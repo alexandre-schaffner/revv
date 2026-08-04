@@ -17,6 +17,7 @@ import { MENTION_PATH_PATTERN } from "@revv/shared";
 import { appendPillContents } from "$lib/utils/file-glyph";
 
 export const PILL_CLASS = "composer-pill";
+const TRAILING_BREAK_ATTR = "data-composer-trailing-break";
 
 // Block-level elements a `contenteditable` may acquire (chiefly from a paste):
 // each begins its content on a fresh line, so the serializer treats a block
@@ -43,6 +44,16 @@ function isPillElement(el: HTMLElement): boolean {
   return el.classList.contains(PILL_CLASS);
 }
 
+function isTrailingBreak(el: HTMLElement): boolean {
+  return el.tagName === "BR" && el.getAttribute(TRAILING_BREAK_ATTR) === "true";
+}
+
+function makeBreak(trailing = false): HTMLBRElement {
+  const br = document.createElement("br");
+  if (trailing) br.setAttribute(TRAILING_BREAK_ATTR, "true");
+  return br;
+}
+
 function endsWithNewline(parts: readonly string[]): boolean {
   return parts[parts.length - 1]?.endsWith("\n") ?? false;
 }
@@ -58,6 +69,7 @@ function serializeInto(node: Node, out: string[]): void {
     out.push(el.dataset.token ?? "");
     return;
   }
+  if (isTrailingBreak(el)) return;
   if (el.tagName === "BR") {
     out.push("\n");
     return;
@@ -78,8 +90,13 @@ export function serialize(root: Node | null | undefined): string {
   return out.join("");
 }
 
-function appendText(frag: DocumentFragment, text: string): void {
-  if (text) frag.append(document.createTextNode(text));
+function appendText(frag: DocumentFragment, text: string, terminal: boolean): void {
+  const parts = text.split("\n");
+  parts.forEach((part, i) => {
+    if (i > 0) frag.append(makeBreak());
+    if (part) frag.append(document.createTextNode(part));
+  });
+  if (terminal && text.endsWith("\n")) frag.append(makeBreak(true));
 }
 
 /** Rebuild the editor DOM from a flat string, pillifying known mentions. */
@@ -94,14 +111,48 @@ export function render(
   for (let m = re.exec(value); m; m = re.exec(value)) {
     const path = m[1] ?? "";
     if (!mentionPathSet.has(path)) continue;
-    if (m.index > last) appendText(frag, value.slice(last, m.index));
+    if (m.index > last) appendText(frag, value.slice(last, m.index), false);
     // `m[0]` is the whole `@path[:line]` token, so the pill preserves the line
     // suffix through a re-render instead of silently dropping it.
     frag.append(makePill(m[0], path));
     last = m.index + m[0].length;
   }
-  if (last < value.length) appendText(frag, value.slice(last));
+  if (last < value.length) appendText(frag, value.slice(last), true);
   editorEl.replaceChildren(frag);
+}
+
+function removeTrailingBreaks(editorEl: HTMLElement): void {
+  editorEl.querySelectorAll(`br[${TRAILING_BREAK_ATTR}="true"]`).forEach((node) => {
+    node.remove();
+  });
+}
+
+function serializedContentAfter(editorEl: HTMLElement, range: Range): string {
+  const post = range.cloneRange();
+  post.selectNodeContents(editorEl);
+  post.setStart(range.endContainer, range.endOffset);
+  return serialize(post.cloneContents());
+}
+
+export function insertLineBreak(editorEl: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  if (!editorEl.contains(range.commonAncestorContainer)) return false;
+
+  removeTrailingBreaks(editorEl);
+  const atEditableEnd = serializedContentAfter(editorEl, range).length === 0;
+  range.deleteContents();
+
+  const br = makeBreak();
+  range.insertNode(br);
+  if (atEditableEnd) br.after(makeBreak(true));
+
+  range.setStartAfter(br);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
 }
 
 // ── Caret-relative helpers ────────────────────────────────────────────────────

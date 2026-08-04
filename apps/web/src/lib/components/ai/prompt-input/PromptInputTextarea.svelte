@@ -24,6 +24,7 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		deletePillForward,
 		editorCaret,
 		forwardNode,
+		insertLineBreak,
 		isPill,
 		makePill,
 		placeCaretAfter,
@@ -237,14 +238,12 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 			if (e.key === " ") activeIndex = 0;
 		}
 		if (e.key === "Enter" && !e.isComposing) {
-			// Enter submits; Shift+Enter inserts a literal newline. The editor's
-			// `white-space: pre-wrap` renders it as a real line break without the
-			// fragile trailing-<br> caret behavior WebKit can show at line ends.
-			// `execCommand` is deprecated but chosen deliberately: it preserves the
-			// native undo stack that manual Range surgery would break.
+			// Enter submits; Shift+Enter inserts a real <br>. A trailing,
+			// non-serialized sentinel <br> gives WebKit a final line box, avoiding
+			// the caret painting on the previous visual line.
 			e.preventDefault();
 			if (e.shiftKey) {
-				document.execCommand("insertText", false, "\n");
+				if (editorEl) insertLineBreak(editorEl);
 				pushValue();
 				refreshTrigger();
 			} else {
