@@ -28,6 +28,7 @@ import {
 } from "$lib/stores/review.svelte";
 import { setTopbarSubtitle } from "$lib/stores/topbar.svelte";
 import type { ReviewFile } from "$lib/types/review";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
 import FileIssues from "./FileIssues.svelte";
 import FileViewer from "./FileViewer.svelte";
@@ -240,7 +241,7 @@ function navigateFile(direction: 1 | -1) {
 
 function handleGlobalKeydown(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (isTextEditingKeyTarget(e)) return;
 
   const panel = getActivePanel();
 

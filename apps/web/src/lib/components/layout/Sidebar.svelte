@@ -32,6 +32,7 @@ import {
   handleKey as handleNavKey,
   setFocusedId,
 } from "$lib/stores/sidebar-nav.svelte";
+import { isTextEditingKeyTarget } from "$lib/utils";
 
 interface Props {
   collapsed?: boolean;
@@ -142,7 +143,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (collapsed) return;
   if (getPaletteOpen()) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (isTextEditingKeyTarget(e)) return;
 
   // '/' is the global "go to search" shortcut. Resolved against the
   // visible pane — PR search in 'prs' view, file search in 'files'
