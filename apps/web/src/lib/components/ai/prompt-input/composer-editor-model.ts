@@ -78,14 +78,8 @@ export function serialize(root: Node | null | undefined): string {
   return out.join("");
 }
 
-// Newlines render as <br> (matching what the browser inserts on Shift+Enter) so
-// the two never mix; plain runs become text nodes.
 function appendText(frag: DocumentFragment, text: string): void {
-  const parts = text.split("\n");
-  parts.forEach((part, i) => {
-    if (i > 0) frag.append(document.createElement("br"));
-    if (part) frag.append(document.createTextNode(part));
-  });
+  if (text) frag.append(document.createTextNode(text));
 }
 
 /** Rebuild the editor DOM from a flat string, pillifying known mentions. */
