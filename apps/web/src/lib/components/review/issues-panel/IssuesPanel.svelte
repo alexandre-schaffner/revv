@@ -15,6 +15,7 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
 import IssueSummaryBar from "./IssueSummaryBar.svelte";
 import IssueTestRow from "./IssueTestRow.svelte";
@@ -147,14 +148,11 @@ function focusIssue(id: string): void {
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
-  const target = e.target as HTMLElement | null;
-  const inInput =
-    target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-
   // Checkbox focus shouldn't eat the shortcut keys — but ArrowUp/Down
   // inside a checkbox is weird anyway, so we skip shortcut handling
   // whenever the active element is an input/textarea.
-  if (inInput) return;
+  if (isTextEditingKeyTarget(e)) return;
+  const target = e.target as HTMLElement | null;
 
   if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
