@@ -237,13 +237,16 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 			if (e.key === " ") activeIndex = 0;
 		}
 		if (e.key === "Enter" && !e.isComposing) {
-			// Enter submits; Shift+Enter inserts a newline as a <br> so the
-			// serializer sees a single, predictable break shape. `execCommand` is
-			// deprecated but chosen deliberately: it preserves the native undo
-			// stack that manual Range surgery would break. Don't "modernize" it.
+			// Enter submits; Shift+Enter inserts a literal newline. The editor's
+			// `white-space: pre-wrap` renders it as a real line break without the
+			// fragile trailing-<br> caret behavior WebKit can show at line ends.
+			// `execCommand` is deprecated but chosen deliberately: it preserves the
+			// native undo stack that manual Range surgery would break.
 			e.preventDefault();
 			if (e.shiftKey) {
-				document.execCommand("insertLineBreak");
+				document.execCommand("insertText", false, "\n");
+				pushValue();
+				refreshTrigger();
 			} else {
 				ctx.submit();
 			}
