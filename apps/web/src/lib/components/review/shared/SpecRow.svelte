@@ -67,6 +67,14 @@ let {
   trailing,
   content,
 }: Props = $props();
+
+function focusTriggerOnPointerDown(e: PointerEvent): void {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest('[data-slot="checkbox"]')) return;
+  if (e.currentTarget instanceof HTMLElement) {
+    e.currentTarget.focus({ preventScroll: true });
+  }
+}
 </script>
 
 <li
@@ -88,6 +96,7 @@ let {
             aria-disabled={disabled}
             aria-label={ariaLabel}
             bind:ref={triggerRef}
+            onpointerdown={focusTriggerOnPointerDown}
         >
             <span class="spec-row-gutter" aria-hidden="true"></span>
 
