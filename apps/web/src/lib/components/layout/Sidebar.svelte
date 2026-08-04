@@ -119,6 +119,12 @@ function findFirstFileTreeRow(): HTMLElement | null {
   return null;
 }
 
+function eventStartedInSidebar(e: KeyboardEvent): boolean {
+  return e
+    .composedPath()
+    .some((target) => target instanceof HTMLElement && target.classList.contains("sidebar"));
+}
+
 // Switch to the PR list and restore the keyboard cursor to the selected PR.
 // Both panes are always mounted (CSS translate, not unmount), so the PR nav
 // element is queryable even while off-screen. PR nav IDs are
@@ -162,6 +168,7 @@ function handleKeydown(e: KeyboardEvent) {
 
   // Only process sidebar nav keys when the sidebar panel is active
   if (getActivePanel() !== "sidebar") return;
+  if (!eventStartedInSidebar(e)) return;
 
   // In files view we delegate movement to @pierre/trees' built-in
   // keyboard handler, which lives on the row buttons inside the tree's
