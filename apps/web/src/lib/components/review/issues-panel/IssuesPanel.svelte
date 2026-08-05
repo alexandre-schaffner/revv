@@ -147,6 +147,10 @@ function focusIssue(id: string): void {
   if (el) el.focus();
 }
 
+function focusableIssues(): WalkthroughIssue[] {
+  return visibleIssues.filter((issue) => !submittedIds.has(issue.id) && rowRefs.get(issue.id));
+}
+
 function onPanelKeydown(e: KeyboardEvent): void {
   // Checkbox focus shouldn't eat the shortcut keys — but ArrowUp/Down
   // inside a checkbox is weird anyway, so we skip shortcut handling
@@ -170,7 +174,8 @@ function onPanelKeydown(e: KeyboardEvent): void {
   }
   if (focusedId === undefined) return;
 
-  const idx = visibleIssues.findIndex((i) => i.id === focusedId);
+  const focusable = focusableIssues();
+  const idx = focusable.findIndex((i) => i.id === focusedId);
   if (idx < 0) return;
 
   if (e.key === "x" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -186,19 +191,19 @@ function onPanelKeydown(e: KeyboardEvent): void {
 
   if (e.key === "ArrowDown" || e.key === "j") {
     e.preventDefault();
-    const next = visibleIssues[Math.min(idx + 1, visibleIssues.length - 1)];
+    const next = focusable[Math.min(idx + 1, focusable.length - 1)];
     if (next) focusIssue(next.id);
   } else if (e.key === "ArrowUp" || e.key === "k") {
     e.preventDefault();
-    const prev = visibleIssues[Math.max(idx - 1, 0)];
+    const prev = focusable[Math.max(idx - 1, 0)];
     if (prev) focusIssue(prev.id);
   } else if (e.key === "Home") {
     e.preventDefault();
-    const first = visibleIssues[0];
+    const first = focusable[0];
     if (first) focusIssue(first.id);
   } else if (e.key === "End") {
     e.preventDefault();
-    const last = visibleIssues[visibleIssues.length - 1];
+    const last = focusable[focusable.length - 1];
     if (last) focusIssue(last.id);
   }
 }
