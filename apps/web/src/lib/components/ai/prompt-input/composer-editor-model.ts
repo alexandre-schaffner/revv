@@ -17,7 +17,6 @@ import { MENTION_PATH_PATTERN } from "@revv/shared";
 import { appendPillContents } from "$lib/utils/file-glyph";
 
 export const PILL_CLASS = "composer-pill";
-const TRAILING_BREAK_ATTR = "data-composer-trailing-break";
 
 // Block-level elements a `contenteditable` may acquire (chiefly from a paste):
 // each begins its content on a fresh line, so the serializer treats a block
@@ -44,18 +43,11 @@ function isPillElement(el: HTMLElement): boolean {
   return el.classList.contains(PILL_CLASS);
 }
 
-function isTrailingBreak(el: HTMLElement): boolean {
-  return el.tagName === "BR" && el.getAttribute(TRAILING_BREAK_ATTR) === "true";
-}
-
-function makeBreak(trailing = false): HTMLBRElement {
-  const br = document.createElement("br");
-  if (trailing) br.setAttribute(TRAILING_BREAK_ATTR, "true");
-  return br;
-}
-
-function endsWithNewline(parts: readonly string[]): boolean {
-  return parts[parts.length - 1]?.endsWith("\n") ?? false;
+function isFillerBlock(el: HTMLElement): boolean {
+  return Array.from(el.childNodes).every((child) => {
+    if (child.nodeType === Node.TEXT_NODE) return (child.nodeValue ?? "").length === 0;
+    return child.nodeType === Node.ELEMENT_NODE && (child as HTMLElement).tagName === "BR";
+  });
 }
 
 function serializeInto(node: Node, out: string[]): void {
@@ -69,34 +61,64 @@ function serializeInto(node: Node, out: string[]): void {
     out.push(el.dataset.token ?? "");
     return;
   }
-  if (isTrailingBreak(el)) return;
   if (el.tagName === "BR") {
     out.push("\n");
     return;
   }
-  // A block element's content starts on its own line: ensure a separating
-  // newline before descending (but never lead the whole string with one).
-  if (BLOCK_TAGS.has(el.tagName) && out.length > 0 && !endsWithNewline(out)) {
-    out.push("\n");
+  if (BLOCK_TAGS.has(el.tagName)) {
+    serializeBlock(el, out, out.length > 0);
+    return;
   }
-  for (const child of el.childNodes) serializeInto(child, out);
+  serializeChildren(el.childNodes, out);
+}
+
+function serializeBlock(el: HTMLElement, out: string[], needsBoundary: boolean): void {
+  if (needsBoundary) out.push("\n");
+  if (isFillerBlock(el)) return;
+  serializeChildren(el.childNodes, out);
+}
+
+function serializeChildren(children: NodeListOf<ChildNode>, out: string[]): void {
+  let i = 0;
+  for (const child of children) {
+    if (child.nodeType === Node.ELEMENT_NODE && BLOCK_TAGS.has((child as HTMLElement).tagName)) {
+      serializeBlock(child as HTMLElement, out, i > 0 || out.length > 0);
+    } else {
+      serializeInto(child, out);
+    }
+    i += 1;
+  }
 }
 
 /** Serialize a node tree back to the flat `@path`-bearing message string. */
 export function serialize(root: Node | null | undefined): string {
   if (!root) return "";
   const out: string[] = [];
-  for (const child of root.childNodes) serializeInto(child, out);
+  serializeChildren(root.childNodes, out);
   return out.join("");
 }
 
-function appendText(frag: DocumentFragment, text: string, terminal: boolean): void {
-  const parts = text.split("\n");
-  parts.forEach((part, i) => {
-    if (i > 0) frag.append(makeBreak());
-    if (part) frag.append(document.createTextNode(part));
-  });
-  if (terminal && text.endsWith("\n")) frag.append(makeBreak(true));
+function appendInlineText(parent: Node, text: string): void {
+  if (text) parent.appendChild(document.createTextNode(text));
+}
+
+function appendPillifiedInlineText(
+  parent: Node,
+  value: string,
+  mentionPathSet: ReadonlySet<string>,
+): void {
+  const re = new RegExp(MENTION_PATH_PATTERN, "g");
+  let last = 0;
+  for (let m = re.exec(value); m; m = re.exec(value)) {
+    const path = m[1] ?? "";
+    if (!mentionPathSet.has(path)) continue;
+    if (m.index > last) appendInlineText(parent, value.slice(last, m.index));
+    // `m[0]` is the whole `@path[:line]` token, so the pill preserves the line
+    // suffix through a re-render instead of silently dropping it.
+    parent.appendChild(makePill(m[0], path));
+    last = m.index + m[0].length;
+  }
+  if (last < value.length) appendInlineText(parent, value.slice(last));
 }
 
 /** Rebuild the editor DOM from a flat string, pillifying known mentions. */
@@ -106,32 +128,19 @@ export function render(
   mentionPathSet: ReadonlySet<string>,
 ): void {
   const frag = document.createDocumentFragment();
-  const re = new RegExp(MENTION_PATH_PATTERN, "g");
-  let last = 0;
-  for (let m = re.exec(value); m; m = re.exec(value)) {
-    const path = m[1] ?? "";
-    if (!mentionPathSet.has(path)) continue;
-    if (m.index > last) appendText(frag, value.slice(last, m.index), false);
-    // `m[0]` is the whole `@path[:line]` token, so the pill preserves the line
-    // suffix through a re-render instead of silently dropping it.
-    frag.append(makePill(m[0], path));
-    last = m.index + m[0].length;
+
+  if (value.length === 0) {
+    editorEl.replaceChildren();
+    return;
   }
-  if (last < value.length) appendText(frag, value.slice(last), true);
-  editorEl.replaceChildren(frag);
-}
 
-function removeTrailingBreaks(editorEl: HTMLElement): void {
-  editorEl.querySelectorAll(`br[${TRAILING_BREAK_ATTR}="true"]`).forEach((node) => {
-    node.remove();
+  value.split("\n").forEach((line) => {
+    const div = document.createElement("div");
+    appendPillifiedInlineText(div, line, mentionPathSet);
+    if (div.childNodes.length === 0) div.appendChild(document.createElement("br"));
+    frag.appendChild(div);
   });
-}
-
-function serializedContentAfter(editorEl: HTMLElement, range: Range): string {
-  const post = range.cloneRange();
-  post.selectNodeContents(editorEl);
-  post.setStart(range.endContainer, range.endOffset);
-  return serialize(post.cloneContents());
+  editorEl.replaceChildren(frag);
 }
 
 export function insertLineBreak(editorEl: HTMLElement): boolean {
@@ -140,19 +149,7 @@ export function insertLineBreak(editorEl: HTMLElement): boolean {
   const range = sel.getRangeAt(0);
   if (!editorEl.contains(range.commonAncestorContainer)) return false;
 
-  removeTrailingBreaks(editorEl);
-  const atEditableEnd = serializedContentAfter(editorEl, range).length === 0;
-  range.deleteContents();
-
-  const br = makeBreak();
-  range.insertNode(br);
-  if (atEditableEnd) br.after(makeBreak(true));
-
-  range.setStartAfter(br);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
-  return true;
+  return document.execCommand("insertParagraph");
 }
 
 // ── Caret-relative helpers ────────────────────────────────────────────────────
