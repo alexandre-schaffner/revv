@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.2](https://github.com/alexandre-schaffner/revv/compare/v0.21.1...v0.21.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* chat keyboard input ([439a74a](https://github.com/alexandre-schaffner/revv/commit/439a74a04e1aeeb406cf879b0cbb844b6d9723f2))
+* chat keyboard input ([e923fd2](https://github.com/alexandre-schaffner/revv/commit/e923fd289ad2ac01c65faeab262fc6214ad22be9))
+
 ## [0.21.1](https://github.com/alexandre-schaffner/revv/compare/v0.21.0...v0.21.1) (2026-08-03)
 
 
