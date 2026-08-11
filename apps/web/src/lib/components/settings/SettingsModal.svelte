@@ -51,6 +51,11 @@ import {
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import {
+  clearSettingsTargetSection,
+  getSettingsTargetSection,
+  type SettingsSectionId,
+} from "$lib/stores/settingsModal.svelte";
+import {
   getThemePreference,
   setThemePreference,
   type ThemePreference,
@@ -73,15 +78,7 @@ interface Props {
 let { open, onClose }: Props = $props();
 
 // ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId =
-  | "account"
-  | "ai"
-  | "recap"
-  | "cache"
-  | "preferences"
-  | "onboarding"
-  | "updates"
-  | "danger";
+type SectionId = SettingsSectionId;
 
 interface NavItem {
   id: SectionId;
@@ -292,6 +289,17 @@ function scrollToSection(id: SectionId): void {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
+
+$effect(() => {
+  const target = getSettingsTargetSection();
+  if (!open || !contentEl || !target) return;
+
+  requestAnimationFrame(() => {
+    scrollToSection(target);
+    activeSection = target;
+    clearSettingsTargetSection();
+  });
+});
 
 // ── Avatar ────────────────────────────────────────────────────────────────
 // URL-keyed: failed state is only true while the current URL is the one that
@@ -814,6 +822,12 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 						<div class="provider-manual-login">
 							<span>Run this in a terminal, then click Check again:</span>
 							<code>{selectedLoginCommand}</code>
+						</div>
+					{:else if currentAgentStatus?.installed && currentAgentStatus.authed && providerStatus?.embeddedLoginSupported}
+						<div class="provider-setup-actions">
+							<Button size="sm" variant="secondary" class="text-xs" onclick={() => handleProviderSignIn(aiAgent)}>
+								Reconnect {currentAgent?.label ?? 'provider'}
+							</Button>
 						</div>
 					{/if}
 				</div>

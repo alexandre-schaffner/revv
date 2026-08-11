@@ -34,6 +34,7 @@ import {
   getReviewMode,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
   getBlocks,
@@ -80,6 +81,10 @@ import {
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
 import { type GroupableActivity, isExplorationActivity } from "$lib/utils/activity-groups";
+import {
+  agentAuthRecoveryDescription,
+  isAgentAuthRecoveryError,
+} from "$lib/utils/agent-auth-recovery";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -295,7 +300,17 @@ $effect(() => {
 
   toast.error("Walkthrough failed", {
     id: `walkthrough-error-${prId}`,
-    description: streamError,
+    description: isAgentAuthRecoveryError(streamError)
+      ? agentAuthRecoveryDescription(streamError)
+      : streamError,
+    ...(isAgentAuthRecoveryError(streamError)
+      ? {
+          action: {
+            label: "Open Settings",
+            onClick: () => openSettings("ai"),
+          },
+        }
+      : {}),
     duration: 8000,
   });
 });
