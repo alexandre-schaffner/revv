@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/alexandre-schaffner/revv/compare/v0.21.2...v0.22.0) (2026-08-11)
+
+
+### Features
+
+* better display add agent auth recovery ([a3202c1](https://github.com/alexandre-schaffner/revv/commit/a3202c16edd59a470a467f774c832a8d0be03588))
+* better display agent reconnect ([6fba922](https://github.com/alexandre-schaffner/revv/commit/6fba922b108336fbd82dc4ca3e4ab034d7e07c5a))
+
 ## [0.21.2](https://github.com/alexandre-schaffner/revv/compare/v0.21.1...v0.21.2) (2026-08-05)
 
 
