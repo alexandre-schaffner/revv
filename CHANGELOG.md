@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0](https://github.com/alexandre-schaffner/revv/compare/v0.22.0...v0.23.0) (2026-08-11)
+
+
+### Features
+
+* add new models Claude and Codex ([8f68941](https://github.com/alexandre-schaffner/revv/commit/8f68941c2275fadabf1732b26676fcacc58f3cad))
+* add nez models Claude and Codex ([e47fe9e](https://github.com/alexandre-schaffner/revv/commit/e47fe9eaf256e512ce363ebd65042eb8ec509fee))
+
 ## [0.22.0](https://github.com/alexandre-schaffner/revv/compare/v0.21.2...v0.22.0) (2026-08-11)
 
 
