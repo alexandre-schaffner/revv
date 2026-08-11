@@ -101,9 +101,9 @@ export const ACP_AGENTS = [
       defaultModel: "claude-sonnet-5",
       models: [
         { label: "Claude Fable 5", value: "claude-fable-5" },
+        { label: "Claude Opus 5", value: "claude-opus-5" },
         { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
-        { label: "Claude Sonnet 4.6", value: "claude-sonnet-4-6" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
       contextWindow: true,
@@ -151,11 +151,12 @@ export const ACP_AGENTS = [
     capabilities: {
       defaultModel: "gpt-5.5",
       models: [
+        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
+        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
+        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
         { label: "GPT-5.5", value: "gpt-5.5" },
         { label: "GPT-5.4", value: "gpt-5.4" },
         { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
-        { label: "GPT-5.3 Codex", value: "gpt-5.3-codex" },
-        { label: "GPT-5.2", value: "gpt-5.2" },
       ],
       contextWindow: false,
       // Codex maps these onto its `model_reasoning_effort` (no ultrathink/max).
