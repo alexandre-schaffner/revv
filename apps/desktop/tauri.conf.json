@@ -15,6 +15,7 @@
       "app",
       "dmg"
     ],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -71,10 +72,12 @@
     "updater": {
       "active": true,
       "endpoints": [
+        "http://localhost:45678/api/update-manifest",
         "https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"
       ],
+      "dangerousInsecureTransportProtocol": true,
       "dialog": false,
-      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3MzUxMzFGRUFERTc5QjUKUldTMWVkN3FIeE0xUndlSmxEUnlDZnkwUmt2by84L0s4dHI3aldXcDFmUGZ5amF3dWJ6ZFVRNXUK"
     }
   }
 }

@@ -73,6 +73,7 @@ jobs:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
       release_name: "Revv ${{ needs.release-please.outputs.version }}"
       prerelease: false
+      updater_notes: "Revv ${{ needs.release-please.outputs.version }} is available. See the release notes on GitHub for what changed."
     secrets: inherit
 
   # ── Package and attest the signed installers ──────────────────
