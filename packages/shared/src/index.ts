@@ -11,11 +11,14 @@ export type {
 export {
   ACP_AGENT_IDS,
   ACP_AGENTS,
+  clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
+  getModelThinkingEfforts,
   isAcpAgentId,
+  THINKING_EFFORT_ORDER,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";
 export {

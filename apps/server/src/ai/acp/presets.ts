@@ -13,6 +13,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import {
   type AcpAgentId,
   type ContextWindow,
+  clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
@@ -62,9 +63,13 @@ export interface AcpProcessEnvOptions {
   readonly claudeConfigDir?: string | undefined;
 }
 
-// Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex has no
-// ultrathink/max tier, so those fall through to undefined (no override).
-const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
+// Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex's ladder is
+// per-model (`supported_reasoning_levels` in the catalog it fetches from
+// OpenAI), so the tier is clamped to the selected model's capabilities before
+// it gets here — see `clampThinkingEffort`.
+const CODEX_REASONING_EFFORT: Record<ThinkingEffort, string> = {
+  ultrathink: "ultra",
+  max: "max",
   "extra-high": "xhigh",
   high: "high",
   medium: "medium",
@@ -156,8 +161,12 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
   switch (id) {
     case "codex": {
       if (model) args.push("-c", `model=${JSON.stringify(model)}`);
-      const effort = thinkingEffort ? CODEX_REASONING_EFFORT[thinkingEffort] : undefined;
-      if (effort) args.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
+      // Clamp rather than trust the persisted tier: model and effort are stored
+      // independently, so a tier picked on a frontier model can outlive a switch
+      // to one that rejects it — Codex errors on an unsupported level.
+      const tier = clampThinkingEffort(id, model ?? getAcpAgentDefaultModel(id), thinkingEffort);
+      if (tier)
+        args.push("-c", `model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT[tier])}`);
       break;
     }
     case "claude-code": {
