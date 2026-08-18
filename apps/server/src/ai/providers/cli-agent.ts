@@ -11,6 +11,7 @@ import {
 } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CACHE_TTL_MS } from "../../constants";
+import { debug, logError } from "../../logger";
 import { resolveClaudeConfigDir } from "../acp/claude-config";
 
 // ── CLI agent detection ──────────────────────────────────────────────────────
@@ -475,12 +476,45 @@ function isCliAgentAvailable(agent: CliAgent): boolean {
 }
 
 /**
+ * Directories where opencode's installers commonly place the binary. The
+ * login-shell PATH probe (see {@link resolveUserPath}) usually finds it, but
+ * package-manager installs (bun, official installer, Homebrew) can live in
+ * directories that a launchd-spawned server doesn't inherit on its process
+ * PATH and that the user's shell profile doesn't expose to non-interactive
+ * probes. This fallback is the last resort before giving up.
+ */
+function opencodeFallbackBinDirs(): string[] {
+  const home = homedir();
+  return [
+    join(home, ".bun", "bin"),
+    join(home, ".opencode", "bin"),
+    join(home, ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+}
+
+function resolveOpencodeFallbackBin(): string | null {
+  for (const dir of opencodeFallbackBinDirs()) {
+    const candidate = join(dir, "opencode");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * Absolute path to the CLI binary if we have one, else the bare name so
  * Bun.spawn falls back to PATH resolution. Callers should pass the result
  * directly as argv[0] of a spawn call.
  */
 export function resolveCliBin(agent: CliAgent): string {
-  return pinnedBin(agent) || resolveCommandPath(agent) || agent;
+  const resolved = pinnedBin(agent) || resolveCommandPath(agent);
+  if (resolved) return resolved;
+  if (agent === "opencode") {
+    const fallback = resolveOpencodeFallbackBin();
+    if (fallback) return fallback;
+  }
+  return agent;
 }
 
 /**
@@ -625,13 +659,28 @@ export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]
 
   // opencode: run `opencode models --verbose` and parse interleaved output
   // Format: line with "provider/id", then JSON blob with model metadata, repeated
+  const opencodeBin = resolveCliBin("opencode");
+  debug("listCliModels", "opencode binary:", opencodeBin);
   try {
-    const proc = Bun.spawn([resolveCliBin("opencode"), "models", "--verbose"], {
+    const proc = Bun.spawn([opencodeBin, "models", "--verbose"], {
       stdout: "pipe",
       stderr: "pipe",
+      // Inherit the login-shell PATH so the spawn can resolve a bare binary
+      // name even when the server process inherits a sanitized PATH.
+      env: { ...process.env, PATH: resolveUserPath() },
     });
     const text = await new Response(proc.stdout).text();
+    const stderrText = await new Response(proc.stderr).text();
     await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      logError(
+        "listCliModels",
+        `opencode models --verbose exited ${proc.exitCode ?? "with signal"}`,
+        stderrText.slice(0, 500),
+      );
+      return [];
+    }
 
     const models: CliModelOption[] = [];
     const lines = text.split("\n");
@@ -672,7 +721,12 @@ export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]
       }
     }
     return models;
-  } catch {
+  } catch (e) {
+    logError(
+      "listCliModels",
+      "failed to list opencode models",
+      e instanceof Error ? e.message : String(e),
+    );
     // Fallback: empty list (frontend will show empty state)
     return [];
   }
