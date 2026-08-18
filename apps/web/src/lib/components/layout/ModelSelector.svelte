@@ -140,13 +140,12 @@ function selectWindow(value: ContextWindow) {
 						{group.label}
 					</div>
 				{/if}
-				{#each group.models as opt (opt.value)}
-					<button
-						class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-						onclick={() => select(opt.value)}
-					>
-					<ProviderIcon provider={group.provider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
-					<span class="min-w-0 flex-1 truncate text-left">{opt.label}</span>
+			{#each group.models as opt (opt.value)}
+				<button
+					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+					onclick={() => select(opt.value)}
+				>
+					<span class="min-w-0 truncate text-left">{opt.label}</span>
 					{#if currentModel === opt.value}
 						<Check size={12} weight="regular" class="shrink-0 text-accent" />
 					{/if}
