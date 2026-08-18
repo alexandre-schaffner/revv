@@ -63,13 +63,13 @@ export interface AcpProcessEnvOptions {
   readonly claudeConfigDir?: string | undefined;
 }
 
-// Revv thinking-effort tier → Codex `model_reasoning_effort`. Codex's ladder is
-// per-model (`supported_reasoning_levels` in the catalog it fetches from
-// OpenAI), so the tier is clamped to the selected model's capabilities before
-// it gets here — see `clampThinkingEffort`.
-const CODEX_REASONING_EFFORT: Record<ThinkingEffort, string> = {
-  ultrathink: "ultra",
-  max: "max",
+// Revv thinking-effort tier → Codex `model_reasoning_effort`. The vocabulary is
+// the one `@zed-industries/codex-acp` vendors — none/minimal/low/medium/high/
+// xhigh — NOT the standalone `codex` CLI's, which has since added `max` and
+// `ultra`. Sending a level the adapter predates makes it fail to parse its own
+// config, so ultrathink/max stay unmapped; `clampThinkingEffort` steps a stale
+// setting down before it reaches here.
+const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
   "extra-high": "xhigh",
   high: "high",
   medium: "medium",
@@ -161,12 +161,11 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
   switch (id) {
     case "codex": {
       if (model) args.push("-c", `model=${JSON.stringify(model)}`);
-      // Clamp rather than trust the persisted tier: model and effort are stored
-      // independently, so a tier picked on a frontier model can outlive a switch
-      // to one that rejects it — Codex errors on an unsupported level.
-      const tier = clampThinkingEffort(id, model ?? getAcpAgentDefaultModel(id), thinkingEffort);
-      if (tier)
-        args.push("-c", `model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT[tier])}`);
+      // Clamp rather than trust the persisted tier: effort and agent are stored
+      // independently, so a tier picked on Claude Code outlives a switch here.
+      const tier = clampThinkingEffort(id, thinkingEffort);
+      const effort = tier ? CODEX_REASONING_EFFORT[tier] : undefined;
+      if (effort) args.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
       break;
     }
     case "claude-code": {

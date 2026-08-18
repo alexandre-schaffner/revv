@@ -1,10 +1,5 @@
 <script lang="ts">
-import {
-  clampThinkingEffort,
-  getAgentCapabilities,
-  getModelThinkingEfforts,
-  type ThinkingEffort,
-} from "@revv/shared";
+import { clampThinkingEffort, getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
 import {
@@ -17,24 +12,24 @@ import { getSettings, resolveChatAgentId, updateSettings } from "$lib/stores/set
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
-// Thinking-effort options follow the selected chat agent — and, on agents whose
-// ladder is per-model (Codex), the selected model too.
+// Thinking-effort options follow the selected chat agent's capabilities.
 let currentId = $derived(resolveChatAgentId(getSettings()));
 let caps = $derived(getAgentCapabilities(currentId));
 let visible = $derived(caps.thinkingEfforts.length > 0);
-let allowed = $derived(getModelThinkingEfforts(currentId, getSettings()?.aiModel));
-let options = $derived(THINKING_EFFORT_OPTIONS.filter((o) => allowed.includes(o.value)));
+let options = $derived(
+  THINKING_EFFORT_OPTIONS.filter((o) => caps.thinkingEfforts.includes(o.value)),
+);
 let currentEffort = $derived((getSettings()?.aiThinkingEffort ?? "medium") as ThinkingEffort);
 let currentLabel = $derived(
   options.find((o) => o.value === currentEffort)?.label ?? options[0]?.label ?? "High",
 );
 
-// If the selected effort isn't valid for the current agent+model (a tier the
-// agent lacks entirely after switching provider, or one the newly-selected
-// model doesn't reach), step down to the nearest tier that is.
+// If the selected effort isn't valid for the current agent (e.g. a Claude-only
+// tier after switching to codex, or any tier after switching to an agent with
+// no thinking-effort knob), step down to the nearest tier the agent supports.
 $effect(() => {
-  if (!visible || allowed.includes(currentEffort)) return;
-  const fallback = clampThinkingEffort(currentId, getSettings()?.aiModel, currentEffort);
+  if (!visible || caps.thinkingEfforts.includes(currentEffort)) return;
+  const fallback = clampThinkingEffort(currentId, currentEffort);
   if (fallback) updateSettings({ aiThinkingEffort: fallback });
 });
 

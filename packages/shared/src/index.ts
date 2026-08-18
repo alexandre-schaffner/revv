@@ -16,7 +16,6 @@ export {
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
-  getModelThinkingEfforts,
   isAcpAgentId,
   THINKING_EFFORT_ORDER,
 } from "./acp-agents";

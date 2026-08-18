@@ -21,16 +21,6 @@ export type AcpAgentIconKey = "anthropic" | "openai" | "opencode" | "cursor" | "
 export interface AcpAgentModel {
   readonly label: string;
   readonly value: string;
-  /**
-   * Thinking-effort tiers this specific model accepts, when it accepts fewer
-   * than its agent does. Omitted = the agent's full
-   * {@link AcpAgentCapabilities.thinkingEfforts} applies.
-   *
-   * Codex is the reason this exists: its reasoning ladder is per-model, not
-   * per-provider (`supported_reasoning_levels` in the catalog it fetches from
-   * OpenAI), so the frontier models accept tiers the older ones reject.
-   */
-  readonly thinkingEfforts?: readonly ThinkingEffort[];
 }
 
 /**
@@ -49,13 +39,7 @@ export interface AcpAgentCapabilities {
   readonly models: readonly AcpAgentModel[] | "dynamic";
   /** Whether the 200K / 1M context-window control applies (Claude Code only). */
   readonly contextWindow: boolean;
-  /**
-   * Thinking-effort tiers offered; empty = no thinking-effort control. Where a
-   * model accepts fewer than this, it narrows the list via its own
-   * {@link AcpAgentModel.thinkingEfforts} — so this is the union across the
-   * agent's catalog, not a guarantee every model takes every tier. Resolve with
-   * {@link getModelThinkingEfforts} rather than reading this directly.
-   */
+  /** Thinking-effort tiers offered; empty = no thinking-effort control. */
   readonly thinkingEfforts: readonly ThinkingEffort[];
   /**
    * Whether the agent supports a read-only plan turn — i.e. it advertises a
@@ -104,11 +88,7 @@ export interface AcpAgentDescriptor {
   readonly keychainAuth?: AcpAgentKeychainAuth;
 }
 
-/**
- * Every thinking-effort tier, strongest first. The ordering is the contract
- * {@link clampThinkingEffort} steps down through, and the order the web renders
- * the selector in.
- */
+/** Every thinking-effort tier, strongest first — the order the web renders. */
 export const THINKING_EFFORT_ORDER = [
   "ultrathink",
   "max",
@@ -117,10 +97,6 @@ export const THINKING_EFFORT_ORDER = [
   "medium",
   "low",
 ] as const satisfies readonly ThinkingEffort[];
-
-// Shared per-model effort ladders, so the Codex catalog below reads as data.
-const MAX_AND_BELOW = THINKING_EFFORT_ORDER.slice(1);
-const XHIGH_AND_BELOW = THINKING_EFFORT_ORDER.slice(2);
 
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
 export const ACP_AGENTS = [
@@ -188,23 +164,30 @@ export const ACP_AGENTS = [
     args: ["-y", "@zed-industries/codex-acp"],
     capabilities: {
       defaultModel: "gpt-5.5",
-      // Mirrors the `supported_reasoning_levels` Codex caches in
-      // `~/.codex/models_cache.json`; re-verify against that file when OpenAI
-      // ships a model. (`codex-auto-review` is in the catalog too, but it's
-      // Codex's internal review model, not a selectable chat model.)
+      // ⚠️ The ceiling here is `@zed-industries/codex-acp` (see `args` above),
+      // NOT the `codex` CLI on PATH. The adapter vendors its own — older —
+      // codex core, and the API rejects a model it predates with
+      // `400 "The '<model>' model requires a newer version of Codex"`, which
+      // reaches the user as a bare "Internal error".
+      //
+      // So do NOT curate this from `codex --version` or `~/.codex/
+      // models_cache.json`; the standalone CLI runs well ahead of the adapter
+      // (0.146.0 vs a ~0.137.0 core at codex-acp 0.16.0). Read the roster out
+      // of the adapter binary instead:
+      //   strings "$(npm root -g)/../_npx/*/node_modules/@zed-industries/\
+      //     codex-acp-darwin-arm64/bin/codex-acp" | grep -oE 'gpt-5\.[0-9]+[a-z-]*'
+      // GPT-5.6 Sol/Terra/Luna are deliberately absent until it catches up.
       models: [
-        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
-        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
-        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna", thinkingEfforts: MAX_AND_BELOW },
-        { label: "GPT-5.5", value: "gpt-5.5", thinkingEfforts: XHIGH_AND_BELOW },
-        { label: "GPT-5.4", value: "gpt-5.4", thinkingEfforts: XHIGH_AND_BELOW },
-        { label: "GPT-5.4 Mini", value: "gpt-5.4-mini", thinkingEfforts: XHIGH_AND_BELOW },
+        { label: "GPT-5.5", value: "gpt-5.5" },
+        { label: "GPT-5.4", value: "gpt-5.4" },
+        { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
       ],
       contextWindow: false,
-      // Union across the catalog — Codex maps each tier onto its own
-      // `model_reasoning_effort` ladder (ultrathink→ultra, extra-high→xhigh).
-      // Only Sol and Terra reach the top; the rest narrow it per model above.
-      thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
+      // Same ceiling: the adapter's `model_reasoning_effort` enum is
+      // none/minimal/low/medium/high/xhigh — it cannot parse the `max` and
+      // `ultra` levels the current standalone CLI offers, so extra-high (xhigh)
+      // is the top tier Revv can ask for.
+      thinkingEfforts: ["extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
       planMode: false,
@@ -275,39 +258,21 @@ export function getAcpAgentDefaultModel(id: AcpAgentId): string {
 }
 
 /**
- * Thinking-effort tiers valid for one agent+model pair.
+ * Clamp a selected effort to a tier the agent actually accepts.
  *
- * Falls back to the agent's full list when the model declares no narrower one —
- * which covers agents with a uniform ladder (Claude Code), a dynamic catalog
- * (opencode), and any Codex model that accepts every tier. An unknown model id
- * (a stale persisted value, or one from opencode's live catalog) also gets the
- * agent-level list, since there's nothing narrower to apply.
- */
-export function getModelThinkingEfforts(
-  id: AcpAgentId,
-  model: string | undefined,
-): readonly ThinkingEffort[] {
-  const caps = getAgentCapabilities(id);
-  if (caps.models === "dynamic" || !model) return caps.thinkingEfforts;
-  return caps.models.find((m) => m.value === model)?.thinkingEfforts ?? caps.thinkingEfforts;
-}
-
-/**
- * Clamp a selected effort to something the agent+model actually accepts.
- *
- * The persisted effort and the persisted model move independently, so a user
- * who picked Ultrathink on Sol and then switched to GPT-5.4 holds a tier that
- * model rejects. Steps down to the nearest supported tier rather than dropping
- * the setting, so "as much thinking as this model allows" survives the switch.
+ * Effort and agent are persisted independently, so a tier picked on one agent
+ * outlives a switch to another that tops out lower — and an out-of-range tier
+ * is not inert: Codex's adapter fails to parse a `model_reasoning_effort` it
+ * doesn't know. Steps down to the nearest supported tier rather than dropping
+ * the setting, so "as much thinking as this agent allows" survives the switch.
  * Returns `undefined` when the agent has no thinking-effort control at all.
  */
 export function clampThinkingEffort(
   id: AcpAgentId,
-  model: string | undefined,
   effort: ThinkingEffort | undefined,
 ): ThinkingEffort | undefined {
   if (!effort) return undefined;
-  const allowed = getModelThinkingEfforts(id, model);
+  const allowed = getAgentCapabilities(id).thinkingEfforts;
   if (allowed.length === 0) return undefined;
   if (allowed.includes(effort)) return effort;
   // THINKING_EFFORT_ORDER is strongest-first, so the first allowed tier at or
