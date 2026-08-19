@@ -39,6 +39,23 @@ import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 
+/**
+ * Select the authentication method to request from an ACP agent. Codex's ACP
+ * adapter advertises API-key auth first, but a ChatGPT subscription session is
+ * the correct default when it is available. Requesting `api-key` first makes a
+ * signed-in desktop Codex installation fail before it can inspect that session.
+ */
+export function selectAcpAuthMethod(
+  agent: AcpAgentId,
+  methods: readonly { readonly id: string }[],
+): string | undefined {
+  if (agent === "codex") {
+    const chatGpt = methods.find((method) => method.id === "chat-gpt");
+    if (chatGpt) return chatGpt.id;
+  }
+  return methods[0]?.id;
+}
+
 export type AcpSessionUpdate = SessionUpdate;
 
 /** Listener invoked for every `session/update` notification on a session. */
@@ -291,11 +308,9 @@ async function spawnConnection(
   // Authenticate only if the agent advertises auth methods (claude-agent-acp
   // typically inherits local CLI credentials and needs none).
   const authMethods = initialize.authMethods ?? [];
-  if (authMethods.length > 0) {
-    const methodId = authMethods[0]?.id;
-    if (methodId) {
-      await connection.authenticate({ methodId });
-    }
+  const methodId = selectAcpAuthMethod(agent, authMethods);
+  if (methodId) {
+    await connection.authenticate({ methodId });
   }
 
   return entry;
