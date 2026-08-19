@@ -289,6 +289,10 @@ jobs:
     name: Publish updater manifest
     runs-on: ubuntu-latest
     needs: [version, build]
+    # `build` is a fail-fast: false matrix, so a single failed leg still lets
+    # this job run — which is what makes the `count -lt 2` guard below able to
+    # fire with a clear error instead of the job being silently skipped.
+    if: always() && needs.version.result == 'success'
     permissions:
       contents: write
 
@@ -315,7 +319,7 @@ jobs:
             tarball=$(basename "$sig" .sig)
             case "$tarball" in
               *_aarch64.app.tar.gz) key="darwin-aarch64" ;;
-              *_x64.app.tar.gz|*_x86_64.app.tar.gz) key="darwin-x86_64" ;;
+              *_x64.app.tar.gz) key="darwin-x86_64" ;;
               *) echo "::error::Cannot map ${tarball} to an updater platform key."; exit 1 ;;
             esac
             # Built by hand rather than taken from the API: a draft release's

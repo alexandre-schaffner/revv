@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -497,7 +497,13 @@ function opencodeFallbackBinDirs(): string[] {
 function resolveOpencodeFallbackBin(): string | null {
   for (const dir of opencodeFallbackBinDirs()) {
     const candidate = join(dir, "opencode");
-    if (existsSync(candidate)) return candidate;
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not present, or present but not executable (broken symlink,
+      // half-finished install) — fall through to the next candidate dir.
+    }
   }
   return null;
 }

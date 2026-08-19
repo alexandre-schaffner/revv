@@ -38,4 +38,3 @@ apps/desktop/target/
 # Tooling
 .context/
 .openlogs/
-.repos/effect

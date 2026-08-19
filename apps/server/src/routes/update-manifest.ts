@@ -17,9 +17,11 @@
 // The GitHub stable manifest stays in the endpoint list as a second entry.
 // The plugin walks endpoints in order and skips any that error, so a stopped
 // LaunchAgent degrades to stable-channel checks instead of failing outright.
-// Note that a 204 from this route ends the walk (the plugin reads it as "no
-// update") — that is deliberate, and why the not-yet-published cases below
-// return 204 while genuine failures return 502.
+// A 204 from this route ends the walk (the plugin reads it as "no update"),
+// so this handler only ever returns 204 for a genuinely resolved "no release
+// published for this asset" (the final upstream 404) — every other
+// unresolved/failure case returns 502 so the walk continues to the GitHub
+// stable endpoint instead of going silent.
 //
 // The route is intentionally unauthenticated — the updater plugin runs in
 // the Rust host and doesn't forward bearer tokens, and the server only binds
@@ -58,24 +60,43 @@ interface GitHubRelease {
   assets: GitHubAsset[];
 }
 
-/**
- * Resolves the newest published nightly's `latest.json` URL.
- *
- * Distinguishes "no nightly exists yet" (`"none"`, a legitimate silent state)
- * from "couldn't ask GitHub" (`"error"`, e.g. the API is down or rate-limited).
- * Collapsing the two would report an unreachable GitHub as "you're up to
- * date", which is exactly the kind of silent failure that let the updater stay
- * broken across 23 releases.
- */
-async function resolveNightlyManifestUrl(): Promise<
-  { kind: "ok"; url: string } | { kind: "none" } | { kind: "error" }
-> {
+function isGitHubAsset(value: unknown): value is GitHubAsset {
+  if (typeof value !== "object" || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return typeof a.name === "string" && typeof a.browser_download_url === "string";
+}
+
+function isGitHubRelease(value: unknown): value is GitHubRelease {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.tag_name === "string" &&
+    typeof r.prerelease === "boolean" &&
+    typeof r.draft === "boolean" &&
+    Array.isArray(r.assets) &&
+    r.assets.every(isGitHubAsset)
+  );
+}
+
+type NightlyResolution = { kind: "ok"; url: string } | { kind: "none" } | { kind: "error" };
+
+// The releases API is unauthenticated here (60 req/hr per source IP) and gets
+// hit on every updater check. A short in-memory cache keeps a handful of
+// manual "check for updates" clicks from burning through that budget. Errors
+// are never cached — a transient rate-limit/outage shouldn't stick around
+// for the full TTL once GitHub recovers.
+const NIGHTLY_CACHE_TTL_MS = 5 * 60 * 1000;
+let nightlyCache: { resolution: NightlyResolution; expiresAt: number } | null = null;
+
+async function resolveNightlyManifestUrlUncached(): Promise<NightlyResolution> {
   const res = await fetch(NIGHTLY_RELEASES_API_URL, {
     headers: { Accept: "application/vnd.github+json" },
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) return { kind: "error" };
-  const releases = (await res.json()) as GitHubRelease[];
+  const body: unknown = await res.json();
+  if (!Array.isArray(body)) return { kind: "error" };
+  const releases = body.filter(isGitHubRelease);
   // The releases API returns results sorted by published_at desc, so the
   // first matching entry is the newest nightly.
   const nightly = releases.find(
@@ -88,38 +109,69 @@ async function resolveNightlyManifestUrl(): Promise<
   return asset ? { kind: "ok", url: asset.browser_download_url } : { kind: "error" };
 }
 
+/**
+ * Resolves the newest published nightly's `latest.json` URL, cached for
+ * {@link NIGHTLY_CACHE_TTL_MS}.
+ *
+ * Still distinguishes "no nightly exists yet" (`"none"`, a legitimate state)
+ * from "couldn't ask GitHub" (`"error"`, e.g. the API is down or
+ * rate-limited) even though both now produce the same 502 response to the
+ * plugin: only `"none"` is cache-worthy — caching a transient error would
+ * make a rate-limit blip look like "no nightly" for the full TTL.
+ */
+async function resolveNightlyManifestUrl(): Promise<NightlyResolution> {
+  if (nightlyCache && nightlyCache.expiresAt > Date.now()) return nightlyCache.resolution;
+  const resolution = await resolveNightlyManifestUrlUncached();
+  if (resolution.kind !== "error") {
+    nightlyCache = { resolution, expiresAt: Date.now() + NIGHTLY_CACHE_TTL_MS };
+  }
+  return resolution;
+}
+
 export const updateManifestRoute = new Elysia()
   .get("/api/update-manifest", async () => {
-    const channel = await AppRuntime.runPromise(
+    const channelResult = await AppRuntime.runPromise(
       Effect.gen(function* () {
         const settings = yield* SettingsService;
         const s = yield* settings.getSettings();
-        return s.updateChannel;
-      }).pipe(Effect.orElseSucceed(() => "stable" as const)),
+        return { kind: "ok", channel: s.updateChannel } as const;
+      }).pipe(Effect.orElseSucceed(() => ({ kind: "error" }) as const)),
     );
+    // Don't default a Settings/DB read failure to "stable" — that would
+    // silently downgrade a nightly user. 502 falls through to the GitHub
+    // stable endpoint instead, same as any other resolution failure below.
+    if (channelResult.kind === "error") return new Response(null, { status: 502 });
+    const channel = channelResult.channel;
 
     let target: string;
     if (channel === "nightly") {
       const resolved = await resolveNightlyManifestUrl();
-      // No nightly published yet — a real "nothing to offer", so 204 and let
-      // the plugin end its endpoint walk quietly.
-      if (resolved.kind === "none") return new Response(null, { status: 204 });
-      if (resolved.kind === "error") return new Response(null, { status: 502 });
+      // Both "no nightly published yet" and "couldn't resolve one" return 502
+      // (not 204): a 204 ends the plugin's endpoint walk right here, so a
+      // nightly user would never fall through to check the stable endpoint,
+      // and — since this route is unauthenticated on loopback — any process
+      // that beat the real server to the port could otherwise suppress every
+      // update by always answering 204.
+      if (resolved.kind === "none" || resolved.kind === "error") {
+        return new Response(null, { status: 502 });
+      }
       target = resolved.url;
     } else {
       target = STABLE_MANIFEST_URL;
     }
 
-    // 502 rather than 204 on failure: 204 would end the plugin's endpoint
-    // walk and render as "You're up to date", whereas a non-success status
-    // makes it fall through to the GitHub endpoint and, if that fails too,
-    // surface a real error on manual checks. A missing manifest is a broken
-    // release pipeline, not an absence of updates.
     const upstream = await fetch(target, {
       redirect: "follow",
       signal: AbortSignal.timeout(10_000),
     });
-    if (!upstream.ok) return new Response(null, { status: 502 });
+    // A 404 here means no release has been published yet (fresh clone / no
+    // tags cut) — a legitimate absence, so end the walk quietly with 204
+    // rather than surfacing a hard error toast on a manual check. Any other
+    // non-2xx is a genuine failure (broken pipeline, GitHub outage): 502, so
+    // the plugin falls through / a manual check can report it.
+    if (!upstream.ok) {
+      return new Response(null, { status: upstream.status === 404 ? 204 : 502 });
+    }
 
     return new Response(await upstream.text(), {
       status: 200,
