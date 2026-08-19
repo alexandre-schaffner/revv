@@ -209,14 +209,14 @@ export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
       const data = (await res.json()) as { models: ModelOption[] };
       const list = data.models ?? [];
       modelsByAgent = { ...modelsByAgent, [agent]: list };
-      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       return list;
     } catch {
-      // Mark loaded even on failure so the UI doesn't stay in "Loading…"
-      // forever; the cached (possibly empty) list is the best fallback.
-      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       return modelsByAgent[agent] ?? [];
     } finally {
+      // Mark loaded on every path (success, non-2xx, or thrown exception) so
+      // the UI doesn't stay in "Loading…" forever; the cached (possibly
+      // empty) list is the best fallback.
+      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       delete modelsInFlight[agent];
     }
   })();

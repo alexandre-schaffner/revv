@@ -1,5 +1,5 @@
 <script lang="ts">
-import { clampThinkingEffort, getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
+import { getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
 import {
@@ -26,12 +26,9 @@ let currentLabel = $derived(
 
 // If the selected effort isn't valid for the current agent (e.g. a Claude-only
 // tier after switching to codex, or any tier after switching to an agent with
-// no thinking-effort knob), step down to the nearest tier the agent supports.
-$effect(() => {
-  if (!visible || caps.thinkingEfforts.includes(currentEffort)) return;
-  const fallback = clampThinkingEffort(currentId, currentEffort);
-  if (fallback) updateSettings({ aiThinkingEffort: fallback });
-});
+// no thinking-effort knob), the launch path clamps it (see presets.ts). The
+// persisted preference is intentionally left untouched here — switching back
+// to the original agent should restore the original tier, not a clamped one.
 
 function select(value: ThinkingEffort) {
   updateSettings({ aiThinkingEffort: value });
