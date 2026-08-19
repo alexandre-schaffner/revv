@@ -2,6 +2,7 @@
 import type { RatingAxis, Verdict, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXES, RATING_AXIS_LABELS } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import RatingSummaryBar from "./ratings-panel/RatingSummaryBar.svelte";
 import RatingSummaryFooter from "./ratings-panel/RatingSummaryFooter.svelte";
 import RatingTestRow, { type RowState } from "./ratings-panel/RatingTestRow.svelte";
@@ -232,9 +233,8 @@ function onPanelKeydown(e: KeyboardEvent): void {
   // 'e' toggles expand-all — but only when focus is inside the panel
   // and not in an input/textarea (defensive: there are no inputs in
   // this panel, but a future expansion might add one).
+  const isInInput = isTextEditingKeyTarget(e);
   const target = e.target as HTMLElement | null;
-  const isInInput =
-    target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
 
   if (e.key === "e" && !isInInput && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();

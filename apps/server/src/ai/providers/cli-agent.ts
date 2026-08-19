@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,8 @@ import {
 } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CACHE_TTL_MS } from "../../constants";
+import { debug, logError } from "../../logger";
+import { resolveClaudeConfigDir } from "../acp/claude-config";
 
 // ── CLI agent detection ──────────────────────────────────────────────────────
 //
@@ -22,7 +24,7 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 //      installer's shell PATH). Survives a restricted LaunchAgent PATH.
 //   2. Auth-only fallback for the npx-adapter agents whose adapter authenticates
 //      from a local store instead of shelling out to the named CLI:
-//        • Codex  — `@zed-industries/codex-acp` reads `~/.codex/auth.json`
+//        • Codex  — `@agentclientprotocol/codex-acp` reads `~/.codex/auth.json`
 //          (honoring `CODEX_HOME`). CLI *or* Codex desktop app login counts.
 //        • Claude — `claude-agent-acp` runs on the Claude Agent SDK; an
 //          `ANTHROPIC_API_KEY`, `~/.claude/.credentials.json`, or the macOS
@@ -240,10 +242,20 @@ function codexAuthStatus(): AgentAuthStatus {
  * is usable without the CLI on PATH. Subscription auth can come from a
  * long-lived OAuth token, the credentials file Claude Code writes, or the macOS
  * Keychain.
+ *
+ * This is a best-effort HINT only (used for "sign-in expired" vs "not signed
+ * in" messaging) — the authoritative check is `claudeSubscriptionVerified`.
+ * The credentials-file probe checks the isolated dir when isolation is on; the
+ * Keychain existence probe does not — it always checks the default `Claude
+ * Code-credentials` service, since an isolated dir's Keychain item uses a
+ * different (unpublished) service name suffix (see `claude-config.ts`). A
+ * false negative here just means slightly less precise wording, never a wrong
+ * `authed` result.
  */
 function detectClaudeSubscriptionAuthHint(): boolean {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true;
-  if (existsSync(join(homedir(), ".claude", ".credentials.json"))) return true;
+  const claudeConfigDir = resolveClaudeConfigDir("claude-code") ?? join(homedir(), ".claude");
+  if (existsSync(join(claudeConfigDir, ".credentials.json"))) return true;
   try {
     // Existence probe only (no `-w`): returns attributes, doesn't print the secret.
     execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
@@ -256,13 +268,29 @@ function detectClaudeSubscriptionAuthHint(): boolean {
   }
 }
 
+/**
+ * Env for the `claude auth status` probe. Critically includes `CLAUDE_CONFIG_DIR`
+ * when isolation is on (`resolveClaudeConfigDir`) — Claude Code's Keychain-backed
+ * OAuth item is scoped per resolved config dir (see `claude-config.ts`), so a
+ * probe run under the wrong dir reads the wrong (or no) Keychain item and
+ * reports logged-out even when the isolated dir's own one-time login succeeded.
+ */
+export function claudeStatusCommandEnv(
+  omit: readonly string[] = [],
+): Record<string, string | undefined> {
+  const env = statusCommandEnv(omit);
+  const claudeConfigDir = resolveClaudeConfigDir("claude-code");
+  if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  return env;
+}
+
 function claudeSubscriptionVerified(): boolean {
   try {
     const out = execFileSync(resolveCliBin("claude"), ["auth", "status", "--json"], {
       encoding: "utf-8",
       timeout: 5000,
       stdio: ["ignore", "pipe", "ignore"],
-      env: statusCommandEnv(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]),
+      env: claudeStatusCommandEnv(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]),
     }).trim();
     if (!out) return true;
     const parsed = JSON.parse(out) as { loggedIn?: unknown };
@@ -274,9 +302,10 @@ function claudeSubscriptionVerified(): boolean {
 
 /**
  * Whether Claude Code subscription/OAuth auth is verified by Claude's own CLI
- * status command. Credential artifacts alone are intentionally not enough:
- * logout can leave files/keychain records behind even though launches fail with
- * "Authentication required".
+ * status command, in the SAME `CLAUDE_CONFIG_DIR` context the agent will
+ * actually spawn with (see `claudeStatusCommandEnv`). Credential artifacts
+ * alone are intentionally not enough: logout can leave files/keychain records
+ * behind even though launches fail with "Authentication required".
  */
 export function detectClaudeSubscriptionAuth(): boolean {
   return claudeSubscriptionVerified();
@@ -475,17 +504,55 @@ function isCliAgentAvailable(agent: CliAgent): boolean {
 }
 
 /**
+ * Directories where opencode's installers commonly place the binary. The
+ * login-shell PATH probe (see {@link resolveUserPath}) usually finds it, but
+ * package-manager installs (bun, official installer, Homebrew) can live in
+ * directories that a launchd-spawned server doesn't inherit on its process
+ * PATH and that the user's shell profile doesn't expose to non-interactive
+ * probes. This fallback is the last resort before giving up.
+ */
+function opencodeFallbackBinDirs(): string[] {
+  const home = homedir();
+  return [
+    join(home, ".bun", "bin"),
+    join(home, ".opencode", "bin"),
+    join(home, ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+}
+
+function resolveOpencodeFallbackBin(): string | null {
+  for (const dir of opencodeFallbackBinDirs()) {
+    const candidate = join(dir, "opencode");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not present, or present but not executable (broken symlink,
+      // half-finished install) — fall through to the next candidate dir.
+    }
+  }
+  return null;
+}
+
+/**
  * Absolute path to the CLI binary if we have one, else the bare name so
  * Bun.spawn falls back to PATH resolution. Callers should pass the result
  * directly as argv[0] of a spawn call.
  */
 export function resolveCliBin(agent: CliAgent): string {
-  return (
-    pinnedBin(agent) ||
-    resolveCommandPath(agent) ||
-    (agent === "codex" ? resolveDesktopCodexBin() : null) ||
-    agent
-  );
+  const resolved = pinnedBin(agent) || resolveCommandPath(agent);
+  if (resolved) return resolved;
+  if (agent === "opencode") {
+    const fallback = resolveOpencodeFallbackBin();
+    if (fallback) return fallback;
+  }
+  if (agent === "codex") {
+    const fallback = resolveDesktopCodexBin();
+    if (fallback) return fallback;
+  }
+  return agent;
 }
 
 /**
@@ -630,13 +697,28 @@ export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]
 
   // opencode: run `opencode models --verbose` and parse interleaved output
   // Format: line with "provider/id", then JSON blob with model metadata, repeated
+  const opencodeBin = resolveCliBin("opencode");
+  debug("listCliModels", "opencode binary:", opencodeBin);
   try {
-    const proc = Bun.spawn([resolveCliBin("opencode"), "models", "--verbose"], {
+    const proc = Bun.spawn([opencodeBin, "models", "--verbose"], {
       stdout: "pipe",
       stderr: "pipe",
+      // Inherit the login-shell PATH so the spawn can resolve a bare binary
+      // name even when the server process inherits a sanitized PATH.
+      env: { ...process.env, PATH: resolveUserPath() },
     });
     const text = await new Response(proc.stdout).text();
+    const stderrText = await new Response(proc.stderr).text();
     await proc.exited;
+
+    if (proc.exitCode !== 0) {
+      logError(
+        "listCliModels",
+        `opencode models --verbose exited ${proc.exitCode ?? "with signal"}`,
+        stderrText.slice(0, 500),
+      );
+      return [];
+    }
 
     const models: CliModelOption[] = [];
     const lines = text.split("\n");
@@ -677,7 +759,12 @@ export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]
       }
     }
     return models;
-  } catch {
+  } catch (e) {
+    logError(
+      "listCliModels",
+      "failed to list opencode models",
+      e instanceof Error ? e.message : String(e),
+    );
     // Fallback: empty list (frontend will show empty state)
     return [];
   }

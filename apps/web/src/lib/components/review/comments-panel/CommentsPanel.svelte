@@ -8,6 +8,7 @@
  * not individual threads.
  */
 import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupThreadsByFile } from "$lib/utils/group-threads";
 import CommentSummaryBar from "./CommentSummaryBar.svelte";
 import CommentTestRow from "./CommentTestRow.svelte";
@@ -94,10 +95,8 @@ function focusRow(filePath: string): void {
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
+  if (isTextEditingKeyTarget(e)) return;
   const target = e.target as HTMLElement | null;
-  const inInput =
-    target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-  if (inInput) return;
 
   if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
@@ -107,7 +106,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
 
   let focusedPath: string | undefined;
   for (const [path, el] of rowRefs) {
-    if (el === target) {
+    if (el && target && (el === target || el.contains(target))) {
       focusedPath = path;
       break;
     }

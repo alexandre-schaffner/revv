@@ -209,11 +209,14 @@ export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
       const data = (await res.json()) as { models: ModelOption[] };
       const list = data.models ?? [];
       modelsByAgent = { ...modelsByAgent, [agent]: list };
-      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       return list;
     } catch {
       return modelsByAgent[agent] ?? [];
     } finally {
+      // Mark loaded on every path (success, non-2xx, or thrown exception) so
+      // the UI doesn't stay in "Loading…" forever; the cached (possibly
+      // empty) list is the best fallback.
+      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       delete modelsInFlight[agent];
     }
   })();
@@ -284,9 +287,12 @@ export function getAgentStatus(): AgentStatusReport | null {
   return agentStatus;
 }
 
-export async function fetchAgentStatus(): Promise<AgentStatusReport | null> {
+export async function fetchAgentStatus(
+  options: { refresh?: boolean } = {},
+): Promise<AgentStatusReport | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status`, {
+    const suffix = options.refresh ? "?refresh=1" : "";
+    const res = await fetch(`${API_BASE_URL}/api/onboarding/agent-status${suffix}`, {
       headers: authHeaders(),
     });
     if (!res.ok) return agentStatus;

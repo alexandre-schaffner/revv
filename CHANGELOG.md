@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.23.0](https://github.com/alexandre-schaffner/revv/compare/v0.22.0...v0.23.0) (2026-08-11)
+
+
+### Features
+
+* add new models Claude and Codex ([8f68941](https://github.com/alexandre-schaffner/revv/commit/8f68941c2275fadabf1732b26676fcacc58f3cad))
+* add nez models Claude and Codex ([e47fe9e](https://github.com/alexandre-schaffner/revv/commit/e47fe9eaf256e512ce363ebd65042eb8ec509fee))
+
+## [0.22.0](https://github.com/alexandre-schaffner/revv/compare/v0.21.2...v0.22.0) (2026-08-11)
+
+
+### Features
+
+* better display add agent auth recovery ([a3202c1](https://github.com/alexandre-schaffner/revv/commit/a3202c16edd59a470a467f774c832a8d0be03588))
+* better display agent reconnect ([6fba922](https://github.com/alexandre-schaffner/revv/commit/6fba922b108336fbd82dc4ca3e4ab034d7e07c5a))
+
+## [0.21.2](https://github.com/alexandre-schaffner/revv/compare/v0.21.1...v0.21.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* chat keyboard input ([439a74a](https://github.com/alexandre-schaffner/revv/commit/439a74a04e1aeeb406cf879b0cbb844b6d9723f2))
+* chat keyboard input ([e923fd2](https://github.com/alexandre-schaffner/revv/commit/e923fd289ad2ac01c65faeab262fc6214ad22be9))
+
+## [0.21.1](https://github.com/alexandre-schaffner/revv/compare/v0.21.0...v0.21.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **server:** zero-touch acquirePrWorktree fast path ([061195c](https://github.com/alexandre-schaffner/revv/commit/061195c58ff13bf3e6bf32500fb01ab54e098d66))
+* **server:** zero-touch acquirePrWorktree fast path for healthy worktrees ([056f767](https://github.com/alexandre-schaffner/revv/commit/056f7679ce6275ecfbe600adc3a728940271c49f))
+
+## [0.21.0](https://github.com/alexandre-schaffner/revv/compare/v0.20.0...v0.21.0) (2026-08-03)
+
+
+### Features
+
+* **server:** isolate Claude agent sessions in a private config dir ([91e8c5e](https://github.com/alexandre-schaffner/revv/commit/91e8c5e04ee8ed7fdb571cf3a24d394c91dfc6d1))
+* **server:** isolate Claude agent sessions in a private config dir ([cbb299e](https://github.com/alexandre-schaffner/revv/commit/cbb299e9010cde8020fb200af485d940a2b89a36))
+
+## [0.20.0](https://github.com/alexandre-schaffner/revv/compare/v0.19.5...v0.20.0) (2026-07-31)
+
+
+### Features
+
+* (server) reap stale PR review worktrees and branches ([d28cf1d](https://github.com/alexandre-schaffner/revv/commit/d28cf1d8bbf7c7f1b3685db5201b87dd4a15065b))
+
+## [0.19.5](https://github.com/alexandre-schaffner/revv/compare/v0.19.4...v0.19.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* ACP launch without npx ([2bbc3af](https://github.com/alexandre-schaffner/revv/commit/2bbc3af552391252bbf9c65af7cfe6ed7350f37e))
+
+## [0.19.4](https://github.com/alexandre-schaffner/revv/compare/v0.19.3...v0.19.4) (2026-07-29)
+
+
+### Bug Fixes
+
+* repo relink upsert ([b085eb3](https://github.com/alexandre-schaffner/revv/commit/b085eb30b6b8c929a62e77693d95a94bfd7a4a8f))
+
+## [0.19.3](https://github.com/alexandre-schaffner/revv/compare/v0.19.2...v0.19.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* duplicate diff cache writes ([bba1509](https://github.com/alexandre-schaffner/revv/commit/bba1509cd100a1356abcb6bce7a235fece3150a5))
+
+## [0.19.2](https://github.com/alexandre-schaffner/revv/compare/v0.19.1...v0.19.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* enable provider setup recovery in settings ([879ba8a](https://github.com/alexandre-schaffner/revv/commit/879ba8aac807f22ae1e241b6005df3973f6cbed3))
+* enable provider setup recovery in settings ([cbed3a8](https://github.com/alexandre-schaffner/revv/commit/cbed3a8cf02856cf85917e4ae7a74c0d7c88d09c))
+
+## [0.19.1](https://github.com/alexandre-schaffner/revv/compare/v0.19.0...v0.19.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **auth:** never apply a BYO GHE client_id to github.com ([#185](https://github.com/alexandre-schaffner/revv/issues/185)) ([0a87246](https://github.com/alexandre-schaffner/revv/commit/0a872468dd54b8253e5398dc20efd32e377cabbd))
+* debug large report crashes ([#182](https://github.com/alexandre-schaffner/revv/issues/182)) ([cf14520](https://github.com/alexandre-schaffner/revv/commit/cf1452086c59c8b5a21b067615c17fd275613b3e))
+
 ## [0.19.0](https://github.com/alexandre-schaffner/revv/compare/v0.18.1...v0.19.0) (2026-07-22)
 
 

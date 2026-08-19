@@ -34,6 +34,7 @@ import {
 import type { AcpAgentId } from "@revv/shared";
 import { debug } from "../../logger";
 import { resolveUserPath } from "../providers/cli-agent";
+import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
 import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
@@ -172,11 +173,20 @@ async function spawnConnection(
   config: AcpLaunchConfig,
   key: string,
 ): Promise<ConnectionEntry> {
+  // Isolated `CLAUDE_CONFIG_DIR` for claude-code (see `claude-config.ts`) —
+  // the SAME resolution the subscription-auth probe (`cli-agent.ts`) and the
+  // login PTY (`AgentLogin.ts`) use, since Claude Code's Keychain-backed OAuth
+  // storage is scoped per config dir. Seed the directory before the agent
+  // process can touch it; a no-op once it's already seeded from a prior spawn.
+  const claudeConfigDir = resolveClaudeConfigDir(agent);
+  if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
+
   const { command, args, env } = resolveAcpProcessLaunchById(
     agent,
     config,
     process.env,
     resolveUserPath(),
+    { claudeConfigDir },
   );
   const proc = Bun.spawn([command, ...args], {
     cwd,

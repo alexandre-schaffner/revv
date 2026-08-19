@@ -63,6 +63,11 @@ export const walkthroughs = sqliteTable(
      */
     status: text("status").notNull().default("generating"),
     /**
+     * Last terminal generation failure surfaced to the user. Cleared whenever
+     * the row re-enters `generating` or reaches `complete`.
+     */
+    errorMessage: text("error_message"),
+    /**
      * Monotonically-advancing phase pointer — `'none' | 'A' | 'B' | 'C' | 'D'`.
      * Advanced as a side effect of the MCP tool writes that complete each phase
      * (transactionally, in the same `db.transaction` as the content write).

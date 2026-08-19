@@ -120,7 +120,14 @@ dist: ## Build the Revv.app bundle used by the source installer
 	# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
 	# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
 	# explicitly if you actually need the .dmg.
-	cd apps/desktop && bunx tauri build --bundles app
+	#
+	# createUpdaterArtifacts is true in tauri.conf.json so CI-signed release
+	# builds emit a signed .app.tar.gz for the updater. This target runs on
+	# end-user/dev machines (install.sh and `revv update`'s local-build
+	# fallback) that never hold TAURI_SIGNING_PRIVATE_KEY, so it's overridden
+	# off here — otherwise the bundler hard-fails with "public key has been
+	# found, but no private key".
+	cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
 	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
 
@@ -128,7 +135,7 @@ dmg: ## Build the full DMG installer (requires Finder/AppleEvents permission)
 	cd apps/desktop && bunx tauri build --bundles dmg
 
 dist-debug: ## Build a debug distribution (faster, larger binary)
-	cd apps/desktop && bunx tauri build --debug --bundles app
+	cd apps/desktop && bunx tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 # ── Quality ───────────────────────────────────────────────────
 

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { ACP_LOGIN_COMMAND } from "../providers/cli-agent";
@@ -7,6 +10,18 @@ import {
   resolveAcpProcessLaunchById,
   resolveGenerationModel,
 } from "./presets";
+
+function withPathExecutable(command: string, fn: (path: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "revv-acp-preset-"));
+  try {
+    const bin = join(dir, command);
+    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    chmodSync(bin, 0o755);
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("ACP agent registry", () => {
   it("is the single source of truth — adding an agent is one registry entry", () => {
@@ -50,32 +65,29 @@ describe("ACP launch presets", () => {
     });
     expect(resolveAcpLaunchById("codex")).toEqual({
       command: "npx",
-      args: ["-y", "@zed-industries/codex-acp"],
+      args: ["-y", "@agentclientprotocol/codex-acp"],
     });
   });
 
-  it("passes the selected model to codex-acp at launch", () => {
+  it("passes the selected model to codex-acp through CODEX_CONFIG", () => {
     if (serverEnv.acpCommand) return;
-    expect(resolveAcpLaunchById("codex", { model: "gpt-5.5" })).toEqual({
+    expect(resolveAcpLaunchById("codex", { model: "gpt-5.6-sol" })).toEqual({
       command: "npx",
-      args: ["-y", "@zed-industries/codex-acp", "-c", 'model="gpt-5.5"'],
+      args: ["-y", "@agentclientprotocol/codex-acp"],
+      env: { CODEX_CONFIG: JSON.stringify({ model: "gpt-5.6-sol" }) },
     });
   });
 
-  it("injects model + reasoning effort as codex `-c` args", () => {
+  it("injects model + reasoning effort as Codex session config", () => {
     if (serverEnv.acpCommand) return;
     expect(
-      resolveAcpLaunchById("codex", { model: "gpt-5.5", thinkingEffort: "extra-high" }),
+      resolveAcpLaunchById("codex", { model: "gpt-5.6-sol", thinkingEffort: "extra-high" }),
     ).toEqual({
       command: "npx",
-      args: [
-        "-y",
-        "@zed-industries/codex-acp",
-        "-c",
-        'model="gpt-5.5"',
-        "-c",
-        'model_reasoning_effort="xhigh"',
-      ],
+      args: ["-y", "@agentclientprotocol/codex-acp"],
+      env: {
+        CODEX_CONFIG: JSON.stringify({ model: "gpt-5.6-sol", model_reasoning_effort: "xhigh" }),
+      },
     });
   });
 
@@ -122,6 +134,71 @@ describe("ACP launch presets", () => {
     expect(launch.env.PATH).toBe("/usr/bin");
   });
 
+  it("keeps npx when the selected PATH provides it", () => {
+    withPathExecutable("npx", (path) => {
+      const launch = resolveAcpProcessLaunchById("claude-code", {}, {}, path, {
+        claudeSubscriptionAuth: false,
+      });
+
+      expect(launch.command).toBe("npx");
+      expect(launch.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp"]);
+    });
+  });
+
+  it("falls back from npx to bunx and removes npx's yes flag", () => {
+    withPathExecutable("bunx", (path) => {
+      const launch = resolveAcpProcessLaunchById("claude-code", {}, {}, path, {
+        claudeSubscriptionAuth: false,
+      });
+
+      expect(launch.command).toBe("bunx");
+      expect(launch.args).toEqual(["@agentclientprotocol/claude-agent-acp"]);
+    });
+  });
+
+  it("falls back from npx to bun x when only bun is available", () => {
+    withPathExecutable("bun", (path) => {
+      const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.6-sol" }, {}, path);
+
+      expect(launch.command).toBe("bun");
+      expect(launch.args).toEqual(["x", "@agentclientprotocol/codex-acp"]);
+      expect(launch.env.CODEX_CONFIG).toBe(JSON.stringify({ model: "gpt-5.6-sol" }));
+    });
+  });
+
+  it("injects CLAUDE_CONFIG_DIR for claude-code when the option is set", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-4-6" },
+      {},
+      "/usr/bin",
+      { claudeSubscriptionAuth: false, claudeConfigDir: "/tmp/x" },
+    );
+
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBe("/tmp/x");
+  });
+
+  it("never leaks CLAUDE_CONFIG_DIR to a non-claude-code adapter", () => {
+    if (serverEnv.acpCommand) return;
+    const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.6-sol" }, {}, "/usr/bin", {
+      claudeConfigDir: "/tmp/x",
+    });
+
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  it("omits CLAUDE_CONFIG_DIR for claude-code when the option is absent", () => {
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-4-6" },
+      {},
+      "/usr/bin",
+      { claudeSubscriptionAuth: false },
+    );
+
+    expect("CLAUDE_CONFIG_DIR" in launch.env).toBe(false);
+  });
+
   it("keeps Anthropic API credentials when no Claude subscription auth exists", () => {
     const launch = resolveAcpProcessLaunchById(
       "claude-code",
@@ -154,8 +231,8 @@ describe("ACP login commands", () => {
 
 describe("resolveGenerationModel", () => {
   it("keeps a model valid for the agent", () => {
-    expect(resolveGenerationModel("claude-code", "claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
-    expect(resolveGenerationModel("codex", "gpt-5.5")).toBe("gpt-5.5");
+    expect(resolveGenerationModel("claude-code", "claude-sonnet-5")).toBe("claude-sonnet-5");
+    expect(resolveGenerationModel("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
   });
 
   it("falls back to the agent default when the model belongs to another agent", () => {

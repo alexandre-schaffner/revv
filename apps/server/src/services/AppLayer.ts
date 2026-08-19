@@ -149,7 +149,14 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
 // PollScheduler depends on BaseLayers + SyncService (for thread polling) +
 // WalkthroughJobs (for superseding walkthroughs when a new head SHA arrives).
 const PollSchedulerWithDeps = PollSchedulerLive.pipe(
-  Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps)),
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      SyncServiceWithDeps,
+      WalkthroughJobsWithDeps,
+      RepoCloneServiceWithDeps,
+    ),
+  ),
 );
 
 // ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but

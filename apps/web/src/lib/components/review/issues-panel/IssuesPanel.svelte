@@ -15,6 +15,7 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
 import IssueSummaryBar from "./IssueSummaryBar.svelte";
 import IssueTestRow from "./IssueTestRow.svelte";
@@ -146,15 +147,16 @@ function focusIssue(id: string): void {
   if (el) el.focus();
 }
 
-function onPanelKeydown(e: KeyboardEvent): void {
-  const target = e.target as HTMLElement | null;
-  const inInput =
-    target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+function focusableIssues(): WalkthroughIssue[] {
+  return visibleIssues.filter((issue) => !submittedIds.has(issue.id) && rowRefs.get(issue.id));
+}
 
+function onPanelKeydown(e: KeyboardEvent): void {
   // Checkbox focus shouldn't eat the shortcut keys — but ArrowUp/Down
   // inside a checkbox is weird anyway, so we skip shortcut handling
   // whenever the active element is an input/textarea.
-  if (inInput) return;
+  if (isTextEditingKeyTarget(e)) return;
+  const target = e.target as HTMLElement | null;
 
   if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
@@ -165,14 +167,15 @@ function onPanelKeydown(e: KeyboardEvent): void {
   // Is focus on one of our row triggers?
   let focusedId: string | undefined;
   for (const [id, el] of rowRefs) {
-    if (el === target) {
+    if (el && target && (el === target || el.contains(target))) {
       focusedId = id;
       break;
     }
   }
   if (focusedId === undefined) return;
 
-  const idx = visibleIssues.findIndex((i) => i.id === focusedId);
+  const focusable = focusableIssues();
+  const idx = focusable.findIndex((i) => i.id === focusedId);
   if (idx < 0) return;
 
   if (e.key === "x" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -188,19 +191,19 @@ function onPanelKeydown(e: KeyboardEvent): void {
 
   if (e.key === "ArrowDown" || e.key === "j") {
     e.preventDefault();
-    const next = visibleIssues[Math.min(idx + 1, visibleIssues.length - 1)];
+    const next = focusable[Math.min(idx + 1, focusable.length - 1)];
     if (next) focusIssue(next.id);
   } else if (e.key === "ArrowUp" || e.key === "k") {
     e.preventDefault();
-    const prev = visibleIssues[Math.max(idx - 1, 0)];
+    const prev = focusable[Math.max(idx - 1, 0)];
     if (prev) focusIssue(prev.id);
   } else if (e.key === "Home") {
     e.preventDefault();
-    const first = visibleIssues[0];
+    const first = focusable[0];
     if (first) focusIssue(first.id);
   } else if (e.key === "End") {
     e.preventDefault();
-    const last = visibleIssues[visibleIssues.length - 1];
+    const last = focusable[focusable.length - 1];
     if (last) focusIssue(last.id);
   }
 }

@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
   "productName": "Revv (Alpha)",
   "identifier": "com.revv.desktop",
-  "version": "0.19.0",
+  "version": "0.23.0",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web/build",
@@ -15,6 +15,7 @@
       "app",
       "dmg"
     ],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -71,10 +72,12 @@
     "updater": {
       "active": true,
       "endpoints": [
+        "http://localhost:45678/api/update-manifest",
         "https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json"
       ],
+      "dangerousInsecureTransportProtocol": true,
       "dialog": false,
-      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3MzUxMzFGRUFERTc5QjUKUldTMWVkN3FIeE0xUndlSmxEUnlDZnkwUmt2by84L0s4dHI3aldXcDFmUGZ5amF3dWJ6ZFVRNXUK"
     }
   }
 }

@@ -58,6 +58,11 @@ import {
   streamChatMessage,
   submitQuestionAnswer,
 } from "$lib/api/chat";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
+import {
+  agentAuthRecoveryDescription,
+  isAgentAuthRecoveryError,
+} from "$lib/utils/agent-auth-recovery";
 
 export type ChatItem =
   | {
@@ -930,7 +935,11 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         void refreshProposedChanges(prId);
         if (err.code === "NOT_CONFIGURED") {
           toast.error("AI agent not configured", {
-            description: "Install opencode or Claude Code, then configure it in Settings.",
+            description: "Reconnect the agent in Settings, then retry.",
+            action: {
+              label: "Open Settings",
+              onClick: () => openSettings("ai"),
+            },
             duration: Number.POSITIVE_INFINITY,
           });
           return;
@@ -939,6 +948,17 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           toast.error("GitHub rate limit reached", {
             description: err.message,
             duration: 15000,
+          });
+          return;
+        }
+        if (isAgentAuthRecoveryError(err.message)) {
+          toast.error("AI agent authentication required", {
+            description: agentAuthRecoveryDescription(err.message),
+            action: {
+              label: "Open Settings",
+              onClick: () => openSettings("ai"),
+            },
+            duration: Number.POSITIVE_INFINITY,
           });
           return;
         }
