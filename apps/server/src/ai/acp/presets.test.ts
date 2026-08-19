@@ -91,19 +91,29 @@ describe("ACP launch presets", () => {
     });
   });
 
-  it("injects Claude Code model / context / thinking via env", () => {
+  it("injects Claude Code model / context / effort via env", () => {
     if (serverEnv.acpCommand) return;
     const launch = resolveAcpLaunchById("claude-code", {
-      model: "claude-opus-4-8",
+      model: "claude-opus-5",
       thinkingEffort: "high",
       contextWindow: "1m",
     });
     expect(launch.command).toBe("npx");
     expect(launch.env).toEqual({
-      ANTHROPIC_MODEL: "claude-opus-4-8",
+      ANTHROPIC_MODEL: "claude-opus-5",
       CLAUDE_CODE_DISABLE_1M_CONTEXT: "false",
-      MAX_THINKING_TOKENS: "24000",
+      CLAUDE_CODE_EFFORT_LEVEL: "high",
     });
+    // `extra-high` is Revv's key for Claude Code's `xhigh` level.
+    expect(
+      resolveAcpLaunchById("claude-code", { thinkingEffort: "extra-high" }).env
+        ?.CLAUDE_CODE_EFFORT_LEVEL,
+    ).toBe("xhigh");
+    // Retired tier persisted before the ladder was trimmed → deepest real level.
+    expect(
+      resolveAcpLaunchById("claude-code", { thinkingEffort: "ultrathink" }).env
+        ?.CLAUDE_CODE_EFFORT_LEVEL,
+    ).toBe("max");
     // The 200K tier disables the 1M context.
     expect(
       resolveAcpLaunchById("claude-code", { contextWindow: "200k" }).env
