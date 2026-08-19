@@ -22,6 +22,7 @@
     "dist": "cd apps/desktop && bunx tauri build",
     "dist:debug": "cd apps/desktop && bunx tauri build --debug",
     "clean": "rm -rf apps/web/build apps/web/.svelte-kit apps/server/dist apps/desktop/target .turbo",
+    "prepare": "./scripts/prepare-effect.sh",
     "postinstall": "echo $'\\n  Run `bun run dev` to start developing, or `bun run dist` to build an installer.\\n'"
   },
   "devDependencies": {

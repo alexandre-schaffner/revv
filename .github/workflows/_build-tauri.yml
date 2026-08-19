@@ -2,16 +2,27 @@ name: Build Tauri (reusable)
 
 # Shared macOS Tauri build matrix (Apple Silicon + Intel). Invoked by:
 #   - release.yml     (per-version stable releases, prerelease=false)
-#   - nightly.yml     (moving `nightly` tag, prerelease=true)
+#   - nightly.yml     (per-SHA `nightly-<sha>` tags, prerelease=true)
 #
 # Inputs are intentionally minimal — the matrix, build steps, and attestation
 # logic are identical across both pipelines; only the release metadata differs.
+#
+# ── Updater artifacts ────────────────────────────────────────────────────────
+# `bundle.createUpdaterArtifacts` is on in `tauri.conf.json`, so every build
+# emits `<name>.app.tar.gz` plus a minisign `.sig` alongside the `.dmg`. Those
+# three, and the `latest.json` manifest composed by the `manifest` job below,
+# are what `tauri-plugin-updater` needs. Without them the in-app check fails
+# with "Could not fetch a valid release JSON from the remote".
+#
+# Signing requires the `TAURI_SIGNING_PRIVATE_KEY` repo secret; its public half
+# is pinned in `tauri.conf.json` → `plugins.updater.pubkey`. See
+# `docs/updater-setup.md`.
 
 on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Git tag to upload artifacts under (e.g. v1.2.3 or nightly)"
+        description: "Git tag to upload artifacts under (e.g. v1.2.3 or nightly-abc1234)"
         required: true
         type: string
       release_name:
@@ -28,10 +39,61 @@ on:
         required: false
         type: boolean
         default: false
+      nightly:
+        description: >-
+          Stamp a monotonic prerelease version onto the build instead of using
+          `tauri.conf.json`'s version verbatim. Nightly builds all share the
+          last released version number, so without this every nightly would
+          report the same version and the updater would never consider a newer
+          one an upgrade.
+        required: false
+        type: boolean
+        default: false
+      updater_notes:
+        description: "Short one-liner shown in the in-app update toast"
+        required: false
+        type: string
+        default: "A new version of Revv is ready to install."
 
 jobs:
+  # Resolve the version once, up front, so both matrix legs and the manifest
+  # job agree on it. Doing this per-job would duplicate the bump formula and
+  # invite drift.
+  version:
+    name: Resolve build version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Resolve version
+        id: resolve
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          base=$(jq -r '.version' apps/desktop/tauri.conf.json)
+          if [[ "$NIGHTLY" == "true" ]]; then
+            # `0.23.0` → `0.23.1-nightly.<run>`. Bumping the patch keeps every
+            # nightly semver-greater than the stable release it was cut from,
+            # and the run number (numeric, so semver compares it numerically)
+            # keeps successive nightlies ordered. A short SHA would not — it
+            # sorts as an ASCII string.
+            IFS=. read -r major minor patch <<< "$base"
+            version="${major}.${minor}.$((patch + 1))-nightly.${RUN_NUMBER}"
+          else
+            version="$base"
+          fi
+          echo "Build version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.label }})
+    needs: version
     permissions:
       contents: write
       id-token: write
@@ -45,10 +107,15 @@ jobs:
             platform: macos-latest
             args: "--target aarch64-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            # Suffix tauri-action appends to updater artifacts for this target.
+            # Must match, or the fallback upload publishes a duplicate asset
+            # under a second name instead of replacing tauri-action's.
+            arch: aarch64
           - label: macOS (Intel)
             platform: macos-latest
             args: "--target x86_64-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            arch: x64
 
     runs-on: ${{ matrix.platform }}
 
@@ -56,6 +123,32 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag_name }}
+
+      # Fail here rather than 15 minutes into the bundler. Without the key the
+      # build errors out anyway (createUpdaterArtifacts requires signing), and
+      # the bundler's message doesn't say which secret is missing.
+      - name: Check updater signing key
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SIGNING_KEY" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Updater artifacts cannot be signed — see docs/updater-setup.md."
+            exit 1
+          fi
+
+      # No-op for stable (writes back the value it read); stamps the nightly
+      # prerelease version otherwise. `tauri.conf.json`'s `version` is what
+      # ends up in `PackageInfo`, i.e. what the updater compares against — so
+      # patching it here is sufficient, no Cargo.toml edit needed.
+      - name: Stamp build version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' apps/desktop/tauri.conf.json > "$tmp"
+          mv "$tmp" apps/desktop/tauri.conf.json
+          echo "Building version ${VERSION}"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -78,9 +171,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Uncomment when updater signing is configured:
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Empty when the key was generated without a password; harmless to
+          # pass either way.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: ./apps/desktop
           tauriScript: bunx tauri
@@ -90,10 +184,18 @@ jobs:
           releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
           args: ${{ matrix.args }}
+          # tauri-action can build `latest.json` itself, but it does so by
+          # read-modify-writing the release asset once per matrix leg — two
+          # concurrent runners can each read the empty manifest and the second
+          # write drops the first architecture. The `manifest` job below
+          # composes it once, after both legs, instead.
+          includeUpdaterJson: false
 
       - name: Find bundle artifacts
         id: bundles
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           bundles=()
@@ -101,20 +203,60 @@ jobs:
             bundles+=("$f")
           done < <(find apps/desktop/target -type f -name '*.dmg' -print0)
           if [[ ${#bundles[@]} -eq 0 ]]; then
-            echo "No bundle files found."
+            echo "::error::No bundle files found."
             exit 1
           fi
 
-          echo "Found bundles: ${bundles[*]}"
+          updater=()
+          while IFS= read -r -d '' f; do
+            updater+=("$f")
+          done < <(find apps/desktop/target -type f -name '*.app.tar.gz' -print0)
+          if [[ ${#updater[@]} -eq 0 ]]; then
+            echo "::error::No .app.tar.gz produced — is bundle.createUpdaterArtifacts still enabled?"
+            exit 1
+          fi
+
+          # Stage the updater tarball and its signature under the architecture
+          # suffix. On disk both matrix legs produce the same
+          # `<product>.app.tar.gz`, so uploading them verbatim would have the
+          # two legs clobber each other under one name. The suffixed name is
+          # also exactly what tauri-action uploads them as, so the fallback
+          # below replaces its copy rather than adding a second one. (GitHub
+          # rewrites spaces and parens in asset names to dots server-side;
+          # both paths go through the same rewrite, so they still collide.)
+          staged="${RUNNER_TEMP}/updater"
+          mkdir -p "$staged"
+          staged_paths=()
+          for f in "${updater[@]}"; do
+            # A build that silently skipped signing would publish a manifest
+            # the installed app then refuses to verify. Fail now instead.
+            if [[ ! -f "${f}.sig" ]]; then
+              echo "::error::${f} has no .sig — updater signing did not run."
+              exit 1
+            fi
+            base=$(basename "$f" .app.tar.gz)
+            cp "$f"       "${staged}/${base}_${ARCH}.app.tar.gz"
+            cp "${f}.sig" "${staged}/${base}_${ARCH}.app.tar.gz.sig"
+            staged_paths+=("${staged}/${base}_${ARCH}.app.tar.gz" "${staged}/${base}_${ARCH}.app.tar.gz.sig")
+          done
+
+          echo "Found bundles: ${bundles[*]} ${staged_paths[*]}"
           {
             echo "paths<<EOF"
-            printf '%s\n' "${bundles[@]}"
+            printf '%s\n' "${bundles[@]}" "${staged_paths[@]}"
+            echo "EOF"
+            # `.sig` files are short signatures over artifacts that are
+            # themselves attested; attesting them separately adds nothing.
+            echo "attest_paths<<EOF"
+            printf '%s\n' "${bundles[@]}" "${updater[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       # tauri-action uploads bundles automatically, but it can silently fail
       # when the release already exists (e.g. created by release-please). This
-      # fallback ensures every platform's bundles land on the release.
+      # fallback ensures every platform's bundles land on the release —
+      # including the updater tarball and signature, which the `manifest` job
+      # below reads back off the release.
       - name: Upload bundles (fallback)
         shell: bash
         env:
@@ -137,4 +279,69 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: ${{ steps.bundles.outputs.paths }}
+          subject-path: ${{ steps.bundles.outputs.attest_paths }}
+
+  # Compose `latest.json` — the manifest `tauri-plugin-updater` fetches — from
+  # the signatures both matrix legs just uploaded. Done in a dedicated job
+  # rather than letting tauri-action merge per-leg manifests, because two
+  # concurrent runners read-modify-writing the same asset is a race.
+  manifest:
+    name: Publish updater manifest
+    runs-on: ubuntu-latest
+    needs: [version, build]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Compose and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          NOTES: ${{ inputs.updater_notes }}
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          # Works on draft releases too — this runs before the caller's
+          # publish step un-drafts them.
+          gh release download "$TAG" --dir "$workdir" --pattern '*.app.tar.gz.sig'
+
+          platforms='{}'
+          for sig in "$workdir"/*.app.tar.gz.sig; do
+            # `gh release download` names files after the GitHub *asset* name
+            # (spaces normalised to dots), so stripping `.sig` yields exactly
+            # the tarball's asset name — and therefore its download URL.
+            tarball=$(basename "$sig" .sig)
+            case "$tarball" in
+              *_aarch64.app.tar.gz) key="darwin-aarch64" ;;
+              *_x64.app.tar.gz|*_x86_64.app.tar.gz) key="darwin-x86_64" ;;
+              *) echo "::error::Cannot map ${tarball} to an updater platform key."; exit 1 ;;
+            esac
+            # Built by hand rather than taken from the API: a draft release's
+            # browser_download_url can carry an `untagged-<hash>` path that
+            # stops resolving once the release is published.
+            url="https://github.com/${GH_REPO}/releases/download/${TAG}/${tarball}"
+            platforms=$(jq --arg k "$key" --arg s "$(cat "$sig")" --arg u "$url" \
+              '.[$k] = {signature: $s, url: $u}' <<< "$platforms")
+          done
+
+          # One entry per matrix leg. Anything less means a leg failed
+          # (fail-fast is off) and publishing would strand that architecture
+          # on a manifest that never offers it an update.
+          count=$(jq 'length' <<< "$platforms")
+          if [[ "$count" -lt 2 ]]; then
+            echo "::error::Only ${count} platform(s) in the manifest; expected 2 (aarch64 + x86_64)."
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > "$workdir/latest.json"
+
+          cat "$workdir/latest.json"
+          gh release upload "$TAG" "$workdir/latest.json" --clobber

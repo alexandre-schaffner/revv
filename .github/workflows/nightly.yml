@@ -92,6 +92,8 @@ jobs:
       release_name: "Revv nightly (${{ needs.prep.outputs.short_sha }})"
       release_body: "Auto-built from main @ ${{ github.sha }}. Expect bugs."
       prerelease: true
+      nightly: true
+      updater_notes: "Nightly build from main @ ${{ needs.prep.outputs.short_sha }}. Expect bugs."
     secrets: inherit
 
   publish:

@@ -212,6 +212,9 @@ export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
       modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       return list;
     } catch {
+      // Mark loaded even on failure so the UI doesn't stay in "Loading…"
+      // forever; the cached (possibly empty) list is the best fallback.
+      modelsLoadedByAgent = { ...modelsLoadedByAgent, [agent]: true };
       return modelsByAgent[agent] ?? [];
     } finally {
       delete modelsInFlight[agent];

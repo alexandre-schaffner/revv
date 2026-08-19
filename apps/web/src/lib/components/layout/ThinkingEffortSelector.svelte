@@ -1,5 +1,5 @@
 <script lang="ts">
-import { getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
+import { clampThinkingEffort, getAgentCapabilities, type ThinkingEffort } from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
 import {
@@ -24,14 +24,13 @@ let currentLabel = $derived(
   options.find((o) => o.value === currentEffort)?.label ?? options[0]?.label ?? "High",
 );
 
-// If the selected effort isn't valid for the current agent (e.g. an opus-only
+// If the selected effort isn't valid for the current agent (e.g. a Claude-only
 // tier after switching to codex, or any tier after switching to an agent with
-// no thinking-effort knob), reset to one the agent supports.
+// no thinking-effort knob), step down to the nearest tier the agent supports.
 $effect(() => {
-  if (visible && !caps.thinkingEfforts.includes(currentEffort)) {
-    const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
-    if (fallback) updateSettings({ aiThinkingEffort: fallback });
-  }
+  if (!visible || caps.thinkingEfforts.includes(currentEffort)) return;
+  const fallback = clampThinkingEffort(currentId, currentEffort);
+  if (fallback) updateSettings({ aiThinkingEffort: fallback });
 });
 
 function select(value: ThinkingEffort) {

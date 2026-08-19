@@ -29,12 +29,24 @@ export type UpdateInfo = {
 };
 
 /**
+ * Per-endpoint timeout for the manifest fetch.
+ *
+ * The first configured endpoint is the local API server
+ * (`/api/update-manifest`), which resolves the release channel. A connection
+ * refused there fails instantly, but a wedged server would otherwise hang the
+ * request forever — and `runCheck`'s `inFlight` guard would then suppress
+ * every subsequent check for the life of the process. Bounding it lets the
+ * plugin move on to the GitHub fallback instead.
+ */
+const CHECK_TIMEOUT_MS = 15_000;
+
+/**
  * Returns the available update, or `null` if we're already on the latest
  * version or the updater is unreachable.
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
   const { check } = await import("@tauri-apps/plugin-updater");
-  const update = await check();
+  const update = await check({ timeout: CHECK_TIMEOUT_MS });
   if (!update) return null;
 
   return {

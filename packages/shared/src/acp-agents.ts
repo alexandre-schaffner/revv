@@ -88,6 +88,16 @@ export interface AcpAgentDescriptor {
   readonly keychainAuth?: AcpAgentKeychainAuth;
 }
 
+/** Every thinking-effort tier, strongest first — the order the web renders. */
+export const THINKING_EFFORT_ORDER = [
+  "ultrathink",
+  "max",
+  "extra-high",
+  "high",
+  "medium",
+  "low",
+] as const satisfies readonly ThinkingEffort[];
+
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
 export const ACP_AGENTS = [
   {
@@ -99,14 +109,18 @@ export const ACP_AGENTS = [
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
       defaultModel: "claude-sonnet-5",
+      // Current-generation Anthropic models only. Opus 4.8 was dropped when
+      // Opus 5 superseded it; a user still on a delisted id keeps working (the
+      // value is passed through to the agent), they just can't reselect it.
       models: [
         { label: "Claude Fable 5", value: "claude-fable-5" },
         { label: "Claude Opus 5", value: "claude-opus-5" },
-        { label: "Claude Opus 4.8", value: "claude-opus-4-8" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
       contextWindow: true,
+      // Claude Code takes a `MAX_THINKING_TOKENS` budget rather than a named
+      // tier, so every model accepts every tier — no per-model narrowing.
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
@@ -147,19 +161,22 @@ export const ACP_AGENTS = [
     description: "OpenAI's coding agent.",
     icon: "openai",
     command: "npx",
-    args: ["-y", "@zed-industries/codex-acp"],
+    args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
-      defaultModel: "gpt-5.5",
+      defaultModel: "gpt-5.6-sol",
+      // This maintained adapter embeds a current Codex App Server, so the
+      // selector can expose the current GPT-5.6 family. Do not replace it with
+      // the deprecated `@zed-industries/codex-acp`: that adapter embeds an
+      // older Codex core which rejects GPT-5.6 models.
       models: [
         { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
         { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
         { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
-        { label: "GPT-5.5", value: "gpt-5.5" },
-        { label: "GPT-5.4", value: "gpt-5.4" },
-        { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
       ],
       contextWindow: false,
-      // Codex maps these onto its `model_reasoning_effort` (no ultrathink/max).
+      // The GPT-5.6 family supports the existing selector's xhigh-or-below
+      // ladder. The adapter also supports newer tiers; keep those out of this
+      // shared setting until the UI can model each model's distinct limits.
       thinkingEfforts: ["extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
@@ -175,17 +192,22 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
-      // Curated from Cursor's CLI model roster (`cursor-agent --list-models`).
-      // Re-verify when Cursor ships/retires models.
+      // Cursor documents these exact IDs in its Models & Pricing catalog. The
+      // ACP adapter does not yet forward a selected model, so this remains a
+      // stored preference until it gains a model passthrough.
       models: [
         { label: "Auto", value: "auto" },
-        { label: "Composer 2.5", value: "composer" },
-        { label: "Claude Sonnet 4.6", value: "sonnet-4.6" },
-        { label: "Claude Sonnet 4.6 Thinking", value: "sonnet-4.6-thinking" },
-        { label: "Claude Opus 4.7", value: "opus-4.7" },
-        { label: "GPT-5.5", value: "gpt-5.5" },
-        { label: "Gemini 3 Pro", value: "gemini-3-pro" },
-        { label: "Grok 4", value: "grok-4" },
+        { label: "Claude Fable 5", value: "claude-fable-5" },
+        { label: "Claude Opus 5", value: "claude-opus-5" },
+        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Composer 2.5", value: "composer-2.5" },
+        { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
+        { label: "Gemini 3.7 Flash", value: "gemini-3.7-flash" },
+        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
+        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
+        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        { label: "Grok 4.6", value: "grok-4.6" },
+        { label: "Grok 4.5", value: "grok-4.5" },
       ],
       contextWindow: false,
       thinkingEfforts: [],
@@ -219,6 +241,30 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
 /** Revv's persisted-model default for an ACP agent. */
 export function getAcpAgentDefaultModel(id: AcpAgentId): string {
   return getAcpAgent(id).capabilities.defaultModel;
+}
+
+/**
+ * Clamp a selected effort to a tier the agent actually accepts.
+ *
+ * Effort and agent are persisted independently, so a tier picked on one agent
+ * outlives a switch to another that tops out lower — and an out-of-range tier
+ * is not inert: Codex's adapter fails to parse a `model_reasoning_effort` it
+ * doesn't know. Steps down to the nearest supported tier rather than dropping
+ * the setting, so "as much thinking as this agent allows" survives the switch.
+ * Returns `undefined` when the agent has no thinking-effort control at all.
+ */
+export function clampThinkingEffort(
+  id: AcpAgentId,
+  effort: ThinkingEffort | undefined,
+): ThinkingEffort | undefined {
+  if (!effort) return undefined;
+  const allowed = getAgentCapabilities(id).thinkingEfforts;
+  if (allowed.length === 0) return undefined;
+  if (allowed.includes(effort)) return effort;
+  // THINKING_EFFORT_ORDER is strongest-first, so the first allowed tier at or
+  // below the request is the nearest step down.
+  const from = THINKING_EFFORT_ORDER.indexOf(effort);
+  return THINKING_EFFORT_ORDER.slice(from).find((t) => allowed.includes(t)) ?? allowed[0];
 }
 
 /** Keychain-login details for an agent, or `undefined` when it isn't keychain-backed. */
