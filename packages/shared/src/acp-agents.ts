@@ -161,32 +161,22 @@ export const ACP_AGENTS = [
     description: "OpenAI's coding agent.",
     icon: "openai",
     command: "npx",
-    args: ["-y", "@zed-industries/codex-acp"],
+    args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
-      defaultModel: "gpt-5.5",
-      // ⚠️ The ceiling here is `@zed-industries/codex-acp` (see `args` above),
-      // NOT the `codex` CLI on PATH. The adapter vendors its own — older —
-      // codex core, and the API rejects a model it predates with
-      // `400 "The '<model>' model requires a newer version of Codex"`, which
-      // reaches the user as a bare "Internal error".
-      //
-      // So do NOT curate this from `codex --version` or `~/.codex/
-      // models_cache.json`; the standalone CLI runs well ahead of the adapter
-      // (0.146.0 vs a ~0.137.0 core at codex-acp 0.16.0). Read the roster out
-      // of the adapter binary instead:
-      //   strings "$(npm root -g)/../_npx/*/node_modules/@zed-industries/\
-      //     codex-acp-darwin-arm64/bin/codex-acp" | grep -oE 'gpt-5\.[0-9]+[a-z-]*'
-      // GPT-5.6 Sol/Terra/Luna are deliberately absent until it catches up.
+      defaultModel: "gpt-5.6-sol",
+      // This maintained adapter embeds a current Codex App Server, so the
+      // selector can expose the current GPT-5.6 family. Do not replace it with
+      // the deprecated `@zed-industries/codex-acp`: that adapter embeds an
+      // older Codex core which rejects GPT-5.6 models.
       models: [
-        { label: "GPT-5.5", value: "gpt-5.5" },
-        { label: "GPT-5.4", value: "gpt-5.4" },
-        { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" },
+        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
+        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
+        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
       ],
       contextWindow: false,
-      // Same ceiling: the adapter's `model_reasoning_effort` enum is
-      // none/minimal/low/medium/high/xhigh — it cannot parse the `max` and
-      // `ultra` levels the current standalone CLI offers, so extra-high (xhigh)
-      // is the top tier Revv can ask for.
+      // The GPT-5.6 family supports the existing selector's xhigh-or-below
+      // ladder. The adapter also supports newer tiers; keep those out of this
+      // shared setting until the UI can model each model's distinct limits.
       thinkingEfforts: ["extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
@@ -202,26 +192,22 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
-      // Curated from Cursor's CLI model roster (`cursor-agent --list-models`).
-      //
-      // STALE — the Anthropic entries below are a generation behind (Sonnet 4.6
-      // / Opus 4.7 vs Sonnet 5 / Opus 5). Not refreshed with the Claude Code and
-      // Codex catalogs because `--list-models` requires a logged-in Cursor CLI
-      // and the slugs are Cursor's own, not guessable from the model names. Run
-      // `cursor-agent login && cursor-agent --list-models` and paste the result.
-      //
-      // Low blast radius today: the `cursor-agent-acp` adapter doesn't forward a
-      // model, so this list is a stored preference Cursor never reads (see
-      // `resolveAcpLaunchById`). It starts mattering the moment that lands.
+      // Cursor documents these exact IDs in its Models & Pricing catalog. The
+      // ACP adapter does not yet forward a selected model, so this remains a
+      // stored preference until it gains a model passthrough.
       models: [
         { label: "Auto", value: "auto" },
-        { label: "Composer 2.5", value: "composer" },
-        { label: "Claude Sonnet 4.6", value: "sonnet-4.6" },
-        { label: "Claude Sonnet 4.6 Thinking", value: "sonnet-4.6-thinking" },
-        { label: "Claude Opus 4.7", value: "opus-4.7" },
-        { label: "GPT-5.5", value: "gpt-5.5" },
-        { label: "Gemini 3 Pro", value: "gemini-3-pro" },
-        { label: "Grok 4", value: "grok-4" },
+        { label: "Claude Fable 5", value: "claude-fable-5" },
+        { label: "Claude Opus 5", value: "claude-opus-5" },
+        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Composer 2.5", value: "composer-2.5" },
+        { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
+        { label: "Gemini 3.7 Flash", value: "gemini-3.7-flash" },
+        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
+        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
+        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        { label: "Grok 4.6", value: "grok-4.6" },
+        { label: "Grok 4.5", value: "grok-4.5" },
       ],
       contextWindow: false,
       thinkingEfforts: [],

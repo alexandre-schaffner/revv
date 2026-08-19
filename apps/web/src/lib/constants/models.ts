@@ -33,7 +33,7 @@ export function getDefaultModel(agent: AcpAgentId): string {
 const DEFAULT_SUGGESTIONS_MODEL_BY_AGENT: Record<AcpAgentId, string> = {
   opencode: "opencode/big-pickle",
   "claude-code": "claude-haiku-4-5-20251001",
-  codex: "gpt-5.4-mini",
+  codex: "gpt-5.6-luna",
   cursor: "auto",
 };
 

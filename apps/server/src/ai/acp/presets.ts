@@ -6,7 +6,7 @@
 // entry there. This module holds the server-only concerns: the `REVV_ACP_AGENT`
 // / `REVV_ACP_COMMAND` overrides, availability checks, and — since ACP has no
 // model protocol — per-adapter injection of the selected model / thinking-effort
-// / context-window at launch time (args for Codex/opencode, env for Claude Code).
+// / context-window at launch time (env for Codex/Claude Code/opencode).
 
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -26,7 +26,7 @@ import { detectClaudeSubscriptionAuth, isCommandOnPath } from "../providers/cli-
 export interface AcpLaunch {
   readonly command: string;
   readonly args: readonly string[];
-  /** Extra env vars merged over `process.env` when spawning (Claude Code model/effort/context). */
+  /** Extra env vars merged over `process.env` when spawning. */
   readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -63,12 +63,8 @@ export interface AcpProcessEnvOptions {
   readonly claudeConfigDir?: string | undefined;
 }
 
-// Revv thinking-effort tier → Codex `model_reasoning_effort`. The vocabulary is
-// the one `@zed-industries/codex-acp` vendors — none/minimal/low/medium/high/
-// xhigh — NOT the standalone `codex` CLI's, which has since added `max` and
-// `ultra`. Sending a level the adapter predates makes it fail to parse its own
-// config, so ultrathink/max stay unmapped; `clampThinkingEffort` steps a stale
-// setting down before it reaches here.
+// Revv thinking-effort tier → Codex `model_reasoning_effort`. The maintained
+// Codex ACP adapter merges this into the session config through CODEX_CONFIG.
 const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
   "extra-high": "xhigh",
   high: "high",
@@ -160,12 +156,18 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
 
   switch (id) {
     case "codex": {
-      if (model) args.push("-c", `model=${JSON.stringify(model)}`);
       // Clamp rather than trust the persisted tier: effort and agent are stored
       // independently, so a tier picked on Claude Code outlives a switch here.
       const tier = clampThinkingEffort(id, thinkingEffort);
       const effort = tier ? CODEX_REASONING_EFFORT[tier] : undefined;
-      if (effort) args.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
+      // `@agentclientprotocol/codex-acp` starts Codex's App Server and reads
+      // CODEX_CONFIG, rather than forwarding the legacy adapter's `-c` flags.
+      if (model || effort) {
+        env.CODEX_CONFIG = JSON.stringify({
+          ...(model ? { model } : {}),
+          ...(effort ? { model_reasoning_effort: effort } : {}),
+        });
+      }
       break;
     }
     case "claude-code": {

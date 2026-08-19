@@ -24,7 +24,7 @@ import { resolveClaudeConfigDir } from "../acp/claude-config";
 //      installer's shell PATH). Survives a restricted LaunchAgent PATH.
 //   2. Auth-only fallback for the npx-adapter agents whose adapter authenticates
 //      from a local store instead of shelling out to the named CLI:
-//        • Codex  — `@zed-industries/codex-acp` reads `~/.codex/auth.json`
+//        • Codex  — `@agentclientprotocol/codex-acp` reads `~/.codex/auth.json`
 //          (honoring `CODEX_HOME`). CLI *or* Codex desktop app login counts.
 //        • Claude — `claude-agent-acp` runs on the Claude Agent SDK; an
 //          `ANTHROPIC_API_KEY`, `~/.claude/.credentials.json`, or the macOS
