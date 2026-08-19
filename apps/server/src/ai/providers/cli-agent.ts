@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,7 +29,10 @@ import { CLI_CACHE_TTL_MS } from "../../constants";
 //          Keychain login counts.
 //      opencode (own binary) and Cursor (`cursor-agent-acp` shells out to the
 //      `cursor-agent` CLI) are excluded — they genuinely need their binary.
-//   3. `which <tool>` resolved against the user's *login-shell* PATH — not the
+//   3. The Codex desktop app bundle on macOS. The bundled CLI shares the
+//      desktop app's ChatGPT login, but the app cannot always create its PATH
+//      alias (for example, when it lacks permission to write the shell setup).
+//   4. `which <tool>` resolved against the user's *login-shell* PATH — not the
 //      process PATH. A server launched by launchd / a GUI inherits a sanitized
 //      PATH that omits where CLIs actually live (nvm, Homebrew on Apple Silicon,
 //      npm global prefixes, app-managed bin dirs). Probing the login shell makes
@@ -45,6 +48,31 @@ type AgentAuthStatus = Pick<
   AgentStatus,
   "authed" | "verified" | "authSource" | "authLabel" | "authWarning"
 >;
+
+const CODEX_DESKTOP_CLI_CANDIDATES = [
+  "/Applications/ChatGPT.app/Contents/Resources/codex",
+  join(homedir(), "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
+] as const;
+
+/**
+ * Resolve the Codex CLI bundled with the macOS desktop app. This is a fallback
+ * only: an explicit Revv pin or a user-managed PATH installation takes
+ * precedence. Keeping the probe here means status checks and embedded login
+ * launch the same executable that owns the desktop app's session.
+ */
+export function resolveDesktopCodexBin(
+  candidates: readonly string[] = CODEX_DESKTOP_CLI_CANDIDATES,
+  isExecutable: (path: string) => boolean = (path) => {
+    try {
+      const stat = statSync(path);
+      return stat.isFile() && (stat.mode & 0o111) !== 0;
+    } catch {
+      return false;
+    }
+  },
+): string | null {
+  return candidates.find(isExecutable) ?? null;
+}
 
 let cachedPath: { value: string; expiresAt: number } | null = null;
 
@@ -452,7 +480,12 @@ function isCliAgentAvailable(agent: CliAgent): boolean {
  * directly as argv[0] of a spawn call.
  */
 export function resolveCliBin(agent: CliAgent): string {
-  return pinnedBin(agent) || resolveCommandPath(agent) || agent;
+  return (
+    pinnedBin(agent) ||
+    resolveCommandPath(agent) ||
+    (agent === "codex" ? resolveDesktopCodexBin() : null) ||
+    agent
+  );
 }
 
 /**

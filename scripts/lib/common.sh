@@ -532,8 +532,17 @@ write_launch_agent_plist() {
   claude_bin="$(command -v claude 2>/dev/null || true)"
   opencode_bin="$(command -v opencode 2>/dev/null || true)"
   codex_bin="$(command -v codex 2>/dev/null || true)"
+  # The Codex desktop app bundles a CLI that shares its ChatGPT session. The
+  # app cannot always install a PATH alias, so persist this known macOS path
+  # when a separately installed CLI is unavailable.
+  if [[ -z "$codex_bin" && -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
+    codex_bin="/Applications/ChatGPT.app/Contents/Resources/codex"
+  elif [[ -z "$codex_bin" && -x "$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
+    codex_bin="$HOME/Applications/ChatGPT.app/Contents/Resources/codex"
+  fi
   [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
   [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
+  [[ -n "$codex_bin"    ]] && info "Detected codex at $codex_bin"
 
   # ── GitHub Enterprise env vars ─────────────────────────────
   # Resolution order (first non-empty value wins):
@@ -621,6 +630,10 @@ write_launch_agent_plist() {
         <key>REVV_OPENCODE_BIN</key>
         <string>$opencode_bin</string>
         <key>REVV_CODEX_BIN</key>
+        <string>$codex_bin</string>
+        <!-- The maintained Codex ACP adapter uses this standard variable to
+             start the user's signed-in desktop/CLI executable. -->
+        <key>CODEX_PATH</key>
         <string>$codex_bin</string>
 $extra_env_xml    </dict>
 
