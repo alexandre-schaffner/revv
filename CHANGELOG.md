@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.1](https://github.com/alexandre-schaffner/revv/compare/v0.23.0...v0.23.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **acp:** send Claude Code effort level, add Claude Opus 5 ([#191](https://github.com/alexandre-schaffner/revv/issues/191)) ([35d54fe](https://github.com/alexandre-schaffner/revv/commit/35d54fe6f9d77f84b6296c71b17337c9627f13ce))
+* discover bundled Codex CLI ([#213](https://github.com/alexandre-schaffner/revv/issues/213)) ([bcb6267](https://github.com/alexandre-schaffner/revv/commit/bcb6267dc9be4bee61b4623ae75d09e0fe7cda91))
+* **updater:** address Thermos review findings on the update-check pipeline ([#212](https://github.com/alexandre-schaffner/revv/issues/212)) ([ba98bf4](https://github.com/alexandre-schaffner/revv/commit/ba98bf4c1904d91bbfcec58d20ef571417a827bc))
+* **updater:** publish signed release manifests and honour the channel ([#210](https://github.com/alexandre-schaffner/revv/issues/210)) ([19eb0d6](https://github.com/alexandre-schaffner/revv/commit/19eb0d6aa568876a29d125d6fa144e92409354b2))
+
 ## [0.23.0](https://github.com/alexandre-schaffner/revv/compare/v0.22.0...v0.23.0) (2026-08-11)
 
 
