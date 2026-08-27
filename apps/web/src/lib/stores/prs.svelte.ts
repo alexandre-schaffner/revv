@@ -11,7 +11,7 @@ import { REVIEW_MODE, type ReviewMode } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
@@ -52,6 +52,10 @@ let teamsByOrg = $state<Map<string, Team[]>>(new Map());
 let teamsLoadingByOrg = $state<Map<string, boolean>>(new Map());
 let teamsFailedByOrg = $state<Map<string, boolean>>(new Map());
 let isLoading = $state(false);
+// Set once `fetchPrs` has settled (success or failure). Lets callers tell
+// "this PR isn't in the list yet" from "this PR isn't in the list at all"
+// without waiting forever on a row that will never arrive.
+let prsFetchAttempted = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
 // Cursor for the next page of archived PRs. Null = exhausted or never
 // fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
@@ -250,6 +254,31 @@ export function getReviewModeForPr(prId: string): ReviewMode {
     : REVIEW_MODE.reviewer;
 }
 
+/**
+ * Whether {@link getReviewModeForPr} can give a real answer yet.
+ *
+ * The lens needs two async inputs — the PR row (for `authorLogin`) and the
+ * signed-in user's GitHub login. Missing either, `getReviewModeForPr` quietly
+ * reports `"reviewer"`, which is indistinguishable from a genuine reviewer
+ * verdict. On a cold start that provisional answer is wrong for every PR the
+ * user authored, and any caller that *fetches* on it pays for the request
+ * twice — once against the wrong lens, once again when the real mode lands.
+ * For a 3 000-file PR that is two ~12 MB `/files` responses per app launch.
+ *
+ * Callers that only render the mode can keep reading it directly; callers that
+ * issue requests should wait for this.
+ */
+export function isReviewModeResolved(prId: string): boolean {
+  if (!hasAttemptedIdentityLoad()) return false;
+  if (pullRequests.some((p) => p.id === prId) || archivedPrs.some((p) => p.id === prId)) {
+    return true;
+  }
+  // The row may never arrive — a deep link can point at a PR outside the
+  // synced set. Once the list fetch has settled, "reviewer" is the real
+  // answer rather than a placeholder, so callers must not keep waiting.
+  return prsFetchAttempted;
+}
+
 export function getTaggedPrs(repoId: string): PullRequest[] {
   return taggedPrsByRepo.get(repoId) ?? [];
 }
@@ -375,6 +404,7 @@ export async function fetchPrs(): Promise<void> {
     // error handled by wsStore or caller
   } finally {
     isLoading = false;
+    prsFetchAttempted = true;
   }
 }
 

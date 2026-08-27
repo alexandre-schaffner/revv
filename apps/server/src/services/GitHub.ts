@@ -12,6 +12,7 @@ import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
+  apiBaseForHost,
   assertGitHubOk,
   conditionalFetch,
   conditionalFetchPaginated,
@@ -30,23 +31,21 @@ import {
 import { SettingsService } from "./Settings";
 
 /**
- * Resolve the GitHub REST API base URL at call time from user settings.
- * Falls back to `serverEnv.githubHost` when settings haven't been written yet
- * (first-run, or settings file missing). Returns `https://api.github.com` for
- * `github.com`; `https://api.<host>` for GitHub Enterprise.
+ * Fallback GitHub REST API base URL, derived from the *global* settings host.
+ *
+ * Only correct for flows that have no repository in hand: add-repo, onboarding,
+ * device auth, org/team pickers. Anything scoped to a repo must pass an
+ * explicit `apiBase` built from that repo's `githubHost` — the settings row
+ * holds one host, so relying on it silently sends GitHub Enterprise traffic to
+ * `api.github.com` (or vice versa) the moment two hosts coexist on one machine.
  */
 const resolveApiBase: Effect.Effect<string, never, SettingsService> = Effect.gen(function* () {
   const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
     Effect.orElseSucceed(() => null),
   );
   const host = settings?.githubHost?.trim() || serverEnv.githubHost;
-  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
+  return apiBaseForHost(host);
 });
-
-/** Build the REST API base URL for an explicit host (no settings lookup needed). */
-function resolveApiBaseForHost(host: string): string {
-  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
-}
 
 /** Parse "owner/repo" into parts, failing with GitHubNotFoundError if malformed. */
 function parseRepoFullName(
@@ -131,6 +130,34 @@ const PR_FILES_PAGE_SIZE = 100;
 export const PR_FILES_MAX_PAGES = 30;
 export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
 
+/**
+ * Collapse repeated filenames in GitHub's PR-files list.
+ *
+ * GitHub emits *two* entries for one path when the file's type changed — a
+ * regular file replaced by a symlink comes back as a `removed` entry
+ * immediately followed by an `added` entry, both with the same `filename`.
+ * Two consequences, both bugs we hit:
+ *
+ *   • `pr_diff_files` is keyed on `(prId, path)`, so the pair collapses to a
+ *     single row on write. The stored row count then never reaches GitHub's
+ *     `changed_files` stat (which counts entries, not paths), and the
+ *     completeness guard re-fetched all 30 pages on *every* page view.
+ *   • `@pierre/trees` throws `Duplicate path` when the sidebar tree is built
+ *     from a list containing the same path twice. That throw happens inside a
+ *     Svelte `$effect`, which aborts the whole flush — the walkthrough's code
+ *     blocks silently never mount.
+ *
+ * Deduping at the gateway keeps what we return identical to what we store.
+ * Last entry wins, matching the cache write's `onConflictDoUpdate`; the
+ * surviving entry keeps the first occurrence's position so file order is
+ * stable.
+ */
+export function dedupePrFilesByPath(files: readonly PrFileMeta[]): PrFileMeta[] {
+  const byPath = new Map<string, PrFileMeta>();
+  for (const file of files) byPath.set(file.filename, file);
+  return [...byPath.values()];
+}
+
 export interface PrCommit {
   readonly sha: string;
   readonly message: string;
@@ -150,6 +177,7 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
   /**
    * Find PR numbers closed (or merged) in a time window via GitHub's
@@ -167,6 +195,7 @@ interface GitHubGatewayFlatService {
     sinceIso: string,
     untilIso: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     ReadonlyArray<{
       readonly number: number;
@@ -179,6 +208,7 @@ interface GitHubGatewayFlatService {
   readonly getRepo: (
     fullName: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache | SettingsService>;
   /**
    * Like `getRepo`, but bypasses the ETag cache. Required for fields that
@@ -221,22 +251,26 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
   readonly getPrFiles: (
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
   readonly listPrCommits: (
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
   readonly getFileContent: (
     repoFullName: string,
     path: string,
     ref: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<string, GitHubError, SettingsService>;
   /**
    * Fetch the raw bytes for a file at a specific ref. Uses the
@@ -250,6 +284,7 @@ interface GitHubGatewayFlatService {
     path: string,
     ref: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
   readonly postReview: (
     repoFullName: string,
@@ -267,24 +302,28 @@ interface GitHubGatewayFlatService {
       }>;
     },
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
   readonly findPendingReview: (
     repoFullName: string,
     prNumber: number,
     reviewerLogin: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<{ id: number; htmlUrl: string } | null, GitHubError, SettingsService>;
   readonly deletePendingReview: (
     repoFullName: string,
     prNumber: number,
     reviewId: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   readonly listReviewCommentsForReview: (
     repoFullName: string,
     prNumber: number,
     reviewId: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     Array<{
       id: number;
@@ -309,6 +348,7 @@ interface GitHubGatewayFlatService {
       readonly commitSha: string;
     },
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     { id: number; htmlUrl: string; createdAt: string },
     GitHubError,
@@ -320,6 +360,7 @@ interface GitHubGatewayFlatService {
     commentId: string | number,
     body: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     { id: number; htmlUrl: string; createdAt: string },
     GitHubError,
@@ -330,19 +371,23 @@ interface GitHubGatewayFlatService {
     prNumber: number,
     since: string | null,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<GhReviewComment[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
   readonly listReviewThreads: (
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<GhReviewThread[], GitHubError, SettingsService>;
   readonly resolveReviewThread: (
     threadNodeId: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   readonly unresolveReviewThread: (
     threadNodeId: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /**
    * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
@@ -353,12 +398,14 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /** Inverse of {@link convertPrToDraft}: move a draft back to ready-for-review. */
   readonly markPrReadyForReview: (
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /**
    * Close (but do not merge) the PR via REST PATCH /pulls/:number with
@@ -369,6 +416,7 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /**
    * Check whether the authenticated viewer can merge this PR, and whether
@@ -379,6 +427,7 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     prNumber: number,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<MergeEligibility, GitHubError, SettingsService>;
   /**
    * Merge a pull request via the REST API. GitHub returns 405 when the PR
@@ -390,6 +439,7 @@ interface GitHubGatewayFlatService {
     prNumber: number,
     mergeMethod: MergeMethod,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
   /**
    * Fetch the authenticated viewer (`GET /user`), bypassing the ETag cache.
@@ -431,6 +481,7 @@ interface GitHubGatewayFlatService {
       readonly draft?: boolean;
     },
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     {
       readonly id: number;
@@ -457,6 +508,7 @@ interface GitHubGatewayFlatService {
     repoFullName: string,
     headBranch: string,
     token: string,
+    apiBase?: string,
   ) => Effect.Effect<
     {
       readonly number: number;
@@ -529,9 +581,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
     }).pipe(retryTransient),
 
-  getPr: (repoFullName, prNumber, token) =>
+  getPr: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -541,9 +593,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
     }).pipe(retryTransient),
 
-  searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token) =>
+  searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GitHub's search query syntax: `repo:owner/name is:pr is:closed
       // closed:since..until`. Timestamps in ISO form are accepted with
@@ -592,9 +644,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }>;
     }).pipe(retryTransient),
 
-  getRepo: (fullName, token) =>
+  getRepo: (fullName, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(fullName);
       const data = yield* conditionalFetch(`/repos/${owner}/${repo}`, token, apiBase);
       return mapRepo(data as Record<string, unknown>);
@@ -789,9 +841,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return yield* fromRest;
     }).pipe(retryTransient),
 
-  getPrMeta: (repoFullName, prNumber, token) =>
+  getPrMeta: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -804,9 +856,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return { baseSha: base.sha as string, headSha: head.sha as string };
     }).pipe(retryTransient),
 
-  getPrFiles: (repoFullName, prNumber, token) =>
+  getPrFiles: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GitHub returns PR files in 100-file pages. Fetch the endpoint's full
       // supported range so large PRs don't cache an incomplete sidebar/diff.
@@ -816,19 +868,21 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         PR_FILES_MAX_PAGES,
         apiBase,
       );
-      return (data as Record<string, unknown>[]).map((f) => ({
-        filename: f.filename as string,
-        previousFilename: (f.previous_filename as string | undefined) ?? null,
-        status: f.status as string,
-        additions: (f.additions as number | undefined) ?? 0,
-        deletions: (f.deletions as number | undefined) ?? 0,
-        patch: (f.patch as string | undefined) ?? null,
-      }));
+      return dedupePrFilesByPath(
+        (data as Record<string, unknown>[]).map((f) => ({
+          filename: f.filename as string,
+          previousFilename: (f.previous_filename as string | undefined) ?? null,
+          status: f.status as string,
+          additions: (f.additions as number | undefined) ?? 0,
+          deletions: (f.deletions as number | undefined) ?? 0,
+          patch: (f.patch as string | undefined) ?? null,
+        })),
+      );
     }).pipe(retryTransient),
 
-  listPrCommits: (repoFullName, prNumber, token) =>
+  listPrCommits: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // Paginate to capture the head commit. GitHub's PR commits endpoint
       // returns up to 250 commits in ascending date order (oldest first),
@@ -905,9 +959,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }).pipe(retryTransient),
 
-  getFileContent: (repoFullName, path, ref, token) =>
+  getFileContent: (repoFullName, path, ref, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const data = yield* githubFetch(
@@ -923,9 +977,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return "";
     }).pipe(retryTransient),
 
-  getFileRawBytes: (repoFullName, path, ref, token) =>
+  getFileRawBytes: (repoFullName, path, ref, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
@@ -948,9 +1002,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       });
     }).pipe(retryTransient),
 
-  postReview: (repoFullName, prNumber, review, token) =>
+  postReview: (repoFullName, prNumber, review, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const payload: Record<string, unknown> = {
         event: review.event,
@@ -984,9 +1038,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  findPendingReview: (repoFullName, prNumber, reviewerLogin, token) =>
+  findPendingReview: (repoFullName, prNumber, reviewerLogin, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* githubFetchPaginated(
         `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
@@ -1007,9 +1061,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  deletePendingReview: (repoFullName, prNumber, reviewId, token) =>
+  deletePendingReview: (repoFullName, prNumber, reviewId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       yield* githubDelete(
         `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
@@ -1018,9 +1072,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  listReviewCommentsForReview: (repoFullName, prNumber, reviewId, token) =>
+  listReviewCommentsForReview: (repoFullName, prNumber, reviewId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* githubFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
@@ -1037,9 +1091,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }));
     }),
 
-  postReviewComment: (repoFullName, prNumber, c, token) =>
+  postReviewComment: (repoFullName, prNumber, c, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const payload: Record<string, unknown> = {
         body: c.body,
@@ -1066,9 +1120,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  replyToComment: (repoFullName, prNumber, commentId, body, token) =>
+  replyToComment: (repoFullName, prNumber, commentId, body, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* githubPost(
         `/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
@@ -1084,9 +1138,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  listReviewComments: (repoFullName, prNumber, since, token) =>
+  listReviewComments: (repoFullName, prNumber, since, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const sinceQ = since ? `&since=${encodeURIComponent(since)}` : "";
       // Conditional (ETag) fetch: this is the per-PR REST call the 30s thread
@@ -1123,9 +1177,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       });
     }).pipe(retryTransient),
 
-  listReviewThreads: (repoFullName, prNumber, token) =>
+  listReviewThreads: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GraphQL paginates at 100 per page — most PRs fit, but we page just in case.
       const query = `
@@ -1185,9 +1239,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       return out;
     }).pipe(retryTransient),
 
-  resolveReviewThread: (threadNodeId, token) =>
+  resolveReviewThread: (threadNodeId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       yield* githubGraphql(
         `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
         { id: threadNodeId },
@@ -1196,9 +1250,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  unresolveReviewThread: (threadNodeId, token) =>
+  unresolveReviewThread: (threadNodeId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       yield* githubGraphql(
         `mutation($id: ID!) { unresolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
         { id: threadNodeId },
@@ -1221,7 +1275,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
 
   getAuthenticatedUserFreshForHost: (token, host) =>
     Effect.gen(function* () {
-      const apiBase = resolveApiBaseForHost(host);
+      const apiBase = apiBaseForHost(host);
       const data = yield* githubFetch(`/user`, token, apiBase);
       const raw = data as Record<string, unknown>;
       return {
@@ -1231,9 +1285,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }).pipe(retryTransient),
 
-  convertPrToDraft: (repoFullName, prNumber, token) =>
+  convertPrToDraft: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
       yield* githubGraphql(
@@ -1244,9 +1298,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  markPrReadyForReview: (repoFullName, prNumber, token) =>
+  markPrReadyForReview: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
       yield* githubGraphql(
@@ -1257,9 +1311,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  closePullRequest: (repoFullName, prNumber, token) =>
+  closePullRequest: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       yield* githubPatch(
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -1269,9 +1323,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  getMergeEligibility: (repoFullName, prNumber, token) =>
+  getMergeEligibility: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const query = `
         query($owner: String!, $repo: String!, $number: Int!) {
@@ -1317,9 +1371,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  mergePullRequest: (repoFullName, prNumber, mergeMethod, token) =>
+  mergePullRequest: (repoFullName, prNumber, mergeMethod, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       yield* githubPut(
         `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
@@ -1329,9 +1383,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }),
 
-  createPullRequest: (repoFullName, params, token) =>
+  createPullRequest: (repoFullName, params, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const body: Record<string, unknown> = {
         title: params.title,
@@ -1354,9 +1408,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       };
     }),
 
-  findPrByHead: (repoFullName, headBranch, token) =>
+  findPrByHead: (repoFullName, headBranch, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GitHub expects head as `owner:branch` to disambiguate forks.
       const headQuery = encodeURIComponent(`${owner}:${headBranch}`);
@@ -1382,7 +1436,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
   getCollaboratorPermission: (token, host, owner, repo, username) =>
     Effect.tryPromise({
       try: async () => {
-        const apiBase = resolveApiBaseForHost(host);
+        const apiBase = apiBaseForHost(host);
         const path = `/repos/${owner}/${repo}/collaborators/${username}/permission`;
         const res = await fetch(`${apiBase}${path}`, { headers: githubHeaders(token) });
         if (res.status === 404) return "none" as const;

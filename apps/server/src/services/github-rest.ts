@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Effect, Schedule } from "effect";
 import {
   GitHubAccessDeniedError,
+  GitHubApiError,
   GitHubAuthError,
   type GitHubError,
   GitHubNetworkError,
@@ -34,11 +35,25 @@ export function toGitHubError(e: unknown): GitHubError {
     e instanceof GitHubAccessDeniedError ||
     e instanceof GitHubRateLimitError ||
     e instanceof GitHubNotFoundError ||
+    e instanceof GitHubApiError ||
     e instanceof GitHubNetworkError
   ) {
     return e;
   }
   return new GitHubNetworkError({ cause: e });
+}
+
+/**
+ * Build the REST API base URL for an explicit GitHub host. `github.com` maps
+ * to the public `api.github.com`; every GitHub Enterprise host maps to
+ * `api.<host>`.
+ *
+ * Host is a **per-repository** property (`repositories.github_host`), never a
+ * global one — the settings-derived base URL is only a fallback for flows that
+ * have no repo in hand (add-repo, onboarding, device auth).
+ */
+export function apiBaseForHost(host: string): string {
+  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
 }
 
 /** Build the standard headers for GitHub API requests. */
@@ -117,7 +132,14 @@ export function assertGitHubOk(res: Response, path: string): void {
     throw new GitHubNotFoundError({ resource: path, id: path });
   }
   if (!res.ok) {
-    throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
+    // 5xx and 408 are the only statuses worth replaying — GitHub is having a
+    // bad moment and the identical request may succeed. Every other status is
+    // a considered rejection (422 validation, 405 method, 409 conflict, …);
+    // retrying those just spends the backoff budget to get the same answer.
+    if (res.status >= 500 || res.status === 408) {
+      throw new GitHubNetworkError({ cause: `HTTP ${res.status} for ${path}` });
+    }
+    throw new GitHubApiError({ status: res.status, cause: `HTTP ${res.status} for ${path}` });
   }
 }
 
@@ -339,7 +361,7 @@ export function githubPost(
         );
         if (res.status === 422) {
           const text = await res.text().catch(() => "");
-          throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+          throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
         }
         assertGitHubOk(res, path);
         return res.json();
@@ -368,7 +390,7 @@ export function githubPatch(
       );
       if (res.status === 422) {
         const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+        throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
       }
       assertGitHubOk(res, path);
       return res.json();
@@ -396,11 +418,14 @@ export function githubPut(
       );
       if (res.status === 405) {
         const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `HTTP 405 Method Not Allowed: ${text}` });
+        throw new GitHubApiError({
+          status: 405,
+          cause: `HTTP 405 Method Not Allowed: ${text}`,
+        });
       }
       if (res.status === 422) {
         const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
+        throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
       }
       assertGitHubOk(res, path);
       return res.json();
@@ -455,13 +480,19 @@ export function githubGraphql<T = unknown>(
         );
         assertGitHubOk(res, "/graphql");
         const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+        // A 200 carrying `errors` means GraphQL parsed and rejected the query
+        // (unknown field, missing scope, node not visible). That verdict is
+        // stable, so this must NOT be a retryable network error — otherwise
+        // every such call costs 4 attempts and ~14s of backoff, which in the
+        // sequential thread sweep stalls every PR behind it.
         if (payload.errors && payload.errors.length > 0) {
-          throw new GitHubNetworkError({
+          throw new GitHubApiError({
+            status: res.status,
             cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
           });
         }
         if (!payload.data) {
-          throw new GitHubNetworkError({ cause: "GraphQL: empty data field" });
+          throw new GitHubApiError({ status: res.status, cause: "GraphQL: empty data field" });
         }
         return payload.data;
       },

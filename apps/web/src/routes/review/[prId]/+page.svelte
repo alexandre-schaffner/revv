@@ -10,7 +10,7 @@ import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
-import { getSelectedPr, setSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   clearReviewFiles,
   getActiveFilePath,
@@ -156,6 +156,18 @@ $effect(() => {
   const prId = page.params.prId;
   const mode = reviewMode;
   if (!prId) return;
+
+  // Hold until the author-vs-reviewer lens is real. On a cold start (deep
+  // link, or the desktop app reopening on this route) the PR row and the
+  // signed-in user's login are both still in flight, and `reviewMode` reads
+  // "reviewer" for everything — including PRs the user authored. Fetching on
+  // that provisional value means the whole `/files` payload is downloaded
+  // twice, which on a 3 000-file PR is two ~12 MB responses back to back.
+  // Keep the spinner up instead; this effect re-runs the moment mode resolves.
+  if (!isReviewModeResolved(prId)) {
+    setIsLoadingFiles(true);
+    return;
+  }
 
   // Everything below mutates store state. Calls like `clearReviewFiles()`
   // invoke `clearSession()`, which does `threadsVersion++` — a read-then-

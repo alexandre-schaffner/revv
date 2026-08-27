@@ -63,13 +63,30 @@ export function requestThreadSync(prId: string): void {
     });
 }
 
+/**
+ * Refresh everything about ONE pull request: its GitHub metadata and its
+ * comment threads.
+ *
+ * Deliberately not the global `/prs/sync` — that walks every repo on every
+ * account (plus, on a cold cycle, the hourly metadata refresh and archive
+ * backfill) to answer a question about a single PR. `/prs/:id/refresh` is a
+ * couple of requests, and it reads GitHub's PR detail endpoint, so it also
+ * fills in the diff stats the list-endpoint poll can't see.
+ */
 export function requestFullSync(prId: string): void {
   markThreadsSyncing(prId);
   setPrListSyncing(true);
-  void api.api.prs.sync.post().catch(() => {
-    setPrListSyncing(false);
-    toast.error("Failed to sync pull requests");
-  });
+  void api.api
+    .prs({ id: prId })
+    .refresh.post()
+    .catch(() => {
+      toast.error("Failed to refresh pull request");
+    })
+    .finally(() => {
+      // This request is awaited server-side, so its completion IS the signal —
+      // there's no `prs:sync-complete` coming to release the spinner.
+      setPrListSyncing(false);
+    });
   void api.api
     .prs({ id: prId })
     ["sync-threads"].post()

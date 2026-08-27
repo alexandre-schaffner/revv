@@ -8,19 +8,27 @@ import { DbService } from "./Db";
 import { type CachedDiffFile, DiffCacheService, hasCompleteCachedFiles } from "./DiffCache";
 import { GitHubGateway, type PrCommit, type PrFileMeta, type PrMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
+import { apiBaseForHost } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 import type { SettingsService } from "./Settings";
 import { TokenProvider } from "./TokenProvider";
 
 /**
- * Minimal PR context — the DB-backed trio that almost every PR-scoped feature
- * needs to talk to GitHub.
+ * Minimal PR context — the DB-backed values that almost every PR-scoped
+ * feature needs to talk to GitHub.
+ *
+ * `apiBase` is derived from `repo.githubHost`, not from global settings. Pass
+ * it to every `GitHubGateway` call made with this context: the settings row
+ * holds a single host, so a github.com repo and a GitHub Enterprise repo on the
+ * same machine would otherwise both be addressed at whichever host happens to
+ * be configured, sending each token to the wrong API.
  */
 export interface PrContextBasic {
   readonly pr: PullRequest;
   readonly repo: Repository;
   readonly token: string;
+  readonly apiBase: string;
 }
 
 /**
@@ -77,6 +85,7 @@ export class PrContextService extends Context.Tag("PrContextService")<
       repoFullName: string,
       externalId: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
     /**
      * Raw changed-file list for an arbitrary PR. Thin forward to the GitHub
@@ -87,6 +96,7 @@ export class PrContextService extends Context.Tag("PrContextService")<
       repoFullName: string,
       externalId: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
     /**
      * Full PR fetch by number. Thin forward to the GitHub gateway. Used by
@@ -97,6 +107,7 @@ export class PrContextService extends Context.Tag("PrContextService")<
       repoFullName: string,
       externalId: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
     /**
      * Search for PRs closed (or merged) in a time window. Thin forward to the
@@ -108,6 +119,7 @@ export class PrContextService extends Context.Tag("PrContextService")<
       sinceIso: string,
       untilIso: string,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<
       ReadonlyArray<{
         readonly number: number;
@@ -170,7 +182,12 @@ export const PrContextServiceLive = Layer.effect(
                 ),
               ),
             );
-        return { pr, repo, token } satisfies PrContextBasic;
+        return {
+          pr,
+          repo,
+          token,
+          apiBase: apiBaseForHost(repo.githubHost),
+        } satisfies PrContextBasic;
       });
 
     // Cache-or-fetch diff files. Inlined from DiffCache.getOrFetchDiffFiles so
@@ -183,12 +200,16 @@ export const PrContextServiceLive = Layer.effect(
       prExternalId: number,
       token: string,
       expectedChangedFiles: number,
+      apiBase: string,
     ) =>
       Effect.gen(function* () {
         const { db } = yield* DbService;
         const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
-        if (cached !== null && hasCompleteCachedFiles(cached, expectedChangedFiles)) return cached;
-        const fileList = yield* github.prs.files(repoFullName, prExternalId, token);
+        if (cached !== null) {
+          const cachedCount = yield* withDb(db, diffCache.getCachedFileCount(prId));
+          if (hasCompleteCachedFiles(cached, expectedChangedFiles, cachedCount)) return cached;
+        }
+        const fileList = yield* github.prs.files(repoFullName, prExternalId, token, apiBase);
         const fresh: CachedDiffFile[] = fileList.map((f) => ({
           path: f.filename,
           oldPath: f.previousFilename,
@@ -205,13 +226,19 @@ export const PrContextServiceLive = Layer.effect(
     const resolveWithDiff = (prId: string, userId: string) =>
       Effect.gen(function* () {
         const basic = yield* resolveBasic(prId, userId);
-        const meta = yield* github.prs.meta(basic.repo.fullName, basic.pr.externalId, basic.token);
+        const meta = yield* github.prs.meta(
+          basic.repo.fullName,
+          basic.pr.externalId,
+          basic.token,
+          basic.apiBase,
+        );
         const cachedFiles = yield* cacheOrFetchFiles(
           basic.pr.id,
           basic.repo.fullName,
           basic.pr.externalId,
           basic.token,
           basic.pr.changedFiles,
+          basic.apiBase,
         );
         const files = cachedFiles.map((f) => ({
           filename: f.path,
@@ -231,6 +258,7 @@ export const PrContextServiceLive = Layer.effect(
           basic.repo.fullName,
           basic.pr.externalId,
           basic.token,
+          basic.apiBase,
         );
         return { ...basic, meta, files, commits } satisfies PrContextWithDiff;
       });
@@ -240,18 +268,19 @@ export const PrContextServiceLive = Layer.effect(
     // requirement channel; the deps are discharged by the caller, not here.
     // They exist so feature modules reach GitHub through PrContext only
     // (enforced by scripts/check-import-boundaries.ts).
-    const prMeta = (repoFullName: string, externalId: number, token: string) =>
-      github.prs.meta(repoFullName, externalId, token);
-    const prFiles = (repoFullName: string, externalId: number, token: string) =>
-      github.prs.files(repoFullName, externalId, token);
-    const fetchPr = (repoFullName: string, externalId: number, token: string) =>
-      github.prs.get(repoFullName, externalId, token);
+    const prMeta = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
+      github.prs.meta(repoFullName, externalId, token, apiBase);
+    const prFiles = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
+      github.prs.files(repoFullName, externalId, token, apiBase);
+    const fetchPr = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
+      github.prs.get(repoFullName, externalId, token, apiBase);
     const searchClosedPrs = (
       repoFullName: string,
       sinceIso: string,
       untilIso: string,
       token: string,
-    ) => github.prs.searchClosedInWindow(repoFullName, sinceIso, untilIso, token);
+      apiBase?: string,
+    ) => github.prs.searchClosedInWindow(repoFullName, sinceIso, untilIso, token, apiBase);
 
     const resolveRepoToken = (repoId: string) =>
       Effect.gen(function* () {

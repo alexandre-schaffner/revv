@@ -7,6 +7,7 @@ import {
   CloneInProgressError,
   CloneNotReadyError,
   GitHubAccessDeniedError,
+  GitHubApiError,
   GitHubAuthError,
   GitHubNetworkError,
   GitHubNotFoundError,
@@ -182,6 +183,14 @@ export function handleAppError(
 
   if (e instanceof GitHubNetworkError) {
     ctx.set.status = 502;
+    return { error: `GitHub API error: ${String(e.cause)}` };
+  }
+
+  // GitHub rejected the request on its merits, so this is not a bad-gateway
+  // condition — pass its own 4xx through (clamped, since a mapped 401/403/404
+  // is already handled above by its dedicated error class).
+  if (e instanceof GitHubApiError) {
+    ctx.set.status = e.status >= 400 && e.status < 500 ? e.status : 502;
     return { error: `GitHub API error: ${String(e.cause)}` };
   }
 

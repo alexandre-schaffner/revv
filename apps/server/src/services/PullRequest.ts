@@ -89,6 +89,35 @@ export interface ArchivedPrWithWalkthrough {
   readonly walkthrough: ArchivedPrWalkthroughSummary | null;
 }
 
+/**
+ * Merge GitHub logins into a PR's `mentioned_users` JSON array, in place.
+ *
+ * Shared by `upsertPrs` (body mentions) and `appendMentionedUsers` (mentions
+ * harvested from review comments) because both write the same column and
+ * neither owns it: the column is the union of everywhere a login was mentioned,
+ * so the only safe write is a merge.
+ */
+function mergeMentionedUsers(
+  db: (typeof DbService)["Service"]["db"],
+  prId: string,
+  logins: readonly string[],
+): void {
+  if (logins.length === 0) return;
+  const row = db
+    .select({ mentionedUsers: pullRequests.mentionedUsers })
+    .from(pullRequests)
+    .where(eq(pullRequests.id, prId))
+    .get();
+  if (!row) return;
+  const existing = JSON.parse(row.mentionedUsers ?? "[]") as string[];
+  const merged = [...new Set([...existing, ...logins])];
+  if (merged.length === existing.length) return;
+  db.update(pullRequests)
+    .set({ mentionedUsers: JSON.stringify(merged) })
+    .where(eq(pullRequests.id, prId))
+    .run();
+}
+
 /** Default page size for `listArchivedPrs` when caller doesn't specify. */
 export const DEFAULT_ARCHIVE_PAGE_LIMIT = 50;
 /** Upper bound on `listArchivedPrs` page size — defends against pathologically large pulls. */
@@ -105,6 +134,19 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       id: string,
       accountId?: string,
     ) => Effect.Effect<PullRequest, NotFoundError, DbService>;
+    /**
+     * Upsert PR rows from GitHub.
+     *
+     * Two columns are deliberately not assigned from the incoming row:
+     *   - `mentioned_users` is merged, never replaced (see
+     *     {@link mergeMentionedUsers}).
+     *   - `additions` / `deletions` / `changed_files` are only taken when the
+     *     source actually carried them. GitHub's list-PRs endpoint returns the
+     *     "simple" PR object without those fields, so a poll-sourced row has
+     *     zeroes that must not overwrite real numbers from a detail fetch.
+     *     Real stats arrive via `DiffCacheService.cacheFiles`, which derives
+     *     them from the changed-file list alongside the cached diff.
+     */
     readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
     readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
     /**
@@ -301,11 +343,14 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (prs.length === 0) return;
+      const bodyMentionsByPrId = new Map<string, string[]>();
       yield* Effect.tryPromise({
         try: () => {
           const values = prs.map((pr) => {
-            // Extract @-mentions from the PR body.
+            // Extract @-mentions from the PR body. Used verbatim for a fresh
+            // insert; merged (not assigned) into an existing row afterwards.
             const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
+            if (bodyMentions.length > 0) bodyMentionsByPrId.set(pr.id, bodyMentions);
             const base: typeof pullRequests.$inferInsert = {
               id: pr.id,
               externalId: pr.externalId,
@@ -356,20 +401,48 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   body: sql`excluded.body`,
                   status: sql`excluded.status`,
                   isDraft: sql`excluded.is_draft`,
-                  additions: sql`excluded.additions`,
-                  deletions: sql`excluded.deletions`,
-                  changedFiles: sql`excluded.changed_files`,
+                  // Diff stats are conditional. GitHub's list-PRs endpoint —
+                  // the poll's source for every open PR — returns the "simple"
+                  // PR object, which has no additions/deletions/changed_files,
+                  // so those arrive as 0. Assigning them unconditionally
+                  // overwrote the real numbers a detail fetch had recorded, and
+                  // left every open PR at changed_files = 0 forever, which
+                  // silently disabled the diff-cache completeness guard.
+                  //
+                  // `changed_files` is the discriminator: any PR with commits
+                  // has at least one changed file, whereas additions or
+                  // deletions can legitimately be 0 (pure rename, mode change).
+                  // `pull_requests.<col>` is SQLite's way of naming the original
+                  // row inside DO UPDATE, i.e. "keep what we already had".
+                  additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
+                  deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
+                  changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
                   headSha: sql`excluded.head_sha`,
                   baseSha: sql`excluded.base_sha`,
                   updatedAt: sql`excluded.updated_at`,
                   fetchedAt: sql`excluded.fetched_at`,
                   requestedReviewers: sql`excluded.requested_reviewers`,
                   closedAt: sql`excluded.closed_at`,
-                  mentionedUsers: sql`excluded.mentioned_users`,
+                  // `mentioned_users` is deliberately absent: it is the union of
+                  // body mentions AND mentions found in review comments (see
+                  // `appendMentionedUsers`). Assigning the body-only set here
+                  // erased the comment-sourced half on every poll tick.
                 },
               })
               .run(),
           );
+        },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+
+      // Merge body mentions into whatever the row already accumulated. Runs
+      // after the upsert so fresh inserts (which took `mentionedUsers` from the
+      // insert values) are a no-op here.
+      yield* Effect.try({
+        try: () => {
+          for (const [prId, logins] of bodyMentionsByPrId) {
+            mergeMentionedUsers(db, prId, logins);
+          }
         },
         catch: (e) => new ValidationError({ message: String(e) }),
       });
@@ -780,21 +853,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       if (logins.length === 0) return;
       const { db } = yield* DbService;
       yield* Effect.try({
-        try: () => {
-          // Read existing mentioned users, merge with new logins, write back.
-          const row = db
-            .select({ mentionedUsers: pullRequests.mentionedUsers })
-            .from(pullRequests)
-            .where(eq(pullRequests.id, prId))
-            .get();
-          if (!row) return;
-          const existing = JSON.parse(row.mentionedUsers ?? "[]") as string[];
-          const merged = [...new Set([...existing, ...logins])];
-          db.update(pullRequests)
-            .set({ mentionedUsers: JSON.stringify(merged) })
-            .where(eq(pullRequests.id, prId))
-            .run();
-        },
+        try: () => mergeMentionedUsers(db, prId, logins),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
     }),
