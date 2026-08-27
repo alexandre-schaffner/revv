@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { GitHubNetworkError } from "../../../domain/errors";
+import { GitHubApiError, GitHubNetworkError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
 import { Broadcaster } from "../../../services/Broadcaster";
 import { GitHubGateway } from "../../../services/GitHub";
@@ -30,7 +30,12 @@ export interface SubmitReviewInput {
 }
 
 export function isExistingPendingReviewError(error: unknown): boolean {
-  if (!(error instanceof GitHubNetworkError) || typeof error.cause !== "string") {
+  // GitHub answers the duplicate-review case with a 422, which the REST helpers
+  // surface as `GitHubApiError`. `GitHubNetworkError` stays accepted for the
+  // synthetic failure this module raises itself when the pending review can't
+  // be located.
+  const isSniffable = error instanceof GitHubApiError || error instanceof GitHubNetworkError;
+  if (!isSniffable || typeof error.cause !== "string") {
     return false;
   }
 

@@ -27,6 +27,14 @@ let user = $state<{
   onboardedAt?: string | null;
 } | null>(null);
 let isLoading = $state(false);
+/**
+ * Set once `/api/user/identity` has been *attempted* for the current session
+ * — on success and on failure alike, so a flaky identity call can never wedge
+ * a caller that waits on it. Distinguishes "GitHub login not fetched yet" from
+ * "fetched, and there is none", which `getCurrentUserLogin()` reports
+ * identically. See {@link hasAttemptedIdentityLoad}.
+ */
+let identityAttempted = $state(false);
 let isSwitching = $state(false);
 let error = $state<string | null>(null);
 
@@ -184,6 +192,7 @@ export function clearToken(): void {
   resetLoadUserRetryState();
   token = null;
   user = null;
+  identityAttempted = false;
   _connectedAccounts = [];
   // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
   // signed-out session must clear it (and any stale sign-in error) — otherwise
@@ -478,6 +487,8 @@ export async function loadUser(): Promise<void> {
         }
       } catch {
         // best-effort
+      } finally {
+        identityAttempted = true;
       }
       // Init per-user org selection before fetching orgs
       initForUser(u.id);
@@ -747,6 +758,16 @@ export function getUser(): {
 /** Current user's GitHub login, or null if not yet loaded or missing. */
 export function getCurrentUserLogin(): string | null {
   return user?.githubLogin ?? null;
+}
+
+/**
+ * Whether the GitHub identity fetch has run for this session (successfully or
+ * not). Callers that *branch* on `getCurrentUserLogin()` — rather than merely
+ * displaying it — should wait for this, otherwise they act on a provisional
+ * `null` and have to redo the work when the real answer lands.
+ */
+export function hasAttemptedIdentityLoad(): boolean {
+  return identityAttempted;
 }
 
 /**

@@ -118,6 +118,34 @@ function reconcileOnReconnect(): void {
 }
 
 /**
+ * Re-read local state when the window comes back to the foreground.
+ *
+ * The server's poll fiber sleeps between cycles, so after the machine suspends
+ * — or the app simply sits in the background — the first thing the user sees on
+ * return is up to a full interval stale, with no event inbound to correct it.
+ * These are DB-only REST reads (no GitHub traffic), so running them on every
+ * focus is cheap; the same debounce as the reconnect path keeps a rapid
+ * alt-tab from firing repeatedly.
+ */
+function reconcileOnForeground(): void {
+  if (document.visibilityState !== "visible") return;
+  if (!source || source.readyState === EventSource.CLOSED) return;
+  const now = Date.now();
+  if (now - lastReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
+  lastReconcileAt = now;
+  void Promise.all([fetchRepos(), fetchPrs(), fetchPinnedPrs()]);
+}
+
+let foregroundListenersBound = false;
+
+function bindForegroundReconcile(): void {
+  if (foregroundListenersBound || typeof document === "undefined") return;
+  foregroundListenersBound = true;
+  document.addEventListener("visibilitychange", reconcileOnForeground);
+  window.addEventListener("focus", reconcileOnForeground);
+}
+
+/**
  * Open the global SSE stream for the given bearer token. Closes any
  * existing connection first. Called from `auth.svelte.ts` on sign-in /
  * account-switch.
@@ -140,6 +168,7 @@ export function connect(token: string, hostOverride?: string): void {
   openCount = 0;
   lastEventTime = Date.now();
   startWatchdog(token);
+  bindForegroundReconcile();
 
   es.addEventListener("open", () => {
     lastEventTime = Date.now();
@@ -215,6 +244,10 @@ function dispatch(msg: ServerEventMessage): void {
       });
       break;
     case "error":
+      // A sync failure is a terminal outcome for that sync, and no
+      // `prs:sync-complete` follows it — so release the sidebar spinner here or
+      // it spins until the next successful cycle.
+      if (msg.data.code === "SYNC_ERROR") setPrListSyncing(false);
       setError(msg.data);
       break;
     case "auth:reauth-required":

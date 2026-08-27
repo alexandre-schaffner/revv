@@ -12,7 +12,27 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
   readonly message: string;
 }> {}
 
+/**
+ * Transport-level failure: DNS, TLS, connection reset, request timeout, or a
+ * 5xx/408 from GitHub. **Retryable** — `retryTransient` in `github-rest.ts`
+ * only retries this class, so nothing else may be mapped to it.
+ */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
+  readonly cause: unknown;
+}> {}
+
+/**
+ * GitHub understood the request and rejected it: a 4xx that isn't
+ * 401/403/404/429, or a GraphQL response carrying an `errors` array.
+ * **Not retryable** — replaying it produces the same rejection, so retrying
+ * only burns the backoff budget (2s + 4s + 8s per call) and stalls the
+ * sequential sync loops.
+ *
+ * `cause` is a human-readable string (status + response body when available)
+ * so callers can sniff GitHub's error text; see `isExistingPendingReviewError`.
+ */
+export class GitHubApiError extends Data.TaggedError("GitHubApiError")<{
+  readonly status: number;
   readonly cause: unknown;
 }> {}
 
@@ -31,6 +51,7 @@ export type GitHubError =
   | GitHubAuthError
   | GitHubAccessDeniedError
   | GitHubNetworkError
+  | GitHubApiError
   | GitHubNotFoundError;
 
 // General errors

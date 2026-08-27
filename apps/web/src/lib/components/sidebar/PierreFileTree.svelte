@@ -70,8 +70,14 @@ const PHANTOM_PATHS: readonly string[] = Array.from(
   (_, i) => `${PHANTOM_PATH_PREFIX}${i}`,
 );
 
+// `@pierre/trees` throws `Duplicate path: "…"` when the same path appears
+// twice in its input, and it throws from inside the `$effect` below — which
+// aborts the entire Svelte flush, so every effect queued after this component
+// (notably the walkthrough's `use:mountCodeBlock` actions) silently never
+// runs. The server dedupes GitHub's file list at the gateway now, but a tree
+// crash is far too destructive to leave undefended one layer up.
 function withPhantomPaths(real: readonly string[]): string[] {
-  return [...real, ...PHANTOM_PATHS];
+  return [...new Set(real), ...PHANTOM_PATHS];
 }
 
 function isPhantomPath(path: string): boolean {
@@ -577,6 +583,10 @@ $effect(() => {
         // we land on the right button.
         tree.focusPath(activePath);
         requestAnimationFrame(() => {
+          // `bind:this` nulls `host` when the component is destroyed, and this
+          // callback is two frames removed from the effect that scheduled it —
+          // easily long enough for a PR switch to unmount us in between.
+          if (!host) return;
           const sr = tree?.getFileTreeContainer()?.shadowRoot;
           // After re-render, the focused row has tabIndex=0.
           const row =
@@ -588,6 +598,7 @@ $effect(() => {
       } else {
         // No active file yet — focus the first visible row so
         // arrow-key navigation has a starting point.
+        if (!host) return;
         const container = tree?.getFileTreeContainer();
         const firstRow = container?.shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
         if (firstRow) {

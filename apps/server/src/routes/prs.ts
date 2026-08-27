@@ -418,10 +418,39 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     }
   })
 
+  // Full sync of every repo. Forked, not awaited: a cold-start cycle also runs
+  // the hourly metadata refresh and the archive backfill (up to 150 detail
+  // fetches per repo), which is minutes of work — far too long to hold an HTTP
+  // request open. Completion reaches the client over SSE (`prs:sync-complete`),
+  // which is what it already listens for. `syncNow` coalesces, so a double-click
+  // does not start a second pass.
   .post("/sync", async (ctx) => {
     try {
-      await AppRuntime.runPromise(Effect.flatMap(PollScheduler, (s) => s.syncNow()));
+      await AppRuntime.runPromise(
+        Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.syncNow())),
+      );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
 
+  // Targeted refresh of a single PR. Bounded to a couple of GitHub requests, so
+  // unlike `/sync` it is awaited and reports failure directly. Prefer this
+  // wherever the user is asking about one PR rather than the whole list.
+  .post("/:id/refresh", async (ctx) => {
+    try {
+      // Ownership check before touching GitHub: `getPr` with the caller's
+      // accountId 404s on a PR belonging to another account, so a valid session
+      // can't refresh — or learn about — a repo it doesn't own.
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const prService = yield* PullRequestService;
+          const scheduler = yield* PollScheduler;
+          yield* prService.getPr(ctx.params.id, ctx.account.accountId);
+          yield* scheduler.refreshPr(ctx.params.id);
+        }),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);

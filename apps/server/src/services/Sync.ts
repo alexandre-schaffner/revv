@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CommentThread, ThreadSummary, UserRole } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
@@ -5,7 +6,7 @@ import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
-import { type GhReviewComment, GitHubGateway } from "./GitHub";
+import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
@@ -21,6 +22,12 @@ export interface PullResult {
   readonly newMessages: number;
   readonly statusChanges: number;
   readonly edits: number;
+  /**
+   * Whether this pull observed anything new on GitHub — either it wrote rows,
+   * or the review-thread fingerprint moved. False means the local mirror
+   * already matched GitHub, so there is nothing worth announcing.
+   */
+  readonly changed: boolean;
 }
 
 export interface SyncResult {
@@ -43,8 +50,17 @@ export class SyncService extends Context.Tag("SyncService")<
     readonly pullComments: (
       prId: string,
     ) => Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * Reconcile one PR's threads against GitHub.
+     *
+     * Pass `force: true` for user-initiated syncs: the `threads:synced`
+     * envelope is what clears the client's per-PR spinner, so it must go out
+     * even when nothing changed. The background sweep leaves it unset and stays
+     * silent on no-op PRs.
+     */
     readonly syncThreads: (
       prId: string,
+      opts?: { readonly force?: boolean },
     ) => Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
     readonly getThreadSummary: (
       prId: string,
@@ -119,7 +135,7 @@ export const SyncServiceLive = Layer.effect(
         if (thread.externalCommentId) return; // already pushed
 
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { pr, repo, token } = yield* resolvePrContext(sessionPrId);
+        const { pr, repo, token, apiBase } = yield* resolvePrContext(sessionPrId);
 
         if (!pr.headSha) {
           return yield* Effect.fail(
@@ -160,6 +176,7 @@ export const SyncServiceLive = Layer.effect(
           pr.externalId,
           commentPayload,
           token,
+          apiBase,
         );
 
         const externalCommentId = String(posted.id);
@@ -173,6 +190,7 @@ export const SyncServiceLive = Layer.effect(
           repo.fullName,
           pr.externalId,
           token,
+          apiBase,
         );
         const match = threadsOnGithub.find((t) => t.commentDatabaseIds.includes(posted.id));
         if (match) {
@@ -208,7 +226,7 @@ export const SyncServiceLive = Layer.effect(
         }
 
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { pr, repo, token } = yield* resolvePrContext(sessionPrId);
+        const { pr, repo, token, apiBase } = yield* resolvePrContext(sessionPrId);
 
         const posted = yield* github.reviews.replyToComment(
           repo.fullName,
@@ -216,6 +234,7 @@ export const SyncServiceLive = Layer.effect(
           parentCommentId,
           message.body,
           token,
+          apiBase,
         );
         yield* reviewService.setMessageExternalId(message.id, String(posted.id));
       }).pipe(Effect.mapError(toSyncError()));
@@ -228,12 +247,12 @@ export const SyncServiceLive = Layer.effect(
         if (!thread.externalThreadId) return;
 
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { token } = yield* resolvePrContext(sessionPrId);
+        const { token, apiBase } = yield* resolvePrContext(sessionPrId);
 
         const isResolved = thread.status === "resolved" || thread.status === "wont_fix";
         yield* isResolved
-          ? github.reviews.resolveThread(thread.externalThreadId, token)
-          : github.reviews.unresolveThread(thread.externalThreadId, token);
+          ? github.reviews.resolveThread(thread.externalThreadId, token, apiBase)
+          : github.reviews.unresolveThread(thread.externalThreadId, token, apiBase);
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
     const getThreadSummary = (
@@ -270,7 +289,7 @@ export const SyncServiceLive = Layer.effect(
       prId: string,
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
-        const { pr, repo, token } = yield* resolvePrContext(prId);
+        const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
         const accountId = yield* repoService.getAccountIdForRepo(repo.id);
         const session = yield* reviewService.getOrCreateActiveSession(pr.id);
 
@@ -282,6 +301,7 @@ export const SyncServiceLive = Layer.effect(
           pr.externalId,
           since,
           token,
+          apiBase,
         );
 
         let newThreads = 0;
@@ -291,6 +311,40 @@ export const SyncServiceLive = Layer.effect(
 
         const byExternalId = new Map<number, GhReviewComment>();
         for (const c of comments) byExternalId.set(c.id, c);
+
+        // GitHub's own thread grouping is the authoritative answer to "which
+        // thread does this reply belong to", and we need it twice — once to
+        // attach incoming replies, once to reconcile resolved/unresolved. Fetch
+        // it once, and only when one of those jobs is actually live: a PR with
+        // no local threads and no incoming replies has nothing to match, and
+        // skipping the GraphQL call there is what keeps quiet PRs free on the
+        // background sweep (GraphQL has no conditional-request equivalent, so
+        // unlike the REST calls above it is never a free 304).
+        const localThreadsBefore = yield* reviewService.getThreadsForSession(session.id);
+        const hasIncomingReplies = comments.some((c) => c.inReplyToId !== null);
+        const needsGhThreads = localThreadsBefore.length > 0 || hasIncomingReplies;
+        const ghThreads = needsGhThreads
+          ? yield* github.reviews.listThreads(repo.fullName, pr.externalId, token, apiBase)
+          : [];
+
+        // Every comment id GitHub lists in a thread maps to that thread's root
+        // (its first comment). This is what `findRootInBatch` can only guess at:
+        // that fallback walks `in_reply_to_id` through the current batch, which
+        // misses whenever the root falls outside the `since` window — and a miss
+        // used to drop the comment permanently, since the watermark then
+        // advances past it.
+        const rootByCommentId = new Map<number, number>();
+        for (const t of ghThreads) {
+          const root = t.commentDatabaseIds[0];
+          if (root === undefined) continue;
+          for (const id of t.commentDatabaseIds) rootByCommentId.set(id, root);
+        }
+
+        // Comment authors, deduped by login. One person usually writes several
+        // comments in a batch and each upsert costs a SELECT + UPSERT (plus an
+        // avatar refetch once the 24h TTL lapses), so collapse them and flush
+        // after the ingest loop.
+        const pendingAuthors = new Map<string, string | null>();
 
         for (const c of comments) {
           const existingMsg = yield* reviewService.findMessageByExternalId(String(c.id));
@@ -311,43 +365,44 @@ export const SyncServiceLive = Layer.effect(
             continue;
           }
 
-          // Upsert the comment author into remote_users.
-          yield* remoteUserService.upsert({
-            provider: "github",
-            providerUserId: "", // We don't have the numeric ID from GraphQL comments
-            login: c.authorLogin,
-            avatarUrl: c.authorAvatarUrl,
-          });
+          if (!pendingAuthors.has(c.authorLogin)) {
+            pendingAuthors.set(c.authorLogin, c.authorAvatarUrl);
+          }
 
           const authorRole: "reviewer" | "coder" | "ai_agent" =
             c.authorLogin === pr.authorLogin ? "coder" : "reviewer";
 
           if (c.inReplyToId !== null) {
-            const root = findRoot(c, byExternalId);
+            const rootId = rootByCommentId.get(c.id) ?? findRootInBatch(c, byExternalId);
             const thread = yield* reviewService.getThreadByExternalCommentId(
               session.id,
-              String(root),
+              String(rootId),
             );
-            if (!thread) continue;
+            if (thread) {
+              const msg = yield* reviewService.addMessage(thread.id, {
+                authorRole,
+                authorName: c.authorLogin,
+                authorLogin: c.authorLogin,
+                body: c.body,
+                messageType: "reply",
+                externalId: String(c.id),
+                createdAt: c.createdAt,
+              });
+              newMessages++;
 
-            const msg = yield* reviewService.addMessage(thread.id, {
-              authorRole,
-              authorName: c.authorLogin,
-              authorLogin: c.authorLogin,
-              body: c.body,
-              messageType: "reply",
-              externalId: String(c.id),
-              createdAt: c.createdAt,
-            });
-            newMessages++;
+              yield* reviewService.transitionStatus(thread.id, authorRole);
 
-            yield* reviewService.transitionStatus(thread.id, authorRole);
-
-            yield* broadcaster.broadcastToAccount(accountId, {
-              type: "threads:new-reply",
-              data: { prId: pr.id, thread, message: msg },
-            });
-            continue;
+              yield* broadcaster.broadcastToAccount(accountId, {
+                type: "threads:new-reply",
+                data: { prId: pr.id, thread, message: msg },
+              });
+              continue;
+            }
+            // No local thread owns this reply — its root predates our first
+            // sync of this PR, or was pruned by retention. Fall through and
+            // ingest it as its own root thread: showing it detached is strictly
+            // better than the old behaviour of dropping it and never looking
+            // again.
           }
 
           const thread = yield* reviewService.createThread(session.id, {
@@ -379,6 +434,15 @@ export const SyncServiceLive = Layer.effect(
           });
         }
 
+        for (const [login, avatarUrl] of pendingAuthors) {
+          yield* remoteUserService.upsert({
+            provider: "github",
+            providerUserId: "", // We don't have the numeric ID from GraphQL comments
+            login,
+            avatarUrl,
+          });
+        }
+
         // Extract @-mentions from newly-synced review comments and append
         // them to the PR's `mentionedUsers` array.
         const commentMentions = comments.flatMap((c) => extractGitHubMentions(c.body));
@@ -388,18 +452,6 @@ export const SyncServiceLive = Layer.effect(
             .pipe(Effect.catchAll(() => Effect.void));
         }
 
-        // Reconcile resolution status via GraphQL — but only when this PR
-        // actually has local threads to reconcile. The reconciliation loop
-        // matches GitHub threads back to local rows by external comment id;
-        // with zero local threads every match is a miss, so the GraphQL call
-        // is pure waste. Skipping it removes one GraphQL request per quiet PR
-        // on every 30s poll tick — the bulk of PRs most of the time — which is
-        // the single biggest contributor to GitHub rate-limit pressure.
-        const localThreads = yield* reviewService.getThreadsForSession(session.id);
-        const ghThreads =
-          localThreads.length === 0
-            ? []
-            : yield* github.reviews.listThreads(repo.fullName, pr.externalId, token);
         for (const ght of ghThreads) {
           for (const cdbId of ght.commentDatabaseIds) {
             const local = yield* reviewService.getThreadByExternalCommentId(
@@ -444,21 +496,44 @@ export const SyncServiceLive = Layer.effect(
           }
         }
 
-        return { newThreads, newMessages, statusChanges, edits };
+        // Did GitHub's side actually move? Row writes are the obvious signal;
+        // the thread fingerprint catches the rest (a resolve, an unresolve, a
+        // thread appearing or vanishing) without re-deriving it from the DB.
+        // When the GraphQL call was skipped there was nothing to fingerprint,
+        // so the row writes are the whole answer.
+        let changed = newThreads + newMessages + edits + statusChanges > 0;
+        if (needsGhThreads) {
+          const fingerprint = fingerprintThreads(ghThreads);
+          const previous = yield* prService.getThreadsFingerprint(pr.id);
+          if (previous !== fingerprint) {
+            changed = true;
+            yield* prService.setThreadsFingerprint(pr.id, fingerprint);
+          }
+        }
+
+        return { newThreads, newMessages, statusChanges, edits, changed };
       }).pipe(Effect.mapError(toSyncError()));
 
     const syncThreads = (
       prId: string,
+      opts?: { readonly force?: boolean },
     ): Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
         const summary = yield* getThreadSummary(prId, null);
-        const { repo } = yield* resolvePrContext(prId);
-        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-        yield* broadcaster.broadcastToAccount(accountId, {
-          type: "threads:synced",
-          data: { prId, summary, timestamp: new Date().toISOString() },
-        });
+        // The background sweep visits every open PR on every tick. Announcing
+        // an unchanged summary for each one costs an SSE message per PR and two
+        // Map clones in every connected client, for no new information — so stay
+        // quiet unless something moved. User-initiated syncs always announce:
+        // this envelope is what clears their per-PR spinner.
+        if (pulled.changed || opts?.force === true) {
+          const { repo } = yield* resolvePrContext(prId);
+          const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+          yield* broadcaster.broadcastToAccount(accountId, {
+            type: "threads:synced",
+            data: { prId, summary, timestamp: new Date().toISOString() },
+          });
+        }
         return { pulled, summary };
       }).pipe(Effect.mapError(toSyncError()));
 
@@ -473,8 +548,29 @@ export const SyncServiceLive = Layer.effect(
   }),
 );
 
-/** Walk up the reply chain to find the root comment's database id. */
-function findRoot(c: GhReviewComment, byExternalId: Map<number, GhReviewComment>): number {
+/**
+ * Fingerprint the externally-observable review-thread state: every thread's
+ * node id, resolution flag, and comment ids, order-independent. Two pulls that
+ * produce the same fingerprint saw the same GitHub state, so the second has
+ * nothing to write and nothing to announce.
+ */
+function fingerprintThreads(threads: ReadonlyArray<GhReviewThread>): string {
+  const canonical = threads
+    .map((t) => {
+      const ids = [...t.commentDatabaseIds].sort((a, b) => a - b).join(",");
+      return `${t.nodeId}:${t.isResolved ? 1 : 0}:${ids}`;
+    })
+    .sort()
+    .join("|");
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Best-effort root lookup for a reply, walking `in_reply_to_id` through the
+ * comments in the current batch. Only a fallback for when GitHub's own thread
+ * grouping is unavailable — it cannot see comments outside the `since` window.
+ */
+function findRootInBatch(c: GhReviewComment, byExternalId: Map<number, GhReviewComment>): number {
   let cursor: GhReviewComment | undefined = c;
   for (let i = 0; i < 32 && cursor; i++) {
     if (cursor.inReplyToId === null) return cursor.id;
