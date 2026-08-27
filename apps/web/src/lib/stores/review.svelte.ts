@@ -8,11 +8,12 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests, getReviewModeForPr } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
+import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -109,6 +110,7 @@ export function getLoadedHeadSha(prId: string): string | null {
 // racing a second click. Set-reassignment for reactivity, matching the
 // loadedHeadShas pattern above.
 let isPullingCommit = $state(new Set<string>());
+const pullCommitRequests = new Map<string, Promise<boolean>>();
 
 export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
@@ -123,16 +125,30 @@ function apiErrorMessage(error: { status: number; value?: unknown }, fallback: s
 
 /**
  * Refetch the PR's diff files against the current `pr.headSha`, restamp
- * the loaded SHA, and regenerate the walkthrough against the new content.
+ * the loaded SHA, and invalidate the walkthrough against the old content.
  * The server's PollScheduler has already invalidated + repopulated its diff
  * cache on SHA change, so the `files.get()` call returns the fresh diff.
- * Coalesces concurrent calls for the same PR.
+ * Coalesces concurrent calls for the same PR and resolves true only when the
+ * fresh diff has been installed successfully.
  */
-export async function pullLatestCommit(prId: string): Promise<void> {
-  if (isPullingCommit.has(prId)) return;
+export function pullLatestCommit(prId: string): Promise<boolean> {
+  const inFlight = pullCommitRequests.get(prId);
+  if (inFlight) return inFlight;
+
   isPullingCommit.add(prId);
   isPullingCommit = new Set(isPullingCommit);
 
+  const request = runPullLatestCommit(prId).finally(() => {
+    pullCommitRequests.delete(prId);
+    setIsLoadingFiles(false);
+    isPullingCommit.delete(prId);
+    isPullingCommit = new Set(isPullingCommit);
+  });
+  pullCommitRequests.set(prId, request);
+  return request;
+}
+
+async function runPullLatestCommit(prId: string): Promise<boolean> {
   try {
     setIsLoadingFiles(true);
     setFilesError(null);
@@ -180,13 +196,22 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     // and unblocks the page immediately — we no longer await the SSE stream.
     await invalidateForPull(prId);
     invalidateChatHistory(prId);
+    return true;
   } catch (e) {
     setFilesError(e instanceof Error ? e.message : "Failed to pull latest commit");
-  } finally {
-    setIsLoadingFiles(false);
-    isPullingCommit.delete(prId);
-    isPullingCommit = new Set(isPullingCommit);
+    return false;
   }
+}
+
+/**
+ * Pull the current head through the same path as the tab-side Pull button,
+ * then start the incremental walkthrough requested by the superseded toast.
+ */
+export async function reviewLatestCommit(prId: string, mode: ReviewMode): Promise<void> {
+  await reviewNewCommits({
+    pull: () => pullLatestCommit(prId),
+    regenerate: () => regenerate(prId, mode, "incremental"),
+  });
 }
 
 // --- Session state ---
