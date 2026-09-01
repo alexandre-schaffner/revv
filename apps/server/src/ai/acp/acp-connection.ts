@@ -56,6 +56,27 @@ export function selectAcpAuthMethod(
   return methods[0]?.id;
 }
 
+/**
+ * Codex silently refuses to start an MCP server whose name contains anything
+ * outside `[A-Za-z0-9_-]`: it emits an internal `mcp__<name>__startup` tool call
+ * that never connects, our HTTP route is never hit, and the turn runs with none
+ * of our tools — the agent just reports them "unavailable". The chat server is
+ * named after the prId (`<repoId>:<prNumber>`), so that colon cost every Codex
+ * chat turn the walkthrough-edit tools. Normalize here, at the one point every
+ * ACP caller funnels through, so no adapter can be handed an unsafe name.
+ * Nothing reads the name back, so rewriting it is invisible to callers.
+ */
+export function sanitizeMcpServerName(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, "-");
+}
+
+function sanitizeMcpServers(servers: McpServer[]): McpServer[] {
+  return servers.map((server) => {
+    const name = sanitizeMcpServerName(server.name);
+    return name === server.name ? server : { ...server, name };
+  });
+}
+
 export type AcpSessionUpdate = SessionUpdate;
 
 /** Listener invoked for every `session/update` notification on a session. */
@@ -403,7 +424,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
     newSession: async (mcpServers) => {
       const res = await connection.newSession({
         cwd: entry.cwd,
-        mcpServers,
+        mcpServers: sanitizeMcpServers(mcpServers),
       });
       return { sessionId: res.sessionId, modes: res.modes ?? null };
     },
@@ -411,7 +432,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
       const res = await connection.loadSession({
         sessionId,
         cwd: entry.cwd,
-        mcpServers,
+        mcpServers: sanitizeMcpServers(mcpServers),
       });
       return res.modes ?? null;
     },
