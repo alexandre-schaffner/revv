@@ -8,9 +8,10 @@
  * thin left guide.
  */
 
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import Trash from "phosphor-svelte/lib/Trash";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -26,6 +27,7 @@ interface Props {
 }
 
 let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
+const currentUserLogin = $derived(getCurrentUserLogin());
 
 // Flatten to a render-ready shape so the template doesn't recompute on
 // every iteration. Re-derive when the shiki highlighter becomes ready
@@ -65,7 +67,7 @@ const renderedThreads = $derived.by(() => {
                         <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
                     </button>
                 {/if}
-                {#if onDiscard && entry.thread.externalCommentId == null}
+                {#if onDiscard && entry.thread.externalCommentId == null && entry.messages[0] && canUserModifyComment(entry.messages[0], currentUserLogin)}
                     <button
                         type="button"
                         class="thread-discard"

@@ -14,6 +14,7 @@ export interface AccountIdentity {
   readonly accountId: string;
   readonly accessToken: string;
   readonly providerId: string;
+  readonly githubLogin: string | null;
   readonly host: string | null;
 }
 

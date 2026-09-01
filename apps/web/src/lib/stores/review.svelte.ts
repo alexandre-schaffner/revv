@@ -760,6 +760,22 @@ export async function deleteThread(threadId: string): Promise<boolean> {
   return true;
 }
 
+/** Push one local draft comment to GitHub under the active account's identity. */
+export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
+  const { error } = await api.api.threads({ id: threadId }).push.post();
+  if (error) {
+    toast.error("Failed to send comment to GitHub");
+    return false;
+  }
+
+  const prId = store.activePrId;
+  if (prId !== null) {
+    await loadSession(prId, undefined, true);
+  }
+  toast.success("Comment sent to GitHub");
+  return true;
+}
+
 /**
  * Remove a thread from local state in response to an SSE broadcast.
  */

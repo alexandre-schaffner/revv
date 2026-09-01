@@ -61,6 +61,26 @@ let dotEl: HTMLSpanElement | null = $state(null);
 let pullBtnEl: HTMLButtonElement | null = $state(null);
 let pulseTl: gsap.core.Timeline | null = null;
 
+// How much room the trailing slot currently needs, handed to PillTabs so it
+// can keep that room inside the pane (see its trailing-slot clamp). The dot
+// is a fixed 6 px; the pull button's width depends on its label, so measure
+// it — `offsetWidth` is layout width, unaffected by the GSAP scale below.
+const STATUS_DOT_SIZE = 6;
+let pullBtnWidth = $state(0);
+
+$effect(() => {
+  const btn = pullBtnEl;
+  if (!btn) return;
+  pullBtnWidth = btn.offsetWidth;
+  const observer = new ResizeObserver(() => {
+    pullBtnWidth = btn.offsetWidth;
+  });
+  observer.observe(btn);
+  return () => observer.disconnect();
+});
+
+const trailingReserve = $derived(buttonVisible ? pullBtnWidth : dotVisible ? STATUS_DOT_SIZE : 0);
+
 // Status-dot visibility (autoAlpha + scale crossfade). Replaces the CSS
 // transitions on `.status-dot { transition: opacity, transform, ... }`.
 $effect(() => {
@@ -119,67 +139,55 @@ $effect(() => {
 });
 </script>
 
-<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld}>
+<PillTabs {tabs} {activeTab} onTabChange={handleTabChange} {cmdHeld} {trailingReserve}>
 	{#snippet trailing()}
-		<div class="status-slot" aria-hidden={!dotVisible && !buttonVisible}>
-			<span
-				bind:this={dotEl}
-				class="status-dot"
-				class:status-dot--generating={walkthroughStatus === 'generating'}
-				class:status-dot--complete={walkthroughStatus === 'complete'}
-				class:status-dot--error={walkthroughStatus === 'error'}
-				aria-hidden="true"
-			></span>
+		<span
+			bind:this={dotEl}
+			class="status-dot"
+			class:status-dot--generating={walkthroughStatus === 'generating'}
+			class:status-dot--complete={walkthroughStatus === 'complete'}
+			class:status-dot--error={walkthroughStatus === 'error'}
+			aria-hidden="true"
+		></span>
 
-			<button
-				bind:this={pullBtnEl}
-				type="button"
-				class="pull-btn"
-				class:pull-btn--visible={buttonVisible}
-				class:pull-btn--pulling={isPulling}
-				disabled={!buttonInteractive}
-				tabindex={buttonVisible && !isPulling ? 0 : -1}
-				aria-hidden={!buttonVisible}
-				onclick={handlePullClick}
-				title={isPulling ? 'Pulling new commit…' : 'New commit. Click to pull.'}
-				aria-label={isPulling
-					? 'Pulling new commit'
-					: 'New commit available. Click to pull the latest changes.'}
-			>
-				{#if isPulling}
-					<Loader2 size={12} weight="regular" class="motion-essential-spin" />
-				{:else}
-					<DownloadCloud size={12} weight="fill" />
-				{/if}
-				<span class="pull-btn-label">Pull</span>
-			</button>
-		</div>
+		<button
+			bind:this={pullBtnEl}
+			type="button"
+			class="pull-btn"
+			class:pull-btn--visible={buttonVisible}
+			class:pull-btn--pulling={isPulling}
+			disabled={!buttonInteractive}
+			tabindex={buttonVisible && !isPulling ? 0 : -1}
+			aria-hidden={!buttonVisible}
+			onclick={handlePullClick}
+			title={isPulling ? 'Pulling new commit…' : 'New commit. Click to pull.'}
+			aria-label={isPulling
+				? 'Pulling new commit'
+				: 'New commit available. Click to pull the latest changes.'}
+		>
+			{#if isPulling}
+				<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+			{:else}
+				<DownloadCloud size={12} weight="fill" />
+			{/if}
+			<span class="pull-btn-label">Pull</span>
+		</button>
 	{/snippet}
 </PillTabs>
 
 <style>
 	/*
-	 * Status slot — anchored to the right of the pill. Holds two stacked
-	 * children (the walkthrough-status dot and the pull button). The slot
-	 * is `position: absolute` so it never pushes the centered tabs wrapper
-	 * leftward when the button appears.
+	 * Both children render into PillTabs' `.status-slot` — an absolutely
+	 * positioned, zero-width anchor hanging off the pill's right edge (it
+	 * stays out of flow so the pull button appearing never pushes the
+	 * centered tabs wrapper leftward). PillTabs also keeps the anchor
+	 * inside its container, so neither child gets clipped by the pane.
 	 *
-	 * The two children are also `position: absolute` with `left: 0`, so
-	 * they occupy the same anchor and crossfade via opacity + scale.
-	 * Only one is visible at a time; the other sits invisible and
-	 * non-interactive underneath.
+	 * The two children are `position: absolute` with `left: 0`, so they
+	 * occupy the same anchor and crossfade via opacity + scale. Only one
+	 * is visible at a time; the other sits invisible and non-interactive
+	 * underneath.
 	 */
-	.status-slot {
-		position: absolute;
-		left: calc(100% + var(--spacing-island));
-		top: 50%;
-		/* Height matches the tallest child (the 18 px button) so the
-		 * slot's center line — which both children align to — stays fixed
-		 * regardless of which one is currently visible. */
-		height: 18px;
-		transform: translateY(-50%);
-		pointer-events: none;
-	}
 
 	/* ── Walkthrough status dot (6 × 6, centered in the slot) ──
 	   Visibility, scale, and the generating-pulse loop are all driven by GSAP

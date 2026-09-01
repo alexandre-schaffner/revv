@@ -1,3 +1,4 @@
+import { isPublishableDraftComment } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
@@ -194,13 +195,12 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
             })
             .pipe(Effect.orElseSucceed(() => undefined));
 
-          // Find the last unsynced reviewer message in this thread and link it
+          // Link the local draft, whether written by the reviewer or Revv, to
+          // the GitHub comment created under the authenticated user's identity.
           const messages = yield* reviewService
             .getMessages(input.threadId)
             .pipe(Effect.orElseSucceed(() => []));
-          const unsyncedMsg = [...messages]
-            .reverse()
-            .find((m) => m.authorRole === "reviewer" && m.externalId == null);
+          const unsyncedMsg = [...messages].reverse().find(isPublishableDraftComment);
           if (unsyncedMsg) {
             yield* reviewService
               .setMessageExternalId(unsyncedMsg.id, String(match.id))

@@ -88,6 +88,7 @@ export interface TokenHoverInfo {
 		onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
 		onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
 		onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
+		onPushThread?: ((threadId: string) => void | Promise<void>) | undefined;
 		scrollRoot?: HTMLElement | null;
 	}
 
@@ -111,6 +112,7 @@ export interface TokenHoverInfo {
 		onTokenHover,
 		onApplySuggestion,
 		onEditMessage,
+		onPushThread,
 		scrollRoot = null,
 	}: Props = $props();
 
@@ -309,6 +311,7 @@ export interface TokenHoverInfo {
 							onApplySuggestion,
 							onReplySubmit,
 							onEditMessage,
+							onPushThread,
 						});
 					} else {
 						host.appendChild(
