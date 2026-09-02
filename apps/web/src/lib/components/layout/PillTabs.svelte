@@ -10,10 +10,25 @@ interface Props {
   onTabChange: (tab: string) => void;
   trailing?: Snippet;
   cmdHeld?: boolean;
+  /**
+   * Width, in px, of whatever the `trailing` snippet is currently showing —
+   * 0 when it shows nothing. The snippet's content is out of flow, so this
+   * is the only way PillTabs can know how much room to keep for it to the
+   * right of the pill. See the trailing-slot clamp below.
+   */
+  trailingReserve?: number;
 }
 
-let { tabs, activeTab, onTabChange, trailing, cmdHeld = false }: Props = $props();
+let {
+  tabs,
+  activeTab,
+  onTabChange,
+  trailing,
+  cmdHeld = false,
+  trailingReserve = 0,
+}: Props = $props();
 
+let wrapperEl: HTMLDivElement | null = $state(null);
 let pillEl: HTMLDivElement | null = $state(null);
 let indicatorEl: HTMLSpanElement | null = $state(null);
 let segmentEls = $state<(HTMLButtonElement | null)[]>([]);
@@ -77,6 +92,74 @@ function isDividerHidden(index: number): boolean {
   return index === highlighted || index + 1 === highlighted;
 }
 
+// ── Trailing-slot clamp ──
+// The trailing slot is out of flow (see `.status-slot` below), so the pill
+// stays centred in its container no matter what the slot holds. The cost is
+// that the slot's content hangs past the wrapper's right edge, and the
+// container — a floating bar inside an `overflow: hidden` pane — clips it once
+// the pane gets narrow. That is what used to slice the walkthrough status dot
+// in half with the sidebar and the context panel both open.
+//
+// So: nudge the whole wrapper left by exactly the amount that would otherwise
+// overflow. Zero shift whenever there is room, which is the common case.
+const TRAILING_GAP = 8;
+const EDGE_GAP = 8;
+let shift = 0;
+let hasClamped = false;
+
+$effect(() => {
+  const wrapper = wrapperEl;
+  const container = wrapper?.parentElement;
+  const reserve = trailingReserve;
+  if (!wrapper || !container) return;
+
+  // `animate` is true only when the slot's content changed size, where the
+  // pill easing out of the way reads as motion. Container-driven measures
+  // (window resize, panel drag) snap instead — a tween there would trail the
+  // pointer for the whole drag.
+  const measure = (animate: boolean) => {
+    const containerRect = container.getBoundingClientRect();
+    const wrapperRect = wrapper.getBoundingClientRect();
+    // Back the applied translation out of the measurement so it reads the
+    // wrapper's natural (centred) position and can't feed back on itself.
+    // Read it from GSAP rather than from `shift`: mid-tween the two differ.
+    const applied = Number(gsap.getProperty(wrapper, "x")) || 0;
+    const naturalLeft = wrapperRect.left - applied;
+    const naturalRight = wrapperRect.right - applied;
+    // Nothing in the slot means nothing to protect — leave the pill centred
+    // even if it is itself wider than the container.
+    const needed = reserve > 0 ? TRAILING_GAP + reserve : 0;
+    const overflow = needed > 0 ? naturalRight + needed - (containerRect.right - EDGE_GAP) : 0;
+    // Never shift so far that the pill's own left edge leaves the container:
+    // clipping the trailing content beats clipping a tab label. No EDGE_GAP on
+    // this side — in a pane this tight, letting the pill sit flush against the
+    // left edge is what buys the trailing content the room to stay whole.
+    const headroom = Math.max(0, naturalLeft - containerRect.left);
+    const next = Math.max(0, Math.min(overflow, headroom));
+    if (Math.abs(next - shift) < 0.5) return;
+    shift = next;
+    if (!animate || prefersReducedMotion()) {
+      gsap.set(wrapper, { x: -shift });
+      return;
+    }
+    gsap.to(wrapper, {
+      x: -shift,
+      duration: tokens.smooth,
+      ease: tokens.easeOutExpo,
+      overwrite: "auto",
+    });
+  };
+
+  // First run is initial layout, so it lands without motion.
+  measure(hasClamped);
+  hasClamped = true;
+
+  const observer = new ResizeObserver(() => measure(false));
+  observer.observe(container);
+  observer.observe(wrapper);
+  return () => observer.disconnect();
+});
+
 // Cmd-hold shortcut hint reveal. Animates the ⌘N labels next to each tab
 // label when the user holds Cmd. Reveal/hide are simultaneous across all
 // segments and symmetric in easing: a modifier-key hint should feel like
@@ -102,7 +185,7 @@ $effect(() => {
 });
 </script>
 
-<div class="tabs-wrapper">
+<div class="tabs-wrapper" bind:this={wrapperEl}>
 	<div class="pill" bind:this={pillEl}>
 		<span
 			class="pill-indicator"
@@ -145,6 +228,14 @@ $effect(() => {
 		align-items: center;
 	}
 
+	/* Anchor for the trailing content, hanging off the pill's right edge.
+	   Out of flow so its contents never push the centred pill sideways;
+	   zero-width, so consumers position their own children against it with
+	   `position: absolute; left: 0`. `height` matches the tallest expected
+	   child (an 18 px pill button) so the centre line those children align
+	   to stays fixed regardless of which one is showing. The clamp effect
+	   above keeps this anchor inside the container. Keep `left` in sync with
+	   TRAILING_GAP. */
 	.status-slot {
 		position: absolute;
 		left: calc(100% + 8px);

@@ -172,6 +172,10 @@ export function handleAppError(
       ctx.set.status = 404;
       return { error: e.message };
     }
+    if (e.code === "FORBIDDEN") {
+      ctx.set.status = 403;
+      return { error: e.message };
+    }
     ctx.set.status = 500;
     return { error: e.message };
   }

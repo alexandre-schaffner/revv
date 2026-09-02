@@ -40,6 +40,7 @@ export class SyncService extends Context.Tag("SyncService")<
   {
     readonly pushThread: (
       threadId: string,
+      userId?: string,
     ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
     readonly pushReply: (
       messageId: string,
@@ -129,13 +130,14 @@ export const SyncServiceLive = Layer.effect(
 
     const pushThread = (
       threadId: string,
+      userId = "single-user",
     ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
       Effect.gen(function* () {
         const thread = yield* reviewService.getThread(threadId);
         if (thread.externalCommentId) return; // already pushed
 
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
-        const { pr, repo, token, apiBase } = yield* resolvePrContext(sessionPrId);
+        const { pr, repo, token, apiBase } = yield* prContext.resolveBasic(sessionPrId, userId);
 
         if (!pr.headSha) {
           return yield* Effect.fail(

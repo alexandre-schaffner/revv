@@ -14,7 +14,6 @@ import {
   type ThemePreference,
 } from "$lib/stores/theme.svelte";
 import { getTopbarSubtitle } from "$lib/stores/topbar.svelte";
-import FloatingTabs from "./FloatingTabs.svelte";
 
 interface Props {
   rightPanelOpen: boolean;

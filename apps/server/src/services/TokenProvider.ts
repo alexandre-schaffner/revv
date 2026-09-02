@@ -49,7 +49,7 @@ export class TokenProvider extends Context.Tag("TokenProvider")<
       userId: string,
       host?: string,
     ) => Effect.Effect<
-      { accountId: string; accessToken: string; providerId: string },
+      { accountId: string; accessToken: string; providerId: string; githubLogin: string | null },
       GitHubAuthError
     >;
     /**
@@ -315,7 +315,7 @@ export const TokenProviderLive = Layer.effect(
       userId: string,
       host?: string,
     ): Effect.Effect<
-      { accountId: string; accessToken: string; providerId: string },
+      { accountId: string; accessToken: string; providerId: string; githubLogin: string | null },
       GitHubAuthError
     > =>
       Effect.gen(function* () {
@@ -328,6 +328,7 @@ export const TokenProviderLive = Layer.effect(
           .select({
             id: account.id,
             providerId: account.providerId,
+            githubLogin: account.githubLogin,
             accessTokenExpiresAt: account.accessTokenExpiresAt,
           })
           .from(account)
@@ -357,7 +358,12 @@ export const TokenProviderLive = Layer.effect(
             stored.accessToken,
             stored.refreshToken,
           );
-          return { accountId: meta.id, accessToken: token, providerId: meta.providerId };
+          return {
+            accountId: meta.id,
+            accessToken: token,
+            providerId: meta.providerId,
+            githubLogin: meta.githubLogin ?? null,
+          };
         }
         return yield* Effect.fail(new GitHubAuthError({ message: "No access token found" }));
       });

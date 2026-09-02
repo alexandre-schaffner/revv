@@ -13,6 +13,7 @@ import {
   getThreadMessages,
   getThreadsForFile,
   getThreadsVersion,
+  pushThreadToGitHub,
   reopenThread,
   resolveThread,
 } from "$lib/stores/review.svelte";
@@ -264,6 +265,10 @@ async function handleApplySuggestion(threadId: string, suggestion: string) {
 async function handleEditMessage(threadId: string, messageId: string, body: string) {
   await editThreadMessage(threadId, messageId, body);
 }
+
+async function handlePushThread(threadId: string) {
+  await pushThreadToGitHub(threadId);
+}
 </script>
 
 {#if file}
@@ -287,6 +292,7 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 			onEditMessage={handleEditMessage}
+			onPushThread={handlePushThread}
 			{scrollRoot}
 		/>
 	{/key}

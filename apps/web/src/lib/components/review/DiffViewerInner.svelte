@@ -77,6 +77,7 @@ interface Props {
   onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
   onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
   onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
+  onPushThread?: ((threadId: string) => void | Promise<void>) | undefined;
   scrollRoot?: HTMLElement | null;
 }
 
@@ -100,6 +101,7 @@ let {
   onTokenHover,
   onApplySuggestion,
   onEditMessage,
+  onPushThread,
   scrollRoot = null,
 }: Props = $props();
 
@@ -574,6 +576,7 @@ onMount(() => {
             onApplySuggestion,
             onReplySubmit,
             onEditMessage,
+            onPushThread,
           });
         } else {
           host.appendChild(createMarkerDot(meta, () => onAnnotationToggle?.(meta.threadId)));

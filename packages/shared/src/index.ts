@@ -68,6 +68,12 @@ export {
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
 } from "./chat";
+export {
+  type CommentPermissionMessage,
+  canUserModifyComment,
+  type DraftReviewMessage,
+  isPublishableDraftComment,
+} from "./comment-permissions";
 export type { AppChannel, UpdateChannel } from "./constants";
 export {
   API_BASE_URL,

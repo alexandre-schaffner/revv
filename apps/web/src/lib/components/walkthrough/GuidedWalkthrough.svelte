@@ -33,6 +33,7 @@ import {
   getPendingWalkthroughBlockJump,
   getReviewMode,
   jumpToDiffLine,
+  reviewLatestCommit,
 } from "$lib/stores/review.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
@@ -346,7 +347,7 @@ $effect(() => {
     description: "The PR has new commits since this review was generated.",
     action: {
       label: "Review new commits",
-      onClick: () => handleRegenerate(),
+      onClick: () => reviewLatestCommit(prId, selectedMode),
     },
     duration: Number.POSITIVE_INFINITY,
   });

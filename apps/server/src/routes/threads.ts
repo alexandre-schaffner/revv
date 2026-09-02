@@ -1,6 +1,7 @@
-import type { ThreadStatus } from "@revv/shared";
+import { canUserModifyComment, type ThreadStatus } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { ReviewError } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
 import { ReviewService } from "../services/Review";
@@ -84,7 +85,29 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
   // Used by the frontend immediately after creating a thread to get it round-tripping.
   .post("/:id/push", async (ctx) => {
     try {
-      await AppRuntime.runPromise(Effect.flatMap(SyncService, (s) => s.pushThread(ctx.params.id)));
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const reviewService = yield* ReviewService;
+          const messages = yield* reviewService.getMessages(ctx.params.id);
+          const firstMessage = messages[0];
+          if (!firstMessage) {
+            return yield* Effect.fail(
+              new ReviewError({ message: "Thread has no message", code: "NOT_FOUND" }),
+            );
+          }
+          if (!canUserModifyComment(firstMessage, ctx.account.githubLogin)) {
+            return yield* Effect.fail(
+              new ReviewError({
+                message: "You can only publish your own comments or comments left by Revv",
+                code: "FORBIDDEN",
+              }),
+            );
+          }
+
+          const sync = yield* SyncService;
+          yield* sync.pushThread(ctx.params.id, ctx.session.user.id);
+        }),
+      );
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -99,15 +122,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
           const reviewService = yield* ReviewService;
           const broadcaster = yield* Broadcaster;
 
-          const thread = yield* reviewService.getThread(ctx.params.id);
-
-          if (thread.externalCommentId !== null) {
-            return yield* Effect.fail(
-              new Error("Cannot discard a thread already synced to GitHub"),
-            );
-          }
-
-          yield* reviewService.deleteThread(ctx.params.id);
+          yield* reviewService.deleteThreadAsUser(ctx.params.id, ctx.account.githubLogin);
 
           yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
             type: "thread:deleted",
@@ -131,7 +146,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             const reviewService = yield* ReviewService;
             const broadcaster = yield* Broadcaster;
 
-            const message = yield* reviewService.editMessage(ctx.params.messageId, ctx.body.body);
+            const message = yield* reviewService.editMessage(
+              ctx.params.messageId,
+              ctx.body.body,
+              ctx.account.githubLogin,
+            );
 
             yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:message:edited",
@@ -175,7 +194,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
           const reviewService = yield* ReviewService;
           const broadcaster = yield* Broadcaster;
 
-          yield* reviewService.deleteMessage(ctx.params.messageId);
+          yield* reviewService.deleteMessage(ctx.params.messageId, ctx.account.githubLogin);
 
           yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
             type: "thread:message:deleted",

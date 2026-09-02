@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRatingsPanel.svelte";
@@ -83,11 +84,7 @@ const selectedCount = $derived(selectedIssueIds.size);
 // Mirrors the filtering in buildComments() so the Comment button's enabled
 // state matches what gets sent.
 const pendingCommentCount = $derived(
-  unresolvedThreads.filter((t) =>
-    getThreadMessages(t.id).some(
-      (m) => m.authorRole === "reviewer" && m.externalId == null && m.body.trim().length > 0,
-    ),
-  ).length,
+  unresolvedThreads.filter((t) => getThreadMessages(t.id).some(isPublishableDraftComment)).length,
 );
 // A plain COMMENT review can go up with selected issues OR pending comments.
 const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
@@ -159,9 +156,7 @@ function buildComments(): Array<{
     // the user can remove with the Discard button. Skip the check when the
     // diff hasn't loaded (empty set) so valid comments are never dropped.
     if (currentFilePaths.size > 0 && !currentFilePaths.has(thread.filePath)) continue;
-    const messages = getThreadMessages(thread.id).filter(
-      (m) => m.authorRole === "reviewer" && m.externalId == null,
-    );
+    const messages = getThreadMessages(thread.id).filter(isPublishableDraftComment);
     const body = messages
       .map((m) => m.body)
       .filter((b) => b.trim().length > 0)

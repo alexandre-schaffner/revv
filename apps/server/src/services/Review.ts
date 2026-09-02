@@ -9,6 +9,7 @@ import type {
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
+import { canUserModifyComment } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -159,6 +160,10 @@ export class ReviewService extends Context.Tag("ReviewService")<
       authorRole: AuthorRole,
     ) => Effect.Effect<CommentThread, ReviewError, DbService>;
     readonly deleteThread: (threadId: string) => Effect.Effect<void, ReviewError, DbService>;
+    readonly deleteThreadAsUser: (
+      threadId: string,
+      actorLogin: string | null,
+    ) => Effect.Effect<void, ReviewError, DbService>;
 
     // Messages
     readonly addMessage: (
@@ -183,6 +188,7 @@ export class ReviewService extends Context.Tag("ReviewService")<
     readonly editMessage: (
       messageId: string,
       body: string,
+      actorLogin: string | null,
     ) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
     /**
      * Delete a reply message that hasn't been synced to GitHub yet.
@@ -195,6 +201,7 @@ export class ReviewService extends Context.Tag("ReviewService")<
      */
     readonly deleteMessage: (
       messageId: string,
+      actorLogin: string | null,
     ) => Effect.Effect<{ threadId: string }, ReviewError, DbService>;
     readonly findMessageByExternalId: (
       externalId: string,
@@ -425,6 +432,53 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       );
     }),
 
+  deleteThreadAsUser: (threadId, actorLogin) =>
+    Effect.gen(function* () {
+      const thread = yield* tryDb("find thread for discard", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
+      if (!thread) {
+        return yield* Effect.fail(
+          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
+        );
+      }
+      if (thread.externalCommentId !== null) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "Cannot discard a thread already synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+
+      const firstMessage = yield* tryDb("find first message for discard", (db) =>
+        db
+          .select()
+          .from(threadMessages)
+          .where(eq(threadMessages.threadId, threadId))
+          .orderBy(threadMessages.createdAt)
+          .limit(1)
+          .get(),
+      );
+      if (!firstMessage) {
+        return yield* Effect.fail(
+          new ReviewError({ message: "Thread has no message", code: "NOT_FOUND" }),
+        );
+      }
+      if (!canUserModifyComment(firstMessage, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only discard your own comments or comments left by Revv",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+
+      yield* tryDb("delete thread", (db) =>
+        db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run(),
+      );
+    }),
+
   getThreadsForFile: (sessionId, filePath) =>
     Effect.gen(function* () {
       const rows = yield* tryDb("list threads for file", (db) =>
@@ -601,7 +655,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         .run(),
     ).pipe(Effect.asVoid),
 
-  editMessage: (messageId, body) =>
+  editMessage: (messageId, body, actorLogin) =>
     Effect.gen(function* () {
       const msgRow = yield* tryDb("find message for edit", (db) =>
         db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
@@ -613,20 +667,18 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         );
       }
 
-      const threadRow = yield* tryDb("find thread for edit", (db) =>
-        db.select().from(commentThreads).where(eq(commentThreads.id, msgRow.threadId)).get(),
-      );
-
-      if (!threadRow) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
-      }
-
-      if (threadRow.externalCommentId !== null) {
+      if (msgRow.externalId !== null) {
         return yield* Effect.fail(
           new ReviewError({
             message: "Cannot edit a message that has already been synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+      if (!canUserModifyComment(msgRow, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only edit your own comments or comments left by Revv",
             code: "FORBIDDEN",
           }),
         );
@@ -645,7 +697,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       return rowToMessage({ ...msgRow, body, editedAt });
     }),
 
-  deleteMessage: (messageId) =>
+  deleteMessage: (messageId, actorLogin) =>
     Effect.gen(function* () {
       const msgRow = yield* tryDb("find message for delete", (db) =>
         db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
@@ -661,6 +713,14 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         return yield* Effect.fail(
           new ReviewError({
             message: "Cannot discard a reply already synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+      if (!canUserModifyComment(msgRow, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only discard your own comments or comments left by Revv",
             code: "FORBIDDEN",
           }),
         );
