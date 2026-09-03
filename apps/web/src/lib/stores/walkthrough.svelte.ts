@@ -483,6 +483,49 @@ export function getHasUnreviewedCommits(
   return getReviewRounds(prId, mode)?.hasNewCommits ?? false;
 }
 
+/**
+ * True when `a` and `b` name the same commit, tolerating either side being an
+ * abbreviation of the other.
+ *
+ * The commits list hands the client whatever SHA length GitHub returned, so a
+ * selection can be shorter than the 40-char `toSha` the rounds carry.
+ */
+function shaMatches(a: string, b: string): boolean {
+  return a.length <= b.length ? b.startsWith(a) : a.startsWith(b);
+}
+
+/**
+ * The walkthrough report that reviewed the PR as of `sha`, or `null` when no
+ * round ends at that commit.
+ *
+ * A round's `toSha` is the head it reviewed up to, so "the report for this
+ * commit" is the round that ends there. Hidden rounds are skipped and ties are
+ * broken the same way the report selector in `GuidedWalkthrough` orders them —
+ * a finished report ahead of one still generating, then most recent first — so
+ * picking a commit and picking its report off the dropdown land on the same row.
+ */
+export function getReportIdForSha(
+  prId: string,
+  sha: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): string | null {
+  const candidates = (getReviewRounds(prId, mode)?.rounds ?? [])
+    .filter((round) => round.visibility !== "hidden" && shaMatches(sha, round.toSha))
+    .sort((a, b) => {
+      const aPending = a.status === "generating";
+      const bPending = b.status === "generating";
+      if (aPending !== bPending) return aPending ? 1 : -1;
+
+      const aTime = Date.parse(a.completedAt ?? a.createdAt);
+      const bTime = Date.parse(b.completedAt ?? b.createdAt);
+      if (aTime !== bTime) return bTime - aTime;
+
+      return b.roundNumber - a.roundNumber;
+    });
+
+  return candidates[0]?.walkthroughId ?? null;
+}
+
 export async function loadReviewRounds(
   prId: string,
   mode: WalkthroughMode = getSelectedMode(prId),
