@@ -13,7 +13,12 @@ import { RequestState, type RequestState as RequestStateType } from "$lib/stores
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPullRequests, getReviewModeForPr } from "$lib/stores/prs.svelte";
-import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
+import {
+  getReportIdForSha,
+  invalidateForPull,
+  regenerate,
+  selectWalkthroughReport,
+} from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -55,6 +60,9 @@ export function clearReviewFiles(): void {
   // runs. Wiping it would lose that restore.
   clearRepoFile();
   clearSession();
+  // An explicit clear means the caller wants a fresh diff on the next load,
+  // same contract as `clearSession`'s reset of its own short-circuit window.
+  invalidateFilesLoaded();
 }
 
 // --- Unchanged-file content viewer ------------------------------------------
@@ -106,6 +114,114 @@ export function getLoadedHeadSha(prId: string): string | null {
   return loadedHeadShas.get(prId) ?? null;
 }
 
+// --- Commit-scoped review ----------------------------------------------------
+//
+// A PR can be reviewed "as of" one of its commits: the file tree, the diffs
+// and the walkthrough all re-scope to `base...C` instead of the full PR. The
+// commits dropdown is the only selector.
+//
+// This lives in its own map rather than on `PrViewState` on purpose. That
+// state sits inside the single `store = $state({ entries, activePrId })`
+// object whose `entries` map is reassigned on every scroll tick by
+// `setPrScrollPosition`, and the `/files` effect has to read the selection
+// *reactively* — reading it off `store` would subscribe that effect to scroll
+// traffic and fire a request per frame. A dedicated map has exactly one
+// writer and cannot self-retrigger. Keying by `prId` gives it the same
+// survive-a-PR-switch lifetime as `loadedHeadShas`, so `switchPrViewState`
+// needs no change.
+let selectedCommitShas = $state(new Map<string, string>());
+
+/** The commit the review is scoped to, or null for "the whole PR". */
+export function getSelectedCommitSha(prId: string): string | null {
+  return selectedCommitShas.get(prId) ?? null;
+}
+
+export function isCommitScoped(prId: string): boolean {
+  return selectedCommitShas.has(prId);
+}
+
+export function clearSelectedCommitSha(prId: string): void {
+  if (!selectedCommitShas.has(prId)) return;
+  selectedCommitShas.delete(prId);
+  selectedCommitShas = new Map(selectedCommitShas);
+}
+
+/**
+ * Scope the review to `sha`, or back to the whole PR with `null`.
+ *
+ * The only public writer of the selection, and the orchestrator for the
+ * walkthrough side of the switch. Selecting the head commit normalises to
+ * `null` so "head" has exactly one spelling and no reader has to compare
+ * against `headSha`.
+ *
+ * Deliberately does not fetch: the `/files` refetch is reactive off this
+ * state in `+page.svelte`, which stays the single owner of request-id
+ * cancellation, session loading and error state.
+ */
+export async function selectCommit(prId: string, sha: string | null): Promise<void> {
+  const pr = getPullRequests().find((p) => p.id === prId);
+  const next = sha !== null && sha === pr?.headSha ? null : sha;
+  const current = getSelectedCommitSha(prId);
+  // Early-return on no-op: without it, a repeat click on the selected commit
+  // reassigns the map and re-triggers the files effect for the same range.
+  if (current === next) return;
+
+  if (next === null) {
+    clearSelectedCommitSha(prId);
+  } else {
+    selectedCommitShas.set(prId, next);
+    selectedCommitShas = new Map(selectedCommitShas);
+  }
+  requestDiffScrollReset();
+
+  const mode = getReviewMode(prId);
+  if (next === null) {
+    // Back to following the latest report.
+    await selectWalkthroughReport(prId, null, mode);
+    return;
+  }
+  const reportId = getReportIdForSha(prId, next, mode);
+  if (reportId !== null) {
+    await selectWalkthroughReport(prId, reportId, mode);
+  }
+  // No report at this commit: leave the walkthrough store untouched. The
+  // "commit-scoped, no report" state is derived in GuidedWalkthrough from
+  // the selection plus the rounds list, so there is nothing to store.
+}
+
+// --- Diff-files short-circuit window -----------------------------------------
+//
+// Shared by the `/files` effect in `+page.svelte` and `pullLatestCommit`, so
+// the two cannot both decide a fetch is needed for the same key. Without a
+// shared window, `pullLatestCommit` clearing the commit scope invalidates the
+// effect's tracked read and produces a second concurrent full `/files` fetch —
+// two ~12 MB responses on a large PR.
+const FILES_REFETCH_WINDOW_MS = 60_000;
+let lastFilesKey: string | null = null;
+let lastFilesAt = 0;
+
+function filesKey(prId: string, mode: ReviewMode, atSha: string | null): string {
+  return `${prId}:${mode}:${atSha ?? "head"}`;
+}
+
+export function shouldSkipFilesLoad(prId: string, mode: ReviewMode, atSha: string | null): boolean {
+  return (
+    filesKey(prId, mode, atSha) === lastFilesKey &&
+    Date.now() - lastFilesAt < FILES_REFETCH_WINDOW_MS &&
+    getReviewFiles().length > 0
+  );
+}
+
+export function markFilesLoaded(prId: string, mode: ReviewMode, atSha: string | null): void {
+  lastFilesKey = filesKey(prId, mode, atSha);
+  lastFilesAt = Date.now();
+}
+
+export function invalidateFilesLoaded(): void {
+  lastFilesKey = null;
+  lastFilesAt = 0;
+}
+
 // Per-PR in-flight flag so the pull button can show a spinner without
 // racing a second click. Set-reassignment for reactivity, matching the
 // loadedHeadShas pattern above.
@@ -150,6 +266,10 @@ export function pullLatestCommit(prId: string): Promise<boolean> {
 
 async function runPullLatestCommit(prId: string): Promise<boolean> {
   try {
+    // Pulling head is the one flow that swaps the whole diff, so it also
+    // drops any commit scope — the fresh diff we install below is the full
+    // PR at the new head.
+    clearSelectedCommitSha(prId);
     setIsLoadingFiles(true);
     setFilesError(null);
 
@@ -176,6 +296,10 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
     }));
 
     setReviewFiles(mapped);
+    // Claim the short-circuit window for the full-PR key we just installed,
+    // so the reactive `/files` effect doesn't fetch the same thing again
+    // after `clearSelectedCommitSha` above invalidated its tracked read.
+    markFilesLoaded(prId, mode, null);
     // If the user has an active file that's gone in the new diff, fall back
     // to the first file. If the active file still exists, leave it alone so
     // the user's scroll position in the diff tab isn't reset.

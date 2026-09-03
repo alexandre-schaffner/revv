@@ -18,7 +18,12 @@ import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
-import { type CachedDiffFile, DiffCacheService, getOrFetchDiffFiles } from "../services/DiffCache";
+import {
+  type CachedDiffFile,
+  DiffCacheService,
+  getOrFetchDiffFiles,
+  toCachedDiffFiles,
+} from "../services/DiffCache";
 import { GitHubGateway } from "../services/GitHub";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
@@ -46,6 +51,24 @@ import { coerceReviewMode } from "./reviews/handlers/active-session";
 // fields are mirrored here.
 
 const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = PR_DIFF_RENDER_OPTIONS;
+
+/**
+ * Resolve the `?at=` query param to the SHA the review should be scoped to,
+ * or `null` for "the whole PR".
+ *
+ * Selecting the head commit is *identical* to selecting nothing, so it
+ * normalises to `null` and structurally takes the cached full-PR path — the
+ * default page load cannot regress into a compare call. The comparison is
+ * prefix-tolerant because the client hands back whatever length of SHA the
+ * commits list gave it.
+ */
+function resolveScopedSha(at: string | undefined, headSha: string | null): string | null {
+  if (at === undefined) return null;
+  if (headSha === null) return at;
+  const shorter = Math.min(at.length, headSha.length);
+  const isHead = at.slice(0, shorter).toLowerCase() === headSha.slice(0, shorter).toLowerCase();
+  return isHead ? null : at;
+}
 
 /** Build the full git patch the SSR call expects from a cached PR file row. */
 function buildPrFilePatch(file: CachedDiffFile): string {
@@ -222,21 +245,33 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             const prService = yield* PullRequestService;
             const repoService = yield* RepositoryService;
             const reviewService = yield* ReviewService;
+            const github = yield* GitHubGateway;
             const { accountId, accessToken: token } = ctx.account;
 
             const pr = yield* prService.getPr(ctx.params.id, accountId);
             const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-            // Always the full PR diff (merge-base 3-dot, matching GitHub's
-            // "Files changed" tab). No per-commit selection anymore — the
-            // commits dropdown is read-only.
-            const files = yield* getOrFetchDiffFiles(
-              pr.id,
-              repo.fullName,
-              pr.externalId,
-              token,
-              pr.changedFiles,
-            );
+            // Unscoped (or scoped to head) means the full PR diff (merge-base
+            // 3-dot, matching GitHub's "Files changed" tab) served from the
+            // `pr_diff_files` cache. `?at=<sha>` scopes the review to the PR as
+            // of that commit via a `base...at` compare, which is three-dot too
+            // and returns the same fields in the same hunks-only patch format.
+            // Ranged results deliberately never reach `pr_diff_files`: its PK
+            // `(prId, path)` has no range dimension and `cacheFiles` wipes the
+            // PR's rows, so caching them would poison the full-PR view.
+            const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
+            const files =
+              atSha === null || pr.baseSha === null
+                ? yield* getOrFetchDiffFiles(
+                    pr.id,
+                    repo.fullName,
+                    pr.externalId,
+                    token,
+                    pr.changedFiles,
+                  )
+                : toCachedDiffFiles(
+                    yield* github.prs.compareFiles(repo.fullName, pr.baseSha, atSha, token),
+                  );
             const mode = coerceReviewMode(ctx.query.mode);
             const session = yield* reviewService.getActiveSession(pr.id, mode);
             const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
@@ -273,6 +308,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       query: t.Object({
         active: t.Optional(t.String()),
         mode: t.Optional(t.String()),
+        // Malformed SHAs are rejected with a 400 before the handler runs, so
+        // the compare path can only ever be reached with a plausible ref.
+        at: t.Optional(t.String({ pattern: "^[0-9a-fA-F]{7,40}$" })),
       }),
       detail: {
         description: `Returns PR files and server-renders at most one diff, capped at ${SSR_PATCH_BYTE_LIMIT} bytes / ${SSR_PATCH_LINE_LIMIT} lines.`,
