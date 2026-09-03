@@ -806,8 +806,8 @@ export const WalkthroughJobsLive = Layer.effect(
               // A user cancel sets `cancelledByUser` AND interrupts the fiber,
               // so `handleFailure` owns the terminal lifecycle event — emitting
               // here too would double-broadcast. Every OTHER abort of
-              // `job.abortController` (the 10-minute hard timeout in the
-              // provider, scope-close, shutdown) flips `signal.aborted` WITHOUT
+              // `job.abortController` (scope-close, shutdown) flips
+              // `signal.aborted` WITHOUT
               // `cancelledByUser` and does NOT interrupt the fiber, so
               // `handleFailure` never runs. Keying suppression on
               // `signal.aborted` (the old condition) swallowed those errors and

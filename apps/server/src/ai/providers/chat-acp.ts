@@ -22,7 +22,7 @@ import {
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
+import { CHAT_IDLE_TIMEOUT_MS, CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
 import { getAcpConnection } from "../acp/acp-connection";
@@ -32,6 +32,7 @@ import {
   decodeAcpSessionUpdate,
   fluidEmit,
   makeAcpDecodeState,
+  makeActivityBeacon,
   type NormalizedAgentEvent,
   relativizeToolInput,
   withAgentTurn,
@@ -283,7 +284,13 @@ export function streamChatViaAcp(
         };
         const wrappedEmit = fluidEmit(emit);
         const decodeState = makeAcpDecodeState();
+        // Liveness for the harness' idle deadline. Noted off the RAW update
+        // (not `emit`) because `fluidEmit` delays delivery and some updates
+        // decode to zero normalized events while still proving the agent is
+        // alive.
+        const activity = makeActivityBeacon();
         h.setListener(turnSessionId, (update) => {
+          activity.note();
           for (const ev of decodeAcpSessionUpdate(update, decodeState)) wrappedEmit(ev);
         });
 
@@ -304,6 +311,8 @@ export function streamChatViaAcp(
         await withAgentTurn({
           externalAbort: opts.abortController,
           hardTimeoutMs: CLI_CHAT_TURN_TIMEOUT_MS,
+          idleTimeoutMs: CHAT_IDLE_TIMEOUT_MS,
+          activity,
           jobStarted: async () => {
             h.jobStarted();
           },

@@ -26,6 +26,7 @@ import type {
   RecapSourcePrDigest,
   RecapToolContext,
 } from "../ai/providers/recap-tools";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
@@ -60,8 +61,12 @@ export const MAX_CONCURRENT_RECAP_JOBS = 2;
 /** Resume-on-boot retry budget. After this many attempts the row goes to 'error'. */
 export const RECAP_MAX_RESUME_ATTEMPTS = 3;
 
-/** TTL for opencode HTTP-MCP session tokens (10-min cap + slack). */
-const RECAP_SESSION_TOKEN_TTL_MS = 15 * 60_000;
+/**
+ * TTL for HTTP-MCP session tokens. Derived from the turn ceiling so a token
+ * never expires mid-run (the recap driver passes CLI_WALKTHROUGH_TIMEOUT_MS as
+ * its `hardTimeoutMs`), plus slack for setup and teardown.
+ */
+const RECAP_SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS + 5 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

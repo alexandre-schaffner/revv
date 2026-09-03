@@ -42,7 +42,11 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "../../config";
-import { CLI_WALKTHROUGH_TIMEOUT_MS, WALKTHROUGH_HEARTBEAT_MS } from "../../constants";
+import {
+  AGENT_IDLE_TIMEOUT_MS,
+  CLI_WALKTHROUGH_TIMEOUT_MS,
+  WALKTHROUGH_HEARTBEAT_MS,
+} from "../../constants";
 import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
@@ -53,6 +57,7 @@ import {
   buildActivity,
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
+  makeActivityBeacon,
   mergeContextOccupancy,
   type NormalizedAgentEvent,
   relativizeToolInput,
@@ -130,7 +135,7 @@ export interface AcpWalkthroughStreamParams {
   /**
    * Caller-owned abort signal (user cancel, scope finalizer, shutdown). Routed
    * to `handle.cancel(sessionId)` so the ACP agent stops producing output. The
-   * 10-minute hard timeout layers on top via the same controller.
+   * idle deadline and the absolute ceiling layer on top inside `withAgentTurn`.
    */
   abortController?: AbortController;
   /** Resolved ACP registry agent id that drives this generation. */
@@ -164,8 +169,19 @@ export function streamWalkthroughViaAcp(
   let errorEmitted = false;
   let anySummaryEmitted = false;
   // Tracked outside the harness so the notifier closure (registered before
-  // `withAgentTurn`) can suppress late events after regenerate/hard-timeout.
+  // `withAgentTurn`) can suppress late events after regenerate/timeout.
   let cancelled = false;
+  // Distinguishes a timeout from a user cancel in the catch below: a timeout
+  // keeps whatever was already committed and defers to auto-continuation.
+  let timedOut = false;
+  // The harness' timeout message, kept so the zero-content path can say WHY the
+  // run produced nothing instead of blaming the PR's complexity.
+  let timeoutReason: string | null = null;
+  // Liveness for the harness' idle deadline. Poked by BOTH signals that can
+  // only come from a live agent: its own ACP session updates, and the MCP
+  // content writes the route handlers push through the activity notifier. The
+  // synthetic phase heartbeat below deliberately does NOT poke it.
+  const activity = makeActivityBeacon();
   // Running context-occupancy gauge. Throughput fields stay zero — ACP doesn't
   // report them (accepted regression vs. the pre-migration drivers).
   let tokenUsage: WalkthroughTokenUsage = ZERO_TOKEN_USAGE;
@@ -202,6 +218,7 @@ export function streamWalkthroughViaAcp(
   // names, which carry no machine identifier for MCP tools.
   const onContentEvent = (event: WalkthroughStreamEvent): void => {
     if (queryDone || errorEmitted || cancelled) return;
+    activity.note();
     switch (event.type) {
       case "summary":
         anySummaryEmitted = true;
@@ -346,6 +363,8 @@ export function streamWalkthroughViaAcp(
       return await withAgentTurn({
         externalAbort: params.abortController,
         hardTimeoutMs: CLI_WALKTHROUGH_TIMEOUT_MS,
+        idleTimeoutMs: AGENT_IDLE_TIMEOUT_MS,
+        activity,
         jobStarted: async () => {
           h.jobStarted();
         },
@@ -358,6 +377,7 @@ export function streamWalkthroughViaAcp(
         },
         onTimeout: () => {
           cancelled = true;
+          timedOut = true;
         },
         abortSession: async () => {
           if (sessionId) {
@@ -399,6 +419,10 @@ export function streamWalkthroughViaAcp(
           // ── 3. Stream session updates into the normalized pipeline ───────
           const decodeState = makeAcpDecodeState();
           h.setListener(sessionId, (update) => {
+            // Note liveness off the RAW update: some updates decode to zero
+            // normalized events (MCP tool calls carry no machine name) yet
+            // still prove the agent is alive.
+            activity.note();
             for (const ev of decodeAcpSessionUpdate(update, decodeState)) handleAgentEvent(ev);
           });
 
@@ -429,6 +453,16 @@ export function streamWalkthroughViaAcp(
         params.acpAgentId,
         err instanceof Error ? err.message : String(err),
       );
+      if (timedOut) {
+        // A timeout is not a failure. Everything the agent already wrote is
+        // committed (invariant #1), so end the stream WITHOUT an error event:
+        // the tail below yields `done` and `WalkthroughJobs` resumes from the
+        // DB out of its auto-continuation budget instead of burning the run and
+        // showing the user a red chip over a half-written walkthrough.
+        debug("walkthrough-acp", "turn timed out — deferring to auto-continuation:", message);
+        timeoutReason = message;
+        return tokenUsage;
+      }
       logError("walkthrough-acp", "queryTask error:", message);
       if (!errorEmitted) {
         errorEmitted = true;
@@ -486,10 +520,11 @@ export function streamWalkthroughViaAcp(
     // `set_overview`, so the in-memory `anySummaryEmitted` flag stays false even
     // though the row is fully populated. DB is authoritative (invariant #1) —
     // fall back to the persisted summary before emitting the fallback error.
-    // Skip the fallback when the run was cancelled/timed out (explicit semantics
-    // owned by `withAgentTurn`).
+    // Skip the fallback when the run was cancelled by the caller (explicit
+    // semantics owned by `withAgentTurn`). A timeout still consults the DB —
+    // its whole point is to hand the committed partial to auto-continuation.
     let summaryPersisted = anySummaryEmitted;
-    if (!summaryPersisted && !cancelled) {
+    if (!summaryPersisted && (!cancelled || timedOut)) {
       try {
         const row = params.db
           .select({ summary: walkthroughsTable.summary })
@@ -513,13 +548,21 @@ export function streamWalkthroughViaAcp(
       };
     } else if (!errorEmitted) {
       debug("walkthrough-acp", "Session ended without producing content — emitting fallback error");
+      // A timeout that wrote nothing has no partial for auto-continuation to
+      // build on, so it surfaces as a terminal error — but say what actually
+      // happened rather than blaming the PR.
       yield {
         type: "error" as const,
-        data: {
-          code: "NoSummaryGenerated",
-          message:
-            "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
-        },
+        data: timeoutReason
+          ? {
+              code: "AgentTimeout",
+              message: `${timeoutReason}, and nothing had been written yet. Try regenerating.`,
+            }
+          : {
+              code: "NoSummaryGenerated",
+              message:
+                "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
+            },
       };
     }
   })();
