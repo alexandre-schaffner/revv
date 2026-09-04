@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.3](https://github.com/alexandre-schaffner/revv/compare/v0.23.2...v0.23.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* update fallback Rust toolchain handling ([#218](https://github.com/alexandre-schaffner/revv/issues/218)) ([8cc54f4](https://github.com/alexandre-schaffner/revv/commit/8cc54f4ecde5b0706686d6470e934d6f6571f07b))
+
 ## [0.23.2](https://github.com/alexandre-schaffner/revv/compare/v0.23.1...v0.23.2) (2026-09-02)
 
 
