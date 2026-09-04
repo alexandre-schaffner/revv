@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.2](https://github.com/alexandre-schaffner/revv/compare/v0.23.1...v0.23.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* **review:** pull the fresh diff before reviewing new commits ([#217](https://github.com/alexandre-schaffner/revv/issues/217)) ([3da1e40](https://github.com/alexandre-schaffner/revv/commit/3da1e4088cc002d2cfdc8e634062f2a5baedd7fa))
+
+
+### Performance Improvements
+
+* **github:** stop re-fetching diffs and cut poll/sync API cost ([#215](https://github.com/alexandre-schaffner/revv/issues/215)) ([33b99ae](https://github.com/alexandre-schaffner/revv/commit/33b99aec8f2b0665517318c02dabddc9345e2eb9))
+
 ## [0.23.1](https://github.com/alexandre-schaffner/revv/compare/v0.23.0...v0.23.1) (2026-08-19)
 
 
