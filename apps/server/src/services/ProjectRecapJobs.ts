@@ -585,7 +585,13 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Synchronous emitter wired into the job's subscriber set.
         // Same pattern as WalkthroughJobs: MCP tool handlers call this
         // synchronously so content events don't lag behind lifecycle events.
+        // Time-to-first-token: from the agent run starting to its first emitted
+        // event. `agentStartMs` is set just before runRecapAgent, so the earlier
+        // orchestrator "analyzing" phase emit doesn't count against it.
+        let agentStartMs: number | null = null;
+        let ttftMs: number | null = null;
         const emit = (event: RecapStreamEvent): void => {
+          if (agentStartMs !== null && ttftMs === null) ttftMs = Date.now() - agentStartMs;
           fanOut(job, event);
         };
 
@@ -804,6 +810,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Run the agent. The runner returns whether the agent reached the
         // validation gate (complete_recap returned success). On any error
         // we transition to 'error'; on success we transition to 'complete'.
+        agentStartMs = Date.now();
         const result = yield* Effect.tryPromise({
           try: async () => {
             return await runRecapAgent({
@@ -835,6 +842,8 @@ export const ProjectRecapJobsLive = Layer.effect(
             }),
           ),
         );
+
+        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
 
         if (job.cancelledByUser) {
           const msg = "Cancelled by user";
@@ -937,6 +946,13 @@ export const ProjectRecapJobsLive = Layer.effect(
               }),
             ),
             Effect.ensuring(removeJob(job)),
+            // The generation span. Like WalkthroughJobs.generate, this wraps the
+            // forked body so its duration is the real recap-generation time and
+            // it can carry the ttft_ms annotation ('ProjectRecapJobs.job' forks
+            // and returns in ~0ms).
+            Effect.withSpan("ProjectRecapJobs.generate", {
+              attributes: { recapId: job.recapId, period: job.period },
+            }),
           );
 
           const fiber = yield* Effect.forkDaemon(scopedBody);

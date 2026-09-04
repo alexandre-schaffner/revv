@@ -39,3 +39,9 @@ apps/desktop/target/
 .context/
 .openlogs/
 .repos/effect
+
+# Collector telemetry DB
+apps/collector/*.duckdb
+apps/collector/*.duckdb.wal
+apps/collector/*.collector.pid
+apps/collector/web/dist/

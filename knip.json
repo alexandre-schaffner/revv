@@ -33,6 +33,22 @@
       "entry": ["src/index.ts", "src/**/*.test.ts"],
       "ignoreDependencies": ["bun-types", "drizzle-kit"]
     },
+    "apps/collector": {
+      "entry": [
+        "src/index.ts",
+        "web/vite.config.ts",
+        "web/svelte.config.js",
+        "web/src/main.ts",
+        "web/src/vite-env.d.ts"
+      ],
+      "ignoreDependencies": [
+        "@sveltejs/vite-plugin-svelte",
+        "@tailwindcss/vite",
+        "bun-types",
+        "svelte-check",
+        "tailwindcss"
+      ]
+    },
     "packages/shared": {
       "entry": ["src/index.ts"]
     }

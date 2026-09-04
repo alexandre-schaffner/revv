@@ -2,6 +2,9 @@
   "productName": "Revv Dev",
   "identifier": "com.revv.desktop.dev",
   "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:45678 http://localhost:45679 http://localhost:45680 ws://localhost:45678 ws://localhost:45679 ws://localhost:9223; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:"
+    },
     "windows": [
       {
         "label": "main",

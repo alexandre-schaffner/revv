@@ -587,6 +587,9 @@ export const WalkthroughJobsLive = Layer.effect(
       autoContinuations: number;
       currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
       capturedOpencodeSessionId: string | undefined;
+      /** Content events seen this job — each maps 1:1 to an MCP tool write.
+       *  Annotated onto the generation span as a KPI (`tool_call_count`). */
+      toolCallCount: number;
     }
 
     type ProcessResult =
@@ -740,11 +743,21 @@ export const WalkthroughJobsLive = Layer.effect(
             });
           });
 
+        // Time-to-first-token: wall-clock from the first agent stream pull to
+        // the first event it yields. Stamped on the generation span. Excludes
+        // worktree/setup (those completed above, before the stream starts).
+        let streamStartMs = 0;
+        let ttftRecorded = false;
+
         const processEvent = (
           state: LoopState,
           event: WalkthroughStreamEvent,
         ): Effect.Effect<ProcessResult, never, never> =>
           Effect.gen(function* () {
+            if (!ttftRecorded && streamStartMs > 0) {
+              ttftRecorded = true;
+              yield* Effect.annotateCurrentSpan("ttft_ms", Date.now() - streamStartMs);
+            }
             if (event.type === "done") {
               state.accumulatedTokenUsage = accumulateTokenUsage(
                 state.accumulatedTokenUsage,
@@ -865,6 +878,10 @@ export const WalkthroughJobsLive = Layer.effect(
             if (event.type === "thinking") {
               return { _tag: "continue" } as const;
             }
+
+            // Everything past the type guards above is a content event, each
+            // produced by exactly one MCP tool write — count it as a tool call.
+            state.toolCallCount++;
 
             yield* emitEvent(job.walkthroughId, event).pipe(Effect.catchAll(() => Effect.void));
             return { _tag: "continue" } as const;
@@ -1045,8 +1062,10 @@ export const WalkthroughJobsLive = Layer.effect(
           autoContinuations: 0,
           currentGenerator: generator,
           capturedOpencodeSessionId: undefined,
+          toolCallCount: 0,
         };
 
+        streamStartMs = Date.now();
         yield* Effect.gen(function* () {
           yield* runWithAutoContinuation(initialState);
         }).pipe(
@@ -1061,6 +1080,19 @@ export const WalkthroughJobsLive = Layer.effect(
               : Effect.void,
           ),
         );
+
+        // KPI telemetry: stamp the generation span (see `launchJob`) with the
+        // final token + tool-call totals. Reached only on a completed run; a
+        // failed generation re-raises above and skips this.
+        yield* Effect.annotateCurrentSpan(
+          "input_tokens",
+          initialState.accumulatedTokenUsage.inputTokens,
+        );
+        yield* Effect.annotateCurrentSpan(
+          "output_tokens",
+          initialState.accumulatedTokenUsage.outputTokens,
+        );
+        yield* Effect.annotateCurrentSpan("tool_call_count", initialState.toolCallCount);
       });
 
     const launchJob = (job: ActiveJob, ctx: ResolvedContext, trigger: StartJobTrigger) =>
@@ -1186,6 +1218,20 @@ export const WalkthroughJobsLive = Layer.effect(
               // Clear any session tokens issued for this job.
               sessionStore.clearWhere((payload) => payload.walkthroughId === job.walkthroughId),
             ),
+            // The generation span. Unlike `WalkthroughJobs.job` (which forks and
+            // returns in ~0 ms), this wraps the forked work, so its duration is
+            // the real end-to-end generation time — the basis for the
+            // walkthrough-gen-duration KPI. KPI attributes (`input_tokens`,
+            // `output_tokens`, `tool_call_count`) are annotated from inside
+            // `buildJobBody` on completion.
+            Effect.withSpan("WalkthroughJobs.generate", {
+              attributes: {
+                walkthroughId: job.walkthroughId,
+                prId: job.prId,
+                trigger,
+                model: ctx.modelUsed,
+              },
+            }),
           );
 
           const fiber = yield* Effect.forkDaemon(scopedBody);

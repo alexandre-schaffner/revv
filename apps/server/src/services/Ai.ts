@@ -236,6 +236,10 @@ export const AiServiceLive = Layer.effect(
             const settings = yield* getSettings();
             const agent = yield* getAgent();
 
+            // KPI telemetry: label the span with the resolved provider + model.
+            yield* Effect.annotateCurrentSpan("provider", agent);
+            if (settings.aiModel) yield* Effect.annotateCurrentSpan("model", settings.aiModel);
+
             // Walkthrough generation runs exclusively on the ACP transport now.
             // The shared MCP tool handlers behind `/mcp/walkthrough` are the same
             // code every agent reaches (doctrine invariant #13 — agent-path parity).

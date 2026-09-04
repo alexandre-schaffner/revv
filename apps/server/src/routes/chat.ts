@@ -16,6 +16,7 @@
 // still tracked so follow-up turns resume the same provider context.
 
 import { existsSync } from "node:fs";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   attachmentByteSize,
   attachmentsTotalTooLargeMessage,
@@ -434,16 +435,32 @@ export const chatRoute = new Elysia()
         const flagClearingStream = new ReadableStream<ChatStreamFrame>({
           async start(controller) {
             const reader = persistedStream.getReader();
+            // Span over the turn's token stream, carrying time-to-first-token
+            // (first text/reasoning frame). Ai.chat's own span only covers
+            // setup and has already ended by the time frames are pulled.
+            const span = trace.getTracer("revv-server").startSpan("Chat.stream", {
+              // All chat runs on the ACP transport now; the specific registry
+              // agent is a launch detail, so the transport is the provider.
+              attributes: { prId: prepared.prId, provider: "acp" },
+            });
+            const streamStartMs = Date.now();
+            let ttftRecorded = false;
             try {
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+                if (!ttftRecorded && (value.kind === "text" || value.kind === "reasoning")) {
+                  ttftRecorded = true;
+                  span.setAttribute("ttft_ms", Date.now() - streamStartMs);
+                }
                 controller.enqueue(value);
               }
               controller.close();
             } catch (err) {
+              span.setStatus({ code: SpanStatusCode.ERROR });
               controller.error(err);
             } finally {
+              span.end();
               try {
                 await AppRuntime.runPromise(
                   Effect.flatMap(ChatChangesPushService, (svc) =>

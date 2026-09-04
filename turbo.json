@@ -15,7 +15,7 @@
     },
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["build/**", "dist/**", ".svelte-kit/**"]
+      "outputs": ["build/**", "dist/**", "web/dist/**", ".svelte-kit/**"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]

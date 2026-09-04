@@ -99,6 +99,7 @@ export const ServerConfig = Config.all({
   acpAgent: Config.string("REVV_ACP_AGENT").pipe(Config.withDefault("")),
   acpCommand: Config.string("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
   acpArgs: Config.string("REVV_ACP_ARGS").pipe(Config.withDefault("")),
+  otlpEndpoint: Config.string("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(Config.withDefault("")),
 });
 
 export type ServerConfig = Config.Config.Success<typeof ServerConfig>;

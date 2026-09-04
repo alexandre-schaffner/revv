@@ -1,0 +1,22 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "types": ["svelte"],
+    "noEmit": true,
+    "paths": {
+      "@revv/shared": ["../../../packages/shared/src"],
+      "@revv/shared/*": ["../../../packages/shared/src/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "../src/shared/**/*.ts",
+    "vite.config.ts",
+    "svelte.config.js"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

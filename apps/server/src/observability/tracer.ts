@@ -12,6 +12,7 @@
 
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { ExportResultCode, hrTimeToMilliseconds } from "@opentelemetry/core";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { BatchSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 import { serverEnv } from "../config";
@@ -200,6 +201,12 @@ const processors = [new BatchSpanProcessor(new RevSpanExporter())];
 
 if (serverEnv.revDebug) {
   processors.push(new BatchSpanProcessor(new ConsoleSpanExporter()));
+}
+
+if (serverEnv.otlpEndpoint) {
+  processors.push(
+    new BatchSpanProcessor(new OTLPTraceExporter({ url: `${serverEnv.otlpEndpoint}/v1/traces` })),
+  );
 }
 
 export const TracingLive = NodeSdk.layer(() => ({

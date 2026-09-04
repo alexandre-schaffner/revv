@@ -1,0 +1,238 @@
+@import "tailwindcss";
+
+/* Dark theme is class-driven (toggled on <html>), not media-driven, so the
+   in-app theme switch can override the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Reading Room — the Revv design system, replicated for this standalone SPA.
+   Warm paper underfoot, considered ink, one accent (Tidewater Teal) worth
+   lifting your eyes for. Severity pairs colour with shape, never colour alone.
+   ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Warm-paper surface stack (light) */
+  --canvas: #faf9f6;
+  --surface: #f4f1eb;
+  --surface-2: #eae6de;
+  --elevated: #ffffff;
+  --border: #e4e0d8;
+  --border-subtle: #ece8e0;
+
+  /* Ink */
+  --ink: #2a2825;
+  --ink-2: #5a5650;
+  --ink-muted: #837e74; /* darkened from the spec's #9a958c to clear 4.5:1 on paper */
+
+  /* One accent — Tidewater Teal */
+  --accent: oklch(48% 0.08 195);
+  --accent-hover: oklch(42% 0.075 195);
+  --accent-tint: oklch(48% 0.08 195 / 0.1);
+
+  /* AI presence */
+  --violet: #6d28d9;
+
+  /* Deepened severity (one step past stock Tailwind) */
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
+  --attention: #c2410c;
+  --success-tint: rgba(21, 128, 61, 0.1);
+  --warning-tint: rgba(180, 83, 9, 0.1);
+  --danger-tint: rgba(185, 28, 28, 0.1);
+
+  /* Chart ink — gridlines, axes, series */
+  --grid: rgba(42, 40, 37, 0.07);
+  --chart-track: rgba(42, 40, 37, 0.05);
+
+  --shadow-pop: 0 4px 16px rgba(42, 40, 37, 0.1);
+  --shadow-float: 0 8px 24px rgba(42, 40, 37, 0.12), 0 2px 8px rgba(42, 40, 37, 0.06);
+}
+
+.dark {
+  /* Midnight stack */
+  --canvas: #0a0a0a;
+  --surface: #111111;
+  --surface-2: #1a1a1a;
+  --elevated: #1f1f1f;
+  --border: #262626;
+  --border-subtle: #1c1c1c;
+
+  --ink: #e4e4e7;
+  --ink-2: #a1a1aa;
+  --ink-muted: #8b8b93; /* lifted from #52525b to clear contrast on near-black */
+
+  /* Phosphor Teal — the dark-theme accent, same lineage, luminous value */
+  --accent: oklch(72% 0.12 195);
+  --accent-hover: oklch(78% 0.12 195);
+  --accent-tint: oklch(72% 0.12 195 / 0.14);
+
+  --violet: #a78bfa;
+
+  /* Severity lifted for legibility on near-black (DESIGN allows dark to lift) */
+  --success: #3fb950;
+  --warning: #d29922;
+  --danger: #f85149;
+  --attention: #db6d28;
+  --success-tint: rgba(63, 185, 80, 0.14);
+  --warning-tint: rgba(210, 153, 34, 0.14);
+  --danger-tint: rgba(248, 81, 73, 0.14);
+
+  --grid: rgba(228, 228, 231, 0.07);
+  --chart-track: rgba(228, 228, 231, 0.04);
+
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 10px 30px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-elevated: var(--elevated);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-muted: var(--ink-muted);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-violet: var(--violet);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-attention: var(--attention);
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Motion — product tier: 150–250ms, state-conveying only */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-snap: 120ms;
+  --duration-quick: 160ms;
+  --duration-smooth: 220ms;
+
+  /* Semantic z-index scale */
+  --z-sticky: 20;
+  --z-popover: 40;
+  --z-tooltip: 60;
+}
+
+@layer base {
+  html {
+    background-color: var(--canvas);
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings:
+      "cv05" 1,
+      "ss01" 1;
+  }
+
+  ::selection {
+    background-color: var(--accent-tint);
+  }
+
+  /* Tabular numerals everywhere a figure is compared (tables, KPIs, axes). */
+  .nums {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* A quiet, paper-toned scrollbar — not a custom-styled novelty. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-2) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--surface-2);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
+/* The live-indicator pulse is the one piece of ambient motion. It carries
+   meaning (the stream is alive), so it stays on a meaningful reduced-motion
+   path rather than vanishing — it falls back to a steady dot. */
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--accent-tint);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.live-pulse {
+  animation: live-pulse 2s var(--ease-soft) infinite;
+}
+
+/* Newly-arrived rows breathe in once. Enhances an already-visible default. */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.row-in {
+  animation: row-in var(--duration-smooth) var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The reduced-motion contract must win over any animation/transition defined
+     elsewhere, so !important is required here. biome-ignore per-property. */
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced-motion override must win */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced-motion override must win */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced-motion override must win */
+    transition-duration: 0.01ms !important;
+  }
+  .live-pulse {
+    animation: none;
+    opacity: 1;
+  }
+}

@@ -664,8 +664,14 @@ export const PollSchedulerLive = Layer.effect(
                   Effect.orElseSucceed(() => undefined),
                 );
 
+                yield* Effect.annotateCurrentSpan("prs_open", prs.length);
                 return prs;
               }).pipe(
+                // Group each repo's open-PR listing + upserts under one span so
+                // the sync trace breaks down per repo (GitHub.* calls nest here).
+                Effect.withSpan("PollScheduler.syncRepo", {
+                  attributes: { repo: repo.fullName, repoId: repo.id },
+                }),
                 Effect.tapError((err) =>
                   Effect.sync(() => {
                     logError(
@@ -984,13 +990,21 @@ export const PollSchedulerLive = Layer.effect(
                       fetchedAt: new Date().toISOString(),
                     }));
 
+                    yield* Effect.annotateCurrentSpan("files", files.length);
                     // `cacheFiles` also records the PR's real diff size from
                     // this list — the only place an open PR gets one, since the
                     // list endpoint above doesn't report it.
                     yield* withDb(diffCache.cacheFiles(prId, files)).pipe(
                       Effect.orElseSucceed(() => undefined),
                     );
-                  }).pipe(Effect.orElseSucceed(() => undefined)),
+                  }).pipe(
+                    // One span per PR whose diff is refreshed — nests the
+                    // GitHub.fetch (files) call + the cache write.
+                    Effect.withSpan("PollScheduler.refreshPrFiles", {
+                      attributes: { prId },
+                    }),
+                    Effect.orElseSucceed(() => undefined),
+                  ),
                 { concurrency: 1 },
               );
             }

@@ -31,8 +31,9 @@ dev: kill-server ## Start all services in development mode
 dev-server: kill-server ## Start only the API server (port 45679)
 	REV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 
-dev-desktop: kill-server ## Start the Tauri desktop app in dev mode
-	$(DEV_ENV) bun run dev:desktop
+dev-desktop: kill-server ## Start the Tauri desktop app + telemetry dashboard (dashboard UI at http://localhost:5174)
+	@printf "\033[36m[dev-desktop]\033[0m telemetry dashboard → \033[1mhttp://localhost:5174\033[0m (collector API/OTLP on :45680)\n"
+	OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:45680 $(DEV_ENV) bun run dev:desktop
 
 kill-server: ## Kill any stale dev server processes (uses PID files; safe to run at any time)
 	@if [ -f apps/server/revv-dev.db.dev.pid ]; then \
