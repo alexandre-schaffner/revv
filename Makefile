@@ -116,18 +116,30 @@ dist: ## Build the Revv.app bundle used by the source installer
 	@printf "  Step 2/3: Building web frontend + API server\n"
 	bun run build
 	@printf "  Step 3/3: Building Tauri desktop bundle (.app only)\n"
-	# --bundles app skips the DMG. Revv is distributed via source install,
-	# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
-	# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
-	# explicitly if you actually need the .dmg.
-	#
-	# createUpdaterArtifacts is true in tauri.conf.json so CI-signed release
-	# builds emit a signed .app.tar.gz for the updater. This target runs on
-	# end-user/dev machines (install.sh and `revv update`'s local-build
-	# fallback) that never hold TAURI_SIGNING_PRIVATE_KEY, so it's overridden
-	# off here — otherwise the bundler hard-fails with "public key has been
-	# found, but no private key".
-	cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+	@if ! command -v cargo >/dev/null 2>&1; then \
+		if command -v bash >/dev/null 2>&1 && [ -f scripts/lib/common.sh ]; then \
+			bash -c 'set -euo pipefail; source scripts/lib/common.sh; detect_platform; ensure_xcode_clt; ensure_rust'; \
+		else \
+			printf "\n\033[0;31m  ✗ cargo not found.\033[0m\n"; \
+			printf "  Install Rust/Cargo, then rerun this command:\n"; \
+			printf "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n\n"; \
+			printf "  If Rust is already installed, refresh this shell first:\n"; \
+			printf "    source $$HOME/.cargo/env\n\n"; \
+			exit 1; \
+		fi; \
+	fi
+	@# --bundles app skips the DMG. Revv is distributed via source install,
+	@# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
+	@# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
+	@# explicitly if you actually need the .dmg.
+	@#
+	@# createUpdaterArtifacts is true in tauri.conf.json so CI-signed release
+	@# builds emit a signed .app.tar.gz for the updater. This target runs on
+	@# end-user/dev machines (install.sh and `revv update`'s local-build
+	@# fallback) that never hold TAURI_SIGNING_PRIVATE_KEY, so it's overridden
+	@# off here -- otherwise the bundler hard-fails with "public key has been
+	@# found, but no private key".
+	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
 	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
 
