@@ -17,9 +17,11 @@ import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 // Liveness is enforced by two timers only: a first-event timeout and an
 // inactivity timeout that ANY event resets — content, phase heartbeat, or
 // reasoning. A model that reads files for a long time before it produces output
-// is legitimate, so there is no separate exploration-stall gate; the hard
-// `withAgentTurn` wall (CLI_WALKTHROUGH_TIMEOUT_MS) is the backstop for an agent
-// that emits heartbeats forever without finishing.
+// is legitimate, so there is no separate exploration-stall gate. Because the
+// phase heartbeat is synthetic, this layer cannot tell a working agent from a
+// stalled-but-connected one; that is `withAgentTurn`'s idle deadline
+// (AGENT_IDLE_TIMEOUT_MS), rearmed only by real agent activity, with
+// CLI_WALKTHROUGH_TIMEOUT_MS as the absolute ceiling behind it.
 
 const PHASE_MESSAGES = {
   exploration: {

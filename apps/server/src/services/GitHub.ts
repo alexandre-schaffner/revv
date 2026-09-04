@@ -9,6 +9,7 @@ import type {
 import { Context, Effect, Either, Layer } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import { logError } from "../logger";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
@@ -129,6 +130,12 @@ export interface PrFileMeta {
 const PR_FILES_PAGE_SIZE = 100;
 export const PR_FILES_MAX_PAGES = 30;
 export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
+/**
+ * Hard cap on `files[]` from GitHub's compare endpoint. Unlike `/pulls/:n/files`
+ * this endpoint does not paginate the file list, so a range touching more than
+ * 300 files comes back truncated.
+ */
+const COMPARE_FILES_MAX_COUNT = 300;
 
 /**
  * Collapse repeated filenames in GitHub's PR-files list.
@@ -256,6 +263,26 @@ interface GitHubGatewayFlatService {
   readonly getPrFiles: (
     repoFullName: string,
     prNumber: number,
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * Files changed between two refs, as a three-dot (merge-base) comparison.
+   *
+   * GitHub's compare endpoint resolves the merge base server-side and returns
+   * `files[]` entries with the same shape and the same hunks-only `patch`
+   * format as `/pulls/:n/files`, so a commit-scoped review view renders
+   * through exactly the same pipeline as the full-PR one.
+   *
+   * Caveat: compare caps `files[]` at 300 entries with no pagination, where
+   * the full-PR path walks up to {@link PR_FILES_MAX_COUNT}. A range wider
+   * than 300 files is silently truncated by GitHub; we log a warning when the
+   * cap is hit so it's visible in the server log.
+   */
+  readonly compareFiles: (
+    repoFullName: string,
+    baseRef: string,
+    headRef: string,
     token: string,
     apiBase?: string,
   ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
@@ -880,6 +907,41 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       );
     }).pipe(retryTransient),
 
+  compareFiles: (repoFullName, baseRef, headRef, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // Three-dot compare: GitHub resolves the merge base server-side, so the
+      // result matches what its own "Files changed" tab would show for the
+      // range. Conditional so repeat visits to the same range replay from
+      // `github_etag_cache` on a 304 and cost no primary rate-limit budget.
+      const data = yield* conditionalFetch(
+        `/repos/${owner}/${repo}/compare/${baseRef}...${headRef}`,
+        token,
+        apiBase,
+      );
+      const raw = (data as Record<string, unknown>).files as Record<string, unknown>[] | undefined;
+      const rawFiles = raw ?? [];
+      if (rawFiles.length >= COMPARE_FILES_MAX_COUNT) {
+        // GitHub caps compare at 300 files and offers no pagination, so a
+        // wider range is truncated with no signal in the payload.
+        logError(
+          "github",
+          `compare ${repoFullName} ${baseRef}...${headRef} hit the ${COMPARE_FILES_MAX_COUNT}-file compare cap; the ranged file list is truncated`,
+        );
+      }
+      return dedupePrFilesByPath(
+        rawFiles.map((f) => ({
+          filename: f.filename as string,
+          previousFilename: (f.previous_filename as string | undefined) ?? null,
+          status: f.status as string,
+          additions: (f.additions as number | undefined) ?? 0,
+          deletions: (f.deletions as number | undefined) ?? 0,
+          patch: (f.patch as string | undefined) ?? null,
+        })),
+      );
+    }).pipe(retryTransient),
+
   listPrCommits: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
@@ -1468,6 +1530,7 @@ export interface GitHubGatewayService {
     readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
     readonly meta: GitHubGatewayFlat["getPrMeta"];
     readonly files: GitHubGatewayFlat["getPrFiles"];
+    readonly compareFiles: GitHubGatewayFlat["compareFiles"];
     readonly commits: GitHubGatewayFlat["listPrCommits"];
     readonly convertToDraft: GitHubGatewayFlat["convertPrToDraft"];
     readonly markReadyForReview: GitHubGatewayFlat["markPrReadyForReview"];
@@ -1520,6 +1583,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,
     meta: githubGatewayFlat.getPrMeta,
     files: githubGatewayFlat.getPrFiles,
+    compareFiles: githubGatewayFlat.compareFiles,
     commits: githubGatewayFlat.listPrCommits,
     convertToDraft: githubGatewayFlat.convertPrToDraft,
     markReadyForReview: githubGatewayFlat.markPrReadyForReview,

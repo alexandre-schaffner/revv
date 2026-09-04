@@ -5,7 +5,7 @@ import { repositories } from "../db/schema";
 import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { type CachedDiffFile, DiffCacheService, hasCompleteCachedFiles } from "./DiffCache";
+import { DiffCacheService, hasCompleteCachedFiles, toCachedDiffFiles } from "./DiffCache";
 import { GitHubGateway, type PrCommit, type PrFileMeta, type PrMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost } from "./github-rest";
@@ -210,15 +210,7 @@ export const PrContextServiceLive = Layer.effect(
           if (hasCompleteCachedFiles(cached, expectedChangedFiles, cachedCount)) return cached;
         }
         const fileList = yield* github.prs.files(repoFullName, prExternalId, token, apiBase);
-        const fresh: CachedDiffFile[] = fileList.map((f) => ({
-          path: f.filename,
-          oldPath: f.previousFilename,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: f.patch,
-          fetchedAt: new Date().toISOString(),
-        }));
+        const fresh = toCachedDiffFiles(fileList);
         yield* withDb(db, diffCache.cacheFiles(prId, fresh));
         return fresh;
       });

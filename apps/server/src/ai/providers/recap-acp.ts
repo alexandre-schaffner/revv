@@ -26,13 +26,14 @@
 import type { McpServer } from "@agentclientprotocol/sdk";
 import type { AcpAgentId, ContextWindow, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
+import { AGENT_IDLE_TIMEOUT_MS, CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
 import {
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
+  makeActivityBeacon,
   type NormalizedAgentEvent,
   withAgentTurn,
 } from "../agent-stream";
@@ -87,6 +88,10 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
   let sessionId: string | null = null;
   let handle: AcpConnectionHandle | null = null;
   let validatedCompleteSeen = false;
+  // Liveness for the harness' idle deadline — poked by the agent's own ACP
+  // session updates (its MCP tool calls arrive on that stream too, they just
+  // carry no machine name).
+  const activity = makeActivityBeacon();
 
   // Wrap onCompleted so a complete_recap-triggered abort reads as success.
   const toolCtx: RecapToolContext = {
@@ -120,6 +125,8 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
     return await withAgentTurn<RecapAcpResult>({
       externalAbort: params.abortController,
       hardTimeoutMs: CLI_WALKTHROUGH_TIMEOUT_MS,
+      idleTimeoutMs: AGENT_IDLE_TIMEOUT_MS,
+      activity,
       jobStarted: async () => {
         h.jobStarted();
       },
@@ -175,6 +182,7 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
         };
         const decodeState = makeAcpDecodeState();
         h.setListener(sessionId, (update) => {
+          activity.note();
           for (const ev of decodeAcpSessionUpdate(update, decodeState)) onAgentEvent(ev);
         });
 

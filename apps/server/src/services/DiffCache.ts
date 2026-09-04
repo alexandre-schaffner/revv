@@ -4,7 +4,7 @@ import { prDiffFiles, pullRequests } from "../db/schema/index";
 import { type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { GitHubGateway, PR_FILES_MAX_COUNT } from "./GitHub";
+import { GitHubGateway, PR_FILES_MAX_COUNT, type PrFileMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import type { SettingsService } from "./Settings";
 
@@ -216,6 +216,26 @@ export function hasCompleteCachedFiles(
   return cached.length >= Math.min(expectedChangedFiles, PR_FILES_MAX_COUNT);
 }
 
+/**
+ * Project GitHub's `files[]` shape onto the row shape the review surface
+ * renders. Shared by the cached full-PR path and the ranged `?at=` compare
+ * path so both produce byte-identical projections; `fetchedAt` is stamped even
+ * on the ranged path, which never reaches `pr_diff_files` (its PK
+ * `(prId, path)` has no range dimension), so the field stays non-optional.
+ */
+export function toCachedDiffFiles(files: readonly PrFileMeta[]): CachedDiffFile[] {
+  const fetchedAt = new Date().toISOString();
+  return files.map((f) => ({
+    path: f.filename,
+    oldPath: f.previousFilename,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: f.patch,
+    fetchedAt,
+  }));
+}
+
 export function shouldServeCachedFilesOnFetchError(
   cached: readonly CachedDiffFile[] | null,
   error: GitHubError,
@@ -262,16 +282,7 @@ export const getOrFetchDiffFiles = (
 
     if (fetched.source === "cache") return [...fetched.files];
 
-    const fileList = fetched.fileList;
-    const files: CachedDiffFile[] = fileList.map((f) => ({
-      path: f.filename,
-      oldPath: f.previousFilename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      patch: f.patch,
-      fetchedAt: new Date().toISOString(),
-    }));
+    const files = toCachedDiffFiles(fetched.fileList);
 
     yield* withDb(db, diffCache.cacheFiles(prId, files));
     return files;
