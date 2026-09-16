@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+  artifactInteractivityWarning,
+  artifactLayoutWarning,
   artifactThemingWarning,
   type BlockVariantInput,
+  blockContentError,
   buildBlock,
   normalizeDiffPatch,
 } from "./walkthrough-blocks";
@@ -90,6 +93,130 @@ describe("artifactThemingWarning", () => {
         markdown: { content: "This prose mentions #fff and rgba(0,0,0,.5)." },
       }),
     ).toBeNull();
+  });
+});
+
+describe("artifactInteractivityWarning", () => {
+  it("returns null when the artifact has a control the reader can drive", () => {
+    expect(
+      artifactInteractivityWarning(artifact(`<body><button id="step">Step</button></body>`)),
+    ).toBeNull();
+    expect(
+      artifactInteractivityWarning(
+        artifact(
+          `<body><div id="row"></div><script>row.addEventListener("click", next)</script></body>`,
+        ),
+      ),
+    ).toBeNull();
+    expect(
+      artifactInteractivityWarning(
+        artifact(`<body><label><input type="checkbox" /> With the guard</label></body>`),
+      ),
+    ).toBeNull();
+  });
+
+  it("warns when the artifact is a static picture", () => {
+    expect(
+      artifactInteractivityWarning(
+        artifact(`<body><div class="row">step 1</div><div class="row">step 2</div></body>`),
+      ),
+    ).toContain("no interactive control");
+  });
+
+  it("returns null for non-artifact variants", () => {
+    expect(artifactInteractivityWarning({ markdown: { content: "1. step one" } })).toBeNull();
+  });
+});
+
+describe("artifactLayoutWarning", () => {
+  it("returns null for an artifact that inherits the baseline type and reserves nothing", () => {
+    expect(
+      artifactLayoutWarning(
+        artifact(`<style>.row { font-size: 12px; padding: 3px 8px; }</style><button>Step</button>`),
+      ),
+    ).toBeNull();
+  });
+
+  it("warns when type is sized above the 13px ceiling", () => {
+    expect(artifactLayoutWarning(artifact(`<style>.title { font-size: 15px; }</style>`))).toContain(
+      "font-size: 15px",
+    );
+    expect(artifactLayoutWarning(artifact(`<style>.title { font-size: 1rem; }</style>`))).toContain(
+      "font-size: 1rem",
+    );
+    expect(
+      artifactLayoutWarning(artifact(`<style>.title { font-size: 13px; }</style>`)),
+    ).toBeNull();
+    expect(artifactLayoutWarning(artifact(`<style>.n { font-size: 0.8rem; }</style>`))).toBeNull();
+  });
+
+  it("warns about height reserved for content that has not rendered", () => {
+    expect(
+      artifactLayoutWarning(artifact(`<style>.verdict { min-height: 48px; }</style>`)),
+    ).toContain("min-height: 48px");
+    expect(artifactLayoutWarning(artifact(`<style>.trace { height: 240px; }</style>`))).toContain(
+      "height: 240px",
+    );
+  });
+
+  it("ignores hairline min-heights and control-sized fixed heights", () => {
+    expect(artifactLayoutWarning(artifact(`<style>.rule { min-height: 1px; }</style>`))).toBeNull();
+    expect(artifactLayoutWarning(artifact(`<style>.bar { height: 24px; }</style>`))).toBeNull();
+    expect(
+      artifactLayoutWarning(artifact(`<style>.wrap { max-height: 300px; }</style>`)),
+    ).toBeNull();
+  });
+
+  it("warns about a native select", () => {
+    expect(
+      artifactLayoutWarning(artifact(`<select><option>admin tab</option></select>`)),
+    ).toContain("<select>");
+  });
+
+  it("returns null for non-artifact variants", () => {
+    expect(artifactLayoutWarning({ markdown: { content: "font-size: 32px" } })).toBeNull();
+  });
+});
+
+describe("blockContentError", () => {
+  const DIAGRAM = [
+    "```prlens",
+    '{ "title": "T", "lenses": ["architecture"],',
+    '  "lanes": [{ "id": "http", "label": "HTTP" }],',
+    '  "nodes": [{ "id": "n", "label": "n", "kind": "KIND", "delta": "added", "lane": "http" }] }',
+    "```",
+  ].join("\n");
+
+  it("rejects an empty payload before it looks at diagrams", () => {
+    expect(blockContentError({ markdown: { content: "   " } })).toContain("non-empty content");
+  });
+
+  it("accepts a markdown block whose diagram renders", () => {
+    expect(
+      blockContentError({ markdown: { content: DIAGRAM.replace("KIND", "route") } }),
+    ).toBeNull();
+  });
+
+  it("rejects a markdown block whose diagram the renderer would reject", () => {
+    expect(
+      blockContentError({ markdown: { content: DIAGRAM.replace("KIND", "migration") } }),
+    ).toContain("markdown block content");
+  });
+
+  it("checks the annotation beside a code block, not only prose blocks", () => {
+    expect(
+      blockContentError({
+        code: {
+          file_path: "a.ts",
+          start_line: 1,
+          end_line: 2,
+          language: "ts",
+          content: "const a = 1;",
+          annotation: DIAGRAM.replace("KIND", "migration"),
+          annotation_position: "right",
+        },
+      }),
+    ).toContain("code block annotation");
   });
 });
 

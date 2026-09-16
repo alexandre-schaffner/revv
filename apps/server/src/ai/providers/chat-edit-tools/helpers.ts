@@ -80,10 +80,12 @@ export function stampLastEdited(db: Db, walkthroughId: string, actor: string): v
 
 // ── Block construction ──────────────────────────────────────────────────────
 //
-// The variant-count, empty/size validation, and typed-block construction are
-// shared with the generation pipeline in `../walkthrough-blocks` so the two
-// MCP write paths can never drift (CLAUDE.md #2, #13). Handlers import
-// `blockVariantCount`, `emptyBlockError`, and `buildBlock` from there directly.
+// The variant-count, content validation (empty payloads, artifact size, and
+// unrenderable `prlens` diagrams), and typed-block construction are shared
+// with the generation pipeline in `../walkthrough-blocks` so the two MCP write
+// paths can never drift (CLAUDE.md #2, #13). Handlers import
+// `blockVariantCount`, `blockContentError`, and `buildBlock` from there
+// directly.
 
 // ── Issue-blockIds JSON helpers ─────────────────────────────────────────────
 

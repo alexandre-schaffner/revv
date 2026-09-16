@@ -21,13 +21,14 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodePlainText } from "../agent-text";
 import {
   type BlockVariantInput,
+  blockContentError,
   blockRow,
   blockVariantCount,
   buildBlock,
-  emptyBlockError,
-  withArtifactThemingWarning,
+  withArtifactWarnings,
 } from "../walkthrough-blocks";
 import {
   blockIdFor,
@@ -127,7 +128,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   ctx,
   input,
 ) => {
-  const trimmedTitle = input.title.trim();
+  const trimmedTitle = decodePlainText(input.title);
   if (trimmedTitle.length === 0) {
     return errorResult(
       "Error: add_semantic_step requires a non-empty title — chapters are named, not anonymous.",
@@ -139,7 +140,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
     );
   }
-  const initialBlockErr = emptyBlockError(input.initial_block);
+  const initialBlockErr = blockContentError(input.initial_block);
   if (initialBlockErr) return errorResult(initialBlockErr);
 
   let result: WalkthroughToolResult | null = null;
@@ -265,7 +266,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     });
   }
   return okResult(
-    withArtifactThemingWarning(
+    withArtifactWarnings(
       `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
       input.initial_block,
     ),
@@ -286,8 +287,8 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
       "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
     );
   }
-  const emptyErr = emptyBlockError(input);
-  if (emptyErr) return errorResult(emptyErr);
+  const contentErr = blockContentError(input);
+  if (contentErr) return errorResult(contentErr);
   const variant = {
     markdown: input.markdown,
     code: input.code,
@@ -352,7 +353,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
 
   ctx.emit({ type: "block", data: block });
   return okResult(
-    withArtifactThemingWarning(
+    withArtifactWarnings(
       `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
       variant,
     ),
@@ -367,9 +368,13 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
 // Does not advance phase.
 
 export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (ctx, input) => {
+  // Normalize before hashing: the id is derived from the title, so decoding
+  // afterwards would give the same concern two different ids across runs.
+  const title = decodePlainText(input.title);
+  const description = decodePlainText(input.description);
   const issueId = await computeIssueId(
     ctx.walkthroughId,
-    input.title,
+    title,
     input.file_path ?? null,
     input.start_line ?? null,
   );
@@ -444,8 +449,8 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
         walkthroughId: ctx.walkthroughId,
         order,
         severity: input.severity,
-        title: input.title,
-        description: input.description,
+        title,
+        description,
         filePath: input.file_path ?? null,
         startLine: input.start_line ?? null,
         endLine: input.end_line ?? null,
@@ -456,8 +461,8 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
         target: walkthroughIssues.id,
         set: {
           severity: input.severity,
-          title: input.title,
-          description: input.description,
+          title,
+          description,
           filePath: input.file_path ?? null,
           startLine: input.start_line ?? null,
           endLine: input.end_line ?? null,
@@ -469,8 +474,8 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     const issue: WalkthroughIssue = {
       id: issueId,
       severity: input.severity,
-      title: input.title,
-      description: input.description,
+      title,
+      description,
       blockIds,
       ...(input.file_path !== null ? { filePath: input.file_path } : {}),
       ...(input.start_line !== null ? { startLine: input.start_line } : {}),
@@ -494,9 +499,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     // warning/critical without a line anchor → PR-wide, no anchor possible
     nextStepHint = `\n\n(PR-wide issue with no line anchor — no inline comment needed. Continue with the next concern or diff step.)`;
   }
-  return okResult(
-    `Issue flagged: [${input.severity}] ${input.title} (id: ${issueId}).${nextStepHint}`,
-  );
+  return okResult(`Issue flagged: [${input.severity}] ${title} (id: ${issueId}).${nextStepHint}`);
 };
 
 // ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────

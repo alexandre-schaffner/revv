@@ -15,6 +15,13 @@ import type {
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import {
+  ISSUE_COMMENT_CONTRACT,
+  PLAIN_TEXT_FIELD,
+  PROSE_VOICE_CONTRACT,
+  SENTIMENT_CONTRACT,
+  SUMMARY_CONTRACT,
+} from "../../prompts/review-copy-contract";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ─── Doctrine & phase model ─────────────────────────────────────────────────
@@ -130,7 +137,7 @@ const getRepoContextSchema = z.object({
 const getCommitHistorySchema = z.object({});
 
 const setOverviewSchema = z.object({
-  summary: z.string().describe("2-3 sentence summary of what this PR does and why"),
+  summary: z.string().describe(`${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT}`),
   risk_level: z.enum(["low", "medium", "high"]).describe("Overall risk assessment"),
 });
 
@@ -139,7 +146,7 @@ const artifactBlockSchema = z
     html: z
       .string()
       .describe(
-        "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family. See the system prompt for the full token list and design rules.",
+        "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage; no timers/randomness. Renders in a sandboxed iframe that auto-sizes. Must carry a live state readout, something the reader can vary, and a verdict — a step-reveal with no changing state is a markdown list, not an artifact. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family; spend the accent on the current state, not on buttons. Keep it under ~320px tall: compact rows, no placeholder rows for content not yet revealed. See 'Interactive artifacts (the craft bar)' in the system prompt for the full contract.",
       ),
     annotation: z.string().nullable(),
     annotation_position: z.enum(["left", "right"]),
@@ -177,7 +184,7 @@ const semanticStepInitialBlockSchema = z
         content: z
           .string()
           .describe(
-            "GitHub-flavored markdown for the chapter's opening block. Headings, **bold**, `inline code`, lists, blockquotes, fenced snippets — use the full toolkit. This is the first thing the reader sees in the chapter, so set up the narrative.",
+            `GitHub-flavored markdown for the chapter's opening block, budget 150 WORDS. Use headings, \`inline code\`, lists, tables, blockquotes and fenced snippets for STRUCTURE; **bold** is a line-start label, never mid-sentence emphasis. This is the first thing the reader sees in the chapter, so open on the point rather than on a preamble. ${PROSE_VOICE_CONTRACT}`,
           ),
       })
       .nullable()
@@ -198,7 +205,7 @@ const semanticStepInitialBlockSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`. Annotation REQUIRED (1–3 sentences) — code without annotation is a wall of code.",
+        `Use for source-code excerpts. Mutually exclusive with \`markdown\`, \`diff\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words); code without annotation is a wall of code. ${PROSE_VOICE_CONTRACT}`,
       ),
     diff: z
       .object({
@@ -210,7 +217,7 @@ const semanticStepInitialBlockSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`. Annotation REQUIRED (1–3 sentences).",
+        `Use for unified-diff hunks. Mutually exclusive with \`markdown\`, \`code\`, and \`artifact\`. Annotation REQUIRED (1–3 sentences, 45 words). ${PROSE_VOICE_CONTRACT}`,
       ),
     artifact: artifactBlockSchema,
   })
@@ -230,7 +237,8 @@ const addSemanticStepSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Chapter title — the heading the reader sees. Keep it short (≤ ~60 chars). Describe the concept being walked through, e.g. 'Token validation changes', 'Race condition in refresh flow', 'Test coverage gaps'. NOT a file name — chapters span concepts, not files.",
+      "Chapter title — the heading the reader sees. Keep it short (≤ ~60 chars). Describe the concept being walked through, e.g. 'Token validation changes', 'Race condition in refresh flow', 'Test coverage gaps'. NOT a file name — chapters span concepts, not files. " +
+        PLAIN_TEXT_FIELD,
     ),
   summary: z
     .string()
@@ -273,7 +281,7 @@ const addDiffStepSchema = z.object({
       content: z
         .string()
         .describe(
-          "GitHub-flavored markdown. USE THE FULL TOOLKIT: headings (## / ###), **bold** for key terms, *italics*, `inline code` for identifiers and paths, bulleted / numbered lists, > blockquotes, [links](url), and ```fenced``` snippets for tiny illustrative code. A single flat sentence is a missed opportunity.",
+          `GitHub-flavored markdown, budget 150 WORDS. Use the toolkit for STRUCTURE, not for volume: headings (## / ###), **bold** labels, \`inline code\` for identifiers and paths, bulleted / numbered lists, tables, > blockquotes, [links](url), and \`\`\`fenced\`\`\` snippets for tiny illustrative code. Give each fact its own line or list item. A dense paragraph the reader must parse linearly is the failure mode. Over 150 words, split into two blocks or cut the weaker half. ${PROSE_VOICE_CONTRACT}`,
         ),
     })
     .nullable()
@@ -339,11 +347,11 @@ const flagIssueSchema = z.object({
     .describe(
       "Two decisions, kept separate. (1) WHETHER TO FLAG — a HIGH bar: flag only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by THIS diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. If any fails, do not flag. (2) SEVERITY ONCE FLAGGED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero. Security examples are illustrative per tier, not a narrowing — correctness/perf/tests/maintainability map the same way.",
     ),
-  title: z.string().describe("Short title of the concern (10 words max)"),
+  title: z.string().describe(`Short title of the concern (10 words max). ${PLAIN_TEXT_FIELD}`),
   description: z
     .string()
     .describe(
-      "MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked diff step.",
+      `MINIMAL one-sentence label for the issues-list card (≤ ~15 words). Do not explain the concern here — the full explanation belongs in the annotation of the linked diff step. ${PLAIN_TEXT_FIELD}`,
     ),
   block_refs: z
     .array(blockRefSchema)
@@ -394,7 +402,7 @@ const addIssueCommentSchema = z.object({
   body: z
     .string()
     .describe(
-      "Markdown body of the comment. Speak to the coder directly — explain the issue, why it matters, and the recommended fix. Idempotency: a retry with the same anchor (issue_id + file_path + start_line + end_line + diff_side) replaces the body of the existing comment rather than creating a duplicate.",
+      `Markdown body of the comment. ${ISSUE_COMMENT_CONTRACT} ${PROSE_VOICE_CONTRACT} Idempotency: a retry with the same anchor (issue_id + file_path + start_line + end_line + diff_side) replaces the body of the existing comment rather than creating a duplicate.`,
     ),
 });
 
@@ -402,7 +410,7 @@ const setSentimentSchema = z.object({
   markdown: z
     .string()
     .describe(
-      "GitHub-flavored markdown, 2–4 sentences, direct verdict. Covers the reviewer's bottom-line read of the PR after the diff analysis. Replaces the old convention of emitting a '## Overall Sentiment' markdown block.",
+      `GitHub-flavored markdown. ${SENTIMENT_CONTRACT} ${PROSE_VOICE_CONTRACT} Replaces the old convention of emitting a '## Overall Sentiment' markdown block.`,
     ),
 });
 
@@ -420,7 +428,7 @@ const rateAxisSchema = z.object({
       "description",
     ])
     .describe(
-      "Which scorecard axis this rating is for. correctness: logic errors, off-by-ones, race conditions, unhandled errors. scope: is the PR doing one thing, or has it absorbed drive-by refactors / unrelated formatting. tests: new behavior has tests, no suspiciously deleted/weakened assertions. clarity: naming, function length, nesting depth, comment quality, dead code, magic numbers. safety: touches auth, payments, migrations, deletes, public APIs, shared packages (a risk-surface signal, not a quality score). consistency: follows existing codebase patterns (layering, module boundaries, conventions). api_changes: breaking changes to routes, schemas, event payloads, exported types. performance: N+1 queries, unbounded loops, sync work in hot paths, missing indexes. description: does the PR explain why (not just what), link issues, call out deployment concerns.",
+      "Which scorecard axis this rating is for. correctness: logic errors, off-by-ones, race conditions, unhandled errors. scope: is the PR doing one thing, or has it absorbed drive-by refactors / unrelated formatting — several unrelated concerns is at least a concern, with the concrete split named in details. tests: new behavior has tests, no suspiciously deleted/weakened assertions. clarity: naming, function length, nesting depth, comment quality, dead code, magic numbers. safety: touches auth, payments, migrations, deletes, public APIs, shared packages (a risk-surface signal, not a quality score). consistency: follows existing codebase patterns (layering, module boundaries, conventions). api_changes: breaking changes to routes, schemas, event payloads, exported types. performance: N+1 queries, unbounded loops, sync work in hot paths, missing indexes. description: does the PR explain why (not just what), link issues, call out deployment concerns.",
     ),
   verdict: z
     .enum(["pass", "concern", "blocker"])
@@ -435,12 +443,12 @@ const rateAxisSchema = z.object({
   rationale: z
     .string()
     .describe(
-      "1–2 sentences. Required. If the axis doesn't apply (e.g. performance on a docs-only PR), emit verdict=pass with a rationale starting 'n/a for this PR — '.",
+      `1–2 sentences, 35 words. Required. Lead with what drove the verdict, then the evidence: 'No tests cover the new \`refresh\` failure path', not 'While the existing suite is thorough, there is one area…'. If the axis doesn't apply (e.g. performance on a docs-only PR), emit verdict=pass with a rationale starting 'n/a for this PR — '. ${PROSE_VOICE_CONTRACT}`,
     ),
   details: z
     .string()
     .describe(
-      "Rich GitHub-flavored markdown expanding on the rationale. USE THE FULL TOOLKIT: **bold** key terms, `inline code` for identifiers/paths, bullet lists for multiple findings, and ### subheadings if needed. For pass: 2–4 sentences explaining what was checked and why it's clean. For concern/blocker: explain the problem clearly, why it matters, affected code paths, and the recommended fix. Minimum 3 sentences.",
+      `GitHub-flavored markdown expanding on the rationale, budget 80 WORDS. Use the toolkit for STRUCTURE: **bold** labels, \`inline code\` for identifiers/paths, one bullet per finding. For pass: one or two sentences naming what you checked. Do not pad a clean axis; nine padded axes are a wall of text nobody reads. For concern/blocker: what breaks, the affected code path, the fix, then a concrete effort estimate (\`~15 min\`, \`about a day\`), as a short bullet list rather than a paragraph. ${PROSE_VOICE_CONTRACT}`,
     ),
   citations: z
     .array(

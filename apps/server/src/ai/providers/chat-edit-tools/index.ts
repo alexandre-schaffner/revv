@@ -4,6 +4,7 @@
 // canonical EDIT_TOOL_SPECS array consumed by chat-context.ts,
 // chat-claude.ts, and chat-mcp-tools.ts.
 
+import { SENTIMENT_CONTRACT_SHORT } from "../../prompts/review-copy-contract";
 import {
   addBlockHandler,
   addSemanticStepEditHandler,
@@ -110,7 +111,7 @@ export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
   },
   {
     name: "update_sentiment",
-    description: "Replace the 'Overall Sentiment' markdown. 2–4 sentences, direct verdict.",
+    description: `Replace the 'Overall Sentiment' markdown. ${SENTIMENT_CONTRACT_SHORT}`,
     inputSchema: updateSentimentSchema,
     handler: updateSentimentHandler,
   },

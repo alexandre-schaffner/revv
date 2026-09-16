@@ -15,6 +15,7 @@ import { threadMessages } from "../../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
+import { decodePlainText } from "../agent-text";
 import { blockIdFor, computeAnchorThreadId, computeIssueId } from "../walkthrough-tools";
 import {
   assertStillComplete,
@@ -210,12 +211,11 @@ export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async
   if (!active) return fail("No complete walkthrough exists for this PR yet.");
   const walkthroughId = active.id;
 
-  const issueId = await computeIssueId(
-    walkthroughId,
-    input.title,
-    input.file_path,
-    input.start_line,
-  );
+  // Normalize before hashing: the id derives from the title, so decoding
+  // afterwards would give the same concern two different ids.
+  const title = decodePlainText(input.title);
+  const description = decodePlainText(input.description);
+  const issueId = await computeIssueId(walkthroughId, title, input.file_path, input.start_line);
 
   let result: ChatEditToolResult | null = null;
   let emitIssue: WalkthroughIssue | null = null;
@@ -290,8 +290,8 @@ export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async
         walkthroughId,
         order,
         severity: input.severity,
-        title: input.title,
-        description: input.description,
+        title,
+        description,
         filePath: input.file_path,
         startLine: input.start_line,
         endLine: input.end_line,
@@ -304,8 +304,8 @@ export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async
     emitIssue = {
       id: issueId,
       severity: input.severity,
-      title: input.title,
-      description: input.description,
+      title,
+      description,
       blockIds,
       ...(input.file_path !== null ? { filePath: input.file_path } : {}),
       ...(input.start_line !== null ? { startLine: input.start_line } : {}),
@@ -403,8 +403,8 @@ export const updateIssueHandler: ChatEditToolHandler<UpdateIssueInput> = async (
       blockIds?: string;
     } = {};
     if (input.severity != null) patch.severity = input.severity;
-    if (input.title != null) patch.title = input.title;
-    if (input.description != null) patch.description = input.description;
+    if (input.title != null) patch.title = decodePlainText(input.title);
+    if (input.description != null) patch.description = decodePlainText(input.description);
     if ("file_path" in input && input.file_path !== undefined) patch.filePath = input.file_path;
     if ("start_line" in input && input.start_line !== undefined) patch.startLine = input.start_line;
     if ("end_line" in input && input.end_line !== undefined) patch.endLine = input.end_line;

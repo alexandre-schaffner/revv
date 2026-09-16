@@ -8,12 +8,13 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodePlainText } from "../agent-text";
 import {
+  blockContentError,
   blockRow,
   blockVariantCount,
   buildBlock,
-  emptyBlockError,
-  withArtifactThemingWarning,
+  withArtifactWarnings,
 } from "../walkthrough-blocks";
 import { blockIdFor, unwrapJsonWrappedString } from "../walkthrough-tools";
 import {
@@ -99,7 +100,7 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
       "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact }.",
     );
   }
-  const initialBlockErr = emptyBlockError(input.initial_block);
+  const initialBlockErr = blockContentError(input.initial_block);
   if (initialBlockErr) return fail(initialBlockErr);
   const title = input.title.trim();
   if (title.length === 0) {
@@ -192,7 +193,7 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   ctx.emit(walkthroughId, { type: "semantic-step", data: emitChapter });
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
   return ok(
-    withArtifactThemingWarning(
+    withArtifactWarnings(
       `Chapter ${input.semantic_step_index} ('${title}') inserted with its first block.`,
       input.initial_block,
     ),
@@ -241,7 +242,7 @@ export const updateSemanticStepHandler: ChatEditToolHandler<UpdateSemanticStepIn
       return;
     }
 
-    const newTitle = hasTitle ? (input.title as string).trim() : existing.title;
+    const newTitle = hasTitle ? decodePlainText(input.title as string) : existing.title;
     if (newTitle.length === 0) {
       result = fail("Error: title cannot be empty.");
       return;
@@ -410,8 +411,8 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
       "Error: add_block.content requires exactly one of { markdown, code, diff, artifact }.",
     );
   }
-  const emptyErr = emptyBlockError(input.content);
-  if (emptyErr) return fail(emptyErr);
+  const contentErr = blockContentError(input.content);
+  if (contentErr) return fail(contentErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
   if (!active) return fail("No complete walkthrough exists for this PR yet.");
@@ -514,7 +515,7 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
 
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
   return ok(
-    withArtifactThemingWarning(
+    withArtifactWarnings(
       `Block added at chapter ${input.semantic_step_index}, step ${resolvedStepIndex}.`,
       input.content,
     ),
@@ -529,8 +530,8 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
       "Error: update_block.content requires exactly one of { markdown, code, diff, artifact }.",
     );
   }
-  const emptyErr = emptyBlockError(input.content);
-  if (emptyErr) return fail(emptyErr);
+  const contentErr = blockContentError(input.content);
+  if (contentErr) return fail(contentErr);
 
   const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
   if (!active) return fail("No complete walkthrough exists for this PR yet.");
@@ -583,7 +584,7 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
 
   ctx.emit(walkthroughId, { type: "block", data: emitBlock });
   return ok(
-    withArtifactThemingWarning(
+    withArtifactWarnings(
       `Block at chapter ${input.semantic_step_index}, step ${input.step_index} updated.`,
       input.content,
     ),

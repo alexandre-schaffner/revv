@@ -9,8 +9,14 @@
 // SDK (`persistSession: true`) and the opencode daemon retain it for resumes.
 
 import { readFileSync } from "node:fs";
+import { WALKTHROUGH_ARTIFACT_SPEC } from "./walkthrough";
 
 const CHAT_SYSTEM_TEMPLATE: string = readFileSync(`${import.meta.dir}/chat-system.md`, "utf-8");
+
+const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
+if (!CHAT_SYSTEM_TEMPLATE.includes(ARTIFACT_SPEC_MARKER)) {
+  throw new Error(`chat-system.md is missing the ${ARTIFACT_SPEC_MARKER} marker`);
+}
 
 const CHAT_RESOLVE_CONFLICTS_TEMPLATE: string = readFileSync(
   `${import.meta.dir}/chat-resolve-conflicts.md`,
@@ -102,11 +108,14 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
     walkthroughSection = wtLines.join("\n");
   }
 
-  // Fill placeholders
-  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", prSection).replace(
-    "{{BRANCH_NAME}}",
-    params.branchName,
-  );
+  // Fill placeholders. The artifact craft spec is single-sourced in
+  // `walkthrough-artifacts.md` and shared with the review agent's system prompt —
+  // the chat agent writes artifact blocks through `add_block`/`update_block`, so
+  // the two must not drift. Replaced via a function so a `$` in the markdown is
+  // never read as a replacement pattern.
+  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", prSection)
+    .replace("{{BRANCH_NAME}}", params.branchName)
+    .replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
 
   if (walkthroughSection) {
     prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", walkthroughSection);

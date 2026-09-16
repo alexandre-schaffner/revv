@@ -33,6 +33,12 @@ Editing rules:
 - Deleting a block referenced by a warning/critical issue requires deleting (or re-anchoring) the issue first.
 - Edits never re-run validation — the walkthrough stays `status: 'complete'` even if `passesCompletenessGate` flips false.
 
+When an `add_block` / `update_block` call carries an `artifact` (an interactive HTML island), it is held to
+exactly the same bar as the ones the review agent writes. The full spec follows — read it before writing any
+artifact HTML.
+
+{{ARTIFACT_SPEC}}
+
 The worktree is checked out on a working branch named `{{BRANCH_NAME}}`.
 
 User messages may include `@path/to/file` tokens. Treat those as worktree-relative file references; the prompt may also include resource links for the same paths.
