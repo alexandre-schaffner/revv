@@ -76,6 +76,7 @@ import {
   diffNumstat,
   diffPatchForPath,
   fetchCommit,
+  redactGitAuth,
 } from "./GitOps";
 import {
   capPatch,
@@ -509,9 +510,6 @@ export const WalkthroughJobsLive = Layer.effect(
 
     const buildAuthedRepoUrl = (ctx: ResolvedContext): string =>
       `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
-
-    const redactGitAuth = (message: string): string =>
-      message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:<redacted>@");
 
     const resolveIncrementalPromptFiles = (
       ctx: ResolvedContext,
@@ -1418,8 +1416,17 @@ export const WalkthroughJobsLive = Layer.effect(
             : null;
         const parentWalkthroughId = partial?.parentWalkthroughId ?? priorArtifact?.id ?? null;
         const baseHeadSha = partial?.baseHeadSha ?? priorArtifact?.prHeadSha ?? null;
+        // An incremental run whose base SHA is its own head has an empty commit
+        // range — there is nothing to review, so fall back to the full PR diff.
+        // Only the fresh-row path is guarded: on a resume (`partial !== null`)
+        // the row's generationMode is already committed, and flipping it here
+        // would change `createPartial`'s dedup key and collide on the row's id.
+        const emptyIncrementalRange = partial === null && baseHeadSha === meta.headSha;
         const generationMode: WalkthroughGenerationMode =
-          requestedGenerationMode === "incremental" && parentWalkthroughId && baseHeadSha
+          requestedGenerationMode === "incremental" &&
+          parentWalkthroughId &&
+          baseHeadSha &&
+          !emptyIncrementalRange
             ? "incremental"
             : "full";
 

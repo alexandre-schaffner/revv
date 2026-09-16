@@ -75,6 +75,10 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     authorAvatarContent: null,
     authorAvatarUrl: (user.avatar_url as string | null) ?? null,
     requestedReviewers,
+    // GitHub's PR payload has no mentions field; they're parsed out of the
+    // body and unioned with comment-sourced mentions during sync, then read
+    // back off the DB row. Always empty on this path.
+    mentionedUsers: [],
     status: raw.state === "closed" ? (raw.merged_at ? "merged" : "closed") : "open",
     reviewStatus: "pending",
     isDraft: (raw.draft as boolean | undefined) ?? false,
@@ -1397,6 +1401,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
               mergeStateStatus
             }
             viewerPermission
+            mergeCommitAllowed
+            squashMergeAllowed
+            rebaseMergeAllowed
           }
         }
       `;
@@ -1407,6 +1414,9 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
             mergeStateStatus: string | null;
           } | null;
           viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
+          mergeCommitAllowed: boolean | null;
+          squashMergeAllowed: boolean | null;
+          rebaseMergeAllowed: boolean | null;
         } | null;
       }
       const data = yield* githubGraphql<Resp>(
@@ -1426,10 +1436,18 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }
       const perm = data.repository?.viewerPermission;
       const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // Repos routinely disable merge strategies (squash-only is the common
+      // house style). Offering a disabled one earns a 405 from the merge
+      // endpoint, so the allowed set travels with the eligibility answer.
+      const allowedMethods: MergeMethod[] = [];
+      if (data.repository?.mergeCommitAllowed !== false) allowedMethods.push("merge");
+      if (data.repository?.squashMergeAllowed !== false) allowedMethods.push("squash");
+      if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
       return {
         canMerge,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
+        allowedMethods,
       };
     }),
 

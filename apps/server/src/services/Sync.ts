@@ -13,6 +13,7 @@ import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
 import { RepositoryService } from "./Repository";
 import { ReviewService } from "./Review";
+import { resolveReviewModeForPr } from "./review-mode";
 import type { SettingsService } from "./Settings";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import { latestUpdatedAt } from "./sync-engine/watermark";
@@ -262,7 +263,8 @@ export const SyncServiceLive = Layer.effect(
       userLogin: string | null,
     ): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
-        const session = yield* reviewService.getOrCreateActiveSession(prId);
+        const { mode } = yield* resolveReviewModeForPr(prId);
+        const session = yield* reviewService.getOrCreateActiveSession(prId, mode);
         const threads = yield* reviewService.getThreadsForSession(session.id);
 
         let role: UserRole = "unknown";
@@ -293,7 +295,29 @@ export const SyncServiceLive = Layer.effect(
       Effect.gen(function* () {
         const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
         const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-        const session = yield* reviewService.getOrCreateActiveSession(pr.id);
+
+        // Pull into the session the user's UI actually reads. Review sessions
+        // are keyed on `(pullRequestId, mode)` and the mode is derived from
+        // identity, so on a self-authored PR the default (`reviewer`) session
+        // is one nothing ever displays — reviewer comments would sync into it
+        // forever and stay invisible. See `resolveReviewModeForPr`.
+        const verdict = yield* resolveReviewModeForPr(pr.id);
+        const session = yield* reviewService.getOrCreateActiveSession(pr.id, verdict.mode);
+
+        // Repair PRs that were synced into the wrong mode's session before the
+        // line above existed: their GitHub threads are deduped by external id,
+        // so re-pulling would never re-create them here.
+        //
+        // Gated on `resolved`, because this moves rows. An unresolved verdict
+        // is "we don't know", and it reports `reviewer` — so running the repair
+        // on it would yank a self-authored PR's threads OUT of the author
+        // session the UI reads, which is the very failure being repaired, in
+        // reverse. When identity is unknown, sync into the default session and
+        // leave existing threads where they are; the next pull with a resolved
+        // identity does the move.
+        const adopted = verdict.resolved
+          ? yield* reviewService.adoptExternalThreads(pr.id, session.id)
+          : 0;
 
         // Incremental poll: ask GitHub only for comments newer than our
         // last successful sync. Null on cold-start pulls everything.
@@ -503,7 +527,10 @@ export const SyncServiceLive = Layer.effect(
         // thread appearing or vanishing) without re-deriving it from the DB.
         // When the GraphQL call was skipped there was nothing to fingerprint,
         // so the row writes are the whole answer.
-        let changed = newThreads + newMessages + edits + statusChanges > 0;
+        // `adopted` counts threads that moved into this session from another
+        // mode's session — no new content, but the session the UI reads just
+        // gained threads, so it must be told to re-hydrate.
+        let changed = newThreads + newMessages + edits + statusChanges + adopted > 0;
         if (needsGhThreads) {
           const fingerprint = fingerprintThreads(ghThreads);
           const previous = yield* prService.getThreadsFingerprint(pr.id);

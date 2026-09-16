@@ -40,6 +40,7 @@ import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
+import { addressesActiveWalkthrough } from "$lib/stores/walkthrough-event-target";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
 
@@ -824,7 +825,19 @@ export function onWalkthroughEvent(
   event: WalkthroughStreamEvent,
 ): void {
   const selectedReportId = store.selectedReportIds.get(prId) ?? null;
-  if (selectedReportId !== null && selectedReportId !== walkthroughId) {
+  const entry = store.entries.get(prId);
+  const foreign =
+    (selectedReportId !== null && selectedReportId !== walkthroughId) ||
+    // `lifecycle:started` is how an entry learns which walkthrough to follow,
+    // so it is never foreign.
+    (event.type !== "lifecycle:started" &&
+      entry !== undefined &&
+      !addressesActiveWalkthrough(entry, walkthroughId, event.type));
+  if (foreign) {
+    wtTrace(
+      "apply",
+      `onWalkthroughEvent-foreign wt=${walkthroughId} active=${entry?.walkthroughId ?? "none"} type=${event.type}`,
+    );
     if (event.type === "lifecycle:complete") {
       void loadReviewRounds(prId, getSelectedMode(prId));
       if (store.activePrId !== prId) {
@@ -871,10 +884,10 @@ export function onWalkthroughEvent(
   lastEventAtByPr.set(prId, Date.now());
 
   if (event.type === "lifecycle:complete") {
-    const entry = store.entries.get(prId);
+    const applied = store.entries.get(prId);
     if (
-      entry &&
-      (entry.summary === null || entry.blocks.length === 0 || entry.ratings.length < 9)
+      applied &&
+      (applied.summary === null || applied.blocks.length === 0 || applied.ratings.length < 9)
     ) {
       void hydrateFromCache(prId, { activate: store.activePrId === prId });
     }
@@ -1210,7 +1223,13 @@ async function doHydrateFromCache(
         ? null
         : (wt.errorMessage ?? "Walkthrough generation failed. Resume or regenerate to retry.")
       : null;
-    entry.superseded = body.stale === true;
+    // A row that is still generating is never presented as outdated: the
+    // snapshot's `stale` flag compares the row's head SHA against the PR row's,
+    // which can disagree transiently while a sync is in flight, and firing the
+    // outdated-walkthrough toast over a live generation reads as "my review
+    // just got thrown away". If the row really is stale the server supersedes
+    // it and emits `lifecycle:superseded` for this exact walkthrough id.
+    entry.superseded = !isGenerating && body.stale === true;
     entry.historical = isHistorical;
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";

@@ -22,6 +22,7 @@ import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost, githubFetch } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
+import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
 import { RemoteUserService } from "./RemoteUser";
 import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
@@ -655,7 +656,14 @@ export const PollSchedulerLive = Layer.effect(
                   });
                 }
 
-                yield* withDb(prService.upsertPrs(prs)).pipe(
+                // Don't let a lagging list body rewind a head we already know
+                // about — see `preserveHeadOnStaleRead`. Masking happens here,
+                // before the write, because the supersede gate further down
+                // fires on the *stored* row and a regressed `updated_at` would
+                // make it pass on the very next cycle.
+                const rows = prs.map((pr) => preserveHeadOnStaleRead(existingMap.get(pr.id), pr));
+
+                yield* withDb(prService.upsertPrs(rows)).pipe(
                   Effect.tapError((err) =>
                     Effect.sync(() => {
                       logError("PollScheduler", `upsertPrs error for ${repo.fullName}:`, err);
@@ -664,7 +672,10 @@ export const PollSchedulerLive = Layer.effect(
                   Effect.orElseSucceed(() => undefined),
                 );
 
-                return prs;
+                // The masked rows, not the raw payload: everything downstream
+                // (the supersede gate, the change detection, the broadcast)
+                // must see the same view that landed in SQLite.
+                return rows;
               }).pipe(
                 Effect.tapError((err) =>
                   Effect.sync(() => {
@@ -922,12 +933,20 @@ export const PollSchedulerLive = Layer.effect(
           // Generate while this poll was mid-flight) survives — it's by
           // definition not stale, since "stale" means "pinned to an old
           // SHA we just learned has been replaced."
+          //
+          // `isTrustedHeadShaMove` gates that on the fresh payload actually
+          // being newer than the row we already have. The list endpoint is
+          // cache-fronted and lags the PR detail endpoint `refreshPr` and the
+          // walkthrough job read from, so "the SHAs differ" does NOT imply
+          // "the head moved forward" — and acting on a stale read here
+          // cancelled the walkthrough generating at the real head and left a
+          // contentless 'superseded' row behind.
           const headShaChanged = allPrs.flatMap((pr) => {
-            const existing = existingShaMap.get(pr.id);
-            if (existing === undefined || existing.headSha === pr.headSha) {
-              return [];
-            }
-            return [{ prId: pr.id, newHeadSha: pr.headSha ?? undefined }];
+            const existing = existingMap.get(pr.id);
+            if (existing === undefined) return [];
+            if (!isTrustedHeadShaMove(existing, pr)) return [];
+            // Non-null by the helper's contract; narrowed for the caller.
+            return pr.headSha === null ? [] : [{ prId: pr.id, newHeadSha: pr.headSha }];
           });
           for (const { prId, newHeadSha } of headShaChanged) {
             yield* walkthroughJobs
@@ -1286,15 +1305,27 @@ export const PollSchedulerLive = Layer.effect(
         );
         // `getPr` derives id/repositoryId from `owner/repo` because it has no
         // idea what our local row is called. Repoint before writing.
-        const row = { ...fresh, id: existing.id, repositoryId: existing.repositoryId };
+        // Same stale-read masking as the list poll: a detail read can lag too
+        // (the ETag cache in front of it will replay a body that was already
+        // stale when cached), and writing a regressed head here is what makes
+        // the guard below self-defeating on the next cycle.
+        const row = preserveHeadOnStaleRead(existing, {
+          ...fresh,
+          id: existing.id,
+          repositoryId: existing.repositoryId,
+        });
         yield* withDb(prService.upsertPrs([row]));
 
-        if (row.headSha !== existing.headSha) {
+        // Same stale-read guard as the list poll: only supersede when the
+        // detail payload is provably a newer view of the PR than the row we
+        // had. Without it a lagging read cancels the walkthrough generating
+        // at the real head.
+        if (row.headSha !== null && isTrustedHeadShaMove(existing, row)) {
           yield* withDb(diffCache.invalidateFiles(prId)).pipe(
             Effect.orElseSucceed(() => undefined),
           );
           yield* walkthroughJobs
-            .supersedeForPr(prId, row.headSha ?? undefined)
+            .supersedeForPr(prId, row.headSha)
             .pipe(Effect.catchAll(() => Effect.void));
         }
 

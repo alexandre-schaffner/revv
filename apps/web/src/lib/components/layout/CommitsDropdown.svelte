@@ -1,11 +1,12 @@
 <script lang="ts">
 import type { PullRequest } from "@revv/shared";
 import { DropdownMenu } from "bits-ui";
-import ChevronUp from "phosphor-svelte/lib/CaretUp";
-import Loader from "phosphor-svelte/lib/Spinner";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import CaretUp from "phosphor-svelte/lib/CaretUp";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";
+import { refreshPrHead } from "$lib/stores/sync.svelte";
 
 let { pr }: { pr: PullRequest } = $props();
 
@@ -18,10 +19,17 @@ type Commit = {
 };
 
 let open = $state(false);
-let cachedPrId = $state<string | null>(null);
+// Cache key is `prId@headSha`, not just `prId`: a head-SHA move makes the
+// cached list wrong (it is missing the new commits and its "latest" marker
+// points at a commit that is no longer the head), so the next open must refetch.
+let cachedKey = $state<string | null>(null);
 let commits = $state<Commit[] | null>(null);
 let loading = $state(false);
 let fetchError = $state(false);
+
+function cacheKey(prId: string, headSha: string | null): string {
+  return `${prId}@${headSha ?? ""}`;
+}
 
 function relativeDate(iso: string | null): string {
   if (!iso) return "";
@@ -32,15 +40,24 @@ function relativeDate(iso: string | null): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-async function fetchData(prId: string) {
-  const needsCommits = cachedPrId !== prId;
-  if (!needsCommits) return;
+async function fetchData(prId: string, headSha: string | null) {
+  const key = cacheKey(prId, headSha);
+  if (cachedKey === key) return;
   loading = true;
   fetchError = false;
   try {
     const res = await api.api.prs({ id: prId }).commits.get();
-    commits = (res.data ?? []) as Commit[];
-    cachedPrId = prId;
+    const fetched = (res.data ?? []) as Commit[];
+    commits = fetched;
+    cachedKey = key;
+    // This endpoint reads GitHub live and returns the PR's commits head-first,
+    // so `fetched[0]` IS the real head. When it disagrees with the head we have
+    // stored, the row is behind — the poll fiber hasn't caught this push yet —
+    // and every head-derived affordance (the "Pull" button, the "latest" marker
+    // below) is currently lying. Reconcile from the evidence already in hand
+    // instead of waiting out the poll interval.
+    const liveHead = fetched[0]?.sha;
+    if (liveHead !== undefined && liveHead !== headSha) refreshPrHead(prId);
   } catch {
     fetchError = true;
   } finally {
@@ -49,15 +66,15 @@ async function fetchData(prId: string) {
 }
 
 $effect(() => {
-  // Only `open` is tracked here. pr.id is read via untrack so SSE-driven
+  // Only `open` is tracked here. The PR is read via untrack so SSE-driven
   // PR object updates don't re-trigger a fetch while the dropdown is open.
   if (open) {
-    const prId = untrack(() => pr.id);
-    if (cachedPrId !== null && cachedPrId !== prId) {
+    const { id: prId, headSha } = untrack(() => ({ id: pr.id, headSha: pr.headSha }));
+    if (cachedKey !== null && cachedKey !== cacheKey(prId, headSha)) {
       commits = null;
-      cachedPrId = null;
+      cachedKey = null;
     }
-    fetchData(prId);
+    fetchData(prId, headSha);
   }
 });
 </script>
@@ -71,7 +88,7 @@ $effect(() => {
 			{#if pr.headSha}
 				<span class="opacity-50">@{pr.headSha.slice(0, 7)}</span>
 			{/if}
-			<ChevronUp size={10} class="shrink-0 opacity-60" />
+			<CaretUp size={10} class="shrink-0 opacity-60" />
 		</button>
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Portal>
@@ -83,12 +100,12 @@ $effect(() => {
 		>
 			{#if loading}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-text-muted">
-					<span class="motion-essential-spin"><Loader size={12} /></span>
+					<Spinner size={12} class="motion-essential-spin" />
 					<span>Loading commits…</span>
 				</div>
 			{:else if fetchError}
 				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-danger">
-					<AlertCircle size={12} weight="fill" />
+					<WarningCircle size={12} weight="fill" />
 					<span>Failed to load commits</span>
 				</div>
 			{:else if commits !== null}
