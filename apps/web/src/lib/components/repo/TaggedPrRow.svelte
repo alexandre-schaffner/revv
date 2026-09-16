@@ -396,5 +396,4 @@ function onNav(event: MouseEvent): void {
 			clip-path: inset(50%);
 		}
 	}
-
 </style>

@@ -15,6 +15,24 @@
 
 import { serverEnv } from "../config";
 
+// ── Credential redaction ─────────────────────────────────────────────────────
+
+/**
+ * Strip the access token out of anything derived from git's stderr.
+ *
+ * Every push/fetch/clone helper is handed an `authedUrl` of the form
+ * `https://x-access-token:{token}@host/owner/repo.git`, and git echoes that URL
+ * verbatim in most transport errors (`fatal: unable to access '<url>'`).
+ * Applied once, inside {@link spawnGit}, so no caller can forget: `stderrTail`
+ * is the only channel that carries it out of this module.
+ *
+ * Re-exported from `GitOps` for callers that redact a string they assembled
+ * themselves rather than read off a result.
+ */
+export function redactGitAuth(message: string): string {
+  return message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:<redacted>@");
+}
+
 // ── Environment ──────────────────────────────────────────────────────────────
 
 /**
@@ -174,7 +192,12 @@ export async function spawnGit(
     return {
       exitCode: proc.exitCode ?? -1,
       stdout,
-      stderrTail: stderrTail.trim(),
+      // Redacted at the source, not at each call site. Fetch/push/clone are all
+      // handed an `https://x-access-token:{token}@host/…` URL and git echoes it
+      // verbatim in most transport errors, so every reader of `stderrTail` —
+      // `runGit`'s thrown message, a `logError` line, an `{ error }` body the
+      // desktop client renders — is a place the token would otherwise leak.
+      stderrTail: redactGitAuth(stderrTail.trim()),
       timedOut,
     };
   } finally {

@@ -1393,7 +1393,19 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const query = `
+      // `mergeCommitAllowed` / `squashMergeAllowed` / `rebaseMergeAllowed` are
+      // recent additions to `Repository`, and GraphQL rejects the *whole* query
+      // on an unknown field — so on a GitHub Enterprise release that predates
+      // them, asking for them would cost the caller `canMerge` too and the merge
+      // pill would vanish rather than degrade. Ask once with them; on a schema
+      // complaint, ask again without and let `allowedMethods` come back empty,
+      // which the UI already reads as "offer all three".
+      const MERGE_METHOD_FIELDS = [
+        "mergeCommitAllowed",
+        "squashMergeAllowed",
+        "rebaseMergeAllowed",
+      ];
+      const buildQuery = (withMergeMethods: boolean): string => `
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
@@ -1401,9 +1413,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
               mergeStateStatus
             }
             viewerPermission
-            mergeCommitAllowed
-            squashMergeAllowed
-            rebaseMergeAllowed
+            ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
           }
         }
       `;
@@ -1419,11 +1429,23 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
           rebaseMergeAllowed: boolean | null;
         } | null;
       }
-      const data = yield* githubGraphql<Resp>(
-        query,
-        { owner, repo, number: prNumber },
-        token,
-        apiBase,
+      const ask = (withMergeMethods: boolean) =>
+        githubGraphql<Resp>(
+          buildQuery(withMergeMethods),
+          { owner, repo, number: prNumber },
+          token,
+          apiBase,
+        );
+      const data = yield* ask(true).pipe(
+        Effect.catchAll((err) => {
+          // Only a complaint naming one of the three fields earns the retry.
+          // Anything else — auth, rate limit, network — is answered the same
+          // way by both queries, so retrying would just cost a second request.
+          const text = JSON.stringify(err);
+          return MERGE_METHOD_FIELDS.some((field) => text.includes(field))
+            ? ask(false)
+            : Effect.fail(err);
+        }),
       );
       const pr = data.repository?.pullRequest;
       if (!pr) {

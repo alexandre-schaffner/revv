@@ -34,6 +34,37 @@ interface Props {
 let { repo, variant = "page" }: Props = $props();
 
 const isFeed = $derived(variant === "feed");
+
+/*
+ * The recap card is mounted on demand in the feed, immediately on the page.
+ *
+ * `RepoRecapCard` fetches on mount — the repo's recap list, then the latest
+ * recap's full markdown — so mounting one per repo up front turns landing on
+ * `/` into two requests and a markdown render per synced repo, all of them for
+ * cards that are mostly below the fold. The queue above it costs nothing
+ * (it is derived from the PR store), so this is the only part worth deferring.
+ *
+ * 600px of root margin means the card is already loaded by the time it is
+ * scrolled to at any normal speed; the reader sees a card, not a spinner.
+ */
+let recapSlot = $state<HTMLElement | null>(null);
+let recapMounted = $state(false);
+
+$effect(() => {
+  if (!isFeed || recapMounted) return;
+  const host = recapSlot;
+  if (!host) return;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      recapMounted = true;
+      observer.disconnect();
+    },
+    { rootMargin: "600px 0px" },
+  );
+  observer.observe(host);
+  return () => observer.disconnect();
+});
 </script>
 
 <section class="repo-home" aria-labelledby="repo-home-{repo.id}">
@@ -62,7 +93,13 @@ const isFeed = $derived(variant === "feed");
 	</div>
 
 	<RepoTaggedPrs repoId={repo.id} defaultBranch={repo.defaultBranch} />
-	<RepoRecapCard repoId={repo.id} />
+	{#if isFeed}
+		<div bind:this={recapSlot}>
+			{#if recapMounted}<RepoRecapCard repoId={repo.id} />{/if}
+		</div>
+	{:else}
+		<RepoRecapCard repoId={repo.id} />
+	{/if}
 </section>
 
 <style>

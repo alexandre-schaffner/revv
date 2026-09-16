@@ -671,11 +671,18 @@ export const ChatSessionServiceLive = Layer.effect(
             return found ? rowToSessionRow(found) : null;
           });
           if (!row) return null;
-          const pr = db
-            .select({ headSha: pullRequests.headSha })
-            .from(pullRequests)
-            .where(eq(pullRequests.id, prId))
-            .get();
+          // A failed read answers `null`, which `resolveProposedBaseSha` reads
+          // as "no known PR head" and resolves to the session baseline — the
+          // historical answer. Letting it throw would take down the fiber for
+          // a lookup whose absence is already a handled case.
+          const prHeadSha = yield* Effect.try(
+            () =>
+              db
+                .select({ headSha: pullRequests.headSha })
+                .from(pullRequests)
+                .where(eq(pullRequests.id, prId))
+                .get()?.headSha ?? null,
+          ).pipe(Effect.orElseSucceed(() => null));
           // Always `row.branchName`, never `"HEAD"`. The worktree's HEAD is
           // detached onto the source-branch tip during a push and is restored
           // only best-effort, so a run that died mid-push leaves HEAD and the
@@ -687,7 +694,7 @@ export const ChatSessionServiceLive = Layer.effect(
               worktreePath: row.worktreePath,
               tip: row.branchName,
               sessionPrHeadSha: row.prHeadSha,
-              prHeadSha: pr?.headSha ?? null,
+              prHeadSha,
             }),
           );
           return { row, baseSha };

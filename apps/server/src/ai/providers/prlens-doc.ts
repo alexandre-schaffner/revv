@@ -17,7 +17,7 @@
 // and #5).
 
 import { formatIssues, SCHEMA_VERSION, safeParseGraphDoc } from "@coldtea/pr-lens-schema";
-import { toGraphDocInput } from "@revv/shared";
+import { isPrLensFenceLang, toGraphDocInput } from "@revv/shared";
 
 /** How much of the schema's complaint survives into the tool result. */
 const MAX_ISSUE_TEXT = 600;
@@ -30,13 +30,14 @@ const MAX_ISSUE_TEXT = 600;
  */
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/;
 
+/**
+ * The language word of an info string — everything before the first space,
+ * comma or brace, which is where attribute syntax (`prlens {highlight=1}`)
+ * starts. The alias list itself lives in `@revv/shared` so the write path and
+ * the render path cannot recognise different fences.
+ */
 function isPrLensInfo(info: string): boolean {
-  const lang =
-    info
-      .trim()
-      .split(/[\s,{]/, 1)[0]
-      ?.toLowerCase() ?? "";
-  return lang === "prlens" || lang === "pr-lens";
+  return isPrLensFenceLang(info.trim().split(/[\s,{]/, 1)[0]);
 }
 
 /**

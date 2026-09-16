@@ -35,3 +35,18 @@ export function toGraphDocInput(body: Record<string, unknown>, schemaVersion: st
     provenance: body.provenance ?? PLACEHOLDER_PROVENANCE,
   };
 }
+
+/**
+ * Info-string languages that mark a fenced block as a PR Lens diagram.
+ *
+ * Shared for the same reason the wrapper above is: the server decides which
+ * fences to *validate* at write time and the web app decides which fences to
+ * *render*, and a third alias added to one list alone means the server accepts
+ * a document the reader never sees drawn (or rejects one it would have).
+ */
+const FENCE_LANGS: readonly string[] = ["prlens", "pr-lens"];
+
+/** `true` when a fence's info-string language names a PR Lens diagram. */
+export function isPrLensFenceLang(lang: string | null | undefined): boolean {
+  return FENCE_LANGS.includes(lang?.trim().toLowerCase() ?? "");
+}

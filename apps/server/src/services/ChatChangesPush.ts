@@ -91,6 +91,7 @@ import {
   resolveProposedBaseSha,
   revParse,
   unmergedPaths,
+  unstagedOutsideMerge,
   workingTreeIsClean,
 } from "./GitOps";
 import { PrContextService } from "./PrContext";
@@ -284,6 +285,66 @@ export const ChatChangesPushServiceLive = Layer.effect(
     const inFlight = new Set<string>();
     const streamingChats = new Set<string>();
 
+    /**
+     * Clear an abandoned merge out of the session's worktree. Returns whether
+     * anything was aborted, so the caller knows to re-read the tree state.
+     *
+     * A merge left in progress here is Revv's own scratch state, never the
+     * user's work: the push flow detaches HEAD onto the source-branch tip and
+     * merges the agent branch into it, and the agent's commits live on
+     * `session.branchName` either way. So when a previous attempt died before
+     * its cleanup ran — process restart mid-merge, an interrupted
+     * resolve-and-push stream, a best-effort `merge --abort` that failed
+     * silently — abort it rather than reporting the leftovers as "uncommitted
+     * changes", which the UI offers no way out of.
+     *
+     * Every caller takes the per-PR push lock (`beginPush`) before preflight,
+     * so a merge in progress with the lock free is abandoned by definition.
+     * `RepoClone.acquirePrWorktree` heals the same state the same way, but the
+     * push paths reuse `session.worktreePath` without re-acquiring it, so that
+     * heal never runs for them.
+     *
+     * Two conditions gate the abort, because `git merge --abort` hard-resets
+     * the working tree and the chat agent edits this same worktree:
+     *
+     *   • there are unmerged paths — the dirt includes a real conflict, rather
+     *     than the tree merely being dirty next to a stale `MERGE_HEAD`;
+     *   • nothing is dirty that the merge cannot account for. Unmerged paths
+     *     alone do NOT prove every dirty path belongs to the merge, which is
+     *     what `unstagedOutsideMerge` checks. When that set is non-empty we
+     *     leave the worktree exactly as found and let preflight report it —
+     *     a blocked push is recoverable, a destroyed uncommitted edit is not.
+     */
+    const healAbandonedMerge = (
+      session: { readonly worktreePath: string; readonly branchName: string },
+      prId: string,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        if (!(yield* Effect.promise(() => isMergeInProgress(session.worktreePath)))) return false;
+        if ((yield* Effect.promise(() => unmergedPaths(session.worktreePath))).length === 0) {
+          return false;
+        }
+        const risky = yield* Effect.promise(() => unstagedOutsideMerge(session.worktreePath));
+        if (risky.length > 0) {
+          logError(
+            "chat-push",
+            `refusing to abort the merge in ${session.worktreePath} (pr=${prId}): ` +
+              `uncommitted changes outside the conflict would be lost — ${risky.join(", ")}`,
+          );
+          return false;
+        }
+        logError(
+          "chat-push",
+          `aborting an abandoned merge in ${session.worktreePath} before push (pr=${prId})`,
+        );
+        yield* Effect.promise(() => abortMerge(session.worktreePath).then(() => undefined));
+        yield* restoreToAgentBranch({
+          worktreePath: session.worktreePath,
+          branchName: session.branchName,
+        });
+        return true;
+      });
+
     // Preflight returns context bound to a chat session and verifies the
     // worktree is in a state where push is meaningful. R surfaces
     // DbService so callers (under AppRuntime) get it for free.
@@ -344,41 +405,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
         let cleanCheck = yield* checkClean;
 
-        // A merge left in progress here is Revv's own scratch state, never the
-        // user's work: the push flow detaches HEAD onto the source-branch tip
-        // and merges the agent branch into it, and the agent's commits live on
-        // `session.branchName` either way. So when a previous attempt died
-        // before its cleanup ran — process restart mid-merge, an interrupted
-        // resolve-and-push stream, a best-effort `merge --abort` that failed
-        // silently — abort it and re-check rather than reporting the leftovers
-        // as "uncommitted changes", which the UI offers no way out of.
-        //
-        // Every caller takes the per-PR push lock (`beginPush`) before calling
-        // preflight, so a merge in progress with the lock free is abandoned by
-        // definition. `RepoClone.acquirePrWorktree` heals the same state the
-        // same way, but the push paths reuse `session.worktreePath` without
-        // re-acquiring it, so that heal never runs for them.
-        //
-        // Gated on there being *unmerged paths*, not merely on the tree being
-        // dirty. `git merge --abort` hard-resets the working tree, and the chat
-        // agent edits this same worktree — so "dirty AND a merge exists" would
-        // also destroy uncommitted agent work that has nothing to do with the
-        // merge, with no reflog to recover it from. Unmerged paths prove the
-        // dirt IS the conflict.
-        if (
-          !cleanCheck.clean &&
-          (yield* Effect.promise(() => isMergeInProgress(session.worktreePath))) &&
-          (yield* Effect.promise(() => unmergedPaths(session.worktreePath))).length > 0
-        ) {
-          logError(
-            "chat-push",
-            `aborting an abandoned merge in ${session.worktreePath} before push (pr=${params.prId})`,
-          );
-          yield* Effect.promise(() => abortMerge(session.worktreePath).then(() => undefined));
-          yield* restoreToAgentBranch({
-            worktreePath: session.worktreePath,
-            branchName: session.branchName,
-          });
+        if (!cleanCheck.clean && (yield* healAbandonedMerge(session, params.prId))) {
           cleanCheck = yield* checkClean;
         }
 
@@ -464,13 +491,34 @@ export const ChatChangesPushServiceLive = Layer.effect(
       });
 
     /**
-     * Interpret a failed `git push` to the PR's source branch: log it, put the
-     * worktree back on the agent branch, and turn git's stderr into the one
+     * What a push failure was, recorded before anyone decides what to do about
+     * it. Every push path in this service starts here — the three that end in
+     * {@link handlePushFailure}, and `pushToNewBranch`, which cannot (it has a
+     * recoverable `ref-exists` outcome and must NOT restore the agent branch).
+     *
+     * Logging unconditionally is the point: every caller either paraphrases
+     * git's text or drops it, and without the raw line a push failure is
+     * undiagnosable after the fact. `stderr` comes back redacted — it reaches a
+     * log line, an error message and the UI, and the push URL it echoes carries
+     * the token.
+     */
+    const readPushFailure = (
+      label: string,
+      rawStderr: string,
+    ): { stderr: string; kind: ReturnType<typeof classifyPushFailure> } => {
+      const stderr = redactGitAuth(rawStderr);
+      logError("chat-push", `${label}: ${stderr}`);
+      return { stderr, kind: classifyPushFailure(stderr) };
+    };
+
+    /**
+     * Interpret a failed `git push` to the PR's source branch: record it, put
+     * the worktree back on the agent branch, and turn git's stderr into the one
      * outcome that describes it.
      *
-     * Every push path in this service — merge, cherry-pick, conflict-resolve —
-     * ends the same way, and they were three verbatim copies differing only in
-     * the log label. Lockstep edits across all three (the `redactGitAuth` and
+     * The merge, cherry-pick and conflict-resolve paths all end the same way,
+     * and they were three verbatim copies differing only in the log label.
+     * Lockstep edits across all three (the `redactGitAuth` and
      * `classifyPushFailure` rollouts touched each one) are exactly the churn a
      * single handler removes.
      *
@@ -489,18 +537,12 @@ export const ChatChangesPushServiceLive = Layer.effect(
       GitHubAuthError | PushRejectedError
     > =>
       Effect.gen(function* () {
-        // Redact before anything else: this string reaches a log line, an error
-        // message and the UI, and the push URL it echoes carries the token.
-        const stderr = redactGitAuth(params.rawStderr);
-        // Log unconditionally — every branch below either paraphrases this or
-        // drops it, and without the raw text a push failure is undiagnosable
-        // after the fact.
-        logError("chat-push", `${params.label}: ${stderr}`);
+        const { stderr, kind } = readPushFailure(params.label, params.rawStderr);
         yield* restoreToAgentBranch({
           worktreePath: params.worktreePath,
           branchName: params.branchName,
         });
-        switch (classifyPushFailure(stderr)) {
+        switch (kind) {
           case "remote-moved":
             return { status: "remote-changed" as const, branch: params.sourceBranch };
           case "auth":
@@ -609,12 +651,25 @@ export const ChatChangesPushServiceLive = Layer.effect(
             .prMeta(params.repo.fullName, params.prExternalId, params.token)
             .pipe(Effect.option);
           const headSha = metaOpt._tag === "Some" ? metaOpt.value.headSha : params.newTip;
+          const now = new Date().toISOString();
+          // Advance `updatedAt` with the head, never one without the other.
+          // `fresh` is the DB row, so its `updatedAt` predates this push; a row
+          // left at `(newHead, oldUpdatedAt)` is exactly the shape
+          // `preserveHeadOnStaleRead` reads as "the incoming payload is newer",
+          // so the next cache-lagged list body would be allowed to rewind
+          // `head_sha` — and `isTrustedHeadShaMove` would then supersede the
+          // walkthrough generating at the real head. GitHub bumped its own
+          // `updated_at` on this push and `PrMeta` doesn't carry it, so stamp
+          // now: at worst a few seconds ahead of GitHub's value, which errs
+          // toward rejecting stale reads rather than accepting them.
+          const updatedAt = headSha === fresh.headSha ? fresh.updatedAt : now;
           yield* prService
             .upsertPrs([
               {
                 ...fresh,
                 headSha,
-                fetchedAt: new Date().toISOString(),
+                updatedAt,
+                fetchedAt: now,
               },
             ])
             .pipe(Effect.catchAll(() => Effect.void));
@@ -853,9 +908,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
         });
 
         if (!pushResult.ok) {
-          const stderr = redactGitAuth(pushResult.stderr);
-          logError("chat-push", `push to new branch ${trimmed} failed: ${stderr}`);
-          const kind = classifyPushFailure(stderr);
+          const { stderr, kind } = readPushFailure(
+            `push to new branch ${trimmed} failed`,
+            pushResult.stderr,
+          );
           if (kind === "auth") {
             return yield* Effect.fail(
               new GitHubAuthError({

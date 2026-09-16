@@ -15,6 +15,7 @@ import {
   resolveProposedBaseSha,
   revParse,
   unmergedPaths,
+  unstagedOutsideMerge,
   workingTreeIsClean,
 } from "./GitOps";
 
@@ -60,45 +61,69 @@ function commitFile(cwd: string, name: string, body: string, message: string): s
   return git(cwd, ["rev-parse", "HEAD"]);
 }
 
+// A branch name with a slash, matching the shape that surfaced the checkout bug.
+const SOURCE_BRANCH = "iam/1-authn-service";
+const AGENT_BRANCH = "revv/pr-1";
+
+interface Fixture {
+  /** Temp root; delete this to clean up everything below it. */
+  base: string;
+  origin: string;
+  clonePath: string;
+  /** The user's own linked worktree, holding `SOURCE_BRANCH`. */
+  userWorktree: string;
+  /** Revv's per-PR linked worktree, on `AGENT_BRANCH`. */
+  revvWorktree: string;
+  /** Tip of `SOURCE_BRANCH` as cloned, i.e. the PR head. */
+  sourceTip: string;
+}
+
+/**
+ * The repository shape every test here needs: a bare origin, one clone, and
+ * **two linked worktrees** of that clone — the user's and Revv's.
+ *
+ * Two worktrees is the whole point rather than incidental setup. It is what
+ * makes `git checkout -B {sourceBranch}` illegal in Revv's worktree, and it is
+ * what makes `.git` a *file* there, which is what defeated the old
+ * `existsSync(.git/MERGE_HEAD)` probe.
+ */
+function makeFixture(prefix: string): Fixture {
+  const base = mkdtempSync(join(tmpdir(), prefix));
+  const origin = join(base, "origin");
+  const clonePath = join(base, "clone");
+  const userWorktree = join(base, "user-worktree");
+  const revvWorktree = join(base, "revv-worktree");
+
+  // Upstream repo with `main` plus the PR's source branch.
+  const seed = join(base, "seed");
+  git(base, ["init", "-q", "-b", "main", "seed"]);
+  commitFile(seed, "README.md", "seed\n", "seed");
+  git(seed, ["checkout", "-q", "-b", SOURCE_BRANCH]);
+  const sourceTip = commitFile(seed, "authn.ts", "export const authn = 1;\n", "add authn");
+  // Back to `main` so the clone below lands on `main`, leaving the source
+  // branch free for the two worktrees to fight over.
+  git(seed, ["checkout", "-q", "main"]);
+  git(base, ["clone", "-q", "--bare", seed, "origin"]);
+  git(base, ["clone", "-q", origin, "clone"]);
+
+  git(clonePath, ["worktree", "add", "-q", userWorktree, SOURCE_BRANCH]);
+  git(clonePath, ["worktree", "add", "-q", "-B", AGENT_BRANCH, revvWorktree, sourceTip]);
+
+  return { base, origin, clonePath, userWorktree, revvWorktree, sourceTip };
+}
+
 describe("checkoutDetachedAt", () => {
-  // A branch name with a slash, matching the shape that surfaced the bug.
-  const sourceBranch = "iam/1-authn-service";
-  const agentBranch = "revv/pr-1";
+  const sourceBranch = SOURCE_BRANCH;
+  const agentBranch = AGENT_BRANCH;
 
   let base: string;
-  let origin: string;
-  let clonePath: string;
   let userWorktree: string;
   let revvWorktree: string;
   let sourceTip: string;
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "revv-gitops-"));
-    origin = join(base, "origin");
-    clonePath = join(base, "clone");
-    userWorktree = join(base, "user-worktree");
-    revvWorktree = join(base, "revv-worktree");
-
-    // Upstream repo with `main` plus the PR's source branch.
-    const seed = join(base, "seed");
-    git(base, ["init", "-q", "-b", "main", "seed"]);
-    commitFile(seed, "README.md", "seed\n", "seed");
-    git(seed, ["checkout", "-q", "-b", sourceBranch]);
-    sourceTip = commitFile(seed, "authn.ts", "export const authn = 1;\n", "add authn");
-    // Back to `main` so the clone below lands on `main`, leaving the source
-    // branch free for the two worktrees to fight over.
-    git(seed, ["checkout", "-q", "main"]);
-    git(base, ["clone", "-q", "--bare", seed, "origin"]);
-
-    git(base, ["clone", "-q", origin, "clone"]);
-
-    // The user's own worktree, holding the PR's source branch. This is what
-    // makes `git checkout -B {sourceBranch}` illegal in every other worktree
-    // of the same repository.
-    git(clonePath, ["worktree", "add", "-q", userWorktree, sourceBranch]);
-
-    // Revv's per-PR worktree, with an agent commit on top of the PR head.
-    git(clonePath, ["worktree", "add", "-q", "-B", agentBranch, revvWorktree, sourceTip]);
+    ({ base, userWorktree, revvWorktree, sourceTip } = makeFixture("revv-gitops-"));
+    // One agent commit on top of the PR head.
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: tweak authn");
   });
 
@@ -161,31 +186,15 @@ describe("checkoutDetachedAt", () => {
 // has uncommitted changes".
 
 describe("isMergeInProgress", () => {
-  const sourceBranch = "iam/1-authn-service";
-  const agentBranch = "revv/pr-1";
+  const sourceBranch = SOURCE_BRANCH;
+  const agentBranch = AGENT_BRANCH;
 
   let base: string;
-  let clonePath: string;
   let userWorktree: string;
   let revvWorktree: string;
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "revv-gitops-merge-"));
-    clonePath = join(base, "clone");
-    userWorktree = join(base, "user-worktree");
-    revvWorktree = join(base, "revv-worktree");
-
-    const seed = join(base, "seed");
-    git(base, ["init", "-q", "-b", "main", "seed"]);
-    commitFile(seed, "README.md", "seed\n", "seed");
-    git(seed, ["checkout", "-q", "-b", sourceBranch]);
-    const sourceTip = commitFile(seed, "authn.ts", "export const authn = 1;\n", "add authn");
-    git(seed, ["checkout", "-q", "main"]);
-    git(base, ["clone", "-q", "--bare", seed, "origin"]);
-    git(base, ["clone", "-q", join(base, "origin"), "clone"]);
-
-    git(clonePath, ["worktree", "add", "-q", userWorktree, sourceBranch]);
-    git(clonePath, ["worktree", "add", "-q", "-B", agentBranch, revvWorktree, sourceTip]);
+    ({ base, userWorktree, revvWorktree } = makeFixture("revv-gitops-merge-"));
 
     // Both sides edit the same line — an unavoidable merge conflict.
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: authn = 2");
@@ -222,6 +231,44 @@ describe("isMergeInProgress", () => {
     expect(await abortMerge(revvWorktree)).toBe(true);
     expect(await isMergeInProgress(revvWorktree)).toBe(false);
     expect((await workingTreeIsClean(revvWorktree)).clean).toBe(true);
+  });
+
+  // `unstagedOutsideMerge` is what decides whether the push preflight may
+  // `git merge --abort` an abandoned merge. The abort hard-resets the working
+  // tree and there is no reflog for unstaged work, so answering "yes" over
+  // someone's uncommitted edit destroys it with no way back.
+  describe("unstagedOutsideMerge", () => {
+    it("finds nothing in a pure conflict state, so the abort is safe", async () => {
+      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, "merge");
+
+      // Premise: the tree IS dirty, so an emptiness check here would be
+      // vacuous if it were only reading `workingTreeIsClean`.
+      expect((await workingTreeIsClean(revvWorktree)).clean).toBe(false);
+      expect(await unmergedPaths(revvWorktree)).toEqual(["authn.ts"]);
+      expect(await unstagedOutsideMerge(revvWorktree)).toEqual([]);
+    });
+
+    it("finds an uncommitted edit the merge did not make, so the abort is refused", async () => {
+      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, "merge");
+
+      // A file the merge never touched, edited in the working tree — exactly
+      // what an interrupted chat turn leaves behind. `merge --abort` would
+      // silently discard it.
+      writeFileSync(join(revvWorktree, "README.md"), "seed\nagent notes\n");
+
+      expect(await unmergedPaths(revvWorktree)).toEqual(["authn.ts"]);
+      expect(await unstagedOutsideMerge(revvWorktree)).toEqual(["README.md"]);
+    });
+
+    it("ignores untracked files, which `merge --abort` leaves alone", async () => {
+      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, "merge");
+      writeFileSync(join(revvWorktree, "scratch.log"), "build output\n");
+
+      expect(await unstagedOutsideMerge(revvWorktree)).toEqual([]);
+    });
   });
 });
 

@@ -113,7 +113,7 @@ export {
   PIERRE_THEMES,
   PR_DIFF_RENDER_OPTIONS,
 } from "./pierre-diffs";
-export { toGraphDocInput } from "./prlens";
+export { isPrLensFenceLang, toGraphDocInput } from "./prlens";
 export type {
   ProjectRecap,
   ProjectRecapStatus,

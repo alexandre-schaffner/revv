@@ -102,7 +102,11 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   }
   const initialBlockErr = blockContentError(input.initial_block);
   if (initialBlockErr) return fail(initialBlockErr);
-  const title = input.title.trim();
+  // Same normalization as the generation path's `add_semantic_step`: the title
+  // is rendered as plain text, so a `&amp;` the agent wrote reaches the reader
+  // as its five literal characters (CLAUDE.md #13 — the two write paths have to
+  // behave identically).
+  const title = decodePlainText(input.title);
   if (title.length === 0) {
     return fail("Error: add_semantic_step requires a non-empty title.");
   }

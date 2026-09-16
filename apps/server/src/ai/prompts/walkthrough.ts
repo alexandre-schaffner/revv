@@ -73,8 +73,10 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
       ? WALKTHROUGH_SYSTEM_AUTHOR_PROMPT
       : WALKTHROUGH_SYSTEM_REVIEWER_PROMPT;
 
-  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(
-    REVIEW_PERSPECTIVE_MARKER,
+  // Replacer functions, not replacement strings: a `$&` or `$'` in a prompt
+  // file is a substitution pattern and would splice the surrounding prompt
+  // into itself.
+  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () =>
     modePrompt.trim(),
   ).replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
 }

@@ -114,6 +114,38 @@ export async function unmergedPaths(worktreePath: string): Promise<string[]> {
 }
 
 /**
+ * Tracked paths carrying an **unstaged** change that the in-progress merge did
+ * not produce — the work `git merge --abort` would destroy with no way back.
+ *
+ * `merge --abort` hard-resets to the pre-merge HEAD, and git cannot reconstruct
+ * uncommitted worktree changes that were already there when the merge started.
+ * There is no reflog for unstaged work, so "is this dirt the merge's, or
+ * someone's?" has to be answered before aborting, not after.
+ *
+ * A conflicted merge leaves its own evidence in exactly two shapes: the
+ * conflicts themselves, and the hunks git auto-merged for us — which it
+ * *stages*, so they do not show up as unstaged at all. Everything left over is
+ * an edit made in the working tree, which the merge cannot be responsible for,
+ * because git refuses to start a merge that would touch a dirty path in the
+ * first place.
+ *
+ * So: unstaged changes (`git diff`, worktree against index) minus the conflict
+ * set. Untracked files never appear in either, which is correct — `merge
+ * --abort` leaves them alone.
+ */
+export async function unstagedOutsideMerge(worktreePath: string): Promise<string[]> {
+  const [unstaged, conflicted] = await Promise.all([
+    runGitCapture(["diff", "--name-only"], worktreePath, 10_000),
+    unmergedPaths(worktreePath),
+  ]);
+  const conflicts = new Set(conflicted);
+  return unstaged
+    .trim()
+    .split("\n")
+    .filter((file) => file.length > 0 && !conflicts.has(file));
+}
+
+/**
  * Resolve the baseline commit of a PR's proposed-commit range — the PR head the
  * agent branch is actually built on.
  *
@@ -542,16 +574,15 @@ export async function pushFastForward(
 // ── Push-failure interpretation ──────────────────────────────────────────────
 
 /**
- * Strip the access token out of anything derived from git's stderr. Every
- * push/fetch helper here is handed an `authedUrl` of the form
- * `https://x-access-token:{token}@host/owner/repo.git`, and git echoes that
- * URL verbatim in most transport errors (`fatal: unable to access '<url>'`).
- * Call this on any stderr that reaches a log line, an error message, or the
- * UI — which is all of them.
+ * Strip the access token out of a string.
+ *
+ * Everything this module returns as `stderr` is already redacted —
+ * {@link spawnGit} applies it to `stderrTail` at the source, so no helper here
+ * and no caller of one can leak the token by forgetting. Re-exported for the
+ * remaining case: a message the caller assembled itself rather than read off a
+ * git result.
  */
-export function redactGitAuth(message: string): string {
-  return message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:<redacted>@");
-}
+export { redactGitAuth } from "./git-runner";
 
 /**
  * What a failed `git push` actually means.

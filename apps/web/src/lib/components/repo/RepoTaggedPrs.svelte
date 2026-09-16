@@ -301,5 +301,4 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		font-size: 0.75rem;
 		line-height: 1.45;
 	}
-
 </style>

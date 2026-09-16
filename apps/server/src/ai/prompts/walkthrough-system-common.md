@@ -255,7 +255,7 @@ The reader is scanning under load, and anything not on screen is forgotten. Thes
 
 **Before you send any block:** check it against the length budget above, then delete: the first sentence if it announces what the block is about; the last sentence if it recaps what the block just said; any "by the way" sidebar — a second concern is its own issue or its own chapter, never a tail on this one; any hedging adverb carrying no information ("perhaps", "arguably", "it could possibly be that"), while keeping hedges that carry real uncertainty, because deleting those manufactures confidence you don't have; any idiom in favour of the literal thing ("under the hood" → the mechanism you actually mean).
 
-**Where this yields.** This shapes *how* you say things, never *what* you say. A walkthrough is an explanation the reader asked for: when brevity would delete the answer, the answer wins and the shape stays. Long chapters are fine — they just open with the point and stay on it. The bug bar, the phase pipeline, the annotation requirement, and the citation rules all outrank these five.
+**Where this yields.** This shapes *how* you say things, never *what* you say. A walkthrough is an explanation the reader asked for: when brevity would delete the answer, the answer wins and the shape stays. Long chapters are fine — they just open with the point and stay on it. The bug bar, the phase pipeline, the annotation requirement, and the citation rules all outrank these six.
 
 ### Markdown blocks are FULLY RENDERED — use markdown for structure, not for volume
 

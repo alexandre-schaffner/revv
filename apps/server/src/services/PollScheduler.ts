@@ -433,9 +433,6 @@ export const PollSchedulerLive = Layer.effect(
           // produced anything worth broadcasting at all.
           const existingPrs = yield* withDb(prService.listPrs());
           const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
-          const existingShaMap = new Map(
-            existingPrs.map((pr) => [pr.id, { headSha: pr.headSha, baseSha: pr.baseSha }]),
-          );
 
           // ── Refresh repo metadata (avatar URL, default branch) ────────────────
           // Bypasses the ETag cache — some GitHub Enterprise instances return
@@ -916,7 +913,7 @@ export const PollSchedulerLive = Layer.effect(
           // Detect PRs whose headSha or baseSha changed since last sync
           const changedPrIds = allPrs
             .filter((pr) => {
-              const existing = existingShaMap.get(pr.id);
+              const existing = existingMap.get(pr.id);
               if (!existing) return false; // new PR — no cached diffs yet
               return existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha;
             })

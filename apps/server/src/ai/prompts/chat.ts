@@ -111,14 +111,19 @@ export function buildChatSystemPrompt(params: ChatSystemPromptParams): string {
   // Fill placeholders. The artifact craft spec is single-sourced in
   // `walkthrough-artifacts.md` and shared with the review agent's system prompt —
   // the chat agent writes artifact blocks through `add_block`/`update_block`, so
-  // the two must not drift. Replaced via a function so a `$` in the markdown is
-  // never read as a replacement pattern.
-  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", prSection)
-    .replace("{{BRANCH_NAME}}", params.branchName)
+  // the two must not drift.
+  //
+  // Every substitution goes through a replacer function, never a replacement
+  // string: `$&`, `$'` and `` $` `` are substitution patterns, and every value
+  // here is externally authored — the PR title and body, a branch name, the
+  // walkthrough's own prose. A PR titled "fix: escape $' in the parser" would
+  // otherwise splice the rest of the system prompt into itself.
+  let prompt = CHAT_SYSTEM_TEMPLATE.replace("{{PR_SECTION}}", () => prSection)
+    .replace("{{BRANCH_NAME}}", () => params.branchName)
     .replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
 
   if (walkthroughSection) {
-    prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", walkthroughSection);
+    prompt = prompt.replace("{{WALKTHROUGH_SECTION}}", () => walkthroughSection);
   } else {
     // Remove the placeholder along with its surrounding blank lines
     prompt = prompt.replace("\n\n{{WALKTHROUGH_SECTION}}", "");
