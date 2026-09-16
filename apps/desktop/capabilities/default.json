@@ -14,6 +14,7 @@
     "core:window:allow-unminimize",
     "mcp-bridge:default",
     "autostart:default",
-    "updater:default"
+    "updater:default",
+    "process:allow-restart"
   ]
 }
