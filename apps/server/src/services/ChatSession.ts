@@ -33,8 +33,10 @@ import {
   chatSessions,
   chatSubagentInvocations,
   chatTasks,
+  pullRequests,
 } from "../db/schema/index";
 import { DbService } from "./Db";
+import { resolveProposedBaseSha } from "./GitOps";
 
 export interface ChatSessionRow {
   readonly id: string;
@@ -49,6 +51,19 @@ export interface ChatSessionRow {
   readonly interactionMode: InteractionMode;
   readonly createdAt: string;
   readonly lastActivityAt: string;
+}
+
+/**
+ * A chat session plus the commit its agent work is actually built on.
+ *
+ * `baseSha` is the tightest of the session's frozen `prHeadSha` and the PR's
+ * current head — see `resolveProposedBaseSha`. It is NOT "the PR head": naming
+ * it `prHeadSha` is what let a resolved baseline get written into an HTTP
+ * response field that claims to carry the PR's head.
+ */
+export interface ResolvedChatSession {
+  readonly row: ChatSessionRow;
+  readonly baseSha: string;
 }
 
 export interface FindOrCreateChatSessionParams {
@@ -194,6 +209,23 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      * worktree may be on an old SHA.
      */
     readonly findLatestForPr: (prId: string, agent: string) => Effect.Effect<ChatSessionRow | null>;
+    /**
+     * {@link findLatestForPr}, with the proposed-commit baseline already
+     * resolved against the PR's current head.
+     *
+     * Every caller that enumerates, pushes, rebuilds or discards the agent's
+     * commits needs the same `<base>..<branch>` range, and the row's own
+     * `prHeadSha` is frozen at session creation — so each of them had to fetch
+     * `pull_requests.headSha` alongside the row and call
+     * `resolveProposedBaseSha` itself. Four copies of a four-field preamble is
+     * four chances for one of them to pass a different `tip` (which is exactly
+     * what happened: the display path asked about `HEAD`, the write paths
+     * about the branch). Resolving it here makes disagreement unrepresentable.
+     */
+    readonly findLatestForPrWithBase: (
+      prId: string,
+      agent: string,
+    ) => Effect.Effect<ResolvedChatSession | null>;
     /**
      * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
      * fresh one with `session_id = NULL`. Used by the chat route at the
@@ -624,6 +656,41 @@ export const ChatSessionServiceLive = Layer.effect(
             .limit(1)
             .get();
           return row ? rowToSessionRow(row) : null;
+        }),
+
+      findLatestForPrWithBase: (prId, agent) =>
+        Effect.gen(function* () {
+          const row = yield* Effect.sync(() => {
+            const found = db
+              .select()
+              .from(chatSessions)
+              .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
+              .orderBy(desc(chatSessions.lastActivityAt))
+              .limit(1)
+              .get();
+            return found ? rowToSessionRow(found) : null;
+          });
+          if (!row) return null;
+          const pr = db
+            .select({ headSha: pullRequests.headSha })
+            .from(pullRequests)
+            .where(eq(pullRequests.id, prId))
+            .get();
+          // Always `row.branchName`, never `"HEAD"`. The worktree's HEAD is
+          // detached onto the source-branch tip during a push and is restored
+          // only best-effort, so a run that died mid-push leaves HEAD and the
+          // agent branch pointing at different commits — and a baseline
+          // resolved against the wrong one makes the strip list commits the
+          // rebuild would not touch.
+          const baseSha = yield* Effect.promise(() =>
+            resolveProposedBaseSha({
+              worktreePath: row.worktreePath,
+              tip: row.branchName,
+              sessionPrHeadSha: row.prHeadSha,
+              prHeadSha: pr?.headSha ?? null,
+            }),
+          );
+          return { row, baseSha };
         }),
 
       findOrCreate: ({ prId, agent, model, prHeadSha, worktreePath, branchName }) =>
