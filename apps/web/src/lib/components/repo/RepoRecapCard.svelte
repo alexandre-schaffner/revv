@@ -1,8 +1,8 @@
 <script lang="ts">
 import type { ProjectRecap, ProjectRecapSummary } from "@revv/shared";
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
+import CaretRight from "phosphor-svelte/lib/CaretRight";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import {
@@ -88,29 +88,29 @@ let ledeHtml = $derived.by(() => {
 
 <section class="recap-card-section">
 	<header class="recap-card-header">
-		<Sparkles size={14} weight="fill" class="recap-card-icon" />
+		<CalendarDots size={14} class="recap-card-icon" />
 		<h2 class="recap-card-title">Latest recap</h2>
 	</header>
 
 	{#if listLoading && recaps.length === 0}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+			<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recaps…</span>
 		</div>
 	{:else if !latest}
 		<div class="recap-card-empty">
-			<Sparkles size={16} weight="fill" aria-hidden="true" />
+			<CalendarDots size={16} aria-hidden="true" />
 			<div class="recap-card-empty-body">
 				<p>No recaps yet for this repo.</p>
 				<a href="/repo/{repoId}/recaps" class="recap-card-empty-link">
 					Generate a recap
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</div>
 		</div>
 	{:else if detailLoading && !latestDetail}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+			<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recap…</span>
 		</div>
 	{:else if latestDetail && latestDetail.status === "generating"}
@@ -120,7 +120,7 @@ let ledeHtml = $derived.by(() => {
 				<span class="recap-card-window">{periodWindow(latest)}</span>
 			</header>
 			<div class="recap-card-generating">
-				<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+				<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 				<p>Generating recap…</p>
 				<p class="hint">This page will update when the recap finishes.</p>
 			</div>
@@ -143,7 +143,7 @@ let ledeHtml = $derived.by(() => {
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</footer>
 		</div>
@@ -157,7 +157,7 @@ let ledeHtml = $derived.by(() => {
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</footer>
 		</div>
@@ -244,10 +244,11 @@ let ledeHtml = $derived.by(() => {
 		padding: 1.25rem;
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border-subtle);
-		border-radius: 10px;
-		box-shadow:
-			0 1px 2px rgba(0, 0, 0, 0.04),
-			0 1px 3px rgba(0, 0, 0, 0.06);
+		border-radius: var(--radius-card);
+		/* The system's Small tier. The hand-rolled `rgba(0, 0, 0, 0.04/0.06)`
+		   this replaces was near-invisible on the midnight canvas; the token
+		   carries its own dark-theme value. */
+		box-shadow: var(--color-shadow-sm);
 		max-height: 640px;
 		overflow-y: auto;
 	}
@@ -304,6 +305,9 @@ let ledeHtml = $derived.by(() => {
 	   negative tracking to match the card's display type. */
 	.recap-card-prose {
 		--tw-prose-body: var(--color-text-primary);
+		/* The page container is wider than a reading measure now that the queue
+		   table drives its width; keep the lede at a readable line length. */
+		max-width: 70ch;
 	}
 
 	.recap-card-prose :global(:is(h1, h2, h3)) {
