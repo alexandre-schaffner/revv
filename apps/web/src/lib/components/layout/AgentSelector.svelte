@@ -87,7 +87,7 @@ function select(id: AcpAgentId) {
 					<span class="block truncate text-[11px] text-text-muted">{statusLabel(optStatus)}</span>
 				</span>
 				{#if currentId === opt.id}
-					<Check size={12} weight="regular" class="text-accent" />
+					<Check size={12} class="text-accent" />
 				{/if}
 			</button>
 		{/each}

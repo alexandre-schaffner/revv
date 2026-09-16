@@ -180,7 +180,8 @@ makes it feel collaborative with a single streaming character: the cursor.
 - One brand accent (Tidewater Teal `oklch(48% 0.08 195)`), used on ≤10% of any given screen.
 - Hybrid elevation: tonal layering for chrome, soft shadows only for floating UI.
 - Refined and restrained components: quiet at rest, precise on interaction.
-- Icons-only iconography (`phosphor-svelte`); emoji prohibited.
+- Icons-only iconography (`phosphor-svelte`, one weight default set app-wide);
+  emoji prohibited; no sparkle-as-AI-marker.
 - Reduced-motion is a contract, not a courtesy.
 
 ## 2. Colors: The Warm-Paper Palette
@@ -457,8 +458,12 @@ is alive.
   same surface.
 - **Do** use warm-paper as the canvas in light theme and warm-stone as the secondary
   surface. Tone steps carry chrome elevation.
-- **Do** use `phosphor-svelte` for every icon. Inline SVG only when no phosphor
-  equivalent fits.
+- **Do** use `phosphor-svelte` for every icon, imported deep and never aliased.
+  Inline SVG only for brand/octicon marks, or when no phosphor equivalent fits.
+- **Do** let `weight` carry information, never decoration. `regular` is the default
+  (set once via `<IconContext>` in the root layout); `weight="fill"` means the
+  on/active/selected state of a toggle, or a severity marker where solidity is the
+  signal. See [conventions §5.3](docs/conventions.md#motion-icon-only).
 - **Do** deepen severity colors one step from stock Tailwind (700 weight rather than
   500) so reds and greens read as considered, not bright.
 - **Do** translate buttons 1px down on `:active`. The press is tactile and on
@@ -476,6 +481,11 @@ is alive.
 
 - **Don't** use emoji in rendered UI, ever. Not in buttons, not in fallback avatars,
   not in toast messages, not in placeholders. Use a phosphor icon or nothing.
+- **Don't** use a sparkle (`Sparkle`, `StarFour`, `MagicWand`) to mean "AI". It is the
+  generic-AI-product tell PRODUCT.md's anti-references call out. Name the thing
+  instead: `PenNib` for "the agent writes this", `CalendarDots` for recaps, `Robot`
+  for agent identity, `Brain` for reasoning effort. AI presence is carried by
+  Considered Violet and the streaming cursor, not by a glyph.
 - **Don't** use stock Tailwind blue (`blue-500`, `#3b82f6`) as a brand accent in light
   theme. That is the color every other dashboard ships. Tidewater Teal is the move.
 - **Don't** use side-stripe borders (`border-left > 1px` as a colored accent on cards,

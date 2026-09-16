@@ -1,8 +1,8 @@
 <script lang="ts">
-import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import PenNib from "phosphor-svelte/lib/PenNib";
 import Play from "phosphor-svelte/lib/Play";
-import Sparkle from "phosphor-svelte/lib/Sparkle";
 import StopCircle from "phosphor-svelte/lib/StopCircle";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
@@ -80,7 +80,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Generate walkthrough"}
         onclick={onGenerate ?? onRegenerate}
       >
-        <Sparkle size={16} weight="fill" />
+        <PenNib size={16} />
         {uiState.label ?? "Generate walkthrough"}
       </GlassPill>
     {:else if uiState.kind === "streaming"}
@@ -90,7 +90,7 @@ const destructiveTitle = $derived(
         disabled={pendingAction === "stop"}
         title={pendingAction === "stop" ? "Stopping…" : "Stop generation"}
       >
-        <StopCircle size={16} weight="fill" />
+        <StopCircle size={16} />
         {pendingAction === "stop" ? "Stopping…" : "Stop generation"}
       </GlassPill>
     {:else if uiState.kind === "resumable"}
@@ -100,7 +100,7 @@ const destructiveTitle = $derived(
         onclick={onResume}
         aria-label="Resume generation"
       >
-        <Play size={16} weight="fill" fill="currentColor" />
+        <Play size={16} fill="currentColor" />
         Resume
       </GlassPill>
       <GlassPill
@@ -108,7 +108,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
         onclick={onRegenerate}
       >
-        <RefreshCw size={16} weight="fill" />
+        <ArrowsClockwise size={16} />
         Regenerate
       </GlassPill>
     {:else if uiState.kind === "error"}
@@ -118,7 +118,7 @@ const destructiveTitle = $derived(
         onclick={onResume}
         aria-label="Retry generation"
       >
-        <RotateCcw size={16} weight="fill" />
+        <ArrowCounterClockwise size={16} />
         Retry
       </GlassPill>
       <GlassPill
@@ -126,7 +126,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
         onclick={onRegenerate}
       >
-        <RefreshCw size={16} weight="fill" />
+        <ArrowsClockwise size={16} />
         Regenerate
       </GlassPill>
     {:else if uiState.kind === "complete"}
@@ -135,7 +135,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Refresh this report using the current review as context"}
         onclick={onRegenerate}
       >
-        <RefreshCw size={16} weight="fill" />
+        <ArrowsClockwise size={16} />
         Regenerate
       </GlassPill>
       <GlassPill
@@ -143,7 +143,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Generate a fresh review without using the prior report"}
         onclick={onRegenerateFromScratch ?? onRegenerate}
       >
-        <RotateCcw size={16} weight="fill" />
+        <ArrowCounterClockwise size={16} />
         From scratch
       </GlassPill>
     {:else if uiState.kind === "stale"}
@@ -152,7 +152,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Review only what changed since the last reviewed commit"}
         onclick={onRegenerate}
       >
-        <RefreshCw size={16} weight="fill" />
+        <ArrowsClockwise size={16} />
         {uiState.label ?? "Review new commits"}
       </GlassPill>
       <GlassPill
@@ -160,7 +160,7 @@ const destructiveTitle = $derived(
         title={destructiveTitle ?? "Generate a fresh review for the latest commit"}
         onclick={onRegenerateFromScratch ?? onRegenerate}
       >
-        <RotateCcw size={16} weight="fill" />
+        <ArrowCounterClockwise size={16} />
         From scratch
       </GlassPill>
     {/if}

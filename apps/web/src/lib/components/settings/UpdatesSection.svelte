@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { UpdateChannel } from "@revv/shared";
 import Download from "phosphor-svelte/lib/Download";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Select from "$lib/components/ui/select";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
@@ -76,10 +76,10 @@ async function handleCheckNow(): Promise<void> {
 				class="flex items-center gap-1.5 text-xs hover:border-accent hover:text-text-primary"
 			>
 				{#if checking}
-					<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+					<Spinner size={12} class="motion-essential-spin" />
 					Checking…
 				{:else}
-					<Download size={12} weight="fill" />
+					<Download size={12} />
 					Check now
 				{/if}
 			</Button>

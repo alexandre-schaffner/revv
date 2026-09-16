@@ -24,6 +24,7 @@ import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review.sve
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
 import { cleanupAllMounted, mountInto, pruneDetachedMounts } from "$lib/utils/annotation-mount";
 import { countPatchLines } from "$lib/utils/count-patch-lines";
+import { phosphorMarkup } from "$lib/utils/phosphor-markup";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import {
@@ -109,16 +110,15 @@ let {
 // The library's callbacks must return light-DOM Elements.  These helpers keep
 // the option-object readable by separating construction from composition.
 
-const SVG_UNIFIED = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3.5" y1="4.5" x2="12.5" y2="4.5"/><line x1="3.5" y1="8" x2="12.5" y2="8"/><line x1="3.5" y1="11.5" x2="12.5" y2="11.5"/></svg>`;
-const SVG_SPLIT = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>`;
-
 function buildViewModePill(
   currentMode: "unified" | "split",
   onChange: ((mode: "unified" | "split") => void) | undefined,
 ): HTMLElement {
-  function makeBtn(svg: string, label: string, active: boolean): HTMLElement {
+  // `fill` is the active half of the pair, matching the app-wide rule that
+  // weight carries state (see the IconContext in routes/+layout.svelte).
+  function makeBtn(icon: "Rows" | "Columns", label: string, active: boolean): HTMLElement {
     const btn = document.createElement("div");
-    btn.innerHTML = svg;
+    btn.innerHTML = phosphorMarkup(icon, { weight: active ? "fill" : "regular" });
     btn.title = label;
     btn.setAttribute("role", "button");
     btn.setAttribute("aria-label", label);
@@ -129,8 +129,8 @@ function buildViewModePill(
   const pill = document.createElement("div");
   pill.dataset.viewPill = "";
 
-  const unifiedBtn = makeBtn(SVG_UNIFIED, "Unified view", currentMode === "unified");
-  const splitBtn = makeBtn(SVG_SPLIT, "Split view", currentMode === "split");
+  const unifiedBtn = makeBtn("Rows", "Unified view", currentMode === "unified");
+  const splitBtn = makeBtn("Columns", "Split view", currentMode === "split");
 
   unifiedBtn.addEventListener("click", (e) => {
     e.stopPropagation();

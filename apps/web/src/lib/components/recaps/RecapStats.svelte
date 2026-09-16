@@ -1,9 +1,9 @@
 <script lang="ts">
 import type { RecapSummaryStats } from "@revv/shared";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import GitPullRequestClosed from "phosphor-svelte/lib/GitPullRequest";
+import Prohibit from "phosphor-svelte/lib/Prohibit";
 import Users from "phosphor-svelte/lib/Users";
-import AlertTriangle from "phosphor-svelte/lib/Warning";
+import Warning from "phosphor-svelte/lib/Warning";
 
 interface Props {
   stats: RecapSummaryStats;
@@ -16,12 +16,12 @@ let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0
 
 <div class="recap-stats">
 	<span class="stat" title="PRs in this period">
-		<GitMerge size={11} weight="fill" aria-hidden="true" />
+		<GitMerge size={11} aria-hidden="true" />
 		<span>{stats.mergedCount} merged</span>
 	</span>
 	{#if stats.closedCount > 0}
 		<span class="stat" title="Closed without merging">
-			<GitPullRequestClosed size={11} aria-hidden="true" />
+			<Prohibit size={11} aria-hidden="true" />
 			<span>{stats.closedCount} closed</span>
 		</span>
 	{/if}
@@ -31,7 +31,7 @@ let hasRisk = $derived(stats.riskBreakdown.medium + stats.riskBreakdown.high > 0
 	</span>
 	{#if hasRisk}
 		<span class="stat stat--risk" title="Walkthroughs flagged with medium/high risk">
-			<AlertTriangle size={11} weight="fill" aria-hidden="true" />
+			<Warning size={11} weight="fill" aria-hidden="true" />
 			<span>
 				{stats.riskBreakdown.high > 0 ? `${stats.riskBreakdown.high}H` : ''}
 				{stats.riskBreakdown.medium > 0 ? `${stats.riskBreakdown.medium}M` : ''}

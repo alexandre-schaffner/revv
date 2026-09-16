@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Command as CommandPrimitive } from "bits-ui";
-import MagnifyingGlassIcon from "phosphor-svelte/lib/MagnifyingGlass";
+import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
 import { cn } from "$lib/utils.js";
 
 let {
@@ -12,7 +12,7 @@ let {
 </script>
 
 <div class="flex h-9 items-center gap-2 border-b ps-3 pe-8" data-slot="command-input-wrapper">
-  <MagnifyingGlassIcon class="size-4 shrink-0 opacity-50" />
+  <MagnifyingGlass class="size-4 shrink-0 opacity-50" />
   <CommandPrimitive.Input
     data-slot="command-input"
     class={cn(

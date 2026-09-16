@@ -3,7 +3,7 @@
  * IssueSummaryBar — the header of the Issues panel. Styled as a linter
  * summary line:
  *
- *   ⚠ walkthrough    ✕ 3 critical  ▲ 5 warnings  • 2 info  │  4 selected
+ *   ⚠ walkthrough    ✖ 3 critical  ▲ 5 warnings  ○ 2 info  │  4 selected
  *                                                          ^
  *                                                          divider bar
  *
@@ -15,15 +15,14 @@
  * (a literal `│`) signals the transition from "counts" to "selection".
  */
 
-import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
-import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
 import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Circle from "phosphor-svelte/lib/Circle";
-import Filter from "phosphor-svelte/lib/Funnel";
+import Funnel from "phosphor-svelte/lib/Funnel";
 import Square from "phosphor-svelte/lib/Square";
-import Triangle from "phosphor-svelte/lib/Triangle";
-import AlertTriangle from "phosphor-svelte/lib/Warning";
-import XIcon from "phosphor-svelte/lib/X";
+import Warning from "phosphor-svelte/lib/Warning";
+import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 
 interface Counts {
   critical: number;
@@ -65,7 +64,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <AlertTriangle size={14} weight="fill" />
+            <Warning size={14} weight="fill" />
         </span>
         <span class="spec-title">Issues</span>
 
@@ -75,7 +74,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                 class:count-pill--zero={counts.critical === 0}
                 title="{counts.critical} critical"
             >
-                <XIcon size={11} aria-hidden="true" />
+                <WarningOctagon size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.critical}</span>
                 <span class="count-label">critical</span>
             </span>
@@ -84,7 +83,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                 class:count-pill--zero={counts.warning === 0}
                 title="{counts.warning} warning{counts.warning === 1 ? '' : 's'}"
             >
-                <Triangle size={11} aria-hidden="true" />
+                <Warning size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.warning}</span>
                 <span class="count-label"
                     >{counts.warning === 1 ? "warning" : "warnings"}</span
@@ -95,7 +94,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                 class:count-pill--zero={counts.info === 0}
                 title="{counts.info} info"
             >
-                <Circle size={11} weight="fill" aria-hidden="true" />
+                <Circle size={11} aria-hidden="true" />
                 <span class="count-num">{counts.info}</span>
                 <span class="count-label">info</span>
             </span>
@@ -124,9 +123,9 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} weight="fill" />
+                    <ArrowsInLineVertical size={12} />
                 {:else}
-                    <ChevronsUpDown size={12} weight="fill" />
+                    <ArrowsOutLineVertical size={12} />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>
@@ -140,7 +139,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
             title="Only critical"
         >
             <span class="ctrl-icon" aria-hidden="true">
-                <Filter size={12} />
+                <Funnel size={12} weight={onlyCritical ? "fill" : "regular"} />
             </span>
             <span class="ctrl-label">Only critical</span>
         </button>
@@ -153,7 +152,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
             title="Only unselected"
         >
             <span class="ctrl-icon" aria-hidden="true">
-                <Filter size={12} />
+                <Funnel size={12} weight={onlyUnselected ? "fill" : "regular"} />
             </span>
             <span class="ctrl-label">Only unselected</span>
         </button>
@@ -168,7 +167,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
                     {#if allSelected}
                         <Square size={12} />
                     {:else}
-                        <CheckSquare size={12} weight="fill" />
+                        <CheckSquare size={12} />
                     {/if}
                 </span>
                 <span class="ctrl-label">{selectLabel}</span>

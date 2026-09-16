@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { ThreadMessage } from "@revv/shared";
-import Bot from "phosphor-svelte/lib/Robot";
+import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
 
 interface Props {
@@ -14,7 +14,7 @@ let failed = $state(false);
 
 <div class="avatar" title={msg.authorName}>
 	{#if msg.authorRole === 'ai_agent'}
-		<Bot size={14} weight="fill" aria-hidden="true" />
+		<Robot size={14} aria-hidden="true" />
 	{:else if msg.authorAvatarContent && !failed}
 		<img
 			src={msg.authorAvatarContent}
@@ -25,7 +25,7 @@ let failed = $state(false);
 			onerror={() => { failed = true; }}
 		/>
 	{:else}
-		<User size={14} weight="regular" aria-hidden="true" />
+		<User size={14} aria-hidden="true" />
 	{/if}
 </div>
 

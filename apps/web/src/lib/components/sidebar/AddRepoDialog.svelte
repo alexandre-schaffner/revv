@@ -73,7 +73,7 @@ function rememberCloneBase(path: string): void {
           <RepoDialogHeader title="Add Repository" meta="Sources" />
 
           <button type="button" class="source-row" onclick={() => (view = "clone")} use:gsapPress>
-            <span class="source-icon"><CloudArrowDown size={17} weight="fill" /></span>
+            <span class="source-icon"><CloudArrowDown size={17} /></span>
             <span class="source-body">
               <span class="source-title">Clone from GitHub</span>
               <span class="source-hint">Revv manages the clone</span>
@@ -81,7 +81,7 @@ function rememberCloneBase(path: string): void {
           </button>
 
           <button type="button" class="source-row" onclick={() => (view = "link")} use:gsapPress>
-            <span class="source-icon"><FolderOpen size={17} weight="fill" /></span>
+            <span class="source-icon"><FolderOpen size={17} /></span>
             <span class="source-body">
               <span class="source-title">Open Existing Clone</span>
               <span class="source-hint">You manage the clone</span>

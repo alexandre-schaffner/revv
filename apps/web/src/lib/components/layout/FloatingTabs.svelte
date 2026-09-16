@@ -1,6 +1,6 @@
 <script lang="ts">
-import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
@@ -166,9 +166,9 @@ $effect(() => {
 				: 'New commit available. Click to pull the latest changes.'}
 		>
 			{#if isPulling}
-				<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+				<Spinner size={12} class="motion-essential-spin" />
 			{:else}
-				<DownloadCloud size={12} weight="fill" />
+				<CloudArrowDown size={12} />
 			{/if}
 			<span class="pull-btn-label">Pull</span>
 		</button>

@@ -111,19 +111,26 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		height: 0.9em;
 		flex-shrink: 0;
 	}
-	/* On the teal accent bubble a translucent-white chip leaves white text at
-	   ~4.3:1 (below AA) and muddies the file glyph's color. Flip it to a solid,
-	   brand-tinted light chip: ink-deep teal text hits ~11:1, the per-extension
-	   glyph keeps its meaningful color on a surface bright enough to carry it,
-	   and the chip separates from the bubble at ~5.6:1. Tinted toward the brand
-	   hue (195), never raw #fff, per the design system. */
+	/* On the teal accent bubble a translucent chip leaves its text below AA and
+	   muddies the file glyph's color, so the chip becomes a solid brand-tinted
+	   surface instead — label at ~11:1, chip separated from the bubble at
+	   ~5.3:1, glyph on a surface bright enough to carry it. Tinted toward the
+	   brand hue (195), never raw #fff, per the design system.
+
+	   The chip tokens invert with the theme rather than being pinned light: the
+	   accent fill itself inverts (48% L in light, 72% L in dark), so a light
+	   chip that separates cleanly from the light bubble all but merges with the
+	   dark one. The glyph colors come back from @pierre/trees as `light-dark()`
+	   values resolved against the document color-scheme, so pinning the chip
+	   light also stranded dark-mode's bright glyph variants on a near-white
+	   surface. See --revv-accent-chip-* in app.css. */
 	:global([data-slot='message-response'].prose-on-accent .mention-ref) {
-		border-color: oklch(88% 0.02 195);
-		background: oklch(96% 0.012 195);
-		color: oklch(32% 0.03 195);
+		border-color: var(--color-accent-chip-border);
+		background: var(--color-accent-chip-bg);
+		color: var(--color-accent-chip-fg);
 	}
 	:global([data-slot='message-response'].prose-on-accent .mention-ref[data-mention-path]:hover) {
-		border-color: oklch(80% 0.04 195);
-		background: oklch(92% 0.022 195);
+		border-color: var(--color-accent-chip-border-hover);
+		background: var(--color-accent-chip-bg-hover);
 	}
 </style>

@@ -16,15 +16,15 @@ export type ToolHeaderProps = Omit<CollapsiblePrimitive.TriggerProps, "type"> & 
 	import { cn } from "$lib/utils.js";
 	import { CollapsibleTrigger } from "$lib/components/ui/collapsible/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
-	import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Wrench from "phosphor-svelte/lib/Wrench";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import Check from "phosphor-svelte/lib/Check";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import Clock from "phosphor-svelte/lib/Clock";
-import ShieldQuestion from "phosphor-svelte/lib/Shield";
+import Shield from "phosphor-svelte/lib/Shield";
 import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
-import ShieldX from "phosphor-svelte/lib/ShieldWarning";
+import ShieldSlash from "phosphor-svelte/lib/ShieldSlash";
 	import type { Component } from "svelte";
 
 	let {
@@ -45,12 +45,12 @@ import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 
 	const statusConfig: Record<ToolState, { label: string; icon: Component; variant: string }> = {
 		"input-streaming": { label: "Pending", icon: Clock, variant: "secondary" },
-		"input-available": { label: "Running", icon: Loader2, variant: "secondary" },
-		"approval-requested": { label: "Awaiting Approval", icon: ShieldQuestion, variant: "secondary" },
+		"input-available": { label: "Running", icon: Spinner, variant: "secondary" },
+		"approval-requested": { label: "Awaiting Approval", icon: Shield, variant: "secondary" },
 		"approval-responded": { label: "Responded", icon: ShieldCheck, variant: "secondary" },
 		"output-available": { label: "Completed", icon: Check, variant: "secondary" },
-		"output-error": { label: "Error", icon: AlertCircle, variant: "destructive" },
-		"output-denied": { label: "Denied", icon: ShieldX, variant: "destructive" },
+		"output-error": { label: "Error", icon: WarningCircle, variant: "destructive" },
+		"output-denied": { label: "Denied", icon: ShieldSlash, variant: "destructive" },
 	};
 
 	let config = $derived(statusConfig[state]);
@@ -74,6 +74,6 @@ import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 			{config.label}
 		</Badge>
 	</div>
-	<ChevronDown class="size-4 text-muted-foreground transition-transform duration-snap [[data-state=open]_&]:rotate-180" />
+	<CaretDown class="size-4 text-muted-foreground transition-transform duration-snap [[data-state=open]_&]:rotate-180" />
 	{@render children?.()}
 </CollapsibleTrigger>

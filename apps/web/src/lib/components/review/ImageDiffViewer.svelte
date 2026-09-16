@@ -1,6 +1,6 @@
 <script lang="ts">
-import ArrowLeftRight from "phosphor-svelte/lib/ArrowsHorizontal";
-import ImageOff from "phosphor-svelte/lib/ImageBroken";
+import ArrowsHorizontal from "phosphor-svelte/lib/ArrowsHorizontal";
+import ImageBroken from "phosphor-svelte/lib/ImageBroken";
 import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
@@ -157,7 +157,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 						<div class="placeholder"><Dotmatrix variant="square-9" size="small" /></div>
 					{:else if baseSide.error}
 						<div class="placeholder error">
-							<ImageOff size={20} />
+							<ImageBroken size={20} />
 							<span>{baseSide.error}</span>
 						</div>
 					{:else if baseSide.url}
@@ -171,7 +171,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 			</div>
 
 			<div class="arrow">
-				<ArrowLeftRight size={16} weight="fill" />
+				<ArrowsHorizontal size={16} />
 			</div>
 
 			<div class="pane">
@@ -188,7 +188,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 						<div class="placeholder"><Dotmatrix variant="square-9" size="small" /></div>
 					{:else if headSide.error}
 						<div class="placeholder error">
-							<ImageOff size={20} />
+							<ImageBroken size={20} />
 							<span>{headSide.error}</span>
 						</div>
 					{:else if headSide.url}
@@ -216,7 +216,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 					<div class="placeholder"><Dotmatrix variant="square-9" size="small" /></div>
 				{:else if headSide.error}
 					<div class="placeholder error">
-						<ImageOff size={20} />
+						<ImageBroken size={20} />
 						<span>{headSide.error}</span>
 					</div>
 				{:else if headSide.url}
@@ -243,7 +243,7 @@ function onImgLoad(event: Event, side: "base" | "head"): void {
 					<div class="placeholder"><Dotmatrix variant="square-9" size="small" /></div>
 				{:else if baseSide.error}
 					<div class="placeholder error">
-						<ImageOff size={20} />
+						<ImageBroken size={20} />
 						<span>{baseSide.error}</span>
 					</div>
 				{:else if baseSide.url}

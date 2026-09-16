@@ -672,11 +672,22 @@ onDestroy(() => {
 		display: flex;
 		flex-direction: column;
 		contain: layout paint;
-		/* Force the tree into dark-mode rendering regardless of the user's
-		   system preference. The tree's CSS uses `light-dark()` and reads
-		   `color-scheme` from the host element, so we have to set it on the
-		   *host* (this div) for the inner shadow root to inherit it. */
-		color-scheme: dark;
+		/* Follow the app theme. The tree's CSS uses `light-dark()` and reads
+		   `color-scheme` from the host element (its own `:host { color-scheme:
+		   light dark }` is overridden by this outer-document rule), so the host
+		   is where it has to be set for the inner shadow root to inherit it.
+		   `inherit` picks up <html>'s color-scheme, which the theme store sets
+		   alongside the `.dark` class.
+
+		   This used to be pinned `dark`. The --trees-*-override mappings below
+		   only cover the surface colors; everything else the library resolves
+		   through `light-dark()` — per-extension file icon colors, git status
+		   colors, the focus ring — so pinning it left the tree painting
+		   dark-mode glyph colors onto the light sidebar, and rendering the same
+		   file icon a different color here than in the composer's mention pills,
+		   which resolve the identical sprite against <html> (see
+		   lib/utils/file-icon.ts). */
+		color-scheme: inherit;
 
 		/* Map our design tokens onto the @pierre/trees CSS variables. The
 		   library's fallback chain is `--trees-*-override` (us) →
