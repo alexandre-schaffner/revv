@@ -2,7 +2,7 @@
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
 import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
-import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
@@ -81,7 +81,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
-			<div class="annotation-content prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
+			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -91,7 +91,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 		<button class="diff-header" onclick={() => jumpToDiffLine(block.filePath, targetLine)}>
 			<FileBadge filePath={block.filePath} />
 			<span class="diff-header-right">
-				<span class="diff-jump-icon"><ArrowUpRight size={11} weight="fill" /></span>
+				<span class="diff-jump-icon"><ArrowUpRight size={11} /></span>
 			</span>
 		</button>
 		<div class="diff-body" use:mountDiffBlock></div>
@@ -99,7 +99,7 @@ function mountDiffBlock(el: HTMLDivElement) {
 
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
-			<div class="annotation-content prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
+			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>

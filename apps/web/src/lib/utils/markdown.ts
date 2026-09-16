@@ -25,8 +25,8 @@ marked.use({
   },
   renderer: {
     code({ text, lang }) {
-      if (isMermaidLang(lang)) {
-        return `<div class="mermaid-diagram not-prose" data-mermaid-src="${encodeBase64(text)}"><span class="mermaid-loading">Rendering diagram...</span></div>`;
+      if (isPrLensLang(lang)) {
+        return `<div class="prlens-diagram not-prose" data-prlens-src="${encodeBase64(text)}"><span class="prlens-loading">Rendering diagram...</span></div>`;
       }
       if (lang) {
         const highlighted = highlightCode(text, lang);
@@ -39,12 +39,12 @@ marked.use({
   },
 });
 
-function isMermaidLang(lang: string | undefined): boolean {
+function isPrLensLang(lang: string | undefined): boolean {
   const normalized = lang?.trim().toLowerCase();
-  return normalized === "mermaid" || normalized === "mmd";
+  return normalized === "prlens" || normalized === "pr-lens";
 }
 
-// UTF-8 → base64. Inverse of the decode in mermaid.svelte.ts (atob → bytes →
+// UTF-8 → base64. Inverse of the decode in actions/prlens.svelte.ts (atob → bytes →
 // TextDecoder), so multi-byte source survives the data-attribute round-trip.
 function encodeBase64(source: string): string {
   const bytes = new TextEncoder().encode(source);

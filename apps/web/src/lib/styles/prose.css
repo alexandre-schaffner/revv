@@ -71,25 +71,33 @@
 }
 
 /* User chat bubble renders markdown on the teal accent fill — remap the prose
-   tokens to the on-accent foreground so every element stays legible. */
+   tokens to the on-accent foreground so every element stays legible.
+
+   That foreground is `--color-primary-foreground`, NOT white: the accent
+   inverts between themes (tidewater teal at 48% L in light, phosphor teal at
+   72% L in dark), so a fixed white reads 6.3:1 on the light bubble but 2.4:1
+   on the dark one. The token carries white in light and near-black ink in
+   dark, holding the bubble above AA in both. The code scrim stays a black
+   wash in both themes — it darkens the fill either way, which raises contrast
+   for white ink and for dark ink alike. */
 .prose-on-accent {
-  --tw-prose-body: #fff;
-  --tw-prose-headings: #fff;
-  --tw-prose-lead: #fff;
-  --tw-prose-links: #fff;
-  --tw-prose-bold: #fff;
-  --tw-prose-counters: color-mix(in srgb, #fff 75%, transparent);
-  --tw-prose-bullets: color-mix(in srgb, #fff 70%, transparent);
-  --tw-prose-hr: color-mix(in srgb, #fff 30%, transparent);
-  --tw-prose-quotes: color-mix(in srgb, #fff 85%, transparent);
-  --tw-prose-quote-borders: color-mix(in srgb, #fff 40%, transparent);
-  --tw-prose-code: #fff;
-  --tw-prose-pre-code: #fff;
+  --tw-prose-body: var(--color-primary-foreground);
+  --tw-prose-headings: var(--color-primary-foreground);
+  --tw-prose-lead: var(--color-primary-foreground);
+  --tw-prose-links: var(--color-primary-foreground);
+  --tw-prose-bold: var(--color-primary-foreground);
+  --tw-prose-counters: color-mix(in srgb, var(--color-primary-foreground) 75%, transparent);
+  --tw-prose-bullets: color-mix(in srgb, var(--color-primary-foreground) 70%, transparent);
+  --tw-prose-hr: color-mix(in srgb, var(--color-primary-foreground) 30%, transparent);
+  --tw-prose-quotes: color-mix(in srgb, var(--color-primary-foreground) 85%, transparent);
+  --tw-prose-quote-borders: color-mix(in srgb, var(--color-primary-foreground) 40%, transparent);
+  --tw-prose-code: var(--color-primary-foreground);
+  --tw-prose-pre-code: var(--color-primary-foreground);
   --tw-prose-pre-bg: rgb(0 0 0 / 0.2);
 }
 .prose-on-accent :where(code):not(:where(pre code, .shiki code)) {
   background: rgb(0 0 0 / 0.2);
-  color: #fff;
+  color: var(--color-primary-foreground);
 }
 /* `.prose-on-accent a` lives at the END of the link section below, not here —
    it must follow `.prose a` (equal specificity) to win on source order, else
@@ -207,10 +215,16 @@
 }
 
 /* ──────────────────────────────────────────────────────────
-   Mermaid diagrams — placeholders are emitted by the markdown renderer and
-   replaced client-side after the lazy Mermaid bundle renders SVG.
+   PR Lens diagrams — placeholders are emitted by the markdown renderer and
+   replaced client-side after the lazy PR Lens bundle renders SVG.
    ────────────────────────────────────────────────────────── */
-.mermaid-diagram {
+.prlens-diagram {
+  /* Starting size only. A diagram's natural width is set by its lane or
+     participant count and routinely dwarfs the reading column, so the action
+     measures the nearest `[data-prlens-breakout]` ancestor and overrides
+     `width`/`max-width` inline to grow it rightwards into that room. These
+     values are what a diagram gets before that runs, and everywhere outside a
+     breakout host. */
   width: 100%;
   max-width: 100%;
   overflow-x: auto;
@@ -222,33 +236,58 @@
   color: var(--color-text-secondary);
 }
 
-.mermaid-diagram:last-child {
+.prlens-diagram:last-child {
   margin-bottom: 0;
 }
 
-.mermaid-diagram svg {
+.prlens-diagram svg {
   display: block;
   max-width: 100%;
   height: auto;
-  margin: 0 auto;
+  /* Flush left, like every other block on the page. A diagram narrower than its
+     frame leaves the slack on the right rather than splitting it either side,
+     so its first lane lines up with the prose above it. */
+  margin: 0;
 }
 
-.mermaid-loading,
-.mermaid-error {
+.prlens-loading,
+.prlens-error {
   display: block;
   font-size: 12px;
   line-height: 1.45;
   color: var(--color-text-muted);
 }
 
-.mermaid-error {
+.prlens-error {
   color: var(--color-danger);
-  margin-bottom: var(--spacing-island);
 }
 
-.mermaid-fallback-source {
-  margin: 0;
-  overflow-x: auto;
+/* The rejected document, folded away. Open it to see which diagram broke;
+   closed, a failure costs one line of the reading column instead of the
+   hundreds a graph document runs to. */
+.prlens-fallback {
+  margin-top: var(--spacing-island);
+}
+
+/* The native disclosure marker is deliberate: it is the browser's own control,
+   not a glyph of ours, so it needs no icon component in a stylesheet. */
+.prlens-fallback > summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.prlens-fallback > summary:hover {
+  color: var(--color-text-secondary);
+}
+
+.prlens-fallback-source {
+  /* Tall enough to orient in the document, short enough that the prose after
+     it is still on screen. */
+  max-height: 20rem;
+  margin: var(--spacing-island-half) 0 0;
+  overflow: auto;
   white-space: pre;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -283,10 +322,10 @@
    link colored `--color-accent` would vanish into the background. These must sit
    after `.prose a` / `.prose a:hover` (equal specificity) to win on source order. */
 .prose-on-accent a {
-  color: #fff;
-  text-decoration-color: color-mix(in srgb, #fff 50%, transparent);
+  color: var(--color-primary-foreground);
+  text-decoration-color: color-mix(in srgb, var(--color-primary-foreground) 50%, transparent);
 }
 .prose-on-accent a:hover {
-  color: #fff;
-  text-decoration-color: #fff;
+  color: var(--color-primary-foreground);
+  text-decoration-color: var(--color-primary-foreground);
 }
