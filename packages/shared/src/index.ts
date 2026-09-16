@@ -113,6 +113,7 @@ export {
   PIERRE_THEMES,
   PR_DIFF_RENDER_OPTIONS,
 } from "./pierre-diffs";
+export { toGraphDocInput } from "./prlens";
 export type {
   ProjectRecap,
   ProjectRecapStatus,
@@ -159,5 +160,5 @@ export type {
   UserRole,
   UserSettings,
 } from "./types";
-export { REVIEW_MODE, REVIEW_MODES } from "./types";
+export { loginsMatch, REVIEW_MODE, REVIEW_MODES, reviewModeFor } from "./types";
 export * from "./walkthrough";

@@ -40,6 +40,15 @@ export interface PullRequest {
   /** Raw avatar URL from the provider — used internally during sync to populate remote_users. */
   authorAvatarUrl: string | null;
   requestedReviewers: string[];
+  /**
+   * Logins @-mentioned in the PR body or in any of its review comments.
+   *
+   * Populated on the DB read path only (`rowToPr`); always `[]` when a PR is
+   * mapped straight from a GitHub API payload, since GitHub has no such field
+   * — mentions are parsed out of the body and merged with comment-sourced
+   * mentions during sync.
+   */
+  mentionedUsers: string[];
   status: PullRequestStatus;
   reviewStatus: ReviewStatus;
   /** GitHub draft state — `true` while the PR is in draft. */
@@ -111,6 +120,13 @@ export interface MergeEligibility {
   canMerge: boolean;
   mergeable: boolean;
   mergeStateStatus: string;
+  /**
+   * The merge methods this repository's settings actually permit. GitHub
+   * answers `PUT /pulls/:n/merge` with a 405 ("Merge commits are not allowed
+   * on this repository.") when the requested method is disabled, so the UI
+   * must offer only these — never the full {@link MergeMethod} set.
+   */
+  allowedMethods: MergeMethod[];
 }
 
 export interface UserSettings {
@@ -231,6 +247,40 @@ export const REVIEW_MODE = {
 export type ReviewMode = (typeof REVIEW_MODE)[keyof typeof REVIEW_MODE];
 
 export const REVIEW_MODES: readonly ReviewMode[] = [REVIEW_MODE.reviewer, REVIEW_MODE.author];
+
+/**
+ * Compare two provider logins. GitHub logins are case-insensitive, so `"Alex"`
+ * and `"alex"` are the same account; either being absent is never a match.
+ */
+export function loginsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The review mode for a PR, given its author and the signed-in viewer.
+ *
+ * **This is the only implementation.** Review sessions are keyed on
+ * `(pullRequestId, mode)`, so the web (which requests `?mode=`) and the
+ * background workers (which write into a session) must derive the identical
+ * answer from the identical inputs. A second copy of this rule that disagreed
+ * on casing or on which login column it read is what sent synced GitHub
+ * comments into a session the UI never loads — unrecoverably, since comments
+ * dedupe globally by external id.
+ *
+ * `viewerLogin` is nullable because identity resolves asynchronously on both
+ * sides. Unknown answers `reviewer`: the historical default and the right
+ * answer for every PR the viewer did not write. Callers that would *act*
+ * destructively on the result must distinguish "unknown" themselves rather
+ * than reading a `reviewer` verdict as confirmation — see
+ * `resolveReviewModeForPr` on the server.
+ */
+export function reviewModeFor(
+  authorLogin: string | null | undefined,
+  viewerLogin: string | null | undefined,
+): ReviewMode {
+  return loginsMatch(authorLogin, viewerLogin) ? REVIEW_MODE.author : REVIEW_MODE.reviewer;
+}
 
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 
