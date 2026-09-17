@@ -148,6 +148,20 @@ export interface ProjectRecapSummary {
   readonly errorMessage: string | null;
 }
 
+/**
+ * Fixed lede written for a *historical* window that turned out to hold no
+ * activity at all — no PR closed in it, none in flight across it. The
+ * orchestrator short-circuits before invoking the agent and completes the row
+ * with this text, so a quiet weekend costs zero tokens and renders as a
+ * finished recap rather than a failure.
+ *
+ * Only historical windows take this path. A live window (today / this week)
+ * with nothing in it still errors: "nothing has happened yet, come back
+ * later" is the honest answer there.
+ */
+export const RECAP_EMPTY_WINDOW_LEDE =
+  "Nothing shipped in this window — no pull requests closed, and none were in flight.";
+
 /** Default stats object when the agent hasn't written any yet. */
 export const EMPTY_RECAP_STATS: RecapSummaryStats = {
   prCount: 0,

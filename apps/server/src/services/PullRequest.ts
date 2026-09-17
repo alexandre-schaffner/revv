@@ -1,5 +1,5 @@
 import type { PullRequest } from "@revv/shared";
-import { and, desc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
@@ -176,13 +176,24 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     /**
-     * Currently open PRs for a repo, joined to their latest non-superseded
+     * PRs in flight *as of* `until`: created before the window closed and not
+     * yet closed at that instant. Joined to their latest non-superseded
      * complete walkthrough (if any). Used by the recap agent to surface
      * "who is working on what" context. Sorted by walkthrough presence then
      * updatedAt DESC. Capped at 20 rows to keep the context window bounded.
+     *
+     * For a live window (`until` ≈ now) this is exactly "currently open".
+     * For a historical window it reconstructs the set as it stood then, so a
+     * recap dated three weeks ago doesn't describe today's open PRs.
+     *
+     * Residual imprecision, deliberate: the joined walkthrough and the
+     * `updatedAt` sort still reflect *current* state. Reconstructing those
+     * would need walkthrough version history we don't keep, and "which PRs
+     * were in flight" is what the recap prose actually needs.
      */
-    readonly listOpenPrsWithWalkthroughs: (
+    readonly listOpenPrsAsOfWindow: (
       repoId: string,
+      until: string,
       accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     readonly markPrsClosed: (
@@ -636,7 +647,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       });
     }),
 
-  listOpenPrsWithWalkthroughs: (repoId, accountId) =>
+  listOpenPrsAsOfWindow: (repoId, until, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (accountId) {
@@ -660,7 +671,15 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                 eq(remoteUsers.login, pullRequests.authorLogin),
               ),
             )
-            .where(and(eq(pullRequests.repositoryId, repoId), eq(pullRequests.status, "open")))
+            .where(
+              and(
+                eq(pullRequests.repositoryId, repoId),
+                // "Open at `until`" reconstructed from timestamps rather than
+                // the mutable `status` column, which only ever describes now.
+                lt(pullRequests.createdAt, until),
+                or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+              ),
+            )
             .orderBy(desc(pullRequests.updatedAt))
             .limit(20)
             .all();

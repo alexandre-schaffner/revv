@@ -125,7 +125,7 @@ export type {
   RecapSummaryStats,
   RecapThemeSummary,
 } from "./recap";
-export { EMPTY_RECAP_STATS } from "./recap";
+export { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE } from "./recap";
 export type {
   AuthorRole,
   CloneStatus,

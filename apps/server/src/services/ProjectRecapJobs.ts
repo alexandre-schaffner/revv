@@ -41,6 +41,7 @@ import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers
 import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
+import { windowIsCurrent } from "./RecapScheduler";
 import { runRecapAgent } from "./recap-agent-runner";
 import {
   attachRecapDigests,
@@ -638,31 +639,58 @@ export const ProjectRecapJobsLive = Layer.effect(
           ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
         }
 
-        // Open PRs for "who is working on what" context. Fetched before
-        // the empty-archive guard so a window with only open PRs can still
-        // produce an "active work" recap instead of an error.
-        const openPrs = yield* provideDb(prService.listOpenPrsWithWalkthroughs(job.repoId)).pipe(
-          Effect.catchAll(() => Effect.succeed([] as never[])),
-        );
+        // PRs in flight for "who is working on what" context, reconstructed
+        // as of the window's close so a historical recap doesn't describe
+        // today's open PRs. Fetched before the empty-window guard so a window
+        // with only open PRs can still produce an "active work" recap.
+        const openPrs = yield* provideDb(
+          prService.listOpenPrsAsOfWindow(job.repoId, job.periodEnd),
+        ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
 
         if (windowed.length === 0 && openPrs.length === 0) {
-          // Scheduler should have filtered fully-empty repos out, but defend:
-          // mark the row error with a clear reason rather than spinning.
-          const msg = "No archived or open PRs found for this window";
-          logError(
+          // A window with nothing in it means two different things depending
+          // on whether it's still open.
+          if (windowIsCurrent(job.period, job.periodStart)) {
+            // Live window: "nothing has happened yet, come back later" is the
+            // right answer, and the page's Generate copy assumes it.
+            const msg = "No archived or open PRs found for this window";
+            logError(
+              "recap-jobs",
+              `no archived or open PRs for recap ${job.recapId} — marking error`,
+            );
+            emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
+            yield* setStatus(
+              {
+                id: job.recapId,
+                repositoryId: job.repoId,
+                period: job.period,
+              },
+              "error",
+              { errorMessage: msg },
+            );
+            return;
+          }
+
+          // Closed window: the answer is final and it's "nothing shipped".
+          // That's a complete recap, not a failure — otherwise every quiet
+          // weekend in the calendar would paint red. Short-circuit before the
+          // agent runs so a quiet day costs zero tokens.
+          debug(
             "recap-jobs",
-            `no archived or open PRs for recap ${job.recapId} — marking error`,
+            `empty historical window for recap ${job.recapId} — completing without the agent`,
           );
-          emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
+          yield* provideDb(recapService.markEmptyWindow(job.recapId)).pipe(
+            Effect.catchAll(() => Effect.void),
+          );
           yield* setStatus(
             {
               id: job.recapId,
               repositoryId: job.repoId,
               period: job.period,
             },
-            "error",
-            { errorMessage: msg },
+            "complete",
           );
+          emit({ type: "done", data: { recapId: job.recapId } });
           return;
         }
 

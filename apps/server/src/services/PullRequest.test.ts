@@ -308,3 +308,163 @@ describe("upsertPrs mentioned users", () => {
     expect(JSON.parse(readRow(db, "pr-open-alice").mentionedUsers ?? "[]")).toEqual(["erin"]);
   });
 });
+
+// ── listOpenPrsAsOfWindow: "in flight" reconstructed from timestamps ────────
+//
+// The `status` column only ever describes *now*, so a recap for a window three
+// weeks back must decide membership from createdAt/closedAt instead. These
+// pin the four corners of that predicate.
+
+const WINDOW_END = "2026-07-04T00:00:00Z";
+
+function seedInFlight(db: Db): void {
+  const base = {
+    repositoryId: REPO_ID,
+    title: "t",
+    authorLogin: "alice",
+    sourceBranch: "feature",
+    targetBranch: "main",
+    url: "https://example.com",
+    updatedAt: "2026-07-01T00:00:00Z",
+    fetchedAt: "2026-07-01T00:00:00Z",
+  };
+  db.insert(pullRequests)
+    .values([
+      // Opened before the window closed, still open today.
+      {
+        ...base,
+        id: "pr-still-open",
+        externalId: 10,
+        status: "open",
+        createdAt: "2026-06-20T00:00:00Z",
+        closedAt: null,
+      },
+      // Opened before, closed *after* — in flight at that instant.
+      {
+        ...base,
+        id: "pr-closed-after",
+        externalId: 11,
+        status: "merged",
+        createdAt: "2026-06-20T00:00:00Z",
+        closedAt: "2026-07-10T00:00:00Z",
+      },
+      // Opened before, closed *before* — already done by then.
+      {
+        ...base,
+        id: "pr-closed-before",
+        externalId: 12,
+        status: "merged",
+        createdAt: "2026-06-20T00:00:00Z",
+        closedAt: "2026-07-02T00:00:00Z",
+      },
+      // Didn't exist yet.
+      {
+        ...base,
+        id: "pr-created-after",
+        externalId: 13,
+        status: "open",
+        createdAt: "2026-07-20T00:00:00Z",
+        closedAt: null,
+      },
+    ])
+    .run();
+}
+
+function listInFlight(db: Db, until: string) {
+  return runSvc(db, (svc) => svc.listOpenPrsAsOfWindow(REPO_ID, until));
+}
+
+describe("listOpenPrsAsOfWindow", () => {
+  it("includes a PR opened before the window that is still open", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    const ids = (await listInFlight(db, WINDOW_END)).map((r) => r.pr.id);
+    expect(ids).toContain("pr-still-open");
+  });
+
+  it("includes a PR that closed after the window", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    const ids = (await listInFlight(db, WINDOW_END)).map((r) => r.pr.id);
+    expect(ids).toContain("pr-closed-after");
+  });
+
+  it("excludes a PR that closed before the window", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    const ids = (await listInFlight(db, WINDOW_END)).map((r) => r.pr.id);
+    expect(ids).not.toContain("pr-closed-before");
+  });
+
+  it("excludes a PR created after the window", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    const ids = (await listInFlight(db, WINDOW_END)).map((r) => r.pr.id);
+    expect(ids).not.toContain("pr-created-after");
+  });
+
+  it("is boundary-exclusive on createdAt and inclusive on closedAt", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    // A PR created exactly at `until` hadn't opened when the window shut.
+    db.insert(pullRequests)
+      .values({
+        repositoryId: REPO_ID,
+        id: "pr-created-at-edge",
+        externalId: 14,
+        title: "t",
+        authorLogin: "alice",
+        status: "open",
+        sourceBranch: "f",
+        targetBranch: "main",
+        url: "https://example.com",
+        createdAt: WINDOW_END,
+        updatedAt: WINDOW_END,
+        fetchedAt: WINDOW_END,
+        closedAt: null,
+      })
+      .run();
+    // A PR closed exactly at `until` was still open for the whole window.
+    db.insert(pullRequests)
+      .values({
+        repositoryId: REPO_ID,
+        id: "pr-closed-at-edge",
+        externalId: 15,
+        title: "t",
+        authorLogin: "alice",
+        status: "merged",
+        sourceBranch: "f",
+        targetBranch: "main",
+        url: "https://example.com",
+        createdAt: "2026-06-20T00:00:00Z",
+        updatedAt: WINDOW_END,
+        fetchedAt: WINDOW_END,
+        closedAt: WINDOW_END,
+      })
+      .run();
+
+    const ids = (await listInFlight(db, WINDOW_END)).map((r) => r.pr.id);
+    expect(ids).not.toContain("pr-created-at-edge");
+    expect(ids).toContain("pr-closed-at-edge");
+  });
+
+  it("equals 'currently open' for a live window", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedInFlight(db);
+    const ids = (await listInFlight(db, new Date().toISOString())).map((r) => r.pr.id).sort();
+    const openNow = db
+      .select({ id: pullRequests.id })
+      .from(pullRequests)
+      .where(eq(pullRequests.status, "open"))
+      .all()
+      .map((r) => r.id)
+      .sort();
+    expect(ids).toEqual(openNow);
+  });
+});
