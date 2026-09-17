@@ -16,6 +16,7 @@ import {
   revParse,
   unmergedPaths,
   unstagedOutsideMerge,
+  workflowPermissionRejection,
   workingTreeIsClean,
 } from "./GitOps";
 
@@ -331,6 +332,62 @@ describe("classifyPushFailure", () => {
   it("falls back to rejected for anything unrecognised", () => {
     expect(classifyPushFailure("error: failed to push some refs")).toBe("rejected");
     expect(classifyPushFailure("")).toBe("rejected");
+  });
+});
+
+// ── workflowPermissionRejection ──────────────────────────────────────────────
+//
+// An agent fixing CI is routine, and the push that ships the fix is refused by
+// GitHub on both of Revv's auth paths. Echoing git's wording made users retry
+// a push that can never succeed, so the rejection is recognised and rewritten.
+// It must stay narrow: a protected-branch or pre-receive decline has to keep
+// reaching the user as the remote's own text.
+
+describe("workflowPermissionRejection", () => {
+  it("recognises the GitHub App refusal and names the workflow file", () => {
+    const stderr =
+      "To https://nocturlab.ghe.com/Merkl/monorepo.git\n" +
+      " ! [remote rejected] HEAD -> iam/backoffice-apps (refusing to allow a GitHub App to " +
+      "create or update workflow `.github/workflows/buncodeq.yml` without `workflows` permission)\n" +
+      "error: failed to push some refs to 'https://nocturlab.ghe.com/Merkl/monorepo.git'";
+    expect(workflowPermissionRejection(stderr)).toEqual({
+      path: ".github/workflows/buncodeq.yml",
+    });
+  });
+
+  it("recognises the OAuth/PAT refusal, worded with `workflow` scope", () => {
+    expect(
+      workflowPermissionRejection(
+        " ! [remote rejected] HEAD -> feat (refusing to allow an OAuth App to create or update " +
+          "workflow `.github/workflows/ci.yml` without `workflow` scope)",
+      ),
+    ).toEqual({ path: ".github/workflows/ci.yml" });
+  });
+
+  it("still reports the refusal when GitHub names no file", () => {
+    expect(
+      workflowPermissionRejection(
+        " ! [remote rejected] HEAD -> feat (refusing to allow a GitHub App to create or update " +
+          "workflows without `workflows` permission)",
+      ),
+    ).toEqual({ path: null });
+  });
+
+  it("leaves every other rejection alone", () => {
+    expect(
+      workflowPermissionRejection(
+        "remote: error: GH006: Protected branch update failed\n" +
+          " ! [remote rejected] HEAD -> main (protected branch hook declined)",
+      ),
+    ).toBeNull();
+    // A hook that merely mentions workflows is not this.
+    expect(
+      workflowPermissionRejection(
+        "remote: your commit touches `.github/workflows/ci.yml`; ask #ci first\n" +
+          " ! [remote rejected] HEAD -> feat (pre-receive hook declined)",
+      ),
+    ).toBeNull();
+    expect(workflowPermissionRejection("")).toBeNull();
   });
 });
 

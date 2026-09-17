@@ -48,6 +48,7 @@
 import { ACP_AGENT_IDS } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
 import { serverEnv } from "../config";
+import { CHAT_IDLE_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   GitHubAuthError,
@@ -58,6 +59,7 @@ import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
+import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
@@ -92,11 +94,16 @@ import {
   revParse,
   unmergedPaths,
   unstagedOutsideMerge,
+  workflowPermissionRejection,
   workingTreeIsClean,
 } from "./GitOps";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { SettingsService } from "./Settings";
+
+// The lease a chat turn holds on its worktree, re-exported so the chat route
+// can type the handle this service hands it without reaching past the service.
+export type { ChatStreamLease } from "./chat-stream-leases";
 
 // Re-export the GitOps errors so existing callers that destructured them
 // from this module keep working without import churn.
@@ -106,6 +113,34 @@ export {
   PushRejectedError,
   RefAlreadyExistsError,
 } from "./GitOps";
+
+/**
+ * The message a server-side push rejection carries to the UI, where it lands
+ * in a toast.
+ *
+ * Git's stderr is the right thing to show for most rejections — a pre-receive
+ * hook or a push rule says something only the remote knows. The one rejection
+ * worth translating is the workflow-permission refusal: its wording ("refusing
+ * to allow a GitHub App to create or update workflow `x.yml` without
+ * `workflows` permission") describes GitHub's internals, holds no hint that
+ * this is a standing limit of Revv's credential rather than a transient fault,
+ * and names no way out — so users retry it, which cannot work. Neither auth
+ * path can push CI (see {@link workflowPermissionRejection}), so the two real
+ * ways out go in the message.
+ *
+ * The raw stderr is not lost: `readPushFailure` logs it unconditionally before
+ * this runs.
+ */
+const rejectionMessage = (stderr: string): string => {
+  const workflow = workflowPermissionRejection(stderr);
+  if (!workflow) return stderr || "git push failed";
+  const what = workflow.path ?? "files under .github/workflows/";
+  return (
+    `GitHub won't let Revv's credential change ${what} — pushing CI needs a permission ` +
+    "Revv doesn't hold. Push these commits over SSH from your own checkout, or push only " +
+    "the commits that leave workflow files alone."
+  );
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -260,8 +295,12 @@ export class ChatChangesPushService extends Context.Tag("ChatChangesPushService"
     >;
 
     readonly isPushing: (prId: string) => boolean;
-    readonly markChatStreaming: (prId: string, streaming: boolean) => void;
-    readonly isChatStreaming: (prId: string) => boolean;
+    /**
+     * Claim the PR's worktree for a chat turn about to stream. The caller owns
+     * the returned lease: `touch()` on every frame, `release()` on every exit
+     * path.
+     */
+    readonly beginChatStream: (prId: string) => ChatStreamLease;
   }
 >() {}
 
@@ -283,7 +322,11 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
     // Per-PR push lock — refuses overlap.
     const inFlight = new Set<string>();
-    const streamingChats = new Set<string>();
+    // Worktree claims held by in-flight chat turns. The expiry is the agent's
+    // own chat idle deadline, deliberately the same constant the chat stream
+    // guard arms itself with: past it the turn has already been killed
+    // upstream, so treating the lease as live could only ever be wrong.
+    const chatStreams = createChatStreamLeases(CHAT_IDLE_TIMEOUT_MS);
 
     /**
      * Clear an abandoned merge out of the session's worktree. Returns whether
@@ -350,7 +393,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     // DbService so callers (under AppRuntime) get it for free.
     const preflight = (params: { readonly prId: string; readonly userId: string }) =>
       Effect.gen(function* () {
-        if (streamingChats.has(params.prId)) {
+        if (chatStreams.isLive(params.prId)) {
           return yield* Effect.fail(new ChatStreamingConflictError({ prId: params.prId }));
         }
 
@@ -552,9 +595,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
               }),
             );
           case "rejected":
-            return yield* Effect.fail(
-              new PushRejectedError({ message: stderr || "git push failed" }),
-            );
+            return yield* Effect.fail(new PushRejectedError({ message: rejectionMessage(stderr) }));
         }
       });
 
@@ -934,7 +975,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           }
           return yield* Effect.fail(
             new PushRejectedError({
-              message: stderr || "git push failed",
+              message: rejectionMessage(stderr),
             }),
           );
         }
@@ -1718,11 +1759,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       cherryPickAndPush,
       batchCherryPickAndPush,
       isPushing: (prId: string) => inFlight.has(prId),
-      markChatStreaming: (prId: string, streaming: boolean) => {
-        if (streaming) streamingChats.add(prId);
-        else streamingChats.delete(prId);
-      },
-      isChatStreaming: (prId: string) => streamingChats.has(prId),
+      beginChatStream: (prId: string): ChatStreamLease => chatStreams.begin(prId),
     };
   }),
 );
