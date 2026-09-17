@@ -20,8 +20,8 @@ import type {
   RecapSummaryStats,
   RecapThemeSummary,
 } from "@revv/shared";
-import { EMPTY_RECAP_STATS } from "@revv/shared";
-import { and, asc, desc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE } from "@revv/shared";
+import { and, asc, desc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
   projectRecaps,
@@ -169,6 +169,17 @@ export interface ListForRepoParams {
   readonly limit?: number;
   /** Include superseded rows. Default false: UI shows the current row only. */
   readonly includeSuperseded?: boolean;
+  /**
+   * Inclusive lower bound on **`periodStart`** — the window the recap covers.
+   * A different axis from `cursor`, which bounds `generatedAt` (when the recap
+   * was written). The calendar asks "which recaps cover this month"; paging
+   * asks "what came before this row". Mixing them up yields plausible-looking
+   * but wrong pages.
+   */
+  readonly from?: string;
+  /** Exclusive upper bound on `periodStart`, matching the table's own
+   *  `[periodStart, periodEnd)` half-open convention. */
+  readonly to?: string;
 }
 
 export interface ListForRepoResult {
@@ -233,6 +244,18 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
 
     /** Mark `oldId` superseded with `supersededBy = newId`. */
     readonly supersede: (oldId: string, newId: string) => Effect.Effect<void, never, DbService>;
+
+    /**
+     * Fill in a recap for a historical window that held no activity at all.
+     * Writes the fixed {@link RECAP_EMPTY_WINDOW_LEDE} and zeroed stats; the
+     * caller then transitions status to `'complete'`.
+     *
+     * Not an exception to invariant #2 ("agent content writes go through MCP
+     * only"): no agent runs on this path, so there is no MCP session to route
+     * through. The orchestrator short-circuits precisely to avoid spending
+     * tokens on an empty window.
+     */
+    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, ValidationError, DbService>;
 
     /**
      * Reset an existing row for an in-place rerun. Clears all content /
@@ -397,6 +420,18 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           if (params.cursor !== undefined) {
             conditions.push(lt(projectRecaps.generatedAt, params.cursor));
           }
+          // String comparison is valid here because `period_start` is always
+          // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
+          // lexicographic order *is* chronological order. Load-bearing: swap
+          // in a local-offset or non-padded format and these predicates go
+          // quietly wrong. The `(repository_id, period, period_start)` index
+          // covers them.
+          if (params.from !== undefined) {
+            conditions.push(gte(projectRecaps.periodStart, params.from));
+          }
+          if (params.to !== undefined) {
+            conditions.push(lt(projectRecaps.periodStart, params.to));
+          }
           if (!params.includeSuperseded) {
             conditions.push(isNull(projectRecaps.supersededBy));
           }
@@ -489,6 +524,26 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         catch: (e) => new ValidationError({ message: `supersede: ${String(e)}` }),
       });
     }).pipe(Effect.catchAll(() => Effect.void)),
+
+  markEmptyWindow: (recapId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      yield* Effect.try({
+        try: () =>
+          db
+            .update(projectRecaps)
+            .set({
+              lede: RECAP_EMPTY_WINDOW_LEDE,
+              summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
+              sourcePrIds: "[]",
+              sourceWalkthroughIds: "[]",
+              errorMessage: null,
+            })
+            .where(eq(projectRecaps.id, recapId))
+            .run(),
+        catch: (e) => new ValidationError({ message: `markEmptyWindow: ${String(e)}` }),
+      });
+    }),
 
   resetForRerun: (recapId, newBoundaries) =>
     Effect.gen(function* () {

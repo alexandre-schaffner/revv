@@ -39,6 +39,8 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
           cursor?: string;
           limit?: number;
           includeSuperseded?: boolean;
+          from?: string;
+          to?: string;
         } = {};
         const p = parsePeriod(ctx.query.period);
         if (p !== undefined) params.period = p;
@@ -48,6 +50,17 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
           if (Number.isFinite(n) && n > 0) params.limit = Math.floor(n);
         }
         if (ctx.query.includeSuperseded === "true") params.includeSuperseded = true;
+        // `from`/`to` bound `periodStart`, not `generatedAt`. Garbage is
+        // dropped rather than 400'd (mirrors the `limit` guard) — and the
+        // parse check matters beyond tidiness: the predicate compares
+        // strings, so an unvalidated value would still match
+        // lexicographically and silently return the wrong rows.
+        if (ctx.query.from !== undefined && Number.isFinite(Date.parse(ctx.query.from))) {
+          params.from = ctx.query.from;
+        }
+        if (ctx.query.to !== undefined && Number.isFinite(Date.parse(ctx.query.to))) {
+          params.to = ctx.query.to;
+        }
 
         return await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapService, (s) => s.listForRepo(ctx.params.id, params)),
@@ -62,6 +75,8 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
         cursor: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         includeSuperseded: t.Optional(t.String()),
+        from: t.Optional(t.String()),
+        to: t.Optional(t.String()),
       }),
     },
   )
