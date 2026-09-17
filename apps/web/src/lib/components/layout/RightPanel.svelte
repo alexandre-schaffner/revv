@@ -1,5 +1,6 @@
 <script lang="ts">
 import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
@@ -150,10 +151,14 @@ import StreamingVerb from "./StreamingVerb.svelte";
 
 interface Props {
   onClose: () => void;
+  /** True when the panel is covering the main pane instead of sitting beside
+      it (see `getChatStacked`). Swaps the close affordance for a back button
+      and caps the conversation to a readable column at full-pane width. */
+  stacked?: boolean;
   prId?: string;
 }
 
-let { onClose, prId }: Props = $props();
+let { onClose, stacked = false, prId }: Props = $props();
 
 const items = $derived(prId ? getChatItems(prId) : []);
 // Turn ids whose assistant bubble is still streaming. Activity rows for
@@ -500,10 +505,21 @@ function activitiesForTurn(
 }
 </script>
 
-<div class="panel">
+<div class="panel" class:panel--stacked={stacked}>
 	<!-- Header -->
 	<div class="panel-header">
+		{#if stacked}
+			<!-- Stacked over the main pane: the panel *is* the view, so the exit
+				 is a back button at the head of the row (Slack thread style)
+				 rather than a close affordance at the far end. -->
+			<button class="back-btn" onclick={onClose} aria-label="Back to pull request">
+				<ArrowLeft size={14} />
+			</button>
+		{/if}
 		<span class="panel-title">Chat</span>
+		{#if stacked && selectedPr}
+			<span class="panel-subtitle">#{selectedPr.externalId} {selectedPr.title}</span>
+		{/if}
 		<div class="header-actions">
 			{#if commitCount > 0}
 				<div
@@ -574,9 +590,11 @@ function activitiesForTurn(
 					<Eraser size={13} />
 				</button>
 			{/if}
-			<button class="icon-btn" onclick={onClose} aria-label="Close panel">
-				<X size={14} />
-			</button>
+			{#if !stacked}
+				<button class="icon-btn" onclick={onClose} aria-label="Close panel">
+					<X size={14} />
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -639,6 +657,7 @@ function activitiesForTurn(
 			<ConversationEmptyState
 				title="Ask the agent about this pull request"
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
+				class={stacked ? 'mx-auto w-full max-w-3xl' : ''}
 				style="padding-bottom: calc({composerH}px + 1rem)"
 			>
 				{#snippet icon()}
@@ -656,7 +675,13 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-3 px-3.5 pt-3" style="padding-bottom: calc({composerH}px + 1rem)">
+			<!-- Stacked: the panel is as wide as the main pane, so cap the
+				 conversation to a readable column instead of letting bubbles
+				 run the full width. -->
+			<ConversationContent
+				class={stacked ? 'mx-auto w-full max-w-3xl gap-3 px-3.5 pt-3' : 'gap-3 px-3.5 pt-3'}
+				style="padding-bottom: calc({composerH}px + 1rem)"
+			>
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
@@ -1419,6 +1444,15 @@ function activitiesForTurn(
 		pointer-events: auto;
 	}
 
+	/* Match the conversation's capped column (max-w-3xl = 48rem) so the
+	   composer stays under the messages instead of spanning the whole pane. */
+	.panel--stacked .composer-float {
+		left: 50%;
+		right: auto;
+		width: min(48rem, 100% - 20px);
+		transform: translateX(-50%);
+	}
+
 	/* Shared glass surface — blur + saturate like PillTabs.
 	   10px blur is the standing-chrome cap; reserve 16px for short-lived
 	   overlays (dialogs, popovers, command palette). */
@@ -1464,7 +1498,7 @@ function activitiesForTurn(
 		padding: 0 8px 0 12px;
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		gap: 8px;
 		flex-shrink: 0;
 		position: sticky;
 		top: 0;
@@ -1480,12 +1514,54 @@ function activitiesForTurn(
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: var(--color-text-muted);
+		/* The PR subtitle beside it absorbs the squeeze instead. */
+		flex-shrink: 0;
 	}
 
 	.header-actions {
 		display: flex;
 		align-items: center;
 		gap: 2px;
+		margin-left: auto;
+		padding-left: 8px;
+	}
+
+	/* ── Stacked header (panel covering the main pane) ── */
+	.panel--stacked .panel-header {
+		padding-left: 6px;
+	}
+
+	.back-btn {
+		width: 24px;
+		height: 24px;
+		border-radius: 4px;
+		border: none;
+		background: transparent;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap);
+	}
+
+	.back-btn:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-primary);
+	}
+
+	/* Which PR you'd return to — the stacked panel hides the main pane, so the
+	   header carries the context the pane would otherwise show. */
+	.panel-subtitle {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
 	}
 
 	/* Streaming indicator — dot matrix + last-2 tool calls sit below the
