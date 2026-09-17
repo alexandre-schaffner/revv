@@ -3,6 +3,7 @@ import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/share
 import PenNib from "phosphor-svelte/lib/PenNib";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
+import { goto } from "$app/navigation";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
@@ -26,7 +27,8 @@ import {
 } from "$lib/stores/recaps.svelte";
 import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
-import PreviousRecaps from "./PreviousRecaps.svelte";
+import { pickLatestByWindow, recapWindowIsStale } from "./period-window";
+import RecapCalendar from "./RecapCalendar.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
 interface Props {
@@ -57,11 +59,10 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 
-// Latest non-superseded recap for this period. The store keeps the list
-// newest-first by generatedAt, so the first match is the most recent.
-const latest = $derived<ProjectRecapSummary | null>(
-  recaps.find((r) => r.period === period && r.status !== "superseded") ?? null,
-);
+// Latest non-superseded recap for this period — by *window*, not by
+// generation time. Generating a recap for a day three weeks back would
+// otherwise hijack this hero the moment it finished.
+const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps, period));
 const latestId = $derived(latest?.id ?? null);
 
 // Hydrate the full markdown for the latest recap whenever the id changes.
@@ -138,39 +139,8 @@ const periodEyebrow = $derived.by(() => {
   return `${DAY_SHORT_FMT.format(start)} → ${DAY_SHORT_FMT.format(now)} · UTC`;
 });
 
-function utcDayKey(iso: string | Date): string {
-  const s = typeof iso === "string" ? iso : iso.toISOString();
-  return s.slice(0, 10);
-}
-
-function utcDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function utcMondayKey(d: Date): string {
-  const daysFromMonday = (d.getUTCDay() + 6) % 7;
-  const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
-  return new Date(mondayMs).toISOString().slice(0, 10);
-}
-
-function isClosedFullPeriod(r: ProjectRecap): boolean {
-  const start = new Date(r.periodStart).getTime();
-  const end = new Date(r.periodEnd).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  const duration = r.period === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  return end - start === duration;
-}
-
-function recapIsOutOfDate(r: ProjectRecap): boolean {
-  if (r.status !== "complete") return false;
-  if (isClosedFullPeriod(r)) return true;
-  if (r.period === "daily") {
-    return utcDayKey(r.periodStart) !== utcDateKey(new Date());
-  }
-  // Weekly windows are labelled and generated in UTC, so compare against
-  // the current UTC week's Monday.
-  return utcDayKey(r.periodStart) !== utcMondayKey(new Date());
-}
+// Whether the newest recap still covers the current day/week window.
+const latestIsStale = $derived(latestDetail ? recapWindowIsStale(latestDetail) : false);
 
 type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
 
@@ -180,8 +150,7 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (latestDetail.status === "error") {
     return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (latestDetail.status === "complete")
-    return recapIsOutOfDate(latestDetail) ? "outdated" : "complete";
+  if (latestDetail.status === "complete") return latestIsStale ? "outdated" : "complete";
   return "hidden";
 });
 
@@ -203,9 +172,23 @@ const genActionState = $derived.by((): GenActionState | null => {
   }
 });
 
-// Show the floating Generate pill when there's no recap yet.
-// When a recap exists, show the Regenerate/Stop/Resume bar instead.
-const showGenerateFab = $derived(!latestDetail);
+// Show the floating Generate pill when there's no recap yet, or when the
+// newest one covers a past window — whatever its status. A stopped or errored
+// recap from an earlier week otherwise leaves only Resume/Regenerate, which
+// both re-run *that* window; there'd be no way to ask for the current one.
+// While a generation is in flight the bar's Stop is the only sensible action.
+const showGenerateFab = $derived(
+  !latestDetail || (latestIsStale && latestDetail.status !== "generating"),
+);
+
+// "Generate weekly recap" for a first run; "Generate this week's recap" when
+// it sits next to an older recap that stays put.
+const generateNoun = $derived(latestDetail ? currentPeriodLabel : periodLabelLower);
+const generateTitle = $derived(
+  latestDetail
+    ? `Write a brand-new recap for ${currentPeriodLabel} ${periodLabelLower} window. The recap below stays as-is.`
+    : `Have the agent write a fresh ${periodLabelLower} recap`,
+);
 
 async function onGenerate(): Promise<void> {
   if (generating) return;
@@ -228,6 +211,13 @@ async function onStop(): Promise<void> {
   const id = latestId;
   if (!id) return;
   await stopRecap(id);
+}
+
+// A current-period generation stays put and streams into the hero above,
+// matching the floating pill. A historical one has no home on this page, so
+// it goes to its own.
+function onCalendarGenerated(recapId: string, wasCurrentPeriod: boolean): void {
+  if (!wasCurrentPeriod) void goto(`/repo/${repoId}/recaps/${recapId}`);
 }
 
 const actionsFloatStyle = $derived(getActionsFloatStyle());
@@ -266,11 +256,12 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 	{/if}
 
 	<div class="aux">
-		<PreviousRecaps
+		<RecapCalendar
 			{repoId}
 			{period}
 			{recaps}
-			excludeRecapId={latestId}
+			activeRecapId={latestId}
+			onGenerated={onCalendarGenerated}
 		/>
 	</div>
 </div>
@@ -283,7 +274,7 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 					variant="accent"
 					onclick={onGenerate}
 					disabled={generating}
-					title="Have the agent write a fresh {periodLabelLower} recap"
+					title={generateTitle}
 				>
 					{#if generating}
 						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
@@ -292,28 +283,8 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 					{/if}
 					<Shimmer active={!generating}>
 						{generating
-							? `Generating ${periodLabelLower} recap…`
-							: `Generate ${periodLabelLower} recap`}
-					</Shimmer>
-				</GlassPill>
-			{/if}
-
-			{#if recapUiKind === 'outdated'}
-				<GlassPill
-					variant="accent"
-					onclick={onGenerate}
-					disabled={generating}
-					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
-				>
-					{#if generating}
-						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-					{:else}
-						<PenNib size={16} aria-hidden="true" />
-					{/if}
-					<Shimmer active={!generating}>
-						{generating
-							? `Generating ${currentPeriodLabel} recap…`
-							: `Generate ${currentPeriodLabel} recap`}
+							? `Generating ${generateNoun} recap…`
+							: `Generate ${generateNoun} recap`}
 					</Shimmer>
 				</GlassPill>
 			{/if}
@@ -349,8 +320,10 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 		width: 100%;
 	}
 
+	/* Same centre axis and same content width as RecapDetail's reading
+	   column above it — `+ 4rem` cancels this element's own padding. */
 	.aux {
-		max-width: 1280px;
+		max-width: calc(var(--recap-measure) + 4rem);
 		margin: 0 auto;
 		width: 100%;
 		padding: 0 2rem 4rem;
@@ -362,7 +335,7 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		max-width: 56rem;
+		max-width: calc(var(--recap-measure) + 4rem);
 		margin: 0 auto;
 		width: 100%;
 		padding: 3.5rem 2rem 1.5rem;

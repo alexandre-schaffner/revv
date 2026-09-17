@@ -4,6 +4,7 @@ import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
+import { pickLatestByWindow } from "$lib/components/recaps/period-window";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import {
   fetchRecapsForRepo,
@@ -31,10 +32,9 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 
-// Most recent non-superseded recap regardless of period.
-const latest = $derived<ProjectRecapSummary | null>(
-  recaps.find((r) => r.status !== "superseded") ?? null,
-);
+// Most recent non-superseded recap regardless of period — by *window*, not
+// by generation time, so a historical backfill doesn't take over this card.
+const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps));
 const latestId = $derived(latest?.id ?? null);
 
 // Hydrate the full markdown for the latest recap.
