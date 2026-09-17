@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import PenNib from "phosphor-svelte/lib/PenNib";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
@@ -286,9 +286,9 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 					title="Have the agent write a fresh {periodLabelLower} recap"
 				>
 					{#if generating}
-						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
 					{:else}
-						<Sparkles size={16} weight="fill" aria-hidden="true" />
+						<PenNib size={16} aria-hidden="true" />
 					{/if}
 					<Shimmer active={!generating}>
 						{generating
@@ -306,9 +306,9 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 				>
 					{#if generating}
-						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
 					{:else}
-						<Sparkles size={16} weight="fill" aria-hidden="true" />
+						<PenNib size={16} aria-hidden="true" />
 					{/if}
 					<Shimmer active={!generating}>
 						{generating

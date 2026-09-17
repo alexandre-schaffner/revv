@@ -135,7 +135,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         {#snippet icon()}
             {#if submitted}
                 <span class="staged-check" aria-hidden="true">
-                    <Check size={13} weight="regular" />
+                    <Check size={13} />
                 </span>
             {:else}
                 <Checkbox

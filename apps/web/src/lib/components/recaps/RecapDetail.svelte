@@ -1,8 +1,8 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
@@ -134,7 +134,7 @@ function formatCompletedAt(iso: string): string {
       <RecapHeroBig recap={null} period={effectivePeriod} />
       <div class="body-col">
         <div class="body-callout">
-          <CircleAlert size={20} weight="fill" aria-hidden="true" />
+          <WarningCircle size={20} weight="fill" aria-hidden="true" />
           <p>Recap not found.</p>
         </div>
       </div>
@@ -172,7 +172,7 @@ function formatCompletedAt(iso: string): string {
         <div class="body-col">
         {#if isError}
           <div class="error-card">
-            <CircleAlert size={16} weight="fill" aria-hidden="true" />
+            <WarningCircle size={16} weight="fill" aria-hidden="true" />
             <div>
               <p class="error-title">
                 {recap.errorMessage === "Cancelled by user"
@@ -202,7 +202,7 @@ function formatCompletedAt(iso: string): string {
           <RecapBody recap={liveRecap} />
         {:else}
           <div class="body-callout">
-            <Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+            <Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
             <p>Preparing recap…</p>
           </div>
         {/if}

@@ -105,7 +105,7 @@ function retryTeams(): void {
 		aria-expanded={!collapsed}
 	>
 		<span class="caret" class:caret--open={!collapsed} aria-hidden="true">
-			<CaretRight size={10} weight="bold" />
+			<CaretRight size={10} />
 		</span>
 		<span class="section-label">{label}</span>
 		<span class="section-count">{count}</span>
@@ -125,7 +125,7 @@ function retryTeams(): void {
 			>
 				<span class="check-slot" aria-hidden="true">
 					{#if checked}
-						<Check size={12} weight="bold" />
+						<Check size={12} />
 					{/if}
 				</span>
 
@@ -225,7 +225,7 @@ function retryTeams(): void {
 									>
 										<span class="check-slot" aria-hidden="true">
 											{#if checked}
-												<Check size={12} weight="bold" />
+												<Check size={12} />
 											{/if}
 										</span>
 

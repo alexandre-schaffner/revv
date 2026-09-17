@@ -7,10 +7,11 @@ import type {
   Team,
   ThreadSummary,
 } from "@revv/shared";
-import { REVIEW_MODE, type ReviewMode } from "@revv/shared";
+import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
+import { reasonFor } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
@@ -56,6 +57,10 @@ let isLoading = $state(false);
 // "this PR isn't in the list yet" from "this PR isn't in the list at all"
 // without waiting forever on a row that will never arrive.
 let prsFetchAttempted = $state(false);
+// Same contract as `prsFetchAttempted`, for the repo list. The `/` feed needs
+// it to tell "no repos synced yet" (show the onboarding hero) from "repos
+// haven't landed yet" (show nothing), which are the same empty array.
+let reposFetchAttempted = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
 // Cursor for the next page of archived PRs. Null = exhausted or never
 // fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
@@ -64,10 +69,6 @@ let archivedNextCursor = $state<string | null>(null);
 // True while a `fetchMoreArchived` request is in flight, so the sidebar
 // can disable the "show more" affordance and show a spinner.
 let archivedLoadingMore = $state(false);
-// Tagged PRs per repo (requested reviewer, @-mentioned, or authored by the
-// current user). Populated by `fetchTaggedPrs` — used by the repo homepage.
-let taggedPrsByRepo = $state<Map<string, PullRequest[]>>(new Map());
-let taggedPrsLoadingByRepo = $state<Map<string, boolean>>(new Map());
 // Set of PR ids pinned by the current user. Fetched once at login and
 // kept in sync via local optimistic updates.
 let pinnedPrIds = $state<Set<string>>(new Set());
@@ -76,7 +77,6 @@ interface RepoDeleteSnapshot {
   readonly repositories: Repository[];
   readonly pullRequests: PullRequest[];
   readonly archivedPrs: PullRequest[];
-  readonly taggedPrsByRepo: Map<string, PullRequest[]>;
   readonly pinnedPrIds: Set<string>;
 }
 
@@ -248,10 +248,10 @@ export function getSelectedPr(): PullRequest | null {
 export function getReviewModeForPr(prId: string): ReviewMode {
   const pr =
     pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
-  const login = getCurrentUserLogin();
-  return pr?.authorLogin && login && pr.authorLogin === login
-    ? REVIEW_MODE.author
-    : REVIEW_MODE.reviewer;
+  // Shared with the server's `resolveReviewModeForPr` — see `reviewModeFor`.
+  // Sessions are keyed on `(pullRequestId, mode)`, so the two must never
+  // disagree, including on login casing.
+  return reviewModeFor(pr?.authorLogin, getCurrentUserLogin());
 }
 
 /**
@@ -279,27 +279,36 @@ export function isReviewModeResolved(prId: string): boolean {
   return prsFetchAttempted;
 }
 
+/**
+ * PRs the current user is involved in, grouped by repo — the repo homepage's
+ * "needs your attention" table.
+ *
+ * Derived from the raw open-PR list rather than fetched, so it rides the same
+ * `prs:updated` SSE reconcile as everything else and can never go stale. It
+ * reads `pullRequests`, *not* `filteredPrs`: the sidebar's search box and
+ * creator chips must not silently prune the homepage table.
+ */
+const taggedByRepo = $derived.by((): Map<string, PullRequest[]> => {
+  const login = getCurrentUserLogin();
+  if (!login) return new Map();
+  const tagged = pullRequests.filter((pr) => reasonFor(pr, login) !== null);
+  return Map.groupBy(tagged, (pr) => pr.repositoryId);
+});
+
 export function getTaggedPrs(repoId: string): PullRequest[] {
-  return taggedPrsByRepo.get(repoId) ?? [];
+  return taggedByRepo.get(repoId) ?? [];
 }
 
-export function getTaggedPrsLoading(repoId: string): boolean {
-  return taggedPrsLoadingByRepo.get(repoId) ?? false;
-}
-
-export async function fetchTaggedPrs(repoId: string): Promise<void> {
-  if (taggedPrsLoadingByRepo.get(repoId)) return;
-  taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, true);
-  try {
-    const { data } = await api.api.prs.tagged.get({ query: { repo: repoId } });
-    if (data) {
-      taggedPrsByRepo = new Map(taggedPrsByRepo).set(repoId, data as PullRequest[]);
-    }
-  } catch {
-    // best-effort
-  } finally {
-    taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, false);
-  }
+/**
+ * Whether {@link getTaggedPrs} is answering from real data yet.
+ *
+ * The tagged set needs both the PR list *and* the viewer's GitHub login, so
+ * an empty result before either lands is "unknown", not "nothing to do".
+ * Callers must gate their empty state on this or they flash a false
+ * "nothing needs your attention" on every cold start.
+ */
+export function getTaggedPrsResolved(): boolean {
+  return hasAttemptedIdentityLoad() && prsFetchAttempted;
 }
 
 /**
@@ -328,7 +337,6 @@ function snapshotRepoState(): RepoDeleteSnapshot {
     repositories,
     pullRequests,
     archivedPrs,
-    taggedPrsByRepo,
     pinnedPrIds,
   };
 }
@@ -338,7 +346,6 @@ function restoreRepoState(snapshot: RepoDeleteSnapshot): void {
   void preloadOwnerHues(repositories);
   pullRequests = snapshot.pullRequests;
   archivedPrs = snapshot.archivedPrs;
-  taggedPrsByRepo = snapshot.taggedPrsByRepo;
   pinnedPrIds = snapshot.pinnedPrIds;
 }
 
@@ -350,10 +357,6 @@ function removeRepoLocally(repoId: string): void {
   repositories = repositories.filter((repo) => repo.id !== repoId);
   pullRequests = pullRequests.filter((pr) => pr.repositoryId !== repoId);
   archivedPrs = archivedPrs.filter((pr) => pr.repositoryId !== repoId);
-
-  const nextTagged = new Map(taggedPrsByRepo);
-  nextTagged.delete(repoId);
-  taggedPrsByRepo = nextTagged;
 
   if (removedPrIds.size > 0) {
     pinnedPrIds = new Set([...pinnedPrIds].filter((prId) => !removedPrIds.has(prId)));
@@ -581,6 +584,8 @@ export async function fetchRepos(): Promise<void> {
     if (data) await setRepositories(data as Repository[]);
   } catch {
     // error handled by caller
+  } finally {
+    reposFetchAttempted = true;
   }
 }
 
@@ -855,14 +860,31 @@ export async function getMergeEligibility(prId: string): Promise<MergeEligibilit
   }
 }
 
+/**
+ * GitHub's merge refusals are only legible in the response body — a bare
+ * "HTTP 405" hides "Merge commits are not allowed on this repository." Surface
+ * the server's message and keep the status as a last resort.
+ */
+function mergeErrorMessage(error: { status: number; value?: unknown }): string {
+  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
+  const detail =
+    typeof value?.error === "string"
+      ? value.error
+      : typeof value?.message === "string"
+        ? value.message
+        : null;
+  return detail ?? `Failed to merge pull request (HTTP ${error.status})`;
+}
+
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
     // PR not known locally — fall back to pessimistic. SSE reconciles.
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
     if (error) {
-      toast.error(`Failed to merge pull request (HTTP ${error.status})`);
-      throw new Error(`HTTP ${error.status}`);
+      const msg = mergeErrorMessage(error);
+      toast.error(msg);
+      throw new Error(msg);
     }
     toast.success("Pull request merged successfully");
     return;
@@ -880,7 +902,7 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
 
   try {
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) throw new Error(`HTTP ${error.status}`);
+    if (error) throw new Error(mergeErrorMessage(error));
     toast.success("Pull request merged successfully");
   } catch (e) {
     restorePrFromArchive(snapshot);
@@ -912,6 +934,11 @@ export function getPullRequests(): PullRequest[] {
 
 export function getRepositories(): Repository[] {
   return repositories;
+}
+
+/** Whether {@link getRepositories} is answering from real data yet. */
+export function getReposFetchAttempted(): boolean {
+  return reposFetchAttempted;
 }
 
 export function getRepoOwner(repoId: string): string | null {
@@ -1042,6 +1069,7 @@ export function reset(): void {
   teamsLoadingByOrg = new Map();
   teamsFailedByOrg = new Map();
   isLoading = false;
+  reposFetchAttempted = false;
   archivedPrs = [];
   archivedNextCursor = null;
   archivedLoadingMore = false;

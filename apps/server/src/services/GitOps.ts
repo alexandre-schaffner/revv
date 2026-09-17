@@ -9,9 +9,22 @@
 // Chat-session orchestration (merge state machine, conflict handling, leases,
 // and Effect error mapping) stays in `ChatChangesPush.ts`; raw subprocess
 // plumbing stays behind this module.
+//
+// Two things here are NOT plumbing and are called out so the boundary above
+// stays honest:
+//
+//   • `resolveProposedBaseSha` is policy — it decides which of two candidate
+//     PR heads counts as the agent's baseline. It lives here because the rule
+//     is expressed purely in terms of git ranges and has four callers across
+//     two route files and a service; putting it in any one of them would make
+//     the other three import from a peer.
+//   • Reading git's stderr (`classifyPushFailure`, `redactGitAuth`) is
+//     interpretation, not invocation. It lives here for the same reason and is
+//     kept in its own section at the bottom of the file.
+//
+// Anything else that wants to reason about *meaning* rather than *arguments*
+// belongs in its caller.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { Data } from "effect";
 import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 
@@ -98,6 +111,93 @@ export async function unmergedPaths(worktreePath: string): Promise<string[]> {
   ).trim();
   if (out.length === 0) return [];
   return out.split("\n").filter((file) => file.length > 0);
+}
+
+/**
+ * Tracked paths carrying an **unstaged** change that the in-progress merge did
+ * not produce — the work `git merge --abort` would destroy with no way back.
+ *
+ * `merge --abort` hard-resets to the pre-merge HEAD, and git cannot reconstruct
+ * uncommitted worktree changes that were already there when the merge started.
+ * There is no reflog for unstaged work, so "is this dirt the merge's, or
+ * someone's?" has to be answered before aborting, not after.
+ *
+ * A conflicted merge leaves its own evidence in exactly two shapes: the
+ * conflicts themselves, and the hunks git auto-merged for us — which it
+ * *stages*, so they do not show up as unstaged at all. Everything left over is
+ * an edit made in the working tree, which the merge cannot be responsible for,
+ * because git refuses to start a merge that would touch a dirty path in the
+ * first place.
+ *
+ * So: unstaged changes (`git diff`, worktree against index) minus the conflict
+ * set. Untracked files never appear in either, which is correct — `merge
+ * --abort` leaves them alone.
+ */
+export async function unstagedOutsideMerge(worktreePath: string): Promise<string[]> {
+  const [unstaged, conflicted] = await Promise.all([
+    runGitCapture(["diff", "--name-only"], worktreePath, 10_000),
+    unmergedPaths(worktreePath),
+  ]);
+  const conflicts = new Set(conflicted);
+  return unstaged
+    .trim()
+    .split("\n")
+    .filter((file) => file.length > 0 && !conflicts.has(file));
+}
+
+/**
+ * Resolve the baseline commit of a PR's proposed-commit range — the PR head the
+ * agent branch is actually built on.
+ *
+ * The obvious baseline, the chat session's own `prHeadSha`, goes stale. That
+ * row is keyed on the head SHA the session started at and is never rewritten
+ * when the PR head moves; `RepoClone.acquirePrWorktree` meanwhile resets the
+ * worktree onto the head *it* was asked for. After a rebase or force-push the
+ * branch sits on a head the session has never heard of, and `staleHead..HEAD`
+ * reports the PR's entire rewritten history as "proposed commits" — 40 phantom
+ * commits in a brand-new chat, a Push pill offering to push other people's
+ * work, and a discard/rebuild that would rewind the branch to a dead head.
+ *
+ * Neither candidate head is reliably the right one (the branch may sit on an
+ * intermediate head that is *neither* the session's nor the PR's current one),
+ * so pick the **tightest** of the two: whichever attributes fewer commits to
+ * the agent. That is safe in both directions because each candidate is a real
+ * PR head — any commit a candidate excludes is reachable from a PR head, which
+ * makes it part of the PR, not agent work. Ties keep the session baseline, so
+ * the historical answer stands wherever the two agree.
+ *
+ * Falls back to the session baseline whenever nothing can be verified: no
+ * known PR head, its object missing from the worktree, or git failing.
+ */
+export async function resolveProposedBaseSha(params: {
+  readonly worktreePath: string;
+  /** Tip of the agent branch — `"HEAD"` or the branch name. */
+  readonly tip: string;
+  /** `chat_sessions.prHeadSha` — the head the session was created at. */
+  readonly sessionPrHeadSha: string;
+  /** `pull_requests.headSha` — the head GitHub reports today, if known. */
+  readonly prHeadSha: string | null;
+}): Promise<string> {
+  const { worktreePath, tip, sessionPrHeadSha, prHeadSha } = params;
+  if (prHeadSha === null || prHeadSha === sessionPrHeadSha || !isValidSha(prHeadSha)) {
+    return sessionPrHeadSha;
+  }
+  if (!(await commitExists(worktreePath, prHeadSha))) return sessionPrHeadSha;
+
+  const [fromPrHead, fromSession] = await Promise.all([
+    countProposedOrNull(worktreePath, `${prHeadSha}..${tip}`),
+    countProposedOrNull(worktreePath, `${sessionPrHeadSha}..${tip}`),
+  ]);
+  if (fromPrHead === null) return sessionPrHeadSha;
+  if (fromSession === null) return prHeadSha;
+  return fromPrHead < fromSession ? prHeadSha : sessionPrHeadSha;
+}
+
+/** {@link proposedCommitCount} as a number, or null when git couldn't answer. */
+async function countProposedOrNull(worktreePath: string, range: string): Promise<number | null> {
+  const raw = await proposedCommitCount(worktreePath, range).catch(() => "");
+  const count = Number.parseInt(raw, 10);
+  return Number.isFinite(count) ? count : null;
 }
 
 /**
@@ -222,12 +322,23 @@ export async function checkoutBranch(worktreePath: string, branch: string): Prom
   await runGit(["checkout", branch], worktreePath);
 }
 
-export async function checkoutNewBranchFromRef(
-  worktreePath: string,
-  branch: string,
-  startRef: string,
-): Promise<void> {
-  await runGit(["checkout", "-B", branch, startRef], worktreePath);
+/**
+ * Move the worktree's HEAD to `startRef` **detached** — no local branch is
+ * created or moved.
+ *
+ * The push flows only need a working tree positioned at the PR's source
+ * branch so they can merge/cherry-pick the agent commits on top and push
+ * `HEAD:refs/heads/{sourceBranch}`. They never need the local branch *name*.
+ *
+ * Creating it was actively harmful: `git checkout -B {sourceBranch}` fails
+ * outright with "fatal: '{branch}' is already used by worktree at ..." when
+ * any other worktree of the same repository has that branch checked out —
+ * which is the norm once Revv adopts a repo the user is also working in
+ * (their own feature-branch worktree holds the PR's source branch). It also
+ * littered the user's repo with local branches Revv had no business owning.
+ */
+export async function checkoutDetachedAt(worktreePath: string, startRef: string): Promise<void> {
+  await runGit(["checkout", "--detach", startRef], worktreePath);
 }
 
 export async function forceBranchTo(
@@ -238,11 +349,21 @@ export async function forceBranchTo(
   await runGit(["branch", "-f", branch, sha], worktreePath);
 }
 
+/**
+ * Merge `branch` into the current HEAD. `message` overrides git's generated
+ * merge-commit subject — needed because HEAD is detached during the push
+ * flows, so git would otherwise write "Merge branch 'x' into HEAD" instead
+ * of naming the source branch. Ignored by git on a fast-forward.
+ */
 export async function merge(
   worktreePath: string,
   branch: string,
+  message?: string,
 ): Promise<{ ok: boolean; stderr: string }> {
-  const result = await spawnGit(["merge", "--no-edit", branch], {
+  const args = ["merge", "--no-edit"];
+  if (message !== undefined) args.push("-m", message);
+  args.push(branch);
+  const result = await spawnGit(args, {
     cwd: worktreePath,
     timeoutMs: 60_000,
     captureStdout: false,
@@ -315,8 +436,23 @@ export async function forceBranchToBestEffort(
   return runGitBestEffort(["branch", "-f", branch, sha], worktreePath, timeoutMs);
 }
 
-export function isMergeInProgress(worktreePath: string): boolean {
-  return existsSync(join(worktreePath, ".git", "MERGE_HEAD"));
+/**
+ * `true` when the worktree has a merge in progress (MERGE_HEAD present).
+ *
+ * Asks git instead of probing `<worktree>/.git/MERGE_HEAD`. In a **linked
+ * worktree** — which is every per-PR worktree Revv creates — `.git` is a
+ * *file* containing `gitdir: …/.git/worktrees/<name>`, not a directory, so
+ * the filesystem probe can never find MERGE_HEAD and reports "no merge in
+ * progress" unconditionally.
+ *
+ * That silent `false` is expensive: `performMerge` reads it to tell a merge
+ * *conflict* apart from a hard merge *failure*, so every conflict was
+ * reported as a hard error — skipping `git merge --abort`, stranding the
+ * worktree mid-merge, hiding the conflict-resolution flow, and dead-ending
+ * every later push on "worktree has uncommitted changes".
+ */
+export async function isMergeInProgress(worktreePath: string): Promise<boolean> {
+  return runGitBestEffort(["rev-parse", "-q", "--verify", "MERGE_HEAD"], worktreePath, 10_000);
 }
 
 /**
@@ -433,4 +569,78 @@ export async function pushFastForward(
     ok: !result.timedOut && result.exitCode === 0,
     stderr: result.stderrTail,
   };
+}
+
+// ── Push-failure interpretation ──────────────────────────────────────────────
+
+/**
+ * Strip the access token out of a string.
+ *
+ * Everything this module returns as `stderr` is already redacted —
+ * {@link spawnGit} applies it to `stderrTail` at the source, so no helper here
+ * and no caller of one can leak the token by forgetting. Re-exported for the
+ * remaining case: a message the caller assembled itself rather than read off a
+ * git result.
+ */
+export { redactGitAuth } from "./git-runner";
+
+/**
+ * What a failed `git push` actually means.
+ *
+ *   - `auth` — the transport refused us: bad/expired token, missing write
+ *     scope, credential prompt suppressed.
+ *   - `remote-moved` — git itself declined to send because the update isn't
+ *     a fast-forward, or `--force-with-lease` found the remote tip somewhere
+ *     other than where we left it. Re-fetching and retrying is the fix, so
+ *     this is the only kind worth telling the user to "sync and try again".
+ *   - `rejected` — the negotiation succeeded and the *server* said no
+ *     (pre-receive hook, protected branch, push rule, quota). Re-syncing
+ *     changes nothing; the remote's own message is the only useful thing to
+ *     show, so callers must surface `stderr` rather than paraphrase it.
+ *
+ * The distinction matters because git prints both of the last two with the
+ * word "rejected": ` ! [rejected]` is git's own local refusal, whereas
+ * ` ! [remote rejected]` is the server's. Matching a bare "rejected" — as
+ * this code used to — turns every hook decline into "the branch was updated
+ * remotely. Sync the latest changes and try again", which sends the user off
+ * to do something that cannot possibly help.
+ */
+export type PushFailureKind = "auth" | "remote-moved" | "rejected";
+
+export function classifyPushFailure(stderr: string): PushFailureKind {
+  const lower = stderr.toLowerCase();
+
+  // Checked first: the transport worked and the server declined the ref
+  // update itself, so its own text (hook output, push rule, permission
+  // wording) is the only thing worth showing. Paraphrasing it as either a
+  // sync or a token problem is a guess, and both guesses send the user
+  // somewhere useless.
+  if (lower.includes("[remote rejected]")) return "rejected";
+
+  // Transport-level refusals. Matched on their surrounding phrasing rather
+  // than on bare "403"/"401", which collide with hook output and commit
+  // subjects.
+  if (
+    lower.includes("authentication failed") ||
+    lower.includes("could not read username") ||
+    lower.includes("terminal prompts disabled") ||
+    lower.includes("write access to repository not granted") ||
+    lower.includes("returned error: 403") ||
+    lower.includes("returned error: 401") ||
+    lower.includes("403 forbidden") ||
+    lower.includes("401 unauthorized")
+  ) {
+    return "auth";
+  }
+
+  if (
+    lower.includes("stale info") ||
+    lower.includes("non-fast-forward") ||
+    lower.includes("fetch first") ||
+    lower.includes("[rejected]")
+  ) {
+    return "remote-moved";
+  }
+
+  return "rejected";
 }

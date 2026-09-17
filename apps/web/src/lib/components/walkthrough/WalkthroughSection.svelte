@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
-import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
@@ -104,7 +104,7 @@ $effect(() => {
 				<span class="section-eyebrow-of">/ {String(chapterCount).padStart(2, '0')}</span>
 			</span>
 			<span class="section-toggle" aria-hidden="true">
-				<ChevronDown size={14} />
+				<CaretDown size={14} />
 			</span>
 		</div>
 		<div class="section-title-row">
@@ -120,7 +120,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary prose prose-sm prose-dense" use:mermaidDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
 
@@ -146,6 +146,7 @@ $effect(() => {
 					<div
 						id="step-{block.id}"
 						class="block-wrapper"
+						data-prlens-breakout={hasAnnotation ? "" : undefined}
 						class:block-wrapper--no-anim={delay === -1}
 						class:block-wrapper--selected-info={selectedIssueBlockId === block.id && selectedIssueSeverity === 'info'}
 						class:block-wrapper--selected-warning={selectedIssueBlockId === block.id && selectedIssueSeverity === 'warning'}
@@ -166,11 +167,12 @@ $effect(() => {
 					{#if hasAnnotation}
 						<aside
 							class="block-annotation"
+							data-prlens-breakout=""
 							class:block-annotation--no-anim={delay === -1}
 							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
 						>
-							<div class="block-annotation-inner prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
+							<div class="block-annotation-inner prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 								{@html renderedAnnotation}
 							</div>
 						</aside>
@@ -434,6 +436,32 @@ $effect(() => {
 		.section-toggle {
 			animation-duration: 0.01ms !important;
 			transition: none !important;
+		}
+	}
+
+	/* Narrow layout — mirrors the @container block in GuidedWalkthrough, which
+	   flips the parent `.blocks` from grid to `display: block` below 1336px.
+	   Svelte scopes that rule to GuidedWalkthrough's own elements, so the
+	   per-block placement declared here has to be unwound on this side too.
+
+	   `.block-group` is `display: contents`, so once `.blocks` stops being a
+	   grid the dot stops being a grid item and falls back to `display: inline`
+	   — width/height no longer apply and its 3px shadow spread paints as a thin
+	   vertical bar next to the block (visible whenever the left sidebar is
+	   expanded). Give the group a box and hang the dot in the stacked layout's
+	   72px left gutter: still a dot, still costs no vertical space, and the 16px
+	   gap to the content edge matches the wide layout's margin-right. */
+	@container (max-width: 1335px) {
+		.block-group {
+			display: block;
+			position: relative;
+		}
+
+		.block-step-dot {
+			position: absolute;
+			left: -24px;
+			top: 18px;
+			margin: 0;
 		}
 	}
 </style>

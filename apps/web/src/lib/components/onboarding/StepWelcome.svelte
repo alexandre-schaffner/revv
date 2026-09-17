@@ -1,4 +1,6 @@
 <script lang="ts">
+import ContinueArrow from "./ContinueArrow.svelte";
+
 interface Props {
   onContinue: () => void;
 }
@@ -15,16 +17,7 @@ let { onContinue }: Props = $props();
 	<div class="actions">
 		<button class="primary" onclick={onContinue}>
 			<span>Begin</span>
-			<svg
-				width="18"
-				height="10"
-				viewBox="0 0 18 10"
-				fill="none"
-				xmlns="http://www.w3.org/2000/svg"
-				aria-hidden="true"
-			>
-				<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-			</svg>
+			<ContinueArrow />
 		</button>
 		<span class="hint">A minute, no more.</span>
 	</div>
@@ -87,7 +80,7 @@ let { onContinue }: Props = $props();
 			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	.primary svg {
+	.primary :global(svg) {
 		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
@@ -96,7 +89,7 @@ let { onContinue }: Props = $props();
 		color: var(--ob-text-heading-bright);
 	}
 
-	.primary:hover svg {
+	.primary:hover :global(svg) {
 		transform: translateX(4px);
 	}
 

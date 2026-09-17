@@ -7,7 +7,7 @@
  *   │   │             │                                       │
  *   │   │             └ preview (sans 12 muted, truncated)    └ thread-count pill
  *   │   └ FileBadge — the row's "headline" is the file
- *   └ MessageSquare / MessagesSquare icon (multi-turn signal)
+ *   └ Chat / Chats icon (multi-turn signal)
  *
  * Click expands to reveal every thread in the file, separated by the
  * "THREADS" hairline (rendered inside CommentExpandedBody). Jumping to
@@ -16,9 +16,9 @@
  */
 
 import type { CommentThread, ThreadMessage } from "@revv/shared";
-import MessageSquare from "phosphor-svelte/lib/Chat";
-import MessagesSquare from "phosphor-svelte/lib/Chats";
-import Bot from "phosphor-svelte/lib/Robot";
+import Chat from "phosphor-svelte/lib/Chat";
+import Chats from "phosphor-svelte/lib/Chats";
+import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import SpecRow from "../shared/SpecRow.svelte";
@@ -101,9 +101,9 @@ const ariaLabel = $derived(
         {#snippet icon()}
             <span class="comment-icon" aria-hidden="true">
                 {#if hasMultipleMessages || hasMultipleThreads}
-                    <MessagesSquare size={13} weight="fill" />
+                    <Chats size={13} />
                 {:else}
-                    <MessageSquare size={13} weight="fill" />
+                    <Chat size={13} />
                 {/if}
             </span>
         {/snippet}
@@ -134,7 +134,7 @@ const ariaLabel = $derived(
             <span class="preview-wrap">
                 <span class="preview-avatar" title={firstMessage?.authorName ?? ""}>
                     {#if firstMessage?.authorRole === 'ai_agent'}
-                        <Bot size={11} weight="fill" aria-hidden="true" />
+                        <Robot size={11} aria-hidden="true" />
                     {:else if firstMessage?.authorAvatarContent && !avatarFailed}
                         <img
                             src={firstMessage.authorAvatarContent}
@@ -145,7 +145,7 @@ const ariaLabel = $derived(
                             onerror={() => (avatarFailed = true)}
                         />
                     {:else}
-                        <User size={11} weight="regular" aria-hidden="true" />
+                        <User size={11} aria-hidden="true" />
                     {/if}
                 </span>
                 <span class="comment-preview">{preview}</span>

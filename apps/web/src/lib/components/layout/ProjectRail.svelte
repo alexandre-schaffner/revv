@@ -89,7 +89,7 @@ function handleAddRepo(): void {
 												/>
 										{:else}
 											<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
-												<User size={14} weight="regular" />
+												<User size={14} />
 											</span>
 										{/if}
 											{#if isMulti}
@@ -108,7 +108,7 @@ function handleAddRepo(): void {
 											/>
 										{:else}
 											<span class="folder-pill-fallback" aria-hidden="true">
-												<User size={14} weight="regular" />
+												<User size={14} />
 											</span>
 										{/if}
 									{/if}
@@ -349,9 +349,10 @@ function handleAddRepo(): void {
 	/* When the active repo lives inside this collapsed folder, hint at
 	   it by tinting the chip toward the accent. Keeps the rail's
 	   "where am I?" answer scannable without resorting to colour-on
-	   every pill. Foreground uses --primary-foreground (white in both
-	   themes) rather than --color-bg-primary, which inverts in dark
-	   mode and would render black text on the accent. */
+	   every pill. Foreground uses --primary-foreground, the app's
+	   on-accent ink: white on light's deep teal, near-black on dark's
+	   luminous one. It is NOT white in both themes — the accent inverts
+	   with the theme, so a fixed white would read 2.4:1 in dark. */
 	.folder-pill--active .folder-pill-count {
 		background: var(--color-accent);
 		color: var(--color-primary-foreground);

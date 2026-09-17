@@ -1160,6 +1160,18 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
   findLatestReviewArtifact: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      // `lastCompletedPhase != 'none'` is the "this row actually reviewed
+      // something" test: Phase A's `set_overview` is the first write of the
+      // pipeline, so a row still at 'none' has no summary, no diff steps —
+      // nothing a follow-up incremental run could build on. Rows die at 'none'
+      // when a supersede sweep cancels them mid-exploration; treating one as
+      // the last reviewed artifact made the next incremental run's base SHA
+      // equal its own head, i.e. a review of an empty commit range.
+      const reviewed = [
+        eq(walkthroughs.mode, mode),
+        inArray(walkthroughs.status, ["complete", "superseded"]),
+        ne(walkthroughs.lastCompletedPhase, "none"),
+      ];
       const roundRows = db
         .select({
           id: walkthroughs.id,
@@ -1171,13 +1183,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         })
         .from(reviewRounds)
         .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(
-          and(
-            eq(reviewRounds.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-            inArray(walkthroughs.status, ["complete", "superseded"]),
-          ),
-        )
+        .where(and(eq(reviewRounds.pullRequestId, prId), ...reviewed))
         .orderBy(desc(reviewRounds.roundNumber))
         .all();
 
@@ -1198,13 +1204,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           prHeadSha: walkthroughs.prHeadSha,
         })
         .from(walkthroughs)
-        .where(
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-            inArray(walkthroughs.status, ["complete", "superseded"]),
-          ),
-        )
+        .where(and(eq(walkthroughs.pullRequestId, prId), ...reviewed))
         .orderBy(desc(walkthroughs.generatedAt))
         .get();
       return row ?? null;

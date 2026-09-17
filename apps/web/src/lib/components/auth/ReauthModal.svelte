@@ -1,6 +1,7 @@
 <script lang="ts">
 import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
-import { GithubLogo, WarningCircle } from "phosphor-svelte";
+import GithubLogo from "phosphor-svelte/lib/GithubLogo";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   cancelSignIn,
@@ -86,7 +87,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 			in:gsapFadeY={{ y: 12, duration: tokens.smooth }}
 		>
 			<div class="flex size-12 items-center justify-center rounded-full bg-warning/10 text-warning">
-				<WarningCircle size={28} weight="duotone" />
+				<WarningCircle size={28} weight="fill" />
 			</div>
 
 			<div class="flex flex-col gap-1.5">
@@ -169,7 +170,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 							type="submit"
 							disabled={isSavingClientId || clientId.trim().length === 0}
 						>
-							<GithubLogo size={18} weight="fill" />
+							<GithubLogo size={18} />
 							Save and sign in
 						</button>
 					</form>
@@ -179,7 +180,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 						onclick={startReauth}
 						disabled={isLoading}
 					>
-						<GithubLogo size={18} weight="fill" />
+						<GithubLogo size={18} />
 						Sign in again
 					</button>
 				{/if}

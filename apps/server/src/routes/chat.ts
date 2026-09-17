@@ -574,11 +574,12 @@ export const chatRoute = new Elysia()
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const agent = yield* settingsService.resolveChatAgentId();
 
-            // Capture the active worktree before dropping rows so we
-            // can rewind it to the PR head SHA below — clearing the
-            // conversation also discards any unpushed agent commits
-            // the user accumulated during this session.
-            const activeRow = yield* chatSessions.findLatestForPr(pr.id, agent);
+            // Capture the active worktree and its resolved baseline before
+            // dropping rows, so we can rewind it below — clearing the
+            // conversation also discards any unpushed agent commits the user
+            // accumulated during this session. Resolving the baseline has to
+            // happen BEFORE `clearAllForPr`, since it reads the row.
+            const active = yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
 
             // Drop every chat-session row for (pr, agent). The
             // per-PR worktree itself stays put — it's shared with
@@ -586,15 +587,20 @@ export const chatRoute = new Elysia()
             // sessions, refreshed in place on the next acquire.
             yield* chatSessions.clearAllForPr(pr.id, agent);
 
-            return activeRow;
+            return active;
           }),
         );
 
-        if (latest && existsSync(latest.worktreePath)) {
+        if (latest && existsSync(latest.row.worktreePath)) {
+          // Rewind to the head the branch is actually built on, not the one
+          // the session was created at — those diverge as soon as the PR head
+          // moves, and resetting to a stale session baseline rewinds the
+          // worktree to a commit the PR left behind. Same baseline the
+          // proposed-changes strip and the push path use.
           await discardAgentCommits({
-            worktreePath: latest.worktreePath,
-            branchName: latest.branchName,
-            prHeadSha: latest.prHeadSha,
+            worktreePath: latest.row.worktreePath,
+            branchName: latest.row.branchName,
+            prHeadSha: latest.baseSha,
           });
         }
 

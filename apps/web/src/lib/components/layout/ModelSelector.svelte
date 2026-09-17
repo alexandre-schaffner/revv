@@ -147,7 +147,7 @@ function selectWindow(value: ContextWindow) {
 				>
 					<span class="min-w-0 truncate text-left">{opt.label}</span>
 					{#if currentModel === opt.value}
-						<Check size={12} weight="regular" class="shrink-0 text-accent" />
+						<Check size={12} class="shrink-0 text-accent" />
 					{/if}
 				</button>
 			{/each}
@@ -161,7 +161,7 @@ function selectWindow(value: ContextWindow) {
 				<ProviderIcon provider={getProvider(opt.value)} size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				<span class="min-w-0 flex-1 truncate text-left">{opt.label}</span>
 				{#if currentModel === opt.value}
-					<Check size={12} weight="regular" class="shrink-0 text-accent" />
+					<Check size={12} class="shrink-0 text-accent" />
 				{/if}
 			</button>
 		{/each}
@@ -179,7 +179,7 @@ function selectWindow(value: ContextWindow) {
 				>
 					{opt.label}
 					{#if currentWindow === opt.value}
-						<Check size={12} weight="regular" class="shrink-0 text-accent" />
+						<Check size={12} class="shrink-0 text-accent" />
 					{/if}
 				</button>
 			{/each}

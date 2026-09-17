@@ -1,5 +1,5 @@
 <script lang="ts">
-import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -21,7 +21,7 @@ const renderedContent = $derived.by(() => {
 <div class="markdown-block">
 	<!-- Markdown styling comes from the app-wide themed @tailwindcss/typography
 	     prose layer (see app.css). -->
-	<div class="prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>
+	<div class="prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 		{@html renderedContent}
 	</div>
 </div>

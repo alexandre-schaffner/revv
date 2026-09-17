@@ -20,6 +20,7 @@ import type {
   MarkdownBlock,
   WalkthroughBlock,
 } from "@revv/shared";
+import { prLensDiagramError } from "./prlens-doc";
 
 /**
  * Max serialized artifact HTML, enforced identically on both write paths. The
@@ -83,7 +84,7 @@ export function blockVariantCount(input: BlockVariantInput): number {
  * markdown block for prose-only content instead. Returns a recoverable error
  * string for the agent, or null when the content is acceptable.
  */
-export function emptyBlockError(input: BlockVariantInput): string | null {
+function emptyBlockError(input: BlockVariantInput): string | null {
   if (input.markdown && input.markdown.content.trim().length === 0) {
     return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
   }
@@ -102,6 +103,44 @@ export function emptyBlockError(input: BlockVariantInput): string | null {
     if (byteLength > MAX_ARTIFACT_HTML_BYTES) {
       return `Error: artifact html is too large (${byteLength} bytes). Keep artifacts under ${MAX_ARTIFACT_HTML_BYTES} bytes.`;
     }
+  }
+  return null;
+}
+
+/**
+ * Every field of a block whose markdown the web app scans for `prlens` fences:
+ * prose content, and the annotation beside a code, diff or artifact block.
+ */
+function diagramBearingFields(input: BlockVariantInput): readonly (readonly [string, string])[] {
+  const fields: (readonly [string, string])[] = [];
+  if (input.markdown) fields.push(["markdown block content", input.markdown.content]);
+  if (input.code?.annotation) fields.push(["code block annotation", input.code.annotation]);
+  if (input.diff?.annotation) fields.push(["diff block annotation", input.diff.annotation]);
+  if (input.artifact?.annotation) {
+    fields.push(["artifact block annotation", input.artifact.annotation]);
+  }
+  return fields;
+}
+
+/**
+ * The full content gate both write paths run before a block is persisted:
+ * empty payloads, then unrenderable `prlens` diagrams. Returns a recoverable
+ * error string for the agent, or null when the block is safe to store.
+ *
+ * Diagram validation is a hard rejection rather than the warn-and-save the
+ * artifact theming lint uses, because the two failures differ in kind. A
+ * hardcoded color still renders — wrong in one theme, readable in the other.
+ * A rejected graph document renders nothing at all: the reader gets a schema
+ * error and a JSON dump in the middle of the prose. Since the block write is
+ * an idempotent upsert, erroring costs one retry and leaves nothing behind.
+ */
+export function blockContentError(input: BlockVariantInput): string | null {
+  const empty = emptyBlockError(input);
+  if (empty) return empty;
+
+  for (const [label, markdown] of diagramBearingFields(input)) {
+    const diagram = prLensDiagramError(markdown, label);
+    if (diagram) return diagram;
   }
   return null;
 }
@@ -167,9 +206,103 @@ export function artifactThemingWarning(input: BlockVariantInput): string | null 
   return `Warning: this artifact hardcodes styling that won't adapt to light/dark theme (found: ${Array.from(issues).join(", ")}). Style with the injected theme variables instead — var(--color-bg-primary), var(--color-accent), var(--font-sans)/var(--font-mono), var(--radius-card) — so it matches the app and flips with the theme. The block was saved; correct it in this or a later block.`;
 }
 
-export function withArtifactThemingWarning(okText: string, input: BlockVariantInput): string {
-  const warning = artifactThemingWarning(input);
-  return warning ? `${okText}\n\n${warning}` : okText;
+/**
+ * Any markup or code that could give the reader something to click, type in,
+ * or toggle. Deliberately broad — a false negative (an interactive artifact we
+ * fail to recognise) would produce a wrong warning, which is worse than a
+ * missed one, since the check is advisory.
+ */
+const INTERACTIVE_RE =
+  /<(button|input|select|textarea|details|summary)\b|addEventListener\s*\(|\son(click|change|input|keydown|pointerdown)\s*=/i;
+
+/**
+ * Warn when an artifact has no way for the reader to drive it. A static
+ * artifact is a markdown block that cost a sandboxed iframe: the one thing the
+ * block type exists for is the interaction. Warn-only, like the theming lint —
+ * the write succeeds and the agent can correct the next block.
+ */
+export function artifactInteractivityWarning(input: BlockVariantInput): string | null {
+  if (!input.artifact) return null;
+  if (INTERACTIVE_RE.test(input.artifact.html)) return null;
+
+  return "Warning: this artifact has no interactive control (no button, input, or event listener), so it is a picture the reader cannot drive — which a markdown block does better and cheaper. An artifact needs something to vary (step the trace, toggle the proposed fix, pick the input) plus a live state readout and a verdict. The block was saved; either replace it with markdown or give it a control.";
+}
+
+/**
+ * The type ceiling an artifact must stay under. The injected baseline sets the
+ * root to 13px sans against 16px walkthrough prose, so an artifact only ever
+ * sizes *down*; a declaration above the ceiling makes the island shout over the
+ * text it annotates. `rem` resolves against the untouched 16px root, not the
+ * 13px body, so the thresholds differ per unit.
+ */
+const FONT_SIZE_DECL_RE = /font-size\s*:\s*([\d.]+)\s*(px|rem|em)/gi;
+const FONT_SIZE_CEILING: Record<string, number> = { px: 13, rem: 0.85, em: 1.05 };
+
+/** Height reserved for content that isn't there yet — the dead-space defect. */
+const MIN_HEIGHT_DECL_RE = /min-height\s*:\s*([\d.]+)\s*(px|vh|rem|em)/gi;
+const FIXED_HEIGHT_DECL_RE = /(?<!min-|max-)height\s*:\s*([\d.]+)\s*px/gi;
+/** A `min-height` under this is a hairline, not a reservation (e.g. `min-height: 1px`). */
+const MIN_HEIGHT_FLOOR_PX = 24;
+/** Below this a fixed height is a control or a bar, not a reserved panel. */
+const FIXED_HEIGHT_FLOOR_PX = 80;
+
+/**
+ * Warn about the two layout defects that survive every amount of prompting,
+ * because they are invisible to an agent that never sees its own render:
+ * type as large as the surrounding prose, and empty space reserved for content
+ * that has not rendered yet. Warn-only, like the theming lint.
+ */
+export function artifactLayoutWarning(input: BlockVariantInput): string | null {
+  if (!input.artifact) return null;
+
+  const html = input.artifact.html;
+  const issues: string[] = [];
+
+  for (const match of html.matchAll(FONT_SIZE_DECL_RE)) {
+    const value = Number(match[1]);
+    const unit = match[2]?.toLowerCase() ?? "";
+    const ceiling = FONT_SIZE_CEILING[unit];
+    if (ceiling === undefined || !Number.isFinite(value) || value <= ceiling) continue;
+    issues.push(
+      `font-size: ${match[1]}${unit} — the artifact must read smaller than the 16px prose around it, so never size above 13px (the injected baseline already sets it; only go down, to 12px for dense rows)`,
+    );
+    break;
+  }
+
+  const reserved = [...html.matchAll(MIN_HEIGHT_DECL_RE)].find((match) => {
+    const value = Number(match[1]);
+    const unit = match[2]?.toLowerCase();
+    if (!Number.isFinite(value)) return false;
+    return unit === "px" ? value >= MIN_HEIGHT_FLOOR_PX : value > 0;
+  });
+  const fixed = [...html.matchAll(FIXED_HEIGHT_DECL_RE)].find(
+    (match) => Number(match[1]) >= FIXED_HEIGHT_FLOOR_PX,
+  );
+  if (reserved || fixed) {
+    const decl = reserved ? `min-height: ${reserved[1]}${reserved[2]}` : `height: ${fixed?.[1]}px`;
+    issues.push(
+      `${decl} — the frame auto-sizes to its content, so reserved height renders as a band of empty space under the last row, which reads as a broken artifact. Drop it and let the layout grow; seed the verdict line with its pending text ("Not run yet — step to see where it lands") instead of holding space for it`,
+    );
+  }
+
+  if (/<select\b/i.test(html)) {
+    issues.push(
+      "<select> — a native dropdown drags in unthemeable platform chrome and hides the scenarios that are the point of the artifact. With 2–4 options use a segmented row of small buttons with aria-pressed",
+    );
+  }
+
+  if (issues.length === 0) return null;
+
+  return `Warning: this artifact has layout defects you cannot see from here (found: ${issues.join("; ")}). The block was saved; correct it in this or a later block.`;
+}
+
+export function withArtifactWarnings(okText: string, input: BlockVariantInput): string {
+  const warnings = [
+    artifactThemingWarning(input),
+    artifactInteractivityWarning(input),
+    artifactLayoutWarning(input),
+  ].filter((warning): warning is string => warning !== null);
+  return warnings.length > 0 ? `${okText}\n\n${warnings.join("\n\n")}` : okText;
 }
 
 /**

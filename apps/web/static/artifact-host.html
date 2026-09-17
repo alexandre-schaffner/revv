@@ -67,14 +67,29 @@
     }
   }
 
+  // Measure the BODY, never documentElement: <html>.scrollHeight is floored at
+  // the viewport, i.e. at the iframe height the parent already gave us. Folding
+  // it into the max makes the handshake a one-way ratchet — once the frame is
+  // taller than the content (a transient narrow layout that wrapped the
+  // controls onto two lines is enough), every later report just echoes the
+  // inflated height back, and the artifact keeps a band of empty space under
+  // its last row forever. body is auto-height, so it measures the content.
   function reportSize() {
     const body = document.body;
-    const root = document.documentElement;
+    if (!body) return;
+    // Absolutely-positioned children don't grow body, so walk the top-level
+    // boxes too and take the lowest edge (page coordinates, plus body's own
+    // bottom padding) before falling back to body's box.
+    let bottom = 0;
+    for (const child of body.children) {
+      const rect = child.getBoundingClientRect();
+      if (rect.bottom > bottom) bottom = rect.bottom;
+    }
+    const padBottom = parseFloat(getComputedStyle(body).paddingBottom) || 0;
     const height = Math.max(
-      body ? body.scrollHeight : 0,
-      body ? body.offsetHeight : 0,
-      root.scrollHeight,
-      root.offsetHeight
+      body.scrollHeight,
+      body.offsetHeight,
+      bottom > 0 ? bottom + window.scrollY + padBottom : 0
     );
     post({ kind: "resize", height: Math.ceil(height) });
   }
@@ -123,16 +138,35 @@ ${"<"}/script>`;
         function baseStyle() {
           return `<style>
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; accent-color: var(--color-accent); }
 body {
   margin: 0;
+  /* The host frame is full-bleed inside its card, so the inset lives here.
+     Without it every artifact renders jammed against the card border. */
+  padding: 12px 14px;
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 0.875rem;
+  /* An artifact is a compact instrument panel sitting beside 16px prose — it
+     must read visibly smaller than the walkthrough text around it. */
+  font-size: 13px;
   line-height: 1.5;
 }
-code, pre, kbd, samp { font-family: var(--font-mono); }
+code, pre, kbd, samp { font-family: var(--font-mono); font-size: 0.92em; }
+/* Form controls do NOT inherit type: left alone they render in the platform UI
+   font at the platform size, which is the fastest way for an artifact to look
+   foreign. Give them the app's type and quiet chrome by default; an artifact's
+   own <style> still wins (same specificity, injected later). */
+button, select, input, textarea { font: inherit; }
+button, select {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-island);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+button:disabled { color: var(--color-text-muted); cursor: default; }
 a { color: var(--color-accent); }
 a:hover { color: var(--color-accent-hover); }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }

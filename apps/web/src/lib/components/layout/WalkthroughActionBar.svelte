@@ -93,7 +93,7 @@ const combinedDisabledTitle = $derived(
         onclick={scrollWalkthroughToTop}
         aria-label="Scroll to top of walkthrough"
       >
-        <ArrowUp size={16} weight="regular" />
+        <ArrowUp size={16} />
       </GlassPill>
 
       <GenActionBar
@@ -120,7 +120,7 @@ const combinedDisabledTitle = $derived(
             onclick={scrollWalkthroughToBottom}
             aria-label="Scroll to newest walkthrough content"
           >
-            <ArrowDown size={16} weight="regular" />
+            <ArrowDown size={16} />
             New content
           </GlassPill>
         </span>

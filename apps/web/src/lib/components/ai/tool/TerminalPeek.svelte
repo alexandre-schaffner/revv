@@ -10,6 +10,7 @@
 import type { FitAddon } from "@xterm/addon-fit";
 import type { ITheme, Terminal } from "@xterm/xterm";
 import { onDestroy, onMount } from "svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import "@xterm/xterm/css/xterm.css";
 
 interface Props {
@@ -118,6 +119,22 @@ onMount(async () => {
     // fit() throws on a zero-size container mid-transition — harmless.
   }
   term.write(buildText());
+});
+
+// xterm resolves its palette to literal colors at construction, so a theme
+// switch leaves an open terminal painting the old theme's ink — and this one
+// renders on a transparent background, so the surface underneath flips while
+// the text does not. Re-read the tokens and hand xterm a fresh theme whenever
+// the resolved theme changes. `term` is deliberately not reactive: the first
+// run lands before the async import resolves and is a no-op, which is correct —
+// construction already applied the current theme.
+$effect(() => {
+  const resolved = getResolvedTheme();
+  if (!term) return;
+  // The class on <html> is toggled synchronously before this effect runs, so
+  // the computed tokens are already the new theme's.
+  void resolved;
+  term.options.theme = readTheme(container).theme;
 });
 
 onDestroy(() => {

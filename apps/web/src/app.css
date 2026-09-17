@@ -9,6 +9,14 @@
    biome-ignore lint/correctness/noInvalidPositionAtImportRule: must follow @plugin */
 @import "./lib/styles/prose.css";
 
+/* Tailwind v4's stock `dark:` variant keys off `prefers-color-scheme`, which is
+   the *OS* preference — it would ignore the app's own light/dark/system setting
+   entirely. The theme store toggles `.dark` on <html>, so point the variant at
+   that class. The app styles from tokens rather than `dark:` utilities, so this
+   currently generates nothing; it's here so the first `dark:` anyone writes
+   tracks the theme toggle instead of silently drifting to the OS. */
+@custom-variant dark (&:where(:root.dark, :root.dark *));
+
 /* ──────────────────────────────────────────────────────────
    Light theme (default)
    ────────────────────────────────────────────────────────── */
@@ -148,6 +156,19 @@
   --revv-tooltip-border: rgba(42, 40, 37, 0.12);
   --revv-tooltip-item-bg: rgba(42, 40, 37, 0.04);
 
+  /* On-accent chip — a file pill rendered *inside* the accent bubble (user
+     chat message). The bubble's own foreground is --color-primary-foreground;
+     the chip needs a surface that separates from the bubble and carries the
+     per-extension file glyph, whose colors resolve through `light-dark()`
+     against the document color-scheme. So the chip tracks the theme rather
+     than being pinned light: a light chip in light mode, a deep-teal chip in
+     dark mode, each matching the scheme its glyphs resolve under. */
+  --revv-accent-chip-bg: oklch(96% 0.012 195);
+  --revv-accent-chip-fg: oklch(32% 0.03 195);
+  --revv-accent-chip-border: oklch(88% 0.02 195);
+  --revv-accent-chip-bg-hover: oklch(92% 0.022 195);
+  --revv-accent-chip-border-hover: oklch(80% 0.04 195);
+
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
@@ -231,7 +252,10 @@
   --revv-accent-muted: oklch(81% 0.09 195); /* muted icon variant */
   --revv-success: #22c55e;
   --revv-warning: #f59e0b;
-  --revv-warning-fg: #ffffff;
+  /* Dark-mode amber is luminous (#f59e0b): white on it is 2.15:1, well under
+     AA. Ink tinted toward the amber hue reads at 9.2:1 and keeps the pill in
+     the palette instead of reading as raw black. */
+  --revv-warning-fg: oklch(20% 0.03 70);
   --revv-danger: #ef4444;
 
   /* Diff canvas */
@@ -320,6 +344,16 @@
   --revv-tooltip-bg: rgba(20, 20, 28, 0.92);
   --revv-tooltip-border: rgba(255, 255, 255, 0.08);
   --revv-tooltip-item-bg: rgba(255, 255, 255, 0.04);
+
+  /* On-accent chip (dark). The dark bubble is luminous teal, so the chip goes
+     *down* rather than up: 5.3:1 against the bubble, 10.8:1 for its label, and
+     a dark color-scheme under which the file glyphs resolve to their bright
+     variants — the same relationship the light chip has in light mode. */
+  --revv-accent-chip-bg: oklch(32% 0.045 195);
+  --revv-accent-chip-fg: oklch(95% 0.012 195);
+  --revv-accent-chip-border: oklch(44% 0.05 195);
+  --revv-accent-chip-bg-hover: oklch(38% 0.055 195);
+  --revv-accent-chip-border-hover: oklch(52% 0.06 195);
 
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
@@ -496,6 +530,13 @@
   --color-tooltip-bg: var(--revv-tooltip-bg);
   --color-tooltip-border: var(--revv-tooltip-border);
   --color-tooltip-item-bg: var(--revv-tooltip-item-bg);
+
+  /* On-accent chip */
+  --color-accent-chip-bg: var(--revv-accent-chip-bg);
+  --color-accent-chip-fg: var(--revv-accent-chip-fg);
+  --color-accent-chip-border: var(--revv-accent-chip-border);
+  --color-accent-chip-bg-hover: var(--revv-accent-chip-bg-hover);
+  --color-accent-chip-border-hover: var(--revv-accent-chip-border-hover);
 
   /* Scorecard */
   --color-score-pass-bg: var(--revv-score-pass-bg);
@@ -950,4 +991,43 @@ diffs-container {
 }
 .tabs-float * {
   pointer-events: auto;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Theme swap — flip every surface in the same frame.
+
+   Held on <html> by `apply()` in stores/theme.svelte.ts for the
+   swap, then dropped. A theme change recolors ~450 elements on a
+   typical route, and those carry transitions at four token
+   durations (80/120/160/220ms) plus Tailwind's own 150ms
+   `transition-colors`, while untransitioned elements flip at once.
+   Left alone the app arrives in five waves over 220ms — parts of
+   the UI visibly switching before others.
+
+   Suppression, not a shared duration. Giving every component the
+   same transition was tried and rejected: it is genuinely uniform
+   (all transitions share one start time) but it does not read as
+   smooth. Animating ~2700 concurrent transitions for 160ms costs
+   4 dropped frames against 1 for the cut, and the parts CSS cannot
+   interpolate — the Pierre diff canvas and file tree (shadow DOM),
+   xterm terminals (canvas), artifact iframes — cut at 0ms anyway,
+   so the chrome ends up fading behind them. A theme swap is a
+   state change, not motion; it wants to be a cut.
+
+   Not a motion token and not subject to the reduced-motion
+   contract: this suppresses animation rather than defining any.
+   Scoped to the swap, so ordinary hover/focus transitions are
+   untouched a frame later.
+
+   `!important` is load-bearing — it has to outrank the inline
+   `transition` styles bits-ui and GSAP leave on elements.
+   ────────────────────────────────────────────────────────── */
+:root.theme-switching,
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank inline transition styles */
+  transition-duration: 0s !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank inline transition styles */
+  transition-delay: 0s !important;
 }

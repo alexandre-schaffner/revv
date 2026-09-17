@@ -10,20 +10,20 @@ import {
   type Repository,
 } from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
-import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
-import ExternalLink from "phosphor-svelte/lib/ArrowSquareOut";
-import CalendarClock from "phosphor-svelte/lib/CalendarCheck";
+import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
-import Monitor from "phosphor-svelte/lib/Desktop";
+import Desktop from "phosphor-svelte/lib/Desktop";
 import Download from "phosphor-svelte/lib/Download";
 import Moon from "phosphor-svelte/lib/Moon";
 import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import Sun from "phosphor-svelte/lib/Sun";
-import Trash2 from "phosphor-svelte/lib/Trash";
+import Trash from "phosphor-svelte/lib/Trash";
 import User from "phosphor-svelte/lib/User";
-import TriangleAlert from "phosphor-svelte/lib/Warning";
+import Warning from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
 import { onDestroy } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
@@ -89,12 +89,12 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: "account", label: "Account", icon: User },
   { id: "ai", label: "AI Configuration", icon: Cpu },
-  { id: "recap", label: "Project Recap", icon: CalendarClock },
+  { id: "recap", label: "Project Recap", icon: CalendarDots },
   { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
-  { id: "onboarding", label: "Onboarding", icon: RotateCcw },
+  { id: "onboarding", label: "Onboarding", icon: ArrowCounterClockwise },
   { id: "updates", label: "Updates", icon: Download },
-  { id: "danger", label: "Danger Zone", icon: TriangleAlert },
+  { id: "danger", label: "Danger Zone", icon: Warning },
 ];
 
 // ── Team-cache "Test connection" state ────────────────────────────────────
@@ -581,7 +581,7 @@ async function handleRemoveAccount(): Promise<void> {
 // ── Theme options ────────────────────────────────────────────────────────
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "system", label: "System", icon: Monitor },
+  { value: "system", label: "System", icon: Desktop },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
 ];
@@ -633,7 +633,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							/>
 						{:else}
 							<span class="settings-sidebar-avatar settings-sidebar-avatar--fallback" aria-hidden="true">
-								<User size={11} weight="regular" />
+								<User size={11} />
 							</span>
 						{/if}
 						<span class="settings-sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
@@ -651,7 +651,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				onclick={onClose}
 				aria-label="Close settings"
 			>
-					<X size={14} weight="fill" />
+					<X size={14} />
 				</Button>
 
 				<!-- Account -->
@@ -670,7 +670,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									/>
 								{:else}
 									<div class="flex h-9 w-9 items-center justify-center rounded-full bg-bg-elevated text-text-muted">
-										<User size={18} weight="regular" aria-hidden="true" />
+										<User size={18} aria-hidden="true" />
 									</div>
 								{/if}
 								<div>
@@ -692,7 +692,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								class="inline-flex items-center gap-1 text-accent underline underline-offset-2 hover:text-accent-hover"
 							>
 								your authorized applications
-								<ExternalLink size={10} weight="fill" />
+								<ArrowSquareOut size={10} />
 							</a>.
 						</p>
 					{:else}
@@ -722,7 +722,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							</p>
 							{#if currentAgentStatus?.authWarning}
 								<p class="provider-warning">
-									<TriangleAlert size={12} weight="fill" />
+									<Warning size={12} weight="fill" />
 									<span>{currentAgentStatus.authWarning}</span>
 								</p>
 							{/if}
@@ -740,7 +740,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							</Select.Root>
 							<div class="status-line">
 								{#if providerStatusLoading}
-									<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
+									<Spinner size={11} class="motion-essential-spin text-text-muted" />
 									<span class="status-line-text">Checking</span>
 								{:else if providerReady(currentAgentStatus)}
 									<span
@@ -779,7 +779,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					{:else if providerInstall.kind === 'running'}
 						<div class="provider-setup-panel">
 							<div class="provider-setup-heading">
-								<Loader2 size={12} weight="regular" class="motion-essential-spin text-text-muted" />
+								<Spinner size={12} class="motion-essential-spin text-text-muted" />
 								<span>Installing {providerInstallLabel(providerInstall)}</span>
 							</div>
 							<div class="provider-install-log">
@@ -885,7 +885,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 								onclick={handleCheckAgentKeychain}
 							>
 								{#if keychainChecking}
-									<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+									<Spinner size={12} class="motion-essential-spin" />
 									Checking…
 								{:else}
 									Check access
@@ -938,7 +938,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<!-- AI status indicator -->
 					<div class="status-line">
 						{#if aiStatusLoading}
-							<Loader2 size={11} weight="regular" class="motion-essential-spin text-text-muted" />
+							<Spinner size={11} class="motion-essential-spin text-text-muted" />
 							<span class="status-line-text">Checking status…</span>
 						{:else if aiConfigured}
 							<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
@@ -1046,7 +1046,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					<div class="settings-field">
 						{#if adcStatus === null}
 							<div class="flex items-center gap-2">
-								<Loader2 size={12} weight="regular" class="motion-essential-spin text-text-muted" />
+								<Spinner size={12} class="motion-essential-spin text-text-muted" />
 								<span class="text-xs text-text-muted">Checking credentials…</span>
 							</div>
 						{:else if adcStatus.available}
@@ -1068,7 +1068,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									class="w-fit"
 								>
 									{#if adcPolling}
-										<Loader2 size={14} weight="regular" class="motion-essential-spin" />
+										<Spinner size={14} class="motion-essential-spin" />
 										Waiting for sign-in…
 									{:else}
 										Sign in with Google Cloud
@@ -1097,7 +1097,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							disabled={cacheTestRunning}
 						>
 							{#if cacheTestRunning}
-								<Loader2 size={14} weight="regular" class="motion-essential-spin" />
+								<Spinner size={14} class="motion-essential-spin" />
 							{/if}
 							Test connection
 						</Button>
@@ -1247,7 +1247,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							disabled={signingTestRunning}
 						>
 							{#if signingTestRunning}
-								<Loader2 size={14} weight="regular" class="motion-essential-spin" />
+								<Spinner size={14} class="motion-essential-spin" />
 							{/if}
 							Test signing
 						</Button>
@@ -1345,10 +1345,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							class="flex shrink-0 items-center gap-1.5 text-xs"
 						>
 							{#if replaying}
-								<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+								<Spinner size={12} class="motion-essential-spin" />
 								Starting…
 							{:else}
-								<RotateCcw size={12} weight="fill" />
+								<ArrowCounterClockwise size={12} />
 								Replay
 							{/if}
 						</Button>
@@ -1363,7 +1363,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 		{#if getUser()}
 				<section id="section-danger" class="settings-section danger-section">
 					<h2 class="section-head-title section-head-title--danger">
-						<TriangleAlert size={14} weight="fill" />
+						<Warning size={14} weight="fill" />
 						Danger Zone
 					</h2>
 
@@ -1386,9 +1386,9 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 											aria-label="Remove {repo.fullName}"
 										>
 											{#if removingRepoId === repo.id}
-												<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+												<Spinner size={12} class="motion-essential-spin" />
 											{:else}
-												<Trash2 size={12} weight="fill" />
+												<Trash size={12} />
 											{/if}
 										</button>
 									</li>
@@ -1415,7 +1415,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 									onclick={() => (showDeleteConfirm = true)}
 									class="flex shrink-0 items-center gap-1.5 text-xs"
 								>
-									<TriangleAlert size={12} weight="fill" />
+									<Warning size={12} weight="fill" />
 									Remove account
 								</Button>
 							{:else}
@@ -1437,10 +1437,10 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 										class="flex items-center gap-1.5 text-xs"
 									>
 										{#if deleting}
-											<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+											<Spinner size={12} class="motion-essential-spin" />
 											Removing…
 										{:else}
-											<TriangleAlert size={12} weight="fill" />
+											<Warning size={12} weight="fill" />
 											Confirm remove
 										{/if}
 									</Button>

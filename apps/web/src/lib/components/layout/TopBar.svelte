@@ -1,9 +1,8 @@
 <script lang="ts">
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import Monitor from "phosphor-svelte/lib/Desktop";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import Desktop from "phosphor-svelte/lib/Desktop";
 import Moon from "phosphor-svelte/lib/Moon";
-import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
-import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
 import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
@@ -74,11 +73,10 @@ function cycleTheme() {
 		aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
-		{#if sidebarCollapsed}
-			<PanelLeftOpen size={14} weight="fill" />
-		{:else}
-			<PanelLeftClose size={14} weight="fill" />
-		{/if}
+		<!-- One glyph; `fill` is the "panel is showing" state. Previously this
+			 was an {#if} whose two branches imported the same icon under
+			 different names, so the button never changed appearance. -->
+		<SidebarSimple size={14} weight={sidebarCollapsed ? 'regular' : 'fill'} />
 	</button>
 
 	<!-- Left: app name / inline PR title when scrolled -->
@@ -101,7 +99,7 @@ function cycleTheme() {
 			aria-label="Sync pull requests"
 			title="Sync pull requests"
 		>
-			<RefreshCw size={14} weight="fill" class={isSyncing ? 'motion-essential-spin' : ''} />
+			<ArrowsClockwise size={14} class={isSyncing ? 'motion-essential-spin' : ''} />
 		</button>
 		<button
 			class="theme-btn"
@@ -110,11 +108,11 @@ function cycleTheme() {
 			title={labels[theme]}
 		>
 			{#if theme === 'light'}
-				<Sun size={14} weight="fill" />
+				<Sun size={14} />
 			{:else if theme === 'dark'}
-				<Moon size={14} weight="fill" />
+				<Moon size={14} />
 			{:else}
-				<Monitor size={14} weight="fill" />
+				<Desktop size={14} />
 			{/if}
 		</button>
 
@@ -126,20 +124,7 @@ function cycleTheme() {
 			title={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
 			disabled={!pr}
 		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				width="14"
-				height="14"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<rect width="18" height="18" x="3" y="3" rx="2" />
-				<path d="M15 3v18" />
-			</svg>
+			<SidebarSimple size={14} mirrored weight={rightPanelOpen ? 'fill' : 'regular'} />
 		</button>
 	</div>
 </div>

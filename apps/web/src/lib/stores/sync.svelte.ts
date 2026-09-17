@@ -95,6 +95,53 @@ export function requestFullSync(prId: string): void {
     });
 }
 
+// Per-PR debounce for `refreshPrHead`. The call reaches GitHub, so a rapid
+// alt-tab / dropdown-reopen must not turn into a request per event. 30 s is
+// well under the 5-minute poll interval it is compensating for, and the
+// underlying PR-detail read is ETag-conditional — an unchanged PR answers 304,
+// which GitHub does not charge against the primary REST limit.
+const HEAD_REFRESH_DEBOUNCE_MS = 30_000;
+const lastHeadRefreshAt = new Map<string, number>();
+
+/**
+ * Reconcile ONE pull request's GitHub metadata — head SHA above all — without
+ * any visible sync UI.
+ *
+ * The "new commits, click Pull" affordance compares `pr.headSha` (SQLite,
+ * advanced only by the 5-minute poll fiber) against the SHA the on-screen diff
+ * was loaded at. Nothing else moves `pr.headSha`: the SSE reconcile paths are
+ * DB-only reads by design, so after someone pushes outside Revv the app can sit
+ * for a full poll interval knowing nothing — no Pull button, even though the
+ * bottom-bar commits dropdown (which reads GitHub live) is already showing the
+ * newer commits. This closes that window for the PR the user is actually
+ * looking at.
+ *
+ * Fire-and-forget: `POST /prs/:id/refresh` broadcasts `prs:updated` on success,
+ * which is what updates the store. Failure is silent — this is a background
+ * freshness check, not something the user asked for, and the manual "Sync now"
+ * button is still there to report errors.
+ */
+export function refreshPrHead(prId: string): void {
+  const now = Date.now();
+  const last = lastHeadRefreshAt.get(prId);
+  if (last !== undefined && now - last < HEAD_REFRESH_DEBOUNCE_MS) return;
+  // Drop stamps that can no longer suppress anything. The desktop window is
+  // never reloaded, so without this the map keeps one entry per PR ever
+  // visited, for the life of the process.
+  for (const [id, at] of lastHeadRefreshAt) {
+    if (now - at >= HEAD_REFRESH_DEBOUNCE_MS) lastHeadRefreshAt.delete(id);
+  }
+  lastHeadRefreshAt.set(prId, now);
+  void api.api
+    .prs({ id: prId })
+    .refresh.post()
+    .catch(() => {
+      // Allow an immediate retry on the next trigger rather than holding the
+      // debounce open for a request that never landed.
+      lastHeadRefreshAt.delete(prId);
+    });
+}
+
 /** Mark a PR's threads sync as in-flight (called when we send the request). */
 export function markThreadsSyncing(prId: string): void {
   const next = new Set(threadsSyncingByPr);

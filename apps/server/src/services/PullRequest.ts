@@ -21,6 +21,7 @@ function rowToPr(
     authorAvatarContent: avatarContent,
     authorAvatarUrl: null,
     requestedReviewers: JSON.parse(row.requestedReviewers ?? "[]") as string[],
+    mentionedUsers: JSON.parse(row.mentionedUsers ?? "[]") as string[],
     status: row.status as PullRequest["status"],
     reviewStatus: row.reviewStatus as PullRequest["reviewStatus"],
     isDraft: row.isDraft,
@@ -223,16 +224,6 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       prId: string,
       logins: string[],
     ) => Effect.Effect<void, ValidationError, DbService>;
-    /**
-     * Open PRs for one repo where the given user is the author, a requested
-     * reviewer, or mentioned in the body/comments. Used by the repo homepage
-     * "PRs tagged on" section.
-     */
-    readonly listTaggedPrs: (
-      repoId: string,
-      userLogin: string,
-      accountId?: string,
-    ) => Effect.Effect<PullRequest[], ValidationError, DbService>;
   }
 >() {}
 
@@ -856,71 +847,5 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         try: () => mergeMentionedUsers(db, prId, logins),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
-    }),
-
-  listTaggedPrs: (repoId, userLogin, accountId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const repoIds = accountId
-        ? db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .where(eq(repositories.accountId, accountId))
-            .all()
-            .map((r) => r.id)
-        : null;
-
-      if (accountId && repoIds !== null && repoIds.length === 0) return [];
-
-      const rows = yield* Effect.try({
-        try: () => {
-          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
-            eq(pullRequests.status, "open"),
-            eq(pullRequests.repositoryId, repoId),
-          ];
-          if (repoIds && repoIds.length > 0) {
-            conditions.push(inArray(pullRequests.repositoryId, repoIds));
-          }
-          // Query all open PRs for the repo, then filter in JS for the
-          // JSON-array membership checks (requestedReviewers, mentionedUsers).
-          // SQLite JSON containment would work but is clunkier in Drizzle.
-          return db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(and(...conditions))
-            .all();
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(
-        Effect.orElseSucceed(
-          () =>
-            [] as {
-              pr: typeof pullRequests.$inferSelect;
-              avatarContent: string | null;
-            }[],
-        ),
-      );
-
-      const tagged = rows.filter((r) => {
-        const row = r.pr;
-        if (row.authorLogin === userLogin) return true;
-        const reviewers = JSON.parse(row.requestedReviewers ?? "[]") as string[];
-        if (reviewers.includes(userLogin)) return true;
-        const mentioned = JSON.parse(row.mentionedUsers ?? "[]") as string[];
-        if (mentioned.includes(userLogin)) return true;
-        return false;
-      });
-      return tagged.map((r) => rowToPr(r.pr, r.avatarContent));
     }),
 });

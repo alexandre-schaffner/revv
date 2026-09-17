@@ -1,6 +1,8 @@
 <script lang="ts">
 import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
-import CornerDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
+import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
+import CaretUp from "phosphor-svelte/lib/CaretUp";
+import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
@@ -182,17 +184,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
 					<div class="suggestion-label">
-						<svg
-							width="11"
-							height="11"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-						>
-							<rect width="10" height="10" x="2" y="2" rx="2" />
-							<path d="m7 13 3 3 7-7" />
-						</svg>
+						<CheckSquare size={11} />
 						Code suggestion
 					</div>
 					<pre class="suggestion-code">{msg.codeSuggestion}</pre>
@@ -223,7 +215,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				onclick={pushToGitHub}
 				disabled={isPushing}
 			>
-				<PaperPlaneTilt size={12} weight="fill" aria-hidden="true" />
+				<PaperPlaneTilt size={12} aria-hidden="true" />
 				{isPushing ? 'Sending…' : 'Send to GitHub'}
 			</button>
 		{/if}
@@ -233,7 +225,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				class:footer-link--active={isReplying}
 				onclick={onReply}
 			>
-				<CornerDownLeft size={12} aria-hidden="true" />
+				<ArrowElbowDownLeft size={12} aria-hidden="true" />
 				{isReplying ? 'Cancel' : 'Add reply...'}
 			</button>
 		{/if}
@@ -262,16 +254,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				onclick={onCollapse}
 				aria-label="Collapse thread"
 			>
-				<svg
-					width="13"
-					height="13"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-				>
-					<polyline points="18 15 12 9 6 15" />
-				</svg>
+				<CaretUp size={13} />
 			</button>
 		{/if}
 	</div>

@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import CircleAlert from "phosphor-svelte/lib/WarningCircle";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { goto } from "$app/navigation";
 import { Badge } from "$lib/components/ui/badge";
 import RecapStats from "./RecapStats.svelte";
@@ -85,12 +85,12 @@ function navigate(recapId: string): void {
 						<span class="period-window">{formatPeriod(recap)}</span>
 						{#if recap.status === "generating"}
 							<Badge variant="secondary">
-								<Loader2 class="motion-essential-spin" />
+								<Spinner class="motion-essential-spin" />
 								generating
 							</Badge>
 						{:else if recap.status === "error"}
 							<Badge variant="destructive" title={recap.errorMessage ?? undefined}>
-								<CircleAlert />
+								<WarningCircle />
 								{recap.errorMessage ? "failed" : "error"}
 							</Badge>
 						{/if}

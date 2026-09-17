@@ -1,12 +1,12 @@
 <script lang="ts">
-import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
-import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
 import Check from "phosphor-svelte/lib/Check";
-import Filter from "phosphor-svelte/lib/Funnel";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Funnel from "phosphor-svelte/lib/Funnel";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import Star from "phosphor-svelte/lib/Star";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import X from "phosphor-svelte/lib/X";
+import Warning from "phosphor-svelte/lib/Warning";
+import XCircle from "phosphor-svelte/lib/XCircle";
 import { formatDuration } from "./format-duration";
 
 interface Counts {
@@ -59,7 +59,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.pass === 0}
                 title="{counts.pass} passed"
             >
-                <Check size={11} weight="regular" aria-hidden="true" />
+                <Check size={11} aria-hidden="true" />
                 <span class="count-num">{counts.pass}</span>
                 <span class="count-label">passed</span>
             </span>
@@ -68,7 +68,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.concern === 0}
                 title="{counts.concern} concern{counts.concern === 1 ? '' : 's'}"
             >
-                <AlertCircle size={11} weight="fill" aria-hidden="true" />
+                <Warning size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.concern}</span>
                 <span class="count-label"
                     >{counts.concern === 1 ? "concern" : "concerns"}</span
@@ -79,7 +79,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
                 class:count-pill--zero={counts.blocker === 0}
                 title="{counts.blocker} blocker{counts.blocker === 1 ? '' : 's'}"
             >
-                <X size={11} weight="fill" aria-hidden="true" />
+                <XCircle size={11} weight="fill" aria-hidden="true" />
                 <span class="count-num">{counts.blocker}</span>
                 <span class="count-label"
                     >{counts.blocker === 1 ? "blocker" : "blockers"}</span
@@ -88,7 +88,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 
             {#if runningCount > 0}
                 <span class="count-pill count-pill--running" title="{runningCount} running">
-                    <Loader2 size={11} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+                    <Spinner size={11} class="motion-essential-spin" aria-hidden="true" />
                     <span class="count-label">{runningCount} running</span>
                 </span>
             {/if}
@@ -110,9 +110,9 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} weight="fill" />
+                    <ArrowsInLineVertical size={12} />
                 {:else}
-                    <ChevronsUpDown size={12} weight="fill" />
+                    <ArrowsOutLineVertical size={12} />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>
@@ -125,7 +125,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
             aria-pressed={onlyFailing}
         >
             <span class="ctrl-icon" aria-hidden="true">
-                <Filter size={12} />
+                <Funnel size={12} weight={onlyFailing ? 'fill' : 'regular'} />
             </span>
             <span class="ctrl-label">Only failing</span>
         </button>

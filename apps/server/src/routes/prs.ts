@@ -206,37 +206,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     }
   })
   .get(
-    "/tagged",
-    async (ctx) => {
-      try {
-        const repoId = ctx.query.repo;
-        if (!repoId) {
-          ctx.set.status = 400;
-          return { error: "repo query parameter is required" };
-        }
-        // Look up the current user's GitHub login.
-        const rows = await db
-          .select({ githubLogin: user.githubLogin })
-          .from(user)
-          .where(eq(user.id, ctx.session.user.id));
-        const login = rows[0]?.githubLogin;
-        if (!login) {
-          return [];
-        }
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const { accountId } = ctx.account;
-            return yield* prService.listTaggedPrs(repoId, login, accountId);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { query: t.Object({ repo: t.String() }) },
-  )
-  .get(
     "/:id/files",
     async (ctx) => {
       try {

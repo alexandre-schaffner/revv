@@ -1,8 +1,8 @@
 <script lang="ts">
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
-import Monitor from "phosphor-svelte/lib/Desktop";
+import Desktop from "phosphor-svelte/lib/Desktop";
 import Moon from "phosphor-svelte/lib/Moon";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import Sun from "phosphor-svelte/lib/Sun";
 import User from "phosphor-svelte/lib/User";
 import { gsapFade, tokens } from "$lib/motion";
@@ -61,11 +61,11 @@ function cycleTheme() {
 <div class="picker" in:gsapFade={{ duration: tokens.slow }}>
     <button class="theme-toggle" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
         {#if theme === 'light'}
-            <Sun size={14} weight="fill" />
+            <Sun size={14} />
         {:else if theme === 'dark'}
-            <Moon size={14} weight="fill" />
+            <Moon size={14} />
         {:else}
-            <Monitor size={14} weight="fill" />
+            <Desktop size={14} />
         {/if}
     </button>
     <div class="picker-header">
@@ -92,7 +92,7 @@ function cycleTheme() {
                                 referrerpolicy="no-referrer"
                             />
                         {:else}
-                            <User size={18} weight="regular" class="picker-card-icon" />
+                            <User size={18} class="picker-card-icon" />
                         {/if}
                     </span>
                     <span class="picker-card-body">
@@ -101,7 +101,7 @@ function cycleTheme() {
                     </span>
                     <span class="picker-card-action">
                         {#if switching}
-                            <Loader2 size={14} weight="regular" class="picker-spinner motion-essential-spin" />
+                            <Spinner size={14} class="picker-spinner motion-essential-spin" />
                         {:else}
                             <ArrowRight size={14} class="picker-arrow" />
                         {/if}

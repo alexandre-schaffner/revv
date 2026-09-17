@@ -8,6 +8,13 @@
 //   4. On finding an update, a persistent Sonner toast is shown with
 //      Install / Dismiss buttons. The user must click Install to apply.
 //
+// Every toast this module raises shares one Sonner id. The update toast is
+// `duration: Infinity`, so without a shared id the hourly tick would stack a
+// fresh "Update available" card on top of the one already sitting on screen,
+// once per hour, forever. With the id, a re-notify replaces the card in place
+// and the install/error/restart toasts reuse the same slot instead of
+// accumulating next to it.
+//
 // Dismissals are session-scoped: we store the dismissed version in a
 // module-level variable so the toast doesn't reappear on the next hourly
 // tick, but a full app restart resets it. That's intentional — if the user
@@ -23,10 +30,15 @@ import { checkForUpdate, type UpdateInfo } from "./client";
 
 const HOURLY_MS = 60 * 60 * 1000;
 
+/** Shared Sonner slot for every updater toast — see the module header. */
+const TOAST_ID = "revv-updater";
+
 let started = false;
 let intervalId: ReturnType<typeof setInterval> | null = null;
 let dismissedVersion: string | null = null;
-let inFlight = false;
+/** Version currently advertised by an on-screen toast, if any. */
+let notifiedVersion: string | null = null;
+let pending: Promise<void> | null = null;
 
 /**
  * Kick off the background update checker. Idempotent. Call this from the root
@@ -57,15 +69,33 @@ export function stopUpdater(): void {
  * now" button can reuse the same code path as the background loop. When
  * `manual` is true, callers get an "up to date" toast on the miss path
  * instead of silent no-op.
+ *
+ * Concurrency: a background tick that lands while another check is running
+ * piggybacks on it rather than firing a redundant round-trip. A manual check
+ * instead queues behind it, so the Settings button always ends in a toast —
+ * previously it dropped the click on the floor whenever the hourly tick
+ * happened to be in flight.
  */
-export async function runCheck(options: { manual?: boolean } = {}): Promise<void> {
-  if (inFlight) return;
-  inFlight = true;
+export function runCheck(options: { manual?: boolean } = {}): Promise<void> {
+  if (pending && !options.manual) return pending;
+  // `check()` never rejects — it reports failures as toasts — so the chain
+  // can't be poisoned by a rejected link.
+  const next = (pending ?? Promise.resolve()).then(() => check(options));
+  pending = next;
+  void next.then(() => {
+    if (pending === next) pending = null;
+  });
+  return next;
+}
+
+async function check(options: { manual?: boolean }): Promise<void> {
   try {
     const update = await checkForUpdate();
     if (!update) {
+      notifiedVersion = null;
       if (options.manual) {
         toast.success("You're up to date", {
+          id: TOAST_ID,
           description: "No new version available.",
         });
       }
@@ -74,6 +104,11 @@ export async function runCheck(options: { manual?: boolean } = {}): Promise<void
     if (!options.manual && update.version === dismissedVersion) {
       // User already dismissed this version during this session; don't
       // re-toast on every hourly tick. The flag resets on app restart.
+      return;
+    }
+    if (!options.manual && update.version === notifiedVersion) {
+      // The toast for this version is already on screen from an earlier
+      // tick. Re-raising it would only reset its position in the stack.
       return;
     }
     if (!shouldNotify(update, options.manual ?? false)) {
@@ -89,11 +124,10 @@ export async function runCheck(options: { manual?: boolean } = {}): Promise<void
     console.error("updater check failed", err);
     if (options.manual) {
       toast.error("Update check failed", {
+        id: TOAST_ID,
         description: err instanceof Error ? err.message : String(err),
       });
     }
-  } finally {
-    inFlight = false;
   }
 }
 
@@ -123,7 +157,9 @@ function showUpdateToast(update: UpdateInfo): void {
   // Sonner's `duration: Infinity` keeps the toast open until the user
   // explicitly acts. The Install button triggers download+install; Dismiss
   // records the version so we don't re-nag until the next launch.
+  notifiedVersion = update.version;
   toast(`Update available — v${update.version}`, {
+    id: TOAST_ID,
     description: update.notes ?? "A new version of Revv is ready to install.",
     duration: Number.POSITIVE_INFINITY,
     icon: Download,
@@ -137,33 +173,44 @@ function showUpdateToast(update: UpdateInfo): void {
       label: "Dismiss",
       onClick: () => {
         dismissedVersion = update.version;
+        notifiedVersion = null;
       },
     },
   });
 }
 
 async function installWithProgress(update: UpdateInfo): Promise<void> {
-  const id = toast.loading(`Installing v${update.version}…`, {
+  notifiedVersion = null;
+  toast.loading(`Installing v${update.version}…`, {
+    id: TOAST_ID,
     description: "Downloading and applying the update.",
     duration: Number.POSITIVE_INFINITY,
   });
   try {
     await update.install();
-    // As with auto-install: if relaunch() returned without tearing the
-    // process down, prompt the user to restart. Most of the time we
-    // never reach this branch.
-    toast.dismiss(id);
-    showRestartFallbackToast();
   } catch (err) {
-    toast.dismiss(id);
     toast.error("Update failed", {
+      id: TOAST_ID,
       description: err instanceof Error ? err.message : String(err),
     });
+    return;
   }
+  // The bundle is swapped at this point — the update is applied whether or
+  // not we manage to restart. Relaunch to land the user in the new version
+  // immediately; if that fails, or returns without tearing the process
+  // down, ask them to restart instead of crying "Update failed" over an
+  // update that actually succeeded.
+  try {
+    await relaunch();
+  } catch (err) {
+    console.error("relaunch after update failed", err);
+  }
+  showRestartFallbackToast();
 }
 
 function showRestartFallbackToast(): void {
   toast("Update installed", {
+    id: TOAST_ID,
     description: "Restart Revv to finish applying the update.",
     duration: Number.POSITIVE_INFINITY,
     action: {
@@ -175,12 +222,17 @@ function showRestartFallbackToast(): void {
   });
 }
 
+async function relaunch(): Promise<void> {
+  const { relaunch: doRelaunch } = await import("@tauri-apps/plugin-process");
+  await doRelaunch();
+}
+
 async function relaunchNow(): Promise<void> {
   try {
-    const { relaunch } = await import("@tauri-apps/plugin-process");
     await relaunch();
   } catch (err) {
     toast.error("Failed to restart", {
+      id: TOAST_ID,
       description: err instanceof Error ? err.message : String(err),
     });
   }

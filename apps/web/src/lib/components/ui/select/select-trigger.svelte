@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Select as SelectPrimitive } from "bits-ui";
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import { cn } from "$lib/utils.js";
 
 let {
@@ -21,5 +21,5 @@ let {
 	{...restProps}
 >
 	{@render children?.()}
-	<ChevronDown size={14} class="shrink-0 text-text-muted" />
+	<CaretDown size={14} class="shrink-0 text-text-muted" />
 </SelectPrimitive.Trigger>

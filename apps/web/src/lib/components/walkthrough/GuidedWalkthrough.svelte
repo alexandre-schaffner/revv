@@ -9,13 +9,13 @@ import type {
   WalkthroughReviewRound,
   WalkthroughSemanticStep,
 } from "@revv/shared";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
-import AlertTriangle from "phosphor-svelte/lib/Warning";
+import Warning from "phosphor-svelte/lib/Warning";
 import { toast } from "svelte-sonner";
-import { mermaidDiagrams } from "$lib/actions/mermaid.svelte";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
@@ -1088,9 +1088,9 @@ function handleResume(): void {
 					aria-label="Choose walkthrough report"
 					title="Choose walkthrough report"
 				>
-					<Clock size={13} weight="regular" aria-hidden="true" />
+					<Clock size={13} aria-hidden="true" />
 					<span>{reportTriggerLabel}</span>
-					<CaretDown size={12} weight="bold" aria-hidden="true" />
+					<CaretDown size={12} aria-hidden="true" />
 				</Popover.Trigger>
 
 				<Popover.Content align="start" sideOffset={6} class="report-selector-popover">
@@ -1111,7 +1111,7 @@ function handleResume(): void {
 							>
 								<span class="report-check" aria-hidden="true">
 									{#if active}
-										<Check size={12} weight="bold" />
+										<Check size={12} />
 									{/if}
 								</span>
 								<span class="report-option-main">
@@ -1226,7 +1226,7 @@ function handleResume(): void {
 			{/if}
 			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
 			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
-				<RefreshCw size={16} weight="fill" />
+				<ArrowsClockwise size={16} />
 				Retry
 			</Button>
 		</div>
@@ -1242,7 +1242,7 @@ function handleResume(): void {
 		     regenerates the walkthrough. -->
 		<div class="walkthrough-empty">
 			{#if !cloneRepoId}
-				<AlertTriangle size={20} weight="fill" />
+				<Warning size={20} weight="fill" />
 				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
 			{:else}
 				<div class="clone-progress-container">
@@ -1256,7 +1256,7 @@ function handleResume(): void {
 						disabled={retryingClone}
 						onclick={handleRetryClone}
 					>
-						<RefreshCw size={16} weight="fill" />
+						<ArrowsClockwise size={16} />
 						Retry clone
 					</Button>
 				</div>
@@ -1303,17 +1303,18 @@ function handleResume(): void {
 		<!-- Landing page content -->
 		<div
 			class="walkthrough-content"
+			data-prlens-breakout=""
 			class:walkthrough-content--no-anim={contentAnimated}
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
 			{#if streamError}
 				<div class="partial-error" role="status">
 					<div class="partial-error-copy">
-						<AlertTriangle size={14} weight="fill" />
+						<Warning size={14} weight="fill" />
 						<span>{streamError}</span>
 					</div>
 					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
-						<RefreshCw size={14} weight="fill" />
+						<ArrowsClockwise size={14} />
 						Retry
 					</Button>
 				</div>
@@ -1330,7 +1331,7 @@ function handleResume(): void {
 					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
 				>
 					<div class="issues-header">
-						<AlertTriangle size={13} weight="fill" />
+						<Warning size={13} weight="fill" />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
 					<div class="issues-groups">
@@ -1481,7 +1482,7 @@ function handleResume(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body prose prose-sm" use:mermaidDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}
@@ -2654,6 +2655,24 @@ function handleResume(): void {
 
 		.block-group > .block-wrapper {
 			grid-column: auto;
+		}
+
+		/* With `.blocks` no longer a grid, a `display: contents` group leaves the
+		   severity dot as an inline box — width/height stop applying and it paints
+		   as a thin bar rather than a dot. Give the group a box and hang the dot in
+		   the stacked layout's 72px left gutter, 16px clear of the content edge
+		   (same offset the wide layout gets from margin-right). Kept in sync with
+		   the matching @container block in WalkthroughSection.svelte. */
+		.block-group:not(.block-group--sentiment-stack) {
+			display: block;
+			position: relative;
+		}
+
+		.block-step-dot {
+			position: absolute;
+			left: -24px;
+			top: 18px;
+			margin: 0;
 		}
 
 		.block-group--sentiment-stack {

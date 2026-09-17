@@ -34,6 +34,10 @@ const WALKTHROUGH_SYSTEM_AUTHOR_PROMPT = readFileSync(
   `${import.meta.dir}/walkthrough-system-author.md`,
   "utf-8",
 );
+const WALKTHROUGH_ARTIFACTS_PROMPT = readFileSync(
+  `${import.meta.dir}/walkthrough-artifacts.md`,
+  "utf-8",
+);
 const WALKTHROUGH_COMMON_PROMPT = readFileSync(`${import.meta.dir}/walkthrough-common.md`, "utf-8");
 const WALKTHROUGH_REVIEWER_PROMPT = readFileSync(
   `${import.meta.dir}/walkthrough-reviewer.md`,
@@ -53,13 +57,28 @@ if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(REVIEW_PERSPECTIVE_MARKER)) {
   );
 }
 
+// The artifact craft spec is single-sourced in `walkthrough-artifacts.md` because
+// two agents write artifact blocks: the walkthrough author (add_semantic_step /
+// add_diff_step) and the chat agent's edit tools (add_block / update_block).
+// Substituted into both system prompts so the two can't drift.
+export const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
+export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.trim();
+if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(ARTIFACT_SPEC_MARKER)) {
+  throw new Error(`walkthrough-system-common.md is missing the ${ARTIFACT_SPEC_MARKER} marker`);
+}
+
 export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE.reviewer): string {
   const modePrompt =
     mode === REVIEW_MODE.author
       ? WALKTHROUGH_SYSTEM_AUTHOR_PROMPT
       : WALKTHROUGH_SYSTEM_REVIEWER_PROMPT;
 
-  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, modePrompt.trim());
+  // Replacer functions, not replacement strings: a `$&` or `$'` in a prompt
+  // file is a substitution pattern and would splice the surrounding prompt
+  // into itself.
+  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () =>
+    modePrompt.trim(),
+  ).replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
 }
 
 const WALKTHROUGH_SHARED_REVIEW_PRINCIPLES: string = readFileSync(
@@ -234,6 +253,7 @@ export function buildWalkthroughPrompt(
     mode === REVIEW_MODE.author
       ? "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
       : "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
+    '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
   );
 
   if (continuation) {

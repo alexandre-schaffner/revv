@@ -87,7 +87,13 @@ pub fn run() {
 		// The endpoint, signing key, and install mode all live in
 		// tauri.conf.json → plugins.updater; the frontend drives the actual
 		// check/install loop via `@tauri-apps/plugin-updater`.
-		.plugin(tauri_plugin_updater::Builder::new().build());
+		.plugin(tauri_plugin_updater::Builder::new().build())
+		// Required by the updater flow: macOS swaps the .app bundle in place
+		// but leaves the running process alone, so the frontend calls
+		// `relaunch()` from `@tauri-apps/plugin-process` once the install
+		// lands. Without this plugin registered that call fails and a
+		// perfectly good update looks like a failed one.
+		.plugin(tauri_plugin_process::init());
 
 	// Shadow-rebind under debug only; release builds skip this entirely,
 	// so the binding above never needs `mut` and produces no warning.

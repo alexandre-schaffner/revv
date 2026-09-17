@@ -1,17 +1,27 @@
 <script lang="ts">
-import { mode } from "mode-watcher";
-import CircleCheckIcon from "phosphor-svelte/lib/CheckCircle";
-import InfoIcon from "phosphor-svelte/lib/Info";
-import Loader2Icon from "phosphor-svelte/lib/Spinner";
-import TriangleAlertIcon from "phosphor-svelte/lib/Warning";
-import OctagonXIcon from "phosphor-svelte/lib/WarningOctagon";
+import CheckCircle from "phosphor-svelte/lib/CheckCircle";
+import Info from "phosphor-svelte/lib/Info";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import Warning from "phosphor-svelte/lib/Warning";
+import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import { Toaster as Sonner, type ToasterProps as SonnerProps } from "svelte-sonner";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 
 let { ...restProps }: SonnerProps = $props();
+
+// Sonner needs a concrete light/dark to stamp `data-theme` on the toaster,
+// which drives every one of its styles the inline `--normal-*` overrides below
+// don't reach. Feed it the *resolved* theme from Revv's own store rather than
+// `"system"`: "system" would make sonner consult prefers-color-scheme directly
+// and render dark toasts whenever the OS is dark, even with the app set to
+// light. (This used to read `mode-watcher`'s store — a second theme library
+// whose ModeWatcher component this app never mounts, so it tracked nothing but
+// the OS.)
+const theme = $derived(getResolvedTheme());
 </script>
 
 <Sonner
-	theme={(mode.current ?? 'system') as 'light' | 'dark' | 'system'}
+	{theme}
 	position="top-right"
 	closeButton
 	class="toaster group"
@@ -30,18 +40,18 @@ let { ...restProps }: SonnerProps = $props();
 	{...restProps}
 >
 	{#snippet loadingIcon()}
-		<Loader2Icon class="size-4 motion-essential-spin" />
+		<Spinner class="size-4 motion-essential-spin" />
 	{/snippet}
 	{#snippet successIcon()}
-		<CircleCheckIcon class="size-4" />
+		<CheckCircle class="size-4" weight="fill" />
 	{/snippet}
 	{#snippet errorIcon()}
-		<OctagonXIcon class="size-4" />
+		<WarningOctagon class="size-4" weight="fill" />
 	{/snippet}
 	{#snippet infoIcon()}
-		<InfoIcon class="size-4" />
+		<Info class="size-4" />
 	{/snippet}
 	{#snippet warningIcon()}
-		<TriangleAlertIcon class="size-4" />
+		<Warning class="size-4" weight="fill" />
 	{/snippet}
 </Sonner>

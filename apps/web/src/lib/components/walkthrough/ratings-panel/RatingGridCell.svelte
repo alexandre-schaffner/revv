@@ -2,9 +2,9 @@
 import type { RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import X from "phosphor-svelte/lib/X";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import Warning from "phosphor-svelte/lib/Warning";
+import XCircle from "phosphor-svelte/lib/XCircle";
 import * as Popover from "$lib/components/ui/popover";
 import { synthesize } from "./format-synthesis";
 import RatingExpandedBody from "./RatingExpandedBody.svelte";
@@ -92,23 +92,23 @@ const isDisabled = $derived(state !== "resolved");
                 <span class="cell-status-icon" aria-hidden="true">
                     {#if state === "queued"}
                         <span class="icon-queued">
-                            <Loader2 size={13} weight="regular" />
+                            <Spinner size={13} class="motion-essential-spin" />
                         </span>
                     {:else if state === "running"}
                         <span class="icon-running">
-                            <Loader2 size={13} weight="regular" class="motion-essential-spin" />
+                            <Spinner size={13} class="motion-essential-spin" />
                         </span>
                     {:else if rating?.verdict === "pass"}
                         <span class="icon-resolved">
-                            <Check size={13} weight="regular" />
+                            <Check size={13} />
                         </span>
                     {:else if rating?.verdict === "concern"}
                         <span class="icon-resolved">
-                            <AlertCircle size={13} weight="fill" />
+                            <Warning size={13} weight="fill" />
                         </span>
                     {:else if rating?.verdict === "blocker"}
                         <span class="icon-resolved">
-                            <X size={13} weight="fill" />
+                            <XCircle size={13} weight="fill" />
                         </span>
                     {/if}
                 </span>

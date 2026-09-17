@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.26.0",
+    "@coldtea/pr-lens-schema": "^0.1.2",
     "@effect/opentelemetry": "^0.63.0",
     "@effect/platform": "^0.96.0",
     "@elysiajs/cors": "^1",

@@ -124,9 +124,9 @@ function handleNewAccount() {
 					<img src="/icon.svg" alt="" class="restore-status-watermark" aria-hidden="true" />
 					<div class="restore-status-icon" class:restore-status-icon-error={restoreExhausted}>
 						{#if restoreExhausted}
-							<WarningCircle size={22} weight="duotone" />
+							<WarningCircle size={22} weight="fill" />
 						{:else}
-							<Spinner size={18} weight="bold" class="motion-essential-spin" />
+							<Spinner size={18} class="motion-essential-spin" />
 						{/if}
 					</div>
 					<div class="restore-copy">

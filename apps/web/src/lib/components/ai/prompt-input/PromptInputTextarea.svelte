@@ -27,6 +27,7 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		insertLineBreak,
 		isPill,
 		makePill,
+		pillifyInPlace,
 		placeCaretAfter,
 		render,
 		replaceTokenRange,
@@ -259,11 +260,17 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 	}
 
 	// Pillify any complete, known mention typed by hand (rather than picked from
-	// the menu) once the user leaves the field — a safe moment to rebuild the DOM
-	// since there's no caret to disturb. Serialization is unchanged, so ctx.value
-	// stays put.
+	// the menu) once the user leaves the field. Serialization is unchanged, so
+	// ctx.value stays put.
+	//
+	// This must not rebuild the editor (`render`): blur is not "a safe moment,
+	// there's no caret to disturb" — it also fires on every app switch and on
+	// every click elsewhere in the UI, and replacing the nodes invalidates the
+	// caret the browser would otherwise restore. `pillifyInPlace` rewrites only
+	// the text nodes that actually hold a mention, so an ordinary blur leaves the
+	// DOM — and the caret — exactly as it was.
 	function handleBlur() {
-		if (editorEl && ctx.value.trim().length > 0) render(editorEl, ctx.value, mentionPathSet);
+		if (editorEl && ctx.value.trim().length > 0) pillifyInPlace(editorEl, mentionPathSet);
 	}
 
 	// Always take over paste: insert the clipboard's plain text via `execCommand`

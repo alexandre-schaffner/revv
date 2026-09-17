@@ -540,7 +540,8 @@ export interface ProposedCommit {
 
 export interface ProposedChanges {
   branchName: string | null;
-  prHeadSha: string | null;
+  /** Baseline the listed commits are measured from — NOT the PR head. */
+  baseSha: string | null;
   commits: ProposedCommit[];
 }
 

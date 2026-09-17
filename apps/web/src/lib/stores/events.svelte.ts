@@ -41,7 +41,13 @@ import {
   onThreadUpdated,
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
-import { applySynced, requestThreadSync, setPrListSyncing, setSyncError } from "./sync.svelte";
+import {
+  applySynced,
+  refreshPrHead,
+  requestThreadSync,
+  setPrListSyncing,
+  setSyncError,
+} from "./sync.svelte";
 import {
   hydrateActiveWalkthroughs,
   hydrateFromCache,
@@ -114,6 +120,9 @@ function reconcileOnReconnect(): void {
     void hydrateFromCache(selectedPrId, { activate: false });
     requestThreadSync(selectedPrId);
     void loadSession(selectedPrId);
+    // A dropped connection means we may also have missed a head-SHA move; the
+    // reads above are DB-only, so ask GitHub about this one PR.
+    refreshPrHead(selectedPrId);
   }
 }
 
@@ -123,13 +132,21 @@ function reconcileOnReconnect(): void {
  * The server's poll fiber sleeps between cycles, so after the machine suspends
  * — or the app simply sits in the background — the first thing the user sees on
  * return is up to a full interval stale, with no event inbound to correct it.
- * These are DB-only REST reads (no GitHub traffic), so running them on every
+ * The list reads are DB-only REST (no GitHub traffic), so running them on every
  * focus is cheap; the same debounce as the reconnect path keeps a rapid
  * alt-tab from firing repeatedly.
+ *
+ * The selected PR gets one step more: a GitHub-backed head-SHA refresh. Coming
+ * back to the window is exactly the moment the user pushed from a terminal, and
+ * a DB read can't see a commit the poll fiber hasn't fetched yet — which is what
+ * left the "Pull" affordance dark for up to a full poll interval. `refreshPrHead`
+ * carries its own longer debounce because it costs a GitHub request.
  */
 function reconcileOnForeground(): void {
   if (document.visibilityState !== "visible") return;
   if (!source || source.readyState === EventSource.CLOSED) return;
+  const selectedPrId = getSelectedPrId();
+  if (selectedPrId) refreshPrHead(selectedPrId);
   const now = Date.now();
   if (now - lastReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
   lastReconcileAt = now;
@@ -277,7 +294,13 @@ function dispatch(msg: ServerEventMessage): void {
     case "threads:synced":
       applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
       if (msg.data.prId === getSelectedPrId()) {
-        void loadSession(msg.data.prId);
+        // Forced: the server only emits this envelope when the pull actually
+        // moved something (or the user asked for the sync), which is precisely
+        // the case `loadSession`'s 60 s short-circuit must not swallow. Opening
+        // a PR hydrates the session and immediately force-syncs its threads, so
+        // without this the comments that sync brought in stay invisible until
+        // the window lapses.
+        void loadSession(msg.data.prId, undefined, true);
       }
       break;
     case "threads:sync-error":

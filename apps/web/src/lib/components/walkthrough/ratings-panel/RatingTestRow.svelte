@@ -1,11 +1,11 @@
 <script lang="ts">
 import type { Confidence, RatingAxis, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Check from "phosphor-svelte/lib/Check";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
-import X from "phosphor-svelte/lib/X";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import Warning from "phosphor-svelte/lib/Warning";
+import XCircle from "phosphor-svelte/lib/XCircle";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import RatingExpandedBody from "./RatingExpandedBody.svelte";
 
@@ -110,23 +110,23 @@ const isDisabled = $derived(state !== "resolved");
             <span class="row-icon" aria-hidden="true">
                 {#if state === "queued"}
                     <span class="icon-queued">
-                        <Loader2 size={14} weight="regular" />
+                        <Spinner size={14} class="motion-essential-spin" />
                     </span>
                 {:else if state === "running"}
                     <span class="icon-running">
-                        <Loader2 size={14} weight="regular" class="motion-essential-spin" />
+                        <Spinner size={14} class="motion-essential-spin" />
                     </span>
                 {:else if rating?.verdict === "pass"}
                     <span class="icon-resolved">
-                        <Check size={14} weight="regular" />
+                        <Check size={14} />
                     </span>
                 {:else if rating?.verdict === "concern"}
                     <span class="icon-resolved">
-                        <AlertCircle size={14} weight="fill" />
+                        <Warning size={14} weight="fill" />
                     </span>
                 {:else if rating?.verdict === "blocker"}
                     <span class="icon-resolved">
-                        <X size={14} weight="fill" />
+                        <XCircle size={14} weight="fill" />
                     </span>
                 {/if}
             </span>
@@ -159,7 +159,7 @@ const isDisabled = $derived(state !== "resolved");
                 class:row-chevron--open={open}
                 aria-hidden="true"
             >
-                <ChevronRight size={14} weight="fill" />
+                <CaretRight size={14} />
             </span>
         </Collapsible.Trigger>
 

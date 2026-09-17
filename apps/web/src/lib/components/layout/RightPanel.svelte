@@ -5,10 +5,10 @@ import Check from "phosphor-svelte/lib/Check";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import Circle from "phosphor-svelte/lib/Circle";
 import Copy from "phosphor-svelte/lib/Copy";
+import Eraser from "phosphor-svelte/lib/Eraser";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import MagicWand from "phosphor-svelte/lib/MagicWand";
 import MapTrifold from "phosphor-svelte/lib/MapTrifold";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import Robot from "phosphor-svelte/lib/Robot";
@@ -519,10 +519,10 @@ function activitiesForTurn(
 						disabled={isPushing || isStreaming || isResolving}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							<span class="push-pill-label">Pushing…</span>
 						{:else}
-							<UploadSimple size={12} weight="fill" />
+							<UploadSimple size={12} />
 							<span class="push-pill-label">
 								Push
 								<span class="push-pill-count">{commitCount}</span>
@@ -538,7 +538,7 @@ function activitiesForTurn(
 								title="Push options"
 								disabled={isPushing || isStreaming || isResolving}
 							>
-								<CaretDown size={11} weight="fill" />
+								<CaretDown size={11} />
 							</button>
 						</PopoverTrigger>
 						<PopoverContent class="w-72 p-1" align="end" side="bottom">
@@ -547,7 +547,7 @@ function activitiesForTurn(
 								class="push-menu-item"
 								onclick={openNewBranchDialog}
 							>
-								<GitBranch size={12} weight="fill" class="push-menu-item-icon" />
+								<GitBranch size={12} class="push-menu-item-icon" />
 								<div class="push-menu-item-body">
 									<span class="push-menu-item-title">Push to new branch…</span>
 									<span class="push-menu-item-hint">
@@ -571,11 +571,11 @@ function activitiesForTurn(
 						: 'Clear conversation'}
 					disabled={isPushing || isResolving}
 				>
-					<MagicWand size={13} weight="fill" />
+					<Eraser size={13} />
 				</button>
 			{/if}
 			<button class="icon-btn" onclick={onClose} aria-label="Close panel">
-				<X size={14} weight="fill" />
+				<X size={14} />
 			</button>
 		</div>
 	</div>
@@ -596,10 +596,10 @@ function activitiesForTurn(
 					title="Rebase all commits onto new PR head"
 				>
 					{#if isRebasing}
-						<Spinner size={11} weight="fill" class="motion-essential-spin" />
+						<Spinner size={11} class="motion-essential-spin" />
 						<span>Rebasing…</span>
 					{:else}
-						<ArrowCounterClockwise size={11} weight="fill" />
+						<ArrowCounterClockwise size={11} />
 						<span>Rebase all</span>
 					{/if}
 				</button>
@@ -618,9 +618,9 @@ function activitiesForTurn(
 							aria-label="Discard commit {commit.shortSha}"
 						>
 							{#if isDiscardingCommit(commit.sha)}
-								<Spinner size={10} weight="fill" class="motion-essential-spin" />
+								<Spinner size={10} class="motion-essential-spin" />
 							{:else}
-								<Trash size={10} weight="fill" />
+								<Trash size={10} />
 							{/if}
 						</button>
 					</li>
@@ -642,7 +642,7 @@ function activitiesForTurn(
 				style="padding-bottom: calc({composerH}px + 1rem)"
 			>
 				{#snippet icon()}
-					<Robot size={32} weight="fill" />
+					<Robot size={32} />
 				{/snippet}
 				<Suggestion class="mt-3 justify-center">
 					{#each suggestedPrompts as prompt (prompt)}
@@ -774,7 +774,7 @@ function activitiesForTurn(
 						<MessageContent>
 							<div class="flex max-w-full flex-col items-end gap-1.5">
 								{#if item.content}
-									<MessageResponse content={item.content} mentionPills class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-white" />
+									<MessageResponse content={item.content} mentionPills class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-primary-foreground" />
 								{/if}
 								{#if item.attachments && item.attachments.length > 0}
 									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">
@@ -1218,7 +1218,7 @@ function activitiesForTurn(
 					onclick={dismissConflictDialog}
 					aria-label="Close conflict dialog"
 				>
-					<X size={14} weight="fill" />
+					<X size={14} />
 				</button>
 			</div>
 			<div class="conflict-card-body">
@@ -1266,7 +1266,7 @@ function activitiesForTurn(
 				<Dialog.Title>
 					<span class="new-branch-title">
 						{#if newBranchDialogMode === 'input'}
-							<GitBranch size={16} weight="fill" />
+							<GitBranch size={16} />
 							Push to a new branch
 						{:else}
 							<Warning size={16} weight="fill" class="new-branch-title-warn" />
@@ -1340,7 +1340,7 @@ function activitiesForTurn(
 						disabled={isPushing || !isValidNewBranchName(newBranchValue)}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							Pushing…
 						{:else}
 							Push
@@ -1354,7 +1354,7 @@ function activitiesForTurn(
 						disabled={isPushing}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							Overwriting…
 						{:else}
 							Overwrite
@@ -1532,7 +1532,7 @@ function activitiesForTurn(
 
 	   Style: a neutral elevated chip. The accent comes through only in
 	   the upload icon + count badge so the button reads as primary
-	   without flooding the panel header with color. Roboth halves are
+	   without flooding the panel header with color. Both halves are
 	   transparent and inherit the wrapper background, so the surface
 	   is uniform across the divider. */
 	.push-pill {

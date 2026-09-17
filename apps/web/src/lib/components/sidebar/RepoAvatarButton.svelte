@@ -70,7 +70,7 @@ const cloneStatusLabel = $derived.by(() => {
 					></span>
 				{:else if !repository.managed}
 					<span class="linked-dot" aria-hidden="true">
-						<LinkSimple size={8} weight="bold" />
+						<LinkSimple size={8} />
 					</span>
 				{/if}
 			</span>

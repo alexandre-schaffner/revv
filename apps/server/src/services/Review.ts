@@ -10,7 +10,7 @@ import type {
   ThreadStatus,
 } from "@revv/shared";
 import { canUserModifyComment } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { hunkDecisions } from "../db/schema/hunk-decisions";
@@ -141,6 +141,26 @@ export class ReviewService extends Context.Tag("ReviewService")<
       sessionId: string,
       externalCommentId: string,
     ) => Effect.Effect<CommentThread | null, ReviewError, DbService>;
+    /**
+     * Re-parent this PR's GitHub-sourced threads (`externalCommentId != null`)
+     * that landed in one of its *other* review sessions into `sessionId`.
+     * Returns how many moved.
+     *
+     * A PR has exactly one conversation on GitHub, but review sessions are
+     * keyed on `(pullRequestId, mode)`. The comment sync used to write into
+     * whichever session `getOrCreateActiveSession` defaulted to (`reviewer`),
+     * so on a PR the user authored — where the UI only ever loads the `author`
+     * session — every incoming reviewer comment landed in a session nothing
+     * displays. Re-pulling can't repair that: comments are deduped globally by
+     * external id, so an already-ingested comment is never re-created.
+     *
+     * Only externally-sourced threads move. Drafts the user has not submitted
+     * (no external id) stay in the session they were written in.
+     */
+    readonly adoptExternalThreads: (
+      prId: string,
+      sessionId: string,
+    ) => Effect.Effect<number, ReviewError, DbService>;
     readonly updateThreadStatus: (
       threadId: string,
       status: ThreadStatus,
@@ -374,6 +394,39 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
           .get(),
       );
       return row ? rowToThread(row) : null;
+    }),
+
+  adoptExternalThreads: (prId, sessionId) =>
+    Effect.gen(function* () {
+      const strays = yield* tryDb("find strayed external threads", (db) =>
+        db
+          .select({ id: commentThreads.id })
+          .from(commentThreads)
+          .innerJoin(reviewSessions, eq(reviewSessions.id, commentThreads.reviewSessionId))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              ne(commentThreads.reviewSessionId, sessionId),
+              isNotNull(commentThreads.externalCommentId),
+            ),
+          )
+          .all(),
+      );
+      if (strays.length === 0) return 0;
+
+      yield* tryDb("adopt strayed external threads", (db) =>
+        db
+          .update(commentThreads)
+          .set({ reviewSessionId: sessionId })
+          .where(
+            inArray(
+              commentThreads.id,
+              strays.map((t) => t.id),
+            ),
+          )
+          .run(),
+      );
+      return strays.length;
     }),
 
   setThreadExternalIds: (threadId, ids) =>

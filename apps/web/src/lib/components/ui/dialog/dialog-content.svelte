@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Dialog as DialogPrimitive } from "bits-ui";
-import XIcon from "phosphor-svelte/lib/X";
+import X from "phosphor-svelte/lib/X";
 import type { ComponentProps, Snippet } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
@@ -41,7 +41,7 @@ let {
 					<DialogPrimitive.Close data-slot="dialog-close">
 						{#snippet child({ props: closeProps })}
 							<Button variant="ghost" class="absolute top-3 right-3" size="icon-sm" {...closeProps}>
-								<XIcon />
+								<X />
 								<span class="sr-only">Close</span>
 							</Button>
 						{/snippet}

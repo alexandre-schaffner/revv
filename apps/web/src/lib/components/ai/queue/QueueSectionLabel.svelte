@@ -14,7 +14,7 @@ export type QueueSectionLabelProps = HTMLAttributes<HTMLSpanElement> & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 
 	let {
 		label,
@@ -30,7 +30,7 @@ export type QueueSectionLabelProps = HTMLAttributes<HTMLSpanElement> & {
 	class={cn("flex items-center gap-2", className)}
 	{...restProps}
 >
-	<ChevronDown class="size-4 transition-transform duration-snap group-data-[state=closed]:-rotate-90" />
+	<CaretDown class="size-4 transition-transform duration-snap group-data-[state=closed]:-rotate-90" />
 	{#if icon}
 		{@render icon()}
 	{/if}

@@ -41,6 +41,17 @@ const pr = $derived(getSelectedPr());
 // `getReviewModeForPr`. No manual override; the file fetch + session load
 // below resolve through it.
 const reviewMode = $derived(getReviewMode(page.params.prId ?? ""));
+// Read through a `$derived`, never inline in the diff-load effect below.
+// `isReviewModeResolved` walks `pullRequests` + `archivedPrs`, so calling it
+// from inside the effect subscribed that effect to both arrays — and every
+// `prs:updated` broadcast (5-min poll cycle) and every `fetchPrs()`
+// (SSE reconnect, window refocus) swaps those arrays wholesale. The effect
+// then re-ran for the *same* PR, and past its 60s reuse window it called
+// `clearReviewFiles()` + `setIsLoadingFiles(true)`, which flips the template
+// to the "Loading diff…" branch and destroys `.review-page` — unmounting a
+// mid-generation walkthrough and replaying every entrance animation. A
+// derived only propagates when the boolean itself changes.
+const reviewModeResolved = $derived(isReviewModeResolved(page.params.prId ?? ""));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
@@ -164,7 +175,7 @@ $effect(() => {
   // that provisional value means the whole `/files` payload is downloaded
   // twice, which on a 3 000-file PR is two ~12 MB responses back to back.
   // Keep the spinner up instead; this effect re-runs the moment mode resolves.
-  if (!isReviewModeResolved(prId)) {
+  if (!reviewModeResolved) {
     setIsLoadingFiles(true);
     return;
   }
@@ -186,12 +197,8 @@ $effect(() => {
     // or a hard refresh will bust this.
     const now = Date.now();
     const currentFiles = getReviewFiles();
-    if (
-      prId === lastLoadedPrId &&
-      mode === lastLoadedMode &&
-      now - lastLoadedAt < PR_REFETCH_WINDOW_MS &&
-      currentFiles.length > 0
-    ) {
+    const sameView = prId === lastLoadedPrId && mode === lastLoadedMode && currentFiles.length > 0;
+    if (sameView && now - lastLoadedAt < PR_REFETCH_WINDOW_MS) {
       // Still kick off a session load so thread-counts refresh; cheap.
       loadSession(prId, mode).catch((e) =>
         console.error("[review] Session load failed (non-blocking):", e),
@@ -199,8 +206,16 @@ $effect(() => {
       return;
     }
 
-    clearReviewFiles();
-    setIsLoadingFiles(true);
+    // Refresh in place when the view isn't actually changing. `clearReviewFiles()`
+    // + `setIsLoadingFiles(true)` swap the template to the "Loading diff…" branch,
+    // which destroys `.review-page` — the walkthrough, the request-changes tab and
+    // the review session go with it. That's the right trade when the user asked
+    // for a different PR or lens; it is never right for a background re-fetch of
+    // the view already on screen. New files replace the old ones when they land.
+    if (!sameView) {
+      clearReviewFiles();
+      setIsLoadingFiles(true);
+    }
     const activeFileHint = getActiveFilePath();
 
     (async () => {
@@ -260,6 +275,14 @@ $effect(() => {
         }
       } catch (e) {
         if (requestId !== currentRequestId) return;
+        // A failed background refresh must not replace a diff the user is
+        // reading with a full-page error — the files already on screen are
+        // still the last good answer. Only a load the view is waiting on
+        // (PR switch, lens switch, first visit) surfaces as `loadError`.
+        if (sameView) {
+          console.error("[review] Background diff refresh failed:", e);
+          return;
+        }
         setFilesError(e instanceof Error ? e.message : "Failed to load diff");
       } finally {
         if (requestId === currentRequestId) setIsLoadingFiles(false);

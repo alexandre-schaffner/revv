@@ -75,6 +75,10 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     authorAvatarContent: null,
     authorAvatarUrl: (user.avatar_url as string | null) ?? null,
     requestedReviewers,
+    // GitHub's PR payload has no mentions field; they're parsed out of the
+    // body and unioned with comment-sourced mentions during sync, then read
+    // back off the DB row. Always empty on this path.
+    mentionedUsers: [],
     status: raw.state === "closed" ? (raw.merged_at ? "merged" : "closed") : "open",
     reviewStatus: "pending",
     isDraft: (raw.draft as boolean | undefined) ?? false,
@@ -1389,7 +1393,19 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const query = `
+      // `mergeCommitAllowed` / `squashMergeAllowed` / `rebaseMergeAllowed` are
+      // recent additions to `Repository`, and GraphQL rejects the *whole* query
+      // on an unknown field — so on a GitHub Enterprise release that predates
+      // them, asking for them would cost the caller `canMerge` too and the merge
+      // pill would vanish rather than degrade. Ask once with them; on a schema
+      // complaint, ask again without and let `allowedMethods` come back empty,
+      // which the UI already reads as "offer all three".
+      const MERGE_METHOD_FIELDS = [
+        "mergeCommitAllowed",
+        "squashMergeAllowed",
+        "rebaseMergeAllowed",
+      ];
+      const buildQuery = (withMergeMethods: boolean): string => `
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
@@ -1397,6 +1413,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
               mergeStateStatus
             }
             viewerPermission
+            ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
           }
         }
       `;
@@ -1407,13 +1424,28 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
             mergeStateStatus: string | null;
           } | null;
           viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
+          mergeCommitAllowed: boolean | null;
+          squashMergeAllowed: boolean | null;
+          rebaseMergeAllowed: boolean | null;
         } | null;
       }
-      const data = yield* githubGraphql<Resp>(
-        query,
-        { owner, repo, number: prNumber },
-        token,
-        apiBase,
+      const ask = (withMergeMethods: boolean) =>
+        githubGraphql<Resp>(
+          buildQuery(withMergeMethods),
+          { owner, repo, number: prNumber },
+          token,
+          apiBase,
+        );
+      const data = yield* ask(true).pipe(
+        Effect.catchAll((err) => {
+          // Only a complaint naming one of the three fields earns the retry.
+          // Anything else — auth, rate limit, network — is answered the same
+          // way by both queries, so retrying would just cost a second request.
+          const text = JSON.stringify(err);
+          return MERGE_METHOD_FIELDS.some((field) => text.includes(field))
+            ? ask(false)
+            : Effect.fail(err);
+        }),
       );
       const pr = data.repository?.pullRequest;
       if (!pr) {
@@ -1426,10 +1458,18 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }
       const perm = data.repository?.viewerPermission;
       const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // Repos routinely disable merge strategies (squash-only is the common
+      // house style). Offering a disabled one earns a 405 from the merge
+      // endpoint, so the allowed set travels with the eligibility answer.
+      const allowedMethods: MergeMethod[] = [];
+      if (data.repository?.mergeCommitAllowed !== false) allowedMethods.push("merge");
+      if (data.repository?.squashMergeAllowed !== false) allowedMethods.push("squash");
+      if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
       return {
         canMerge,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
+        allowedMethods,
       };
     }),
 

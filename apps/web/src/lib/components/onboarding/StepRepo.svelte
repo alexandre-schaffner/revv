@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
@@ -328,7 +328,7 @@ function handlePathKey(e: KeyboardEvent) {
 <div class="repo">
 	{#if onBack && !isAdding && mode !== 'browse'}
 		<button class="back" onclick={onBack}>
-			<ChevronLeft size={14} />
+			<CaretLeft size={14} />
 			<span>Back</span>
 		</button>
 	{/if}
@@ -362,7 +362,7 @@ function handlePathKey(e: KeyboardEvent) {
 						<Dotmatrix variant="square-13" size="small" />
 					{/if}
 					<button class="browse-button" onclick={() => void browseLocalClone()} disabled={inspecting}>
-						<FolderOpen size={13} weight="fill" />
+						<FolderOpen size={13} />
 						<span>Browse</span>
 					</button>
 				</div>
@@ -373,7 +373,7 @@ function handlePathKey(e: KeyboardEvent) {
 					<p class="path-hint path-hint--danger">This repository is already tracked.</p>
 				{:else if isGitRepo === true && fullName !== null}
 					<p class="path-hint path-hint--ok">
-						<CheckCircle size={12} weight="fill" />
+						<CheckCircle size={12} />
 						<span>Recognized as <code>{fullName}</code>.</span>
 					</p>
 				{:else if isGitRepo === true}
@@ -400,7 +400,7 @@ function handlePathKey(e: KeyboardEvent) {
 					     as a full-width card. -->
 					<div class="link-actions">
 						<button class="link-submit" onclick={() => void submitLink()}>
-							<LinkSimple size={14} weight="bold" />
+							<LinkSimple size={14} />
 							<span>Link this repository</span>
 						</button>
 						<button class="alt-link" onclick={() => (mode = 'browse')}>
@@ -439,7 +439,7 @@ function handlePathKey(e: KeyboardEvent) {
 		{:else}
 			<div class="browse">
 				<button class="back-mode" onclick={() => (mode = 'link')}>
-					<ChevronLeft size={13} />
+					<CaretLeft size={13} />
 					<span>Back</span>
 				</button>
 

@@ -12,7 +12,7 @@
 // files share stays inert rather than guessing the wrong target. This keeps the
 // common "symbol in backticks" (`checkAccessBatch`) from masquerading as a file.
 //
-// Follows the `mermaidDiagrams` action pattern: a MutationObserver re-decorates
+// Follows the `prlensDiagrams` action pattern: a MutationObserver re-decorates
 // on content changes (streaming), microtask-scheduled so it runs after Svelte
 // patches the DOM. Attribute writes aren't observed (childList only), so our own
 // decoration never re-triggers the observer.

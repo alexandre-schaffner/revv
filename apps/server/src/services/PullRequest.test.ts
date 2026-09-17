@@ -174,6 +174,7 @@ function listSourcedPr(overrides: Partial<PullRequest> = {}): PullRequest {
     authorAvatarContent: null,
     authorAvatarUrl: null,
     requestedReviewers: [],
+    mentionedUsers: [],
     status: "open",
     reviewStatus: "pending",
     isDraft: false,

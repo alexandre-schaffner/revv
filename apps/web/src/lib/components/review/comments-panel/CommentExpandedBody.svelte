@@ -64,7 +64,7 @@ const renderedThreads = $derived.by(() => {
                         title="Jump to diff line {entry.thread.startLine}"
                     >
                         <span class="thread-jump-label">jump</span>
-                        <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
+                        <ArrowUpRight size={11} aria-hidden="true" />
                     </button>
                 {/if}
                 {#if onDiscard && entry.thread.externalCommentId == null && entry.messages[0] && canUserModifyComment(entry.messages[0], currentUserLogin)}
@@ -74,7 +74,7 @@ const renderedThreads = $derived.by(() => {
                         onclick={() => onDiscard?.(entry.thread.id)}
                         title="Discard this pending comment"
                     >
-                        <Trash size={11} weight="fill" aria-hidden="true" />
+                        <Trash size={11} aria-hidden="true" />
                         <span class="thread-discard-label">discard</span>
                     </button>
                 {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
 import CaretDown from "phosphor-svelte/lib/CaretDown";
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import {
   cancelSignIn,
@@ -9,6 +9,7 @@ import {
   setForceOnboardingFlow,
 } from "$lib/stores/auth.svelte";
 import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
+import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
   onContinue: () => void;
@@ -92,7 +93,7 @@ async function handleContinue() {
 <div class="host">
 	{#if onBack}
 		<button class="back" onclick={onBack}>
-			<ChevronLeft size={14} />
+			<CaretLeft size={14} />
 			<span>Back</span>
 		</button>
 	{/if}
@@ -174,7 +175,7 @@ async function handleContinue() {
 				>
 					<span class="guide-toggle-copy">
 						<span class="guide-icon" aria-hidden="true">
-							<GithubLogo size={15} weight="fill" />
+							<GithubLogo size={15} />
 						</span>
 						<span>
 							<span class="guide-title">How to create the GitHub App</span>
@@ -182,7 +183,7 @@ async function handleContinue() {
 						</span>
 					</span>
 					<span class="guide-caret" aria-hidden="true">
-						<CaretDown size={13} weight="bold" />
+						<CaretDown size={13} />
 					</span>
 				</button>
 
@@ -263,16 +264,7 @@ async function handleContinue() {
 	<div class="actions">
 		<button class="primary" onclick={handleContinue} disabled={isSaving || !canContinue}>
 			<span>Continue</span>
-			<svg
-				width="18"
-				height="10"
-				viewBox="0 0 18 10"
-				fill="none"
-				xmlns="http://www.w3.org/2000/svg"
-				aria-hidden="true"
-			>
-				<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-			</svg>
+			<ContinueArrow />
 		</button>
 	</div>
 </div>
@@ -487,7 +479,7 @@ async function handleContinue() {
 			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	.primary svg {
+	.primary :global(svg) {
 		transition: transform var(--duration-slow) var(--ease-out-expo);
 	}
 
@@ -496,7 +488,7 @@ async function handleContinue() {
 		color: var(--ob-text-heading-bright);
 	}
 
-	.primary:hover:not(:disabled) svg {
+	.primary:hover:not(:disabled) :global(svg) {
 		transform: translateX(4px);
 	}
 
@@ -574,7 +566,7 @@ async function handleContinue() {
 		font-family: 'Newsreader', Georgia, serif;
 		font-size: 13.5px;
 		line-height: 1.45;
-		color: var(--danger, #f87171);
+		color: var(--ob-error);
 	}
 
 	.guide {

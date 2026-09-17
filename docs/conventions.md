@@ -554,11 +554,54 @@ Hand-typed durations that match no token, in the same file as 1200ms which also 
 [`M-014`](./conventions-backlog.md#m-014).
 
 <a id="motion-icon-only"></a>
-### 5.3 Icon-only policy (cross-reference)
+### 5.3 Iconography
 
-The "always use icons, never emojis" rule lives in CLAUDE.md and is fully honored — zero
-violations in the codebase. Use `phosphor-svelte` components or inline SVG for brand/octicon
-marks; no emoji glyphs in rendered UI, toasts, or component text.
+**No emoji.** The "always use icons, never emojis" rule lives in CLAUDE.md and is fully
+honored — zero violations. No emoji glyphs in rendered UI, toasts, or component text.
+
+**One icon system: `phosphor-svelte`.** Import deep
+(`phosphor-svelte/lib/<Icon>`), never from the package root, and **never under an
+alias**. The import name is the phosphor icon name. A Lucide-era alias
+(`import Loader2 from ".../Spinner"`) hides which glyph actually ships, and cost us
+six wrong icons — a bare `Octagon` for "blocker", an open-PR glyph for "closed", a
+`CalendarCheck` for "scheduled", and a sidebar toggle whose two `{#if}` branches
+resolved to the same icon, so the button never changed.
+
+**Defaults come from one place.** `routes/+layout.svelte` wraps the app in
+phosphor's `<IconContext>` and sets `weight: "regular"` and `aria-hidden: "true"`.
+Call sites state only what differs. Props beat context, so both stay overridable.
+
+- **`aria-hidden`.** phosphor stamps `role="img"` on every `<svg>`, and a `role=img`
+  with no accessible name is an unlabelled image (WCAG 1.1.1). Icons are decorative —
+  the adjacent label or the button's `aria-label` carries the meaning. An icon that
+  IS the only signal opts back in with `aria-hidden="false"` plus an `aria-label`.
+- **`weight` is information, not decoration.** `regular` is the default. `weight="fill"`
+  means one of exactly two things:
+  1. **State** — the on / active / selected half of a toggle. Prefer a dynamic
+     expression on one glyph (`weight={open ? "fill" : "regular"}`) over swapping
+     glyphs in an `{#if}`.
+  2. **Severity** — a status marker where solidity itself is the signal.
+
+  `bold`, `thin`, `light`, and `duotone` are not used.
+
+**The severity ramp.** Solidity descends with severity, so the most severe mark is
+always the heaviest on screen. Applies to the issues panel, the ratings panel, the
+approve dialog, and toasts.
+
+| Level | Glyph | Weight |
+| --- | --- | --- |
+| critical / blocker / error | `WarningOctagon` | `fill` |
+| warning / concern | `Warning` | `fill` |
+| failed check | `XCircle` | `fill` |
+| success / passed check | `CheckCircle` / `Check` | `fill` / `regular` |
+| info | `Info` / `Circle` | `regular` |
+
+**Inline SVG** is for brand and octicon-style marks only (`components/icons/*`, the
+`@pierre/trees` file-type sprite in `utils/file-icon.ts`, `ContinueArrow`). If a
+phosphor equivalent exists, use it — a hand-rolled 24-grid, 1.5–2px-stroke glyph
+next to phosphor's 256-grid set reads as two different icon sets. Imperative DOM
+callers that can't mount a component use `utils/phosphor-markup.ts`, which carries
+phosphor's own path data.
 
 **Backlog.** None.
 

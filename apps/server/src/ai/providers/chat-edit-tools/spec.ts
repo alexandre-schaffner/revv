@@ -13,6 +13,12 @@
 import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import {
+  PLAIN_TEXT_FIELD,
+  PROSE_VOICE_CONTRACT,
+  SENTIMENT_CONTRACT,
+  SUMMARY_CONTRACT,
+} from "../../prompts/review-copy-contract";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Handler execution context ───────────────────────────────────────────────
@@ -85,7 +91,7 @@ export const blockContentSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for narrative/explanatory content. Mutually exclusive with `code`, `diff`, and `artifact`.",
+        `Use for narrative/explanatory content, budget 150 WORDS. Mutually exclusive with \`code\`, \`diff\`, and \`artifact\`. ${PROSE_VOICE_CONTRACT}`,
       ),
     code: z
       .object({
@@ -119,7 +125,7 @@ export const blockContentSchema = z
         html: z
           .string()
           .describe(
-            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage. Renders in a sandboxed iframe. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family. See the system prompt for the full token list and design rules.",
+            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage; no timers/randomness. Renders in a sandboxed iframe that auto-sizes. Must carry a live state readout, something the reader can vary, and a verdict — a step-reveal with no changing state is a markdown list, not an artifact. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family; spend the accent on the current state, not on buttons. Keep it under ~320px tall: compact rows, no placeholder rows for content not yet revealed. See 'Interactive artifacts (the craft bar)' in the system prompt for the full contract.",
           ),
         annotation: z.string().nullable(),
         annotation_position: z.enum(["left", "right"]),
@@ -163,7 +169,7 @@ export const updateOverviewSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "New 2–3 sentence PR summary. Omit (or send null) to leave the existing summary unchanged.",
+      `New PR summary. ${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT} Omit (or send null) to leave the existing summary unchanged.`,
     ),
   risk_level: z
     .enum(["low", "medium", "high"])
@@ -182,7 +188,7 @@ export const addSemanticStepEditSchema = z.object({
     .describe(
       "Index at which to insert the new chapter. Must NOT already exist — call get_walkthrough_for_edit first to pick a free index. Gaps are allowed (e.g. existing indices 0,1,3 → you can insert 2, 4, 99 etc.).",
     ),
-  title: z.string().min(1).describe("Chapter title (≤ ~60 chars)."),
+  title: z.string().min(1).describe(`Chapter title (≤ ~60 chars). ${PLAIN_TEXT_FIELD}`),
   summary: z
     .string()
     .nullable()
@@ -202,7 +208,7 @@ export const updateSemanticStepSchema = z.object({
     .min(1)
     .nullable()
     .optional()
-    .describe("New chapter title. Omit / null to leave unchanged."),
+    .describe(`New chapter title. Omit / null to leave unchanged. ${PLAIN_TEXT_FIELD}`),
   summary: z
     .string()
     .nullable()
@@ -267,7 +273,7 @@ export const updateSentimentSchema = z.object({
   markdown: z
     .string()
     .describe(
-      "New Overall Sentiment markdown. 2–4 sentences, direct verdict — replaces the current sentiment in full.",
+      `New Overall Sentiment markdown, replacing the current sentiment in full. ${SENTIMENT_CONTRACT} ${PROSE_VOICE_CONTRACT}`,
     ),
 });
 
@@ -289,12 +295,16 @@ export const updateRatingSchema = z.object({
     .string()
     .nullable()
     .optional()
-    .describe("New 1–2 sentence rationale. Omit/null to leave unchanged."),
+    .describe(
+      `New rationale, 1–2 sentences and 35 words. Omit/null to leave unchanged. ${PROSE_VOICE_CONTRACT}`,
+    ),
   details: z
     .string()
     .nullable()
     .optional()
-    .describe("New rich markdown details. Omit/null to leave unchanged."),
+    .describe(
+      `New markdown details, 80 words. Omit/null to leave unchanged. ${PROSE_VOICE_CONTRACT}`,
+    ),
   citations: z
     .array(
       z.object({
@@ -331,8 +341,10 @@ const SEVERITY_CALIBRATION =
 
 export const addIssueEditSchema = z.object({
   severity: z.enum(["info", "warning", "critical"]).describe(SEVERITY_CALIBRATION),
-  title: z.string(),
-  description: z.string(),
+  title: z.string().describe(`Short title of the concern (10 words max). ${PLAIN_TEXT_FIELD}`),
+  description: z
+    .string()
+    .describe(`One-sentence label for the issues-list card (≤ ~15 words). ${PLAIN_TEXT_FIELD}`),
   block_refs: z
     .array(blockRefSchema)
     .min(1)
@@ -351,8 +363,8 @@ export const updateIssueSchema = z.object({
     .describe(SEVERITY_CALIBRATION)
     .nullable()
     .optional(),
-  title: z.string().nullable().optional(),
-  description: z.string().nullable().optional(),
+  title: z.string().nullable().optional().describe(`New title. ${PLAIN_TEXT_FIELD}`),
+  description: z.string().nullable().optional().describe(`New description. ${PLAIN_TEXT_FIELD}`),
   block_refs: z.array(blockRefSchema).nullable().optional(),
   file_path: z.string().nullable().optional(),
   start_line: z.coerce.number().int().nullable().optional(),
@@ -378,7 +390,7 @@ export const addIssueCommentEditSchema = z.object({
 
 export const updateIssueCommentSchema = z.object({
   thread_message_id: z.string().describe("thread_messages.id of the comment to update."),
-  body: z.string().describe("New markdown body."),
+  body: z.string().describe(`New markdown body. ${PROSE_VOICE_CONTRACT}`),
 });
 
 export const deleteIssueCommentSchema = z.object({

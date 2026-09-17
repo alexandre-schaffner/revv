@@ -6,6 +6,7 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { prefersReducedMotion } from "$lib/motion";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
 // xterm ships its own canvas/DOM — acceptable for a literal terminal. The
@@ -228,6 +229,22 @@ onMount(async () => {
   const ctrl = new AbortController();
   abort = ctrl;
   void streamLoginEvents(jobId, ctrl.signal);
+});
+
+// The tokens above are resolved to literal colors at construction and xterm
+// never re-reads them, so a theme switch mid-login left the PTY output painted
+// in the old palette on the new paper — and the onboarding shell carries its
+// own theme toggle, so that switch is one click away from this very screen.
+// Re-read and reapply on every resolved-theme change. `term` is deliberately
+// not reactive: the first run lands before the async import resolves and is a
+// no-op, which is correct — construction already applied the current theme.
+$effect(() => {
+  const resolved = getResolvedTheme();
+  if (!term) return;
+  // The `.dark` class on <html> is toggled synchronously before this effect
+  // runs, so the --ob-* tokens already resolve to the new theme.
+  void resolved;
+  term.options.theme = readTerminalStyle(container).theme;
 });
 
 onDestroy(() => {
