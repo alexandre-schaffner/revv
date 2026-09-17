@@ -34,6 +34,19 @@ export interface PrHeadSnapshot {
 }
 
 /**
+ * The fields a stale read must not be allowed to write.
+ *
+ * Wider than `PrHeadSnapshot` because the *verdict* needs only the head, while
+ * the *write mask* must keep the whole diff range coherent. `base_sha` and
+ * `head_sha` are consumed as a pair — `routes/prs.ts` calls
+ * `compareFiles(baseSha, headSha)`, the diff cache keys on both — so masking one
+ * and writing the other produces a range GitHub never reported.
+ */
+export interface PrRangeSnapshot extends PrHeadSnapshot {
+  readonly baseSha: string | null;
+}
+
+/**
  * `true` when `fresh` is a trustworthy report that the PR's head moved off
  * `stored.headSha`, i.e. the caller may supersede walkthroughs pinned to
  * anything other than `fresh.headSha`.
@@ -86,14 +99,25 @@ function regressesStoredHead(stored: PrHeadSnapshot, fresh: PrHeadSnapshot): boo
  * provably older, the stored view stands and a later cycle — which will carry a
  * monotonically newer `updated_at` — is the one that acts.
  *
- * Only the two head-bearing fields are masked. Everything else in the payload
- * (title, draft state, reviewers, counts) is still worth writing; a stale read
- * is stale about the head, not corrupt.
+ * Only the three range-bearing fields are masked. Everything else in the
+ * payload (title, draft state, reviewers, counts) is still worth writing; a
+ * stale read is stale about the head, not corrupt.
+ *
+ * `baseSha` travels with `headSha` because the two are only ever read as a
+ * pair. Keeping the stored head while writing the stale body's base would
+ * compute the PR diff over `(staleBase, storedHead)` — a range that describes
+ * no commit either side ever produced, and one the `(headSha, baseSha)` diff
+ * cache key would then treat as a legitimate miss and re-fetch.
  */
-export function preserveHeadOnStaleRead<T extends PrHeadSnapshot>(
-  stored: PrHeadSnapshot | undefined,
+export function preserveHeadOnStaleRead<T extends PrRangeSnapshot>(
+  stored: PrRangeSnapshot | undefined,
   fresh: T,
-): Omit<T, keyof PrHeadSnapshot> & PrHeadSnapshot {
+): Omit<T, keyof PrRangeSnapshot> & PrRangeSnapshot {
   if (stored === undefined || !regressesStoredHead(stored, fresh)) return fresh;
-  return { ...fresh, headSha: stored.headSha, updatedAt: stored.updatedAt };
+  return {
+    ...fresh,
+    headSha: stored.headSha,
+    baseSha: stored.baseSha,
+    updatedAt: stored.updatedAt,
+  };
 }
