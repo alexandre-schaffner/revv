@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.24.0](https://github.com/alexandre-schaffner/revv/compare/v0.23.3...v0.24.0) (2026-09-17)
+
+
+### Features
+
+* **home:** derive the PR queue client-side and stack repos into a feed ([548b4f0](https://github.com/alexandre-schaffner/revv/commit/548b4f0e66a06aefe0db1967bb78c10e3038940f))
+* PR Lens diagram renderer, plus chat-push, sync and homepage work ([4c6981c](https://github.com/alexandre-schaffner/revv/commit/4c6981c3d3cd17e60f34aa7e9d784f849d232bd2))
+* **ui:** put every icon on one phosphor system ([d9c53d6](https://github.com/alexandre-schaffner/revv/commit/d9c53d6af26d18de1b625f033fba793a57ab30bb))
+* **walkthrough:** put review copy, artifacts and triage under stated contracts ([403f887](https://github.com/alexandre-schaffner/revv/commit/403f887537f2082fe3cd25861dc62ee1b9c7a2f7))
+* **walkthrough:** replace Mermaid with the PR Lens diagram renderer ([c09ca67](https://github.com/alexandre-schaffner/revv/commit/c09ca67f6fe4badf7903b96c86102bc8ac07ad2f))
+
+
+### Bug Fixes
+
+* **chat:** make the push path safe in a repo the user also works in ([ace5e02](https://github.com/alexandre-schaffner/revv/commit/ace5e0291f4a892d95953c4bbb298b510a0df77b))
+* **review:** close the gaps two review passes found ([2d512ba](https://github.com/alexandre-schaffner/revv/commit/2d512ba8f15dcc2d6f875796e2c03a0ee4e2df2d))
+* **sync:** keep baseSha with headSha in the stale-read mask ([1e329f6](https://github.com/alexandre-schaffner/revv/commit/1e329f6a63357669c7ee545f8cda98611a2ad482))
+* **sync:** stop stale GitHub reads rewinding heads and losing comments ([4b45946](https://github.com/alexandre-schaffner/revv/commit/4b45946f936b811e97d9dd7e607eb551deb0880c))
+* **ui:** cut the theme swap, the caret loss and the double update toast ([9d72431](https://github.com/alexandre-schaffner/revv/commit/9d724310b95268e130758bea035c7de1af4d79f5))
+
 ## [0.23.3](https://github.com/alexandre-schaffner/revv/compare/v0.23.2...v0.23.3) (2026-09-04)
 
 
