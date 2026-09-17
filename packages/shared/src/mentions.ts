@@ -43,9 +43,17 @@ const MENTION_TOKEN_RE = /(^|\s)@([^\s`]+)/g;
 export const MENTION_PATH_PATTERN = "@((?:[\\w.-]+/)*[\\w.-]+\\.[A-Za-z0-9]+)(?::(\\d+))?";
 
 /**
- * Detect the active autocomplete trigger in the text before the caret. Slash
- * commands only trigger at the very start of the input; `@`-mentions trigger
- * anywhere. Returns `null` when the caret is not in a trigger token.
+ * Detect the active autocomplete trigger in the text before the caret. Both
+ * markers trigger at start-of-input or after whitespace, anywhere in the
+ * message — naming a command mid-sentence ("rewrite the body using /…") is as
+ * ordinary as naming a file, and slash used to be pinned to offset 0, so the
+ * menu silently refused to open for exactly that phrasing.
+ *
+ * The word boundary is what keeps this quiet: a path (`/etc/hosts`), a URL
+ * (`https://…`) and a fraction (`and/or`) either fail the boundary or produce
+ * a query no command name contains, and the composer only opens the menu when
+ * at least one item matches. Returns `null` when the caret is not in a trigger
+ * token.
  */
 export function detectMentionTrigger(textBeforeCaret: string): MentionTrigger | null {
   const match = TRIGGER_AT_CARET_RE.exec(textBeforeCaret);
@@ -54,7 +62,7 @@ export function detectMentionTrigger(textBeforeCaret: string): MentionTrigger | 
   const marker = match[2];
   const query = match[3] ?? "";
   const start = match.index + prefix.length;
-  if (marker === "/" && start === 0) return { kind: "slash", start, query };
+  if (marker === "/") return { kind: "slash", start, query };
   if (marker === "@") return { kind: "mention", start, query };
   return null;
 }
