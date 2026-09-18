@@ -15,11 +15,16 @@
 // and the install/error/restart toasts reuse the same slot instead of
 // accumulating next to it.
 //
-// Dismissals are session-scoped: we store the dismissed version in a
-// module-level variable so the toast doesn't reappear on the next hourly
-// tick, but a full app restart resets it. That's intentional — if the user
-// dismisses an update and then leaves the app running for a week, the next
-// launch should offer it again.
+// Dismissals are durable. The dismissed version is persisted to
+// localStorage, so dismissing v1.2.3 silences v1.2.3 for good instead of
+// re-nagging five seconds into the next launch. The memory is keyed on the
+// exact version string, so a *newer* release notifies again, and Settings →
+// "Check now" bypasses it entirely — an explicit check always answers.
+//
+// Closing the card with its × counts as a dismissal too. Sonner routes the
+// close button and swipe-to-dismiss through `onDismiss` and the Dismiss
+// button through `cancel.onClick`; both record the version. Only Install
+// leaves the memory alone.
 
 import { UPDATE_STABLE_COOLDOWN_MS } from "@revv/shared";
 import Download from "phosphor-svelte/lib/Download";
@@ -33,8 +38,15 @@ const HOURLY_MS = 60 * 60 * 1000;
 /** Shared Sonner slot for every updater toast — see the module header. */
 const TOAST_ID = "revv-updater";
 
+/** localStorage key holding the last version the user dismissed. */
+const DISMISSED_KEY = "revv:updater:dismissed-version";
+
 let started = false;
 let intervalId: ReturnType<typeof setInterval> | null = null;
+/**
+ * In-memory mirror of {@link DISMISSED_KEY}, so a dismissal still holds for
+ * the rest of the session even if the write didn't land.
+ */
 let dismissedVersion: string | null = null;
 /** Version currently advertised by an on-screen toast, if any. */
 let notifiedVersion: string | null = null;
@@ -101,9 +113,9 @@ async function check(options: { manual?: boolean }): Promise<void> {
       }
       return;
     }
-    if (!options.manual && update.version === dismissedVersion) {
-      // User already dismissed this version during this session; don't
-      // re-toast on every hourly tick. The flag resets on app restart.
+    if (!options.manual && isDismissed(update.version)) {
+      // User already told us they don't want this exact version. Stay quiet
+      // until a newer one ships or they ask explicitly from Settings.
       return;
     }
     if (!options.manual && update.version === notifiedVersion) {
@@ -153,10 +165,26 @@ function shouldNotify(update: UpdateInfo, manual: boolean): boolean {
   return Date.now() - publishedMs >= UPDATE_STABLE_COOLDOWN_MS;
 }
 
+/** True when the user has dismissed this exact version, now or in a past run. */
+function isDismissed(version: string): boolean {
+  if (version === dismissedVersion) return true;
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem(DISMISSED_KEY) === version;
+}
+
+/** Records a dismissal and takes the card off the screen's books. */
+function rememberDismissal(version: string): void {
+  dismissedVersion = version;
+  notifiedVersion = null;
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(DISMISSED_KEY, version);
+  }
+}
+
 function showUpdateToast(update: UpdateInfo): void {
   // Sonner's `duration: Infinity` keeps the toast open until the user
   // explicitly acts. The Install button triggers download+install; Dismiss
-  // records the version so we don't re-nag until the next launch.
+  // records the version so this release never nags again.
   notifiedVersion = update.version;
   toast(`Update available — v${update.version}`, {
     id: TOAST_ID,
@@ -172,9 +200,17 @@ function showUpdateToast(update: UpdateInfo): void {
     cancel: {
       label: "Dismiss",
       onClick: () => {
-        dismissedVersion = update.version;
-        notifiedVersion = null;
+        rememberDismissal(update.version);
       },
+    },
+    onDismiss: () => {
+      // Fires for the × and for swipe-to-dismiss. The install/error/restart
+      // toasts reuse this Sonner slot, and svelte-sonner merges new options
+      // over the stored ones — `exactOptionalPropertyTypes` rules out
+      // clearing this with an explicit `undefined` — so gate on the card
+      // still being the one advertising the update.
+      if (notifiedVersion !== update.version) return;
+      rememberDismissal(update.version);
     },
   });
 }

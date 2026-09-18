@@ -607,6 +607,43 @@ export { redactGitAuth } from "./git-runner";
  */
 export type PushFailureKind = "auth" | "remote-moved" | "rejected";
 
+/**
+ * GitHub's refusal when a push would create or update a file under
+ * `.github/workflows/` with a credential that carries no workflow-write
+ * authority. Returns the workflow path GitHub named (`null` when it named
+ * none), or `null` for any other rejection.
+ *
+ * Neither of Revv's auth paths can push CI: the GitHub App's permission set
+ * is Pull requests RW + Contents RW + Metadata R with no `Workflows: write`,
+ * and the OAuth device flow asks for `repo read:org user:email` with no
+ * `workflow`. Both refusals arrive as a `[remote rejected]`, and neither
+ * wording ("refusing to allow a GitHub App to create or update workflow
+ * `x.yml` without `workflows` permission" / "…without `workflow` scope")
+ * tells the user anything they can act on — it reads like a server
+ * misconfiguration. Agents touch CI constantly, so this is a rejection worth
+ * naming rather than echoing.
+ *
+ * There is no preflight for it: whether a given credential holds the
+ * permission is not knowable locally (a self-hosted GHE app may well have it),
+ * so the push has to reach GitHub to find out. This only interprets the
+ * answer.
+ */
+export function workflowPermissionRejection(
+  stderr: string,
+): { readonly path: string | null } | null {
+  const lower = stderr.toLowerCase();
+  if (!lower.includes("refusing to allow")) return null;
+  if (
+    !lower.includes("without `workflows` permission") &&
+    !lower.includes("without `workflow` scope")
+  ) {
+    return null;
+  }
+  // GitHub backticks the path it tripped on: "…update workflow `.github/workflows/ci.yml` without…".
+  const named = /workflow `([^`]+)`/i.exec(stderr);
+  return { path: named?.[1] ?? null };
+}
+
 export function classifyPushFailure(stderr: string): PushFailureKind {
   const lower = stderr.toLowerCase();
 
