@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.25.0](https://github.com/alexandre-schaffner/revv/compare/v0.24.0...v0.25.0) (2026-09-18)
+
+
+### Features
+
+* **recaps, review:** calendar/window recap views, merged stamp, diff-anchor fitting ([960834a](https://github.com/alexandre-schaffner/revv/commit/960834a4cbdad0870c763634ad46663183655a8d))
+* **recaps:** fetch recap grids by month and merge into one cache ([e2af0a7](https://github.com/alexandre-schaffner/revv/commit/e2af0a76c2901e58304bb793c49a5015330785ff))
+* **recaps:** promote the UTC period-window math into a tested module ([608e6bf](https://github.com/alexandre-schaffner/revv/commit/608e6bf16c94b87cec4260738c1cd28736f2dd07))
+* **recaps:** range-filter the recap list by period window ([cbb5ed9](https://github.com/alexandre-schaffner/revv/commit/cbb5ed9d59fdf39c06194200d8c58ec06d73d03c))
+* **recaps:** replace the recap archive list with a month calendar ([5d78e50](https://github.com/alexandre-schaffner/revv/commit/5d78e5073e7877ebe9836cf7969cc8099ac51f9b))
+* **ui:** give the chat pane a Slack-style responsive layout ([#223](https://github.com/alexandre-schaffner/revv/issues/223)) ([05cad9f](https://github.com/alexandre-schaffner/revv/commit/05cad9f9ee59fae2c6a0cc9627040f53432a8980))
+
+
+### Bug Fixes
+
+* **agent:** let the isolated Claude config reach the user's own toolbox ([91c0226](https://github.com/alexandre-schaffner/revv/commit/91c022687b2a49cf1b78b43a7342b4e49f384194))
+* **chat-push:** stop a stale claim wedging the push, and say why CI pushes fail ([a46ad94](https://github.com/alexandre-schaffner/revv/commit/a46ad94f7a779ba137cc6c573ecd8858c5ab7ed9))
+* **chat:** open the command menu for a slash anywhere in the message ([e9a04c1](https://github.com/alexandre-schaffner/revv/commit/e9a04c1ac30d5d85f5548aabb2f2eb0641c71238))
+* **recaps:** make historical recap windows actually historical ([8dadc5a](https://github.com/alexandre-schaffner/revv/commit/8dadc5aae7e1051eb55c436e28e2c8e23b4b4a10))
+* **updater:** make dismissing an update stick ([5c53fd3](https://github.com/alexandre-schaffner/revv/commit/5c53fd3bb7a1f511725e6ae792619dffc4b8ef91))
+* **walkthrough:** make Stop terminal and Regenerate actually regenerate ([cd39880](https://github.com/alexandre-schaffner/revv/commit/cd39880dbe12bcc5fb9cf7d5b4ef284ac6bc30df))
+
 ## [0.24.0](https://github.com/alexandre-schaffner/revv/compare/v0.23.3...v0.24.0) (2026-09-17)
 
 
