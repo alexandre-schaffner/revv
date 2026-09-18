@@ -355,14 +355,12 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/regenerate", async (ctx) => {
     try {
-      const body = ctx.body as
-        | { mode?: unknown; generationMode?: "full" | "incremental" }
-        | undefined;
+      // `generationMode` still rides along in the body — it is the *start*
+      // call that consumes it. Regenerate itself sweeps unconditionally.
+      const body = ctx.body as { mode?: unknown } | undefined;
       await regenerateWalkthroughHandler(
         ctx.params.id,
-        ctx.session.user.id,
         body?.mode === undefined ? undefined : coerceWalkthroughMode(body.mode),
-        body?.generationMode ?? "incremental",
       );
       return { success: true };
     } catch (e) {
@@ -389,8 +387,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // orchestrator's failure handler picks up the `cancelledByUser` flag and
   // transitions the row to `status='error'` with code `'Cancelled'`, then
   // broadcasts `lifecycle:error` — that's what the UI consumes to flip out
-  // of the streaming state. We do NOT supersede the row: a partial
-  // walkthrough should remain resumable via the Resume button.
+  // of the streaming state. (That handler hangs off `Effect.onExit`, not
+  // `catchAllCause`; an interrupted fiber skips the error channel entirely,
+  // so the older wiring left every stopped row stuck at 'generating'.)
+  // We do NOT supersede the row: a partial walkthrough should remain
+  // resumable via the Resume button, which revives the 'error' row.
   .post("/:id/walkthrough/abort", async (ctx) => {
     try {
       await AppRuntime.runPromise(

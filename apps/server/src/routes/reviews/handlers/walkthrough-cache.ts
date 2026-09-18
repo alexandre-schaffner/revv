@@ -108,24 +108,23 @@ export function getCachedWalkthroughHandler(
  * matches the path taken by PollScheduler when it detects a head-SHA
  * change in the background, so the user-clicked Pull and the
  * polling-detected commit produce identical externally-observable state.
+ *
+ * The sweep is deliberately unqualified by head SHA — `supersedeForPr`'s
+ * `exceptHeadSha` escape hatch belongs to PollScheduler alone, where the
+ * point is to spare a job already running at the NEW sha. Regenerate
+ * means "user wants a do-over", which includes any row at any sha,
+ * *especially* the one at the current head. Passing `pr.headSha` here
+ * left that row active, and since Stop leaves a row at
+ * `status='generating'` (see `resumeWalkthroughHandler` below),
+ * `createPartial`'s dedup on (prId, headSha, mode, generationMode) then
+ * handed the stopped row straight back to the new job — Regenerate
+ * silently resumed the abandoned draft instead of starting a fresh one.
  */
-export function regenerateWalkthroughHandler(
-  prId: string,
-  userId: string,
-  mode?: WalkthroughMode,
-  generationMode: "full" | "incremental" = "incremental",
-) {
+export function regenerateWalkthroughHandler(prId: string, mode?: WalkthroughMode) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const jobs = yield* WalkthroughJobs;
-      if (generationMode === "full") {
-        yield* jobs.supersedeForPr(prId, undefined, mode);
-        return;
-      }
-
-      const prContext = yield* PrContextService;
-      const { pr } = yield* prContext.resolveBasic(prId, userId);
-      yield* jobs.supersedeForPr(prId, pr.headSha ?? undefined, mode);
+      yield* jobs.supersedeForPr(prId, undefined, mode);
     }),
   );
 }
@@ -136,13 +135,15 @@ export function regenerateWalkthroughHandler(
  *
  * Two source states feed this endpoint:
  *
- *   • `status='generating'` — user clicked Stop. The SSE was aborted but the
- *     DB row was never transitioned; boot-time `resumePending()` would have
- *     picked it up too. Just relaunch.
+ *   • `status='generating'` — the process died mid-generation (crash or
+ *     shutdown interrupt) and nothing got to transition the row. Boot-time
+ *     `resumePending()` claims these too. Just relaunch.
  *
  *   • `status='error'`     — generation failed (e.g. MAX_AUTO_CONTINUATIONS
  *     exhausted before Phase D, or `resumeAttempts` exceeded
- *     `WALKTHROUGH_MAX_RESUME_ATTEMPTS`). We REVIVE the row first via the
+ *     `WALKTHROUGH_MAX_RESUME_ATTEMPTS`), or the user clicked Stop — a
+ *     deliberate cancel is terminal, never resume-on-boot fodder. We REVIVE
+ *     the row first via the
  *     orchestrator: transition status back to 'generating' AND reset
  *     `resumeAttempts` to 0 so the user gets a fresh budget. Without the
  *     revive, `createPartial` inside `startJob` recycles 'error' rows by

@@ -37,7 +37,7 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect";
 import { resolveGenerationModel } from "../ai/acp/presets";
 import {
   accumulateTokenUsage,
@@ -158,6 +158,17 @@ interface ActiveJob {
   nextSeq: number;
   fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
   cancelledByUser: boolean;
+  /**
+   * Why the job was cancelled, or null if it ended on its own.
+   *
+   * Both reasons are deliberate — neither may be left for resume-on-boot —
+   * but they differ on the wire: a `'user'` cancel is the terminal state the
+   * reviewer sees and broadcasts `lifecycle:error`/'Cancelled', whereas a
+   * `'superseded'` cancel is immediately followed by the sweep's own
+   * `lifecycle:superseded`, so announcing an error first would flash a
+   * spurious failure in the UI on every head move.
+   */
+  cancelReason: "user" | "superseded" | null;
   /**
    * Number of block-prerender attempts that fell back (threw or returned null).
    * Observability only — answers "is the SSR cache earning its keep?" (S10).
@@ -1165,6 +1176,12 @@ export const WalkthroughJobsLive = Layer.effect(
                 Effect.catchAll(() => Effect.void),
               );
 
+              // A superseding cancel has its own announcement coming
+              // (`lifecycle:superseded`, emitted by the sweep right after this
+              // finalizer returns). Emitting an error first would flash a
+              // failure in the UI on every head move and every Regenerate.
+              if (job.cancelReason === "superseded") return;
+
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
                 data: { code, message },
@@ -1178,7 +1195,24 @@ export const WalkthroughJobsLive = Layer.effect(
               prId: job.prId,
             }),
             semaphore.withPermits(1),
-            Effect.catchAllCause(handleFailure),
+            // `onExit`, NOT `catchAllCause`: an interrupted fiber unwinds
+            // straight to its finalizers and never enters an error-channel
+            // handler, so a `catchAllCause` here silently skipped the whole
+            // terminal transition on every user Stop — the row stayed
+            // 'generating' forever, `lifecycle:error`/'Cancelled' never
+            // broadcast, and resume-on-boot kept re-launching the abandoned
+            // job until it burned `WALKTHROUGH_MAX_RESUME_ATTEMPTS`.
+            // Finalizers run uninterruptibly, so the DB write lands.
+            // Registered inside `removeJob` so the job is still in the
+            // registry when `handleFailure` broadcasts.
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) ? handleFailure(exit.cause) : Effect.void,
+            ),
+            // The cause is handled above; swallow it so a genuine failure
+            // doesn't surface as an unhandled daemon-fiber defect. Skipped on
+            // interrupt, which is what leaves the fiber's exit interrupted —
+            // exactly the shape it had when this was the only handler.
+            Effect.catchAllCause(() => Effect.void),
             Effect.ensuring(removeJob(job.walkthroughId)),
             Effect.ensuring(
               // Clear any session tokens issued for this job.
@@ -1289,7 +1323,7 @@ export const WalkthroughJobsLive = Layer.effect(
               };
             }
           } else {
-            yield* cancel(existing.walkthroughId);
+            yield* cancel(existing.walkthroughId, "superseded");
           }
         }
 
@@ -1530,6 +1564,7 @@ export const WalkthroughJobsLive = Layer.effect(
           nextSeq: 0,
           fiber: null,
           cancelledByUser: false,
+          cancelReason: null,
           prerenderFailures: 0,
         };
 
@@ -1581,14 +1616,18 @@ export const WalkthroughJobsLive = Layer.effect(
         return { found: true, unsubscribe, flush };
       });
 
-    const cancel = (walkthroughId: string): Effect.Effect<void> =>
+    const cancel = (
+      walkthroughId: string,
+      reason: "user" | "superseded" = "user",
+    ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         const job = map.get(walkthroughId);
         if (!job) return;
 
-        debug("walkthrough-jobs", "cancel:", walkthroughId);
+        debug("walkthrough-jobs", "cancel:", walkthroughId, reason);
         job.cancelledByUser = true;
+        job.cancelReason = reason;
         if (!job.abortController.signal.aborted) {
           try {
             job.abortController.abort(new Error("Walkthrough cancelled"));
@@ -1713,7 +1752,7 @@ export const WalkthroughJobsLive = Layer.effect(
             continue;
           }
           supersededIds.push(job.walkthroughId);
-          yield* cancel(job.walkthroughId);
+          yield* cancel(job.walkthroughId, "superseded");
         }
         yield* provideDb(walkthroughService.supersedeAllForPr(prId, exceptHeadSha, mode));
         for (const id of supersededIds) {

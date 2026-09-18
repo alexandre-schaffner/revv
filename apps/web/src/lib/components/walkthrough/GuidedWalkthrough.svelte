@@ -1588,7 +1588,11 @@ function handleResume(): void {
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) 60ms both;
 	}
 
-	/* Single-column sections live in the content column (col 3). */
+	/* Single-column sections live in the content column (col 3). Every direct
+	   child of the grid needs a line here: auto-placement drops it into col 1,
+	   which is a ~24px gutter track, and the child renders as an unreadable
+	   one-character-wide sliver pinned to the far left. */
+	.walkthrough-content > .partial-error,
 	.walkthrough-content > .issues-section,
 	.walkthrough-content > .walkthrough-footer,
 	.walkthrough-content > :global([data-slot="separator"]) {
@@ -2504,6 +2508,10 @@ function handleResume(): void {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		/* Wrap the button under the copy rather than letting the copy shrink to
+		   nothing — `overflow-wrap: anywhere` below would otherwise break the
+		   message one character per line. */
+		flex-wrap: wrap;
 		gap: 12px;
 		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
 		border-radius: 8px;
