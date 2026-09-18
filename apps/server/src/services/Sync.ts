@@ -6,6 +6,8 @@ import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
+import { DiffCacheService } from "./DiffCache";
+import { fitAnchorToPatch } from "./diff-anchors";
 import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
@@ -107,6 +109,7 @@ export const SyncServiceLive = Layer.effect(
     const remoteUserService = yield* RemoteUserService;
     const repoService = yield* RepositoryService;
     const broadcaster = yield* Broadcaster;
+    const diffCache = yield* DiffCacheService;
 
     // Background-worker PR context — always uses the 'single-user' token.
     const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
@@ -154,6 +157,31 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
+        // Fit the anchor onto the diff. A thread can point outside it — the
+        // walkthrough agent flags ranges it read in the full file, and the
+        // file viewer lets a reviewer comment on any line — and GitHub answers
+        // such a comment with an opaque 422. See `diff-anchors`.
+        const side = thread.diffSide === "old" ? ("LEFT" as const) : ("RIGHT" as const);
+        // Only ever a judgement on a patch we hold — a file the cache doesn't
+        // cover is sent as-is, for the reasons the submit handler spells out.
+        const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
+        const cachedFile = cachedFiles?.find(
+          (f) => f.path === thread.filePath || f.oldPath === thread.filePath,
+        );
+        const fit = fitAnchorToPatch(cachedFile?.patch ?? null, {
+          startLine: thread.startLine,
+          endLine: thread.endLine,
+          side,
+        });
+        if (!fit.ok) {
+          return yield* Effect.fail(
+            new SyncError({
+              message: `Cannot post comment on ${thread.filePath}: ${fit.reason}`,
+              threadId,
+            }),
+          );
+        }
+
         const commentPayload: {
           path: string;
           body: string;
@@ -165,13 +193,13 @@ export const SyncServiceLive = Layer.effect(
         } = {
           path: thread.filePath,
           body: first.body,
-          line: thread.endLine,
-          side: thread.diffSide === "old" ? "LEFT" : "RIGHT",
+          line: fit.endLine,
+          side,
           commitSha: pr.headSha,
         };
-        if (thread.startLine !== thread.endLine) {
-          commentPayload.startLine = thread.startLine;
-          commentPayload.startSide = commentPayload.side;
+        if (fit.startLine !== fit.endLine) {
+          commentPayload.startLine = fit.startLine;
+          commentPayload.startSide = side;
         }
 
         const posted = yield* github.reviews.createComment(

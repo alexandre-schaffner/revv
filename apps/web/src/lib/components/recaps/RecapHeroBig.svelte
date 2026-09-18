@@ -1,13 +1,17 @@
 <script lang="ts">
 import type { ProjectRecap, RecapPeriod } from "@revv/shared";
+import type { Snippet } from "svelte";
 import { buildRecapHeader, formatLines, formatTheme, paletteLookup, scrollToTheme } from "./themes";
 
 interface Props {
   recap: ProjectRecap | null;
   period: RecapPeriod;
+  /** Archive control rendered beside the date — the routes own the calendar's
+   *  data, so they hand it in rather than having it drilled through here. */
+  archive?: Snippet | undefined;
 }
 
-let { recap, period }: Props = $props();
+let { recap, period, archive = undefined }: Props = $props();
 
 const header = $derived(buildRecapHeader(recap, period));
 </script>
@@ -18,7 +22,10 @@ const header = $derived(buildRecapHeader(recap, period));
       <span class="ai-mark" aria-hidden="true"></span>
       <span>{header.eyebrow}</span>
     </span>
-    <h1 class="date">{header.title}</h1>
+    <div class="date-row">
+      <h1 class="date">{header.title}</h1>
+      {#if archive}{@render archive()}{/if}
+    </div>
     {#if header.syncedRelative}
       <span class="time-cap">UTC · synced {header.syncedRelative}</span>
     {:else}
@@ -90,6 +97,22 @@ const header = $derived(buildRecapHeader(recap, period));
   gap: 0.35rem;
 }
 
+/* The archive control rides the date's baseline but sits at the far edge of
+   the reading column: it is page-level navigation, not a modifier on the
+   date, and hard against the title it read as part of the heading. */
+.date-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  min-width: 0;
+}
+
+.date-row :global(.archive-trigger) {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .eyebrow {
   display: inline-flex;
   align-items: center;
@@ -121,7 +144,10 @@ const header = $derived(buildRecapHeader(recap, period));
   text-wrap: balance;
 }
 
-@media (max-width: 960px) {
+/* Queries RecapDetail's `recap` container, not the viewport. Has to live in
+   this component's own <style>: a @container band written in the parent
+   cannot reach a child component's scoped rules. */
+@container recap (max-width: 720px) {
   .date {
     font-size: 2.25rem;
   }

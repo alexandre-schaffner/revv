@@ -177,15 +177,12 @@ interface HeroMorphParams {
   startPx?: number;
   /** Scroll distance (px) over which `--shrink` ramps 0 → 1. */
   rangePx?: number;
-  /** Below this viewport width the big hero is hidden; lock `--shrink` to 1. */
-  minWidthPx?: number;
 }
 
 const HERO_MORPH_DEFAULTS = {
   sidebarSelector: ".side",
   startPx: 160,
   rangePx: 120,
-  minWidthPx: 960,
 } as const;
 
 function findScrollContainer(el: HTMLElement): HTMLElement | Window {
@@ -200,69 +197,46 @@ function findScrollContainer(el: HTMLElement): HTMLElement | Window {
 
 export const heroMorph: Action<HTMLElement, HeroMorphParams | undefined> = (node, params) => {
   const cfg = { ...HERO_MORPH_DEFAULTS, ...params };
-  const wide = matchMedia(`(min-width: ${cfg.minWidthPx}px)`);
+  // Reduced motion suppresses the *ramp*, not the state: `--shrink` snaps
+  // 0 → 1 at the midpoint instead of tweening. Pinning it to 1 (what this
+  // used to do) leaves the sidebar fully opaque at scroll top, so the header
+  // renders twice. The global reduced-motion block in app.css already
+  // collapses the opacity transition, so there is nothing else to do here.
+  const snap = prefersReducedMotion();
 
-  let container: HTMLElement | Window | null = null;
-  let onScroll: (() => void) | null = null;
+  // No viewport gate. Whether the sidebar has room is a question about the
+  // AppShell main pane, not the window, and RecapDetail answers it with an
+  // `@container` band that hides the rail outright — at which point `--shrink`
+  // is inert and this listener costs one clamp per scroll event.
+  const target = findScrollContainer(node);
+  // Cache the sidebar reference; `null` until the recap hydrates, the
+  // fallback inside onScroll picks it up on the next tick.
+  let sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+  let lastInert: boolean | null = null;
 
-  const lock = (): void => {
-    node.style.setProperty("--shrink", "1");
-    node.querySelector<HTMLElement>(cfg.sidebarSelector)?.removeAttribute("inert");
-  };
-
-  const detach = (): void => {
-    if (container && onScroll) container.removeEventListener("scroll", onScroll);
-    container = null;
-    onScroll = null;
-  };
-
-  const attach = (): void => {
-    const target = findScrollContainer(node);
-    container = target;
-    // Cache the sidebar reference; `null` until the recap hydrates, the
-    // fallback inside onScroll picks it up on the next tick.
-    let sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
-    let lastInert: boolean | null = null;
-    onScroll = () => {
-      const top = target instanceof Window ? window.scrollY : target.scrollTop;
-      const next = Math.min(1, Math.max(0, (top - cfg.startPx) / cfg.rangePx));
-      node.style.setProperty("--shrink", String(next));
-      // Keep the sidebar out of the tab order / a11y tree while it's
-      // visually hidden, so screen readers don't see duplicate hero content.
-      if (!sidebar) sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
-      if (sidebar) {
-        const shouldInert = next < 0.1;
-        if (shouldInert !== lastInert) {
-          sidebar.toggleAttribute("inert", shouldInert);
-          lastInert = shouldInert;
-        }
+  const onScroll = (): void => {
+    const top = target instanceof Window ? window.scrollY : target.scrollTop;
+    const ramp = Math.min(1, Math.max(0, (top - cfg.startPx) / cfg.rangePx));
+    const next = snap ? (ramp < 0.5 ? 0 : 1) : ramp;
+    node.style.setProperty("--shrink", String(next));
+    // Keep the sidebar out of the tab order / a11y tree while it's
+    // visually hidden, so screen readers don't see duplicate hero content.
+    if (!sidebar) sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+    if (sidebar) {
+      const shouldInert = next < 0.1;
+      if (shouldInert !== lastInert) {
+        sidebar.toggleAttribute("inert", shouldInert);
+        lastInert = shouldInert;
       }
-    };
-    onScroll();
-    container.addEventListener("scroll", onScroll, { passive: true });
-  };
-
-  const onWideChange = (e: MediaQueryListEvent): void => {
-    if (e.matches) attach();
-    else {
-      detach();
-      lock();
     }
   };
 
-  if (prefersReducedMotion()) {
-    lock();
-  } else if (wide.matches) {
-    attach();
-  } else {
-    lock();
-  }
-  wide.addEventListener("change", onWideChange);
+  onScroll();
+  target.addEventListener("scroll", onScroll, { passive: true });
 
   return {
     destroy() {
-      detach();
-      wide.removeEventListener("change", onWideChange);
+      target.removeEventListener("scroll", onScroll);
     },
   };
 };

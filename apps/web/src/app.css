@@ -62,6 +62,12 @@
   --revv-border-subtle: #ece8e0;
   --revv-text-primary: #2a2825;
   --revv-text-secondary: #5a5650;
+  /* The quiet-but-readable step. `--revv-text-muted` is a decorative grey —
+     2.9:1 on warm-paper, 2.6:1 on midnight — so it is only legitimate on
+     disabled controls and non-informational marks. Any label a user is meant
+     to *read* (weekday headers, footnotes, metadata) belongs here: 5.1:1
+     light / 4.8:1 dark, still clearly subordinate to `--revv-text-secondary`. */
+  --revv-text-subtle: #6f6b64;
   --revv-text-muted: #9a958c;
   --revv-accent: oklch(48% 0.08 195); /* tidewater teal — the one distinctive move */
   --revv-accent-hover: oklch(42% 0.075 195); /* deepened */
@@ -70,6 +76,12 @@
   --revv-warning: #b45309; /* amber-700 — keep */
   --revv-warning-fg: #ffffff; /* text on warning surfaces */
   --revv-danger: #b91c1c; /* red-700 — slightly deeper */
+  /* Merge state — the "this landed" mark (the walkthrough's merged stamp).
+     Deliberately bluer than `--revv-ai-accent` (#6d28d9, a red-leaning
+     violet): the two would otherwise be the same swatch, and a merged mark
+     must never read as agent output. Deep enough to pass as ink on warm
+     paper rather than as a UI accent. */
+  --revv-merged: oklch(45% 0.19 285);
 
   /* Diff canvas — warm with subtle bias */
   --revv-diff-bg: #f4f1eb;
@@ -246,6 +258,7 @@
   --revv-border-subtle: #1a1a1a;
   --revv-text-primary: #e4e4e7;
   --revv-text-secondary: #a1a1aa;
+  --revv-text-subtle: #7c7c85; /* see the light-theme note above */
   --revv-text-muted: #52525b;
   --revv-accent: oklch(72% 0.12 195); /* phosphor teal — luminous dark accent */
   --revv-accent-hover: oklch(66% 0.12 195); /* deepened press */
@@ -257,6 +270,8 @@
      the palette instead of reading as raw black. */
   --revv-warning-fg: oklch(20% 0.03 70);
   --revv-danger: #ef4444;
+  /* Lifted for the midnight canvas — see the light-theme note. */
+  --revv-merged: oklch(76% 0.14 285);
 
   /* Diff canvas */
   --revv-diff-bg: #0d0d0d;
@@ -427,6 +442,7 @@
   --color-border-subtle: var(--revv-border-subtle);
   --color-text-primary: var(--revv-text-primary);
   --color-text-secondary: var(--revv-text-secondary);
+  --color-text-subtle: var(--revv-text-subtle);
   --color-text-muted: var(--revv-text-muted);
   --color-accent: var(--revv-accent);
   --color-accent-hover: var(--revv-accent-hover);
@@ -435,6 +451,7 @@
   --color-warning: var(--revv-warning);
   --color-warning-fg: var(--revv-warning-fg);
   --color-danger: var(--revv-danger);
+  --color-merged: var(--revv-merged);
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
 
@@ -586,6 +603,17 @@
   /* Layout — chrome bar heights */
   --topbar-height: 28px; /* non-Tauri chrome topbar strip */
   --bottombar-height: 28px;
+
+  /* Layout — recap reading column.
+       Global rather than component-local because four surfaces have to
+       agree on the same centre axis: RecapDetail's grid, RecapPeriodView's
+       `.period-hero` + `.aux`, and the permalink route's `.aux`. When they
+       disagree the page visibly jumps sideways between empty and loaded.
+       The rail/gutter values here are the floor; RecapDetail's `@container`
+       bands widen them once the pane can afford it. */
+  --recap-measure: 720px; /* the reading column — centred on the main pane */
+  --recap-rail: 220px; /* sticky marginalia hung in the left margin */
+  --recap-gutter: 2.5rem; /* rail → column */
 
   /* Motion — durations
        Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */

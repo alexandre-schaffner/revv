@@ -259,6 +259,17 @@ export function formatPeriod(r: RecapWindow): string {
   return `${DAY_MONTH_FMT.format(start)} → ${DAY_MONTH_FMT.format(lastDay)} UTC`;
 }
 
+/**
+ * Route for a calendar slot, whether or not a recap exists for it yet. The
+ * empty case is a real page — landing on "no recap for this day, generate
+ * one?" is what makes every cell in the grid clickable rather than only the
+ * filled ones.
+ */
+export function windowPath(repoId: string, period: RecapPeriod, dayKey: string): string {
+  const anchor = period === "daily" ? dayKey : mondayKeyOf(dayKey);
+  return `/repo/${repoId}/recaps/${period}/${anchor}`;
+}
+
 /** Human label for a calendar slot that has no recap yet. */
 export function formatSlot(period: RecapPeriod, dayKey: string): string {
   if (period === "daily") return DAY_MONTH_YEAR_FMT.format(dayKeyToUtcDate(dayKey));

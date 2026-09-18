@@ -3,19 +3,12 @@ import type { ProjectRecapSummary, RecapPeriod } from "@revv/shared";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
-import PenNib from "phosphor-svelte/lib/PenNib";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
-import { Badge } from "$lib/components/ui/badge";
 import { gsapFade, gsapPress } from "$lib/motion";
-import {
-  fetchRecapsForMonth,
-  generateRecap,
-  getMonthRecapsLoading,
-  regenerateRecap,
-} from "$lib/stores/recaps.svelte";
+import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/stores/recaps.svelte";
 import {
   addUtcDays,
   dayKeyToUtcDate,
@@ -25,13 +18,13 @@ import {
   monthGrid,
   monthKeyOf,
   recapSlotKey,
-  selectionBoundaries,
   shiftMonth,
   slotKeyFor,
   utcDateKey,
   utcDayKey,
+  windowPath,
 } from "./period-window";
-import RecapStats from "./RecapStats.svelte";
+import RecapButton from "./RecapButton.svelte";
 
 /**
  * Month calendar over a repo's recaps. Every cell — filled or empty — is a
@@ -50,18 +43,15 @@ interface Props {
   /** All recaps for the repo (any period). The component filters internally. */
   recaps: ProjectRecapSummary[];
   /** The recap rendered above this calendar, highlighted in the grid. */
-  activeRecapId?: string | null;
+  activeRecapId?: string | null | undefined;
   /** Month/day the calendar opens on. Defaults to the active recap, else UTC today. */
-  initialDayKey?: string;
-  /**
-   * Fired after a generation is accepted. `wasCurrentPeriod` distinguishes a
-   * rolling today/this-week run (which the caller may want to keep on-page and
-   * stream) from a historical one (which lives on its own page).
-   */
-  onGenerated?: (recapId: string, wasCurrentPeriod: boolean) => void;
+  initialDayKey?: string | undefined;
+  /** Fired when the calendar hands off to another view, so a host popover can
+   *  close instead of hanging over the page it just navigated away from. */
+  onLeave?: (() => void) | undefined;
 }
 
-let { repoId, period, recaps, activeRecapId = null, initialDayKey, onGenerated }: Props = $props();
+let { repoId, period, recaps, activeRecapId = null, initialDayKey, onLeave }: Props = $props();
 
 /** Pre-Step-2b rows carry this message for a window that simply held nothing. */
 const LEGACY_EMPTY_WINDOW_MESSAGE = "No archived or open PRs found for this window";
@@ -96,10 +86,8 @@ const initialAnchor = untrack(
 );
 
 let viewMonth = $state(monthKeyOf(initialAnchor));
-let selectedDayKey = $state<string | null>(null);
 let focusedDayKey = $state(initialAnchor);
 let hoverWeekKey = $state<string | null>(null);
-let generating = $state(false);
 // Mouse selection must not yank focus out from under the pointer; only
 // keyboard navigation moves the DOM focus ring.
 let shouldStealFocus = $state(false);
@@ -121,6 +109,24 @@ $effect(() => {
 });
 
 const grid = $derived(monthGrid(viewMonth));
+
+/**
+ * `monthGrid` always returns six rows so the fetch range is a constant 42
+ * days. Rendering all six paints a whole week of the *next* month whenever
+ * five rows already cover this one — in weekly mode that row looks like a
+ * selectable week that has nothing to do with the month in the label. Only
+ * the last row can be fully outside (the first always holds the 1st), so
+ * dropping it is the whole fix. The grid then stands 5 or 6 rows tall by
+ * month; reserving the taller height would trade a visible 47px of dead space
+ * in most months against a shift that only ever follows a deliberate click on
+ * the month arrows, with nothing but the footer below it to move.
+ */
+const weeks = $derived(
+  grid.weeks.filter(
+    (week, i) => i < grid.weeks.length - 1 || week.some((k) => monthKeyOf(k) === viewMonth),
+  ),
+);
+
 const weekdayLabels = $derived(
   (grid.weeks[0] ?? []).map((k) => WEEKDAY_FMT.format(dayKeyToUtcDate(k))),
 );
@@ -248,20 +254,38 @@ function jumpToToday(): void {
   viewMonth = currentMonth;
   focusedDayKey = nowKey;
   shouldStealFocus = true;
-  select(nowKey);
 }
 
-function select(dayKey: string): void {
-  selectedDayKey = dayKey;
-  focusedDayKey = dayKey;
-  // Clicking a leading/trailing day is a request to see that month.
-  if (monthKeyOf(dayKey) !== viewMonth) goToMonth(monthKeyOf(dayKey));
-}
-
+/**
+ * Every cell in the grid is a link, filled or not.
+ *
+ * A filled slot goes to its recap. An empty one goes to that window's own
+ * page, which says so and offers to generate it — the calendar itself no
+ * longer generates anything, so there is no select-then-confirm step and no
+ * state in here beyond which month you are looking at.
+ */
 function onCellClick(dayKey: string): void {
   if (slotIsFuture(dayKey)) return;
   shouldStealFocus = false;
-  select(dayKey);
+  const recap = recapAt(dayKey);
+  if (recap) openRecap(recap);
+  else openWindow(dayKey);
+}
+
+/**
+ * Navigate to a recap and let the host close. Clicking the recap already on
+ * screen is a no-op beyond closing: on the period view its permalink is a
+ * lateral move to the same content under a different URL.
+ */
+function openRecap(recap: ProjectRecapSummary): void {
+  onLeave?.();
+  if (recap.id === activeRecapId) return;
+  void goto(`/repo/${repoId}/recaps/${recap.id}`);
+}
+
+function openWindow(dayKey: string): void {
+  onLeave?.();
+  void goto(windowPath(repoId, period, dayKey));
 }
 
 function moveFocus(dayKey: string): void {
@@ -303,11 +327,7 @@ function onGridKeydown(e: KeyboardEvent): void {
       break;
     case "Enter":
     case " ":
-      if (slotIsFuture(key)) break;
-      // Enter on an already-selected cell confirms it, so select-then-confirm
-      // is one-handed rather than a trip to the panel.
-      if (selectedDayKey === key) void onConfirm();
-      else select(key);
+      onCellClick(key);
       break;
     default:
       return;
@@ -323,96 +343,29 @@ $effect(() => {
   const el = document.querySelector<HTMLButtonElement>(`[data-daykey="${key}"]`);
   el?.focus();
 });
-
-// ── Selection panel ─────────────────────────────────────────────────────────
-
-const selectedRecap = $derived(selectedDayKey ? recapAt(selectedDayKey) : undefined);
-const selectedKind = $derived(selectedDayKey ? recapKind(selectedRecap, selectedDayKey) : "empty");
-const selectedIsFuture = $derived(selectedDayKey ? slotIsFuture(selectedDayKey) : false);
-const selectedIsCurrent = $derived(
-  selectedDayKey ? isCurrentPeriod(period, selectedDayKey, dayKeyToUtcDate(nowKey)) : false,
-);
-const selectedLabel = $derived(selectedDayKey ? formatSlot(period, selectedDayKey) : "");
-const currentNoun = $derived(period === "daily" ? "today's" : "this week's");
-
-async function onConfirm(): Promise<void> {
-  const dayKey = selectedDayKey;
-  if (!dayKey || generating || selectedIsFuture) return;
-  generating = true;
-  try {
-    // The current-period carve-out lives here and nowhere else.
-    // `selectionBoundaries` returns null for a live window, which omits
-    // periodStart/periodEnd from the body — the server then rolls its own
-    // [00:00Z, now] window and takes the supersede-and-regenerate path,
-    // byte-identical to the floating "Generate today's recap" pill. A past
-    // window is closed and immutable, so it goes out pinned and idempotent.
-    const b = selectionBoundaries(period, dayKey, new Date());
-    if (b === null) {
-      // `b ?? undefined`, never `b ?? {}` — under exactOptionalPropertyTypes
-      // the store does the conditional-assign dance itself and must not be
-      // handed `periodStart: undefined`.
-      const res = await generateRecap(repoId, period, undefined);
-      if (res?.recapId) onGenerated?.(res.recapId, true);
-      return;
-    }
-    // A past slot that already holds a recap must never re-issue a pinned
-    // generate: the server would treat it as idempotent and hand back the same
-    // id, so the button would do visibly nothing. Route it through the
-    // explicit regenerate endpoint instead.
-    const existing = recapAt(dayKey);
-    const res = existing
-      ? await regenerateRecap(existing.id)
-      : await generateRecap(repoId, period, b);
-    if (res?.recapId) onGenerated?.(res.recapId, false);
-  } finally {
-    generating = false;
-  }
-}
-
-function openSelected(): void {
-  const r = selectedRecap;
-  if (r) void goto(`/repo/${repoId}/recaps/${r.id}`);
-}
 </script>
 
 <section class="recap-calendar">
-	<header class="calendar-section-header">
-		<span class="eyebrow">Archive</span>
-		<h2>{period === "daily" ? "Daily" : "Weekly"} recaps</h2>
-	</header>
+	<div class="calendar-block">
+	<div class="calendar-toolbar">
+		<div class="month-nav">
+			<RecapButton icon onclick={() => stepMonth(-1)} aria-label="Previous month">
+				<CaretLeft size={14} aria-hidden="true" />
+			</RecapButton>
+			<span class="month-label" aria-live="polite">{monthLabel}</span>
+			<RecapButton icon onclick={() => stepMonth(1)} disabled={!canGoNext} aria-label="Next month">
+				<CaretRight size={14} aria-hidden="true" />
+			</RecapButton>
+		</div>
+		<RecapButton class="today-btn" onclick={jumpToToday}>Today</RecapButton>
+	</div>
 
-	<div class="calendar-layout">
-		<div class="calendar-main">
-			<div class="calendar-nav">
-				<button
-					type="button"
-					class="nav-btn"
-					onclick={() => stepMonth(-1)}
-					aria-label="Previous month"
-					use:gsapPress
-				>
-					<CaretLeft size={14} aria-hidden="true" />
-				</button>
-				<span class="month-label" aria-live="polite">{monthLabel}</span>
-				<button
-					type="button"
-					class="nav-btn"
-					onclick={() => stepMonth(1)}
-					disabled={!canGoNext}
-					aria-label="Next month"
-					use:gsapPress
-				>
-					<CaretRight size={14} aria-hidden="true" />
-				</button>
-				<button type="button" class="today-btn" onclick={jumpToToday} use:gsapPress>
-					Today
-				</button>
-			</div>
-
+	<div class="calendar-body">
 			{#key viewMonth}
 				<div class="grid-wrap" in:gsapFade>
 					<table
 						class="calendar-grid"
+						class:calendar-grid--weekly={period === "weekly"}
 						role="grid"
 						aria-label="{period === 'daily' ? 'Daily' : 'Weekly'} recap calendar, {monthLabel} UTC"
 						onkeydown={onGridKeydown}
@@ -425,18 +378,15 @@ function openSelected(): void {
 							</tr>
 						</thead>
 						<tbody>
-							{#each grid.weeks as week (week[0])}
+							{#each weeks as week (week[0])}
 								{@const mondayKey = week[0] ?? ""}
-								{@const weekActive =
-									period === "weekly" &&
-									(hoverWeekKey === mondayKey ||
-										(selectedDayKey !== null && mondayKeyOf(selectedDayKey) === mondayKey))}
+								{@const weekActive = period === "weekly" && hoverWeekKey === mondayKey}
 								<tr
 									class="week-row"
 									class:week-row--active={weekActive}
 									aria-label={period === "weekly" ? `Week of ${formatSlot("daily", mondayKey)}` : undefined}
 									onpointerenter={() => {
-										if (period === "weekly") hoverWeekKey = mondayKey;
+										if (period === "weekly" && !slotIsFuture(mondayKey)) hoverWeekKey = mondayKey;
 									}}
 									onpointerleave={() => {
 										if (period === "weekly" && hoverWeekKey === mondayKey) hoverWeekKey = null;
@@ -446,23 +396,20 @@ function openSelected(): void {
 										{@const recap = recapAt(dayKey)}
 										{@const kind = recapKind(recap, dayKey)}
 										{@const future = slotIsFuture(dayKey)}
-										{@const selected =
-											selectedDayKey !== null &&
-											slotKeyFor(period, selectedDayKey) === slotKeyFor(period, dayKey)}
-										<td role="gridcell" class="cell-wrap" aria-selected={selected}>
+										{@const isActive = recap !== undefined && recap.id === activeRecapId}
+										<td role="gridcell" class="cell-wrap" aria-current={isActive ? "page" : undefined}>
 											<button
 												type="button"
 												data-daykey={dayKey}
 												class="cell"
 												class:cell--outside={monthKeyOf(dayKey) !== viewMonth}
-												class:cell--future={dayKey > nowKey}
+												class:cell--future={future}
 												class:cell--today={isToday(dayKey)}
 												class:cell--complete={kind === "complete"}
 												class:cell--generating={kind === "generating"}
 												class:cell--error={kind === "error"}
 												class:cell--quiet={kind === "quiet"}
-												class:cell--active={recap !== undefined && recap.id === activeRecapId}
-												class:cell--selected={selected}
+												class:cell--active={isActive}
 												class:cell--week-start={period === "weekly" && dayKey === mondayKey}
 												class:cell--week-end={period === "weekly" && dayKey === addUtcDays(mondayKey, 6)}
 												tabindex={dayKey === focusedDayKey ? 0 : -1}
@@ -496,215 +443,62 @@ function openSelected(): void {
 					</table>
 				</div>
 			{/key}
+	</div>
 
-			<p class="calendar-footer">
-				<CalendarDots size={12} aria-hidden="true" />
-				<span>Windows are UTC. Click a {period === "daily" ? "day" : "week"} to read or generate its recap.</span>
-			</p>
-		</div>
-
-		<aside class="calendar-panel" aria-live="polite">
-			{#if !selectedDayKey}
-				<p class="panel-hint">
-					Pick a {period === "daily" ? "day" : "week"} to read or generate its recap.
-				</p>
-			{:else}
-				<p class="panel-window">{selectedLabel}</p>
-
-				{#if selectedIsFuture}
-					<p class="panel-hint">Nothing has happened yet.</p>
-				{:else if selectedKind === "generating"}
-					<Badge variant="secondary">
-						<Spinner class="motion-essential-spin" />
-						generating
-					</Badge>
-					<div class="panel-actions">
-						<button type="button" class="panel-btn panel-btn--primary" onclick={openSelected} use:gsapPress>
-							Open recap
-						</button>
-					</div>
-				{:else if selectedRecap}
-					{#if selectedKind === "error"}
-						<Badge variant="destructive" title={selectedRecap.errorMessage ?? undefined}>
-							<WarningCircle />
-							failed
-						</Badge>
-					{:else if selectedKind === "quiet"}
-						<Badge variant="outline">no activity</Badge>
-					{:else}
-						<Badge variant="outline">complete</Badge>
-					{/if}
-					<RecapStats stats={selectedRecap.summaryStats} />
-					<div class="panel-actions">
-						<button type="button" class="panel-btn panel-btn--primary" onclick={openSelected} use:gsapPress>
-							Open recap
-						</button>
-						<button
-							type="button"
-							class="panel-btn"
-							onclick={onConfirm}
-							disabled={generating}
-							use:gsapPress
-						>
-							{#if generating}
-								<Spinner size={13} class="motion-essential-spin" aria-hidden="true" />
-							{:else}
-								<PenNib size={13} aria-hidden="true" />
-							{/if}
-							{selectedIsCurrent ? `Regenerate ${currentNoun} recap` : "Regenerate"}
-						</button>
-					</div>
-					{#if selectedIsCurrent}
-						<p class="panel-note">Replaces {currentNoun} recap. Covers 00:00 UTC → now.</p>
-					{/if}
-				{:else}
-					<div class="panel-actions">
-						<button
-							type="button"
-							class="panel-btn panel-btn--primary"
-							onclick={onConfirm}
-							disabled={generating}
-							use:gsapPress
-						>
-							{#if generating}
-								<Spinner size={13} class="motion-essential-spin" aria-hidden="true" />
-							{:else}
-								<PenNib size={13} aria-hidden="true" />
-							{/if}
-							{selectedIsCurrent
-								? `Generate ${currentNoun} recap`
-								: `Generate recap for ${selectedLabel}`}
-						</button>
-					</div>
-					{#if selectedIsCurrent}
-						<p class="panel-note">Covers 00:00 UTC → now.</p>
-					{/if}
-				{/if}
-			{/if}
-		</aside>
+	<!-- The selection strip. Below the grid rather than beside it: as a right
+	     rail it pushed the calendar off the page's centre axis, and it spent
+	     most of its life holding one sentence in a 250px column. -->
+	<p class="calendar-footer">
+		<CalendarDots size={12} aria-hidden="true" />
+		<span>Every window starts and ends at 00:00 UTC.</span>
+	</p>
 	</div>
 </section>
 
 <style>
-	/* Section chrome is lifted verbatim from the archive list this replaces so
-	   the page rhythm below the recap is unchanged. */
+	/* No section chrome — no rule, no page margins. This lives inside a
+	   popover now, which draws its own surface. */
 	.recap-calendar {
+		container-type: inline-size;
+		container-name: recap-archive;
+	}
+
+	.calendar-block {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		margin-top: 3rem;
-		padding-top: 1.5rem;
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.calendar-section-header {
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-
-	.calendar-section-header h2 {
-		margin: 0;
-		font-size: 1.125rem;
-		font-weight: 500;
-		letter-spacing: -0.02em;
-		color: var(--color-text-primary);
-	}
-
-	.eyebrow {
-		font-family: var(--font-mono);
-		font-size: 0.6875rem;
-		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.18em;
-		color: var(--color-text-muted);
-	}
-
-	.calendar-layout {
-		display: flex;
-		flex-direction: column;
-		gap: 1.25rem;
-	}
-
-	/* Beside the grid once there's room. Stacking below at every width would
-	   make the page jump on each click, because the panel's height varies by
-	   state. */
-	@media (min-width: 900px) {
-		.calendar-layout {
-			flex-direction: row;
-			align-items: flex-start;
-			gap: 2rem;
-		}
-
-		.calendar-panel {
-			flex: 1;
-			min-width: 0;
-			padding-top: 2.25rem;
-		}
-	}
-
-	.calendar-main {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
+		gap: 0.875rem;
 		width: 100%;
-		max-width: 34rem;
 	}
 
-	.calendar-nav {
+	/* Month stepper left, Today right. The popover trigger already says
+	   "Archive", so the section heading that used to sit here was a third copy
+	   of the same word within 200px. */
+	.calendar-toolbar {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.75rem;
 	}
 
-	.nav-btn,
-	.today-btn {
+	.month-nav {
 		display: inline-flex;
 		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.375rem;
-		color: var(--color-text-secondary);
-		cursor: pointer;
-		transition: background var(--duration-quick) var(--ease-out-expo);
+		gap: 0.375rem;
 	}
 
-	.nav-btn {
-		width: 1.75rem;
-		height: 1.75rem;
-	}
-
-	.today-btn {
+	.recap-calendar :global(.today-btn) {
 		margin-left: auto;
-		height: 1.75rem;
-		padding: 0 0.625rem;
-		font-size: 0.75rem;
-		font-weight: 500;
-	}
-
-	.nav-btn:hover:not(:disabled),
-	.today-btn:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-primary);
-	}
-
-	.nav-btn:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
-
-	.nav-btn:focus-visible,
-	.today-btn:focus-visible,
-	.panel-btn:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
 	}
 
 	.month-label {
-		font-size: 0.875rem;
+		min-width: 7.5rem;
+		font-size: 0.8125rem;
 		font-weight: 500;
 		color: var(--color-text-primary);
+		text-align: center;
+	}
+
+	.calendar-body {
+		width: 100%;
 	}
 
 	.calendar-grid {
@@ -714,36 +508,36 @@ function openSelected(): void {
 		table-layout: fixed;
 	}
 
+	/* Weekly mode closes the horizontal gap so a selected or hovered week reads
+	   as one continuous band rather than seven separate targets — which is what
+	   the user is actually picking. Cells keep their 1px side borders (painted
+	   transparent), so backgrounds stay flush and only the band's outer edge
+	   shows a rule. */
+	.calendar-grid--weekly {
+		border-spacing: 0 0.1875rem;
+	}
+
 	.weekday {
-		padding-bottom: 0.25rem;
+		padding-bottom: 0.375rem;
 		font-family: var(--font-mono);
 		font-size: 0.625rem;
 		font-weight: 500;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 	}
 
 	.cell-wrap {
 		padding: 0;
 	}
 
-	/* A real table (rather than CSS-grid divs) specifically so weekly mode has
-	   a row element to hang the whole-week highlight on. */
-	.week-row--active .cell:not(.cell--future) {
-		background: var(--color-bg-tertiary);
-	}
-
 	.cell {
 		position: relative;
 		display: flex;
-		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 0.125rem;
 		width: 100%;
-		aspect-ratio: 1;
-		max-height: 2.75rem;
+		height: 2.75rem;
 		padding: 0;
 		background: var(--color-bg-secondary);
 		border: 1px solid transparent;
@@ -755,6 +549,20 @@ function openSelected(): void {
 			border-color var(--duration-quick) var(--ease-out-expo);
 	}
 
+	.calendar-grid--weekly .cell {
+		border-radius: 0;
+	}
+
+	.calendar-grid--weekly .cell--week-start {
+		border-top-left-radius: 0.375rem;
+		border-bottom-left-radius: 0.375rem;
+	}
+
+	.calendar-grid--weekly .cell--week-end {
+		border-top-right-radius: 0.375rem;
+		border-bottom-right-radius: 0.375rem;
+	}
+
 	.cell:hover:not([aria-disabled="true"]) {
 		background: var(--color-bg-tertiary);
 	}
@@ -762,29 +570,102 @@ function openSelected(): void {
 	.cell:focus-visible {
 		outline: 2px solid var(--color-accent);
 		outline-offset: 1px;
+		z-index: 1;
 	}
 
-	.cell--outside {
-		opacity: 0.4;
+	/* A real table (rather than CSS-grid divs) specifically so weekly mode has
+	   a row element to hang the whole-week highlight on. The fill follows the
+	   *slot*, not the day: in the current week, Thu–Sun are future days inside
+	   a week that is very much selectable, and excluding them left the hover
+	   band stopping halfway across the row. `onpointerenter` is what keeps a
+	   wholly-future week from lighting up. */
+	.week-row--active .cell {
+		background: var(--color-bg-tertiary);
+	}
+
+	/* Days from the neighbouring month, and slots that haven't happened yet,
+	   drop their fill instead of dimming: an opacity-faded filled cell still
+	   reads as a block of content, which is what made the bottom third of the
+	   grid look like rows of unlabelled boxes.
+
+	   In weekly mode an out-of-month day keeps its fill — the row is one
+	   target, and blanking the 31st of the previous month punched a hole in
+	   the left end of an otherwise continuous week band. `.cell--future` is
+	   slot-scoped (`slotIsFuture`), so in weekly mode it blanks whole future
+	   weeks and never a few days inside the current one. */
+	.cell--outside,
+	.cell--future {
+		color: var(--color-text-muted);
+	}
+
+	.calendar-grid:not(.calendar-grid--weekly) .cell--outside,
+	.cell--future {
+		background: transparent;
 	}
 
 	.cell--future {
-		opacity: 0.25;
 		cursor: default;
 	}
 
-	.cell--today {
-		border-color: var(--color-accent);
+	.cell--future:hover {
+		background: transparent;
 	}
 
-	.cell--selected,
+	/* Today is a marked date, not a selection: it gets the accent on the
+	   numeral. The accent *border* is reserved for "this is the slot you
+	   picked", which previously rendered identically and made the two
+	   impossible to tell apart. */
+	.cell--today .cell-num {
+		color: var(--color-accent);
+		font-weight: 600;
+	}
+
+	/* "You are here". With selection gone the accent ring is free to mark the
+	   recap actually on screen, which is the only cell state a navigator needs
+	   beyond what each slot holds. */
 	.cell--active {
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-accent);
 	}
 
+	/* Above `.cell--active` deliberately: a failed slot you are *reading*
+	   should still show the "you are here" ring, and the ⚠ mark keeps the
+	   failure legible either way. */
 	.cell--error {
 		border-color: var(--color-danger);
+	}
+
+	.calendar-grid--weekly .cell--error {
+		border-left-color: transparent;
+		border-right-color: transparent;
+	}
+
+	.calendar-grid--weekly .cell--error.cell--week-start {
+		border-left-color: var(--color-danger);
+	}
+
+	.calendar-grid--weekly .cell--error.cell--week-end {
+		border-right-color: var(--color-danger);
+	}
+
+	/* Daily mode has no slot/day split, so a future day keeps its empty look
+	   even under the row highlight. */
+	.calendar-grid:not(.calendar-grid--weekly) .week-row--active .cell--future {
+		background: transparent;
+	}
+
+	/* One ring around the whole week: side borders only at the two ends. */
+	.calendar-grid--weekly .cell--active {
+		border-left-color: transparent;
+		border-right-color: transparent;
+	}
+
+	.calendar-grid--weekly .cell--active.cell--week-start {
+		border-left-color: var(--color-accent);
+	}
+
+	.calendar-grid--weekly .cell--active.cell--week-end {
+		border-right-color: var(--color-accent);
 	}
 
 	.cell-num {
@@ -794,12 +675,18 @@ function openSelected(): void {
 		line-height: 1;
 	}
 
-	.cell--complete .cell-num,
-	.cell--today .cell-num {
+	.cell--complete .cell-num {
 		color: var(--color-text-primary);
 	}
 
+	/* Absolutely positioned so an empty slot doesn't reserve a blank strip
+	   under its numeral — every cell in an ungenerated month was rendering as
+	   a number pushed off-centre above 8px of nothing. */
 	.cell-mark {
+		position: absolute;
+		bottom: 0.4375rem;
+		left: 50%;
+		transform: translateX(-50%);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -831,80 +718,15 @@ function openSelected(): void {
 		color: var(--color-danger);
 	}
 
+	/* Last child of the section so it always closes the block, whatever the
+	   strip above it is showing. */
 	.calendar-footer {
 		display: flex;
 		align-items: center;
 		gap: 0.375rem;
 		margin: 0;
 		font-size: 0.6875rem;
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 	}
 
-	.calendar-panel {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.625rem;
-	}
-
-	.panel-window {
-		margin: 0;
-		font-family: var(--font-mono);
-		font-size: 0.8125rem;
-		color: var(--color-text-primary);
-	}
-
-	.panel-hint,
-	.panel-note {
-		margin: 0;
-		font-size: 0.75rem;
-		line-height: 1.5;
-		color: var(--color-text-muted);
-		max-width: 26rem;
-	}
-
-	.panel-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-	}
-
-	.panel-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.375rem;
-		height: 1.875rem;
-		padding: 0 0.75rem;
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.375rem;
-		font-size: 0.75rem;
-		font-weight: 500;
-		color: var(--color-text-primary);
-		cursor: pointer;
-		transition: background var(--duration-quick) var(--ease-out-expo);
-	}
-
-	.panel-btn:hover:not(:disabled) {
-		background: var(--color-bg-tertiary);
-	}
-
-	.panel-btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-
-	/* The accent-chip tokens rather than a flat `--color-accent` fill: the
-	   accent flips from dark teal (light theme) to light teal (dark theme), so
-	   any fixed foreground colour fails contrast in one of them. */
-	.panel-btn--primary {
-		background: var(--color-accent-chip-bg);
-		border-color: var(--color-accent-chip-border);
-		color: var(--color-accent-chip-fg);
-	}
-
-	.panel-btn--primary:hover:not(:disabled) {
-		background: var(--color-accent-chip-bg-hover);
-		border-color: var(--color-accent-chip-border-hover);
-	}
 </style>

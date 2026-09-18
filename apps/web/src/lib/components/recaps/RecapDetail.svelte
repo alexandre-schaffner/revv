@@ -3,6 +3,7 @@ import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from 
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
+import type { Snippet } from "svelte";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
@@ -19,9 +20,18 @@ interface Props {
   period?: RecapPeriod | undefined;
   onBack?: (() => void) | undefined;
   stream?: RecapStreamEntry | null | undefined;
+  /** Archive control rendered beside the date in the header. */
+  archive?: Snippet | undefined;
 }
 
-let { recap, loading, period, onBack = undefined, stream = null }: Props = $props();
+let {
+  recap,
+  loading,
+  period,
+  onBack = undefined,
+  stream = null,
+  archive = undefined,
+}: Props = $props();
 
 let thoughtsOpen = $state(false);
 const renderThoughtBlocks = createStreamingBlockRenderer();
@@ -147,7 +157,7 @@ function formatCompletedAt(iso: string): string {
         period={effectivePeriod}
         skeleton={isGenerating && !hasAnyContent}
       />
-      <RecapHeroBig recap={liveRecap} period={effectivePeriod} />
+      <RecapHeroBig recap={liveRecap} period={effectivePeriod} {archive} />
       {#if isGenerating && hasAnyContent && liveRecap}
         <div class="body-col">
           <RecapBody recap={liveRecap} />
@@ -237,32 +247,59 @@ function formatCompletedAt(iso: string): string {
 </div>
 
 <style>
+/* Size container for the whole recap. Every breakpoint below queries this,
+   not the viewport: the recap lives in the AppShell main pane, whose width
+   is `viewport − rail − sidebar − island`, and the sidebar is a user-dragged
+   180→480px slider. A @media query cannot see any of that.
+
+   `container-type` must stay HERE and not move up to `.page` / `.content` /
+   `.period-view`. It implies `contain: layout`, which makes the element a
+   containing block for `position: fixed` descendants — and RecapPeriodView's
+   `.actions-float` is a fixed element positioned in viewport coordinates by
+   `getActionsFloatStyle()`. It is a sibling of `.recap-page`, so it escapes;
+   one level up and the Generate bar would jump by the pane's left offset.
+
+   `width: 100%` is load-bearing too: a size container reports zero intrinsic
+   inline size, so without it the grid collapses. */
 .recap-page {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   width: 100%;
-  max-width: 1280px;
   margin: 0 auto;
-  padding: 1.5rem 2rem 4rem;
+  /* 4.5rem at the foot clears the floating action bar. The archive section
+     that used to sit below this and carry that clearance is now a popover at
+     the top, so the recap's own last line is what has to stay legible. */
+  padding: 1.5rem 2rem 4.5rem;
+  container-type: inline-size;
+  container-name: recap;
 }
 
 .back-row {
   align-self: flex-start;
 }
 
+/* Three tracks, and the reading column is the middle one — so it lands on
+   the pane's centre axis by construction, the same axis `.tabs-float` and
+   `.actions-float` centre on. The rail is hung in the left margin rather
+   than given a track of its own: a fixed `rail | measure | rail` grid
+   overflows once it stops fitting, where `1fr` margins just shrink. */
 .grid {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 1fr minmax(0, var(--recap-measure)) 1fr;
   grid-template-rows: auto auto;
-  column-gap: 6rem;
-  row-gap: 0;
   align-items: start;
 }
 
+/* The rail is a wide-pane affordance. Hidden by default because its content
+   is a duplicate of `.hero-big` — stacking it, as the old max-width:960px
+   block did, renders the header twice. */
 :global(.recap-page .grid > .side) {
   grid-column: 1;
   grid-row: 1 / span 2;
+  justify-self: end;
+  margin-right: var(--recap-gutter);
+  display: none;
 }
 
 :global(.recap-page .grid > .hero-big) {
@@ -277,26 +314,35 @@ function formatCompletedAt(iso: string): string {
   flex-direction: column;
   gap: 1.5rem;
   min-width: 0;
-  max-width: 720px;
   width: 100%;
 }
 
-/* Sticky sidebar above 960px. Below, fall back to a single column with the
-   sidebar above the body (not sticky). */
+/* `align-self: start` is load-bearing: the grid default `stretch` makes the
+   item fill its row span, leaving the sticky nothing to travel through. */
 :global(.recap-page .side) {
   position: sticky;
   top: 1rem;
   align-self: start;
 }
 
-@media (max-width: 960px) {
+/* Rail bands. The rail only appears once BOTH margins can hold it —
+   `measure + 2 × (rail + gutter)` — so the column never goes off-centre to
+   make room. Values are set on `.grid`, a descendant: a container cannot be
+   restyled by its own @container query. */
+@container recap (min-width: 1260px) {
   .grid {
-    grid-template-columns: 1fr;
-    gap: 1.5rem;
+    --recap-rail: 220px;
+    --recap-gutter: 2.5rem;
   }
-  :global(.recap-page .side) {
-    position: static;
-    width: 100%;
+  :global(.recap-page .grid > .side) {
+    display: flex;
+  }
+}
+
+@container recap (min-width: 1400px) {
+  .grid {
+    --recap-rail: 240px;
+    --recap-gutter: 3.5rem;
   }
 }
 
@@ -371,7 +417,7 @@ function formatCompletedAt(iso: string): string {
      dotmatrix loader and phase caption stay centered via align-items;
      the Collapsible + its content fill this width so the markdown
      paragraph wraps at a comfortable measure. */
-  max-width: 45rem;
+  max-width: var(--recap-measure);
   width: 100%;
   margin: 0 auto;
 }
@@ -410,7 +456,6 @@ function formatCompletedAt(iso: string): string {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  max-width: 42rem;
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, transparent);
@@ -439,9 +484,10 @@ function formatCompletedAt(iso: string): string {
   overflow: hidden;
 }
 
+/* No rule above it. This is the last line on the page now and it needs no
+   ceiling; mono + muted already sets it apart from the body. */
 .footer {
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--color-border-subtle, color-mix(in srgb, var(--color-text-muted) 18%, transparent));
+  padding-top: 0.25rem;
   font-size: 0.7rem;
   color: var(--color-text-muted);
   font-family: var(--font-mono);

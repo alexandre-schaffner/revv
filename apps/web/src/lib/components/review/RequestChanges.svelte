@@ -230,9 +230,22 @@ async function submit(action: Action): Promise<void> {
       htmlUrl?: string;
       issuesSubmittedAt?: string | null;
       submittedIssueIds?: string[];
+      skippedComments?: Array<{ threadId: string; path: string; line: number; reason: string }>;
     } | null;
     submitSuccess = { action, htmlUrl: payload?.htmlUrl ?? "" };
     toast.success(`${actionLabel(action)} on GitHub`);
+    // Comments GitHub can't take (their lines aren't in the diff) are left out
+    // of the review rather than letting one of them 422 the whole submission.
+    // They stay as local drafts, so say which ones were held back.
+    const skipped = payload?.skippedComments ?? [];
+    if (skipped.length > 0) {
+      const first = skipped[0];
+      toast.warning(
+        skipped.length === 1 && first
+          ? `1 comment not posted — ${first.path}:${first.line}: ${first.reason}`
+          : `${skipped.length} comments not posted — their lines are no longer part of the diff`,
+      );
+    }
     // Mirror the server-side stamp onto the local walkthrough store so
     // the "already posted" treatment renders immediately without
     // waiting for a cache refetch. The server is the source of truth

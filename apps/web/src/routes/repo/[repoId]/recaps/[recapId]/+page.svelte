@@ -8,7 +8,7 @@ import { Shimmer } from "$lib/components/ai/shimmer";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import { recapWindowIsStale, utcDayKey } from "$lib/components/recaps/period-window";
-import RecapCalendar from "$lib/components/recaps/RecapCalendar.svelte";
+import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import {
@@ -108,6 +108,7 @@ const genActionState = $derived.by((): GenActionState | null => {
       return { kind: "error" };
     case "complete":
       return { kind: "complete" };
+    // Rerunning a past window is only offered here — see RecapPeriodView.
     case "outdated":
       return { kind: "stale", label: "Rerun this recap" };
     default:
@@ -159,20 +160,21 @@ async function onGenerate(): Promise<void> {
 				period={recap?.period}
 				{onBack}
 				{stream}
+				archive={recap ? archivePopover : undefined}
 			/>
-			{#if recap}
-				<div class="aux">
-					<RecapCalendar
-						{repoId}
-						period={recap.period}
-						{recaps}
-						activeRecapId={recapId}
-						initialDayKey={utcDayKey(recap.periodStart)}
-						onGenerated={(id) => goto(`/repo/${repoId}/recaps/${id}`)}
-					/>
-				</div>
-			{/if}
 		</div>
+
+		{#snippet archivePopover()}
+			{#if recap}
+				<RecapArchivePopover
+					{repoId}
+					period={recap.period}
+					{recaps}
+					activeRecapId={recapId}
+					initialDayKey={utcDayKey(recap.periodStart)}
+				/>
+			{/if}
+		{/snippet}
 
 		{#if showGenerateFab || genActionState}
 			<div class="actions-float" style={actionsFloatStyle}>
@@ -227,9 +229,4 @@ async function onGenerate(): Promise<void> {
 		overflow-y: auto;
 	}
 
-	.aux {
-		max-width: calc(var(--recap-measure) + 4rem);
-		margin: 0 auto;
-		padding: 0 2rem 4rem;
-	}
 </style>

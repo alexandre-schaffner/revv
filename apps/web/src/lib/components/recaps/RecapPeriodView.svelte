@@ -28,7 +28,7 @@ import {
 import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import { pickLatestByWindow, recapWindowIsStale } from "./period-window";
-import RecapCalendar from "./RecapCalendar.svelte";
+import RecapArchivePopover from "./RecapArchivePopover.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
 interface Props {
@@ -165,6 +165,9 @@ const genActionState = $derived.by((): GenActionState | null => {
       return { kind: "error" };
     case "complete":
       return { kind: "complete" };
+    // Rerunning a past window is only offered here. The archive calendar used
+    // to carry it, but a date click now navigates straight to that date's
+    // recap, so a filled slot never reaches a confirmation step.
     case "outdated":
       return { kind: "stale", label: "Rerun this recap" };
     default:
@@ -172,18 +175,24 @@ const genActionState = $derived.by((): GenActionState | null => {
   }
 });
 
-// Show the floating Generate pill when there's no recap yet, or when the
-// newest one covers a past window — whatever its status. A stopped or errored
-// recap from an earlier week otherwise leaves only Resume/Regenerate, which
-// both re-run *that* window; there'd be no way to ask for the current one.
-// While a generation is in flight the bar's Stop is the only sensible action.
+// The floating pill exists for one case: an older recap is rendered above and
+// the current window has none, so the CTA has to stay reachable over a body
+// that can run thousands of pixels long. A stopped or errored recap from an
+// earlier week otherwise leaves only Resume/Regenerate, which both re-run
+// *that* window; there'd be no way to ask for the current one. While a
+// generation is in flight the bar's Stop is the only sensible action.
+//
+// With nothing rendered above, the CTA belongs in the hero instead — floating
+// it there put the page's primary action at the bottom of the window, 500px
+// below the empty state explaining why you'd want it, and duplicated the
+// calendar's own generate button for the same window.
 const showGenerateFab = $derived(
-  !latestDetail || (latestIsStale && latestDetail.status !== "generating"),
+  latestDetail !== null && latestIsStale && latestDetail.status !== "generating",
 );
 
-// "Generate weekly recap" for a first run; "Generate this week's recap" when
-// it sits next to an older recap that stays put.
-const generateNoun = $derived(latestDetail ? currentPeriodLabel : periodLabelLower);
+// Always names the window. "Generate weekly recap" left the user to work out
+// which week, next to a calendar offering six of them.
+const generateNoun = $derived(currentPeriodLabel);
 const generateTitle = $derived(
   latestDetail
     ? `Write a brand-new recap for ${currentPeriodLabel} ${periodLabelLower} window. The recap below stays as-is.`
@@ -213,13 +222,6 @@ async function onStop(): Promise<void> {
   await stopRecap(id);
 }
 
-// A current-period generation stays put and streams into the hero above,
-// matching the floating pill. A historical one has no home on this page, so
-// it goes to its own.
-function onCalendarGenerated(recapId: string, wasCurrentPeriod: boolean): void {
-  if (!wasCurrentPeriod) void goto(`/repo/${repoId}/recaps/${recapId}`);
-}
-
 const actionsFloatStyle = $derived(getActionsFloatStyle());
 </script>
 
@@ -230,6 +232,7 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 			loading={detailLoading}
 			{period}
 			{stream}
+			archive={archivePopover}
 		/>
 	{:else if latest && detailLoading}
 		<div class="loader-fullscreen">
@@ -252,19 +255,38 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 					shipped, what's still in flight, where the risk sits.
 				{/if}
 			</p>
+			<div class="period-cta">
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title={generateTitle}
+				>
+					{#if generating}
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
+					{:else}
+						<PenNib size={16} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating
+							? `Generating ${generateNoun} recap…`
+							: `Generate ${generateNoun} recap`}
+					</Shimmer>
+				</GlassPill>
+				{@render archivePopover()}
+			</div>
 		</header>
 	{/if}
-
-	<div class="aux">
-		<RecapCalendar
-			{repoId}
-			{period}
-			{recaps}
-			activeRecapId={latestId}
-			onGenerated={onCalendarGenerated}
-		/>
-	</div>
 </div>
+
+{#snippet archivePopover()}
+	<RecapArchivePopover
+		{repoId}
+		{period}
+		{recaps}
+		activeRecapId={latestId}
+	/>
+{/snippet}
 
 {#if showGenerateFab || genActionState}
 	<div class="actions-float" style={actionsFloatStyle}>
@@ -320,25 +342,17 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 		width: 100%;
 	}
 
-	/* Same centre axis and same content width as RecapDetail's reading
-	   column above it — `+ 4rem` cancels this element's own padding. */
-	.aux {
-		max-width: calc(var(--recap-measure) + 4rem);
-		margin: 0 auto;
-		width: 100%;
-		padding: 0 2rem 4rem;
-	}
-
 	/* Editorial empty state. Mono eyebrow → display heading → lede.
 	   Sized to feel like a magazine landing, not a settings card. */
 	.period-hero {
 		display: flex;
 		flex-direction: column;
+		align-items: flex-start;
 		gap: 0.75rem;
 		max-width: calc(var(--recap-measure) + 4rem);
 		margin: 0 auto;
 		width: 100%;
-		padding: 3.5rem 2rem 1.5rem;
+		padding: 2.5rem 2rem 4rem;
 	}
 
 	.period-eyebrow {
@@ -352,6 +366,7 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 
 	.period-title {
 		margin: 0;
+		text-wrap: balance;
 		font-size: 2.5rem;
 		font-weight: 500;
 		letter-spacing: -0.02em;
@@ -371,5 +386,19 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 		max-width: 34rem;
+		text-wrap: pretty;
 	}
+
+	/* The page's primary action, with the archive trigger beside it — on an
+	   empty repo there is no date header to hang the archive off, so it rides
+	   here instead. No helper line under them: both ledes already say the
+	   agent is quick. */
+	.period-cta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.75rem;
+	}
+
 </style>

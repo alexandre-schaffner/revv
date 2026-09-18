@@ -12,7 +12,7 @@ import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPullRequests, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
@@ -185,10 +185,13 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
       setActiveFilePath(mapped[0]!.path);
     }
 
-    // Stamp the current PR head SHA. Read from the live PR list so we pick
+    // Stamp the current PR head SHA. Read from the live PR lists so we pick
     // up whatever `prs:updated` has already merged — even if another
     // `prs:updated` has landed since the UI signalled "new commit available."
-    const pr = getPullRequests().find((p) => p.id === prId);
+    // `getPrById` spans open *and* archived rows: a PR that merged while the
+    // page was open has moved to the archive, and missing it here would leave
+    // the loaded SHA stamped at the old commit forever (pull button stuck on).
+    const pr = getPrById(prId);
     if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
 
     // Invalidate the walkthrough so the user sees the "Generate walkthrough"

@@ -27,7 +27,7 @@ import * as Popover from "$lib/components/ui/popover";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { getRepositories } from "$lib/stores/prs.svelte";
+import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
   getPendingWalkthroughBlockJump,
@@ -92,6 +92,7 @@ import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
 import IssueCard from "./IssueCard.svelte";
+import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
 
@@ -125,6 +126,10 @@ const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
 const selectedMode = $derived(getReviewMode(prId));
+// Merged-PR stamp. `getPrById` spans the open and archived lists, so this
+// keeps answering once the PR moves into the archive.
+const isMerged = $derived(getPrById(prId)?.status === "merged");
+const mergedAt = $derived(getPrById(prId)?.closedAt ?? undefined);
 const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
 const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
@@ -1080,6 +1085,16 @@ function handleResume(): void {
 </script>
 
 <div class="walkthrough">
+	{#if isMerged}
+		<!-- Pressed into the top-right of the content column. Its own grid row
+		     (same 6-col template as the stepper header) so it aligns with the
+		     content column on every sidebar/right-panel toggle, and so it never
+		     overlaps the report selector below it. -->
+		<div class="merged-stamp-row">
+			<MergedStamp {prId} {mergedAt} />
+		</div>
+	{/if}
+
 	{#if reportSelectorVisible}
 		<div class="report-selector-row">
 			<Popover.Root bind:open={reportPopoverOpen}>
@@ -1660,6 +1675,33 @@ function handleResume(): void {
 	   emit elements without the parent's Svelte scope hash. */
 	.walkthrough-loading > :global(*) {
 		grid-column: 3;
+	}
+
+	.merged-stamp-row {
+		display: grid;
+		/* Same 6-col template as the stepper header, except col 3 is a hard
+		   820px instead of `minmax(0, 820px)`: this row's only child is a
+		   ~120px stamp, so a squeezable track collapses to the sum of the
+		   fixed ones and the right-aligned stamp lands ~180px left of the
+		   content column's real right edge. Measured in the running app. */
+		grid-template-columns:
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+			48px
+			820px
+			40px
+			380px
+			minmax(24px, 1fr);
+		padding: 20px 0 0;
+	}
+
+	.merged-stamp-row > :global(*) {
+		grid-column: 3;
+		justify-self: end;
+		/* Lift the stamp up into the header's empty right margin without
+		   dragging the stepper with it: the two margins cancel, so the row
+		   keeps its height and only the ink moves. */
+		margin-top: -22px;
+		margin-bottom: 22px;
 	}
 
 	.report-selector-row {

@@ -65,8 +65,13 @@ const showRcActions = $derived(
 // New-commit-available signal: the PR's current headSha differs from the
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
 // first successful fetch, suppressing the signal on fresh visits.
+//
+// Closed and merged PRs are excluded: their head is final, so there is
+// nothing to pull. Without this a merged PR whose archived row carries a
+// newer SHA than the loaded diff shows a Pull button that can never be
+// satisfied — the walkthrough stamps "Merged" instead.
 const hasNewCommit = $derived.by(() => {
-  if (!pr?.headSha) return false;
+  if (!pr?.headSha || pr.status !== "open") return false;
   const loaded = getLoadedHeadSha(pr.id);
   return loaded !== null && loaded !== pr.headSha;
 });

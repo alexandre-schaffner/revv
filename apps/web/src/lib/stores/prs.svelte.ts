@@ -239,6 +239,17 @@ export function getSelectedPr(): PullRequest | null {
 }
 
 /**
+ * Look a PR up by id across *both* lists. Open PRs live in `pullRequests`
+ * and closed/merged ones move to `archivedPrs`, so any caller that searches
+ * only the open list silently stops finding a PR the moment it merges —
+ * which is how the review page ended up unable to restamp the pulled head
+ * SHA for a merged PR.
+ */
+export function getPrById(prId: string): PullRequest | null {
+  return pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
+}
+
+/**
  * The review lens for a PR, derived purely from identity: `"author"` when the
  * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
  * source of truth — there is no manual override. (The server still stores an
@@ -246,8 +257,7 @@ export function getSelectedPr(): PullRequest | null {
  * always request the one that matches the viewer's role.)
  */
 export function getReviewModeForPr(prId: string): ReviewMode {
-  const pr =
-    pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
+  const pr = getPrById(prId);
   // Shared with the server's `resolveReviewModeForPr` — see `reviewModeFor`.
   // Sessions are keyed on `(pullRequestId, mode)`, so the two must never
   // disagree, including on login casing.
