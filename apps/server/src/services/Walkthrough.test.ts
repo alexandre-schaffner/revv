@@ -131,6 +131,43 @@ describe("setStatus", () => {
   });
 });
 
+describe("walkthrough risk hydration", () => {
+  it("returns an orchestrator-assigned risk before Phase A has written a summary", async () => {
+    const db = createDb(":memory:");
+    const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } })
+      .session.client;
+    sqlite.run("PRAGMA foreign_keys = OFF");
+    db.insert(walkthroughs)
+      .values({
+        id: "wt-risk",
+        reviewSessionId: "session-1",
+        pullRequestId: "pr-1",
+        summary: "",
+        riskLevel: "high",
+        riskConfidence: 0.99,
+        status: "generating",
+        lastCompletedPhase: "none",
+        generatedAt: "2026-01-01T00:00:00Z",
+        modelUsed: "test-model",
+        prHeadSha: "head-1",
+      })
+      .run();
+
+    const partial = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).getPartial("pr-1", "head-1");
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(partial?.summary).toBe("");
+    expect(partial?.riskLevel).toBe("high");
+    expect(partial?.riskConfidence).toBe(0.99);
+  });
+});
+
 // Regression: resuming an incremental walkthrough used to crash with
 // `UNIQUE constraint failed: walkthroughs.id`. `resumePending` didn't pass the
 // row's generationMode, so the resume defaulted to "full", `createPartial`'s

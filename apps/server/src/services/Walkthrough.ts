@@ -215,6 +215,7 @@ function rowToWalkthrough(
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
     riskLevel: row.riskLevel as RiskLevel,
+    riskConfidence: row.riskConfidence,
     generatedAt: row.generatedAt,
     modelUsed: row.modelUsed,
     tokenUsage: JSON.parse(row.tokenUsage) as WalkthroughTokenUsage,

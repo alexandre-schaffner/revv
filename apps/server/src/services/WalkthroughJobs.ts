@@ -1251,6 +1251,10 @@ export const WalkthroughJobsLive = Layer.effect(
               prHeadSha: job.prHeadSha,
               mode: job.mode,
               trigger,
+              // The tier is already on the row by now, so send it with the
+              // very first event rather than making the UI wait for the
+              // `summary` event at the end of Phase A.
+              ...(ctx.assignedRisk !== null ? { riskLevel: ctx.assignedRisk } : {}),
             },
           }).pipe(Effect.catchAll(() => Effect.void));
 

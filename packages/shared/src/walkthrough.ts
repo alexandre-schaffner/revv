@@ -352,6 +352,16 @@ export interface Walkthrough {
   summary: string;
   riskLevel: RiskLevel;
   /**
+   * Calibrated confidence behind {@link riskLevel}, or null when the tier
+   * came from the agent rather than the orchestrator's risk pass.
+   *
+   * Consumers use its non-nullness as "the tier is authoritative already":
+   * a generating row whose agent hasn't run yet still carries the schema
+   * default `'low'` in `riskLevel`, and rendering that as a verdict would
+   * be a lie. With a confidence present, the tier is real from job start.
+   */
+  riskConfidence?: number | null;
+  /**
    * Phase C output — "Overall Sentiment" markdown. Null until Phase C completes.
    * Replaces the old convention of a specially-formatted markdown block.
    */
@@ -613,6 +623,15 @@ export type WalkthroughStreamEvent =
         trigger: WalkthroughStartTrigger;
         status?: "cloning";
         repoId?: string;
+        /**
+         * Risk tier, when the orchestrator assigned it before launching the
+         * agent. Carried here rather than waiting for the `summary` event at
+         * the end of Phase A: the tier is known seconds earlier, and it is
+         * the single most useful thing to show someone watching a
+         * walkthrough start. Absent when the agent owns the tier, in which
+         * case `summary` remains the first place it appears.
+         */
+        riskLevel?: RiskLevel;
       };
     }
   /**

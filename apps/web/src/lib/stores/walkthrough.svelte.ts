@@ -750,6 +750,9 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
+          // Present only when the orchestrator assigned the tier, in which
+          // case it is real from job start and worth showing immediately.
+          if (event.data.riskLevel) entry.riskLevel = event.data.riskLevel;
           entry.isStreaming = true;
           entry.doneReceived = false;
           entry.streamError = null;
@@ -1128,6 +1131,7 @@ async function doHydrateFromCache(
       mode?: WalkthroughMode;
       summary: string;
       riskLevel: RiskLevel;
+      riskConfidence?: number | null;
       sentiment?: string | null;
       lastCompletedPhase?: WalkthroughPipelinePhase;
       errorMessage?: string | null;
@@ -1196,7 +1200,12 @@ async function doHydrateFromCache(
     // collections. Without this, the snapshot's stale view would clobber
     // chapters the SSE had already delivered.
     entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
-    entry.riskLevel = entry.riskLevel ?? (hasRealSummary ? wt.riskLevel : null);
+    // A generating row with no summary still carries the schema default
+    // `'low'`, so the tier is only trustworthy once either the agent has
+    // written its overview or the orchestrator's risk pass has stamped a
+    // confidence on it.
+    const hasRealRisk = hasRealSummary || wt.riskConfidence != null;
+    entry.riskLevel = entry.riskLevel ?? (hasRealRisk ? wt.riskLevel : null);
     entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
 
     const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");
