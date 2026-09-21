@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/alexandre-schaffner/revv/compare/v0.25.0...v0.25.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* interleave chat tool calls with prose; keep issue-card header on one line ([#225](https://github.com/alexandre-schaffner/revv/issues/225)) ([9576eb0](https://github.com/alexandre-schaffner/revv/commit/9576eb0f23e471e25803a3da5751b0319e7a1645))
+
 ## [0.25.0](https://github.com/alexandre-schaffner/revv/compare/v0.24.0...v0.25.0) (2026-09-18)
 
 
