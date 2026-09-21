@@ -81,11 +81,39 @@ export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelec
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
 
+/**
+ * Why a TypeSafe System One (Jev) call produced no answer.
+ *
+ *   'unconfigured' — no API key in the keyring or `REVV_JEV_API_KEY`
+ *   'disabled'     — the master switch or this hook's toggle is off
+ *   'timeout'      — the call exceeded the caller's budget
+ *   'transport'    — HTTP/connection failure, including auth and rate limits
+ *   'malformed'    — a 2xx whose body didn't match the expected answer shape
+ *
+ * The first two short-circuit with zero latency and are not failures in any
+ * meaningful sense — they're the "Jev is off" path. Every call site collapses
+ * all five to `null` and degrades to the pre-Jev behaviour, which is what
+ * makes the hooks safe to land together.
+ */
+export type JevUnavailableReason =
+  | "unconfigured"
+  | "disabled"
+  | "timeout"
+  | "transport"
+  | "malformed";
+
+export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
+  readonly reason: JevUnavailableReason;
+  readonly message?: string;
+  readonly cause?: unknown;
+}> {}
+
 export type AiError =
   | AiGenerationError
   | AiNotConfiguredError
   | OpencodeNotSelectedError
-  | OpencodeUnhealthyError;
+  | OpencodeUnhealthyError
+  | JevUnavailable;
 
 export class ReviewError extends Data.TaggedError("ReviewError")<{
   readonly message: string;
