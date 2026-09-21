@@ -137,6 +137,13 @@ export type ChatItem =
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
 let streamingPrIds = $state(new Set<string>());
+// Turn id of the in-flight turn, per PR. Owned by the turn lifecycle (set on
+// send, cleared on done / error / abort) rather than inferred from whichever
+// assistant bubble happens to be open: a turn's prose is split across several
+// bubbles, so between two of them no bubble is streaming while the turn very
+// much still is. The panel reads this to fold the live turn's tool calls into
+// the dot-matrix ticker.
+let activeTurnIds = $state(new Map<string, string>());
 let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
 let pushingPrIds = $state(new Set<string>());
@@ -214,6 +221,11 @@ export function getChatItems(prId: string): ChatItem[] {
 
 export function isChatStreaming(prId: string): boolean {
   return streamingPrIds.has(prId);
+}
+
+/** Turn id of the in-flight turn for a PR, or null when idle. */
+export function getActiveTurnId(prId: string): string | null {
+  return activeTurnIds.get(prId) ?? null;
 }
 
 export function getProposedChanges(prId: string): ProposedChanges | null {
@@ -424,6 +436,16 @@ function removeItem(prId: string, id: string): void {
   const next = items.filter((i) => i.id !== id);
   if (next.length === items.length) return;
   setItems(prId, next);
+}
+
+function setActiveTurn(prId: string, turnId: string | null): void {
+  if (turnId === null) {
+    if (!activeTurnIds.has(prId)) return;
+    activeTurnIds.delete(prId);
+  } else {
+    activeTurnIds.set(prId, turnId);
+  }
+  activeTurnIds = new Map(activeTurnIds);
 }
 
 function setStreaming(prId: string, streaming: boolean): void {
@@ -681,14 +703,70 @@ export interface SendChatMessageParams {
   attachments?: ReadonlyArray<ChatAttachment>;
 }
 
-function spliceBeforeAssistant(prId: string, assistantId: string, item: ChatItem): void {
-  const items = chatHistories.get(prId) ?? [];
-  const idx = items.findIndex((i) => i.id === assistantId);
-  if (idx === -1) {
-    setItems(prId, [...items, item]);
-  } else {
-    setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-  }
+/**
+ * Chronological turn writer. A turn is a sequence of prose runs and
+ * timeline rows (tool calls, plans, questions, sub-agents) and the panel
+ * must show them in the order the agent produced them. So: text opens an
+ * assistant bubble lazily and appends into it; anything else seals that
+ * bubble first and appends after it, which means the next prose run opens
+ * a fresh bubble further down. One bubble per turn — the old shape — would
+ * force every tool call to render either wholly above or wholly below the
+ * agent's entire narration.
+ *
+ * Mirrors `wrapStreamWithPersistence` on the server, which splits the
+ * persisted `chat_messages` rows on the same boundaries, so the live view
+ * and the view after a reload agree.
+ */
+function createTurnWriter(prId: string, turnId: string) {
+  let assistantId: string | null = null;
+
+  return {
+    /** Append `chunk` to the open bubble, opening one if needed. */
+    text(chunk: string): void {
+      if (chunk.length === 0) return;
+      if (!assistantId) {
+        assistantId = crypto.randomUUID();
+        appendItem(prId, {
+          kind: "message",
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+          turnId,
+        });
+      }
+      patchItem(prId, assistantId, (item) =>
+        item.kind === "message" ? { ...item, content: item.content + chunk } : item,
+      );
+    },
+
+    /** Seal the open prose run, then append `item` after it. */
+    row(item: ChatItem): void {
+      this.seal();
+      appendItem(prId, item);
+    },
+
+    /**
+     * Close the open bubble. An empty one is dropped (nothing to show);
+     * one with partial text is kept and, when the turn errored, carries
+     * the message so the content + preceding tool rows aren't orphaned.
+     */
+    seal(error?: string): void {
+      const id = assistantId;
+      assistantId = null;
+      if (!id) return;
+      const open = (chatHistories.get(prId) ?? []).find((i) => i.id === id);
+      if (open?.kind !== "message" || open.content.length === 0) {
+        removeItem(prId, id);
+        return;
+      }
+      patchItem(prId, id, (item) =>
+        item.kind === "message"
+          ? { ...item, isStreaming: false, ...(error ? { error } : {}) }
+          : item,
+      );
+    },
+  };
 }
 
 export function sendChatMessage(params: SendChatMessageParams): void {
@@ -700,12 +778,11 @@ export function sendChatMessage(params: SendChatMessageParams): void {
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
 
-  // Append the user's message + a placeholder assistant message.
-  // `turnId` correlates the assistant placeholder with the activities that
-  // stream in for the same turn — the RightPanel uses it to fold the last
-  // 2 tool calls into the bubble's dot-matrix loader.
+  // Append the user's message. The assistant's side of the turn is written
+  // incrementally by the turn writer as frames arrive. `turnId` marks every
+  // row it produces — the RightPanel uses it to fold this turn's tool calls
+  // into the dot-matrix loader while the turn is live.
   const userId = crypto.randomUUID();
-  const assistantId = crypto.randomUUID();
   const turnId = crypto.randomUUID();
   appendItem(prId, {
     kind: "message",
@@ -721,15 +798,9 @@ export function sendChatMessage(params: SendChatMessageParams): void {
     })),
     turnId,
   });
-  appendItem(prId, {
-    kind: "message",
-    id: assistantId,
-    role: "assistant",
-    content: "",
-    isStreaming: true,
-    turnId,
-  });
+  const turn = createTurnWriter(prId, turnId);
   setStreaming(prId, true);
+  setActiveTurn(prId, turnId);
 
   const controller = streamChatMessage(
     {
@@ -741,16 +812,10 @@ export function sendChatMessage(params: SendChatMessageParams): void {
     },
     {
       onText: (chunk) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, content: item.content + chunk } : item,
-        );
+        turn.text(chunk);
       },
       onActivity: (activity) => {
-        // Activity entries are inserted BEFORE the streaming
-        // assistant message so the visual order is: user → activity
-        // → activity → … → assistant text. Find the placeholder and
-        // splice in front.
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: activity.activityKind,
@@ -777,13 +842,15 @@ export function sendChatMessage(params: SendChatMessageParams): void {
       onTaskList: ({ turnId: taskTurnId, tasks }) => {
         // Reconcile with any existing task-list for the same turn —
         // snapshot semantics. If we already have a row, update in
-        // place; otherwise insert.
+        // place; otherwise insert. Doesn't seal the open prose run: the
+        // task list renders in the Queue dock, not inline, so it takes no
+        // slot in the timeline (the server splits on the same rule).
         const items = chatHistories.get(prId) ?? [];
         const existingIdx = items.findIndex(
           (i) => i.kind === "task-list" && i.turnId === taskTurnId,
         );
         if (existingIdx === -1) {
-          spliceBeforeAssistant(prId, assistantId, {
+          appendItem(prId, {
             kind: "task-list",
             id: `task-list-${taskTurnId}`,
             turnId: taskTurnId,
@@ -797,7 +864,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         }
       },
       onPlanPresented: ({ planId, turnId: planTurnId, markdown }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "plan",
           id: planId,
           turnId: planTurnId,
@@ -806,7 +873,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         });
       },
       onSubagentStart: ({ invocationId, parentTurnId, subagentType, description }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "subagent",
           id: invocationId,
           parentTurnId,
@@ -828,7 +895,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         );
       },
       onQuestionPosted: ({ questionId, turnId: qTurnId, questions, previewFormat }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "question",
           id: questionId,
           turnId: qTurnId,
@@ -851,10 +918,9 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         );
       },
       onDone: () => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         setStreaming(prId, false);
+        setActiveTurn(prId, null);
         abortControllers.delete(prId);
         // Refresh the proposed-changes strip — the agent may have made
         // commits during this turn.
@@ -868,20 +934,22 @@ export function sendChatMessage(params: SendChatMessageParams): void {
       },
       onError: (err) => {
         // Plan-pending: the user tried to send a new message while a
-        // plan is awaiting decision. Drop the assistant placeholder,
-        // surface a focused toast pointing at the open plan, and let
-        // the UI scroll the card into view. Keep the user message —
-        // they'll likely want to retry after deciding.
+        // plan is awaiting decision. Close out the turn, surface a
+        // focused toast pointing at the open plan, and let the UI scroll
+        // the card into view. Keep the user message — they'll likely
+        // want to retry after deciding.
         if (err.code === "PLAN_PENDING") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           toast.error("Approve or reject the open plan before sending a new message.");
           return;
         }
         if (err.code === "QUESTION_PENDING") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           toast.error("Answer the open question before sending a new message.");
           return;
@@ -890,8 +958,9 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         // daemon has no `plan` agent. Disable the toggle and surface
         // the message so the user knows what to do.
         if (err.code === "AGENT_UNAVAILABLE") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           interactionModes.set(prId, "default");
           interactionModes = new Map(interactionModes);
@@ -906,28 +975,19 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           const oldHeadSha = typeof err.oldHeadSha === "string" ? err.oldHeadSha : "";
           const newHeadSha = typeof err.newHeadSha === "string" ? err.newHeadSha : "";
           setWorktreeBlocked(prId, { oldHeadSha, newHeadSha, commits });
-          // The assistant placeholder has no content — remove it.
-          removeItem(prId, assistantId);
+          // Rejected before the agent ran — nothing was streamed.
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           return;
         }
-        // Preserve any partial content the agent already streamed —
-        // activity lines were spliced *before* this bubble, so removing
-        // it would leave them orphaned. Only drop the bubble if it's
-        // truly empty (no streamed text yet); otherwise mark it errored
-        // and let the renderer attach an inline error chip.
-        const items = chatHistories.get(prId) ?? [];
-        const placeholder = items.find((i) => i.id === assistantId);
-        const hasContent = placeholder?.kind === "message" && placeholder.content.length > 0;
-        if (hasContent) {
-          patchItem(prId, assistantId, (item) =>
-            item.kind === "message" ? { ...item, isStreaming: false, error: err.message } : item,
-          );
-        } else {
-          removeItem(prId, assistantId);
-        }
+        // Keep whatever the agent already streamed: the tool rows around
+        // it are part of the same turn and removing the bubble would
+        // orphan them. `seal` drops it only if it is truly empty.
+        turn.seal(err.message);
         setStreaming(prId, false);
+        setActiveTurn(prId, null);
         abortControllers.delete(prId);
         // The agent may have committed before the stream errored —
         // refresh so the proposed-changes strip reflects whatever
@@ -1168,6 +1228,7 @@ export async function clearChatHistory(prId: string): Promise<void> {
   abortControllers.delete(prId);
   setItems(prId, []);
   setStreaming(prId, false);
+  setActiveTurn(prId, null);
   setProposedChanges(prId, null);
   setWorktreeBlocked(prId, null);
   clearCommitSelection(prId);
@@ -1238,6 +1299,7 @@ export function abortChatTurn(prId: string): void {
     }
   }
   setStreaming(prId, false);
+  setActiveTurn(prId, null);
   // The agent may have committed before the user hit Stop — refresh so the
   // proposed-changes strip reflects whatever landed in the worktree.
   void refreshProposedChanges(prId);
@@ -1326,81 +1388,48 @@ export async function resolveAndPushProposed(prId: string): Promise<void> {
     isStreaming: false,
     turnId,
   });
-  const assistantId = crypto.randomUUID();
-  appendItem(prId, {
-    kind: "message",
-    id: assistantId,
-    role: "assistant",
-    content: "",
-    isStreaming: true,
-    turnId,
-  });
+  const turn = createTurnWriter(prId, turnId);
 
   return new Promise<void>((resolve) => {
     const controller = resolveConflictsAndPush(prId, {
       onStatus: (message) => {
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: "tool.other" as ActivityKind,
           toolName: "merge-and-push",
           summary: message,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onConflictFiles: (files) => {
         const summary = `Conflicts in ${files.length} file${
           files.length === 1 ? "" : "s"
         }: ${files.slice(0, 3).join(", ")}${files.length > 3 ? "…" : ""}`;
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: "tool.other" as ActivityKind,
           toolName: "merge-and-push",
           summary,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onAgentText: (chunk) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, content: item.content + chunk } : item,
-        );
+        turn.text(chunk);
       },
       onAgentActivity: (activity) => {
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: activity.activityKind as ActivityKind,
           toolName: activity.toolName ?? activity.activityKind,
           summary: activity.summary,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onResult: (result) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         if (result.status === "pushed") {
           toast.success(
             `Pushed ${result.pushedCommits} commit${
@@ -1415,15 +1444,11 @@ export async function resolveAndPushProposed(prId: string): Promise<void> {
         }
       },
       onError: (err) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false, error: err.message } : item,
-        );
+        turn.seal(err.message);
         toast.error(err.message || "Conflict resolution failed");
       },
       onDone: () => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         resolveAbortControllers.delete(prId);
         setResolvingPush(prId, false);
         resolve();

@@ -124,13 +124,19 @@ function onAnimEnd(event: AnimationEvent): void {
 		/>
 	{/if}
 	<div class="issue-card-body">
-		<div class="issue-card-top">
-			<span class="issue-badge issue-badge--{issue.severity}">
-				{severityLabels[issue.severity] ?? issue.severity}
+		<!-- Three grid slots: marks / title / step tag. The badges are wrapped in
+		     a single `.issue-card-marks` cell so the row stays exactly three
+		     columns whether or not the Posted badge is present — see the grid
+		     rules in the stylesheet for why that matters. -->
+		<div class="issue-card-top" class:issue-card-top--tagged={!!stepTag}>
+			<span class="issue-card-marks">
+				<span class="issue-badge issue-badge--{issue.severity}">
+					{severityLabels[issue.severity] ?? issue.severity}
+				</span>
+				{#if submitted}
+					<span class="issue-card-posted-badge">Posted</span>
+				{/if}
 			</span>
-			{#if submitted}
-				<span class="issue-card-posted-badge">Posted</span>
-			{/if}
 			<span class="issue-card-title">{issue.title}</span>
 			{#if stepTag}
 				<span class="issue-step-tag">{stepTag}</span>
@@ -173,6 +179,16 @@ function onAnimEnd(event: AnimationEvent): void {
 		width: 100%;
 		box-sizing: border-box;
 		cursor: default;
+		/* The card is its own query container: its width is set by whichever
+		   list embeds it (the walkthrough content column caps at 820px, the
+		   per-file list is the diff pane minus 64px), and neither tracks
+		   `.review-content` — the nearest ancestor container — closely enough
+		   to drive the header layout. `width: 100%` above is what keeps
+		   inline-size containment from collapsing the card to zero intrinsic
+		   width. No positioned-fixed descendants live in here, so the
+		   containing-block side effect is inert. */
+		container-type: inline-size;
+		container-name: issue-card;
 	}
 
 	/* Suppress the entrance animation on tab revisits. Browsers restart CSS
@@ -282,11 +298,55 @@ function onAnimEnd(event: AnimationEvent): void {
 		min-width: 0;
 	}
 
+	/* Header row. A wrapping flexbox is wrong here: the title is a single
+	   flex item with no room to shrink, so as soon as badge + title + tag
+	   exceed the card the *tag* is what wraps — landing on its own line,
+	   pushed right by `margin-left: auto`, floating between the title and
+	   the description with nothing to anchor it. That happens at every card
+	   width, including the 820px maximum, whenever a title runs long.
+
+	   Grid instead: the title owns a `minmax(0, 1fr)` track so it wraps
+	   inside its own column while the badges and the tag stay pinned to the
+	   first baseline. Nothing ever orphans. */
 	.issue-card-top {
-		display: flex;
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-items: baseline;
+		column-gap: 8px;
+		row-gap: 4px;
+	}
+
+	/* Third track only when there's a tag to put in it — an empty `auto`
+	   track still costs its `column-gap`, i.e. dead space on the right. */
+	.issue-card-top--tagged {
+		grid-template-columns: auto minmax(0, 1fr) auto;
+	}
+
+	.issue-card-marks {
+		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	/* Below this width the side-by-side title column gets too narrow to read
+	   (a 360px card leaves it ~170px), so the tag moves up beside the badges
+	   and the title takes the full width underneath. */
+	@container issue-card (max-width: 420px) {
+		.issue-card-top--tagged {
+			grid-template-columns: minmax(0, 1fr) auto;
+		}
+		.issue-card-top--tagged .issue-card-marks {
+			grid-column: 1;
+			grid-row: 1;
+		}
+		.issue-card-top--tagged .issue-step-tag {
+			grid-column: 2;
+			grid-row: 1;
+		}
+		.issue-card-top--tagged .issue-card-title {
+			grid-column: 1 / -1;
+			grid-row: 2;
+		}
 	}
 
 	.issue-card-title {
@@ -294,6 +354,11 @@ function onAnimEnd(event: AnimationEvent): void {
 		font-weight: 500;
 		color: var(--color-text-primary);
 		line-height: 1.4;
+		min-width: 0;
+		/* `anywhere` rather than `break-word` so the title's min-content size
+		   shrinks too — otherwise a long unbreakable token (a path, a symbol
+		   name) widens the 1fr track and overflows the card. */
+		overflow-wrap: anywhere;
 	}
 
 	.issue-card-description {
@@ -301,6 +366,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		color: var(--color-text-secondary);
 		line-height: 1.5;
 		margin: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.issue-card-location {
@@ -312,7 +378,7 @@ function onAnimEnd(event: AnimationEvent): void {
 
 	/* ── Step tag ────────────────────────────────────────────────────── */
 	.issue-step-tag {
-		margin-left: auto;
+		justify-self: end;
 		font-size: 10px;
 		font-weight: 600;
 		text-transform: uppercase;
@@ -321,7 +387,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		padding: 1px 6px;
 		border-radius: 9999px;
 		background: var(--color-bg-tertiary);
-		flex-shrink: 0;
+		white-space: nowrap;
 		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
@@ -351,6 +417,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		border-radius: 9999px;
 		border: 1px solid transparent;
 		flex-shrink: 0;
+		white-space: nowrap;
 	}
 
 	.issue-badge--info {
