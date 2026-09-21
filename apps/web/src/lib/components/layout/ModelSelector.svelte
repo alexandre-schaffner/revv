@@ -10,7 +10,6 @@ import {
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import { getDefaultModel, type ModelOption } from "$lib/constants/models";
-import { fetchModelPreview, getModelPreview } from "$lib/stores/model-preview.svelte";
 import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   areModelsLoaded,
@@ -21,6 +20,10 @@ import {
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
+import {
+  fetchWalkthroughSizing,
+  getWalkthroughSizing,
+} from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
@@ -72,15 +75,15 @@ let selectedPrId = $derived(getSelectedPrId());
 // Tracking the head SHA is what makes a pull re-size: new commits move it,
 // which invalidates the preview for this PR and triggers a fresh ask.
 let selectedHeadSha = $derived(selectedPrId ? (getPrById(selectedPrId)?.headSha ?? null) : null);
-let preview = $derived(getModelPreview(selectedPrId, selectedHeadSha));
+let sizing = $derived(getWalkthroughSizing(selectedPrId, selectedHeadSha));
 
 // Size the PR ahead of generation so the label can name a model rather than
 // going blank. Retries on `pending` are the store's job — the diff cache
 // filling has no client-visible event to wait on.
 $effect(() => {
   if (!isAuto || selectedPrId === null || selectedHeadSha === null) return;
-  if (preview !== null) return;
-  void fetchModelPreview(selectedPrId, selectedHeadSha);
+  if (sizing !== null) return;
+  void fetchWalkthroughSizing(selectedPrId, selectedHeadSha);
 });
 
 /**
@@ -105,8 +108,8 @@ let autoResolvedLabel = $derived.by((): string | null => {
     const running = labelFor(getWalkthroughModelUsed());
     if (running) return running;
   }
-  if (preview?.status !== "ready") return null;
-  return labelFor(preview.model) ?? labelFor(getDefaultModel(currentId));
+  if (sizing?.status !== "ready") return null;
+  return labelFor(sizing.model) ?? labelFor(getDefaultModel(currentId));
 });
 
 /**

@@ -14,7 +14,6 @@ import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
-import { getModelPreviewHandler } from "./reviews/handlers/model-preview";
 import {
   coerceWalkthroughMode,
   getCachedWalkthroughHandler,
@@ -22,6 +21,7 @@ import {
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
 import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
+import { getWalkthroughSizingHandler } from "./reviews/handlers/walkthrough-sizing";
 
 /**
  * Review routes — thin Elysia router. Handler bodies live in
@@ -278,12 +278,13 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     }
   })
 
-  // Sizes the PR ahead of generation so the model selector can name what
-  // "Auto" will pick. Shares its cached answer with the generation path, so
-  // this is the same TypeSafe call moved earlier, not an extra one.
-  .get("/:id/walkthrough/model-preview", async (ctx) => {
+  // Sizes the PR ahead of generation: the risk tier a review would be given
+  // and the model "Auto" would pick. Shares its cached answer with the
+  // generation path, so this is the same TypeSafe call moved earlier, not an
+  // extra one.
+  .get("/:id/walkthrough/sizing", async (ctx) => {
     try {
-      return await getModelPreviewHandler(ctx.params.id, ctx.session.user.id);
+      return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);
     } catch (e) {
       return handleAppError(e, ctx);
     }

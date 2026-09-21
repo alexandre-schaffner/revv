@@ -13,8 +13,8 @@ import {
   getDefaultSuggestionsModel,
   type ModelOption,
 } from "$lib/constants/models";
-import { resetModelPreviews } from "$lib/stores/model-preview.svelte";
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
+import { resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { mergeSettingsUpdate, type SettingsUpdate } from "./settings-merge";
 
@@ -144,11 +144,17 @@ export async function updateSettings(
   if ("aiSuggestionsModel" in partial || "aiAgent" in partial) {
     invalidateSuggestions();
   }
-  // The auto-model preview routes the cached sizing against the current
-  // agent and model, so both invalidate it. The sizing itself is cached
-  // server-side on (prId, headSha) and is not re-paid for.
-  if ("aiModel" in partial || "aiAgent" in partial || partial.jev?.autoModel !== undefined) {
-    resetModelPreviews();
+  // The sizing is routed against the current agent and model, and gated on
+  // the risk / auto-model toggles, so all four invalidate the client copy.
+  // The sizing itself is cached server-side and is not re-paid for.
+  if (
+    "aiModel" in partial ||
+    "aiAgent" in partial ||
+    partial.jev?.autoModel !== undefined ||
+    partial.jev?.risk !== undefined ||
+    partial.jev?.enabled !== undefined
+  ) {
+    resetWalkthroughSizings();
   }
   try {
     const result = await api.api.settings.put(partial as Record<string, unknown>);

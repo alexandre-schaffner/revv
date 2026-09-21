@@ -1,20 +1,21 @@
-// ── Auto-model preview ──────────────────────────────────────────────────────
+// ── Pre-generation sizing ───────────────────────────────────────────────────
 //
-// What "Auto" will pick for a PR, resolved before generation starts so the
-// model selector can name it instead of showing a blank.
+// How much attention a PR needs, and which model "Auto" would pick for it,
+// resolved before any walkthrough exists — so the review page can show a
+// risk tier the moment you open it rather than after a full generation.
 //
 // The server sizes the PR from its cached diff and caches the answer on
-// `(prId, headSha)`, sharing it with the generation path — so asking here is
-// the same TypeSafe call moved earlier, not an extra one.
+// `(prId, headSha, diffFingerprint)`, sharing it with the generation path —
+// so asking here is the same TypeSafe call moved earlier, not an extra one.
 
 import type { RiskLevel } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
 
-export type ModelPreview =
+export type WalkthroughSizing =
   | { status: "off" }
   | { status: "pending" }
-  | { status: "ready"; model: string | null; riskLevel: RiskLevel };
+  | { status: "ready"; riskLevel: RiskLevel | null; model: string | null };
 
 /**
  * Keyed on `(prId, headSha)`, not `prId`.
@@ -24,7 +25,7 @@ export type ModelPreview =
  * Keying on the PR alone would pin the first sizing for the life of the
  * branch, which is exactly wrong for a judgment about the diff.
  */
-let previews = $state<Record<string, ModelPreview>>({});
+let sizings = $state<Record<string, WalkthroughSizing>>({});
 /** In-flight de-dupe: mount, settings change and a pull can all ask at once. */
 const inFlight = new Map<string, Promise<void>>();
 /** Bounded `pending` retries per key, so a never-cached diff can't spin. */
@@ -37,9 +38,12 @@ function cacheKey(prId: string, headSha: string): string {
   return `${prId}@${headSha}`;
 }
 
-export function getModelPreview(prId: string | null, headSha: string | null): ModelPreview | null {
+export function getWalkthroughSizing(
+  prId: string | null,
+  headSha: string | null,
+): WalkthroughSizing | null {
   if (prId === null || headSha === null) return null;
-  return previews[cacheKey(prId, headSha)] ?? null;
+  return sizings[cacheKey(prId, headSha)] ?? null;
 }
 
 /**
@@ -51,9 +55,9 @@ export function getModelPreview(prId: string | null, headSha: string | null): Mo
  * cache filling) has no client-visible event. Bounded so a PR whose diff
  * never caches settles instead of polling forever.
  */
-export async function fetchModelPreview(prId: string, headSha: string): Promise<void> {
+export async function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
   const key = cacheKey(prId, headSha);
-  const existing = previews[key];
+  const existing = sizings[key];
   if (existing && existing.status !== "pending") return;
   const running = inFlight.get(key);
   if (running) return running;
@@ -61,12 +65,12 @@ export async function fetchModelPreview(prId: string, headSha: string): Promise<
   const task = (async () => {
     try {
       const res = await fetch(
-        `${API_BASE_URL}/api/reviews/${encodeURIComponent(prId)}/walkthrough/model-preview`,
+        `${API_BASE_URL}/api/reviews/${encodeURIComponent(prId)}/walkthrough/sizing`,
         { headers: authHeaders(), credentials: "include" },
       );
       if (!res.ok) return;
-      const next = (await res.json()) as ModelPreview;
-      previews = { ...previews, [key]: next };
+      const next = (await res.json()) as WalkthroughSizing;
+      sizings = { ...sizings, [key]: next };
 
       if (next.status === "pending") {
         const tried = (attempts.get(key) ?? 0) + 1;
@@ -74,14 +78,14 @@ export async function fetchModelPreview(prId: string, headSha: string): Promise<
         if (tried < MAX_PENDING_RETRIES) {
           setTimeout(() => {
             // Only chase a key still on screen and still unresolved.
-            if (previews[key]?.status === "pending") void fetchModelPreview(prId, headSha);
+            if (sizings[key]?.status === "pending") void fetchWalkthroughSizing(prId, headSha);
           }, PENDING_RETRY_MS);
         }
       } else {
         attempts.delete(key);
       }
     } catch {
-      // Best-effort: the selector falls back to a bare "Auto".
+      // Best-effort: callers fall back to showing nothing.
     } finally {
       inFlight.delete(key);
     }
@@ -95,8 +99,8 @@ export async function fetchModelPreview(prId: string, headSha: string): Promise<
  * routing — though not the underlying sizing — depends on both. The server
  * still has the sizing cached, so this re-routes rather than re-paying.
  */
-export function resetModelPreviews(): void {
-  previews = {};
+export function resetWalkthroughSizings(): void {
+  sizings = {};
   inFlight.clear();
   attempts.clear();
 }

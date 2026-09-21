@@ -6,23 +6,32 @@ import { DiffCacheService } from "../../../services/DiffCache";
 import { PrContextService } from "../../../services/PrContext";
 import { SettingsService } from "../../../services/Settings";
 
-type ModelPreview =
-  /** Auto isn't in play — the configured model stands and needs no preview. */
+type WalkthroughSizing =
+  /** Nothing to size — neither the risk nor the auto-model hook is on. */
   | { readonly status: "off" }
-  /** Auto is on, but the diff isn't cached yet, so there is nothing to size. */
+  /** A hook is on, but the diff isn't cached yet, so there is nothing to size. */
   | { readonly status: "pending" }
   | {
       readonly status: "ready";
-      /** Model this PR would launch with. Null = the agent's own default. */
+      /**
+       * Tier a review of this PR would be sized to. Null when the risk hook
+       * is off, in which case the agent decides its own tier mid-run and
+       * showing anything here would be a guess.
+       */
+      readonly riskLevel: RiskLevel | null;
+      /**
+       * Model this PR would launch with. Null when auto-model isn't in play
+       * or routing declined, in which case the configured model stands.
+       */
       readonly model: string | null;
-      readonly riskLevel: RiskLevel;
     };
 
 /**
- * GET /api/reviews/:id/walkthrough/model-preview
+ * GET /api/reviews/:id/walkthrough/sizing
  *
- * Sizes the PR *before* generation starts, so the model selector can name
- * what "Auto" will pick rather than leaving it blank until a run finishes.
+ * Sizes the PR *before* generation starts, so the review page can show how
+ * much attention it needs — and the model selector can name what "Auto"
+ * will pick — without waiting for a walkthrough to exist.
  *
  * The answer is cached on `(prId, headSha)` and shared with `startJobBody`,
  * so this is not an extra API call per PR — it is the same call, moved
@@ -34,17 +43,21 @@ type ModelPreview =
  * the diff lands this reports `pending`, and the client tries again once the
  * review page has loaded its files.
  */
-export function getModelPreviewHandler(prId: string, userId: string): Promise<ModelPreview> {
+export function getWalkthroughSizingHandler(
+  prId: string,
+  userId: string,
+): Promise<WalkthroughSizing> {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-      if (
-        settings === null ||
-        !settings.jev.enabled ||
-        !settings.jev.autoModel ||
-        settings.aiModel !== AUTO_MODEL_SENTINEL
-      ) {
+      // Auto-model only means anything when a model isn't pinned; the risk
+      // tier is useful either way. Both read the same cached answers, so
+      // either hook alone is enough to make the call worth making.
+      const wantsModel =
+        settings?.jev.autoModel === true && settings.aiModel === AUTO_MODEL_SENTINEL;
+      const wantsRisk = settings?.jev.risk === true;
+      if (settings === null || !settings.jev.enabled || (!wantsModel && !wantsRisk)) {
         return { status: "off" as const };
       }
 
@@ -77,15 +90,19 @@ export function getModelPreviewHandler(prId: string, userId: string): Promise<Mo
       const agent = yield* settingsSvc.resolveAgent().pipe(Effect.orElseSucceed(() => null));
       if (agent === null) return { status: "pending" as const };
 
-      const override = routeFromAnswers(answers, {
-        agent,
-        configuredModel: settings.aiModel,
-        autoModel: true,
-      });
+      const override = wantsModel
+        ? routeFromAnswers(answers, {
+            agent,
+            configuredModel: settings.aiModel,
+            autoModel: true,
+          })
+        : null;
       return {
         status: "ready" as const,
+        // Only authoritative when the risk hook is on — otherwise the agent
+        // sets its own tier during Phase A and this would contradict it.
+        riskLevel: wantsRisk ? answers.riskLevel : null,
         model: override?.model ?? null,
-        riskLevel: answers.riskLevel,
       };
     }).pipe(Effect.catchAll(() => Effect.succeed({ status: "pending" as const }))),
   );

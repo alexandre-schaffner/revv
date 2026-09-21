@@ -34,6 +34,10 @@ import {
   deactivate as deactivateWalkthrough,
   getRiskLevel as getWalkthroughRiskLevel,
 } from "$lib/stores/walkthrough.svelte";
+import {
+  fetchWalkthroughSizing,
+  getWalkthroughSizing,
+} from "$lib/stores/walkthrough-sizing.svelte";
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
@@ -56,7 +60,32 @@ const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
-const walkthroughRiskLevel = $derived(getWalkthroughRiskLevel());
+// The tier a generated walkthrough carries. Null until one exists.
+const generatedRiskLevel = $derived(getWalkthroughRiskLevel());
+
+// …and the same tier resolved from the diff before anything is generated,
+// so opening a PR tells you how much attention it needs rather than making
+// you run a review to find out. Both come from the same cached answer, so
+// the badge doesn't change value when generation starts.
+const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
+$effect(() => {
+  const prId = pr?.id;
+  const headSha = pr?.headSha;
+  if (!prId || !headSha || generatedRiskLevel !== null) return;
+  if (sizing !== null) return;
+  void fetchWalkthroughSizing(prId, headSha);
+});
+
+const walkthroughRiskLevel = $derived(
+  generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
+);
+// A tier shown before any review exists describes the change, not a verdict
+// someone reached — worth saying on hover so the badge isn't read as one.
+const riskTitle = $derived(
+  generatedRiskLevel !== null
+    ? "How much attention this pull request needs. It set the depth of the review below."
+    : "How much attention this pull request needs, sized from the diff. A review has not run yet.",
+);
 
 const riskClasses: Record<string, string> = {
   low: "risk-badge risk-badge--low",
@@ -342,7 +371,11 @@ onDestroy(() => {
 				<h1 class="page-title">{pr.title}</h1>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
-					<Badge variant="outline" class={riskClasses[walkthroughRiskLevel] ?? ''}>
+					<Badge
+						variant="outline"
+						class={riskClasses[walkthroughRiskLevel] ?? ''}
+						title={riskTitle}
+					>
 						{walkthroughRiskLevel} risk
 					</Badge>
 				{/if}
