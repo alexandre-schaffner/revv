@@ -162,12 +162,23 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 2. **Agent content writes go through MCP, only.** Orchestrator lifecycle writes stay in
    Elysia and must not be routed through MCP. The MCP *transport* may vary; the *handlers*
    are shared.
+
+   **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
+   computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
+   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence`,
+   `walkthrough_ratings.verdict` / `.verdict_confidence` / `.verdict_source`, and
+   `walkthrough_issues.advisory_score` / `.advisory_scored_at`. These are judgments over a
+   closed set, not prose. **All prose, citations, blocks, issues, steps, and sentiment remain
+   MCP-only.** Growing this list means editing this rule — it is not a general licence for
+   Elysia to write content.
 3. **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
    Replays are no-ops.
 4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in
    order. Schema enforces it; tool surface enforces it; orchestrator enforces it.
-   - **Phase A — Overview + Risk.** One atomic write: `set_overview(summary, risk_level)`.
-     `last_completed_phase` becomes `'A'`.
+   - **Phase A — Overview.** One atomic write: `set_overview(summary)`.
+     `last_completed_phase` becomes `'A'`. The risk tier is **not** the agent's to set — it
+     is written by the orchestrator at job start (invariant 2's carve-out) and handed to the
+     agent as a given that governs its issue budget and depth.
    - **Phase B — Diff Analysis.** Multi-step. Each step is exactly one atomic write:
      `add_diff_step(step_index, markdown, code_snippet?, annotations?)`. Deterministically
      keyed on `(walkthrough_id, step_index)`. Agent calls one step per call; batching is
@@ -176,7 +187,10 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      Implicitly closes Phase B (requires ≥1 diff step).
    - **Phase D — 9-Axis Rating.** Nine atomic writes via `rate_axis(axis, ...)`. Keyed on
      `(walkthrough_id, axis)` with `onConflictDoUpdate`. `last_completed_phase` becomes
-     `'D'` only when all 9 axes are rated.
+     `'D'` only when all 9 axes carry a non-empty `rationale`. When the orchestrator's
+     verdict pass has run (`walkthroughs.axis_advisory_state = 'ready'`) the nine rows are
+     pre-seeded with a verdict and `rate_axis` supplies prose only; when it has not
+     (`'unavailable'` or NULL) the agent supplies the verdict as before.
 5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,
