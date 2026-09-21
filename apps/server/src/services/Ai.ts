@@ -1,6 +1,7 @@
 import type {
   ChatAttachment,
   InteractionMode,
+  RiskLevel,
   WalkthroughMode,
   WalkthroughStreamEvent,
 } from "@revv/shared";
@@ -10,6 +11,7 @@ import {
   isAcpAgentAvailable,
   resolveGenerationModel,
 } from "../ai/acp/presets";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -146,6 +148,20 @@ export class AiService extends Context.Tag("AiService")<
         callback: (event: WalkthroughStreamEvent) => void,
       ) => Promise<void>;
       unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
+      /**
+       * Per-job model/effort/context-window override, resolved once at job
+       * start. Absent means "use the configured settings", which is the only
+       * path that existed before. Routed through `resolveGenerationModel`
+       * below so an override naming a model this agent can't run degrades to
+       * the agent default rather than launching a broken session.
+       */
+      launchOverride?: GenerationLaunchOverride;
+      /**
+       * Risk tier already written to the walkthrough row by the orchestrator.
+       * Present means the prompt tells the agent the tier is a given;
+       * absent keeps the original "explore, then declare the tier".
+       */
+      assignedRisk?: RiskLevel;
     }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
@@ -265,6 +281,14 @@ export const AiServiceLive = Layer.effect(
             const clearToken = params.clearHttpMcpSessionToken;
             const registerNotifier = params.registerHttpMcpActivityNotifier;
             const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+            // Guard the model against this agent (the chat bottom bar may
+            // have left a chat-only agent's model id, e.g. cursor). The
+            // per-job override goes through the same guard and falls back to
+            // the configured model when it doesn't survive it.
+            const override = params.launchOverride;
+            const model =
+              (override ? resolveGenerationModel(agent, override.model) : undefined) ??
+              resolveGenerationModel(agent, settings.aiModel);
             const raw = streamWalkthroughViaAcp(
               {
                 ...params,
@@ -278,10 +302,11 @@ export const AiServiceLive = Layer.effect(
                   unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
                 },
               },
-              // Guard the shared model against this agent (the chat bottom bar
-              // may have left a chat-only agent's model id, e.g. cursor).
-              resolveGenerationModel(agent, settings.aiModel),
-              settings,
+              {
+                model,
+                thinkingEffort: override?.thinkingEffort ?? settings.aiThinkingEffort,
+                contextWindow: override?.contextWindow ?? settings.aiContextWindow,
+              },
             );
             return guardWalkthroughStream(raw, {
               label: "walkthrough-acp",

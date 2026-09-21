@@ -358,6 +358,15 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       parentWalkthroughId?: string | null;
       baseHeadSha?: string | null;
       forceNew?: boolean;
+      /**
+       * Orchestrator-assigned risk tier (CLAUDE.md invariant 2's carve-out).
+       * Passed here rather than written by a follow-up `UPDATE` so no
+       * `kill -9` window exists between the row existing and carrying its
+       * risk. Omitted when the TypeSafe risk pass is off or unavailable, in
+       * which case the row keeps the `'low'` default and the agent's prompt
+       * tells it to judge the tier itself.
+       */
+      risk?: { readonly level: RiskLevel; readonly confidence: number };
     }) => Effect.Effect<string, ReviewError, DbService>;
 
     /**
@@ -699,7 +708,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 pullRequestId: params.prId,
                 summary: "",
                 mode,
-                riskLevel: "low",
+                riskLevel: params.risk?.level ?? "low",
+                riskConfidence: params.risk?.confidence ?? null,
                 sentiment: null,
                 status: "generating",
                 lastCompletedPhase: "none",

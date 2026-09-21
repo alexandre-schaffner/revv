@@ -97,13 +97,15 @@ export { computeAnchorThreadId, computeIssueId } from "./spec";
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase === 'none'.
-// Writes: walkthroughs.summary, walkthroughs.risk_level.
+// Writes: walkthroughs.summary, and walkthroughs.risk_level only when the
+//   orchestrator has NOT already assigned the tier (`risk_confidence` null).
 // Advances: last_completed_phase → 'A'.
 
 export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = async (ctx, input) => {
   const summary = unwrapJsonWrappedString(input.summary, "summary");
 
   let result: WalkthroughToolResult | null = null;
+  let riskLevel: RiskLevel = "low";
   ctx.db.transaction(() => {
     const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
     if (!row) {
@@ -117,11 +119,20 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
       );
       return;
     }
+    // A non-null `riskConfidence` is the marker that the orchestrator's
+    // TypeSafe pass assigned the tier at job start. Its value wins and the
+    // agent's argument is dropped: the tier governs the issue budget the
+    // agent was already told to work to, so letting it be overwritten
+    // mid-Phase-A would contradict the prompt the agent is following.
+    const orchestratorAssigned = row.riskConfidence !== null;
+    riskLevel = orchestratorAssigned
+      ? (row.riskLevel as RiskLevel)
+      : ((input.risk_level ?? row.riskLevel) as RiskLevel);
     ctx.db
       .update(walkthroughs)
       .set({
         summary,
-        riskLevel: input.risk_level,
+        riskLevel,
         lastCompletedPhase: "A",
       })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
@@ -133,7 +144,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
     type: "summary",
     data: {
       summary,
-      riskLevel: input.risk_level as RiskLevel,
+      riskLevel,
     },
   });
   ctx.emit({

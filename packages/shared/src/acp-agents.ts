@@ -244,6 +244,25 @@ export function getAcpAgentDefaultModel(id: AcpAgentId): string {
 }
 
 /**
+ * Stored in `aiModel` to mean "don't pin a model — size the PR and pick one".
+ * Only consulted when the TypeSafe auto-model toggle is on; with it off, the
+ * value behaves exactly like an unrecognised model id.
+ *
+ * Namespaced because plain `"auto"` is already taken: the `cursor` agent ships
+ * a literal `{ label: "Auto", value: "auto" }` model and defaults to it.
+ *
+ * **Deliberately absent from every agent's `capabilities.models`.**
+ * `resolveGenerationModel` matches against that array, so an unlisted sentinel
+ * already falls through to the agent's default — meaning any call site that
+ * hasn't been taught about it degrades correctly with no changes at all.
+ */
+export const AUTO_MODEL_SENTINEL = "revv:auto";
+
+export function isAutoModelSentinel(value: string | null | undefined): boolean {
+  return value === AUTO_MODEL_SENTINEL;
+}
+
+/**
  * Clamp a selected effort to a tier the agent actually accepts.
  *
  * Effort and agent are persisted independently, so a tier picked on one agent

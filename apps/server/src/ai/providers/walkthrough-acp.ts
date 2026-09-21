@@ -33,7 +33,7 @@ import type { McpServer } from "@agentclientprotocol/sdk";
 import type {
   AcpAgentId,
   RatingAxis,
-  UserSettings,
+  RiskLevel,
   WalkthroughBlock,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
@@ -53,6 +53,7 @@ import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
+import type { AcpLaunchConfig } from "../acp/presets";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -140,6 +141,12 @@ export interface AcpWalkthroughStreamParams {
   abortController?: AbortController;
   /** Resolved ACP registry agent id that drives this generation. */
   acpAgentId: AcpAgentId;
+  /**
+   * Risk tier the orchestrator assigned before the agent started. Present
+   * means the prompt states the tier as a given; absent keeps the original
+   * "explore first, then declare the tier" instruction.
+   */
+  assignedRisk?: RiskLevel;
   deps: AcpWalkthroughDeps;
 }
 
@@ -151,8 +158,7 @@ export interface AcpWalkthroughStreamParams {
  */
 export function streamWalkthroughViaAcp(
   params: AcpWalkthroughStreamParams,
-  model?: string,
-  settings?: UserSettings,
+  launch: AcpLaunchConfig,
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const events: WalkthroughStreamEvent[] = [];
   let waiter: { resolve: () => void } | null = null;
@@ -346,11 +352,7 @@ export function streamWalkthroughViaAcp(
     try {
       // Acquire the connection BEFORE `withAgentTurn` so `jobStarted`/`jobEnded`
       // /`abortSession` close over a live handle (the chat-acp ordering).
-      handle = await getAcpConnection(params.worktreePath, params.acpAgentId, {
-        model,
-        thinkingEffort: settings?.aiThinkingEffort,
-        contextWindow: settings?.aiContextWindow,
-      });
+      handle = await getAcpConnection(params.worktreePath, params.acpAgentId, launch);
       const h = handle;
       if (!h.httpMcpSupported) {
         // HTTP MCP is MANDATORY here (all content flows through it), unlike chat
@@ -431,7 +433,7 @@ export function streamWalkthroughViaAcp(
             "walkthrough-acp",
             `prompting session ${sessionId}`,
             "model:",
-            model ?? "(default)",
+            launch.model ?? "(default)",
           );
           const stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
 

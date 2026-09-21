@@ -138,7 +138,18 @@ const getCommitHistorySchema = z.object({});
 
 const setOverviewSchema = z.object({
   summary: z.string().describe(`${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT}`),
-  risk_level: z.enum(["low", "medium", "high"]).describe("Overall risk assessment"),
+  // Optional rather than removed. When the orchestrator has already assigned
+  // the tier (CLAUDE.md invariant 2's carve-out) the prompt tells the agent
+  // the tier is a given and the handler ignores anything sent here; when it
+  // hasn't — TypeSafe off, unconfigured, or unreachable — this is still the
+  // only source of the tier, exactly as before.
+  risk_level: z
+    .enum(["low", "medium", "high"])
+    .nullable()
+    .optional()
+    .describe(
+      "Overall risk assessment. Omit when the prompt states the tier has already been assigned — a value sent then is ignored.",
+    ),
 });
 
 const artifactBlockSchema = z

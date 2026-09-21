@@ -3,6 +3,7 @@ import { isAbsolute, relative } from "node:path";
 import {
   type RatingAxis,
   REVIEW_MODE,
+  type RiskLevel,
   type WalkthroughBlock,
   type WalkthroughMode,
 } from "@revv/shared";
@@ -163,6 +164,14 @@ export function buildWalkthroughPrompt(
       readonly headSha: string;
       readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
     };
+    /**
+     * Risk tier the orchestrator already wrote to the row. Present flips the
+     * tier instruction from "explore first, then declare" to "this is your
+     * budget" — the agent knows its issue count before it starts exploring
+     * rather than committing to one mid-run. Absent keeps the original
+     * behaviour, which is what every run gets when TypeSafe is off.
+     */
+    assignedRisk?: RiskLevel;
   },
   maxTokenBudget = 40000,
   continuation?: PromptContinuationContext,
@@ -253,7 +262,9 @@ export function buildWalkthroughPrompt(
     mode === REVIEW_MODE.author
       ? "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
       : "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
-    '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
+    params.assignedRisk
+      ? `3. The risk tier for this PR is already set to \`${params.assignedRisk}\` — it is a given, not yours to decide. Do NOT pass \`risk_level\` to \`set_overview\`; a value sent there is ignored. Work to that tier's chapter count and issue budget (see "Risk tiers" in the system prompt). Still triage the changed-files list into substantive and mechanical: generated output — lockfiles, snapshots, \`.d.ts\`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter.`
+      : '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
   );
 
   if (continuation) {

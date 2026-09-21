@@ -3,6 +3,7 @@ import {
   type AcpAgentId,
   type AgentStatusReport,
   getAgentCapabilities,
+  isAutoModelSentinel,
   type UserSettings,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -252,7 +253,17 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
     aiSuggestionsModel: getDefaultSuggestionsModel(acpId),
   };
 
-  if (caps.models === "dynamic") {
+  // "Auto" is agent-independent — it says "don't pin a model", which stays
+  // true after a switch. Clobbering it with the new agent's default would
+  // silently turn the preference off.
+  if (isAutoModelSentinel(getSettings()?.aiModel)) {
+    // Except where the new agent can't route: opencode's catalog is fetched
+    // live, so Auto there would leave generation on a stale pin forever.
+    if (caps.models === "dynamic") {
+      const cached = getAvailableModels(acpId);
+      update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
+    }
+  } else if (caps.models === "dynamic") {
     const cached = getAvailableModels(acpId);
     update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
   } else {

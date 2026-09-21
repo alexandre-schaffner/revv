@@ -1,6 +1,7 @@
 <script lang="ts">
-import { type ContextWindow, getAgentCapabilities } from "@revv/shared";
+import { AUTO_MODEL_SENTINEL, type ContextWindow, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
+import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
 import ProviderIcon from "$lib/components/icons/ProviderIcon.svelte";
 import {
@@ -40,13 +41,24 @@ let fetchedModels = $derived<ModelOption[]>(
 );
 let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
+// The Auto option is offered only where it can do something: the TypeSafe
+// auto-model toggle has to be on, and the agent needs a depth ladder the
+// server can route onto. opencode's catalog is fetched live, so there is no
+// static ladder and Auto would be a no-op — see `ai/jev/routing.ts`.
+let autoModelOffered = $derived((getSettings()?.jev?.autoModel ?? false) && !isDynamic);
+let isAuto = $derived(currentModel === AUTO_MODEL_SENTINEL);
 let currentLabel = $derived(
-  !fetchDone
-    ? "Loading..."
-    : fetchedModels.length === 0
-      ? "No models"
-      : (fetchedModels.find((m) => m.value === currentModel)?.label ??
-        (currentModel || "Select model")),
+  // Checked ahead of the loading/empty branches: Auto is a real selection
+  // even while a dynamic catalog is still in flight, and without this the
+  // trigger would render the raw sentinel string.
+  isAuto
+    ? "Auto"
+    : !fetchDone
+      ? "Loading..."
+      : fetchedModels.length === 0
+        ? "No models"
+        : (fetchedModels.find((m) => m.value === currentModel)?.label ??
+          (currentModel || "Select model")),
 );
 
 // Cache-miss fallback for opencode's dynamic catalog: if the bootstrap prefetch
@@ -115,7 +127,11 @@ function selectWindow(value: ContextWindow) {
 	<PopoverTrigger>
 		<SelectTrigger label={currentLabel}>
 			{#snippet icon()}
-				<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				{#if isAuto}
+					<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				{:else}
+					<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				{/if}
 			{/snippet}
 			{#snippet trailing()}
 				{#if caps.contextWindow}
@@ -130,6 +146,20 @@ function selectWindow(value: ContextWindow) {
 		align="start"
 		side="top"
 	>
+		{#if autoModelOffered}
+			<button
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				onclick={() => select(AUTO_MODEL_SENTINEL)}
+			>
+				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				<span class="min-w-0 flex-1 truncate text-left">Auto</span>
+				{#if isAuto}
+					<Check size={12} class="shrink-0 text-accent" />
+				{/if}
+			</button>
+			<div class="my-1 border-t border-border"></div>
+		{/if}
+
 		{#if isDynamic}
 			{#each groupedModels as group, i (group.provider ?? '__none__')}
 				{#if i > 0}

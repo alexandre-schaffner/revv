@@ -29,6 +29,7 @@
 
 import type {
   GenerationProviderConfig,
+  RiskLevel,
   Walkthrough,
   WalkthroughGenerationMode,
   WalkthroughMode,
@@ -45,6 +46,8 @@ import {
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
 } from "../ai/agent-stream/token-usage";
+import { judgeJobStart } from "../ai/jev/job-start";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { account } from "../db/schema/auth";
@@ -85,6 +88,7 @@ import {
   parseNumstat,
   resolveCounts,
 } from "./incremental-diff";
+import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
@@ -354,6 +358,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const settingsService = yield* SettingsService;
     const walkthroughService = yield* WalkthroughService;
     const remoteCache = yield* RemoteWalkthroughCache;
+    const jevService = yield* JevService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const broadcaster = yield* Broadcaster;
 
@@ -511,6 +516,24 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly generationMode: WalkthroughGenerationMode;
       readonly parentWalkthroughId: string | null;
       readonly baseHeadSha: string | null;
+      /**
+       * Model/effort/context-window override resolved once at job start from
+       * the TypeSafe depth answer, or `null` to leave the configured model
+       * alone.
+       *
+       * It lives here rather than being derived per-stream because
+       * `buildStreamParams` is reused by `buildContinuationEffect` — deriving
+       * it per stream would hand a continuation a different ACP pool key,
+       * orphaning the first connection (refcount → 0 → `scheduleIdleStop`).
+       */
+      readonly launchOverride: GenerationLaunchOverride | null;
+      /**
+       * Risk tier the orchestrator assigned at job start, or `null` when the
+       * TypeSafe risk pass was off or unavailable. Drives the prompt: assigned
+       * means "the tier is a given, work to it"; `null` keeps the original
+       * "explore, then declare the tier" instruction.
+       */
+      readonly assignedRisk: RiskLevel | null;
     };
 
     type PromptFile = ResolvedContext["files"][number];
@@ -673,6 +696,8 @@ export const WalkthroughJobsLive = Layer.effect(
             diffSource: promptInput.diffSource,
           },
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
+          ...(ctx.launchOverride ? { launchOverride: ctx.launchOverride } : {}),
+          ...(ctx.assignedRisk ? { assignedRisk: ctx.assignedRisk } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
           },
@@ -1373,11 +1398,65 @@ export const WalkthroughJobsLive = Layer.effect(
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
+
+        // ── TypeSafe job-start judgment ─────────────────────────────
+        // One request answers the risk tier (the agent's issue budget) and
+        // the depth tier (the model). Both are skipped when:
+        //
+        //   • neither hook is enabled;
+        //   • this is a resume — the decision is already durable on the row,
+        //     and re-asking would cost money for an answer that could flip
+        //     and re-key the ACP pool mid-run;
+        //   • the team cache already holds a snapshot for this head SHA.
+        //     Without the probe, every cache-hit job would burn a call for a
+        //     walkthrough that never runs an agent at all (the import path
+        //     returns below without ever reaching the generator).
+        const cacheWillHit =
+          mode === "reviewer" &&
+          settings.cache.enabled &&
+          settings.cache.downloadsEnabled &&
+          partial === null
+            ? yield* remoteCache.probe(repo.fullName, meta.headSha)
+            : false;
+        const wantsJudgment =
+          settings.jev.enabled &&
+          (settings.jev.risk || settings.jev.autoModel) &&
+          params.trigger !== "resume" &&
+          !cacheWillHit;
+        const judgment = wantsJudgment
+          ? yield* judgeJobStart({
+              agent,
+              autoModel: settings.jev.autoModel,
+              configuredModel: settings.aiModel,
+              pr,
+              files,
+              commits,
+            }).pipe(
+              Effect.provideService(JevService, jevService),
+              // Never fail a walkthrough over a judgment: degrade to the
+              // agent's own risk tier and the configured model.
+              Effect.catchAll((e) =>
+                Effect.sync(() => {
+                  debug("walkthrough-jobs", `jev job-start unavailable (${e.reason}) — degrading`);
+                  return null;
+                }),
+              ),
+            )
+          : null;
+        // The tier is only authoritative when the risk hook itself is on. With
+        // only `autoModel` enabled we still asked for it (same request, no
+        // extra cost) but the agent stays the author of its own tier.
+        const assignedRisk = settings.jev.risk ? (judgment?.riskLevel ?? null) : null;
+        const launchOverride = judgment?.launchOverride ?? null;
+
         // Guard the shared `aiModel` against the generation agent: the chat
         // bottom bar may have left a model id for a chat-only agent (e.g. cursor)
-        // that this agent can't use — fall back to its default if so.
+        // that this agent can't use — fall back to its default if so. The
+        // override goes through the same guard, so a routed model this agent
+        // can't run degrades to its default rather than launching a broken
+        // session.
         const freshModelUsed =
-          resolveGenerationModel(agent, settings.aiModel) ??
+          resolveGenerationModel(agent, launchOverride?.model ?? settings.aiModel) ??
           (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
         const modelUsed =
           params.trigger === "resume"
@@ -1489,6 +1568,11 @@ export const WalkthroughJobsLive = Layer.effect(
             forceNew: params.trigger === "user" && generationMode === "full",
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
+            // Written at insert, not by a follow-up UPDATE: no `kill -9`
+            // window exists between the row existing and carrying its tier.
+            ...(assignedRisk !== null && judgment !== null
+              ? { risk: { level: assignedRisk, confidence: judgment.riskConfidence } }
+              : {}),
             providerConfig: providerConfigForJob,
           }),
         ).pipe(
@@ -1603,6 +1687,8 @@ export const WalkthroughJobsLive = Layer.effect(
             generationMode,
             parentWalkthroughId,
             baseHeadSha,
+            launchOverride,
+            assignedRisk,
           },
           params.trigger,
         );

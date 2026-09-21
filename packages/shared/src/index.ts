@@ -11,12 +11,14 @@ export type {
 export {
   ACP_AGENT_IDS,
   ACP_AGENTS,
+  AUTO_MODEL_SENTINEL,
   clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
   isAcpAgentId,
+  isAutoModelSentinel,
   THINKING_EFFORT_ORDER,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";

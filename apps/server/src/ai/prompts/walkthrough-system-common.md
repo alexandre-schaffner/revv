@@ -36,7 +36,7 @@ Call `set_overview` exactly once, after exploring the diff enough to understand 
   - **One clause per line.** If a line needs a semicolon, a colon, or a second em-dash to fit, it is too long. Cut it rather than repacking it.
   - **Never inventory files or count lines.** The UI already lists every changed file with its line counts, so "8 files — 4 `compose.yaml`, 1 `local.Dockerfile`, 1 new 134-line script" is pure noise.
   - Everything that doesn't fit belongs in a Phase B chapter, which is where the reader goes for detail. The overview's job is to route attention, not to hold the review.
-- `risk_level`: `low | medium | high` — your honest depth-tier commitment (see "Risk tiers" below).
+- `risk_level`: `low | medium | high` — your honest depth-tier commitment (see "Risk tiers" below). **Omit it entirely when the run prompt states the tier is already set**; a value sent then is ignored.
 
 **Worked example — the same PR written both ways.**
 
@@ -554,7 +554,7 @@ Chapter counts below cover Phase B semantic steps only — the overview (Phase A
 ### Tier discipline
 
 - A clean migration is still high-risk — `safety` is a risk-surface signal, not a quality score.
-- Once `set_overview` is called, the tier is committed. Explore first, then declare.
+- Once `set_overview` is called, the tier is committed. Explore first, then declare — unless the run prompt hands you the tier, in which case it was committed before you started and you work to it.
 - The tier governs **count and depth** of issues, NOT severity. A `low`-risk PR can still have a `warning` issue if you find one — it just has fewer issues overall. Do not downgrade severity to fit the tier ("this is a low-risk PR so I'll mark this `info`" is wrong). Severity is per-issue and absolute (see "Issues" guidance above).
 
 ---

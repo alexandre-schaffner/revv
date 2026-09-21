@@ -52,9 +52,9 @@ function layerFor(jev: Partial<UserSettings["jev"]>, secrets: Record<string, str
 /** Run with `fetch` booby-trapped, so any network use fails the test. */
 async function withoutNetwork<A>(run: () => Promise<A>): Promise<A> {
   const original = globalThis.fetch;
-  globalThis.fetch = (() => {
+  globalThis.fetch = ((): never => {
     throw new Error("network call attempted on a short-circuit path");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     return await run();
   } finally {
