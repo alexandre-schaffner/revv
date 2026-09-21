@@ -124,6 +124,19 @@ export interface WalkthroughIssue {
    * across sessions because it's persisted on the walkthrough_issues row.
    */
   submittedAt?: string;
+  /**
+   * Composite signal score in [0,1] from the orchestrator's issue-scoring
+   * pass. Absent = never scored, which is correct for every pre-Jev row and
+   * for cache-imported walkthroughs (the importer regenerates issue ids).
+   * Unscored is never treated as low-signal.
+   */
+  advisoryScore?: number;
+  /**
+   * True when {@link advisoryScore}'s underlying judgments put this issue
+   * below the low-signal threshold. Computed server-side so every surface
+   * filters identically. Absent on unscored issues.
+   */
+  lowSignal?: boolean;
 }
 
 // ── Risk & token tracking ───────────────────────────────────────────────────
@@ -228,7 +241,37 @@ export interface WalkthroughRating {
   citations: RatingCitation[];
   /** Optional links to walkthrough blocks that explain this rating in depth. */
   blockIds: string[];
+  /**
+   * Who decided {@link verdict}. `'agent'` is the original contract;
+   * `'advisory'` means the orchestrator pre-assigned it from Jev and the
+   * agent contributed prose only.
+   */
+  verdictSource?: VerdictSource;
+  /**
+   * Set when the agent was handed a non-`pass` verdict it could find nothing
+   * to cite for. Recorded on the row and deliberately does *not* change the
+   * verdict — it is the only agent/advisory disagreement signal left once
+   * verdicts are pre-assigned.
+   */
+  disputed?: boolean;
 }
+
+/** Origin of a {@link WalkthroughRating.verdict}. */
+export type VerdictSource = "agent" | "advisory";
+
+/**
+ * Durable gate for the orchestrator's phase-D verdict pass, read by
+ * `rate_axis` to decide whether the agent supplies a verdict or prose only.
+ *
+ *   'pending'     — Phase C has committed; the pass is in flight. `rate_axis`
+ *                   returns a retryable "try again in a moment".
+ *   'ready'       — nine rating rows are pre-seeded with verdicts.
+ *   'unavailable' — the pass was skipped or failed; pre-Jev contract applies.
+ *
+ * Null carries the same meaning as `'unavailable'` and is what every row
+ * predating the feature holds.
+ */
+export type AxisAdvisoryState = "pending" | "ready" | "unavailable";
 
 // ── Pipeline phase (A→B→C→D) ────────────────────────────────────────────────
 

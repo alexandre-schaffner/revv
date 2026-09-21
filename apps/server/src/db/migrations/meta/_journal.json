@@ -260,6 +260,13 @@
       "when": 1779655000000,
       "tag": "0330_decode_plain_text_entities",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1779660000000,
+      "tag": "0340_jev_advisory",
+      "breakpoints": true
     }
   ]
 }

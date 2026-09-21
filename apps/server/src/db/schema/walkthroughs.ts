@@ -1,8 +1,9 @@
-import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
+import { type AxisAdvisoryState, REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   integer,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -46,8 +47,33 @@ export const walkthroughs = sqliteTable(
      * `author` is a self-review/preflight pass for the PR author.
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
-    /** Phase A output: `'low' | 'medium' | 'high'`. Written by `set_overview` MCP tool. */
+    /**
+     * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
+     * from the Jev risk pass (CLAUDE.md invariant 2's carve-out), passed to
+     * `createPartial` so no `kill -9` window exists between row creation and
+     * its risk tier. Falls back to `'low'` when Jev is off or unreachable,
+     * which is also the value every pre-Jev row carries.
+     */
     riskLevel: text("risk_level").notNull().default("low"),
+    /**
+     * Calibrated confidence [0,1] behind {@link riskLevel}, recorded purely so
+     * the tier thresholds are tunable from real data later. Null when the tier
+     * did not come from Jev.
+     */
+    riskConfidence: real("risk_confidence"),
+    /**
+     * Durable three-state gate for the phase-D verdict pass —
+     * `'pending' | 'ready' | 'unavailable'`, null on rows predating it.
+     *
+     * Set to `'pending'` inside the Phase C transaction, then to `'ready'`
+     * (nine `walkthrough_ratings` rows pre-seeded with verdicts) or
+     * `'unavailable'` (Jev off/failed) by the pass itself. `rate_axis` reads
+     * it: `'pending'` is a retryable error, `'ready'` means prose-only, and
+     * `'unavailable'`/null is the pre-Jev contract where the agent supplies
+     * the verdict. In SQLite rather than memory so it survives `kill -9`
+     * (invariant 1); `resumePending()` un-strands a leftover `'pending'`.
+     */
+    axisAdvisoryState: text("axis_advisory_state").$type<AxisAdvisoryState>(),
     /**
      * Phase C output: final "Overall Sentiment" paragraph. Nullable until
      * Phase C completes. Written by `set_sentiment` MCP tool.

@@ -219,6 +219,37 @@ export interface UserSettings {
     };
   };
   /**
+   * TypeSafe System One (Jev) — a calibrated decision model used for the
+   * closed-set judgments the review pipeline would otherwise spend a full
+   * agent turn on. Every hook degrades to today's behaviour when Jev is
+   * off, unconfigured, or unreachable, so the toggles are pure opt-in.
+   *
+   * Per-feature switches rather than one master flag because each hook is
+   * independently reversible — a badly-tuned threshold on one shouldn't
+   * force turning all of them off.
+   */
+  jev: {
+    /** Master switch. Off disables every hook regardless of the rest. */
+    enabled: boolean;
+    /**
+     * Read-only, derived server-side from the keyring/env. The key itself
+     * never enters this DTO: `GET /api/settings` is unauthenticated.
+     */
+    hasApiKey: boolean;
+    /** Let Jev size the PR and pick the generation model tier. */
+    autoModel: boolean;
+    /** Compute `walkthroughs.risk_level` at job start instead of asking the agent. */
+    risk: boolean;
+    /** Pre-assign the nine phase-D axis verdicts after Phase C. */
+    verdicts: boolean;
+    /** Score flagged issues for groundedness, scope, actionability and novelty. */
+    issueScoring: boolean;
+    /** UI: collapse low-signal issues behind a "show N filtered" disclosure. */
+    hideLowSignal: boolean;
+    /** Ask before spending an auto-continuation on a run that looks doomed. */
+    adjudicateContinuations: boolean;
+  };
+  /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
    * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by
    * release-please. `'nightly'` tracks the moving `nightly` tag — built from

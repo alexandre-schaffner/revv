@@ -59,6 +59,16 @@ const DEFAULT_SETTINGS: UserSettings = {
       trustedSignerHosts: [],
     },
   },
+  jev: {
+    enabled: false,
+    hasApiKey: false,
+    autoModel: false,
+    risk: false,
+    verdicts: false,
+    issueScoring: false,
+    hideLowSignal: true,
+    adjudicateContinuations: false,
+  },
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
 
@@ -157,6 +167,7 @@ function normalize(raw: unknown): UserSettings {
         : DEFAULT_SETTINGS.githubClientId,
     recap: coerceRecap(r.recap),
     cache: coerceCache(r.cache),
+    jev: coerceJev(r.jev),
     updateChannel: coerceUpdateChannel(r.updateChannel),
   };
 }
@@ -205,6 +216,28 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
     dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
     weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
     agent,
+  };
+}
+
+/**
+ * `hasApiKey` is never taken from the caller — it is derived from the keyring
+ * at the edge (`withJevKeyState`) and forced to `false` everywhere else, so a
+ * client PUT can't fake a configured key into the settings row.
+ */
+function coerceJev(value: unknown): UserSettings["jev"] {
+  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
+  const r = value as Record<string, unknown>;
+  const flag = (key: keyof UserSettings["jev"]): boolean =>
+    typeof r[key] === "boolean" ? (r[key] as boolean) : DEFAULT_SETTINGS.jev[key];
+  return {
+    enabled: flag("enabled"),
+    hasApiKey: false,
+    autoModel: flag("autoModel"),
+    risk: flag("risk"),
+    verdicts: flag("verdicts"),
+    issueScoring: flag("issueScoring"),
+    hideLowSignal: flag("hideLowSignal"),
+    adjudicateContinuations: flag("adjudicateContinuations"),
   };
 }
 
@@ -271,6 +304,18 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
         })(),
       ),
     },
+    jev: {
+      enabled: row.jevEnabled,
+      // Derived at the edge from `SecretStore`, never from the row — the key
+      // itself is not in this table.
+      hasApiKey: false,
+      autoModel: row.jevAutoModel,
+      risk: row.jevRisk,
+      verdicts: row.jevVerdicts,
+      issueScoring: row.jevIssueScoring,
+      hideLowSignal: row.jevHideLowSignal,
+      adjudicateContinuations: row.jevAdjudicateContinuations,
+    },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
 }
@@ -304,6 +349,13 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheSigningMode: s.cache.signing.mode,
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
+    jevEnabled: s.jev.enabled,
+    jevAutoModel: s.jev.autoModel,
+    jevRisk: s.jev.risk,
+    jevVerdicts: s.jev.verdicts,
+    jevIssueScoring: s.jev.issueScoring,
+    jevHideLowSignal: s.jev.hideLowSignal,
+    jevAdjudicateContinuations: s.jev.adjudicateContinuations,
     updatedAt: new Date(),
   };
 }
@@ -359,17 +411,19 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 /**
  * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional (standard `Partial`), but `recap` and `cache` are recursively
+ * optional (standard `Partial`), but `recap`, `cache` and `jev` are recursively
  * partial so callers can patch a single nested field (e.g.
  * `{ recap: { agent: 'opencode' } }`) without spreading the whole
  * sub-object. {@link Settings.ts}'s `updateSettings` deep-merges them
  * against the current value to honour this contract.
  */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
+export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache" | "jev">> & {
   recap?: Partial<UserSettings["recap"]>;
   cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
     signing?: Partial<UserSettings["cache"]["signing"]>;
   };
+  /** `hasApiKey` is server-derived and not patchable — see {@link coerceJev}. */
+  jev?: Partial<Omit<UserSettings["jev"], "hasApiKey">>;
 };
 
 export class SettingsService extends Context.Tag("SettingsService")<
@@ -426,11 +480,16 @@ export const SettingsServiceLive = Layer.effect(
                       : current.cache.signing,
                 }
               : current.cache;
+          const mergedJev =
+            partial.jev !== undefined
+              ? { ...current.jev, ...partial.jev, hasApiKey: false }
+              : current.jev;
           const merged: UserSettings = {
             ...current,
             ...partial,
             recap: mergedRecap,
             cache: mergedCache,
+            jev: mergedJev,
             id: "default",
           };
           const next: UserSettings = {

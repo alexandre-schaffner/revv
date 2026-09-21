@@ -96,16 +96,18 @@ export async function fetchSettings(): Promise<void> {
 
 /**
  * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional. `recap` and `cache` are recursively partial so callers can
+ * optional. `recap`, `cache` and `jev` are recursively partial so callers can
  * patch a single nested field (e.g. `{ cache: { enabled: true } }`)
  * without spreading the whole sub-object. The server deep-merges them
  * against the current values.
  */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
+export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache" | "jev">> & {
   recap?: Partial<UserSettings["recap"]>;
   cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
     signing?: Partial<UserSettings["cache"]["signing"]>;
   };
+  /** `hasApiKey` is derived server-side from the keyring — not patchable. */
+  jev?: Partial<Omit<UserSettings["jev"], "hasApiKey">>;
 };
 
 type UpdateSettingsOptions = {
