@@ -16,26 +16,46 @@ export type ModelPreview =
   | { status: "pending" }
   | { status: "ready"; model: string | null; riskLevel: RiskLevel };
 
+/**
+ * Keyed on `(prId, headSha)`, not `prId`.
+ *
+ * That is what makes a pull re-size: new commits move the PR's head SHA, the
+ * key changes, the old answer stops matching and the selector asks again.
+ * Keying on the PR alone would pin the first sizing for the life of the
+ * branch, which is exactly wrong for a judgment about the diff.
+ */
 let previews = $state<Record<string, ModelPreview>>({});
-/** In-flight de-dupe: mount + settings change can both ask at once. */
+/** In-flight de-dupe: mount, settings change and a pull can all ask at once. */
 const inFlight = new Map<string, Promise<void>>();
+/** Bounded `pending` retries per key, so a never-cached diff can't spin. */
+const attempts = new Map<string, number>();
 
-export function getModelPreview(prId: string | null): ModelPreview | null {
-  if (prId === null) return null;
-  return previews[prId] ?? null;
+const MAX_PENDING_RETRIES = 6;
+const PENDING_RETRY_MS = 2_500;
+
+function cacheKey(prId: string, headSha: string): string {
+  return `${prId}@${headSha}`;
+}
+
+export function getModelPreview(prId: string | null, headSha: string | null): ModelPreview | null {
+  if (prId === null || headSha === null) return null;
+  return previews[cacheKey(prId, headSha)] ?? null;
 }
 
 /**
- * Fetch the preview for a PR, de-duped.
+ * Fetch the preview for a PR at a specific head SHA, de-duped.
  *
- * `pending` is not cached as a final answer — it means "the diff hasn't
- * landed yet", so a later call (once the review page has its files) is
- * expected to resolve. Everything else sticks until `resetModelPreviews`.
+ * `pending` means the server has no cached diff to size yet — normal right
+ * after a pull, while the poller re-fetches. It retries on a timer rather
+ * than waiting for a signal, because the thing it is waiting for (the diff
+ * cache filling) has no client-visible event. Bounded so a PR whose diff
+ * never caches settles instead of polling forever.
  */
-export async function fetchModelPreview(prId: string): Promise<void> {
-  const existing = previews[prId];
+export async function fetchModelPreview(prId: string, headSha: string): Promise<void> {
+  const key = cacheKey(prId, headSha);
+  const existing = previews[key];
   if (existing && existing.status !== "pending") return;
-  const running = inFlight.get(prId);
+  const running = inFlight.get(key);
   if (running) return running;
 
   const task = (async () => {
@@ -45,22 +65,38 @@ export async function fetchModelPreview(prId: string): Promise<void> {
         { headers: authHeaders(), credentials: "include" },
       );
       if (!res.ok) return;
-      previews = { ...previews, [prId]: (await res.json()) as ModelPreview };
+      const next = (await res.json()) as ModelPreview;
+      previews = { ...previews, [key]: next };
+
+      if (next.status === "pending") {
+        const tried = (attempts.get(key) ?? 0) + 1;
+        attempts.set(key, tried);
+        if (tried < MAX_PENDING_RETRIES) {
+          setTimeout(() => {
+            // Only chase a key still on screen and still unresolved.
+            if (previews[key]?.status === "pending") void fetchModelPreview(prId, headSha);
+          }, PENDING_RETRY_MS);
+        }
+      } else {
+        attempts.delete(key);
+      }
     } catch {
       // Best-effort: the selector falls back to a bare "Auto".
     } finally {
-      inFlight.delete(prId);
+      inFlight.delete(key);
     }
   })();
-  inFlight.set(prId, task);
+  inFlight.set(key, task);
   return task;
 }
 
 /**
  * Drop everything. Called when the model or agent setting changes, since the
- * routing — though not the underlying sizing — depends on both.
+ * routing — though not the underlying sizing — depends on both. The server
+ * still has the sizing cached, so this re-routes rather than re-paying.
  */
 export function resetModelPreviews(): void {
   previews = {};
   inFlight.clear();
+  attempts.clear();
 }

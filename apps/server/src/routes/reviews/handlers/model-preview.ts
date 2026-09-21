@@ -34,7 +34,7 @@ type ModelPreview =
  * the diff lands this reports `pending`, and the client tries again once the
  * review page has loaded its files.
  */
-export function getModelPreviewHandler(prId: string, userId: string) {
+export function getModelPreviewHandler(prId: string, userId: string): Promise<ModelPreview> {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;

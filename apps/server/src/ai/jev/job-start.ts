@@ -7,6 +7,7 @@
 // They batch because none depends on another's answer — a second round trip
 // would only cost latency on the one path where latency is user-visible.
 
+import { createHash } from "node:crypto";
 import type { AcpAgentId, RiskLevel } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
@@ -77,11 +78,30 @@ export interface JobStartAnswers {
   readonly needsWideContext: boolean;
 }
 
-/** Cache namespace. Entries are immutable — the key carries the head SHA. */
+/** Cache namespace. Entries are immutable — the key pins the exact diff. */
 export const JOB_START_CACHE_NS = "jev:job-start";
 
-export function jobStartCacheKey(prId: string, headSha: string): string {
-  return `${prId}:${headSha}`;
+/**
+ * Stable fingerprint of the changed-file set: path, status and line counts,
+ * sorted. Deliberately excludes patch bodies, which are truncated differently
+ * by different callers and would produce spurious misses.
+ *
+ * It is in the cache key alongside the head SHA because the two can
+ * disagree. When a PR gets new commits the poller updates `pull_requests.
+ * head_sha` and *then* invalidates the diff cache, so for a moment the row
+ * advertises a SHA the cached diff doesn't correspond to. Keying on the SHA
+ * alone would let a preview run in that window write an answer about the old
+ * diff under the new SHA — and these entries are immutable, so it would
+ * never correct itself. With the fingerprint, that entry is simply one the
+ * real run never reads: worst case one wasted call, never a wrong answer.
+ */
+export function diffFingerprint(files: JobStartStateInput["files"]): string {
+  const parts = files.map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`).sort();
+  return createHash("sha1").update(parts.join("\n")).digest("hex").slice(0, 16);
+}
+
+export function jobStartCacheKey(prId: string, headSha: string, fingerprint: string): string {
+  return `${prId}:${headSha}:${fingerprint}`;
 }
 
 /** Ask the three job-start questions. Fails only with {@link JevUnavailable}. */
@@ -174,7 +194,7 @@ export function resolveJobStartAnswers(
     return yield* cache
       .getOrFetch<JobStartAnswers, JevUnavailable, JevService>(
         JOB_START_CACHE_NS,
-        jobStartCacheKey(prId, headSha),
+        jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
         () => askJobStart(state),
         { immutable: true },
       )

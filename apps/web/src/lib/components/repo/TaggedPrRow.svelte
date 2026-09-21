@@ -19,6 +19,10 @@
  *   on a second glyph. One icon vocabulary per row.
  * - The branch shows only when it is information. A stacked PR's base is; the
  *   source branch of a PR targeting `main` is a restatement of the title.
+ * - The row carries a diffstat, which GitHub's own list does not. "How big is
+ *   it" is half of triage — a one-line revert and a thousand-line rewrite are
+ *   not the same decision — and it is the only fact here you would otherwise
+ *   have to open the PR to learn.
  */
 
 import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
@@ -57,6 +61,24 @@ const updatedAtExact = $derived.by(() => {
   return Number.isNaN(ms) ? updatedAt : new Date(ms).toLocaleString();
 });
 
+/**
+ * GitHub's PR *list* endpoint omits `additions` / `deletions` / `changed_files`
+ * — only the single-PR fetch carries them — so a freshly synced row holds the
+ * column defaults until a detail fetch fills them in. Zeros here mean "not
+ * known yet", not "an empty diff", and the clause stays out of the row rather
+ * than asserting `0 files · +0 −0`.
+ */
+const hasSize = $derived(pr.changedFiles > 0 || pr.additions > 0 || pr.deletions > 0);
+
+const sizeLabel = $derived(
+  `${pr.changedFiles} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${pr.additions} additions, ${pr.deletions} deletions`,
+);
+
+/** Thousands separators: a five-figure diff is exactly the one worth reading twice. */
+function fmt(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
 const VISIT_LABEL: Record<VisitState, string> = {
   unvisited: "Not opened yet",
   visited: "Already opened",
@@ -94,6 +116,28 @@ function onNav(event: MouseEvent): void {
 				<span class="when led" title={updatedAtExact}>
 					updated {formatRelativeTime(updatedAt)}
 				</span>
+
+				<!--
+					How big is it — the one triage question the row could not answer.
+					File count and line counts are a single clause, not three: they
+					answer that question together, and a "·" between them would
+					split one fact into three.
+
+					Spelled out for assistive tech, because "+340 −88" read aloud
+					as arithmetic is worse than silence.
+				-->
+				{#if hasSize}
+					<span class="size led">
+						<span class="sr-only">{sizeLabel}</span>
+						<span class="size-vis" aria-hidden="true">
+							{#if pr.changedFiles > 0}
+								<span>{fmt(pr.changedFiles)} {pr.changedFiles === 1 ? "file" : "files"}</span>
+							{/if}
+							<span class="add">+{fmt(pr.additions)}</span>
+							<span class="del">&minus;{fmt(pr.deletions)}</span>
+						</span>
+					</span>
+				{/if}
 
 				{#if pr.isDraft}
 					<span class="clause led">Draft</span>
@@ -291,6 +335,40 @@ function onNav(event: MouseEvent): void {
 		flex-shrink: 0;
 	}
 
+	/*
+	 * Change size.
+	 *
+	 * Mono, because three numbers scanned down a column only line up in a
+	 * tabular face — this is the same treatment the recap's PR row gives the
+	 * same fact, so the app has one diffstat.
+	 */
+	.size {
+		flex-shrink: 0;
+	}
+
+	.size-vis {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 0.3125rem;
+		white-space: nowrap;
+		font-family: var(--font-mono);
+		font-size: 0.6875rem;
+		letter-spacing: 0.01em;
+	}
+
+	/*
+	 * `+`/`−` carry the meaning; the colour is the redundant channel, not the
+	 * only one. These are the system's *text* diff inks, measured for body copy,
+	 * rather than the fill tints the diff gutters use.
+	 */
+	.add {
+		color: var(--color-diff-add-text);
+	}
+
+	.del {
+		color: var(--color-diff-del-text);
+	}
+
 	.clause {
 		flex-shrink: 0;
 	}
@@ -394,6 +472,21 @@ function onNav(event: MouseEvent): void {
 			height: 1px;
 			overflow: hidden;
 			clip-path: inset(50%);
+		}
+	}
+
+	/* Last to go, and only once the row is narrow enough that keeping it would
+	   start clipping the timestamp. Clipped whole, like the two above it, so the
+	   clause takes its own leading "·" with it — and, being clipped rather than
+	   `display: none`, it stays in the accessibility tree at every width. */
+	@container tagged (max-width: 400px) {
+		.size {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip-path: inset(50%);
+			white-space: nowrap;
 		}
 	}
 </style>

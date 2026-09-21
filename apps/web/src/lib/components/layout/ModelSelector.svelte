@@ -11,7 +11,7 @@ import {
 } from "$lib/components/ui/popover/index.js";
 import { getDefaultModel, type ModelOption } from "$lib/constants/models";
 import { fetchModelPreview, getModelPreview } from "$lib/stores/model-preview.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   areModelsLoaded,
   fetchModels,
@@ -20,7 +20,7 @@ import {
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
+import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
@@ -69,36 +69,56 @@ function labelFor(value: string | null): string | null {
  * unknown state gets a qualifier of its own instead.
  */
 let selectedPrId = $derived(getSelectedPrId());
-let preview = $derived(getModelPreview(selectedPrId));
+// Tracking the head SHA is what makes a pull re-size: new commits move it,
+// which invalidates the preview for this PR and triggers a fresh ask.
+let selectedHeadSha = $derived(selectedPrId ? (getPrById(selectedPrId)?.headSha ?? null) : null);
+let preview = $derived(getModelPreview(selectedPrId, selectedHeadSha));
 
 // Size the PR ahead of generation so the label can name a model rather than
-// going blank. `pending` means the diff hasn't been cached yet, so retry
-// once it has — the review page fetching its files is what unblocks it.
+// going blank. Retries on `pending` are the store's job — the diff cache
+// filling has no client-visible event to wait on.
 $effect(() => {
-  if (!isAuto || selectedPrId === null) return;
-  if (preview !== null && preview.status !== "pending") return;
-  void fetchModelPreview(selectedPrId);
+  if (!isAuto || selectedPrId === null || selectedHeadSha === null) return;
+  if (preview !== null) return;
+  void fetchModelPreview(selectedPrId, selectedHeadSha);
 });
 
 /**
- * What Auto resolved to for this PR — the model the last run actually
- * launched with, or the pre-generation sizing when nothing has run yet.
+ * What Auto resolves to for the PR at its *current* head.
  *
- * A finished run wins over the preview: it is what happened, not what would
- * happen. `null` from the preview means routing declined and the agent's own
- * default stands, which is a real answer rather than a missing one.
+ * The preview leads, deliberately. A finished run's model is what happened
+ * at some earlier SHA, and after a pull that answer is stale — which is the
+ * one thing this label must not be. The preview is keyed on the current head
+ * and shares the server's sizing cache with the generation path, so for an
+ * un-pulled PR it names exactly what a run did or would use.
+ *
+ * The exception is a run in flight: that is ground truth, and it may have
+ * launched before a settings change the preview already reflects.
+ *
+ * A `ready` preview with a null model means routing declined and the agent's
+ * own default stands — a real answer, so it resolves to that default rather
+ * than showing blank.
  */
 let autoResolvedLabel = $derived.by((): string | null => {
   if (!isAuto) return null;
-  const fromRun = labelFor(getWalkthroughModelUsed());
-  if (fromRun) return fromRun;
+  if (getIsStreaming()) {
+    const running = labelFor(getWalkthroughModelUsed());
+    if (running) return running;
+  }
   if (preview?.status !== "ready") return null;
   return labelFor(preview.model) ?? labelFor(getDefaultModel(currentId));
 });
 
+/**
+ * Whether a sizing is actually outstanding. With no PR open there is nothing
+ * to size, so the label stays a bare "Auto" rather than claiming to be
+ * working on something.
+ */
+let autoSizing = $derived(isAuto && autoResolvedLabel === null && selectedPrId !== null);
+
 let autoTitle = $derived(
   autoResolvedLabel
-    ? `Auto picked ${autoResolvedLabel} for this pull request, from how intricate its diff looked.`
+    ? `Auto picked ${autoResolvedLabel} for this pull request, from how intricate its diff looked. It is re-sized when new commits arrive.`
     : "Revv sizes the pull request and picks a model from how intricate its diff looks.",
 );
 
@@ -109,7 +129,9 @@ let currentLabel = $derived(
   isAuto
     ? autoResolvedLabel
       ? `Auto · ${autoResolvedLabel}`
-      : "Auto · sizing…"
+      : autoSizing
+        ? "Auto · sizing…"
+        : "Auto"
     : !fetchDone
       ? "Loading..."
       : fetchedModels.length === 0
@@ -211,9 +233,11 @@ function selectWindow(value: ContextWindow) {
 				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				<span class="min-w-0 flex-1 truncate text-left">
 					Auto
-					<span class="text-text-muted">
-						· {autoResolvedLabel ?? 'sizing…'}
-					</span>
+					{#if autoResolvedLabel || autoSizing}
+						<span class="text-text-muted">
+							· {autoResolvedLabel ?? 'sizing…'}
+						</span>
+					{/if}
 				</span>
 				{#if isAuto}
 					<Check size={12} class="shrink-0 text-accent" />
