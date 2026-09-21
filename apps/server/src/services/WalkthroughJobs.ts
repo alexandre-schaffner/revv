@@ -48,7 +48,7 @@ import {
 } from "../ai/agent-stream/token-usage";
 import { adjudicateContinuation, classifyFailure } from "../ai/jev/continuation";
 import { scoreIssues } from "../ai/jev/issue-scoring";
-import { judgeJobStart } from "../ai/jev/job-start";
+import { resolveJobStartAnswers, routeFromAnswers } from "../ai/jev/job-start";
 import { markAxisAdvisoryUnavailable, runAxisVerdictPass } from "../ai/jev/phase-d-verdicts";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
@@ -74,6 +74,7 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
+import { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import {
@@ -362,6 +363,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const walkthroughService = yield* WalkthroughService;
     const remoteCache = yield* RemoteWalkthroughCache;
     const jevService = yield* JevService;
+    const cacheService = yield* CacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const broadcaster = yield* Broadcaster;
 
@@ -1255,6 +1257,7 @@ export const WalkthroughJobsLive = Layer.effect(
               // very first event rather than making the UI wait for the
               // `summary` event at the end of Phase A.
               ...(ctx.assignedRisk !== null ? { riskLevel: ctx.assignedRisk } : {}),
+              modelUsed: ctx.modelUsed,
             },
           }).pipe(Effect.catchAll(() => Effect.void));
 
@@ -1545,31 +1548,29 @@ export const WalkthroughJobsLive = Layer.effect(
           (settings.jev.risk || settings.jev.autoModel) &&
           params.trigger !== "resume" &&
           !cacheWillHit;
-        const judgment = wantsJudgment
-          ? yield* judgeJobStart({
-              agent,
-              autoModel: settings.jev.autoModel,
-              configuredModel: settings.aiModel,
-              pr,
-              files,
-              commits,
-            }).pipe(
+        // Cached on (prId, headSha): when the review page already asked for a
+        // model preview, this is a hit and costs nothing on the critical
+        // path. `resolveJobStartAnswers` never fails — an unavailable Jev
+        // degrades to the agent's own risk tier and the configured model.
+        const answers = wantsJudgment
+          ? yield* resolveJobStartAnswers(pr.id, meta.headSha, { pr, files, commits }).pipe(
               Effect.provideService(JevService, jevService),
-              // Never fail a walkthrough over a judgment: degrade to the
-              // agent's own risk tier and the configured model.
-              Effect.catchAll((e) =>
-                Effect.sync(() => {
-                  debug("walkthrough-jobs", `jev job-start unavailable (${e.reason}) — degrading`);
-                  return null;
-                }),
-              ),
+              Effect.provideService(CacheService, cacheService),
+              Effect.provideService(DbService, { db }),
             )
           : null;
         // The tier is only authoritative when the risk hook itself is on. With
         // only `autoModel` enabled we still asked for it (same request, no
         // extra cost) but the agent stays the author of its own tier.
-        const assignedRisk = settings.jev.risk ? (judgment?.riskLevel ?? null) : null;
-        const launchOverride = judgment?.launchOverride ?? null;
+        const assignedRisk = settings.jev.risk ? (answers?.riskLevel ?? null) : null;
+        const launchOverride =
+          answers === null
+            ? null
+            : routeFromAnswers(answers, {
+                agent,
+                configuredModel: settings.aiModel,
+                autoModel: settings.jev.autoModel,
+              });
 
         // Guard the shared `aiModel` against the generation agent: the chat
         // bottom bar may have left a model id for a chat-only agent (e.g. cursor)
@@ -1692,8 +1693,8 @@ export const WalkthroughJobsLive = Layer.effect(
             ...(generatedBy ? { generatedBy } : {}),
             // Written at insert, not by a follow-up UPDATE: no `kill -9`
             // window exists between the row existing and carrying its tier.
-            ...(assignedRisk !== null && judgment !== null
-              ? { risk: { level: assignedRisk, confidence: judgment.riskConfidence } }
+            ...(assignedRisk !== null && answers !== null
+              ? { risk: { level: assignedRisk, confidence: answers.riskConfidence } }
               : {}),
             providerConfig: providerConfigForJob,
           }),

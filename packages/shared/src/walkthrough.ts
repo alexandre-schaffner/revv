@@ -632,6 +632,13 @@ export type WalkthroughStreamEvent =
          * case `summary` remains the first place it appears.
          */
         riskLevel?: RiskLevel;
+        /**
+         * The model this run actually launched with, already resolved
+         * against the agent's catalog. Present so a UI showing "Auto" can
+         * name what Auto picked — including when routing declined and the
+         * configured model stood, which is just as useful to know.
+         */
+        modelUsed?: string;
       };
     }
   /**

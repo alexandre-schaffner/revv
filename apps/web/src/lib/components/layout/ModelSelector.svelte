@@ -9,7 +9,9 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import type { ModelOption } from "$lib/constants/models";
+import { getDefaultModel, type ModelOption } from "$lib/constants/models";
+import { fetchModelPreview, getModelPreview } from "$lib/stores/model-preview.svelte";
+import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   areModelsLoaded,
   fetchModels,
@@ -18,6 +20,7 @@ import {
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
+import { getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
@@ -47,12 +50,66 @@ let currentModel = $derived(getSettings()?.aiModel ?? "");
 // static ladder and Auto would be a no-op — see `ai/jev/routing.ts`.
 let autoModelOffered = $derived((getSettings()?.jev?.autoModel ?? false) && !isDynamic);
 let isAuto = $derived(currentModel === AUTO_MODEL_SENTINEL);
+
+function labelFor(value: string | null): string | null {
+  if (!value) return null;
+  return fetchedModels.find((m) => m.value === value)?.label ?? value;
+}
+
+/**
+ * What Auto actually resolved to on this PR's most recent run.
+ *
+ * Worth showing even when routing declined and the agent default stood —
+ * "Auto · Sonnet 5" tells you the sizing judged this a standard review,
+ * which is exactly as informative as an upgrade.
+ *
+ * Null on a PR that hasn't generated yet, and deliberately not backfilled
+ * with the agent default: Auto sizes *this* diff at generation time, so any
+ * model named before then would be a guess presented as a fact. The
+ * unknown state gets a qualifier of its own instead.
+ */
+let selectedPrId = $derived(getSelectedPrId());
+let preview = $derived(getModelPreview(selectedPrId));
+
+// Size the PR ahead of generation so the label can name a model rather than
+// going blank. `pending` means the diff hasn't been cached yet, so retry
+// once it has — the review page fetching its files is what unblocks it.
+$effect(() => {
+  if (!isAuto || selectedPrId === null) return;
+  if (preview !== null && preview.status !== "pending") return;
+  void fetchModelPreview(selectedPrId);
+});
+
+/**
+ * What Auto resolved to for this PR — the model the last run actually
+ * launched with, or the pre-generation sizing when nothing has run yet.
+ *
+ * A finished run wins over the preview: it is what happened, not what would
+ * happen. `null` from the preview means routing declined and the agent's own
+ * default stands, which is a real answer rather than a missing one.
+ */
+let autoResolvedLabel = $derived.by((): string | null => {
+  if (!isAuto) return null;
+  const fromRun = labelFor(getWalkthroughModelUsed());
+  if (fromRun) return fromRun;
+  if (preview?.status !== "ready") return null;
+  return labelFor(preview.model) ?? labelFor(getDefaultModel(currentId));
+});
+
+let autoTitle = $derived(
+  autoResolvedLabel
+    ? `Auto picked ${autoResolvedLabel} for this pull request, from how intricate its diff looked.`
+    : "Revv sizes the pull request and picks a model from how intricate its diff looks.",
+);
+
 let currentLabel = $derived(
   // Checked ahead of the loading/empty branches: Auto is a real selection
   // even while a dynamic catalog is still in flight, and without this the
   // trigger would render the raw sentinel string.
   isAuto
-    ? "Auto"
+    ? autoResolvedLabel
+      ? `Auto · ${autoResolvedLabel}`
+      : "Auto · sizing…"
     : !fetchDone
       ? "Loading..."
       : fetchedModels.length === 0
@@ -125,7 +182,7 @@ function selectWindow(value: ContextWindow) {
 
 <PopoverRoot bind:open>
 	<PopoverTrigger>
-		<SelectTrigger label={currentLabel}>
+		<SelectTrigger label={currentLabel} title={isAuto ? autoTitle : undefined}>
 			{#snippet icon()}
 				{#if isAuto}
 					<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
@@ -152,7 +209,12 @@ function selectWindow(value: ContextWindow) {
 				onclick={() => select(AUTO_MODEL_SENTINEL)}
 			>
 				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
-				<span class="min-w-0 flex-1 truncate text-left">Auto</span>
+				<span class="min-w-0 flex-1 truncate text-left">
+					Auto
+					<span class="text-text-muted">
+						· {autoResolvedLabel ?? 'sizing…'}
+					</span>
+				</span>
 				{#if isAuto}
 					<Check size={12} class="shrink-0 text-accent" />
 				{/if}

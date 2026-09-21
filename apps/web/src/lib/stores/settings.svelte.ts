@@ -13,6 +13,7 @@ import {
   getDefaultSuggestionsModel,
   type ModelOption,
 } from "$lib/constants/models";
+import { resetModelPreviews } from "$lib/stores/model-preview.svelte";
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 import { mergeSettingsUpdate, type SettingsUpdate } from "./settings-merge";
@@ -142,6 +143,12 @@ export async function updateSettings(
   // a different cache row.
   if ("aiSuggestionsModel" in partial || "aiAgent" in partial) {
     invalidateSuggestions();
+  }
+  // The auto-model preview routes the cached sizing against the current
+  // agent and model, so both invalidate it. The sizing itself is cached
+  // server-side on (prId, headSha) and is not re-paid for.
+  if ("aiModel" in partial || "aiAgent" in partial || partial.jev?.autoModel !== undefined) {
+    resetModelPreviews();
   }
   try {
     const result = await api.api.settings.put(partial as Record<string, unknown>);

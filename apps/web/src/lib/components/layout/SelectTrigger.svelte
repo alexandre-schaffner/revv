@@ -7,13 +7,16 @@ interface Props {
   icon?: Snippet;
   trailing?: Snippet;
   chevron?: boolean;
+  /** Hover explanation, for labels that are shorter than the idea behind them. */
+  title?: string | undefined;
 }
 
-let { label, icon, trailing, chevron = true }: Props = $props();
+let { label, icon, trailing, chevron = true, title }: Props = $props();
 </script>
 
 <button
   type="button"
+  {title}
   class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-bg-secondary"
 >
   {#if icon}

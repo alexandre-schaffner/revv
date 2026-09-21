@@ -14,6 +14,7 @@ import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
+import { getModelPreviewHandler } from "./reviews/handlers/model-preview";
 import {
   coerceWalkthroughMode,
   getCachedWalkthroughHandler,
@@ -272,6 +273,17 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         ctx.session.user.id,
         coerceWalkthroughMode(ctx.query.mode),
       );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // Sizes the PR ahead of generation so the model selector can name what
+  // "Auto" will pick. Shares its cached answer with the generation path, so
+  // this is the same TypeSafe call moved earlier, not an extra one.
+  .get("/:id/walkthrough/model-preview", async (ctx) => {
+    try {
+      return await getModelPreviewHandler(ctx.params.id, ctx.session.user.id);
     } catch (e) {
       return handleAppError(e, ctx);
     }

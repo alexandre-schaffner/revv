@@ -63,6 +63,12 @@ export interface WalkthroughEntry {
   blocks: WalkthroughBlock[];
   summary: string | null;
   riskLevel: RiskLevel | null;
+  /**
+   * The model the run actually launched with. Null until a walkthrough has
+   * started for this PR. Lets the model selector name what "Auto" resolved
+   * to instead of leaving the user guessing.
+   */
+  modelUsed: string | null;
   sentiment: string | null;
   lastCompletedPhase: WalkthroughPipelinePhase;
   isStreaming: boolean;
@@ -168,6 +174,7 @@ export function freshEntry(): WalkthroughEntry {
     blocks: [],
     summary: null,
     riskLevel: null,
+    modelUsed: null,
     sentiment: null,
     lastCompletedPhase: "none",
     isStreaming: true,
@@ -301,6 +308,10 @@ export function getSummary(): string | null {
 }
 export function getRiskLevel(): RiskLevel | null {
   return _active?.riskLevel ?? null;
+}
+/** Model the active PR's latest walkthrough launched with, if any has. */
+export function getWalkthroughModelUsed(): string | null {
+  return _active?.modelUsed ?? null;
 }
 export function getIsStreaming(): boolean {
   return _active?.isStreaming ?? false;
@@ -753,6 +764,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           // Present only when the orchestrator assigned the tier, in which
           // case it is real from job start and worth showing immediately.
           if (event.data.riskLevel) entry.riskLevel = event.data.riskLevel;
+          if (event.data.modelUsed) entry.modelUsed = event.data.modelUsed;
           entry.isStreaming = true;
           entry.doneReceived = false;
           entry.streamError = null;
@@ -1132,6 +1144,7 @@ async function doHydrateFromCache(
       summary: string;
       riskLevel: RiskLevel;
       riskConfidence?: number | null;
+      modelUsed?: string;
       sentiment?: string | null;
       lastCompletedPhase?: WalkthroughPipelinePhase;
       errorMessage?: string | null;
@@ -1206,6 +1219,7 @@ async function doHydrateFromCache(
     // confidence on it.
     const hasRealRisk = hasRealSummary || wt.riskConfidence != null;
     entry.riskLevel = entry.riskLevel ?? (hasRealRisk ? wt.riskLevel : null);
+    entry.modelUsed = entry.modelUsed ?? wt.modelUsed ?? null;
     entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
 
     const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");

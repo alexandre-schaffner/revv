@@ -10,6 +10,9 @@
 import type { AcpAgentId, RiskLevel } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
+import { debug } from "../../logger";
+import { CacheService } from "../../services/Cache";
+import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
 import { type GenerationLaunchOverride, type ReviewDepth, routeDepth } from "./routing";
 import type { JobStartStateInput } from "./state";
@@ -58,32 +61,33 @@ const WIDE_CONTEXT_CRITERIA = {
   yes: "Reviewing this well requires holding an unusually large amount of code in mind at once — a very large diff, or a change whose correctness depends on many distant call sites.",
 } as const;
 
-export interface JobStartJudgment {
+/**
+ * The raw answers, before any agent-specific routing.
+ *
+ * Cached on `(prId, headSha)` because they are a judgment about the *diff* —
+ * nothing here depends on which agent or model is configured. Switching
+ * agents re-routes from the same answers rather than paying for a new call.
+ */
+export interface JobStartAnswers {
   readonly riskLevel: RiskLevel;
   readonly riskConfidence: number;
-  /** `null` when the depth answer didn't clear the gates, or the agent has no ladder. */
-  readonly launchOverride: GenerationLaunchOverride | null;
+  readonly depth: ReviewDepth;
+  readonly depthConfidence: number;
+  readonly depthProbabilities: Readonly<Record<string, number>>;
+  readonly needsWideContext: boolean;
 }
 
-export interface JobStartJudgmentInput extends JobStartStateInput {
-  readonly agent: AcpAgentId;
-  /** The model the user configured — the floor the override never routes below. */
-  readonly configuredModel: string | null | undefined;
-  /** Honour the depth answer. Off means "record the tier, don't move the model". */
-  readonly autoModel: boolean;
+/** Cache namespace. Entries are immutable — the key carries the head SHA. */
+export const JOB_START_CACHE_NS = "jev:job-start";
+
+export function jobStartCacheKey(prId: string, headSha: string): string {
+  return `${prId}:${headSha}`;
 }
 
-/**
- * Ask the job-start questions.
- *
- * Fails only with {@link JevUnavailable}; the caller collapses that to `null`
- * and falls back to the agent's own risk judgment and the configured model.
- * The depth answer is recorded even when `autoModel` is off, so the
- * confidence thresholds stay tunable from real runs.
- */
-export function judgeJobStart(
-  input: JobStartJudgmentInput,
-): Effect.Effect<JobStartJudgment, JevUnavailable, JevService> {
+/** Ask the three job-start questions. Fails only with {@link JevUnavailable}. */
+export function askJobStart(
+  input: JobStartStateInput,
+): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     const { answers } = yield* jev.ask({
@@ -111,22 +115,78 @@ export function judgeJobStart(
       },
     });
 
-    const riskLevel = answers.risk_tier.choice;
-    const depth = answers.review_depth.choice;
-
     return {
-      riskLevel,
+      riskLevel: answers.risk_tier.choice,
       riskConfidence: answers.risk_tier.confidence,
-      launchOverride: input.autoModel
-        ? routeDepth({
-            agent: input.agent,
-            depth: depth satisfies ReviewDepth,
-            confidence: answers.review_depth.confidence,
-            probabilities: answers.review_depth.probabilities,
-            configuredModel: input.configuredModel,
-            needsWideContext: answers.needs_wide_ctx.choice === "yes",
-          })
-        : null,
+      depth: answers.review_depth.choice satisfies ReviewDepth,
+      depthConfidence: answers.review_depth.confidence,
+      depthProbabilities: answers.review_depth.probabilities,
+      needsWideContext: answers.needs_wide_ctx.choice === "yes",
     };
+  });
+}
+
+/**
+ * Turn cached answers into a launch override for a specific agent.
+ *
+ * Pure and cheap, so it runs at every read rather than being cached: the
+ * configured agent and model can change between the preview and the run,
+ * and the routing has to follow them.
+ */
+export function routeFromAnswers(
+  answers: JobStartAnswers,
+  opts: {
+    readonly agent: AcpAgentId;
+    readonly configuredModel: string | null | undefined;
+    readonly autoModel: boolean;
+  },
+): GenerationLaunchOverride | null {
+  if (!opts.autoModel) return null;
+  return routeDepth({
+    agent: opts.agent,
+    depth: answers.depth,
+    confidence: answers.depthConfidence,
+    probabilities: answers.depthProbabilities,
+    configuredModel: opts.configuredModel,
+    needsWideContext: answers.needsWideContext,
+  });
+}
+
+/**
+ * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe
+ * can't answer.
+ *
+ * The cache is what lets the same judgment serve both the pre-generation
+ * model preview and the run itself: whichever asks first pays, and the other
+ * is free. In the common case — the user opens the PR, then clicks Generate
+ * — that takes the call off `startJobBody`'s critical path entirely, which
+ * is the one place its latency is user-visible (it holds `startJobMutex`).
+ *
+ * Immutable: the key carries the head SHA, so a new commit is a new entry.
+ */
+export function resolveJobStartAnswers(
+  prId: string,
+  headSha: string,
+  state: JobStartStateInput,
+): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService | DbService> {
+  return Effect.gen(function* () {
+    const cache = yield* CacheService;
+    return yield* cache
+      .getOrFetch<JobStartAnswers, JevUnavailable, JevService>(
+        JOB_START_CACHE_NS,
+        jobStartCacheKey(prId, headSha),
+        () => askJobStart(state),
+        { immutable: true },
+      )
+      .pipe(
+        // A failure must not be cached — `getOrFetch` propagates it, and the
+        // next caller retries. Both the preview and the run degrade to null.
+        Effect.catchAll((e) =>
+          Effect.sync(() => {
+            debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);
+            return null;
+          }),
+        ),
+      );
   });
 }
