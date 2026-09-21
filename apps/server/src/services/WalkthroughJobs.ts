@@ -1000,6 +1000,16 @@ export const WalkthroughJobsLive = Layer.effect(
                   },
                 }).pipe(Effect.catchAll(() => Effect.void));
               } else {
+                // The row really did reach phase D with every required
+                // inline comment. Without this the status stays
+                // `generating` forever: `completed_at` is never stamped,
+                // `getPartial` keeps returning it as a partial, and
+                // `resumePending()` re-launches a fully-generated
+                // walkthrough on every boot until the resume-attempt cap
+                // marks it `error`. Ordering matches the happy path above.
+                yield* setStatus(job.walkthroughId, "complete", {
+                  tokenUsage: currentTokenUsage,
+                });
                 yield* emitEvent(job.walkthroughId, {
                   type: "lifecycle:complete",
                   data: {
