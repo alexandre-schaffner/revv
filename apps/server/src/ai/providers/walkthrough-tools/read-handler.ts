@@ -69,7 +69,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     .all();
 
   const ratingRows = ctx.db
-    .select({ axis: walkthroughRatings.axis })
+    .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
     .from(walkthroughRatings)
     .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
     .all();
@@ -223,7 +223,14 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     sentiment: row.sentiment ?? null,
     semanticSteps,
     diffSteps,
-    ratedAxes: ratingRows.map((r) => r.axis as RatingAxis),
+    // `loadWalkthroughRow` already has the row, so this is free.
+    axisAdvisoryState: row.axisAdvisoryState ?? null,
+    // Only axes the agent has actually written count as rated — the verdict
+    // pass pre-seeds all nine rows with empty prose, and reporting those as
+    // done would tell a resuming agent Phase D was finished.
+    ratedAxes: ratingRows
+      .filter((r) => r.rationale.trim().length > 0)
+      .map((r) => r.axis as RatingAxis),
     issues,
     issueCount: issues.length,
     issuesNeedingInlineComment,

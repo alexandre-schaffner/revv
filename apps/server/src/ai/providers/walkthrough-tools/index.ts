@@ -17,8 +17,10 @@
 // the agent can recover from — the DB row is never touched.
 
 import type {
+  Confidence,
   RatingCitation,
   RiskLevel,
+  Verdict,
   WalkthroughPipelinePhase,
   WalkthroughRating,
 } from "@revv/shared";
@@ -160,7 +162,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
 //
 // Phase precondition: last_completed_phase === 'B' (and thus at least one
 // diff step persisted — Phase B can't be entered without one).
-// Writes: walkthroughs.sentiment.
+// Writes: walkthroughs.sentiment, walkthroughs.axis_advisory_state = 'pending'.
 // Advances: last_completed_phase → 'C'.
 
 export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = async (
@@ -205,7 +207,18 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
 
     ctx.db
       .update(walkthroughs)
-      .set({ sentiment: markdown, lastCompletedPhase: "C" })
+      .set({
+        sentiment: markdown,
+        lastCompletedPhase: "C",
+        // Opens the gate `rate_axis` reads. The orchestrator forks the
+        // verdict pass off the `phase:advanced → C` event and ALWAYS
+        // terminates this column — `'ready'` on success, `'unavailable'`
+        // when the feature is off or the call fails — so a walkthrough can
+        // never sit here. Written inside this transaction rather than after
+        // it so a `kill -9` between the two can't leave Phase C committed
+        // with no gate at all.
+        axisAdvisoryState: "pending",
+      })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
       .run();
   });
@@ -221,17 +234,22 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
 
 // ── Handler: rate_axis (Phase D) ─────────────────────────────────────────────
 //
-// Phase precondition: last_completed_phase ∈ {'C', 'D'}.
+// Phase precondition: last_completed_phase ∈ {'C', 'D'}, and
+//   walkthroughs.axis_advisory_state !== 'pending'.
 // Writes: one walkthrough_ratings row (upsert on (walkthroughId, axis)).
-// Advances: last_completed_phase → 'D' on the 9th distinct axis.
+// Advances: last_completed_phase → 'D' once all 9 axes carry a rationale.
+//
+// The verdict has two possible authors, decided by `axis_advisory_state`:
+//
+//   'ready'                — the orchestrator's pass pre-seeded all nine
+//                            verdicts; the agent writes prose only and a
+//                            `verdict` argument is ignored.
+//   'unavailable' / null   — the pre-TypeSafe contract: the agent's own
+//                            `verdict` is authoritative.
+//   'pending'              — the pass is in flight. A retryable error, NOT a
+//                            failure: the agent waits a beat and calls again.
 
 export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx, input) => {
-  if (input.verdict !== "pass" && input.citations.length === 0) {
-    return errorResult(
-      `Error: verdict='${input.verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
-    );
-  }
-
   let result: WalkthroughToolResult | null = null;
   let ratingEvent: WalkthroughRating | null = null;
   let advanced = false;
@@ -245,6 +263,50 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
     if (phase !== "C" && phase !== "D") {
       result = errorResult(
         `Error: rate_axis requires Phase C complete (sentiment set). Current phase: '${phase}'. Call set_sentiment first.`,
+      );
+      return;
+    }
+
+    if (row.axisAdvisoryState === "pending") {
+      result = errorResult(
+        "Axis verdicts are still being computed. This is not a failure — wait a moment and call rate_axis again with the same arguments.",
+      );
+      return;
+    }
+
+    // Verdict authority. When the orchestrator pre-assigned it, the seeded
+    // row's verdict wins and anything the agent sent is dropped — the agent
+    // was told the verdict up front and its job here is the reasoning.
+    const advisory =
+      row.axisAdvisoryState === "ready"
+        ? (ctx.db
+            .select({
+              verdict: walkthroughRatings.verdict,
+              confidence: walkthroughRatings.confidence,
+            })
+            .from(walkthroughRatings)
+            .where(
+              and(
+                eq(walkthroughRatings.walkthroughId, ctx.walkthroughId),
+                eq(walkthroughRatings.axis, input.axis),
+              ),
+            )
+            .get() ?? null)
+        : null;
+    const verdict = (advisory?.verdict ?? input.verdict) as Verdict;
+    const confidence = (advisory?.confidence ?? input.confidence) as Confidence;
+
+    // Citation requirement, with the escape hatch that keeps it from
+    // deadlocking. Pre-assigned verdicts mean an agent can be handed a
+    // `concern` it genuinely cannot cite; without `disputed` it would be
+    // rejected forever, burn both auto-continuations, and land in `error`.
+    // A dispute is recorded on the row and never changes the verdict — it
+    // is also the only agent/advisory disagreement signal left.
+    if (verdict !== "pass" && input.citations.length === 0 && input.disputed !== true) {
+      result = errorResult(
+        advisory === null
+          ? `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`
+          : `Error: this axis was assigned verdict='${verdict}', which requires at least one citation. Either cite the specific line range, or — if you genuinely found nothing to cite — pass disputed=true with a rationale explaining the absence.`,
       );
       return;
     }
@@ -300,34 +362,41 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
         id: crypto.randomUUID(),
         walkthroughId: ctx.walkthroughId,
         axis: input.axis,
-        verdict: input.verdict,
-        confidence: input.confidence,
+        verdict,
+        confidence,
         rationale: input.rationale,
         details: input.details,
         citations: JSON.stringify(citations),
         blockIds: JSON.stringify(blockIds),
+        disputed: input.disputed === true,
         createdAt: now,
       })
       .onConflictDoUpdate({
         target: [walkthroughRatings.walkthroughId, walkthroughRatings.axis],
         set: {
-          verdict: input.verdict,
-          confidence: input.confidence,
+          verdict,
+          confidence,
           rationale: input.rationale,
           details: input.details,
           citations: JSON.stringify(citations),
           blockIds: JSON.stringify(blockIds),
+          disputed: input.disputed === true,
         },
       })
       .run();
 
-    // Count distinct axes rated; advance phase to 'D' if all 9 present.
+    // Advance to 'D' once every axis carries a rationale. Keyed on the
+    // rationale rather than on row existence because the verdict pass
+    // pre-seeds all nine rows with empty prose — "9 rows exist" would be
+    // true before the agent had written a single word.
     const ratedRows = ctx.db
-      .select({ axis: walkthroughRatings.axis })
+      .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
       .from(walkthroughRatings)
       .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
       .all();
-    const ratedSet = new Set(ratedRows.map((r) => r.axis));
+    const ratedSet = new Set(
+      ratedRows.filter((r) => r.rationale.trim().length > 0).map((r) => r.axis),
+    );
     if (ratedSet.size === RATING_AXES_SPEC.length && row.lastCompletedPhase !== "D") {
       ctx.db
         .update(walkthroughs)
@@ -339,12 +408,14 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
     const rating: WalkthroughRating = {
       axis: input.axis,
-      verdict: input.verdict,
-      confidence: input.confidence,
+      verdict,
+      confidence,
       rationale: input.rationale,
       details: input.details,
       citations,
       blockIds,
+      verdictSource: advisory === null ? "agent" : "advisory",
+      disputed: input.disputed === true,
     };
     ratingEvent = rating;
   });

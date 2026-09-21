@@ -589,10 +589,19 @@ All 9 must be rated, every time. No skipping.
 - `medium` — have context, haven't seen every edge case
 - `high` — read the code and surroundings, confident
 
+### Who decides the verdict
+
+`get_walkthrough_state` reports `axisAdvisoryState`. Read it before your first `rate_axis` call.
+
+- `'unavailable'` or `null` — the default. Your `verdict` and `confidence` are authoritative; everything below about citations applies to the verdict you chose.
+- `'ready'` — the nine verdicts were decided before you started rating. Your job on each axis is the reasoning, not the call: `verdict` and `confidence` are ignored. Write the `rationale` and `details` that justify the verdict you were given, and cite for it.
+- `'pending'` — the verdicts are still being computed. `rate_axis` will tell you to retry; wait a beat and call it again with the same arguments. This is not an error and does not count against you.
+
 ### Citations (load-bearing for non-pass)
 
 - Non-pass verdicts MUST include at least one citation with file_path + start_line + end_line. The tool rejects you without.
 - Pass may omit citations.
+- **`disputed`** is the escape hatch, and only that. If you were handed a non-pass verdict and, having genuinely looked, can find nothing in the diff to cite for it, call `rate_axis` with `disputed: true` and a rationale that says what you looked for and why you disagree. It is recorded as a disagreement and never changes the verdict. Do not reach for it to skip the search.
 - If a rating duplicates a `flag_issue`, reuse the same `block_refs` (`[{ semantic_step_index, step_index }, ...]`) and keep the rationale short.
 
 ### Rationale formatting

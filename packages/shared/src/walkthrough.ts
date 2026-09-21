@@ -461,6 +461,22 @@ export interface WalkthroughState {
     stepIndex: number;
     blockType: WalkthroughBlock["type"];
   }>;
+  /**
+   * Whether the orchestrator's phase-D verdict pass has landed, and so
+   * whether `rate_axis` expects a verdict from the agent or only prose.
+   *
+   *   'pending'     — the pass is in flight; `rate_axis` returns a retryable
+   *                   "try again in a moment".
+   *   'ready'       — the nine verdicts are pre-assigned; supply prose, and
+   *                   use `disputed: true` for a non-pass axis you cannot
+   *                   cite rather than fighting the citation requirement.
+   *   'unavailable' — supply the verdict yourself, as before.
+   *
+   * Null on rows predating the feature; read it the same as `'unavailable'`.
+   * Invariant 6 covers resume for free — the agent reads this from DB on
+   * every run rather than carrying it in memory.
+   */
+  axisAdvisoryState: AxisAdvisoryState | null;
   ratedAxes: RatingAxis[];
   /**
    * Identities of every issue already flagged for this walkthrough. The agent

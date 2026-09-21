@@ -444,7 +444,7 @@ const rateAxisSchema = z.object({
   verdict: z
     .enum(["pass", "concern", "blocker"])
     .describe(
-      "pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed.",
+      "pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed. When get_walkthrough_state reports the axis verdicts are already assigned, this argument is ignored — write the reasoning for the verdict you were given.",
     ),
   confidence: z
     .enum(["low", "medium", "high"])
@@ -477,6 +477,13 @@ const rateAxisSchema = z.object({
     .array(blockRefSchema)
     .describe(
       "Composite identifiers of Phase-B diff blocks that explain this rating in depth, in the form { semantic_step_index, step_index }. May be empty. Each entry must reference a block already added via add_diff_step.",
+    ),
+  disputed: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      "Set only when this axis was handed a non-pass verdict you genuinely cannot cite — it stands in for the citation requirement and must come with a rationale explaining the absence. It is recorded as a disagreement signal and never changes the verdict. Do not use it to avoid looking for evidence.",
     ),
 });
 

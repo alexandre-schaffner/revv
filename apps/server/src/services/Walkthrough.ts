@@ -95,7 +95,18 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
     details: row.details,
     citations,
     blockIds,
+    verdictSource: row.verdictSource,
+    disputed: row.disputed,
   };
+}
+
+/**
+ * A rating row exists as soon as the orchestrator's verdict pass seeds it,
+ * which is before the agent has written a word. Only rows with prose are
+ * part of the artifact — the rest would render as blank scorecard cards.
+ */
+function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
+  return row.rationale.trim().length > 0;
 }
 
 function rowToWalkthrough(
@@ -145,7 +156,8 @@ function rowToWalkthrough(
 
   // Ratings are ordered by insertion (createdAt) so the grid receives them
   // in arrival order. The UI re-orders by canonical RATING_AXES for display.
-  const sortedRatings = [...ratings]
+  const sortedRatings = ratings
+    .filter(hasRationale)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map(rowToRating);
 
@@ -1537,7 +1549,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           };
         });
 
-      const ratings = [...ratingRows]
+      const ratings = ratingRows
+        .filter(hasRationale)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map(rowToRating);
 
