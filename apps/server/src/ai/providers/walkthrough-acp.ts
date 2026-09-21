@@ -67,6 +67,11 @@ import {
 } from "../agent-stream";
 import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
 
+/** Avoid "Internal error.. Nothing had been written" when joining clauses. */
+function trimTrailingPeriod(message: string): string {
+  return message.replace(/\.\s*$/, "");
+}
+
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
 const ACP_CANCEL_GRACE_MS = 1_500;
 
@@ -183,6 +188,12 @@ export function streamWalkthroughViaAcp(
   // The harness' timeout message, kept so the zero-content path can say WHY the
   // run produced nothing instead of blaming the PR's complexity.
   let timeoutReason: string | null = null;
+  /**
+   * Message from a non-abort mid-turn failure. Only surfaced when the run
+   * committed nothing — otherwise the partial goes to auto-continuation and
+   * the user never needs to see it.
+   */
+  let failureReason: string | null = null;
   // Liveness for the harness' idle deadline. Poked by BOTH signals that can
   // only come from a live agent: its own ACP session updates, and the MCP
   // content writes the route handlers push through the activity notifier. The
@@ -466,6 +477,26 @@ export function streamWalkthroughViaAcp(
         return tokenUsage;
       }
       logError("walkthrough-acp", "queryTask error:", message);
+
+      // Same reasoning as the timeout above, for the same reason. A mid-turn
+      // failure here is the *transport's* — an ACP adapter throwing while it
+      // decodes a notification, a daemon dying — not a verdict on the review.
+      // Everything the agent committed is already durable (invariant #1), and
+      // one observed failure discarded a walkthrough that had reached Phase C
+      // with all nine axes seeded.
+      //
+      // So don't decide here: record the reason and let the tail read the DB.
+      // With content persisted it yields `done` and the run falls into its
+      // auto-continuation budget; with nothing written it still surfaces a
+      // terminal error, now carrying this message instead of blaming the PR.
+      //
+      // An abort is excluded: user cancel and supersede are deliberate
+      // terminations that `WalkthroughJobs.handleFailure` already classifies,
+      // and retrying them would be wrong.
+      if (params.abortController?.signal.aborted !== true) {
+        failureReason = message;
+        return tokenUsage;
+      }
       if (!errorEmitted) {
         errorEmitted = true;
         push({ type: "error", data: { code: "AiGenerationError", message } });
@@ -526,7 +557,7 @@ export function streamWalkthroughViaAcp(
     // semantics owned by `withAgentTurn`). A timeout still consults the DB —
     // its whole point is to hand the committed partial to auto-continuation.
     let summaryPersisted = anySummaryEmitted;
-    if (!summaryPersisted && (!cancelled || timedOut)) {
+    if (!summaryPersisted && (!cancelled || timedOut || failureReason !== null)) {
       try {
         const row = params.db
           .select({ summary: walkthroughsTable.summary })
@@ -560,11 +591,16 @@ export function streamWalkthroughViaAcp(
               code: "AgentTimeout",
               message: `${timeoutReason}, and nothing had been written yet. Try regenerating.`,
             }
-          : {
-              code: "NoSummaryGenerated",
-              message:
-                "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
-            },
+          : failureReason
+            ? {
+                code: "AiGenerationError",
+                message: `${trimTrailingPeriod(failureReason)}. Nothing had been written yet. Try regenerating.`,
+              }
+            : {
+                code: "NoSummaryGenerated",
+                message:
+                  "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
+              },
       };
     }
   })();
