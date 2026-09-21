@@ -74,7 +74,7 @@ describe("JevService", () => {
     const result = await withoutNetwork(() =>
       Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask(probe)).pipe(
-          Effect.provide(layerFor({ enabled: false }, { "jev-api-key": "ts-test" })),
+          Effect.provide(layerFor({ enabled: false }, { "jev-api-key": "apikey_test" })),
           Effect.either,
         ),
       ),
@@ -109,7 +109,7 @@ describe("JevService", () => {
     const withKey = await withoutNetwork(() =>
       Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.isAvailable()).pipe(
-          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "ts-test" })),
+          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
         ),
       ),
     );
@@ -125,7 +125,7 @@ describe("JevService", () => {
     try {
       const result = await Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 3_000 })).pipe(
-          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "ts-test" })),
+          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
           Effect.either,
         ),
       );
@@ -148,7 +148,7 @@ describe("JevService", () => {
       const startedAt = Date.now();
       const result = await Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 300 })).pipe(
-          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "ts-test" })),
+          Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
           Effect.either,
         ),
       );

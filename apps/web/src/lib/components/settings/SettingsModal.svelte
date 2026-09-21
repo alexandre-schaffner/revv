@@ -1388,7 +1388,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 							autocomplete="off"
 							placeholder={getSettings()?.jev?.hasApiKey
 								? 'A key is saved — paste a new one to replace it'
-								: 'ts-…'}
+								: 'apikey_…'}
 							bind:value={jevKeyDraft}
 							disabled={jevKeySaving}
 							onchange={(e) => {
