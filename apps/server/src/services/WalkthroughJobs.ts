@@ -46,6 +46,7 @@ import {
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
 } from "../ai/agent-stream/token-usage";
+import { adjudicateContinuation, classifyFailure } from "../ai/jev/continuation";
 import { scoreIssues } from "../ai/jev/issue-scoring";
 import { judgeJobStart } from "../ai/jev/job-start";
 import { markAxisAdvisoryUnavailable, runAxisVerdictPass } from "../ai/jev/phase-d-verdicts";
@@ -536,6 +537,13 @@ export const WalkthroughJobsLive = Layer.effect(
        * "explore, then declare the tier" instruction.
        */
       readonly assignedRisk: RiskLevel | null;
+      /**
+       * Whether to adjudicate auto-continuations (and enrich the failure
+       * message) for this job. Snapshotted at job start alongside
+       * `providerConfig`, so a settings change mid-run can't flip the
+       * behaviour halfway through a retry budget.
+       */
+      readonly adjudicateContinuations: boolean;
     };
 
     type PromptFile = ResolvedContext["files"][number];
@@ -621,6 +629,18 @@ export const WalkthroughJobsLive = Layer.effect(
       autoContinuations: number;
       currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
       capturedOpencodeSessionId: string | undefined;
+      /** Wall-clock start, for the adjudication state. */
+      readonly startedAt: number;
+      /**
+       * Phase and content counts as they stood when the previous
+       * auto-continuation was spent. "Progress since last continuation" is
+       * undefined without them, which is also why the first continuation is
+       * never adjudicated.
+       */
+      phaseAtLastContinuation: string | null;
+      countsAtLastContinuation: Record<string, number> | null;
+      /** Why the last generator stopped, for the failure classification. */
+      terminalReason: string;
     }
 
     type ProcessResult =
@@ -962,6 +982,35 @@ export const WalkthroughJobsLive = Layer.effect(
             } as const;
           });
 
+        /**
+         * Counters the adjudication reasons over. **Explicitly not content**
+         * — no summaries, no markdown, no patches. Feeding content invites
+         * the model to answer "is this walkthrough good enough?", the exact
+         * question invariant 12 reserves for `complete_walkthrough`. It also
+         * keeps the request around 500 tokens, i.e. free.
+         */
+        const countsOf = (partial: PartialSnapshot | null): Record<string, number> => ({
+          diff_steps: partial?.blocks.length ?? 0,
+          semantic_steps: partial?.semanticSteps.length ?? 0,
+          rated_axes: partial?.ratings.length ?? 0,
+          issues: partial?.issues.length ?? 0,
+          issues_needing_inline_comment: findIssuesMissingInlineComment(db, job.walkthroughId)
+            .length,
+        });
+
+        const adjudicationState = (state: LoopState, partial: PartialSnapshot | null) => ({
+          autoContinuations: state.autoContinuations,
+          maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+          lastCompletedPhase: partial?.lastCompletedPhase ?? "none",
+          phaseAtLastContinuation: state.phaseAtLastContinuation,
+          counts: countsOf(partial),
+          countsAtLastContinuation: state.countsAtLastContinuation,
+          terminalReason: state.terminalReason,
+          elapsedMs: Date.now() - state.startedAt,
+          totalTokens:
+            state.accumulatedTokenUsage.inputTokens + state.accumulatedTokenUsage.outputTokens,
+        });
+
         const consumeGenerator = (state: LoopState): Effect.Effect<ProcessResult, AiError> =>
           Effect.gen(function* () {
             const next = yield* Effect.tryPromise({
@@ -979,6 +1028,90 @@ export const WalkthroughJobsLive = Layer.effect(
             return result;
           });
 
+        /**
+         * Terminate the run at the end of its budget.
+         *
+         * Called from two places — real budget exhaustion, and a
+         * continuation the adjudication declined to spend. Because it
+         * re-reads the persisted state and re-runs the phase-D check, a
+         * walkthrough that is *actually finished* still takes the success
+         * branch whichever way it got here. Adjudication structurally cannot
+         * force an error onto a row that is genuinely done.
+         */
+        const finishAtBudgetEnd = (
+          state: LoopState,
+          opts: { readonly stoppedEarlyBecause: string | null },
+        ): Effect.Effect<void, AiError> =>
+          Effect.gen(function* () {
+            const finalState = yield* provideDb(
+              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
+            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+            const phaseD = finalState?.lastCompletedPhase === "D";
+            const missingCommentsAtExhaustion = phaseD
+              ? findIssuesMissingInlineComment(db, job.walkthroughId)
+              : [];
+            if (phaseD && missingCommentsAtExhaustion.length > 0) {
+              debug(
+                "walkthrough-jobs",
+                `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
+              );
+            }
+            // Exhausted: legacy SSE clients still expect `done`; new
+            // clients get `lifecycle:complete` only if the row actually
+            // reached phase D with no missing comments. When the
+            // exhaustion forced an error, emit `lifecycle:error` instead
+            // so new clients see a terminal failure rather than a fake
+            // success.
+            const currentTokenUsage = state.accumulatedTokenUsage;
+            if (!phaseD || missingCommentsAtExhaustion.length > 0) {
+              const base = phaseD
+                ? "Generation finished but warning/critical issues lack inline comments."
+                : opts.stoppedEarlyBecause !== null
+                  ? `Generation stopped early: ${opts.stoppedEarlyBecause}.`
+                  : "Generation exhausted auto-continuation budget before reaching phase D.";
+              // Cosmetic enrichment only — a clause appended to the string,
+              // never a different status. Failure keeps today's message.
+              const hint = yield* classifyFailure({
+                enabled: ctx.adjudicateContinuations,
+                state: adjudicationState(state, finalState),
+              }).pipe(Effect.provideService(JevService, jevService));
+              const message = hint === null ? base : `${base} ${hint}`;
+              yield* setStatus(job.walkthroughId, "error", { errorMessage: message });
+              yield* emitEvent(job.walkthroughId, {
+                type: "lifecycle:error",
+                data: {
+                  code: "AutoContinuationExhausted",
+                  message,
+                },
+              }).pipe(Effect.catchAll(() => Effect.void));
+            } else {
+              // The row really did reach phase D with every required
+              // inline comment. Without this the status stays
+              // `generating` forever: `completed_at` is never stamped,
+              // `getPartial` keeps returning it as a partial, and
+              // `resumePending()` re-launches a fully-generated
+              // walkthrough on every boot until the resume-attempt cap
+              // marks it `error`. Ordering matches the happy path above.
+              yield* setStatus(job.walkthroughId, "complete", {
+                tokenUsage: currentTokenUsage,
+              });
+              yield* emitEvent(job.walkthroughId, {
+                type: "lifecycle:complete",
+                data: {
+                  walkthroughId: job.walkthroughId,
+                  tokenUsage: currentTokenUsage,
+                },
+              }).pipe(Effect.catchAll(() => Effect.void));
+            }
+            yield* emitEvent(job.walkthroughId, {
+              type: "done",
+              data: {
+                walkthroughId: job.walkthroughId,
+                tokenUsage: currentTokenUsage,
+              },
+            }).pipe(Effect.catchAll(() => Effect.void));
+          });
+
         const runWithAutoContinuation = (state: LoopState): Effect.Effect<void, AiError> =>
           Effect.gen(function* () {
             const result = yield* consumeGenerator(state);
@@ -986,6 +1119,7 @@ export const WalkthroughJobsLive = Layer.effect(
               return;
             }
             if (result._tag === "returnError") {
+              state.terminalReason = `error:${result.code}`;
               return;
             }
 
@@ -1001,7 +1135,16 @@ export const WalkthroughJobsLive = Layer.effect(
                   ? "max continuations reached"
                   : "aborted",
               );
-              const finalState = yield* provideDb(
+              yield* finishAtBudgetEnd(state, { stoppedEarlyBecause: null });
+              return;
+            }
+
+            // We are about to *spend* a continuation, so ask first. Gated on
+            // having spent one already: "progress since the last
+            // continuation" is undefined on the first pass, and the first
+            // continuation is the one that most often succeeds.
+            if (state.autoContinuations >= 1) {
+              const partialNow = yield* provideDb(
                 walkthroughService.getPartial(
                   ctx.pr.id,
                   ctx.prHeadSha,
@@ -1009,64 +1152,15 @@ export const WalkthroughJobsLive = Layer.effect(
                   ctx.generationMode,
                 ),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
-              const phaseD = finalState?.lastCompletedPhase === "D";
-              const missingCommentsAtExhaustion = phaseD
-                ? findIssuesMissingInlineComment(db, job.walkthroughId)
-                : [];
-              if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-                if (phaseD && missingCommentsAtExhaustion.length > 0) {
-                  debug(
-                    "walkthrough-jobs",
-                    `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
-                  );
-                }
+              const verdict = yield* adjudicateContinuation({
+                enabled: ctx.adjudicateContinuations,
+                ...adjudicationState(state, partialNow),
+              }).pipe(Effect.provideService(JevService, jevService));
+              if (verdict.kind === "stop-doomed") {
+                debug("walkthrough-jobs", `stopping early: ${verdict.reason}`);
+                yield* finishAtBudgetEnd(state, { stoppedEarlyBecause: verdict.reason });
+                return;
               }
-              // Exhausted: legacy SSE clients still expect `done`; new
-              // clients get `lifecycle:complete` only if the row actually
-              // reached phase D with no missing comments. When the
-              // exhaustion forced an error, emit `lifecycle:error` instead
-              // so new clients see a terminal failure rather than a fake
-              // success.
-              const currentTokenUsage = state.accumulatedTokenUsage;
-              if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-                const message = phaseD
-                  ? "Generation finished but warning/critical issues lack inline comments."
-                  : "Generation exhausted auto-continuation budget before reaching phase D.";
-                yield* setStatus(job.walkthroughId, "error", { errorMessage: message });
-                yield* emitEvent(job.walkthroughId, {
-                  type: "lifecycle:error",
-                  data: {
-                    code: "AutoContinuationExhausted",
-                    message,
-                  },
-                }).pipe(Effect.catchAll(() => Effect.void));
-              } else {
-                // The row really did reach phase D with every required
-                // inline comment. Without this the status stays
-                // `generating` forever: `completed_at` is never stamped,
-                // `getPartial` keeps returning it as a partial, and
-                // `resumePending()` re-launches a fully-generated
-                // walkthrough on every boot until the resume-attempt cap
-                // marks it `error`. Ordering matches the happy path above.
-                yield* setStatus(job.walkthroughId, "complete", {
-                  tokenUsage: currentTokenUsage,
-                });
-                yield* emitEvent(job.walkthroughId, {
-                  type: "lifecycle:complete",
-                  data: {
-                    walkthroughId: job.walkthroughId,
-                    tokenUsage: currentTokenUsage,
-                  },
-                }).pipe(Effect.catchAll(() => Effect.void));
-              }
-              yield* emitEvent(job.walkthroughId, {
-                type: "done",
-                data: {
-                  walkthroughId: job.walkthroughId,
-                  tokenUsage: currentTokenUsage,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              return;
             }
 
             const continuation = yield* buildContinuationEffect();
@@ -1083,6 +1177,10 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             state.autoContinuations++;
+            // Snapshot what "before this continuation" looked like, so the
+            // next adjudication has something to compare against.
+            state.phaseAtLastContinuation = continuation.partial.lastCompletedPhase;
+            state.countsAtLastContinuation = countsOf(continuation.partial);
             debug(
               "walkthrough-jobs",
               `auto-continuation ${state.autoContinuations}/${MAX_AUTO_CONTINUATIONS}: lastCompletedPhase=${continuation.partial.lastCompletedPhase}`,
@@ -1105,6 +1203,10 @@ export const WalkthroughJobsLive = Layer.effect(
           autoContinuations: 0,
           currentGenerator: generator,
           capturedOpencodeSessionId: undefined,
+          startedAt: Date.now(),
+          phaseAtLastContinuation: null,
+          countsAtLastContinuation: null,
+          terminalReason: "generator-ended",
         };
 
         yield* Effect.gen(function* () {
@@ -1705,6 +1807,7 @@ export const WalkthroughJobsLive = Layer.effect(
             baseHeadSha,
             launchOverride,
             assignedRisk,
+            adjudicateContinuations: settings.jev.enabled && settings.jev.adjudicateContinuations,
           },
           params.trigger,
         );

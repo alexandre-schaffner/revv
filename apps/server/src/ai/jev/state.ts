@@ -243,6 +243,43 @@ export function buildIssueScoringState(input: IssueScoringInput): JevState {
   });
 }
 
+export interface ContinuationInput {
+  readonly autoContinuations: number;
+  readonly maxAutoContinuations: number;
+  readonly lastCompletedPhase: string;
+  readonly phaseAtLastContinuation: string | null;
+  readonly counts: { readonly [name: string]: number };
+  readonly countsAtLastContinuation: { readonly [name: string]: number } | null;
+  readonly terminalReason: string;
+  readonly elapsedMs: number;
+  readonly totalTokens: number;
+}
+
+/**
+ * State for the auto-continuation adjudication. **Counters only — never
+ * content.** Feeding summaries or markdown here invites the model to answer
+ * "is this walkthrough good enough?", which is precisely the question
+ * invariant 12 reserves for `complete_walkthrough`. This is a scheduling
+ * decision. Counters also keep the call around 500 tokens, i.e. free.
+ */
+export function buildContinuationState(input: ContinuationInput): JevState {
+  return {
+    budget: {
+      continuations_used: input.autoContinuations,
+      continuations_max: input.maxAutoContinuations,
+    },
+    phase: {
+      current: input.lastCompletedPhase,
+      at_last_continuation: input.phaseAtLastContinuation,
+    },
+    counts: input.counts,
+    counts_at_last_continuation: input.countsAtLastContinuation,
+    last_turn_ended_because: input.terminalReason,
+    elapsed_seconds: Math.round(input.elapsedMs / 1000),
+    tokens_used: input.totalTokens,
+  };
+}
+
 /**
  * Last-resort clamp. The per-field slicing above is the real budget control;
  * this exists so a pathological input (hundreds of issues, each with a long
