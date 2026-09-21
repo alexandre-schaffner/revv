@@ -494,10 +494,20 @@ export interface ProposedCommit {
  * it passes through, then re-emitted to the SSE encoder unchanged.
  *
  * Persistence rules:
- *   - text frames: lazily begin the assistant message on the FIRST chunk
- *     (so the assistant row's sequence lands AFTER any preceding activities,
- *     matching the "user → activities → assistant" timeline shape). Each
- *     subsequent chunk appends content via SQL `||`.
+ *   - text frames: lazily begin an assistant message on the first chunk of
+ *     each prose run, so its sequence lands after whatever preceded it.
+ *     Subsequent chunks of the same run append content via SQL `||`.
+ *   - any frame that occupies its own slot in the rendered timeline
+ *     (activity, plan, sub-agent start, question) first SEALS the open
+ *     assistant row, so the next prose run opens a fresh one. That's what
+ *     makes the persisted sequence interleave narration and tool calls in
+ *     true chronological order — a single row per turn would force every
+ *     activity to sort either wholly before or wholly after the agent's
+ *     entire narration. Frames that only patch an existing row
+ *     (activity-result / activity-input / subagent-end / question-resolved)
+ *     don't seal: they can land mid-sentence and must not split a paragraph.
+ *     Neither does task-list — it renders in the Queue dock, not in the
+ *     timeline, and its snapshots are frequent enough to shred the prose.
  *   - activity frames: insert a chat_activities row immediately, sequence
  *     allocated atomically against chat_sessions.next_sequence.
  *   - stream end (no error): finalize the assistant message if one exists;
@@ -558,6 +568,26 @@ export function wrapStreamWithPersistence(
         return assistantMessageId;
       };
 
+      /**
+       * Close the open assistant row so the next prose run opens a fresh
+       * one at a later sequence. Called before persisting any frame that
+       * takes its own slot in the timeline.
+       */
+      const sealAssistantMessage = async (): Promise<void> => {
+        const messageId = assistantMessageId;
+        assistantMessageId = null;
+        if (!messageId) return;
+        try {
+          await AppRuntime.runPromise(
+            Effect.flatMap(ChatSessionService, (svc) =>
+              svc.finalizeAssistantMessage({ messageId, error: null }),
+            ),
+          );
+        } catch (err) {
+          logPersistError("finalizeAssistantMessage", err);
+        }
+      };
+
       const finalize = async (errorMessage: string | null): Promise<void> => {
         try {
           if (!assistantMessageId && errorMessage) {
@@ -602,7 +632,22 @@ export function wrapStreamWithPersistence(
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Frames that occupy their own timeline slot close the open prose
+          // run first, so text and tool calls interleave by sequence.
+          if (
+            value.kind === "activity" ||
+            value.kind === "plan-presented" ||
+            value.kind === "subagent-start" ||
+            value.kind === "user-question"
+          ) {
+            await sealAssistantMessage();
+          }
+
           if (value.kind === "text") {
+            if (value.data.length === 0) {
+              controller.enqueue(value);
+              continue;
+            }
             textStreamed = true;
             const id = await ensureAssistantMessage();
             if (id) {

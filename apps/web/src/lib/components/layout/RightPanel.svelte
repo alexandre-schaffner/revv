@@ -101,6 +101,7 @@ import {
   clearCommitSelection,
   discardProposedCommitAction,
   enqueueMessage,
+  getActiveTurnId,
   getChatItems,
   getChatMentionPaths,
   getChatSessionContext,
@@ -161,23 +162,11 @@ interface Props {
 let { onClose, stacked = false, prId }: Props = $props();
 
 const items = $derived(prId ? getChatItems(prId) : []);
-// Turn ids whose assistant bubble is still streaming. Activity rows for
-// these turns get folded into the bubble's dot-matrix loader (walkthrough
-// style) instead of rendering as standalone tool-lines, so the panel
-// stays compact during generation.
-const streamingTurnIds = $derived(
-  new Set(
-    items
-      .filter(
-        (i): i is Extract<typeof i, { kind: "message" }> =>
-          i.kind === "message" &&
-          i.role === "assistant" &&
-          i.isStreaming &&
-          typeof i.turnId === "string",
-      )
-      .map((i) => i.turnId as string),
-  ),
-);
+// The turn currently in flight, if any. Its activity rows are folded into
+// the dot-matrix loader (walkthrough style) instead of rendering as
+// standalone tool-lines, so the panel stays compact during generation;
+// they take their place in the timeline once the turn ends.
+const activeTurnId = $derived(prId ? getActiveTurnId(prId) : null);
 const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
 const proposed = $derived(prId ? getProposedChanges(prId) : null);
 const commitCount = $derived(proposed?.commits.length ?? 0);
@@ -220,18 +209,12 @@ const showQueueDock = $derived(
   queuedMessages.length > 0 || activeTasks.length > 0 || commitCount > 0,
 );
 
-const streamingTurnId = $derived(
-  items.findLast(
-    (i): i is Extract<typeof i, { kind: "message" }> =>
-      i.kind === "message" && i.role === "assistant" && i.isStreaming,
-  )?.turnId,
-);
 const recentToolCalls = $derived(
-  streamingTurnId
+  activeTurnId
     ? items
         .filter(
           (i): i is Extract<typeof i, { kind: "activity" }> =>
-            i.kind === "activity" && i.turnId === streamingTurnId,
+            i.kind === "activity" && i.turnId === activeTurnId,
         )
         .slice(-2)
     : [],
@@ -688,7 +671,7 @@ function activitiesForTurn(
 							 inside their SubagentInvocation card. Also fold
 							 active-turn tool calls into the dot-matrix
 							 indicator below. -->
-						{#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
+						{#if !item.subagentInvocationId && !(item.turnId && item.turnId === activeTurnId)}
 							<ToolCallCard
 								activityKind={item.activityKind}
 								toolName={item.toolName}
@@ -867,9 +850,9 @@ function activitiesForTurn(
 
 				{#if isStreaming}
 					<div class="streaming-indicator" aria-label="AI is thinking…">
-						{#if streamingTurnId}
+						{#if activeTurnId}
 							<Dotmatrix
-								variant={squareVariantForId(streamingTurnId)}
+								variant={squareVariantForId(activeTurnId)}
 								size="small"
 							/>
 						{/if}
