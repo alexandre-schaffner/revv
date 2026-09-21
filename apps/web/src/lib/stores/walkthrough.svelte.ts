@@ -797,6 +797,18 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           entry.source = "remote";
           entry.walkthroughId = event.data.walkthroughId;
           break;
+        case "advisory:issue-scores": {
+          // Delta payload: only the listed issues change, and only their
+          // score fields. Cloned rather than mutated in place —
+          // `updateEntry` freezes nested field references and throws on an
+          // in-place write.
+          const byId = new Map(event.data.scores.map((s) => [s.issueId, s]));
+          entry.issues = entry.issues.map((i) => {
+            const scored = byId.get(i.id);
+            return scored ? { ...i, advisoryScore: scored.score, lowSignal: scored.lowSignal } : i;
+          });
+          break;
+        }
         case "lifecycle:edited":
           // No state change — the inner block/issue/etc. event lands in the
           // same stream as a separate envelope (with its own seq). This

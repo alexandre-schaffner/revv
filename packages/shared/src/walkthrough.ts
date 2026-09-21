@@ -273,6 +273,22 @@ export type VerdictSource = "agent" | "advisory";
  */
 export type AxisAdvisoryState = "pending" | "ready" | "unavailable";
 
+/**
+ * Composite score below which an issue is treated as low signal.
+ *
+ * Deliberately low. This is the highest-blast-radius threshold in the
+ * feature — a false low-signal on a real bug makes it invisible until the
+ * reader expands the disclosure — so it starts conservative and is tuned
+ * from real runs, not from a guess. Shared so the server's DTO and any
+ * client-side reasoning can't drift.
+ */
+export const LOW_SIGNAL_THRESHOLD = 0.4;
+
+/** True when a scored issue falls below {@link LOW_SIGNAL_THRESHOLD}. */
+export function isLowSignalScore(score: number | null | undefined): boolean {
+  return typeof score === "number" && score < LOW_SIGNAL_THRESHOLD;
+}
+
 // ── Pipeline phase (A→B→C→D) ────────────────────────────────────────────────
 
 /**
@@ -620,6 +636,25 @@ export type WalkthroughStreamEvent =
    * rows and replaying them as if they had just been written.
    */
   | { type: "lifecycle:cache-hit"; data: { walkthroughId: string; source: "remote" } }
+  /**
+   * The orchestrator's issue-scoring pass finished. One event for every
+   * issue after a single transaction, not one per issue — the pass writes
+   * them together and the UI's filtered count would flicker otherwise.
+   *
+   * Delta payload: only the issues that were scored are listed, and only
+   * their score fields change. Arrives after `lifecycle:complete`, on the
+   * global `GET /api/events` stream — the per-generation stream is already
+   * dead by then, which is the channel invariant 7's carve-out mandates for
+   * post-completion events. Subscribers that miss it reconcile by
+   * re-reading the walkthrough (invariant 8).
+   */
+  | {
+      type: "advisory:issue-scores";
+      data: {
+        walkthroughId: string;
+        scores: Array<{ issueId: string; score: number; lowSignal: boolean }>;
+      };
+    }
   /**
    * A chat-driven edit landed on a completed walkthrough (CLAUDE.md
    * invariant #7 carve-out). Stamps `lastEditedAt` on the entry; the

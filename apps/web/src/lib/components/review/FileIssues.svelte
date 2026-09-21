@@ -1,8 +1,9 @@
 <script lang="ts">
 import IssueCard from "$lib/components/walkthrough/IssueCard.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { getIssuesForFile } from "$lib/stores/walkthrough.svelte";
-import { groupIssuesBySeverity } from "$lib/utils/walkthrough-issues";
+import { groupIssuesBySeverity, partitionBySignal } from "$lib/utils/walkthrough-issues";
 
 interface Props {
   filePath: string;
@@ -10,7 +11,16 @@ interface Props {
 
 let { filePath }: Props = $props();
 
-const issues = $derived(getIssuesForFile(filePath));
+// No disclosure here: this strip sits inline in the diff and an extra
+// expander per file would out-weigh the handful of rows it hides. The
+// filtered issues stay reachable from the walkthrough and the Request
+// Changes panel, both of which do show the count.
+const issues = $derived(
+  partitionBySignal(getIssuesForFile(filePath), {
+    hideLowSignal:
+      (getSettings()?.jev?.issueScoring ?? false) && (getSettings()?.jev?.hideLowSignal ?? true),
+  }).shown,
+);
 const issueGroups = $derived(groupIssuesBySeverity(issues));
 </script>
 

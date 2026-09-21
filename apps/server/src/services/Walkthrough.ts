@@ -41,6 +41,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { isLowSignalScore } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -109,6 +110,18 @@ function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
   return row.rationale.trim().length > 0;
 }
 
+/**
+ * Advisory score fields for an issue DTO. Absent — not null — when unscored,
+ * because `exactOptionalPropertyTypes` distinguishes them and "never scored"
+ * must never read as low signal.
+ */
+function advisoryFields(
+  advisoryScore: number | null,
+): Pick<WalkthroughIssue, "advisoryScore" | "lowSignal"> | Record<string, never> {
+  if (advisoryScore === null) return {};
+  return { advisoryScore, lowSignal: isLowSignalScore(advisoryScore) };
+}
+
 function rowToWalkthrough(
   row: typeof walkthroughs.$inferSelect,
   semanticSteps: Array<typeof walkthroughSemanticSteps.$inferSelect>,
@@ -151,6 +164,7 @@ function rowToWalkthrough(
         ...(i.startLine !== null ? { startLine: i.startLine } : {}),
         ...(i.endLine !== null ? { endLine: i.endLine } : {}),
         ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+        ...advisoryFields(i.advisoryScore),
       };
     });
 
@@ -1546,6 +1560,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             ...(i.startLine !== null ? { startLine: i.startLine } : {}),
             ...(i.endLine !== null ? { endLine: i.endLine } : {}),
             ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+            ...advisoryFields(i.advisoryScore),
           };
         });
 

@@ -77,3 +77,41 @@ export function groupIssuesBySeverityWithIndex(
     issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
   }));
 }
+
+export interface SignalPartition {
+  /** Issues to render. Everything unscored lands here. */
+  shown: WalkthroughIssue[];
+  /** Issues collapsed behind the "show N filtered" disclosure. */
+  filtered: WalkthroughIssue[];
+}
+
+/**
+ * Split issues into what to show and what to tuck away.
+ *
+ * `lowSignal` is computed server-side (from the stored composite score) so
+ * every surface — the walkthrough body, the Request Changes panel, the
+ * per-file strip, the approve dialog, the address-issues prompt — agrees on
+ * the same set without each re-deriving a threshold.
+ *
+ * **An unscored issue is never low signal.** That covers every walkthrough
+ * generated before the feature, every cache-imported one (the importer
+ * regenerates issue ids, so the scores don't travel), and every run where
+ * the scoring pass was off or unreachable. Those all degrade to showing
+ * everything, which is the pre-feature behaviour.
+ *
+ * A submitted issue is also never hidden: it is already on GitHub, and
+ * quietly dropping it from the list would misrepresent what was sent.
+ */
+export function partitionBySignal(
+  issues: readonly WalkthroughIssue[],
+  opts: { hideLowSignal: boolean },
+): SignalPartition {
+  if (!opts.hideLowSignal) return { shown: [...issues], filtered: [] };
+  const shown: WalkthroughIssue[] = [];
+  const filtered: WalkthroughIssue[] = [];
+  for (const issue of issues) {
+    if (issue.lowSignal === true && issue.submittedAt === undefined) filtered.push(issue);
+    else shown.push(issue);
+  }
+  return { shown, filtered };
+}

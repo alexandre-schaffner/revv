@@ -46,6 +46,7 @@ import {
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
 } from "../ai/agent-stream/token-usage";
+import { scoreIssues } from "../ai/jev/issue-scoring";
 import { judgeJobStart } from "../ai/jev/job-start";
 import { markAxisAdvisoryUnavailable, runAxisVerdictPass } from "../ai/jev/phase-d-verdicts";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
@@ -816,6 +817,20 @@ export const WalkthroughJobsLive = Layer.effect(
                       remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
                     );
                   }
+                  // Score the flagged issues. Hooked here and NOT on the
+                  // cache-import completion below — an imported snapshot was
+                  // already scored upstream, and re-scoring would produce a
+                  // divergent second score set for something meant to be
+                  // reproducible.
+                  //
+                  // `forkDaemon` for the same reason as the cache push: the
+                  // job scope closes right after `returnDone`, and a scoped
+                  // fork would be killed by the finalizer. `emitEvent` still
+                  // works afterwards — it bumps the durable `next_seq` and
+                  // `resolveEventTargets` has a DB-join slow path for exactly
+                  // this case, so the event reaches the client on the global
+                  // stream.
+                  yield* Effect.forkDaemon(scoreIssuesAndBroadcast(job.walkthroughId));
                   yield* emitEvent(job.walkthroughId, {
                     type: "lifecycle:complete",
                     data: {
@@ -2016,6 +2031,39 @@ export const WalkthroughJobsLive = Layer.effect(
 
           return { kind: "delivered" as const, seq };
         }),
+      );
+
+    /**
+     * Run the issue-scoring pass and broadcast the result as one event for
+     * all issues — the pass writes them in a single transaction, and a
+     * per-issue event would make the "N filtered" count flicker its way to
+     * the final value.
+     *
+     * Commit first, broadcast second (invariant 8): the scores are already
+     * durable when this emits, and a subscriber that misses the event
+     * reconciles by re-reading the walkthrough.
+     */
+    const scoreIssuesAndBroadcast = (walkthroughId: string): Effect.Effect<void> =>
+      scoreIssues(db, walkthroughId).pipe(
+        Effect.provideService(JevService, jevService),
+        Effect.provideService(SettingsService, settingsService),
+        Effect.flatMap((scores) =>
+          scores.length === 0
+            ? Effect.void
+            : emitEvent(walkthroughId, {
+                type: "advisory:issue-scores",
+                data: { walkthroughId, scores: [...scores] },
+              }).pipe(Effect.asVoid),
+        ),
+        Effect.catchAllCause((cause) =>
+          Effect.sync(() => {
+            logError(
+              "walkthrough-jobs",
+              `issue scoring failed for ${walkthroughId}:`,
+              Cause.pretty(cause),
+            );
+          }),
+        ),
       );
 
     const issueSessionToken = (walkthroughId: string) => sessionStore.issue({ walkthroughId });

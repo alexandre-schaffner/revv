@@ -194,6 +194,55 @@ export function buildPhaseCState(input: PhaseCInput): JevState {
   return clampState(state);
 }
 
+export interface IssueScoringInput {
+  readonly pr: PrLike;
+  readonly issues: ReadonlyArray<{
+    readonly id: string;
+    readonly severity: string;
+    readonly title: string;
+    readonly description: string;
+    readonly filePath: string | null;
+    readonly startLine: number | null;
+    readonly endLine: number | null;
+    /** The diff hunk the issue is anchored to, if it could be resolved. */
+    readonly hunk: string | null;
+  }>;
+}
+
+/**
+ * State for the issue-scoring pass. Keyed by issue id so the questions can
+ * address a specific issue by backticked path (`issues.<id>.description`).
+ *
+ * The hunk is what makes `grounded` answerable at all — without the code an
+ * issue cites, "is this claim supported" degrades into "does this sound
+ * plausible".
+ */
+export function buildIssueScoringState(input: IssueScoringInput): JevState {
+  const issues: { [id: string]: JsonValue } = {};
+  for (const issue of input.issues) {
+    issues[issue.id] = {
+      severity: issue.severity,
+      title: issue.title,
+      description: issue.description,
+      file: issue.filePath,
+      lines:
+        issue.startLine === null ? null : `${issue.startLine}-${issue.endLine ?? issue.startLine}`,
+      hunk: issue.hunk === null ? null : truncatePatchToChars(issue.hunk, 4_000, "hunk").patch,
+    };
+  }
+  return clampState({
+    pr: {
+      number: input.pr.externalId,
+      title: input.pr.title,
+      body: (input.pr.body ?? "").slice(0, PR_BODY_MAX_CHARS),
+      additions: input.pr.additions,
+      deletions: input.pr.deletions,
+      changed_files: input.pr.changedFiles,
+    },
+    issues,
+  });
+}
+
 /**
  * Last-resort clamp. The per-field slicing above is the real budget control;
  * this exists so a pathological input (hundreds of issues, each with a long
