@@ -1,11 +1,23 @@
 <script lang="ts">
+import { buildPullRequestDeepLink } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import Check from "phosphor-svelte/lib/Check";
 import Desktop from "phosphor-svelte/lib/Desktop";
+import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Moon from "phosphor-svelte/lib/Moon";
 import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
+import { onDestroy } from "svelte";
+import { toast } from "svelte-sonner";
+import * as Tooltip from "$lib/components/ui/tooltip";
+import { gsapFade, gsapPress, tokens } from "$lib/motion";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
-import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import {
+  getIsLoading,
+  getRepositories,
+  getSelectedPr,
+  getSelectedPrId,
+} from "$lib/stores/prs.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
 import {
   getThemePreference,
@@ -24,9 +36,39 @@ interface Props {
 let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
 
 const pr = $derived(getSelectedPr());
+const repository = $derived(
+  pr ? (getRepositories().find((candidate) => candidate.id === pr.repositoryId) ?? null) : null,
+);
 const selectedPrId = $derived(getSelectedPrId());
 const theme = $derived(getThemePreference());
 const topbarSubtitle = $derived(getTopbarSubtitle());
+let linkCopied = $state(false);
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+onDestroy(() => {
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+});
+
+async function copyPrLink(): Promise<void> {
+  if (!pr || !repository) return;
+  try {
+    const url = buildPullRequestDeepLink({
+      githubHost: repository.githubHost,
+      repositoryFullName: repository.fullName,
+      number: pr.externalId,
+    });
+    await navigator.clipboard.writeText(url);
+    linkCopied = true;
+    if (copyResetTimer) clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      linkCopied = false;
+      copyResetTimer = null;
+    }, 1400);
+  } catch {
+    linkCopied = false;
+    toast.error("Couldn’t copy the PR link.");
+  }
+}
 
 // Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
 // PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
@@ -82,9 +124,35 @@ function cycleTheme() {
 	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block">
 		{#if pr}
-			<span class="inline-title">
-				<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
-			</span>
+			<div class="title-row">
+				<span class="inline-title">
+					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
+				</span>
+				{#if repository}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									class="copy-link-btn"
+									onclick={copyPrLink}
+									aria-label={linkCopied ? 'Link copied' : 'Copy PR link'}
+									use:gsapPress
+								>
+									{#key linkCopied}
+										<span in:gsapFade={{ duration: tokens.snap }} out:gsapFade={{ duration: tokens.snap }}>
+											{#if linkCopied}<Check size={13} />{:else}<LinkSimple size={13} />{/if}
+										</span>
+									{/key}
+								</button>
+							{/snippet}
+						</Tooltip.Trigger>
+						<Tooltip.Content side="bottom" sideOffset={6}>
+							{linkCopied ? 'Link copied' : 'Copy PR link'}
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			</div>
 		{:else}
 			<span class="app-name">Revv</span>
 		{/if}
@@ -167,6 +235,50 @@ function cycleTheme() {
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		min-width: 0;
+	}
+
+	.title-row {
+		align-items: center;
+		display: flex;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.copy-link-btn {
+		align-items: center;
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		color: var(--color-text-muted);
+		cursor: pointer;
+		display: inline-flex;
+		flex: 0 0 22px;
+		height: 22px;
+		justify-content: center;
+		padding: 0;
+		position: relative;
+		width: 22px;
+		z-index: 2;
+	}
+
+	.copy-link-btn:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+	}
+
+	.copy-link-btn:focus-visible {
+		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
+		outline: none;
+	}
+
+	.copy-link-btn :global(span) {
+		align-items: center;
+		display: inline-flex;
+	}
+
+	.copy-link-btn[aria-label="Link copied"] {
+		color: var(--color-success);
 	}
 
 	.pr-number {

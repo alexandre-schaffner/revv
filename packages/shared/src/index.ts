@@ -124,6 +124,8 @@ export {
   PIERRE_THEMES,
   PR_DIFF_RENDER_OPTIONS,
 } from "./pierre-diffs";
+export type { PullRequestLocator } from "./pr-deep-link";
+export { buildPullRequestDeepLink, parsePullRequestDeepLink } from "./pr-deep-link";
 export { isPrLensFenceLang, toGraphDocInput } from "./prlens";
 export type {
   ProjectRecap,

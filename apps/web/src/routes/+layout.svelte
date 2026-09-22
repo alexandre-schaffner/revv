@@ -5,6 +5,7 @@ import { onMount } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel } from "$lib/api/runtime";
+import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
 import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
@@ -13,6 +14,7 @@ import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
+import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import {
   fetchPinnedPrs,
   fetchPrs,
@@ -121,6 +123,18 @@ onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
+  let cleanupDeepLinks: (() => void) | undefined;
+
+  if ("__TAURI_INTERNALS__" in window) {
+    void import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
+      const receive = (urls: string[]): void => {
+        for (const url of urls) void openPrDeepLink(url);
+      };
+      cleanupDeepLinks = await onOpenUrl(receive);
+      const current = await getCurrent().catch(() => null);
+      if (current) receive(current);
+    });
+  }
 
   void assertRuntimeChannel().catch((error: unknown) => {
     toast.error("Runtime channel unavailable", {
@@ -149,6 +163,7 @@ onMount(() => {
   return () => {
     cleanupTheme();
     cleanupShortcuts();
+    cleanupDeepLinks?.();
     stopPolling();
     stopUpdater();
   };
@@ -195,6 +210,7 @@ async function hydrate() {
 			{@render children()}
 		</AppShell>
 	</OnboardingGate>
+	<PrDeepLinkCoordinator />
 	<Toaster />
 	{#if import.meta.env.DEV && cacheInspectorOpen}
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
