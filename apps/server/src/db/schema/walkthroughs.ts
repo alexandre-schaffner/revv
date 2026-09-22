@@ -143,15 +143,15 @@ export const walkthroughs = sqliteTable(
     // row is marked `error` and left alone.
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     /**
-     * ISO 8601 timestamp of the most recent chat-driven edit. Null until
-     * the first chat-edit MCP tool call mutates this row. The generation
+     * ISO 8601 timestamp of the most recent post-completion edit. Null until
+     * the first edit MCP tool call mutates this row. The generation
      * pipeline NEVER writes this column — it is the marker of the post-
      * completion chat-edit carve-out (CLAUDE.md invariant #7).
      */
     lastEditedAt: text("last_edited_at"),
     /**
-     * Actor that performed the most recent chat-driven edit — `'chat:acp'`
-     * for chat edits on the ACP transport. Pairs with `lastEditedAt`.
+     * Actor that performed the most recent post-completion edit — currently
+     * `'chat:acp'` or `'claude-code'`. Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
     /**

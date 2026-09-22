@@ -4,6 +4,9 @@ import {
   type AcpAgentId,
   type AgentStatus,
   type AgentStatusReport,
+  EXTERNAL_AGENT_PROVIDER_NAMES,
+  EXTERNAL_AGENT_PROVIDERS,
+  type ExternalAgentProvider,
   getAgentKeychainAuth,
   type InstallEvent,
   type RecapAgentChoice,
@@ -17,6 +20,7 @@ import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
 import Download from "phosphor-svelte/lib/Download";
 import Gauge from "phosphor-svelte/lib/Gauge";
+import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
 import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
@@ -87,6 +91,7 @@ const navItems: NavItem[] = [
   { id: "recap", label: "Project Recap", icon: CalendarDots },
   { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "jev", label: "TypeSafe", icon: Gauge },
+  { id: "integrations", label: "Integrations", icon: PlugsConnected },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: ArrowCounterClockwise },
   { id: "updates", label: "Updates", icon: Download },
@@ -234,6 +239,80 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
 
 let activeSection = $state<SectionId>("account");
 let contentEl = $state<HTMLElement | null>(null);
+
+interface ExternalIntegrationStatus {
+  provider: ExternalAgentProvider;
+  connected: boolean;
+  clientConfigured: boolean;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+}
+
+/** What the user still has to do in the agent itself after a connect. */
+const INTEGRATION_ACTIVATION: Record<ExternalAgentProvider, string> = {
+  "claude-code": "Run /reload-plugins in an open session, or restart Claude Code.",
+  codex: "Restart Codex, then use /revv-address-feedback.",
+  opencode: "Restart opencode, then use /revv-address-feedback.",
+  cursor: 'Reload the Cursor window, then enable "revv" under Settings → MCP.',
+};
+
+let integrationStatuses = $state<ExternalIntegrationStatus[]>([]);
+let integrationAction = $state<{
+  provider: ExternalAgentProvider;
+  kind: "connect" | "disconnect";
+} | null>(null);
+let integrationError = $state<string | null>(null);
+
+function integrationStatusFor(provider: ExternalAgentProvider): ExternalIntegrationStatus | null {
+  return integrationStatuses.find((entry) => entry.provider === provider) ?? null;
+}
+
+async function integrationErrorMessage(response: Response): Promise<string> {
+  const body: unknown = await response.json().catch(() => null);
+  if (body && typeof body === "object") {
+    if ("message" in body && typeof body.message === "string") return body.message;
+    if ("error" in body && typeof body.error === "string") return body.error;
+  }
+  return `Request failed with HTTP ${response.status}.`;
+}
+
+async function fetchIntegrationStatuses(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/integrations/status`, {
+      headers: await authHeaders(),
+    });
+    if (!response.ok) throw new Error(await integrationErrorMessage(response));
+    integrationStatuses = await response.json();
+    integrationError = null;
+  } catch (error) {
+    integrationError = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function runIntegrationAction(
+  provider: ExternalAgentProvider,
+  kind: "connect" | "disconnect",
+): Promise<void> {
+  if (integrationAction) return;
+  integrationAction = { provider, kind };
+  integrationError = null;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/integrations/${provider}/${kind}`, {
+      method: kind === "connect" ? "POST" : "DELETE",
+      headers: await authHeaders(),
+    });
+    if (!response.ok) throw new Error(await integrationErrorMessage(response));
+    await fetchIntegrationStatuses();
+  } catch (error) {
+    integrationError = error instanceof Error ? error.message : String(error);
+  } finally {
+    integrationAction = null;
+  }
+}
+
+$effect(() => {
+  if (open) void fetchIntegrationStatuses();
+});
 
 // ── IntersectionObserver to highlight active nav ──────────────────────────
 $effect(() => {
@@ -1247,6 +1326,70 @@ async function handleRemoveAccount(): Promise<void> {
 			</section>
 
 				<TypeSafeSettingsSection />
+
+			<!-- Integrations -->
+			<section id="section-integrations" class="settings-section">
+				<h2 class="section-head-title">Integrations</h2>
+				<p class="settings-row-hint">
+					Give a coding agent the current PR's walkthrough, issues, and comment threads. It can
+					record verified fixes, update walkthrough content, and reply to or resolve comments.
+					Revv must stay running while the agent is in use.
+				</p>
+
+				{#each EXTERNAL_AGENT_PROVIDERS as provider (provider)}
+					{@const status = integrationStatusFor(provider)}
+					{@const busy = integrationAction?.provider === provider}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">{EXTERNAL_AGENT_PROVIDER_NAMES[provider]}</h3>
+						<div class="settings-row">
+							<div class="settings-row-info">
+								{#if status?.connected}
+									<p class="settings-row-hint">Connected. {INTEGRATION_ACTIVATION[provider]}</p>
+								{:else if status?.clientConfigured}
+									<p class="settings-row-hint">
+										Configured, but the credential is inactive. Reconnect to repair it.
+									</p>
+								{:else}
+									<p class="settings-row-hint">Not connected.</p>
+								{/if}
+							</div>
+							<div class="flex shrink-0 items-center gap-2">
+								{#if status?.connected}
+									<Button
+										variant="outline"
+										size="sm"
+										onclick={() => runIntegrationAction(provider, 'disconnect')}
+										disabled={integrationAction !== null}
+									>
+										{#if busy && integrationAction?.kind === 'disconnect'}
+											<Spinner size={14} class="motion-essential-spin" />
+											Disconnecting…
+										{:else}
+											Disconnect
+										{/if}
+									</Button>
+								{/if}
+								<Button
+									size="sm"
+									onclick={() => runIntegrationAction(provider, 'connect')}
+									disabled={integrationAction !== null}
+								>
+									{#if busy && integrationAction?.kind === 'connect'}
+										<Spinner size={14} class="motion-essential-spin" />
+										Connecting…
+									{:else}
+										{status?.connected ? 'Reconnect' : 'Connect'}
+									{/if}
+								</Button>
+							</div>
+						</div>
+					</div>
+				{/each}
+
+				{#if integrationError}
+					<p class="probe-result probe-result--err" role="alert">{integrationError}</p>
+				{/if}
+			</section>
 
 			<PreferencesSettingsSection />
 

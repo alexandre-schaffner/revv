@@ -251,6 +251,14 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    not the per-generation stream, which dies on `done`. GitHub-submitted issues
    (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
    pipeline still never mutates a completed row.
+
+   The external coding-agent integrations (Claude Code, Codex, OpenCode,
+   Cursor) are additional scoped callers of the same chat-edit handlers. Their
+   `record_issue_resolution` tool may update only the local resolution
+   metadata of an unsubmitted issue; GitHub-submitted issues remain immutable
+   and must be addressed through their comment thread. All four share one
+   credential model, one stdio bridge, and one MCP route — see
+   `docs/architecture/external-agent-integrations.md`.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
    re-reading the DB.

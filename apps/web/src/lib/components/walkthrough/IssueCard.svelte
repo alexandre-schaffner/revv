@@ -47,6 +47,15 @@ const severityLabels: Record<string, string> = {
   critical: "Critical",
 };
 
+const resolutionLabel = $derived(
+  issue.resolutionStatus === "addressed"
+    ? "Addressed"
+    : issue.resolutionStatus === "wont_fix"
+      ? "Won't fix"
+      : null,
+);
+const resolved = $derived(resolutionLabel !== null);
+
 // Once the entrance animation completes (or if the parent tells us to skip
 // it), lock the card into its final visual state by applying `--no-anim`.
 // Without this, browsers restart CSS animations on elements that re-enter
@@ -69,6 +78,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		type="button"
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
+		class:issue-card--resolved={resolved}
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
 		onanimationend={onAnimEnd}
@@ -84,6 +94,7 @@ function onAnimEnd(event: AnimationEvent): void {
 	<label
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
+		class:issue-card--resolved={resolved}
 		class:issue-card--checked={checked}
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
@@ -93,7 +104,7 @@ function onAnimEnd(event: AnimationEvent): void {
 			// label→input forward we used to rely on no longer fires. Forward
 			// here, but skip clicks that already hit the checkbox itself so
 			// we don't toggle twice.
-			if (submitted || disabled) return;
+			if (submitted || resolved || disabled) return;
 			const target = e.target as HTMLElement | null;
 			if (target?.closest('[data-slot="checkbox"]')) return;
 			oncheck?.(!checked);
@@ -105,6 +116,7 @@ function onAnimEnd(event: AnimationEvent): void {
 	<div
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
+		class:issue-card--resolved={resolved}
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
 		onanimationend={onAnimEnd}
@@ -114,7 +126,7 @@ function onAnimEnd(event: AnimationEvent): void {
 {/if}
 
 {#snippet cardContent()}
-	{#if checkable}
+	{#if checkable && !resolved}
 		<Checkbox
 			class="issue-card-checkbox"
 			aria-label="Select issue"
@@ -135,6 +147,9 @@ function onAnimEnd(event: AnimationEvent): void {
 				</span>
 				{#if submitted}
 					<span class="issue-card-posted-badge">Posted</span>
+				{/if}
+				{#if resolutionLabel}
+					<span class="issue-card-resolution-badge">{resolutionLabel}</span>
 				{/if}
 			</span>
 			<span class="issue-card-title">{issue.title}</span>
@@ -284,6 +299,11 @@ function onAnimEnd(event: AnimationEvent): void {
 		opacity: 0.55;
 	}
 
+	.issue-card--resolved {
+		--severity-color: var(--color-success);
+		background: color-mix(in srgb, var(--color-success) 5%, var(--color-bg-secondary));
+	}
+
 	/* ── Checkbox ────────────────────────────────────────────────────── */
 	:global(.issue-card-checkbox) {
 		margin-top: 2px;
@@ -393,6 +413,21 @@ function onAnimEnd(event: AnimationEvent): void {
 
 	/* ── Posted badge ─────────────────────────────────────────────────── */
 	.issue-card-posted-badge {
+		display: inline-flex;
+		align-items: center;
+		border-radius: 9999px;
+		padding: 1px 7px;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		flex-shrink: 0;
+		background: color-mix(in srgb, var(--color-success) 15%, transparent);
+		color: var(--color-success);
+		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
+	}
+
+	.issue-card-resolution-badge {
 		display: inline-flex;
 		align-items: center;
 		border-radius: 9999px;

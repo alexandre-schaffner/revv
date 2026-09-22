@@ -1,5 +1,4 @@
 <script lang="ts">
-import { buildPullRequestDeepLink } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Check from "phosphor-svelte/lib/Check";
 import Desktop from "phosphor-svelte/lib/Desktop";
@@ -7,11 +6,10 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Moon from "phosphor-svelte/lib/Moon";
 import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
-import { onDestroy } from "svelte";
-import { toast } from "svelte-sonner";
 import * as Tooltip from "$lib/components/ui/tooltip";
-import { gsapFade, gsapPress, tokens } from "$lib/motion";
+import { gsapPop, gsapPress, tokens } from "$lib/motion";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
+import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
 import {
   getIsLoading,
   getRepositories,
@@ -42,33 +40,7 @@ const repository = $derived(
 const selectedPrId = $derived(getSelectedPrId());
 const theme = $derived(getThemePreference());
 const topbarSubtitle = $derived(getTopbarSubtitle());
-let linkCopied = $state(false);
-let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
-
-onDestroy(() => {
-  if (copyResetTimer) clearTimeout(copyResetTimer);
-});
-
-async function copyPrLink(): Promise<void> {
-  if (!pr || !repository) return;
-  try {
-    const url = buildPullRequestDeepLink({
-      githubHost: repository.githubHost,
-      repositoryFullName: repository.fullName,
-      number: pr.externalId,
-    });
-    await navigator.clipboard.writeText(url);
-    linkCopied = true;
-    if (copyResetTimer) clearTimeout(copyResetTimer);
-    copyResetTimer = setTimeout(() => {
-      linkCopied = false;
-      copyResetTimer = null;
-    }, 1400);
-  } catch {
-    linkCopied = false;
-    toast.error("Couldn’t copy the PR link.");
-  }
-}
+const linkCopied = $derived(getPrLinkCopied());
 
 // Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
 // PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
@@ -135,20 +107,28 @@ function cycleTheme() {
 								<button
 									{...props}
 									class="copy-link-btn"
-									onclick={copyPrLink}
-									aria-label={linkCopied ? 'Link copied' : 'Copy PR link'}
+									onclick={() => void copySelectedPrLink()}
+									aria-label={linkCopied ? 'Link copied' : 'Copy PR link (\u21e7\u2318C)'}
 									use:gsapPress
 								>
 									{#key linkCopied}
-										<span in:gsapFade={{ duration: tokens.snap }} out:gsapFade={{ duration: tokens.snap }}>
+										<span
+											class="copy-link-icon"
+											class:copied={linkCopied}
+											in:gsapPop={{ duration: tokens.quick }}
+											out:gsapPop={{ duration: tokens.instant }}
+										>
 											{#if linkCopied}<Check size={13} />{:else}<LinkSimple size={13} />{/if}
 										</span>
 									{/key}
 								</button>
 							{/snippet}
 						</Tooltip.Trigger>
+						<!-- Deliberately static: the tooltip is open under the cursor when
+						     the click lands, so swapping its text mid-hover resizes and
+						     re-centers the surface. The icon carries the confirmation. -->
 						<Tooltip.Content side="bottom" sideOffset={6}>
-							{linkCopied ? 'Link copied' : 'Copy PR link'}
+							Copy PR link (&#x21e7;&#x2318;C)
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
@@ -272,12 +252,19 @@ function cycleTheme() {
 		outline: none;
 	}
 
-	.copy-link-btn :global(span) {
+	/* Stacked so the outgoing and incoming glyph crossfade in place rather
+	   than competing for the button's 22px of layout — see `gsapPop`. */
+	.copy-link-icon {
 		align-items: center;
 		display: inline-flex;
+		inset: 0;
+		justify-content: center;
+		position: absolute;
 	}
 
-	.copy-link-btn[aria-label="Link copied"] {
+	/* On the glyph, not the button: the success color then crossfades with
+	   the icon instead of snapping both frames green at once. */
+	.copy-link-icon.copied {
 		color: var(--color-success);
 	}
 

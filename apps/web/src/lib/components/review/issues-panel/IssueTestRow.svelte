@@ -91,8 +91,17 @@ const severityLabels: Record<WalkthroughIssue["severity"], string> = {
   info: "Info",
 };
 
+const resolutionLabel = $derived(
+  issue.resolutionStatus === "addressed"
+    ? "Addressed"
+    : issue.resolutionStatus === "wont_fix"
+      ? "Won't fix"
+      : null,
+);
+const resolved = $derived(resolutionLabel !== null);
+
 const ariaLabel = $derived(
-  `${severityLabels[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}`,
+  `${severityLabels[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}${resolutionLabel ? ` (${resolutionLabel})` : ""}`,
 );
 
 // Cascade-entry delay. Cap at 6 so long lists resolve quickly.
@@ -105,7 +114,7 @@ const delay = $derived(`${Math.min(index, 6) * 50}ms`);
 const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
 
 function handleCheckedChange(): void {
-  if (submitted) return;
+  if (submitted || resolved) return;
   onToggleSelect();
 }
 
@@ -119,6 +128,7 @@ function handleCheckboxClick(e: MouseEvent): void {
 <div
     class="issue-row issue-row--{issue.severity}"
     class:issue-row--submitted={submitted}
+    class:issue-row--resolved={resolved}
     class:issue-row--selected={selected}
     style:--issue-delay={delay}
     data-open={open ? "true" : undefined}
@@ -133,7 +143,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         bind:triggerRef
     >
         {#snippet icon()}
-            {#if submitted}
+            {#if submitted || resolved}
                 <span class="staged-check" aria-hidden="true">
                     <Check size={13} />
                 </span>
@@ -156,6 +166,9 @@ function handleCheckboxClick(e: MouseEvent): void {
                 {severityCode[issue.severity]}
             </span>
             <span class="issue-title">{issue.title}</span>
+            {#if resolutionLabel}
+                <span class="resolution-badge">{resolutionLabel}</span>
+            {/if}
         {/snippet}
 
         {#snippet preview()}
@@ -195,6 +208,10 @@ function handleCheckboxClick(e: MouseEvent): void {
         --c-gutter-color: var(--color-score-info-icon);
         --c-row-bg: var(--color-score-info-bg);
         --c-gutter-flash: color-mix(in srgb, var(--color-score-info-icon) 70%, white);
+    }
+    .issue-row--resolved {
+        --c-gutter-color: var(--color-success);
+        --c-row-bg: color-mix(in srgb, var(--color-success) 7%, var(--color-bg-elevated));
     }
 
     /* Subtle background tint when a row is selected but not yet submitted —
@@ -268,6 +285,19 @@ function handleCheckboxClick(e: MouseEvent): void {
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
+    }
+
+    .resolution-badge {
+        flex-shrink: 0;
+        border: 1px solid color-mix(in srgb, var(--color-success) 35%, transparent);
+        border-radius: 9999px;
+        padding: 1px 6px;
+        color: var(--color-success);
+        font-family: var(--font-mono);
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
     }
 
     .issue-preview {

@@ -25,4 +25,13 @@ export const walkthroughIssues = sqliteTable("walkthrough_issues", {
   advisoryScore: real("advisory_score"),
   /** ISO 8601 timestamp of the scoring pass that wrote `advisoryScore`. */
   advisoryScoredAt: text("advisory_scored_at"),
+  // ── External-agent resolution ─────────────────────────────────────────
+  /** Local implementation state. Submitted GitHub issues stay immutable. */
+  resolutionStatus: text("resolution_status").notNull().default("open"),
+  resolutionExplanation: text("resolution_explanation"),
+  /** JSON-encoded string[] of files, tests, or other verification evidence. */
+  resolutionEvidence: text("resolution_evidence").notNull().default("[]"),
+  resolvingCommitSha: text("resolving_commit_sha"),
+  resolvedAt: text("resolved_at"),
+  resolvedBy: text("resolved_by"),
 });

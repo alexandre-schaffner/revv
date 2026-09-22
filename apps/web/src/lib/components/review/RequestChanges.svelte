@@ -42,6 +42,11 @@ const issueSignal = $derived(
 );
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
+const unresolvedIssues = $derived(
+  issues.filter(
+    (issue) => issue.resolutionStatus !== "addressed" && issue.resolutionStatus !== "wont_fix",
+  ),
+);
 const threads = $derived(getThreads());
 const unresolvedThreads = $derived(
   threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
@@ -78,14 +83,16 @@ let approveDialogOpen = $state(false);
  */
 function handleApproveClick(): void {
   if (submitting) return;
-  if (issues.length > 0 || unresolvedThreads.length > 0) {
+  if (unresolvedIssues.length > 0 || unresolvedThreads.length > 0) {
     approveDialogOpen = true;
     return;
   }
   void submit("approve");
 }
 
-const selectedCount = $derived(selectedIssueIds.size);
+const selectedCount = $derived(
+  unresolvedIssues.filter((issue) => selectedIssueIds.has(issue.id)).length,
+);
 
 // Number of unresolved threads that carry at least one unsynced reviewer
 // message — i.e. line comments that would actually be pushed to GitHub.
@@ -99,8 +106,10 @@ const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 
 const approveBlockerSummary = $derived.by(() => {
   const parts: string[] = [];
-  if (issues.length > 0) {
-    parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? "" : "s"}`);
+  if (unresolvedIssues.length > 0) {
+    parts.push(
+      `${unresolvedIssues.length} walkthrough issue${unresolvedIssues.length === 1 ? "" : "s"}`,
+    );
   }
   if (unresolvedThreads.length > 0) {
     parts.push(
@@ -118,7 +127,7 @@ function severityTag(s: "info" | "warning" | "critical"): string {
 
 function buildBody(): string {
   const parts: string[] = [];
-  const selectedIssues = issues.filter((i) => selectedIssueIds.has(i.id));
+  const selectedIssues = unresolvedIssues.filter((i) => selectedIssueIds.has(i.id));
   if (selectedIssues.length > 0) {
     parts.push("### Walkthrough issues");
     for (const issue of selectedIssues) {
@@ -201,7 +210,9 @@ async function submit(action: Action): Promise<void> {
   try {
     const body = buildBody();
     const comments = buildComments();
-    const issueIdsForSubmit = Array.from(selectedIssueIds);
+    const issueIdsForSubmit = unresolvedIssues
+      .filter((issue) => selectedIssueIds.has(issue.id))
+      .map((issue) => issue.id);
     const { data, error } = await api.api
       .reviews({ id: prId })
       ["github-submit"].post({ action, body, comments, issueIds: issueIdsForSubmit });
@@ -278,7 +289,7 @@ async function submit(action: Action): Promise<void> {
  * chat panel and choose which commits to keep.
  */
 function generateChanges(): void {
-  const selected = issues.filter((i) => selectedIssueIds.has(i.id));
+  const selected = unresolvedIssues.filter((i) => selectedIssueIds.has(i.id));
   if (selected.length === 0) {
     toast.error("Select at least one issue to address.");
     return;
@@ -295,11 +306,11 @@ function actionLabel(a: Action): string {
 }
 
 const allIssuesSelected = $derived(
-  issues.length > 0 && issues.every((i) => selectedIssueIds.has(i.id)),
+  unresolvedIssues.length > 0 && unresolvedIssues.every((i) => selectedIssueIds.has(i.id)),
 );
 
 function toggleIssue(id: string) {
-  if (submittedIssueIds.has(id)) return;
+  if (submittedIssueIds.has(id) || !unresolvedIssues.some((issue) => issue.id === id)) return;
   const next = new Set(selectedIssueIds);
   if (next.has(id)) next.delete(id);
   else next.add(id);
@@ -310,7 +321,9 @@ function toggleAllIssues() {
   if (allIssuesSelected) {
     selectedIssueIds = new Set();
   } else {
-    selectedIssueIds = new Set(issues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id));
+    selectedIssueIds = new Set(
+      unresolvedIssues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id),
+    );
   }
 }
 
@@ -333,7 +346,7 @@ $effect(() => {
     // changes"; with none it's a plain comment review. Either way the line
     // comments ride along. Read `.size` live so the decision reflects the
     // selection at click time, not when this handler was registered.
-    onSubmitReview: () => void submit(selectedIssueIds.size > 0 ? "request_changes" : "comment"),
+    onSubmitReview: () => void submit(selectedCount > 0 ? "request_changes" : "comment"),
     onComment: () => void submit("comment"),
     onApprove: handleApproveClick,
   });
@@ -372,7 +385,7 @@ $effect(() => {
 
 <ApproveWithIssuesDialog
 	bind:open={approveDialogOpen}
-	{issues}
+	issues={unresolvedIssues}
 	pendingThreads={unresolvedThreads}
 	{getThreadMessages}
 	onfileclick={(path, line) => jumpToDiffLine(path, line)}

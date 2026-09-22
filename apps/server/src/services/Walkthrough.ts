@@ -41,7 +41,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { isLowSignalScore } from "@revv/shared";
+import { isExternalAgentProvider, isLowSignalScore } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -146,6 +146,15 @@ function rowToWalkthrough(
       } catch {
         // Legacy row or corrupt JSON — fall back to empty linkage.
       }
+      let resolutionEvidence: string[] = [];
+      try {
+        const parsed: unknown = JSON.parse(i.resolutionEvidence);
+        if (Array.isArray(parsed)) {
+          resolutionEvidence = parsed.filter((value): value is string => typeof value === "string");
+        }
+      } catch {
+        // Corrupt legacy metadata is treated as no evidence.
+      }
       return {
         id: i.id,
         severity: i.severity as WalkthroughIssue["severity"],
@@ -157,6 +166,18 @@ function rowToWalkthrough(
         ...(i.endLine !== null ? { endLine: i.endLine } : {}),
         ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
         ...advisoryFields(i.advisoryScore),
+        ...(i.resolutionStatus === "addressed" || i.resolutionStatus === "wont_fix"
+          ? { resolutionStatus: i.resolutionStatus }
+          : {}),
+        ...(i.resolutionExplanation !== null
+          ? { resolutionExplanation: i.resolutionExplanation }
+          : {}),
+        ...(resolutionEvidence.length > 0 ? { resolutionEvidence } : {}),
+        ...(i.resolvingCommitSha !== null ? { resolvingCommitSha: i.resolvingCommitSha } : {}),
+        ...(i.resolvedAt !== null ? { resolvedAt: i.resolvedAt } : {}),
+        ...(i.resolvedBy !== null && isExternalAgentProvider(i.resolvedBy)
+          ? { resolvedBy: i.resolvedBy }
+          : {}),
       };
     });
 

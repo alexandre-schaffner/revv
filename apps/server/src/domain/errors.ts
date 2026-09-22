@@ -65,6 +65,17 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
   readonly field?: string;
 }> {}
 
+export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrationError")<{
+  readonly message: string;
+  readonly code:
+    | "INVALID_CREDENTIAL"
+    | "INVALID_PROJECT"
+    | "PR_NOT_FOUND"
+    | "INSTALL_FAILED"
+    | "NOT_CONNECTED";
+  readonly cause?: unknown;
+}> {}
+
 // AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;

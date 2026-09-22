@@ -1,4 +1,5 @@
 import { fuzzyScore } from "$lib/utils/fuzzy";
+import { copySelectedPrLink } from "./pr-link.svelte";
 import {
   collapseAllRepoGroups,
   openAddRepoDialog,
@@ -84,6 +85,14 @@ const commands = $state<Command[]>([
     shortcut: "\u2318\u2325B",
     keywords: ["right", "panel", "hide", "show", "context"],
     action: () => toggleRightPanel(),
+  },
+  {
+    id: "pr:copy-link",
+    label: "Copy PR Link",
+    category: "Pull Request",
+    shortcut: "\u21e7\u2318C",
+    keywords: ["share", "deep link", "url", "clipboard"],
+    action: () => void copySelectedPrLink(),
   },
   {
     id: "repo:add",

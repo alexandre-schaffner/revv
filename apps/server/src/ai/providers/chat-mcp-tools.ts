@@ -16,13 +16,17 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
+import { repositories } from "../../db/schema/repositories";
 import { reviewSessions } from "../../db/schema/review-sessions";
 import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
+import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
+import { decodeIssue, decodeRating } from "./chat-edit-tools/helpers";
 import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
 
 // ── Context ─────────────────────────────────────────────────────────────────
@@ -133,6 +137,11 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
   if (!prRow) {
     return fail(`PR not found: ${prId}`);
   }
+  const repository = db
+    .select()
+    .from(repositories)
+    .where(eq(repositories.id, prRow.repositoryId))
+    .get();
 
   // Latest completed walkthrough for this PR (ordered by generatedAt desc).
   const walkthroughRow = db
@@ -163,6 +172,21 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
         .all()
     : [];
   const blocksById = new Map(blockRows.map((b) => [b.id, b]));
+  const semanticRows = walkthroughRow
+    ? db
+        .select()
+        .from(walkthroughSemanticSteps)
+        .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughRow.id))
+        .orderBy(walkthroughSemanticSteps.semanticStepIndex)
+        .all()
+    : [];
+  const ratingRows = walkthroughRow
+    ? db
+        .select()
+        .from(walkthroughRatings)
+        .where(eq(walkthroughRatings.walkthroughId, walkthroughRow.id))
+        .all()
+    : [];
 
   // Inline review comments authored by the agent via `add_issue_comment` are
   // linked back to the issue via comment_threads.walkthroughIssueId. Fetch
@@ -232,6 +256,10 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
   // shape outside of `content`).
   const payload = {
     pr: {
+      id: prRow.id,
+      number: prRow.externalId,
+      url: prRow.url,
+      repository: repository?.fullName ?? null,
       title: prRow.title,
       body: prRow.body,
       sourceBranch: prRow.sourceBranch,
@@ -240,11 +268,26 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     },
     walkthrough: walkthroughRow
       ? {
+          id: walkthroughRow.id,
+          reviewedHeadSha: walkthroughRow.prHeadSha,
           summary: walkthroughRow.summary,
           riskLevel: walkthroughRow.riskLevel,
           sentiment: walkthroughRow.sentiment,
           status: walkthroughRow.status,
           generatedAt: walkthroughRow.generatedAt,
+          chapters: semanticRows.map((semantic) => ({
+            semanticStepIndex: semantic.semanticStepIndex,
+            title: semantic.title,
+            summary: semantic.summary,
+            blocks: blockRows
+              .filter((block) => block.semanticStepIndex === semantic.semanticStepIndex)
+              .map((block) => ({
+                semanticStepIndex: block.semanticStepIndex,
+                stepIndex: block.stepIndex,
+                ...parseBlock(block),
+              })),
+          })),
+          ratings: ratingRows.map(decodeRating),
         }
       : null,
     flaggedIssues: issueRows.map((issue) => {
@@ -269,6 +312,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
             endLine: linked.endLine,
           }
         : null;
+      const decodedIssue = decodeIssue(issue);
       return {
         id: issue.id,
         severity: issue.severity,
@@ -278,8 +322,31 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
         startLine: issue.startLine,
         endLine: issue.endLine,
         submittedToGitHub: issue.submittedAt != null,
+        resolutionStatus: decodedIssue.resolutionStatus ?? "open",
+        resolutionExplanation: decodedIssue.resolutionExplanation ?? null,
+        resolutionEvidence: decodedIssue.resolutionEvidence ?? [],
+        resolvingCommitSha: decodedIssue.resolvingCommitSha ?? null,
+        resolvedAt: decodedIssue.resolvedAt ?? null,
+        resolvedBy: decodedIssue.resolvedBy ?? null,
         blocks,
-        inlineComment,
+        inlineComment: linked
+          ? {
+              threadId: linked.id,
+              status: linked.status,
+              filePath: linked.filePath,
+              startLine: linked.startLine,
+              endLine: linked.endLine,
+              body: inlineComment?.body ?? "",
+              messages: linkedMsgs.map((message) => ({
+                id: message.id,
+                role: message.authorRole,
+                author: message.authorName,
+                body: message.body,
+                createdAt: message.createdAt,
+                externalId: message.externalId,
+              })),
+            }
+          : null,
       };
     }),
     reviewerComments: standaloneThreads.map((thread) => ({
@@ -290,10 +357,12 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
       diffSide: thread.diffSide,
       status: thread.status,
       messages: (standaloneMsgsByThread.get(thread.id) ?? []).map((m) => ({
+        id: m.id,
         role: m.authorRole,
         author: m.authorName,
         body: m.body,
         createdAt: m.createdAt,
+        externalId: m.externalId,
       })),
     })),
   };

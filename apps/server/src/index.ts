@@ -14,7 +14,9 @@ import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
 import { eventsRoute } from "./routes/events";
 import { githubRoutes } from "./routes/github";
+import { externalIntegrationRoutes } from "./routes/integrations";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
+import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
 import { mcpRecapRoute } from "./routes/mcp/recap";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
@@ -124,6 +126,8 @@ const app = new Elysia()
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)
   .use(mcpChatContextRoute)
+  .use(mcpExternalAgentRoute)
+  .use(externalIntegrationRoutes)
   .get("/api/health", () => ({
     status: "ok" as const,
     channel: serverEnv.channel,

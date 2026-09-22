@@ -2,14 +2,15 @@
 //
 // Shared helper functions and types used by chat-edit tool handlers.
 
-import type {
-  RatingAxis,
-  RatingCitation,
-  WalkthroughBlock,
-  WalkthroughIssue,
-  WalkthroughRating,
+import {
+  isExternalAgentProvider,
+  isLowSignalScore,
+  type RatingAxis,
+  type RatingCitation,
+  type WalkthroughBlock,
+  type WalkthroughIssue,
+  type WalkthroughRating,
 } from "@revv/shared";
-import { isLowSignalScore } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -190,6 +191,15 @@ export function decodeBlock(row: typeof walkthroughBlocks.$inferSelect): Walkthr
 
 export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): WalkthroughIssue {
   const blockIds = parseBlockIds(row.blockIds);
+  let resolutionEvidence: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(row.resolutionEvidence);
+    if (Array.isArray(parsed)) {
+      resolutionEvidence = parsed.filter((value): value is string => typeof value === "string");
+    }
+  } catch {
+    // Corrupt legacy metadata is treated as no evidence.
+  }
   return {
     id: row.id,
     severity: row.severity as WalkthroughIssue["severity"],
@@ -204,6 +214,18 @@ export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): Walkthr
     // "never scored" from reading as low signal.
     ...(row.advisoryScore !== null
       ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
+      : {}),
+    ...(row.resolutionStatus === "addressed" || row.resolutionStatus === "wont_fix"
+      ? { resolutionStatus: row.resolutionStatus }
+      : {}),
+    ...(row.resolutionExplanation !== null
+      ? { resolutionExplanation: row.resolutionExplanation }
+      : {}),
+    ...(resolutionEvidence.length > 0 ? { resolutionEvidence } : {}),
+    ...(row.resolvingCommitSha !== null ? { resolvingCommitSha: row.resolvingCommitSha } : {}),
+    ...(row.resolvedAt !== null ? { resolvedAt: row.resolvedAt } : {}),
+    ...(row.resolvedBy !== null && isExternalAgentProvider(row.resolvedBy)
+      ? { resolvedBy: row.resolvedBy }
       : {}),
   };
 }
