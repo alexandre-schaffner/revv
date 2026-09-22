@@ -193,7 +193,6 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
     const config = {
       model: settings.aiModel ?? undefined,
       thinkingEffort: settings.aiThinkingEffort ?? undefined,
-      contextWindow: settings.aiContextWindow ?? undefined,
     };
     const handle = yield* Effect.promise(() =>
       warm

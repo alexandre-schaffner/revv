@@ -267,6 +267,13 @@
       "when": 1779660000000,
       "tag": "0340_jev_advisory",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1779665000000,
+      "tag": "0350_drop_ai_context_window",
+      "breakpoints": true
     }
   ]
 }

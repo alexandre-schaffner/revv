@@ -12,7 +12,6 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
   type AcpAgentId,
-  type ContextWindow,
   clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
@@ -45,7 +44,6 @@ export interface AcpProcessLaunch {
 export interface AcpLaunchConfig {
   readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
 }
 
 export interface AcpProcessEnvOptions {
@@ -156,7 +154,7 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
   const def = getAcpAgent(id);
   const args = [...def.args];
   const env: Record<string, string> = {};
-  const { model, thinkingEffort, contextWindow } = config;
+  const { model, thinkingEffort } = config;
 
   switch (id) {
     case "codex": {
@@ -176,10 +174,8 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     }
     case "claude-code": {
       if (model) env.ANTHROPIC_MODEL = model;
-      // 1M context is on by default in Claude Code; disable it for the 200K tier.
-      if (contextWindow) {
-        env.CLAUDE_CODE_DISABLE_1M_CONTEXT = contextWindow === "1m" ? "false" : "true";
-      }
+      // Revv always runs at the full 1M context, which is Claude Code's own
+      // default — so the disable flag is deliberately never set.
       if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
       break;
     }

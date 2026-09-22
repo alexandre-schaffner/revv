@@ -132,7 +132,6 @@ export type {
   AuthorRole,
   CloneStatus,
   CommentThread,
-  ContextWindow,
   DiffViewMode,
   HunkDecision,
   HunkDecisionType,

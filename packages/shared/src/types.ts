@@ -76,8 +76,6 @@ export interface PullRequest {
  */
 export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
 
-export type ContextWindow = "200k" | "1m";
-
 /**
  * Per-feature override for which agent generates project recaps.
  * `'auto'` (default) inherits the global `aiAgent`; an explicit ACP agent id
@@ -140,7 +138,6 @@ export interface UserSettings {
    * recap generation.
    */
   aiAgent: AcpAgentId;
-  aiContextWindow: ContextWindow;
   /**
    * Low-cost model used for one-shot, no-tools PR-aware suggestion
    * generation (right-panel empty-state prompts). Follows the global

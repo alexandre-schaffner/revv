@@ -8,14 +8,19 @@
 // `(prId, headSha, diffFingerprint)`, sharing it with the generation path —
 // so asking here is the same TypeSafe call moved earlier, not an extra one.
 
-import type { RiskLevel } from "@revv/shared";
+import type { RiskLevel, ThinkingEffort } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
 
 export type WalkthroughSizing =
   | { status: "off" }
   | { status: "pending" }
-  | { status: "ready"; riskLevel: RiskLevel | null; model: string | null };
+  | {
+      status: "ready";
+      riskLevel: RiskLevel | null;
+      model: string | null;
+      thinkingEffort: ThinkingEffort | null;
+    };
 
 /**
  * Keyed on `(prId, headSha)`, not `prId`.

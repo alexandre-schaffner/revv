@@ -1,5 +1,5 @@
 <script lang="ts">
-import { AUTO_MODEL_SENTINEL, type ContextWindow, getAgentCapabilities } from "@revv/shared";
+import { AUTO_MODEL_SENTINEL, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
@@ -25,11 +25,6 @@ import {
   getWalkthroughSizing,
 } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
-
-const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
-  { label: "200K", value: "200k" },
-  { label: "1M", value: "1m" },
-];
 
 let open = $state(false);
 
@@ -192,15 +187,9 @@ let groupedModels = $derived.by((): ModelGroup[] => {
 });
 
 let currentProvider = $derived(getProvider(currentModel));
-let currentWindow = $derived((getSettings()?.aiContextWindow ?? "200k") as ContextWindow);
 
 function select(value: string) {
   updateSettings({ aiModel: value });
-  // Keep popover open so the user can also pick the context window in one session
-}
-
-function selectWindow(value: ContextWindow) {
-  updateSettings({ aiContextWindow: value });
   open = false;
 }
 </script>
@@ -213,12 +202,6 @@ function selectWindow(value: ContextWindow) {
 					<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				{:else}
 					<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
-				{/if}
-			{/snippet}
-			{#snippet trailing()}
-				{#if caps.contextWindow}
-					<span class="text-xs text-text-muted">·</span>
-					<span class="text-xs text-text-secondary">{currentWindow === '1m' ? '1M' : '200K'}</span>
 				{/if}
 			{/snippet}
 		</SelectTrigger>
@@ -286,22 +269,5 @@ function selectWindow(value: ContextWindow) {
 		{/each}
 		{/if}
 
-		{#if caps.contextWindow}
-			<div class="my-1 border-t border-border"></div>
-			<div class="px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
-				Context Window
-			</div>
-			{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
-				<button
-					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-					onclick={() => selectWindow(opt.value)}
-				>
-					{opt.label}
-					{#if currentWindow === opt.value}
-						<Check size={12} class="shrink-0 text-accent" />
-					{/if}
-				</button>
-			{/each}
-		{/if}
 	</PopoverContent>
 </PopoverRoot>

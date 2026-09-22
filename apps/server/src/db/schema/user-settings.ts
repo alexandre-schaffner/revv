@@ -10,7 +10,6 @@ export const userSettings = sqliteTable("user_settings", {
   aiModel: text("ai_model").notNull(),
   aiThinkingEffort: text("ai_thinking_effort").notNull(),
   aiAgent: text("ai_agent").notNull(),
-  aiContextWindow: text("ai_context_window").notNull(),
   aiSuggestionsModel: text("ai_suggestions_model").notNull(),
   aiMaxTurns: integer("ai_max_turns").notNull(),
   theme: text("theme").notNull(),

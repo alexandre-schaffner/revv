@@ -15,7 +15,12 @@ import { debug } from "../../logger";
 import { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
-import { type GenerationLaunchOverride, type ReviewDepth, routeDepth } from "./routing";
+import {
+  type GenerationLaunchOverride,
+  type ReasoningEffort,
+  type ReviewDepth,
+  routeDepth,
+} from "./routing";
 import type { JobStartStateInput } from "./state";
 import { buildJobStartState } from "./state";
 
@@ -57,9 +62,14 @@ const DEPTH_CRITERIA = {
   deep: "The change is intricate: subtle invariants, concurrency, state machines, security boundaries, or behavior spread across many files that must be held in mind at once.",
 } as const;
 
-const WIDE_CONTEXT_CRITERIA = {
-  no: "The change can be understood from the changed files and a handful of neighbours.",
-  yes: "Reviewing this well requires holding an unusually large amount of code in mind at once — a very large diff, or a change whose correctness depends on many distant call sites.",
+const EFFORT_CRITERIA = {
+  minimal:
+    "Skimming is enough. The change is self-evident and a careful reader would not pause over any of it.",
+  standard: "Ordinary care. Follow the logic, check the obvious edge cases, move on.",
+  thorough:
+    "Worth real deliberation: invariants to hold in mind, edge cases that are not obvious, or consequences that reach beyond the changed files.",
+  exhaustive:
+    "Worth thinking as hard as possible. Getting this wrong is expensive — security boundaries, data integrity, concurrency, or migrations that cannot be undone.",
 } as const;
 
 /**
@@ -75,7 +85,7 @@ export interface JobStartAnswers {
   readonly depth: ReviewDepth;
   readonly depthConfidence: number;
   readonly depthProbabilities: Readonly<Record<string, number>>;
-  readonly needsWideContext: boolean;
+  readonly reasoningEffort: ReasoningEffort;
 }
 
 /** Cache namespace. Entries are immutable — the key pins the exact diff. */
@@ -127,10 +137,11 @@ export function askJobStart(
             "How hard is this change to reason about correctly? This is about intricacy, not size or importance.",
           criteria: DEPTH_CRITERIA,
         },
-        needs_wide_ctx: {
+        reasoning_effort: {
           type: "choice",
-          instructions: "Does reviewing this change require an unusually large context window?",
-          criteria: WIDE_CONTEXT_CRITERIA,
+          instructions:
+            "How much deliberation does reviewing this change deserve? This is about the cost of getting it wrong, not the size of the diff.",
+          criteria: EFFORT_CRITERIA,
         },
       },
     });
@@ -141,7 +152,7 @@ export function askJobStart(
       depth: answers.review_depth.choice satisfies ReviewDepth,
       depthConfidence: answers.review_depth.confidence,
       depthProbabilities: answers.review_depth.probabilities,
-      needsWideContext: answers.needs_wide_ctx.choice === "yes",
+      reasoningEffort: answers.reasoning_effort.choice satisfies ReasoningEffort,
     };
   });
 }
@@ -168,7 +179,7 @@ export function routeFromAnswers(
     confidence: answers.depthConfidence,
     probabilities: answers.depthProbabilities,
     configuredModel: opts.configuredModel,
-    needsWideContext: answers.needsWideContext,
+    reasoningEffort: answers.reasoningEffort,
   });
 }
 

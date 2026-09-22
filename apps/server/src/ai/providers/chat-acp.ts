@@ -16,7 +16,6 @@ import type { ContentBlock, McpServer, SessionModeState } from "@agentclientprot
 import {
   type AcpAgentId,
   type ChatAttachment,
-  type ContextWindow,
   extractMentionTokens,
   type InteractionMode,
   type ThinkingEffort,
@@ -72,7 +71,6 @@ export interface StreamChatViaAcpOptions {
   /** Selected thinking-effort tier. Propagated to Claude Code / Codex at launch. */
   readonly thinkingEffort?: ThinkingEffort | undefined;
   /** Selected context window. Propagated to Claude Code at launch (200K vs 1M). */
-  readonly contextWindow?: ContextWindow | undefined;
   readonly acpAgentId: AcpAgentId;
   readonly deps: AcpChatDeps;
   readonly prId: string;
@@ -181,7 +179,6 @@ export function streamChatViaAcp(
         const h = await getAcpConnection(opts.cwd, opts.acpAgentId, {
           model: opts.model,
           thinkingEffort: opts.thinkingEffort,
-          contextWindow: opts.contextWindow,
         });
         handle = h;
 

@@ -844,7 +844,6 @@ export const ProjectRecapJobsLive = Layer.effect(
                 resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5",
               acpAgentId,
               thinkingEffort: settings?.aiThinkingEffort,
-              contextWindow: settings?.aiContextWindow,
               repoWorkingDir: repo.clonePath ?? process.cwd(),
               sessionDeps,
               onCompleted: () => {

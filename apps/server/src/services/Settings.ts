@@ -1,6 +1,5 @@
 import type {
   AcpAgentId,
-  ContextWindow,
   DiffViewMode,
   RecapAgentChoice,
   ThemePreference,
@@ -34,7 +33,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   aiModel: "opencode/big-pickle",
   aiThinkingEffort: "medium",
   aiAgent: "opencode",
-  aiContextWindow: "200k",
   aiSuggestionsModel: "opencode/big-pickle",
   aiMaxTurns: 60,
   theme: "dark",
@@ -139,10 +137,6 @@ function normalize(raw: unknown): UserSettings {
         ? (r.aiThinkingEffort as ThinkingEffort)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent: coerceAgentId(r),
-    aiContextWindow:
-      typeof r.aiContextWindow === "string"
-        ? (r.aiContextWindow as ContextWindow)
-        : DEFAULT_SETTINGS.aiContextWindow,
     aiSuggestionsModel:
       typeof r.aiSuggestionsModel === "string"
         ? (r.aiSuggestionsModel as string)
@@ -271,7 +265,6 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     aiModel: row.aiModel,
     aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
     aiAgent: row.aiAgent as AcpAgentId,
-    aiContextWindow: row.aiContextWindow as ContextWindow,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
     theme: row.theme as ThemePreference,
@@ -327,7 +320,6 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     aiModel: s.aiModel,
     aiThinkingEffort: s.aiThinkingEffort,
     aiAgent: s.aiAgent,
-    aiContextWindow: s.aiContextWindow,
     aiSuggestionsModel: s.aiSuggestionsModel,
     aiMaxTurns: s.aiMaxTurns,
     theme: s.theme,

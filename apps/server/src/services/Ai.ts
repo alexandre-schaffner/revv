@@ -305,7 +305,6 @@ export const AiServiceLive = Layer.effect(
               {
                 model,
                 thinkingEffort: override?.thinkingEffort ?? settings.aiThinkingEffort,
-                contextWindow: override?.contextWindow ?? settings.aiContextWindow,
               },
             );
             return guardWalkthroughStream(raw, {
@@ -357,7 +356,6 @@ export const AiServiceLive = Layer.effect(
               abortController: params.abortController,
               model: settings.aiModel ?? undefined,
               thinkingEffort: settings.aiThinkingEffort ?? undefined,
-              contextWindow: settings.aiContextWindow ?? undefined,
               acpAgentId,
               deps: {
                 issueChatMcpToken: (args: {
@@ -403,7 +401,6 @@ export const AiServiceLive = Layer.effect(
             abortController: params.abortController,
             model: settings.aiModel ?? undefined,
             thinkingEffort: settings.aiThinkingEffort ?? undefined,
-            contextWindow: settings.aiContextWindow ?? undefined,
             acpAgentId,
             deps: {
               issueChatMcpToken: (args: {

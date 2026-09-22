@@ -1,4 +1,4 @@
-import { AUTO_MODEL_SENTINEL, type RiskLevel } from "@revv/shared";
+import { AUTO_MODEL_SENTINEL, type RiskLevel, type ThinkingEffort } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
 import { AppRuntime } from "../../../runtime";
@@ -24,6 +24,12 @@ type WalkthroughSizing =
        * or routing declined, in which case the configured model stands.
        */
       readonly model: string | null;
+      /**
+       * Reasoning effort sized for this PR, already clamped to the selected
+       * agent's ladder. Null on the same terms as {@link model} — the two
+       * are decided together.
+       */
+      readonly thinkingEffort: ThinkingEffort | null;
     };
 
 /**
@@ -103,6 +109,7 @@ export function getWalkthroughSizingHandler(
         // sets its own tier during Phase A and this would contradict it.
         riskLevel: wantsRisk ? answers.riskLevel : null,
         model: override?.model ?? null,
+        thinkingEffort: override?.thinkingEffort ?? null,
       };
     }).pipe(Effect.catchAll(() => Effect.succeed({ status: "pending" as const }))),
   );

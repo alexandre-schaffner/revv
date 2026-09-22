@@ -81,7 +81,6 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             t.Literal("medium"),
             t.Literal("low"),
           ]),
-          aiContextWindow: t.Union([t.Literal("200k"), t.Literal("1m")]),
           aiMaxTurns: t.Number({ minimum: 10, maximum: 500 }),
           aiAgent: aiAgentSchema,
           theme: t.Union([t.Literal("system"), t.Literal("light"), t.Literal("dark")]),

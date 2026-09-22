@@ -2,13 +2,13 @@
 //
 // Jev never names a model. It answers an abstract depth tier and a
 // wide-context yes/no; this module maps those onto a concrete
-// `(model, thinkingEffort, contextWindow)` for the *selected* agent. An
+// `(model, thinkingEffort)` for the *selected* agent. An
 // external API must not be able to emit a model id the agent can't run — and
 // the mapping is a local table, so a new model in the registry is a
 // deliberate edit here rather than something the API can reach for.
 
-import type { AcpAgentId, ContextWindow, ThinkingEffort } from "@revv/shared";
-import { getAgentCapabilities, isAutoModelSentinel } from "@revv/shared";
+import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
+import { clampThinkingEffort, getAgentCapabilities, isAutoModelSentinel } from "@revv/shared";
 
 /** The abstract tier Jev answers. Ordered — index is the ladder position. */
 export const REVIEW_DEPTHS = ["shallow", "standard", "deep"] as const;
@@ -18,7 +18,6 @@ export type ReviewDepth = (typeof REVIEW_DEPTHS)[number];
 export interface GenerationLaunchOverride {
   readonly model: string;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
 }
 
 /**
@@ -53,11 +52,24 @@ const DEPTH_LADDERS: Partial<Record<AcpAgentId, Readonly<Record<ReviewDepth, str
   },
 };
 
-/** Thinking effort paired with each tier, filtered against the agent's ladder. */
-const DEPTH_EFFORTS: Readonly<Record<ReviewDepth, ThinkingEffort>> = {
-  shallow: "low",
+/**
+ * The abstract effort tier Jev answers, mapped onto Revv's ladder.
+ *
+ * Asked as its own question rather than derived from `depth`: how intricate a
+ * change is to *understand* and how much deliberation it is worth are related
+ * but not the same. A sprawling-but-shallow refactor can want more thinking
+ * than its depth suggests, and a small cryptographic change can want a lot
+ * more. `clampThinkingEffort` then steps the answer down to whatever the
+ * selected agent actually offers.
+ */
+export const REASONING_EFFORTS = ["minimal", "standard", "thorough", "exhaustive"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+const EFFORT_TIERS: Readonly<Record<ReasoningEffort, ThinkingEffort>> = {
+  minimal: "low",
   standard: "medium",
-  deep: "high",
+  thorough: "high",
+  exhaustive: "max",
 };
 
 /** Position of `model` on the agent's ladder, or `null` when it isn't on it. */
@@ -82,8 +94,8 @@ export interface RouteDepthInput {
    * applies outright — including a downgrade to a cheaper model.
    */
   readonly configuredModel: string | null | undefined;
-  /** Jev's `needs_wide_ctx` answer; only honoured on agents with the control. */
-  readonly needsWideContext: boolean;
+  /** Jev's reasoning-effort answer, clamped to the agent's own ladder. */
+  readonly reasoningEffort: ReasoningEffort;
 }
 
 /**
@@ -124,14 +136,11 @@ export function routeDepth(input: RouteDepthInput): GenerationLaunchOverride | n
   // the agent no longer lists must never reach the launch.
   if (caps.models !== "dynamic" && !caps.models.some((m) => m.value === model)) return null;
 
-  const effort = DEPTH_EFFORTS[input.depth];
-  return {
-    model,
-    ...(caps.thinkingEfforts.includes(effort) ? { thinkingEffort: effort } : {}),
-    ...(caps.contextWindow && input.needsWideContext
-      ? { contextWindow: "1m" as ContextWindow }
-      : {}),
-  };
+  // Clamped, not filtered: an agent that tops out below the answered tier
+  // should get its strongest available tier rather than nothing, which is
+  // what "as much thinking as this agent allows" means.
+  const effort = clampThinkingEffort(input.agent, EFFORT_TIERS[input.reasoningEffort]);
+  return { model, ...(effort ? { thinkingEffort: effort } : {}) };
 }
 
 /** Gap between the top two probabilities; `1` when there's only one label. */

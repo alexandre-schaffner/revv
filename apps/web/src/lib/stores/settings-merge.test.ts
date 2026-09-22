@@ -8,7 +8,6 @@ const CURRENT: UserSettings = {
   aiModel: "claude-sonnet-5",
   aiThinkingEffort: "medium",
   aiAgent: "claude-code",
-  aiContextWindow: "200k",
   aiSuggestionsModel: "claude-haiku-4-5-20251001",
   aiMaxTurns: 60,
   theme: "dark",

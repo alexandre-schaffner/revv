@@ -1598,7 +1598,9 @@ export const WalkthroughJobsLive = Layer.effect(
             agent === "opencode" ? "opencode" : agent === "codex" ? "codex" : "claude-agent-sdk",
           model: modelUsed,
           thinkingEffort: settings.aiThinkingEffort ?? null,
-          contextWindow: settings.aiContextWindow ?? null,
+          // Revv always runs at the full context window now; recorded so
+          // historical rows stay comparable with new ones.
+          contextWindow: "1m",
           maxTurns: settings.aiMaxTurns,
         };
 

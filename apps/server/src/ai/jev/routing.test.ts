@@ -3,6 +3,7 @@ import { ACP_AGENT_IDS, AUTO_MODEL_SENTINEL, getAgentCapabilities } from "@revv/
 import {
   DEPTH_CONFIDENCE_FLOOR,
   DEPTH_MARGIN_FLOOR,
+  REASONING_EFFORTS,
   type RouteDepthInput,
   routeDepth,
 } from "./routing";
@@ -15,7 +16,7 @@ function input(over: Partial<RouteDepthInput> = {}): RouteDepthInput {
     confidence: 0.9,
     probabilities: { shallow: 0.02, standard: 0.08, deep: 0.9 },
     configuredModel: "claude-sonnet-5",
-    needsWideContext: false,
+    reasoningEffort: "thorough",
     ...over,
   };
 }
@@ -75,15 +76,19 @@ describe("routeDepth", () => {
     }
   });
 
-  it("only widens the context window when the agent has the control and the answer asks", () => {
-    expect(routeDepth(input({ needsWideContext: true }))?.contextWindow).toBe("1m");
-    expect(routeDepth(input({ needsWideContext: false }))?.contextWindow).toBeUndefined();
+  it("carries the answered reasoning effort, not one derived from depth", () => {
+    // Depth and effort are separate questions: a change can be shallow to
+    // follow yet expensive to get wrong.
+    expect(routeDepth(input({ reasoningEffort: "minimal" }))?.thinkingEffort).toBe("low");
+    expect(routeDepth(input({ reasoningEffort: "exhaustive" }))?.thinkingEffort).toBe("max");
   });
 
-  it("pairs a thinking effort the agent actually accepts", () => {
-    const routed = routeDepth(input());
-    const allowed = getAgentCapabilities("claude-code").thinkingEfforts;
-    expect(routed?.thinkingEffort).toBeDefined();
-    if (routed?.thinkingEffort) expect(allowed).toContain(routed.thinkingEffort);
+  it("clamps the effort to a tier the agent actually accepts", () => {
+    for (const effort of REASONING_EFFORTS) {
+      const routed = routeDepth(input({ reasoningEffort: effort }));
+      const allowed = getAgentCapabilities("claude-code").thinkingEfforts;
+      expect(routed?.thinkingEffort).toBeDefined();
+      if (routed?.thinkingEffort) expect(allowed).toContain(routed.thinkingEffort);
+    }
   });
 });

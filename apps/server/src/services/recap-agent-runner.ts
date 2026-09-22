@@ -17,13 +17,7 @@
 // discarded — the prompt instructs the agent not to emit any. Live UI
 // updates come from per-handler SSE emissions (`lede`, `entry`, `phase`).
 
-import type {
-  AcpAgentId,
-  ContextWindow,
-  ProjectRecap,
-  RecapStreamEvent,
-  ThinkingEffort,
-} from "@revv/shared";
+import type { AcpAgentId, ProjectRecap, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { type RecapAcpSessionDeps, runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
@@ -55,7 +49,6 @@ export interface RunRecapAgentParams {
   /** Resolved ACP registry agent id that drives this recap run. */
   readonly acpAgentId: AcpAgentId;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
   /**
    * Server-side working directory the ACP connection is pooled under. Recap
    * doesn't run against a worktree the way walkthrough does; the repo's clone
@@ -115,7 +108,6 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
     acpAgentId: params.acpAgentId,
     modelUsed: params.modelUsed,
     thinkingEffort: params.thinkingEffort,
-    contextWindow: params.contextWindow,
     workingDir: params.repoWorkingDir,
     abortController: params.abortController,
     sessionDeps: params.sessionDeps,

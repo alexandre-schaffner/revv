@@ -789,7 +789,6 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
           cwd: process.cwd(),
           model,
           thinkingEffort: settings.aiThinkingEffort,
-          contextWindow: settings.aiContextWindow,
         }),
       // Provider has its own internal fallback; this catch is
       // belt-and-suspenders for the rare case where the Promise
