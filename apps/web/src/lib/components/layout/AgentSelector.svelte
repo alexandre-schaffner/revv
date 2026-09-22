@@ -1,6 +1,7 @@
 <script lang="ts">
 import { ACP_AGENTS, type AcpAgentId, type AgentStatus } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
+import { onMount } from "svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import {
   Content as PopoverContent,
@@ -25,17 +26,24 @@ let currentId = $derived(resolveChatAgentId(getSettings()));
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");
 let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
-let status = $state(getAgentStatus());
+// Read the shared snapshot through `$derived`, not a `$state` copy: the status
+// is fetched from several places (settings, onboarding, the embedded login),
+// and a snapshot taken at construction would never see those refreshes — the
+// dot would keep rendering a sign-in that has since succeeded.
+let status = $derived(getAgentStatus());
 let currentStatus = $derived(status?.agents[currentId] ?? null);
+
+// The dot is on screen from first paint, long before the popover is opened, so
+// prime the snapshot on mount. Without this it renders "Not checked" grey for a
+// perfectly ready agent until the user happens to open this menu.
+onMount(() => {
+  if (!getAgentStatus()) void fetchAgentStatus();
+});
 
 $effect(() => {
   if (!open) return;
-  void refreshStatus();
+  void fetchAgentStatus();
 });
-
-async function refreshStatus(): Promise<void> {
-  status = await fetchAgentStatus();
-}
 
 function isReady(s: AgentStatus | null | undefined): boolean {
   return !!s?.installed && s.authed;
