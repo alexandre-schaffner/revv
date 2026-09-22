@@ -186,8 +186,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             );
           }),
         );
-      } catch (error) {
-        return handleAppError(error, ctx);
+      } catch (e) {
+        return handleAppError(e, ctx);
       }
     },
     {

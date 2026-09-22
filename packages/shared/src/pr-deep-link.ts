@@ -6,6 +6,7 @@ export interface PullRequestLocator {
 
 const REPOSITORY_FULL_NAME = /^[^/\s]+\/[^/\s]+$/;
 const DECIMAL_INTEGER = /^[1-9]\d*$/;
+const ALLOWED_KEYS = new Set(["host", "repo", "number"]);
 
 function isValidGithubHost(value: string): boolean {
   if (value !== value.trim() || value.length === 0) return false;
@@ -44,10 +45,11 @@ export function parsePullRequestDeepLink(value: string): PullRequestLocator | nu
     return null;
   }
 
-  const allowedKeys = new Set(["host", "repo", "number"]);
+  // `forEach`, not `for…of`: this package's `lib` omits `DOM.Iterable`, so
+  // `URLSearchParams` is not iterable here.
   let hasUnknownKey = false;
   url.searchParams.forEach((_value, key) => {
-    if (!allowedKeys.has(key)) hasUnknownKey = true;
+    if (!ALLOWED_KEYS.has(key)) hasUnknownKey = true;
   });
   if (hasUnknownKey) return null;
 

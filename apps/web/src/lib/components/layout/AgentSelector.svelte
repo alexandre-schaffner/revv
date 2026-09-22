@@ -26,16 +26,13 @@ let currentId = $derived(resolveChatAgentId(getSettings()));
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");
 let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
-// Read the shared snapshot through `$derived`, not a `$state` copy: the status
-// is fetched from several places (settings, onboarding, the embedded login),
-// and a snapshot taken at construction would never see those refreshes — the
-// dot would keep rendering a sign-in that has since succeeded.
+// `$derived`, not a `$state` copy: settings, onboarding and the embedded login
+// all refresh this, and a snapshot taken at construction would never see them.
 let status = $derived(getAgentStatus());
 let currentStatus = $derived(status?.agents[currentId] ?? null);
 
-// The dot is on screen from first paint, long before the popover is opened, so
-// prime the snapshot on mount. Without this it renders "Not checked" grey for a
-// perfectly ready agent until the user happens to open this menu.
+// The dot paints long before the popover is opened, so prime it here — otherwise
+// a ready agent shows "Not checked" grey until the user opens this menu.
 onMount(() => {
   if (!getAgentStatus()) void fetchAgentStatus();
 });

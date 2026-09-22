@@ -304,8 +304,8 @@ export function resumePendingPrDeepLink(): void {
 }
 
 export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<void> {
-  const locator = state.kind === "choose-account" ? state.locator : null;
-  if (!locator) return;
+  if (state.kind !== "choose-account") return;
+  const locator = state.locator;
   state = { kind: "resolving", locator };
   try {
     await switchAccount(account.userId, account.host);
@@ -322,8 +322,8 @@ export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<v
 }
 
 export async function connectPrDeepLinkAccount(clientId: string): Promise<string | null> {
-  const locator = state.kind === "connect-account" ? state.locator : null;
-  if (!locator) return null;
+  if (state.kind !== "connect-account") return null;
+  const locator = state.locator;
   const trimmedClientId = clientId.trim();
   if (locator.githubHost !== "github.com" && !isLikelyGitHubClientId(trimmedClientId)) {
     return GITHUB_CLIENT_ID_HINT;

@@ -90,7 +90,6 @@ $effect(() => {
 
 $effect(() => {
   if (!open || workflow.kind === "resolving") return;
-  workflow.kind;
   void tick().then(() => {
     requestAnimationFrame(() => {
       document.querySelector<HTMLElement>("[data-pr-deep-link-autofocus]")?.focus();
