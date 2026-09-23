@@ -94,6 +94,7 @@ export {
   getRepoContextHandler,
   getWalkthroughStateHandler,
 } from "./read-handler";
+export type { WalkthroughToolJudgments } from "./spec";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
@@ -293,8 +294,18 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
             )
             .get() ?? null)
         : null;
-    const verdict = (advisory?.verdict ?? input.verdict) as Verdict;
-    const confidence = (advisory?.confidence ?? input.confidence) as Confidence;
+    // When the pass seeded this axis, its verdict is the only one there is —
+    // `input.verdict` isn't consulted and isn't asked for. Falling back to
+    // the agent only happens on the no-TypeSafe path, where it never had an
+    // assignment to work from.
+    const verdict = (advisory?.verdict ?? input.verdict ?? null) as Verdict | null;
+    const confidence = (advisory?.confidence ?? input.confidence ?? null) as Confidence | null;
+    if (verdict === null || confidence === null) {
+      result = errorResult(
+        `Error: no verdict has been assigned for '${input.axis}', so rate_axis needs one from you. Call it again with both \`verdict\` and \`confidence\`. (Call get_walkthrough_state to see which axes, if any, were assigned for you.)`,
+      );
+      return;
+    }
 
     // Citation requirement, with the escape hatch that keeps it from
     // deadlocking. Pre-assigned verdicts mean an agent can be handed a
@@ -302,7 +313,20 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
     // rejected forever, burn both auto-continuations, and land in `error`.
     // A dispute is recorded on the row and never changes the verdict — it
     // is also the only agent/advisory disagreement signal left.
-    if (verdict !== "pass" && input.citations.length === 0 && input.disputed !== true) {
+    //
+    // **Gated on `advisory !== null`, deliberately.** The deadlock the hatch
+    // relieves only exists for a verdict the agent didn't choose. On the
+    // agent-authored path it picked the verdict itself, so "I can't cite it"
+    // has an answer that isn't an escape hatch: downgrade to `pass`. Letting
+    // `disputed` through there would hand every agent an opt-out of the
+    // citation requirement — including the majority of users, who never turn
+    // TypeSafe on and for whom `advisory` is always null.
+    // A dispute is a disagreement with an *assigned* verdict, so it is only
+    // meaningful — and only recorded — on the advisory path. On the
+    // agent-authored path the flag is dropped rather than rejected: it isn't
+    // wrong of the agent to send it, it just has nothing to disagree with.
+    const disputed = input.disputed === true && advisory !== null;
+    if (verdict !== "pass" && input.citations.length === 0 && !disputed) {
       result = errorResult(
         advisory === null
           ? `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`
@@ -368,7 +392,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
         details: input.details,
         citations: JSON.stringify(citations),
         blockIds: JSON.stringify(blockIds),
-        disputed: input.disputed === true,
+        disputed,
         createdAt: now,
       })
       .onConflictDoUpdate({
@@ -380,7 +404,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
           details: input.details,
           citations: JSON.stringify(citations),
           blockIds: JSON.stringify(blockIds),
-          disputed: input.disputed === true,
+          disputed,
         },
       })
       .run();
@@ -415,7 +439,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       citations,
       blockIds,
       verdictSource: advisory === null ? "agent" : "advisory",
-      disputed: input.disputed === true,
+      disputed,
     };
     ratingEvent = rating;
   });
@@ -447,6 +471,13 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthroughInput> = async (
   ctx,
 ) => {
+  // Every relevance judgment scheduled during Phase B lands before anything
+  // below counts an issue. Without this the gate could validate an issue set
+  // a retraction is about to change — passing the comment-pairing check on a
+  // concern that no longer exists, or failing it on one about to be
+  // withdrawn. The drain is bounded and degrades to "one issue judged late"
+  // rather than holding the gate open (see `ai/jev/pending.ts`).
+  await ctx.jev.awaitIssueJudgments();
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
     return errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
@@ -549,12 +580,11 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     );
   }
 
-  // Every line-anchored WARNING or CRITICAL issue must have at least one
+  // Every line-anchored concern must have at least one
   // inline comment. The agent's job is `flag_issue` (sidebar card) +
-  // `add_issue_comment` (inline review comment); a warning/critical with no
+  // `add_issue_comment` (inline review comment); a concern with no
   // inline comment is invisible to the coder at the place that matters.
-  // Exempt: severity='info' (nitpicks — no inline noise expected) and
-  // PR-wide issues (file_path / start_line NULL — no anchor possible).
+  // Exempt: PR-wide issues (file_path / start_line NULL — no anchor possible).
   //
   // Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
   // above. Both gates MUST agree, otherwise the orchestrator can mark

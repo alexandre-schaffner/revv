@@ -1,5 +1,5 @@
 <script lang="ts">
-import { AUTO_MODEL_SENTINEL, getAgentCapabilities } from "@revv/shared";
+import { AUTO_SENTINEL, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
@@ -10,7 +10,6 @@ import {
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import { getDefaultModel, type ModelOption } from "$lib/constants/models";
-import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   areModelsLoaded,
   fetchModels,
@@ -20,16 +19,13 @@ import {
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
-import {
-  fetchWalkthroughSizing,
-  getWalkthroughSizing,
-} from "$lib/stores/walkthrough-sizing.svelte";
+import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 
-// The model/context-window surface follows the selected `aiAgent`.
-// Capabilities are the registry's single source of truth.
+// The model surface follows the selected `aiAgent`. Capabilities are the
+// registry's single source of truth.
 let currentId = $derived(resolveChatAgentId(getSettings()));
 let caps = $derived(getAgentCapabilities(currentId));
 // opencode is the only agent whose catalog is fetched live; everything else
@@ -46,40 +42,18 @@ let currentModel = $derived(getSettings()?.aiModel ?? "");
 // auto-model toggle has to be on, and the agent needs a depth ladder the
 // server can route onto. opencode's catalog is fetched live, so there is no
 // static ladder and Auto would be a no-op — see `ai/jev/routing.ts`.
-let autoModelOffered = $derived((getSettings()?.jev?.autoModel ?? false) && !isDynamic);
-let isAuto = $derived(currentModel === AUTO_MODEL_SENTINEL);
+let autoModelOffered = $derived(
+  (getSettings()?.jev?.enabled ?? false) && (getSettings()?.jev?.autoModel ?? false) && !isDynamic,
+);
+let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
 function labelFor(value: string | null): string | null {
   if (!value) return null;
   return fetchedModels.find((m) => m.value === value)?.label ?? value;
 }
 
-/**
- * What Auto actually resolved to on this PR's most recent run.
- *
- * Worth showing even when routing declined and the agent default stood —
- * "Auto · Sonnet 5" tells you the sizing judged this a standard review,
- * which is exactly as informative as an upgrade.
- *
- * Null on a PR that hasn't generated yet, and deliberately not backfilled
- * with the agent default: Auto sizes *this* diff at generation time, so any
- * model named before then would be a guess presented as a fact. The
- * unknown state gets a qualifier of its own instead.
- */
-let selectedPrId = $derived(getSelectedPrId());
-// Tracking the head SHA is what makes a pull re-size: new commits move it,
-// which invalidates the preview for this PR and triggers a fresh ask.
-let selectedHeadSha = $derived(selectedPrId ? (getPrById(selectedPrId)?.headSha ?? null) : null);
-let sizing = $derived(getWalkthroughSizing(selectedPrId, selectedHeadSha));
-
-// Size the PR ahead of generation so the label can name a model rather than
-// going blank. Retries on `pending` are the store's job — the diff cache
-// filling has no client-visible event to wait on.
-$effect(() => {
-  if (!isAuto || selectedPrId === null || selectedHeadSha === null) return;
-  if (sizing !== null) return;
-  void fetchWalkthroughSizing(selectedPrId, selectedHeadSha);
-});
+const selectedSizing = sizingForSelectedPr(() => isAuto && autoModelOffered);
+let sizing = $derived(selectedSizing.sizing);
 
 /**
  * What Auto resolves to for the PR at its *current* head.
@@ -112,7 +86,7 @@ let autoResolvedLabel = $derived.by((): string | null => {
  * to size, so the label stays a bare "Auto" rather than claiming to be
  * working on something.
  */
-let autoSizing = $derived(isAuto && autoResolvedLabel === null && selectedPrId !== null);
+let autoSizing = $derived(isAuto && autoResolvedLabel === null && selectedSizing.pending);
 
 let autoTitle = $derived(
   autoResolvedLabel
@@ -214,7 +188,7 @@ function select(value: string) {
 		{#if autoModelOffered}
 			<button
 				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-				onclick={() => select(AUTO_MODEL_SENTINEL)}
+				onclick={() => select(AUTO_SENTINEL)}
 			>
 				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				<span class="min-w-0 flex-1 truncate text-left">

@@ -17,6 +17,7 @@ import {
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   isAcpAgentId,
+  isAutoSentinel,
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
@@ -270,15 +271,26 @@ export function resolveAcpProcessLaunchById(
  * resolved agent. Guard against that: if the configured id isn't in the agent's
  * catalog, fall back to that agent's default model. opencode's catalog is
  * dynamic, so configured opencode models are taken on trust.
+ *
+ * This is also the single arbiter for {@link AUTO_SENTINEL}: Auto is a request
+ * to be unpinned, so it is collapsed to `undefined` *before* the dynamic-catalog
+ * branch — which takes its argument on trust and would otherwise forward
+ * `"revv:auto"` verbatim into an agent adapter. Callers that have sized the PR
+ * pass the sized model in `sized`; every other launch path (chat, recap,
+ * suggestions) passes nothing and lands on the agent's own default. Every path
+ * that hands a model to an agent must route through here — passing a raw
+ * `settings.aiModel` is the bug this argument exists to prevent.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,
   configuredModel: string | null | undefined,
+  sized?: string | null,
 ): string | undefined {
   const caps = getAgentCapabilities(agent);
-  if (caps.models === "dynamic") return configuredModel ?? getAcpAgentDefaultModel(agent);
-  if (configuredModel && caps.models.some((m) => m.value === configuredModel)) {
-    return configuredModel;
+  const pinned = isAutoSentinel(configuredModel) ? (sized ?? null) : configuredModel;
+  if (caps.models === "dynamic") return pinned ?? getAcpAgentDefaultModel(agent);
+  if (pinned && caps.models.some((m) => m.value === pinned)) {
+    return pinned;
   }
   const defaultModel = getAcpAgentDefaultModel(agent);
   if (caps.models.some((m) => m.value === defaultModel)) return defaultModel;

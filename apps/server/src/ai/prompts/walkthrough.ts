@@ -146,6 +146,24 @@ export function buildExplorationDescription(
   }
 }
 
+/** Human-readable attention tier, for the ranked list and the file headers. */
+function tierLabel(tier: number | null): string {
+  switch (tier) {
+    case 0:
+      return "tier 0 · generated";
+    case 1:
+      return "tier 1 · mechanical";
+    case 2:
+      return "tier 2 · routine";
+    case 3:
+      return "tier 3 · logic";
+    case 4:
+      return "tier 4 · critical";
+    default:
+      return "unscored";
+  }
+}
+
 export function buildWalkthroughPrompt(
   params: {
     pr: {
@@ -172,6 +190,25 @@ export function buildWalkthroughPrompt(
      * behaviour, which is what every run gets when TypeSafe is off.
      */
     assignedRisk?: RiskLevel;
+    /**
+     * Reading order for the changed files, highest attention first, with the
+     * tier the orchestrator scored each at. Present flips the file list from
+     * "here is the diff, triage it yourself" to "here is the diff, already
+     * triaged" — which is the point: that triage decides what gets reviewed
+     * at all, and the agent was making it from paths alone.
+     *
+     * A `null` tier is a file past the scoring cap; it sorts to the bottom
+     * and carries no claim either way.
+     */
+    filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
+    /**
+     * Present when the PR reads as several changes wearing one hat. The
+     * system prompt already asks for a *named* split recommendation; this
+     * tells the agent that the recommendation is warranted and how many
+     * pieces to look for, so it spends its effort naming the seams rather
+     * than deciding whether to mention them.
+     */
+    splitRecommendation?: { readonly pieces: number };
   },
   maxTokenBudget = 40000,
   continuation?: PromptContinuationContext,
@@ -238,9 +275,31 @@ export function buildWalkthroughPrompt(
     );
   }
 
+  // Attention tier per path, when the orchestrator scored them. The files
+  // themselves are still emitted in diff order — reordering the patches would
+  // scramble the mental model a reader builds from a diff — but each header
+  // carries its tier, and the ranked list above tells the agent where to look
+  // first.
+  const tierByPath = new Map<string, number | null>(
+    (params.filePriorities ?? []).map((f) => [f.filename, f.tier]),
+  );
+  const hasRankedFiles = (params.filePriorities?.length ?? 0) > 0;
+  if (params.filePriorities && hasRankedFiles) {
+    lines.push(
+      "This list is already triaged. Each file below carries an attention tier, and these are the files in the order they deserve your attention:",
+      "",
+      ...params.filePriorities.map((f) => `- ${tierLabel(f.tier)} — \`${f.filename}\``),
+      "",
+      "Tier 0 files are generated or vendored: name the category and the count in one line, never a chapter. Spend your chapters on tier 3 and 4. The tier is a given, the same way the risk tier is — you may still find a tier-4 file uninteresting once you read it, but do not start by re-ranking the list.",
+      "",
+    );
+  }
+
   let approxTokens = 0;
   for (const file of params.files) {
-    const header = `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`;
+    const tier = tierByPath.get(file.filename);
+    const tierSuffix = tier === undefined || tier === null ? "" : `, ${tierLabel(tier)}`;
+    const header = `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions}${tierSuffix})`;
     if (file.patch) {
       const patchTokens = file.patch.length / 4;
       if (approxTokens + patchTokens > maxTokenBudget) {
@@ -263,9 +322,22 @@ export function buildWalkthroughPrompt(
       ? "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
       : "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
     params.assignedRisk
-      ? `3. The risk tier for this PR is already set to \`${params.assignedRisk}\` — it is a given, not yours to decide. Do NOT pass \`risk_level\` to \`set_overview\`; a value sent there is ignored. Work to that tier's chapter count and issue budget (see "Risk tiers" in the system prompt). Still triage the changed-files list into substantive and mechanical: generated output — lockfiles, snapshots, \`.d.ts\`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter.`
-      : '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
+      ? `3. The risk tier for this PR is already set to \`${params.assignedRisk}\` — it is a given, not yours to decide. Do NOT pass \`risk_level\` to \`set_overview\`; a value sent there is ignored. Work to that tier's chapter count and issue budget (see "Risk tiers" in the system prompt).${
+          hasRankedFiles
+            ? " The changed-files list is already triaged — work down it in the order given."
+            : " Still triage the changed-files list into substantive and mechanical: generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter."
+        }`
+      : hasRankedFiles
+        ? '3. The changed-files list above is already triaged — work down it in the order given. Size the risk tier on the tier-2-and-above pile only (see "Planning the chapters" in the system prompt).'
+        : '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
   );
+
+  if (params.splitRecommendation) {
+    lines.push(
+      "",
+      `4. This pull request has been judged to carry ${params.splitRecommendation.pieces} independent concerns, and it earns a split recommendation. That call is made — your job is to NAME the seams, concretely and in the author's terms ("three PRs: the migration, the rate limiter, the unrelated lint fix"), never "consider breaking this up". Put the named split in the overview's takeaway line, raise it as a \`warning\` on the \`scope\` axis, and lead the Phase C verdict with it. Then review the pull request in front of you anyway, at the depth its risk deserves — the recommendation is for the author, the review is for whoever has to merge it today.`,
+    );
+  }
 
   if (continuation) {
     lines.push(

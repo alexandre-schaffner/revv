@@ -28,7 +28,6 @@
 // here anymore (doctrine invariant #2).
 
 import type {
-  GenerationProviderConfig,
   RiskLevel,
   Walkthrough,
   WalkthroughGenerationMode,
@@ -39,23 +38,21 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect";
-import { resolveGenerationModel } from "../ai/acp/presets";
 import {
   accumulateTokenUsage,
   addThroughput,
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
 } from "../ai/agent-stream/token-usage";
-import { adjudicateContinuation, classifyFailure } from "../ai/jev/continuation";
-import { scoreIssues } from "../ai/jev/issue-scoring";
-import { resolveJobStartAnswers, routeFromAnswers } from "../ai/jev/job-start";
+import { adjudicateContinuation } from "../ai/jev/continuation";
+import { resolveJobStart } from "../ai/jev/job-start-resolution";
+import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
 import { markAxisAdvisoryUnavailable, runAxisVerdictPass } from "../ai/jev/phase-d-verdicts";
+import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
-import { account } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
-import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import {
@@ -77,21 +74,6 @@ import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
-import {
-  commitExists,
-  diffNameStatusZ,
-  diffNumstat,
-  diffPatchForPath,
-  fetchCommit,
-  redactGitAuth,
-} from "./GitOps";
-import {
-  capPatch,
-  normalizeGitStatus,
-  parseNameStatusZ,
-  parseNumstat,
-  resolveCounts,
-} from "./incremental-diff";
 import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
@@ -104,6 +86,14 @@ import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
+import { tryImportCachedWalkthrough } from "./walkthrough-cache-import";
+import {
+  buildContinuationAdjudicationState,
+  continuationCounts,
+  finishWalkthroughAtBudgetEnd,
+} from "./walkthrough-job-budget";
+import { resolveWalkthroughLaunch, resolveWalkthroughOwner } from "./walkthrough-job-context";
+import { type PromptFile, resolveIncrementalPromptFiles } from "./walkthrough-prompt-files";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -480,6 +470,14 @@ export const WalkthroughJobsLive = Layer.effect(
             return next;
           }),
           unregisterActivityNotifier(walkthroughId),
+          // Phase-B judgment bookkeeping is per-run and ephemeral (see
+          // `ai/jev/pending.ts`). Dropped here rather than left to a timer so
+          // a long-lived server doesn't accumulate a retracted-id set per
+          // walkthrough it ever generated.
+          Effect.sync(() => {
+            forgetPendingJudgments(walkthroughId);
+            forgetProse(walkthroughId);
+          }),
         ],
         { discard: true },
       );
@@ -506,14 +504,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly prHeadSha: string;
       readonly repoFullName: string;
       readonly githubHost: string;
-      readonly files: ReadonlyArray<{
-        readonly filename: string;
-        readonly previousFilename: string | null;
-        readonly status: string;
-        readonly additions: number;
-        readonly deletions: number;
-        readonly patch: string | null;
-      }>;
+      readonly files: ReadonlyArray<PromptFile>;
       readonly partial: PartialSnapshot | null;
       readonly reviewSessionId: string;
       readonly modelUsed: string;
@@ -522,9 +513,8 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly parentWalkthroughId: string | null;
       readonly baseHeadSha: string | null;
       /**
-       * Model/effort/context-window override resolved once at job start from
-       * the TypeSafe depth answer, or `null` to leave the configured model
-       * alone.
+       * Model/effort override resolved once at job start from the TypeSafe
+       * depth answer, or `null` to leave the configured model alone.
        *
        * It lives here rather than being derived per-stream because
        * `buildStreamParams` is reused by `buildContinuationEffect` — deriving
@@ -540,86 +530,28 @@ export const WalkthroughJobsLive = Layer.effect(
        */
       readonly assignedRisk: RiskLevel | null;
       /**
+       * Changed files in the order the orchestrator scored them, highest
+       * attention first, or `null` when the file-priority pass was off or
+       * unavailable. Threaded through the prompt rather than the tool surface
+       * because it shapes the plan the agent makes before its first tool call.
+       */
+      readonly filePriorities: ReadonlyArray<{
+        readonly filename: string;
+        readonly tier: number | null;
+      }> | null;
+      /**
+       * Present when the PR was judged to carry several independent concerns.
+       * Turns the prompt's split guidance from "decide whether to recommend
+       * one" into "name the seams".
+       */
+      readonly splitRecommendation: { readonly pieces: number } | null;
+      /**
        * Whether to adjudicate auto-continuations (and enrich the failure
        * message) for this job. Snapshotted at job start alongside
        * `providerConfig`, so a settings change mid-run can't flip the
        * behaviour halfway through a retry budget.
        */
       readonly adjudicateContinuations: boolean;
-    };
-
-    type PromptFile = ResolvedContext["files"][number];
-    type PromptFilesResult = {
-      readonly files: ReadonlyArray<PromptFile>;
-      readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
-    };
-
-    const buildAuthedRepoUrl = (ctx: ResolvedContext): string =>
-      `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
-
-    const resolveIncrementalPromptFiles = (
-      ctx: ResolvedContext,
-      worktreePath: string,
-    ): Effect.Effect<PromptFilesResult> => {
-      if (ctx.generationMode !== "incremental" || !ctx.baseHeadSha) {
-        return Effect.succeed({ files: ctx.files, diffSource: "full_pr" });
-      }
-      const baseHeadSha = ctx.baseHeadSha;
-
-      return Effect.tryPromise({
-        try: async () => {
-          if (!(await commitExists(worktreePath, baseHeadSha))) {
-            await fetchCommit(worktreePath, buildAuthedRepoUrl(ctx), baseHeadSha);
-          }
-          if (!(await commitExists(worktreePath, baseHeadSha))) {
-            throw new Error(`base commit ${baseHeadSha} is not available locally`);
-          }
-
-          const nameStatus = parseNameStatusZ(
-            await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
-          );
-          // Counts come from git (`--numstat`) in one call, not from scanning
-          // each file's patch body — the latter forces a synchronous multi-MB
-          // split on the event loop for large/generated files.
-          const numstat = parseNumstat(await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha));
-          const files: PromptFile[] = [];
-          for (const file of nameStatus) {
-            let patch: string | null = null;
-            try {
-              const rawPatch = await diffPatchForPath(
-                worktreePath,
-                baseHeadSha,
-                ctx.prHeadSha,
-                file.filename,
-              );
-              patch = capPatch(rawPatch);
-            } catch {
-              patch = null;
-            }
-            const counts = resolveCounts(numstat, file.filename, patch);
-            files.push({
-              filename: file.filename,
-              previousFilename: file.previousFilename,
-              status: normalizeGitStatus(file.status),
-              additions: counts.additions,
-              deletions: counts.deletions,
-              patch,
-            });
-          }
-          return { files, diffSource: "incremental_range" as const };
-        },
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catchAll((cause) => {
-          logError(
-            "walkthrough-jobs",
-            `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${redactGitAuth(
-              cause instanceof Error ? cause.message : String(cause),
-            )}`,
-          );
-          return Effect.succeed({ files: ctx.files, diffSource: "full_pr_fallback" as const });
-        }),
-      );
     };
 
     interface LoopState {
@@ -722,6 +654,8 @@ export const WalkthroughJobsLive = Layer.effect(
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
           ...(ctx.launchOverride ? { launchOverride: ctx.launchOverride } : {}),
           ...(ctx.assignedRisk ? { assignedRisk: ctx.assignedRisk } : {}),
+          ...(ctx.filePriorities ? { filePriorities: ctx.filePriorities } : {}),
+          ...(ctx.splitRecommendation ? { splitRecommendation: ctx.splitRecommendation } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
           },
@@ -815,6 +749,11 @@ export const WalkthroughJobsLive = Layer.effect(
                 data: { tokenUsage: currentTokenUsage },
               }).pipe(Effect.catchAll(() => Effect.void));
 
+              // The tool-level completion gate drains too, but the
+              // orchestrator is the lifecycle owner and must independently
+              // validate a stable issue set before writing `complete`.
+              yield* Effect.promise(() => awaitJudgments(job.walkthroughId));
+
               const dbState = yield* provideDb(
                 walkthroughService.getPartial(
                   ctx.pr.id,
@@ -839,20 +778,6 @@ export const WalkthroughJobsLive = Layer.effect(
                       remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
                     );
                   }
-                  // Score the flagged issues. Hooked here and NOT on the
-                  // cache-import completion below — an imported snapshot was
-                  // already scored upstream, and re-scoring would produce a
-                  // divergent second score set for something meant to be
-                  // reproducible.
-                  //
-                  // `forkDaemon` for the same reason as the cache push: the
-                  // job scope closes right after `returnDone`, and a scoped
-                  // fork would be killed by the finalizer. `emitEvent` still
-                  // works afterwards — it bumps the durable `next_seq` and
-                  // `resolveEventTargets` has a DB-join slow path for exactly
-                  // this case, so the event reaches the client on the global
-                  // stream.
-                  yield* Effect.forkDaemon(scoreIssuesAndBroadcast(job.walkthroughId));
                   yield* emitEvent(job.walkthroughId, {
                     type: "lifecycle:complete",
                     data: {
@@ -864,7 +789,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 }
                 debug(
                   "walkthrough-jobs",
-                  `phase=D but ${missingComments.length} warning/critical issue(s) missing inline comment(s) — falling through to auto-continuation:`,
+                  `phase=D but ${missingComments.length} line-anchored concern(s) are missing inline comment(s) — falling through to auto-continuation:`,
                   missingComments
                     .map((i) => `${i.id}[${i.severity}]@${i.filePath}:${i.startLine}`)
                     .join(", "),
@@ -984,34 +909,15 @@ export const WalkthroughJobsLive = Layer.effect(
             } as const;
           });
 
-        /**
-         * Counters the adjudication reasons over. **Explicitly not content**
-         * — no summaries, no markdown, no patches. Feeding content invites
-         * the model to answer "is this walkthrough good enough?", the exact
-         * question invariant 12 reserves for `complete_walkthrough`. It also
-         * keeps the request around 500 tokens, i.e. free.
-         */
-        const countsOf = (partial: PartialSnapshot | null): Record<string, number> => ({
-          diff_steps: partial?.blocks.length ?? 0,
-          semantic_steps: partial?.semanticSteps.length ?? 0,
-          rated_axes: partial?.ratings.length ?? 0,
-          issues: partial?.issues.length ?? 0,
-          issues_needing_inline_comment: findIssuesMissingInlineComment(db, job.walkthroughId)
-            .length,
-        });
-
-        const adjudicationState = (state: LoopState, partial: PartialSnapshot | null) => ({
-          autoContinuations: state.autoContinuations,
-          maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
-          lastCompletedPhase: partial?.lastCompletedPhase ?? "none",
-          phaseAtLastContinuation: state.phaseAtLastContinuation,
-          counts: countsOf(partial),
-          countsAtLastContinuation: state.countsAtLastContinuation,
-          terminalReason: state.terminalReason,
-          elapsedMs: Date.now() - state.startedAt,
-          totalTokens:
-            state.accumulatedTokenUsage.inputTokens + state.accumulatedTokenUsage.outputTokens,
-        });
+        const missingInlineCommentCount = () =>
+          findIssuesMissingInlineComment(db, job.walkthroughId).length;
+        const adjudicationState = (state: LoopState, partial: PartialSnapshot | null) =>
+          buildContinuationAdjudicationState({
+            state,
+            partial,
+            maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+            missingInlineCommentCount: missingInlineCommentCount(),
+          });
 
         const consumeGenerator = (state: LoopState): Effect.Effect<ProcessResult, AiError> =>
           Effect.gen(function* () {
@@ -1030,89 +936,24 @@ export const WalkthroughJobsLive = Layer.effect(
             return result;
           });
 
-        /**
-         * Terminate the run at the end of its budget.
-         *
-         * Called from two places — real budget exhaustion, and a
-         * continuation the adjudication declined to spend. Because it
-         * re-reads the persisted state and re-runs the phase-D check, a
-         * walkthrough that is *actually finished* still takes the success
-         * branch whichever way it got here. Adjudication structurally cannot
-         * force an error onto a row that is genuinely done.
-         */
         const finishAtBudgetEnd = (
           state: LoopState,
           opts: { readonly stoppedEarlyBecause: string | null },
         ): Effect.Effect<void, AiError> =>
-          Effect.gen(function* () {
-            const finalState = yield* provideDb(
+          finishWalkthroughAtBudgetEnd({
+            state,
+            stoppedEarlyBecause: opts.stoppedEarlyBecause,
+            adjudicationEnabled: ctx.adjudicateContinuations,
+            maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+            walkthroughId: job.walkthroughId,
+            awaitPendingJudgments: Effect.promise(() => awaitJudgments(job.walkthroughId)),
+            loadFinalState: provideDb(
               walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
-            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
-            const phaseD = finalState?.lastCompletedPhase === "D";
-            const missingCommentsAtExhaustion = phaseD
-              ? findIssuesMissingInlineComment(db, job.walkthroughId)
-              : [];
-            if (phaseD && missingCommentsAtExhaustion.length > 0) {
-              debug(
-                "walkthrough-jobs",
-                `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
-              );
-            }
-            // Exhausted: legacy SSE clients still expect `done`; new
-            // clients get `lifecycle:complete` only if the row actually
-            // reached phase D with no missing comments. When the
-            // exhaustion forced an error, emit `lifecycle:error` instead
-            // so new clients see a terminal failure rather than a fake
-            // success.
-            const currentTokenUsage = state.accumulatedTokenUsage;
-            if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-              const base = phaseD
-                ? "Generation finished but warning/critical issues lack inline comments."
-                : opts.stoppedEarlyBecause !== null
-                  ? `Generation stopped early: ${opts.stoppedEarlyBecause}.`
-                  : "Generation exhausted auto-continuation budget before reaching phase D.";
-              // Cosmetic enrichment only — a clause appended to the string,
-              // never a different status. Failure keeps today's message.
-              const hint = yield* classifyFailure({
-                enabled: ctx.adjudicateContinuations,
-                state: adjudicationState(state, finalState),
-              }).pipe(Effect.provideService(JevService, jevService));
-              const message = hint === null ? base : `${base} ${hint}`;
-              yield* setStatus(job.walkthroughId, "error", { errorMessage: message });
-              yield* emitEvent(job.walkthroughId, {
-                type: "lifecycle:error",
-                data: {
-                  code: "AutoContinuationExhausted",
-                  message,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-            } else {
-              // The row really did reach phase D with every required
-              // inline comment. Without this the status stays
-              // `generating` forever: `completed_at` is never stamped,
-              // `getPartial` keeps returning it as a partial, and
-              // `resumePending()` re-launches a fully-generated
-              // walkthrough on every boot until the resume-attempt cap
-              // marks it `error`. Ordering matches the happy path above.
-              yield* setStatus(job.walkthroughId, "complete", {
-                tokenUsage: currentTokenUsage,
-              });
-              yield* emitEvent(job.walkthroughId, {
-                type: "lifecycle:complete",
-                data: {
-                  walkthroughId: job.walkthroughId,
-                  tokenUsage: currentTokenUsage,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-            }
-            yield* emitEvent(job.walkthroughId, {
-              type: "done",
-              data: {
-                walkthroughId: job.walkthroughId,
-                tokenUsage: currentTokenUsage,
-              },
-            }).pipe(Effect.catchAll(() => Effect.void));
-          });
+            ).pipe(Effect.catchAll(() => Effect.succeed(null))),
+            countMissingInlineComments: missingInlineCommentCount,
+            setStatus: (status, options) => setStatus(job.walkthroughId, status, options),
+            emitEvent: (event) => emitEvent(job.walkthroughId, event),
+          }).pipe(Effect.provideService(JevService, jevService));
 
         const runWithAutoContinuation = (state: LoopState): Effect.Effect<void, AiError> =>
           Effect.gen(function* () {
@@ -1182,7 +1023,10 @@ export const WalkthroughJobsLive = Layer.effect(
             // Snapshot what "before this continuation" looked like, so the
             // next adjudication has something to compare against.
             state.phaseAtLastContinuation = continuation.partial.lastCompletedPhase;
-            state.countsAtLastContinuation = countsOf(continuation.partial);
+            state.countsAtLastContinuation = continuationCounts(
+              continuation.partial,
+              missingInlineCommentCount(),
+            );
             debug(
               "walkthrough-jobs",
               `auto-continuation ${state.autoContinuations}/${MAX_AUTO_CONTINUATIONS}: lastCompletedPhase=${continuation.partial.lastCompletedPhase}`,
@@ -1524,130 +1368,39 @@ export const WalkthroughJobsLive = Layer.effect(
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
 
-        // ── TypeSafe job-start judgment ─────────────────────────────
-        // One request answers the risk tier (the agent's issue budget) and
-        // the depth tier (the model). Both are skipped when:
-        //
-        //   • neither hook is enabled;
-        //   • this is a resume — the decision is already durable on the row,
-        //     and re-asking would cost money for an answer that could flip
-        //     and re-key the ACP pool mid-run;
-        //   • the team cache already holds a snapshot for this head SHA.
-        //     Without the probe, every cache-hit job would burn a call for a
-        //     walkthrough that never runs an agent at all (the import path
-        //     returns below without ever reaching the generator).
-        const cacheWillHit =
-          mode === "reviewer" &&
-          settings.cache.enabled &&
-          settings.cache.downloadsEnabled &&
-          partial === null
-            ? yield* remoteCache.probe(repo.fullName, meta.headSha)
-            : false;
-        const wantsJudgment =
-          settings.jev.enabled &&
-          (settings.jev.risk || settings.jev.autoModel) &&
-          params.trigger !== "resume" &&
-          !cacheWillHit;
-        // Cached on (prId, headSha): when the review page already asked for a
-        // model preview, this is a hit and costs nothing on the critical
-        // path. `resolveJobStartAnswers` never fails — an unavailable Jev
-        // degrades to the agent's own risk tier and the configured model.
-        const answers = wantsJudgment
-          ? yield* resolveJobStartAnswers(pr.id, meta.headSha, { pr, files, commits }).pipe(
-              Effect.provideService(JevService, jevService),
-              Effect.provideService(CacheService, cacheService),
-              Effect.provideService(DbService, { db }),
-            )
-          : null;
-        // The tier is only authoritative when the risk hook itself is on. With
-        // only `autoModel` enabled we still asked for it (same request, no
-        // extra cost) but the agent stays the author of its own tier.
-        const assignedRisk = settings.jev.risk ? (answers?.riskLevel ?? null) : null;
-        const launchOverride =
-          answers === null
-            ? null
-            : routeFromAnswers(answers, {
-                agent,
-                configuredModel: settings.aiModel,
-                autoModel: settings.jev.autoModel,
-              });
+        const startPlan = yield* resolveJobStart({
+          prId: pr.id,
+          headSha: meta.headSha,
+          state: { pr, files, commits },
+          settings,
+          agent,
+          trigger: params.trigger,
+          cacheProbe:
+            mode === "reviewer" &&
+            settings.cache.enabled &&
+            settings.cache.downloadsEnabled &&
+            partial === null
+              ? remoteCache.probe(repo.fullName, meta.headSha)
+              : Effect.succeed(false),
+        }).pipe(
+          Effect.provideService(JevService, jevService),
+          Effect.provideService(CacheService, cacheService),
+          Effect.provideService(DbService, { db }),
+        );
+        const { answers, assignedRisk, filePriorities, launchOverride } = startPlan;
 
-        // Guard the shared `aiModel` against the generation agent: the chat
-        // bottom bar may have left a model id for a chat-only agent (e.g. cursor)
-        // that this agent can't use — fall back to its default if so. The
-        // override goes through the same guard, so a routed model this agent
-        // can't run degrades to its default rather than launching a broken
-        // session.
-        const freshModelUsed =
-          resolveGenerationModel(agent, launchOverride?.model ?? settings.aiModel) ??
-          (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
-        const modelUsed =
-          params.trigger === "resume"
-            ? freshModelUsed
-            : partial?.modelUsed && partial.modelUsed !== "unknown"
-              ? partial.modelUsed
-              : freshModelUsed;
-
-        // Snapshot the AI provider config at job start. We persist this
-        // alongside `modelUsed` so a mid-job settings change cannot
-        // corrupt the recorded config — the row reflects what was
-        // actually running, and the same JSON gets exported to the
-        // remote cache as `providerConfig`.
-        const providerConfigForJob: GenerationProviderConfig = {
-          provider:
-            agent === "opencode" ? "opencode" : agent === "codex" ? "codex" : "claude-agent-sdk",
-          model: modelUsed,
-          thinkingEffort: settings.aiThinkingEffort ?? null,
-          // Revv always runs at the full context window now; recorded so
-          // historical rows stay comparable with new ones.
-          contextWindow: "1m",
+        const { modelUsed, providerConfig: providerConfigForJob } = resolveWalkthroughLaunch({
+          agent,
+          trigger: params.trigger,
+          configuredModel: settings.aiModel,
+          routedModel: launchOverride?.model,
+          priorModel: partial?.modelUsed,
+          configuredEffort: settings.aiThinkingEffort,
+          routedEffort: launchOverride?.thinkingEffort,
           maxTurns: settings.aiMaxTurns,
-        };
+        });
 
-        // Resolve `GeneratedBy` + owning account id from the OAuth account
-        // that owns the repo. Best-effort — if rows are missing we skip
-        // attribution rather than fail the job. The `accountId` flows into
-        // `ActiveJob` so `emitEvent` can target `Broadcaster.broadcastToAccount`
-        // without re-querying the DB on every event.
-        const accountResolution = (() => {
-          const repoRow = db
-            .select({ accountId: repositories.accountId })
-            .from(repositories)
-            .where(eq(repositories.id, repo.id))
-            .get();
-          if (!repoRow) return { accountId: "", generatedBy: undefined };
-          const acc = db
-            .select({
-              accountId: account.accountId,
-              githubLogin: account.githubLogin,
-              avatarUrl: account.avatarUrl,
-            })
-            .from(account)
-            .where(eq(account.id, repoRow.accountId))
-            .get();
-          if (!acc?.githubLogin) {
-            return { accountId: repoRow.accountId, generatedBy: undefined };
-          }
-          const githubUserId = Number(acc.accountId);
-
-          // Resolve avatar content from remote_users.
-          const avatarContent =
-            db
-              .select({ avatarContent: remoteUsers.avatarContent })
-              .from(remoteUsers)
-              .where(eq(remoteUsers.login, acc.githubLogin))
-              .get()?.avatarContent ?? null;
-
-          return {
-            accountId: repoRow.accountId,
-            generatedBy: {
-              githubUserId: Number.isFinite(githubUserId) ? githubUserId : 0,
-              githubLogin: acc.githubLogin,
-              displayName: null,
-              avatarContent,
-            },
-          };
-        })();
+        const accountResolution = resolveWalkthroughOwner(db, repo.id);
         const { generatedBy, accountId: ownerAccountId } = accountResolution;
 
         // Idempotent row creation (upsert on the new unique index).
@@ -1710,59 +1463,23 @@ export const WalkthroughJobsLive = Layer.effect(
           ),
         );
 
-        // ── Remote cache probe ────────────────────────────────────────
-        // After the row exists (so subscribers see a consistent target)
-        // we ask the team cache whether a snapshot for this `(repo,
-        // headSha)` is available. On hit, we import + flip status to
-        // 'complete' and skip the agent fiber entirely. On miss / any
-        // failure, fall through to the usual generation path. This is
-        // safe for `partial !== null` paths too — the importer wipes
-        // any leftover partial children inside its transaction.
-        if (
-          mode === "reviewer" &&
-          settings.cache.enabled &&
-          settings.cache.downloadsEnabled &&
-          partial === null
-        ) {
-          const snapshotOpt = yield* remoteCache.fetch(repo.fullName, meta.headSha);
-          if (Option.isSome(snapshotOpt)) {
-            const importResult = yield* provideDb(
-              snapshotImporter.import({
-                walkthroughId,
-                snapshot: snapshotOpt.value,
-              }),
-            ).pipe(Effect.either);
-            if (importResult._tag === "Right") {
-              yield* setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE });
-              // New clients see the cache-hit marker + lifecycle:complete on
-              // the global SSE bus and re-hydrate via REST `/current` to get
-              // the imported content. (A future iteration can replay the
-              // imported rows as content events through emitEvent — see the
-              // plan's §4.10 — so clients render inline without a follow-up
-              // fetch.)
-              yield* emitEvent(walkthroughId, {
-                type: "lifecycle:cache-hit",
-                data: { walkthroughId, source: "remote" },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              yield* emitEvent(walkthroughId, {
-                type: "lifecycle:complete",
-                data: {
-                  walkthroughId,
-                  tokenUsage: ZERO_TOKEN_USAGE,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              debug(
-                "walkthrough-jobs",
-                `cache hit wt=${walkthroughId} pr=${pr.id} sha=${meta.headSha} — skipping agent`,
-              );
-              return { walkthroughId };
-            }
-            logError(
-              "walkthrough-jobs",
-              `cache import failed wt=${walkthroughId} — falling through to agent: ${importResult.left.reason}`,
-            );
-          }
-        }
+        const importedFromCache = yield* tryImportCachedWalkthrough({
+          enabled:
+            mode === "reviewer" &&
+            settings.cache.enabled &&
+            settings.cache.downloadsEnabled &&
+            partial === null,
+          walkthroughId,
+          prId: pr.id,
+          repoFullName: repo.fullName,
+          headSha: meta.headSha,
+          fetchSnapshot: remoteCache.fetch(repo.fullName, meta.headSha),
+          importSnapshot: (snapshot) =>
+            provideDb(snapshotImporter.import({ walkthroughId, snapshot })),
+          markComplete: setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE }),
+          emitEvent: (event) => emitEvent(walkthroughId, event),
+        });
+        if (importedFromCache) return { walkthroughId };
 
         // On user-triggered resume, sync the stored modelUsed to current settings
         // so the DB reflects which agent is actually running this continuation.
@@ -1814,6 +1531,8 @@ export const WalkthroughJobsLive = Layer.effect(
             baseHeadSha,
             launchOverride,
             assignedRisk,
+            filePriorities,
+            splitRecommendation: startPlan.splitRecommendation,
             adjudicateContinuations: settings.jev.enabled && settings.jev.adjudicateContinuations,
           },
           params.trigger,
@@ -2141,39 +1860,6 @@ export const WalkthroughJobsLive = Layer.effect(
 
           return { kind: "delivered" as const, seq };
         }),
-      );
-
-    /**
-     * Run the issue-scoring pass and broadcast the result as one event for
-     * all issues — the pass writes them in a single transaction, and a
-     * per-issue event would make the "N filtered" count flicker its way to
-     * the final value.
-     *
-     * Commit first, broadcast second (invariant 8): the scores are already
-     * durable when this emits, and a subscriber that misses the event
-     * reconciles by re-reading the walkthrough.
-     */
-    const scoreIssuesAndBroadcast = (walkthroughId: string): Effect.Effect<void> =>
-      scoreIssues(db, walkthroughId).pipe(
-        Effect.provideService(JevService, jevService),
-        Effect.provideService(SettingsService, settingsService),
-        Effect.flatMap((scores) =>
-          scores.length === 0
-            ? Effect.void
-            : emitEvent(walkthroughId, {
-                type: "advisory:issue-scores",
-                data: { walkthroughId, scores: [...scores] },
-              }).pipe(Effect.asVoid),
-        ),
-        Effect.catchAllCause((cause) =>
-          Effect.sync(() => {
-            logError(
-              "walkthrough-jobs",
-              `issue scoring failed for ${walkthroughId}:`,
-              Cause.pretty(cause),
-            );
-          }),
-        ),
       );
 
     const issueSessionToken = (walkthroughId: string) => sessionStore.issue({ walkthroughId });

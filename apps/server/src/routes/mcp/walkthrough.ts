@@ -6,7 +6,19 @@
 
 import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tools";
+import { judgeArtifact as judgeArtifactQuality } from "../../ai/jev/artifact-quality";
+import { applyJudgment, judgeIssue as judgeIssueRelevance } from "../../ai/jev/issue-relevance";
+import { awaitJudgments, trackJudgment, wasRetracted } from "../../ai/jev/pending";
+import {
+  claimProseSample,
+  judgeProse,
+  postProseAdvice,
+  takeProseAdvice,
+} from "../../ai/jev/prose-voice";
+import type {
+  WalkthroughToolContext,
+  WalkthroughToolJudgments,
+} from "../../ai/providers/walkthrough-tools";
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
@@ -64,9 +76,65 @@ async function resolveContext(
     );
   };
 
+  // Every Jev hook the Phase-B tools use, resolved through AppRuntime here so
+  // the handlers stay plain async functions. Each one collapses to "no
+  // opinion" on failure: a defect in a dependency must never turn into a
+  // failed tool call, because the pre-Jev behaviour is always a valid outcome.
+  const jev: WalkthroughToolJudgments = {
+    scheduleIssueJudgment: (issueId, candidate) => {
+      trackJudgment(
+        walkthroughId,
+        AppRuntime.runPromise(
+          judgeIssueRelevance(db, walkthroughId, issueId, candidate).pipe(
+            Effect.flatMap((judgment) =>
+              judgment === null
+                ? Effect.void
+                : Effect.sync(() =>
+                    applyJudgment(db, walkthroughId, issueId, candidate, judgment, {
+                      emit,
+                      broadcastThread: (threadId) =>
+                        broadcastThreadEvent({ type: "thread:deleted", data: { threadId } }),
+                    }),
+                  ),
+            ),
+          ),
+        ),
+      );
+    },
+    awaitIssueJudgments: () => awaitJudgments(walkthroughId),
+    issueRetracted: (issueId) => wasRetracted(walkthroughId, issueId),
+    judgeArtifact: (html, context) =>
+      AppRuntime.runPromise(judgeArtifactQuality(html, context)).catch((err: unknown) => {
+        logError(
+          "mcp-walkthrough-route",
+          `artifact craft bar crashed for ${walkthroughId}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return { failed: [], reject: false };
+      }),
+    scheduleProseCheck: (markdown, chapterTitle) => {
+      // The sample budget is claimed synchronously so two blocks written back
+      // to back can't both take the last slot.
+      if (!claimProseSample(walkthroughId)) return;
+      trackJudgment(
+        walkthroughId,
+        AppRuntime.runPromise(
+          judgeProse(markdown, chapterTitle).pipe(
+            Effect.flatMap((advice) =>
+              Effect.sync(() => {
+                if (advice !== null) postProseAdvice(walkthroughId, advice);
+              }),
+            ),
+          ),
+        ),
+      );
+    },
+    takeProseAdvice: () => takeProseAdvice(walkthroughId),
+  };
+
   return {
     ok: true,
-    ctx: { db, walkthroughId, emit, broadcastThreadEvent },
+    ctx: { db, walkthroughId, emit, broadcastThreadEvent, jev },
     meta: { walkthroughId },
   };
 }
@@ -90,6 +158,10 @@ const PHASE_TOOL_META: Record<string, PhaseToolMeta> = {
   add_semantic_step: {
     activityKind: "tool.mcp",
     summary: "Writing walkthrough step...",
+  },
+  flag_issue: {
+    activityKind: "tool.mcp",
+    summary: "Flagging a concern...",
   },
   rate_axis: {
     activityKind: "tool.mcp",

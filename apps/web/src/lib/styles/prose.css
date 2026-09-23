@@ -222,9 +222,9 @@
   /* Starting size only. A diagram's natural width is set by its lane or
      participant count and routinely dwarfs the reading column, so the action
      measures the nearest `[data-prlens-breakout]` ancestor and overrides
-     `width`/`max-width` inline to grow it rightwards into that room. These
-     values are what a diagram gets before that runs, and everywhere outside a
-     breakout host. */
+     `width`/`max-width`/`margin-left` inline to grow it into that room, centred
+     on the column. These values are what a diagram gets before that runs, and
+     everywhere outside a breakout host. */
   width: 100%;
   max-width: 100%;
   overflow-x: auto;

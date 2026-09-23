@@ -46,7 +46,14 @@ export type JevState = { [key: string]: JsonValue };
  * per-hook latency attribution — the job-start call is the only one on a
  * user-visible critical path, so distinguishing it matters.
  */
-export type JevCallLabel = "job-start" | "phase-c" | "issues" | "continuation" | "connection-test";
+export type JevCallLabel =
+  | "job-start"
+  | "phase-c"
+  | "issues"
+  | "artifact"
+  | "prose"
+  | "continuation"
+  | "connection-test";
 
 export interface JevRequest<Q extends Questions> {
   readonly label: JevCallLabel;

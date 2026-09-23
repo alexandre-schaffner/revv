@@ -3,7 +3,10 @@ import {
   type AcpAgentId,
   type AgentStatusReport,
   getAgentCapabilities,
-  isAutoModelSentinel,
+  isAutoSentinel,
+  mergeSettingsUpdate,
+  type SettingsUpdate,
+  type ThinkingEffort,
   type UserSettings,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -16,7 +19,6 @@ import {
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
 import { authHeaders } from "$lib/utils/session-token";
-import { mergeSettingsUpdate, type SettingsUpdate } from "./settings-merge";
 
 /** The agent that drives chat / walkthrough / recap (single registry id). */
 export function resolveChatAgentId(s: UserSettings | null): AcpAgentId {
@@ -97,7 +99,7 @@ export async function fetchSettings(): Promise<void> {
   }
 }
 
-export type { SettingsUpdate } from "./settings-merge";
+export type { SettingsUpdate } from "@revv/shared";
 
 type UpdateSettingsOptions = {
   /**
@@ -149,6 +151,7 @@ export async function updateSettings(
   // The sizing itself is cached server-side and is not re-paid for.
   if (
     "aiModel" in partial ||
+    "aiThinkingEffort" in partial ||
     "aiAgent" in partial ||
     partial.jev?.autoModel !== undefined ||
     partial.jev?.risk !== undefined ||
@@ -240,7 +243,7 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
   // "Auto" is agent-independent — it says "don't pin a model", which stays
   // true after a switch. Clobbering it with the new agent's default would
   // silently turn the preference off.
-  if (isAutoModelSentinel(getSettings()?.aiModel)) {
+  if (isAutoSentinel(getSettings()?.aiModel)) {
     // Except where the new agent can't route: opencode's catalog is fetched
     // live, so Auto there would leave generation on a stale pin forever.
     if (caps.models === "dynamic") {
@@ -262,7 +265,11 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
 
   if (caps.thinkingEfforts.length > 0) {
     const cur = getSettings()?.aiThinkingEffort;
-    if (!cur || !caps.thinkingEfforts.includes(cur)) {
+    // "Auto" survives the switch for the same reason the model sentinel does:
+    // it says "don't pin an effort", which stays true under any agent. Unlike
+    // the model there is no dynamic-catalog exception — every agent with a
+    // thinking-effort knob can be sized onto its own ladder.
+    if (!isAutoSentinel(cur) && (!cur || !caps.thinkingEfforts.includes(cur as ThinkingEffort))) {
       const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
       if (fallback) update.aiThinkingEffort = fallback;
     }

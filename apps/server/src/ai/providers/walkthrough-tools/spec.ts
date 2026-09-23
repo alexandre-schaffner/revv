@@ -15,6 +15,8 @@ import type {
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import type { ArtifactVerdict } from "../../jev/artifact-quality";
+import type { IssueCandidate } from "../../jev/contracts";
 import {
   ISSUE_COMMENT_CONTRACT,
   PLAIN_TEXT_FIELD,
@@ -84,6 +86,46 @@ export interface WalkthroughToolContext {
    * AFTER the DB commit so subscribers never see an event without a row.
    */
   readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
+  /**
+   * The Jev-backed judgments the Phase-B tools defer to, injected as
+   * closures rather than service handles so the handlers stay free of Effect
+   * dependencies (the same reason `emit` is a callback).
+   *
+   * Every one of them degrades to "no opinion" — off, unconfigured,
+   * unreachable — and the handler's behaviour without an opinion is exactly
+   * what it was before these existed.
+   */
+  readonly jev: WalkthroughToolJudgments;
+}
+
+export interface WalkthroughToolJudgments {
+  /**
+   * Schedule the relevance + severity judgment for a just-committed concern.
+   * **Returns immediately**; the judgment lands behind the agent and may
+   * retract the row. See `ai/jev/issue-relevance.ts`.
+   */
+  readonly scheduleIssueJudgment: (issueId: string, candidate: IssueCandidate) => void;
+  /**
+   * Block until every scheduled judgment for this walkthrough has landed.
+   * Called by `complete_walkthrough` so the gate never validates an issue set
+   * that is about to change under it.
+   */
+  readonly awaitIssueJudgments: () => Promise<void>;
+  /** Whether a judgment already retracted this issue id. */
+  readonly issueRetracted: (issueId: string) => boolean;
+  /**
+   * Hold an artifact to the craft bar. **Awaited**, unlike the issue
+   * judgment: a gate that rejects has to answer before the write, and
+   * artifacts are rare enough that the round trip doesn't matter.
+   */
+  readonly judgeArtifact: (
+    html: string,
+    context: { readonly chapterTitle: string; readonly annotation: string | null },
+  ) => Promise<ArtifactVerdict>;
+  /** Schedule a voice check on a markdown block. Returns immediately. */
+  readonly scheduleProseCheck: (markdown: string, chapterTitle: string) => void;
+  /** Drain any voice advice that landed since the last tool call. */
+  readonly takeProseAdvice: () => string | null;
 }
 
 export interface WalkthroughToolResult extends McpToolResult {
@@ -441,15 +483,25 @@ const rateAxisSchema = z.object({
     .describe(
       "Which scorecard axis this rating is for. correctness: logic errors, off-by-ones, race conditions, unhandled errors. scope: is the PR doing one thing, or has it absorbed drive-by refactors / unrelated formatting — several unrelated concerns is at least a concern, with the concrete split named in details. tests: new behavior has tests, no suspiciously deleted/weakened assertions. clarity: naming, function length, nesting depth, comment quality, dead code, magic numbers. safety: touches auth, payments, migrations, deletes, public APIs, shared packages (a risk-surface signal, not a quality score). consistency: follows existing codebase patterns (layering, module boundaries, conventions). api_changes: breaking changes to routes, schemas, event payloads, exported types. performance: N+1 queries, unbounded loops, sync work in hot paths, missing indexes. description: does the PR explain why (not just what), link issues, call out deployment concerns.",
     ),
+  // Optional rather than required. When `get_walkthrough_state` returns
+  // `assignedVerdicts`, the call has already been made and this argument is
+  // ignored outright — asking for it anyway would spend the agent's
+  // deliberation on a decision it does not own, and invite prose that argues
+  // for a verdict the row does not carry. It stays in the schema because the
+  // no-TypeSafe path (off, unconfigured, unreachable) still needs it.
   verdict: z
     .enum(["pass", "concern", "blocker"])
+    .nullable()
+    .optional()
     .describe(
-      "pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed. When get_walkthrough_state reports the axis verdicts are already assigned, this argument is ignored — write the reasoning for the verdict you were given.",
+      "OMIT when get_walkthrough_state returned `assignedVerdicts` — the verdict is already decided and anything sent here is discarded; your job is the reasoning for the verdict listed there. REQUIRED otherwise. pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed.",
     ),
   confidence: z
     .enum(["low", "medium", "high"])
+    .nullable()
+    .optional()
     .describe(
-      "How confident you are in this verdict. Use low when you couldn't find the caller / adjacent tests / relevant config — honest low confidence is more useful than a confident wrong rating.",
+      "OMIT when `assignedVerdicts` was returned — it carries the confidence too. REQUIRED otherwise: how confident you are in this verdict. Use low when you couldn't find the caller / adjacent tests / relevant config — honest low confidence is more useful than a confident wrong rating.",
     ),
   rationale: z
     .string()
@@ -483,7 +535,7 @@ const rateAxisSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Set only when this axis was handed a non-pass verdict you genuinely cannot cite — it stands in for the citation requirement and must come with a rationale explaining the absence. It is recorded as a disagreement signal and never changes the verdict. Do not use it to avoid looking for evidence.",
+      "Set ONLY when this axis was HANDED a non-pass verdict (get_walkthrough_state listed it under assignedVerdicts) that you genuinely cannot cite. There it stands in for the citation requirement and must come with a rationale explaining the absence; it is recorded as a disagreement signal and never changes the verdict. On an axis whose verdict you chose yourself it is ignored, and the citation requirement still applies — cite the evidence or downgrade to pass. Do not use it to avoid looking for evidence.",
     ),
 });
 

@@ -4,8 +4,10 @@
 // agent run makes, including resumes.
 
 import type {
+  Confidence,
   RatingAxis,
   RiskLevel,
+  Verdict,
   WalkthroughBlock,
   WalkthroughPipelinePhase,
   WalkthroughState,
@@ -69,7 +71,12 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     .all();
 
   const ratingRows = ctx.db
-    .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
+    .select({
+      axis: walkthroughRatings.axis,
+      rationale: walkthroughRatings.rationale,
+      verdict: walkthroughRatings.verdict,
+      confidence: walkthroughRatings.confidence,
+    })
     .from(walkthroughRatings)
     .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
     .all();
@@ -231,6 +238,19 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     ratedAxes: ratingRows
       .filter((r) => r.rationale.trim().length > 0)
       .map((r) => r.axis as RatingAxis),
+    // The verdicts themselves, not just the fact that they exist. Without
+    // this the agent is told "the call has been made for you" and given no
+    // way to find out what it was — so it would write a rationale for the
+    // verdict it would have picked, which the handler then overwrites. The
+    // prose and the verdict have to come from the same place.
+    assignedVerdicts:
+      row.axisAdvisoryState === "ready"
+        ? ratingRows.map((r) => ({
+            axis: r.axis as RatingAxis,
+            verdict: r.verdict as Verdict,
+            confidence: r.confidence as Confidence,
+          }))
+        : null,
     issues,
     issueCount: issues.length,
     issuesNeedingInlineComment,
@@ -244,7 +264,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   const stateJson = JSON.stringify(state);
   const text =
     issuesNeedingInlineComment.length > 0
-      ? `WARNING: ${issuesNeedingInlineComment.length} line-anchored issue(s) at severity 'warning' or 'critical' have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
+      ? `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
       : stateJson;
 
   return {

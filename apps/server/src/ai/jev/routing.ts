@@ -1,22 +1,33 @@
-// ── Depth → launch config ────────────────────────────────────────────────────
+// ── Sizing answers → launch config ───────────────────────────────────────────
 //
-// Jev never names a model. It answers an abstract depth tier and a
-// wide-context yes/no; this module maps those onto a concrete
-// `(model, thinkingEffort)` for the *selected* agent. An
-// external API must not be able to emit a model id the agent can't run — and
-// the mapping is a local table, so a new model in the registry is a
-// deliberate edit here rather than something the API can reach for.
+// Jev never names a model. It answers an abstract depth tier and an abstract
+// effort tier; this module maps each onto something concrete for the
+// *selected* agent. An external API must not be able to emit a model id the
+// agent can't run — and the mapping is a local table, so a new model in the
+// registry is a deliberate edit here rather than something the API can reach
+// for.
+//
+// The two answers are routed **independently**. Each has its own opt-in
+// (`revv:auto` in the respective setting), its own gating, and its own slot
+// in the override, so neither can silently suppress the other.
 
-import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
-import { clampThinkingEffort, getAgentCapabilities, isAutoModelSentinel } from "@revv/shared";
+import type { AcpAgentId, ThinkingEffort, ThinkingEffortSetting } from "@revv/shared";
+import { clampThinkingEffort, getAgentCapabilities, isAutoSentinel } from "@revv/shared";
 
 /** The abstract tier Jev answers. Ordered — index is the ladder position. */
 export const REVIEW_DEPTHS = ["shallow", "standard", "deep"] as const;
 export type ReviewDepth = (typeof REVIEW_DEPTHS)[number];
 
-/** What the orchestrator threads into the agent launch when it overrides. */
+/**
+ * What the orchestrator threads into the agent launch when it overrides.
+ *
+ * **Both fields are independently optional.** Depth and effort are separate
+ * questions with separate confidences and separate opt-ins, so a pinned
+ * model, an agent without a depth ladder, or an ambiguous depth answer must
+ * not take the reasoning-effort answer down with it.
+ */
 export interface GenerationLaunchOverride {
-  readonly model: string;
+  readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
 }
 
@@ -33,8 +44,9 @@ export const DEPTH_MARGIN_FLOOR = 0.15;
 
 /**
  * Per-agent depth ladder, lowest tier first. An agent absent from this table
- * is a deliberate no-op: `routeDepth` returns `null` and the configured model
- * stands.
+ * is a deliberate no-op: the model half resolves to `null` and the configured
+ * model stands. The effort half is unaffected — it does not consult this
+ * table at all.
  *
  *   • **opencode** exposes 75+ models fetched live (`caps.models === "dynamic"`),
  *     so there is no static table to write. Documented in the Settings UI.
@@ -80,7 +92,7 @@ function ladderIndex(agent: AcpAgentId, model: string | null | undefined): numbe
   return found === -1 ? null : found;
 }
 
-export interface RouteDepthInput {
+export interface RouteSizingInput {
   readonly agent: AcpAgentId;
   readonly depth: ReviewDepth;
   /** Calibrated confidence in `depth`, from the choice answer. */
@@ -89,19 +101,28 @@ export interface RouteDepthInput {
   readonly probabilities: Readonly<Record<string, number>>;
   /**
    * The model the user has configured. A real model id is a *floor*: the
-   * override may raise it, never lower it. {@link AUTO_MODEL_SENTINEL} means
+   * override may raise it, never lower it. {@link AUTO_SENTINEL} means
    * the user declined to pin one, so there is no floor and the routed tier
    * applies outright — including a downgrade to a cheaper model.
    */
   readonly configuredModel: string | null | undefined;
+  /**
+   * The effort the user has configured. {@link AUTO_SENTINEL} is the
+   * opt-in: anything else is a pin and is left strictly alone. Unlike the
+   * model there is no "raise but never lower" middle ground — a pinned effort
+   * is a direct instruction about how much thinking to buy, and second-
+   * guessing it upward would be spending the user's money against their
+   * stated preference.
+   */
+  readonly configuredEffort: ThinkingEffortSetting | null | undefined;
   /** Jev's reasoning-effort answer, clamped to the agent's own ladder. */
   readonly reasoningEffort: ReasoningEffort;
 }
 
 /**
- * Resolve a launch override, or `null` to leave the configured model alone.
+ * Resolve the model half. `null` means "leave the configured model alone".
  *
- * Returns `null` — meaning "don't override" — when:
+ * Returns `null` when:
  *   • the agent has no depth ladder (see {@link DEPTH_LADDERS});
  *   • confidence or the runner-up margin is below the floor;
  *   • a pinned model is at or above the routed tier.
@@ -111,10 +132,10 @@ export interface RouteDepthInput {
  * under-powered model on an intricate one produces a review the user stops
  * trusting. So a low-confidence answer and a "this could be shallower" answer
  * both resolve to the same thing — leave the pinned model alone. Only when
- * the user has explicitly declined to pin one ({@link AUTO_MODEL_SENTINEL})
+ * the user has explicitly declined to pin one ({@link AUTO_SENTINEL})
  * does a downgrade become theirs to have asked for.
  */
-export function routeDepth(input: RouteDepthInput): GenerationLaunchOverride | null {
+function routeModel(input: RouteSizingInput): string | null {
   const ladder = DEPTH_LADDERS[input.agent];
   if (!ladder) return null;
 
@@ -122,7 +143,7 @@ export function routeDepth(input: RouteDepthInput): GenerationLaunchOverride | n
   if (margin(input.probabilities) < DEPTH_MARGIN_FLOOR) return null;
 
   const targetIndex = REVIEW_DEPTHS.indexOf(input.depth);
-  if (!isAutoModelSentinel(input.configuredModel)) {
+  if (!isAutoSentinel(input.configuredModel)) {
     const currentIndex = ladderIndex(input.agent, input.configuredModel);
     // An off-ladder pinned model (a delisted id, or one chosen deliberately
     // from outside the ladder) is left alone: there's no way to tell whether
@@ -135,12 +156,42 @@ export function routeDepth(input: RouteDepthInput): GenerationLaunchOverride | n
   // Belt and braces against the table drifting from the registry: a model
   // the agent no longer lists must never reach the launch.
   if (caps.models !== "dynamic" && !caps.models.some((m) => m.value === model)) return null;
+  return model;
+}
 
+/**
+ * Resolve the effort half. `null` means "leave the configured effort alone".
+ *
+ * Deliberately gated on nothing but the opt-in. No depth ladder is consulted
+ * — every agent with a thinking-effort knob can take this, including
+ * opencode, codex and cursor, which have no model ladder to route on. No
+ * confidence floor either: the floor on the model side exists to protect a
+ * *pin*, and under {@link AUTO_SENTINEL} there is no pin to protect.
+ * An uncertain answer is still a better basis than a constant.
+ */
+function routeEffort(input: RouteSizingInput): ThinkingEffort | null {
+  if (!isAutoSentinel(input.configuredEffort)) return null;
   // Clamped, not filtered: an agent that tops out below the answered tier
   // should get its strongest available tier rather than nothing, which is
   // what "as much thinking as this agent allows" means.
-  const effort = clampThinkingEffort(input.agent, EFFORT_TIERS[input.reasoningEffort]);
-  return { model, ...(effort ? { thinkingEffort: effort } : {}) };
+  return clampThinkingEffort(input.agent, EFFORT_TIERS[input.reasoningEffort]) ?? null;
+}
+
+/**
+ * Resolve a launch override, or `null` when neither half applies.
+ *
+ * The two halves are decided independently and either can be absent — a PR
+ * can be routed to a bigger model while the user keeps their pinned effort,
+ * or sized to `max` thinking on an agent that has no model ladder at all.
+ */
+export function routeSizing(input: RouteSizingInput): GenerationLaunchOverride | null {
+  const model = routeModel(input);
+  const thinkingEffort = routeEffort(input);
+  if (model === null && thinkingEffort === null) return null;
+  return {
+    ...(model !== null ? { model } : {}),
+    ...(thinkingEffort !== null ? { thinkingEffort } : {}),
+  };
 }
 
 /** Gap between the top two probabilities; `1` when there's only one label. */

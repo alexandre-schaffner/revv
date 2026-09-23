@@ -57,8 +57,8 @@ describe("shallowEntryEqual", () => {
     expect(entries.get("pr-1")).toBe(entry);
   });
 
-  // Regression guard for `setIssueScores` / the `advisory:issue-scores`
-  // reducer. Both apply a delta across the issue list, and the obvious
+  // Regression guard for the `issue` reducer's score stamp. It applies a
+  // delta across the issue list, and the obvious
   // implementation — walk the array, assign the new fields — is silently
   // wrong: the freeze is shallow, so mutating an *element* neither throws
   // nor changes the array reference, and the update is reported as a no-op

@@ -65,6 +65,14 @@ function ctxFor(db: Db): WalkthroughToolContext {
       events.push(e);
     },
     broadcastThreadEvent: () => {},
+    jev: {
+      scheduleIssueJudgment: () => {},
+      awaitIssueJudgments: () => Promise.resolve(),
+      issueRetracted: () => false,
+      judgeArtifact: () => Promise.resolve({ failed: [], reject: false }),
+      scheduleProseCheck: () => {},
+      takeProseAdvice: () => null,
+    },
   };
 }
 
@@ -141,6 +149,42 @@ describe("rate_axis advisory gate", () => {
     // The dispute is recorded and the verdict stands.
     expect(row?.disputed).toBe(true);
     expect(row?.verdict).toBe("concern");
+  });
+
+  it("rejects a disputed uncited axis when no pass ran", async () => {
+    // The hatch exists to relieve a deadlock over a verdict the agent did not
+    // choose. On the agent-authored path there is no such deadlock — it can
+    // downgrade to `pass` — so `disputed` must not become a way around the
+    // citation requirement for the majority of users, who never enable
+    // TypeSafe and for whom every axis takes this path.
+    const db = seed(null);
+    const res = await rateAxisHandler(
+      ctxFor(db),
+      rating({ axis: "safety", verdict: "concern", citations: [], disputed: true }),
+    );
+    expect(res.isError).toBe(true);
+    expect(String(res.content?.[0]?.text)).toContain("requires at least one citation");
+  });
+
+  it("drops disputed on the agent-authored path rather than recording it", async () => {
+    // Nothing to disagree with when the agent picked the verdict itself.
+    const db = seed(null);
+    const res = await rateAxisHandler(
+      ctxFor(db),
+      rating({
+        axis: "safety",
+        verdict: "concern",
+        citations: [{ file_path: "a.ts", start_line: 1, end_line: 2, note: null }],
+        disputed: true,
+      }),
+    );
+    expect(res.isError).toBeFalsy();
+    const row = db
+      .select()
+      .from(walkthroughRatings)
+      .where(eq(walkthroughRatings.axis, "safety"))
+      .get();
+    expect(row?.disputed).toBe(false);
   });
 
   it("still rejects an uncited non-pass axis that isn't disputed", async () => {

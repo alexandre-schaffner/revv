@@ -16,19 +16,18 @@ const BREAKOUT_HOST = "[data-prlens-breakout]";
  * How far past the reading column a diagram may reach, as a multiple of that
  * column's width.
  *
- * 1.5 is the walkthrough grid read back as a ratio: the content column is 820px
- * and the annotation rail ends 1240px from its left edge (820 + 40 gap + 380
- * rail), so a diagram at the cap stops flush with the rightmost furniture on
- * the page and never pokes into the gutter beyond it. Expressed as a ratio
- * rather than as 1240px because the cap then holds in the stacked layout and in
- * any other breakout host, and it stops tracking the gutter, which grows
- * without bound as the window widens.
+ * 1.5 is half a column of overhang, which the diagram splits evenly either side
+ * of the column — a quarter-column of bleed left and right. Past that a diagram
+ * stops reading as an illustration of the text it sits in and starts reading as
+ * its own spread. Expressed as a ratio rather than in pixels so the cap holds in
+ * the stacked layout and in any other breakout host, instead of tracking one
+ * grid's gutters, which grow without bound as the window widens.
  */
 const MAX_BREAKOUT_RATIO = 1.5;
 
 /**
- * Grow a diagram rightwards out of its reading column, into the room its host
- * has going spare.
+ * Grow a diagram out of its reading column, into the room its host has going
+ * spare, centred on the column it came from.
  *
  * The walkthrough lays content out on a six-track grid whose gutters are sized
  * by `min()`/`max()` against the viewport, so on a wide window the 820px text
@@ -38,10 +37,15 @@ const MAX_BREAKOUT_RATIO = 1.5;
  * whole drawing, lettering included, down. Prose keeps its measure; the diagram
  * takes the rest.
  *
- * It grows from its own left edge rather than centring in the host: every other
- * block on the page — prose, code, diffs — starts on the column's left margin,
- * and a diagram centred in a wider host sits inset from all of them, reading as
- * misaligned rather than as generous.
+ * The overhang is split evenly either side rather than hung entirely off the
+ * right. A diagram is the one block on the page whose width is decided by its
+ * own content instead of by the column, so its edges land wherever its lane
+ * count puts them; anchored left, the right edge floats free of every other
+ * edge on the page and the block reads as having slipped sideways. Centred, the
+ * two overhangs are equal and the diagram reads as deliberately wider than the
+ * text, which is what it is. Whatever one side cannot take — a narrow gutter, a
+ * stacked layout — the other absorbs, so the breakout degrades to the old
+ * left-anchored growth rather than to no growth at all.
  *
  * The room it may take is bounded twice over — by the host, and by
  * `MAX_BREAKOUT_RATIO` — because a genuinely wide diagram would otherwise take
@@ -60,21 +64,26 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   const host = container.closest<HTMLElement>(BREAKOUT_HOST);
   if (host === null || host === container) return;
 
-  // Measure the diagram where it naturally sits, not where a previous pass put it.
+  // Measure the diagram where it naturally sits, not where a previous pass put
+  // it — the offset included, or the next pass measures its own displacement.
   container.style.removeProperty("width");
   container.style.removeProperty("max-width");
+  container.style.removeProperty("margin-left");
 
   const hostStyle = getComputedStyle(host);
   const hostBox = host.getBoundingClientRect();
+  const hostLeft = hostBox.left + Number.parseFloat(hostStyle.paddingLeft);
   const hostRight = hostBox.right - Number.parseFloat(hostStyle.paddingRight);
 
   const box = container.getBoundingClientRect();
   if (box.width <= 0) return;
 
-  // The left edge stays put, so the room available is whatever lies between it
-  // and the host's inner right edge.
-  const room = hostRight - box.left;
-  if (!Number.isFinite(room) || room <= 0) return;
+  // Room past each edge of the column, floored at 0: a host narrower than the
+  // column on one side offers nothing there, it does not owe the other side.
+  const roomLeft = Math.max(box.left - hostLeft, 0);
+  const roomRight = Math.max(hostRight - box.right, 0);
+  if (!Number.isFinite(roomLeft) || !Number.isFinite(roomRight)) return;
+  if (roomLeft + roomRight <= 0) return;
 
   // The SVG scales to the container's content box, so the box has to carry the
   // diagram's natural width plus whatever the frame costs.
@@ -87,11 +96,22 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
 
   // Never past natural size — an SVG blown up beyond it just looks oversized —
   // never past the host, and never past the cap.
-  const width = Math.min(room, box.width * MAX_BREAKOUT_RATIO, naturalWidth + frame);
+  const width = Math.min(
+    box.width + roomLeft + roomRight,
+    box.width * MAX_BREAKOUT_RATIO,
+    naturalWidth + frame,
+  );
   if (width <= box.width) return;
+
+  // Half the overhang to the left, unless the left gutter is too shallow to
+  // take it (clamped down) or the right one is too shallow to take its own
+  // share (pushed up, so the left makes up the difference).
+  const overhang = width - box.width;
+  const shift = Math.min(Math.max(overhang / 2, overhang - roomRight), roomLeft);
 
   container.style.width = `${Math.round(width)}px`;
   container.style.maxWidth = "none";
+  if (shift > 0) container.style.marginLeft = `${-Math.round(shift)}px`;
 }
 
 function decodeSource(encoded: string): string | null {
@@ -176,8 +196,19 @@ export const prlensDiagrams: Action<HTMLElement, ResolvedTheme | undefined> = (n
       if (node.contains(diagram)) applyBreakout(diagram, naturalWidth);
       else naturalWidths.delete(diagram);
     }
+    // Drop a host once no diagram we still track resolves to it — a host is an
+    // *ancestor* of `node`, so it can never be tested with `node.contains(...)`:
+    // that unobserved every host on the first callback, and the diagrams then
+    // kept whatever width the layout had at that instant. Opening a pane after
+    // that left them sized for a column that no longer existed, hanging off the
+    // edge of the reading area.
+    const live = new Set<HTMLElement>();
+    for (const diagram of naturalWidths.keys()) {
+      const host = diagram.closest<HTMLElement>(BREAKOUT_HOST);
+      if (host !== null) live.add(host);
+    }
     for (const host of observedHosts) {
-      if (node.contains(host)) continue;
+      if (live.has(host)) continue;
       resizeObserver.unobserve(host);
       observedHosts.delete(host);
     }

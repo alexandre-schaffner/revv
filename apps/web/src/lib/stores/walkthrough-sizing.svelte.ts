@@ -8,19 +8,10 @@
 // `(prId, headSha, diffFingerprint)`, sharing it with the generation path —
 // so asking here is the same TypeSafe call moved earlier, not an extra one.
 
-import type { RiskLevel, ThinkingEffort } from "@revv/shared";
+import type { WalkthroughSizing } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
-
-export type WalkthroughSizing =
-  | { status: "off" }
-  | { status: "pending" }
-  | {
-      status: "ready";
-      riskLevel: RiskLevel | null;
-      model: string | null;
-      thinkingEffort: ThinkingEffort | null;
-    };
 
 /**
  * Keyed on `(prId, headSha)`, not `prId`.
@@ -49,6 +40,48 @@ export function getWalkthroughSizing(
 ): WalkthroughSizing | null {
   if (prId === null || headSha === null) return null;
   return sizings[cacheKey(prId, headSha)] ?? null;
+}
+
+/**
+ * Reactive selected-PR sizing shared by the model and effort selectors.
+ *
+ * `active` is read inside the effect so callers can include their complete
+ * feature gate. This prevents a saved Auto sentinel from polling after the
+ * TypeSafe master switch is turned off.
+ */
+export function sizingForSelectedPr(active: () => boolean) {
+  let prId = $derived(getSelectedPrId());
+  let headSha = $derived(prId ? (getPrById(prId)?.headSha ?? null) : null);
+  let sizing = $derived(getWalkthroughSizing(prId, headSha));
+  let pending = $derived.by(
+    () =>
+      active() &&
+      prId !== null &&
+      (sizing === null ||
+        (sizing.status === "pending" &&
+          headSha !== null &&
+          (attempts.get(cacheKey(prId, headSha)) ?? 0) < MAX_PENDING_RETRIES)),
+  );
+
+  $effect(() => {
+    if (!active() || prId === null || headSha === null || sizing !== null) return;
+    void fetchWalkthroughSizing(prId, headSha);
+  });
+
+  return {
+    get prId(): string | null {
+      return prId;
+    },
+    get headSha(): string | null {
+      return headSha;
+    },
+    get sizing(): WalkthroughSizing | null {
+      return sizing;
+    },
+    get pending(): boolean {
+      return pending;
+    },
+  };
 }
 
 /**

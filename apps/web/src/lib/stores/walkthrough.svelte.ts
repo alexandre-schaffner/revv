@@ -362,23 +362,6 @@ export function getSentiment(): string | null {
 export function getLastCompletedPhase(): WalkthroughPipelinePhase {
   return _active?.lastCompletedPhase ?? "none";
 }
-export function getIsSuperseded(): boolean {
-  return _active?.superseded ?? false;
-}
-
-export function markWalkthroughStale(prId: string): void {
-  // Called from a `$effect` (AppShell's new-commit watcher). The early return
-  // leaves the cloned entry untouched, so `updateEntry`'s no-op dirty-check
-  // skips the `store.entries` write — that is what stops the effect from
-  // re-invalidating on its own output (`effect_update_depth_exceeded`).
-  updateEntry(prId, (entry) => {
-    if (!entry.doneReceived || entry.superseded) return;
-    entry.superseded = true;
-    entry.isStreaming = false;
-    entry.liveGeneration = false;
-    entry.streamError = null;
-  });
-}
 export function getSource(): "local" | "remote" {
   return _active?.source ?? "local";
 }
@@ -812,18 +795,6 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           entry.source = "remote";
           entry.walkthroughId = event.data.walkthroughId;
           break;
-        case "advisory:issue-scores": {
-          // Delta payload: only the listed issues change, and only their
-          // score fields. Cloned rather than mutated in place —
-          // `updateEntry` freezes nested field references and throws on an
-          // in-place write.
-          const byId = new Map(event.data.scores.map((s) => [s.issueId, s]));
-          entry.issues = entry.issues.map((i) => {
-            const scored = byId.get(i.id);
-            return scored ? { ...i, advisoryScore: scored.score, lowSignal: scored.lowSignal } : i;
-          });
-          break;
-        }
         case "lifecycle:edited":
           // No state change — the inner block/issue/etc. event lands in the
           // same stream as a separate envelope (with its own seq). This

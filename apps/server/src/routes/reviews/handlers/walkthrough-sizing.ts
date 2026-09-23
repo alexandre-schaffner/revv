@@ -1,36 +1,10 @@
-import { AUTO_MODEL_SENTINEL, type RiskLevel, type ThinkingEffort } from "@revv/shared";
+import { AUTO_SENTINEL, type WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
 import { AppRuntime } from "../../../runtime";
 import { DiffCacheService } from "../../../services/DiffCache";
 import { PrContextService } from "../../../services/PrContext";
 import { SettingsService } from "../../../services/Settings";
-
-type WalkthroughSizing =
-  /** Nothing to size — neither the risk nor the auto-model hook is on. */
-  | { readonly status: "off" }
-  /** A hook is on, but the diff isn't cached yet, so there is nothing to size. */
-  | { readonly status: "pending" }
-  | {
-      readonly status: "ready";
-      /**
-       * Tier a review of this PR would be sized to. Null when the risk hook
-       * is off, in which case the agent decides its own tier mid-run and
-       * showing anything here would be a guess.
-       */
-      readonly riskLevel: RiskLevel | null;
-      /**
-       * Model this PR would launch with. Null when auto-model isn't in play
-       * or routing declined, in which case the configured model stands.
-       */
-      readonly model: string | null;
-      /**
-       * Reasoning effort sized for this PR, already clamped to the selected
-       * agent's ladder. Null on the same terms as {@link model} — the two
-       * are decided together.
-       */
-      readonly thinkingEffort: ThinkingEffort | null;
-    };
 
 /**
  * GET /api/reviews/:id/walkthrough/sizing
@@ -57,13 +31,19 @@ export function getWalkthroughSizingHandler(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-      // Auto-model only means anything when a model isn't pinned; the risk
-      // tier is useful either way. Both read the same cached answers, so
-      // either hook alone is enough to make the call worth making.
-      const wantsModel =
-        settings?.jev.autoModel === true && settings.aiModel === AUTO_MODEL_SENTINEL;
+      // Three independent reasons to size, all reading the same cached
+      // answers — so any one of them alone is enough to make the call worth
+      // making. Model and effort each only mean something when that half
+      // isn't pinned; the risk tier is useful either way.
+      const autoSizing = settings?.jev.autoModel === true;
+      const wantsModel = autoSizing && settings?.aiModel === AUTO_SENTINEL;
+      const wantsEffort = autoSizing && settings?.aiThinkingEffort === AUTO_SENTINEL;
       const wantsRisk = settings?.jev.risk === true;
-      if (settings === null || !settings.jev.enabled || (!wantsModel && !wantsRisk)) {
+      if (
+        settings === null ||
+        !settings.jev.enabled ||
+        (!wantsModel && !wantsEffort && !wantsRisk)
+      ) {
         return { status: "off" as const };
       }
 
@@ -96,13 +76,12 @@ export function getWalkthroughSizingHandler(
       const agent = yield* settingsSvc.resolveAgent().pipe(Effect.orElseSucceed(() => null));
       if (agent === null) return { status: "pending" as const };
 
-      const override = wantsModel
-        ? routeFromAnswers(answers, {
-            agent,
-            configuredModel: settings.aiModel,
-            autoModel: true,
-          })
-        : null;
+      const override = routeFromAnswers(answers, {
+        agent,
+        configuredModel: settings.aiModel,
+        configuredEffort: settings.aiThinkingEffort,
+        autoSizing,
+      });
       return {
         status: "ready" as const,
         // Only authoritative when the risk hook is on — otherwise the agent

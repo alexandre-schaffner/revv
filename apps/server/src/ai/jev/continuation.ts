@@ -13,6 +13,7 @@
 import { Effect } from "effect";
 import { debug } from "../../logger";
 import { JevService } from "../../services/Jev";
+import { optionalJev } from "./optional";
 import { buildContinuationState, type ContinuationInput } from "./state";
 
 /**
@@ -20,10 +21,9 @@ import { buildContinuationState, type ContinuationInput } from "./state";
  *
  * **No `"complete"` arm and no `"extend"` arm.** Invariant 12 reserves
  * completion for `complete_walkthrough` plus the orchestrator, and invariant
- * 9 fixes the retry budget. Making both type-level properties means a future
- * edit that tried to widen either would not compile, rather than passing
- * review and quietly moving a terminal state. Jev can spend the existing
- * budget better; it cannot change the budget or the outcomes.
+ * 9 fixes the retry budget. Both are type-level here, so widening either is a
+ * compile error. Jev can spend the existing budget better; it cannot change
+ * the budget or the outcomes.
  */
 export type ContinuationVerdict =
   | { readonly kind: "proceed" }
@@ -73,14 +73,11 @@ export function adjudicateContinuation(
   if (!input.enabled) return Effect.succeed(PROCEED);
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    const result = yield* jev
-      .ask({
+    const result = yield* optionalJev(
+      "continuation adjudication",
+      jev.ask({
         label: "continuation",
         timeoutMs: CONTINUATION_TIMEOUT_MS,
-        // Counters only, never content. Feeding summaries or markdown here
-        // invites the model to answer "is this walkthrough good enough?",
-        // which is exactly the question invariant 12 reserves for
-        // `complete_walkthrough`. This is a scheduling decision.
         state: buildContinuationState(input),
         questions: {
           progress_since_last: {
@@ -96,13 +93,13 @@ export function adjudicateContinuation(
             criteria: FINISH_CRITERIA,
           },
         },
-      })
-      .pipe(Effect.either);
+      }),
+    );
 
-    if (result._tag === "Left") return PROCEED;
+    if (result === null) return PROCEED;
 
-    const progress = result.right.answers.progress_since_last;
-    const finish = result.right.answers.will_next_turn_finish;
+    const progress = result.answers.progress_since_last;
+    const finish = result.answers.will_next_turn_finish;
     const doomed =
       progress.choice === "none" &&
       finish.choice === "unlikely" &&
@@ -148,8 +145,9 @@ export function classifyFailure(input: {
   if (!input.enabled) return Effect.succeed(null);
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    const result = yield* jev
-      .ask({
+    const result = yield* optionalJev(
+      "failure classification",
+      jev.ask({
         label: "continuation",
         timeoutMs: FAILURE_CLASSIFY_TIMEOUT_MS,
         state: buildContinuationState(input.state),
@@ -161,10 +159,10 @@ export function classifyFailure(input: {
             criteria: FAILURE_CRITERIA,
           },
         },
-      })
-      .pipe(Effect.either);
-    if (result._tag === "Left") return null;
-    const cause = result.right.answers.cause;
+      }),
+    );
+    if (result === null) return null;
+    const cause = result.answers.cause;
     return cause.choice === "unknown" ? null : FAILURE_HINT[cause.choice];
   });
 }

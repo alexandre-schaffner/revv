@@ -112,8 +112,7 @@ export type AiError =
   | AiGenerationError
   | AiNotConfiguredError
   | OpencodeNotSelectedError
-  | OpencodeUnhealthyError
-  | JevUnavailable;
+  | OpencodeUnhealthyError;
 
 export class ReviewError extends Data.TaggedError("ReviewError")<{
   readonly message: string;

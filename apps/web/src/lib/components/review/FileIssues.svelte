@@ -3,7 +3,11 @@ import IssueCard from "$lib/components/walkthrough/IssueCard.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { getIssuesForFile } from "$lib/stores/walkthrough.svelte";
-import { groupIssuesBySeverity, partitionBySignal } from "$lib/utils/walkthrough-issues";
+import {
+  groupIssuesBySeverity,
+  partitionBySignal,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
 
 interface Props {
   filePath: string;
@@ -17,8 +21,7 @@ let { filePath }: Props = $props();
 // Changes panel, both of which do show the count.
 const issues = $derived(
   partitionBySignal(getIssuesForFile(filePath), {
-    hideLowSignal:
-      (getSettings()?.jev?.issueScoring ?? false) && (getSettings()?.jev?.hideLowSignal ?? true),
+    hideLowSignal: shouldHideLowSignal(getSettings()),
   }).shown,
 );
 const issueGroups = $derived(groupIssuesBySeverity(issues));

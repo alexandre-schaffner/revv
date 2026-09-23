@@ -6,7 +6,7 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getReviewMode } from "$lib/stores/review.svelte";
+import { getIsPullingCommit, getReviewMode, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
@@ -74,11 +74,39 @@ const genActionState = $derived.by((): GenActionState | null => {
 });
 
 /** When chat is streaming, treat it as an in-flight action so the
- *  destructive buttons are disabled with a contextual tooltip. */
-const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
-const combinedDisabledTitle = $derived(
-  chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
+ *  destructive buttons are disabled with a contextual tooltip. The diff
+ *  refresh that opens `handleRegenerate`'s stale branch counts too: it runs
+ *  before `regenerate` takes the pending slot, so without it the pill stays
+ *  live through the whole pull and reads as if the click did nothing. */
+const pullingCommit = $derived(getIsPullingCommit(prId));
+const combinedPendingAction = $derived(
+  chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
 );
+const combinedDisabledTitle = $derived(
+  chatStreaming
+    ? "Chat edit in progress. Wait for it to finish before regenerating."
+    : pullingCommit
+      ? "Fetching the new commits…"
+      : undefined,
+);
+
+/**
+ * The stale pill's primary action reviews the commits that made this
+ * walkthrough stale, so it has to refresh the diff first — otherwise the
+ * new review lands while the diff tab still renders the old head, the Pull
+ * button stays lit, and the user is told to act on the same commits twice.
+ * `reviewLatestCommit` is the same pull-then-review path the tab-side Pull
+ * button feeds; `complete` keeps the plain regenerate (nothing to pull).
+ */
+const isStale = $derived(genActionState?.kind === "stale");
+
+function handleRegenerate(): void {
+  if (isStale) {
+    void reviewLatestCommit(prId, selectedMode);
+    return;
+  }
+  void regenerateWalkthrough(prId, selectedMode);
+}
 </script>
 
 {#if genActionState}
@@ -103,7 +131,7 @@ const combinedDisabledTitle = $derived(
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId, selectedMode)}
         onGenerate={() => generateWalkthrough(prId, selectedMode)}
-        onRegenerate={() => regenerateWalkthrough(prId, selectedMode)}
+        onRegenerate={handleRegenerate}
         onRegenerateFromScratch={() => regenerateWalkthroughFromScratch(prId)}
       />
 

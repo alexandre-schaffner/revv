@@ -33,7 +33,6 @@ import {
   getPendingWalkthroughBlockJump,
   getReviewMode,
   jumpToDiffLine,
-  reviewLatestCommit,
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
@@ -49,7 +48,6 @@ import {
   getGeneratedBy,
   getIsLiveGeneration,
   getIsStreaming,
-  getIsSuperseded,
   getIssues,
   getLastCompletedPhase,
   getLastWalkthroughEventAt,
@@ -91,7 +89,11 @@ import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
-import { groupIssuesBySeverityWithIndex, partitionBySignal } from "$lib/utils/walkthrough-issues";
+import {
+  groupIssuesBySeverityWithIndex,
+  partitionBySignal,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
 import IssueCard from "./IssueCard.svelte";
 import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
@@ -122,14 +124,9 @@ const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
 const allIssues = $derived(getIssues());
 // Low-signal issues are split out, not dropped: the count is always
-// rendered and the disclosure holds the rest. `hideLowSignal` is only
-// honoured while scoring itself is on, so turning scoring off restores
-// the full list without the user also having to find this toggle.
+// rendered and the disclosure holds the rest.
 const issueSignal = $derived(
-  partitionBySignal(allIssues, {
-    hideLowSignal:
-      (getSettings()?.jev?.issueScoring ?? false) && (getSettings()?.jev?.hideLowSignal ?? true),
-  }),
+  partitionBySignal(allIssues, { hideLowSignal: shouldHideLowSignal(getSettings()) }),
 );
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
@@ -153,8 +150,6 @@ const sentiment = $derived(getSentiment());
 const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : "");
 // Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
 const lastCompletedPhase = $derived(getLastCompletedPhase());
-// Newer commit invalidated this walkthrough mid-render.
-const superseded = $derived(getIsSuperseded());
 // Attribution + cache-source — drives the mono footer (matches the recap
 // detail footer pattern) shown under the walkthrough body. Leads with the
 // originating user when available, falls back to the model name, then trails
@@ -302,7 +297,6 @@ let hydrating = $state(true);
 let hydratedForMode: WalkthroughMode | null = $state(null);
 let lastStreamErrorToast: string | null = null;
 let lastCloneErrorToast: string | null = null;
-let lastSupersededToastPrId: string | null = null;
 
 $effect(() => {
   void loadReviewRounds(prId, selectedMode);
@@ -349,26 +343,6 @@ $effect(() => {
     id: `repo-clone-error-${cloneRepoId ?? prId}`,
     description: cloneError,
     duration: 8000,
-  });
-});
-
-$effect(() => {
-  if (!isActive || !superseded) {
-    if (!superseded) lastSupersededToastPrId = null;
-    return;
-  }
-
-  if (lastSupersededToastPrId === prId) return;
-  lastSupersededToastPrId = prId;
-
-  toast.warning("This walkthrough is outdated", {
-    id: `walkthrough-superseded-${prId}`,
-    description: "The PR has new commits since this review was generated.",
-    action: {
-      label: "Review new commits",
-      onClick: () => reviewLatestCommit(prId, selectedMode),
-    },
-    duration: Number.POSITIVE_INFINITY,
   });
 });
 

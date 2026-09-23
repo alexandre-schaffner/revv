@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { UserSettings } from "@revv/shared";
-import { mergeSettingsUpdate, type SettingsUpdate } from "./settings-merge";
+import { mergeSettingsUpdate, type SettingsUpdate, type UserSettings } from "@revv/shared";
 
 const CURRENT: UserSettings = {
   id: "default",
@@ -30,6 +29,10 @@ const CURRENT: UserSettings = {
     risk: false,
     verdicts: true,
     issueScoring: true,
+    issueSeverity: true,
+    filePriority: true,
+    artifactQuality: true,
+    proseVoice: true,
     hideLowSignal: true,
     adjudicateContinuations: false,
   },

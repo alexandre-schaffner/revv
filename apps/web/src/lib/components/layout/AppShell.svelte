@@ -32,7 +32,7 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import { getPrWalkthroughStatus, markWalkthroughStale } from "$lib/stores/walkthrough.svelte";
+import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
@@ -71,6 +71,14 @@ const showRcActions = $derived(
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
 // first successful fetch, suppressing the signal on fresh visits.
 //
+// Scoped to the *diff*, and to the Pull button only. It deliberately says
+// nothing about whether the walkthrough is outdated: the diff's loaded SHA is
+// a per-tab fetch artifact, not the SHA the walkthrough was generated at, and
+// conflating the two marked freshly-generated walkthroughs as stale the
+// moment the user reviewed new commits without also refetching the diff.
+// Walkthrough staleness comes from the server (`/current`'s `stale`,
+// `lifecycle:superseded`, and the review-rounds `hasNewCommits`).
+//
 // Closed and merged PRs are excluded: their head is final, so there is
 // nothing to pull. Without this a merged PR whose archived row carries a
 // newer SHA than the loaded diff shows a Pull button that can never be
@@ -81,10 +89,6 @@ const hasNewCommit = $derived.by(() => {
   return loaded !== null && loaded !== pr.headSha;
 });
 const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
-
-$effect(() => {
-  if (pr && hasNewCommit) markWalkthroughStale(pr.id);
-});
 
 function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);

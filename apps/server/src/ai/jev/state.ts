@@ -194,10 +194,9 @@ export function buildPhaseCState(input: PhaseCInput): JevState {
   return clampState(state);
 }
 
-export interface IssueScoringInput {
+export interface IssueRelevanceInput {
   readonly pr: PrLike;
-  readonly issues: ReadonlyArray<{
-    readonly id: string;
+  readonly issue: {
     readonly severity: string;
     readonly title: string;
     readonly description: string;
@@ -206,30 +205,30 @@ export interface IssueScoringInput {
     readonly endLine: number | null;
     /** The diff hunk the issue is anchored to, if it could be resolved. */
     readonly hunk: string | null;
+  };
+  /** Concerns already recorded for this walkthrough, for the duplicate check. */
+  readonly existingIssues: ReadonlyArray<{
+    readonly title: string;
+    readonly description: string;
+    readonly file: string | null;
   }>;
 }
 
 /**
- * State for the issue-scoring pass. Keyed by issue id so the questions can
- * address a specific issue by backticked path (`issues.<id>.description`).
+ * State for the relevance gate on a single `flag_issue` call.
+ *
+ * One issue rather than a keyed map, because the gate runs while the tool
+ * call is still in flight and there is exactly one candidate — questions can
+ * address it as `issue.description` with no id plumbing.
  *
  * The hunk is what makes `grounded` answerable at all — without the code an
  * issue cites, "is this claim supported" degrades into "does this sound
- * plausible".
+ * plausible". `existing_issues` is what makes `duplicate` answerable: the
+ * agent writes concerns one at a time and has no view of what it already
+ * said three chapters ago.
  */
-export function buildIssueScoringState(input: IssueScoringInput): JevState {
-  const issues: { [id: string]: JsonValue } = {};
-  for (const issue of input.issues) {
-    issues[issue.id] = {
-      severity: issue.severity,
-      title: issue.title,
-      description: issue.description,
-      file: issue.filePath,
-      lines:
-        issue.startLine === null ? null : `${issue.startLine}-${issue.endLine ?? issue.startLine}`,
-      hunk: issue.hunk === null ? null : truncatePatchToChars(issue.hunk, 4_000, "hunk").patch,
-    };
-  }
+export function buildIssueRelevanceState(input: IssueRelevanceInput): JevState {
+  const { issue } = input;
   return clampState({
     pr: {
       number: input.pr.externalId,
@@ -239,7 +238,20 @@ export function buildIssueScoringState(input: IssueScoringInput): JevState {
       deletions: input.pr.deletions,
       changed_files: input.pr.changedFiles,
     },
-    issues,
+    issue: {
+      severity: issue.severity,
+      title: issue.title,
+      description: issue.description,
+      file: issue.filePath,
+      lines:
+        issue.startLine === null ? null : `${issue.startLine}-${issue.endLine ?? issue.startLine}`,
+      hunk: issue.hunk === null ? null : truncatePatchToChars(issue.hunk, 4_000, "hunk").patch,
+    },
+    existing_issues: input.existingIssues.map((i) => ({
+      title: i.title,
+      description: i.description,
+      file: i.file,
+    })),
   });
 }
 

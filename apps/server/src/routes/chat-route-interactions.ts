@@ -12,7 +12,7 @@ import { Broadcaster } from "../services/Broadcaster";
 import { ChatSessionService } from "../services/ChatSession";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
-import { resolveChatSessionContext } from "./chat-helpers";
+import { chatSessionModel, resolveChatSessionContext } from "./chat-helpers";
 import { handleAppError, jsonResponse, withAuth } from "./middleware";
 
 export const chatInteractionRoutes = new Elysia()
@@ -37,7 +37,12 @@ export const chatInteractionRoutes = new Elysia()
             const settings = yield* settingsService.getSettings();
             const agent = yield* settingsService.resolveChatAgentId();
             if (!pr.headSha) return;
-            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
+            const row = yield* chatSessions.find(
+              pr.id,
+              agent,
+              chatSessionModel(agent, settings.aiModel),
+              pr.headSha,
+            );
             if (!row) return;
             yield* chatSessions.setInteractionMode({
               chatSessionId: row.id,

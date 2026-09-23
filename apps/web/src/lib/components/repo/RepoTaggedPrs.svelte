@@ -156,7 +156,7 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 			{:else}
 				<ul class="list">
 					{#each rows as row (row.pr.id)}
-						<TaggedPrRow {row} {defaultBranch} showReason={activeReason === null} />
+						<TaggedPrRow {row} {defaultBranch} />
 					{/each}
 				</ul>
 			{/if}

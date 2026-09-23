@@ -23,7 +23,7 @@ import {
   markIssuesAsSubmitted,
 } from "$lib/stores/walkthrough.svelte";
 import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
-import { partitionBySignal } from "$lib/utils/walkthrough-issues";
+import { partitionBySignal, shouldHideLowSignal } from "$lib/utils/walkthrough-issues";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
 import CommentsPanel from "./comments-panel/CommentsPanel.svelte";
 import IssuesPanel from "./issues-panel/IssuesPanel.svelte";
@@ -40,10 +40,7 @@ type Action = "approve" | "request_changes" | "comment";
 // low-signal issue the reader never saw must not end up posted to GitHub
 // by a select-all they did see.
 const issueSignal = $derived(
-  partitionBySignal(getIssues(), {
-    hideLowSignal:
-      (getSettings()?.jev?.issueScoring ?? false) && (getSettings()?.jev?.hideLowSignal ?? true),
-  }),
+  partitionBySignal(getIssues(), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
 );
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);

@@ -26,6 +26,7 @@ import { walkthroughs } from "../../db/schema/walkthroughs";
 import { debug } from "../../logger";
 import { JevService } from "../../services/Jev";
 import { SettingsService } from "../../services/Settings";
+import { optionalJev } from "./optional";
 import { buildPhaseCState } from "./state";
 
 /**
@@ -89,6 +90,18 @@ function axisQuestion(axis: RatingAxis): ChoiceQuestion<typeof VERDICT_CRITERIA>
     criteria: VERDICT_CRITERIA,
   };
 }
+
+const AXIS_QUESTIONS = {
+  axis_correctness: axisQuestion("correctness"),
+  axis_scope: axisQuestion("scope"),
+  axis_tests: axisQuestion("tests"),
+  axis_clarity: axisQuestion("clarity"),
+  axis_safety: axisQuestion("safety"),
+  axis_consistency: axisQuestion("consistency"),
+  axis_api_changes: axisQuestion("api_changes"),
+  axis_performance: axisQuestion("performance"),
+  axis_description: axisQuestion("description"),
+} satisfies Record<AxisQuestionKey, ChoiceQuestion<typeof VERDICT_CRITERIA>>;
 
 /** Gather everything `buildPhaseCState` needs, in one pass over the DB. */
 function collectPhaseCInput(db: Db, walkthroughId: string) {
@@ -205,7 +218,7 @@ export function runAxisVerdictPass(
 
     const settingsSvc = yield* SettingsService;
     const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    const enabled = settings?.jev.enabled === true && settings.jev.verdicts === true;
+    const enabled = settings?.jev.verdicts === true;
 
     if (!enabled) {
       yield* Effect.sync(() => setState(db, walkthroughId, "unavailable"));
@@ -219,31 +232,22 @@ export function runAxisVerdictPass(
     }
 
     const jev = yield* JevService;
-    // Nine independent judgments over the same state, so they batch into one
-    // request and run in parallel.
-    const questions = Object.fromEntries(
-      RATING_AXES.map((axis) => [questionKey(axis), axisQuestion(axis)]),
-    ) as Record<AxisQuestionKey, ChoiceQuestion<typeof VERDICT_CRITERIA>>;
-
-    const result = yield* jev
-      .ask({
+    const result = yield* optionalJev(
+      `axis verdict pass for ${walkthroughId}`,
+      jev.ask({
         label: "phase-c",
         timeoutMs: PHASE_D_TIMEOUT_MS,
         state: buildPhaseCState(input),
-        questions,
-      })
-      .pipe(Effect.either);
+        questions: AXIS_QUESTIONS,
+      }),
+    );
 
-    if (result._tag === "Left") {
-      debug(
-        "jev",
-        `axis verdict pass unavailable for ${walkthroughId} (${result.left.reason}) — agent will supply verdicts`,
-      );
+    if (result === null) {
       yield* Effect.sync(() => setState(db, walkthroughId, "unavailable"));
       return;
     }
 
-    const answers = result.right.answers;
+    const answers = result.answers;
     yield* Effect.sync(() => {
       const now = new Date().toISOString();
       db.transaction(() => {

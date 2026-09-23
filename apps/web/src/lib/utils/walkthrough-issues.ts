@@ -1,4 +1,4 @@
-import type { WalkthroughIssue } from "@revv/shared";
+import type { UserSettings, WalkthroughIssue } from "@revv/shared";
 
 export type IssueSeverity = WalkthroughIssue["severity"];
 
@@ -114,4 +114,16 @@ export function partitionBySignal(
     else shown.push(issue);
   }
   return { shown, filtered };
+}
+
+/**
+ * Whether the low-signal filter applies, for the three surfaces that render
+ * issues.
+ *
+ * `hideLowSignal` is only honoured while scoring itself is on, so turning
+ * scoring off restores the full list without the user also having to find
+ * this second toggle.
+ */
+export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
+  return (settings?.jev?.issueScoring ?? false) && (settings?.jev?.hideLowSignal ?? true);
 }

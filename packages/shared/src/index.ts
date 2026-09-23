@@ -7,18 +7,20 @@ export type {
   AcpAgentModel,
   AgentStatus,
   AgentStatusReport,
+  ThinkingEffortSetting,
 } from "./acp-agents";
 export {
   ACP_AGENT_IDS,
   ACP_AGENTS,
-  AUTO_MODEL_SENTINEL,
+  AUTO_SENTINEL,
   clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
   isAcpAgentId,
-  isAutoModelSentinel,
+  isAutoSentinel,
+  resolveThinkingEffort,
   THINKING_EFFORT_ORDER,
 } from "./acp-agents";
 export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";
@@ -93,6 +95,13 @@ export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
 export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
 export { guessImageContentType, isImagePath } from "./images";
+export type { JevHookDefinition, JevHookKey, JevHookSettings, JevSettings } from "./jev-settings";
+export {
+  DEFAULT_JEV_SETTINGS,
+  JEV_HOOK_DEFAULTS,
+  JEV_HOOK_KEYS,
+  JEV_HOOKS,
+} from "./jev-settings";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export {
   detectMentionTrigger,
@@ -128,6 +137,8 @@ export type {
   RecapThemeSummary,
 } from "./recap";
 export { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE } from "./recap";
+export type { SettingsUpdate } from "./settings-update";
+export { mergeSettingsUpdate } from "./settings-update";
 export type {
   AuthorRole,
   CloneStatus,

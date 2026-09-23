@@ -15,13 +15,10 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
-import Desktop from "phosphor-svelte/lib/Desktop";
 import Download from "phosphor-svelte/lib/Download";
 import Gauge from "phosphor-svelte/lib/Gauge";
-import Moon from "phosphor-svelte/lib/Moon";
 import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import Sun from "phosphor-svelte/lib/Sun";
 import Trash from "phosphor-svelte/lib/Trash";
 import User from "phosphor-svelte/lib/User";
 import Warning from "phosphor-svelte/lib/Warning";
@@ -58,17 +55,14 @@ import {
   type SettingsSectionId,
 } from "$lib/stores/settingsModal.svelte";
 import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
-import {
   type AgentInstallState,
   agentInstallLog,
   appendAgentInstallLog,
   runAgentInstall,
 } from "$lib/utils/agent-install";
 import { authHeaders } from "$lib/utils/session-token";
+import PreferencesSettingsSection from "./PreferencesSettingsSection.svelte";
+import TypeSafeSettingsSection from "./TypeSafeSettingsSection.svelte";
 import UpdatesSection from "./UpdatesSection.svelte";
 import "./settings-layout.css";
 
@@ -216,79 +210,6 @@ async function testCacheSigning(): Promise<void> {
   }
 }
 
-// ── TypeSafe (Jev) — API key + "Test connection" ──────────────────────────
-// The key never round-trips through `GET /api/settings` (that route is
-// unauthenticated), so the modal only ever learns `jev.hasApiKey`. The input
-// stays empty on load and shows a placeholder instead of a fake masked value,
-// because rendering dots for a key we don't have would imply we could read it.
-let jevKeyDraft = $state("");
-let jevKeySaving = $state(false);
-
-async function saveJevKey(value: string): Promise<void> {
-  if (jevKeySaving) return;
-  jevKeySaving = true;
-  jevTestState = null;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/jev/api-key`, {
-      method: "PUT",
-      headers: { ...(await authHeaders()), "content-type": "application/json" },
-      body: JSON.stringify({ apiKey: value }),
-    });
-    if (res.ok) {
-      jevKeyDraft = "";
-      await fetchSettings();
-    } else {
-      jevTestState = { ok: false, error: `Could not save the key (HTTP ${res.status}).` };
-    }
-  } catch (e) {
-    jevTestState = { ok: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    jevKeySaving = false;
-  }
-}
-
-async function clearJevKey(): Promise<void> {
-  if (jevKeySaving) return;
-  jevKeySaving = true;
-  jevTestState = null;
-  try {
-    await fetch(`${API_BASE_URL}/api/settings/jev/api-key`, {
-      method: "DELETE",
-      headers: await authHeaders(),
-    });
-    jevKeyDraft = "";
-    await fetchSettings();
-  } catch {
-    // Best-effort: the next settings fetch reconciles the real state.
-  } finally {
-    jevKeySaving = false;
-  }
-}
-
-type JevTestResult = { ok: true; model: string; latencyMs: number } | { ok: false; error: string };
-let jevTestState = $state<JevTestResult | null>(null);
-let jevTestRunning = $state(false);
-
-async function testJevConnection(): Promise<void> {
-  if (jevTestRunning) return;
-  jevTestRunning = true;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/jev/test`, {
-      method: "POST",
-      headers: await authHeaders(),
-    });
-    if (!res.ok) {
-      jevTestState = { ok: false, error: `HTTP ${res.status}` };
-      return;
-    }
-    jevTestState = (await res.json()) as JevTestResult;
-  } catch (e) {
-    jevTestState = { ok: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    jevTestRunning = false;
-  }
-}
-
 const signingModeOptions: { value: "off" | "permissive" | "strict"; label: string }[] = [
   { value: "strict", label: "Strict — require valid signature" },
   { value: "permissive", label: "Permissive — sign on push, warn on bad sig" },
@@ -386,15 +307,6 @@ const userAvatarFailed = $derived(
 );
 
 // ── Sync interval options ─────────────────────────────────────────────────
-const intervalOptions = [
-  { label: "Disabled", value: 0 },
-  { label: "1 minute", value: 1 },
-  { label: "5 minutes", value: 5 },
-  { label: "10 minutes", value: 10 },
-  { label: "15 minutes", value: 15 },
-  { label: "30 minutes", value: 30 },
-];
-
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);
@@ -653,14 +565,6 @@ async function handleRemoveAccount(): Promise<void> {
     deleting = false;
   }
 }
-
-// ── Theme options ────────────────────────────────────────────────────────
-
-const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "system", label: "System", icon: Desktop },
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-];
 </script>
 
 <DialogPrimitive.Root
@@ -908,8 +812,8 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					{/if}
 				</div>
 
-				<!-- Suggestions model (agent, review model, context window, and thinking
-				     effort are configured from the chat bottom bar). -->
+				<!-- Suggestions model (agent, review model, and thinking effort are
+				     configured from the chat bottom bar). -->
 				<div class="settings-subgroup">
 					<h3 class="settings-subgroup-heading">Models</h3>
 
@@ -1344,275 +1248,9 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				</div>
 			</section>
 
-			<!-- TypeSafe (Jev) -->
-			<section id="section-jev" class="settings-section">
-				<h2 class="section-head-title">TypeSafe</h2>
+				<TypeSafeSettingsSection />
 
-				<p class="section-blurb">
-					TypeSafe's System One model answers closed-set questions — a risk tier, a
-					pass/concern/blocker verdict, a relevance score — without generating text.
-					Revv uses it for the judgments a full coding agent is overkill for. Every
-					feature below degrades silently to the agent's own judgment when TypeSafe
-					is off or unreachable.
-				</p>
-
-				<!-- Master switch -->
-				<div class="settings-subgroup">
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Enable TypeSafe</p>
-							<p class="settings-row-hint">
-								Off by default. Master switch — when disabled, nothing below runs and
-								no requests are made.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.enabled ?? false}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { enabled: v } });
-							}}
-							aria-label="Enable TypeSafe"
-						/>
-					</div>
-				</div>
-
-				<!-- API key -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Connection</h3>
-
-					<div class="settings-field">
-						<label class="settings-field-label" for="jev-api-key">API key</label>
-						<Input
-							id="jev-api-key"
-							type="password"
-							autocomplete="off"
-							placeholder={getSettings()?.jev?.hasApiKey
-								? 'A key is saved — paste a new one to replace it'
-								: 'apikey_…'}
-							bind:value={jevKeyDraft}
-							disabled={jevKeySaving}
-							onchange={(e) => {
-								void saveJevKey((e.target as HTMLInputElement).value);
-							}}
-						/>
-						<p class="settings-field-hint">
-							Stored in your OS keychain, never in the settings database. Saved when
-							you press Enter or leave the field.
-						</p>
-					</div>
-
-					<div class="flex items-center gap-3 pt-1">
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={testJevConnection}
-							disabled={jevTestRunning || !(getSettings()?.jev?.hasApiKey ?? false)}
-						>
-							{#if jevTestRunning}
-								<Spinner size={14} class="motion-essential-spin" />
-							{/if}
-							Test connection
-						</Button>
-						{#if getSettings()?.jev?.hasApiKey}
-							<Button
-								variant="ghost"
-								size="sm"
-								onclick={clearJevKey}
-								disabled={jevKeySaving}
-							>
-								Remove key
-							</Button>
-						{/if}
-						{#if jevTestState}
-							<span
-								class="probe-result"
-								class:probe-result--ok={jevTestState.ok}
-								class:probe-result--err={!jevTestState.ok}
-							>
-								{#if jevTestState.ok}
-									{jevTestState.model} responded in {jevTestState.latencyMs}ms
-								{:else}
-									{jevTestState.error}
-								{/if}
-							</span>
-						{/if}
-					</div>
-				</div>
-
-				<!-- Per-feature toggles -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Features</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Risk tier</p>
-							<p class="settings-row-hint">
-								Size the PR before generation starts, so the agent knows its issue
-								budget up front instead of committing to a tier mid-run.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.risk ?? false}
-							disabled={!(getSettings()?.jev?.enabled ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { risk: v } });
-							}}
-							aria-label="Use TypeSafe for the risk tier"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Automatic model selection</p>
-							<p class="settings-row-hint">
-								Pick the generation model from how intricate the diff looks. Biases
-								upward only — an intricate PR is never downgraded. No effect on
-								agents whose model list is dynamic, such as opencode.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.autoModel ?? false}
-							disabled={!(getSettings()?.jev?.enabled ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { autoModel: v } });
-							}}
-							aria-label="Use TypeSafe for automatic model selection"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Scorecard verdicts</p>
-							<p class="settings-row-hint">
-								Decide the nine pass/concern/blocker verdicts from the finished
-								review; the agent then writes the reasoning for each.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.verdicts ?? false}
-							disabled={!(getSettings()?.jev?.enabled ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { verdicts: v } });
-							}}
-							aria-label="Use TypeSafe for scorecard verdicts"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Score flagged issues</p>
-							<p class="settings-row-hint">
-								Rate each issue for whether it's grounded in the cited code, in
-								scope for this PR, actionable, and worth saying.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.issueScoring ?? false}
-							disabled={!(getSettings()?.jev?.enabled ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { issueScoring: v } });
-							}}
-							aria-label="Score flagged issues with TypeSafe"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Collapse low-signal issues</p>
-							<p class="settings-row-hint">
-								Tuck scored-low issues behind a "show N filtered" disclosure. The
-								count is always visible and nothing is deleted.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.hideLowSignal ?? true}
-							disabled={!(getSettings()?.jev?.issueScoring ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { hideLowSignal: v } });
-							}}
-							aria-label="Collapse low-signal issues"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Stop doomed retries</p>
-							<p class="settings-row-hint">
-								When a generation turn ends early, judge whether another attempt
-								would finish before spending one. It can only decline to spend a
-								retry — it can never add one or end a review early.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.jev?.adjudicateContinuations ?? false}
-							disabled={!(getSettings()?.jev?.enabled ?? false)}
-							onCheckedChange={(v) => {
-								void updateSettings({ jev: { adjudicateContinuations: v } });
-							}}
-							aria-label="Stop doomed retries"
-						/>
-					</div>
-				</div>
-			</section>
-
-			<!-- Preferences -->
-			<section id="section-preferences" class="settings-section">
-				<h2 class="section-head-title">Preferences</h2>
-
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Appearance</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Theme</p>
-							<p class="settings-row-hint">Light, dark, or follow system preference.</p>
-						</div>
-						<div class="flex items-center gap-1 rounded-md border border-border-subtle bg-bg-elevated p-0.5 w-fit">
-							{#each themeOptions as opt (opt.value)}
-								<button
-									type="button"
-									class="flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors"
-									class:bg-bg-primary={getThemePreference() === opt.value}
-									class:text-text-primary={getThemePreference() === opt.value}
-									class:text-text-muted={getThemePreference() !== opt.value}
-									onclick={() => setThemePreference(opt.value)}
-								>
-									<opt.icon size={11} />
-									{opt.label}
-								</button>
-							{/each}
-						</div>
-					</div>
-
-				</div>
-
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Sync</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Sync interval</p>
-							<p class="settings-row-hint">How often Revv polls GitHub for new PRs.</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={String(getSettings()?.autoFetchInterval ?? 5)}
-							onValueChange={(v) => {
-								if (v) void updateSettings({ autoFetchInterval: Number(v) });
-							}}
-						>
-							<Select.Trigger class="w-40 text-xs">
-								{intervalOptions.find((o) => o.value === (getSettings()?.autoFetchInterval ?? 5))?.label ?? '5 minutes'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each intervalOptions as opt (opt.value)}
-									<Select.Item value={String(opt.value)} class="text-xs">{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				</div>
-			</section>
+			<PreferencesSettingsSection />
 
 			<!-- Onboarding -->
 			<section id="section-onboarding" class="settings-section">

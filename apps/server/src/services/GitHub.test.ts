@@ -442,3 +442,84 @@ describe("getPrFiles", () => {
     expect(files[1]?.patch).toBe("@@ new");
   });
 });
+
+describe("listPrDiffStats", () => {
+  it("batches the whole repo into aliased GraphQL requests", async () => {
+    const db = createDb(":memory:");
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      bodies.push(body);
+      const data: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(body.variables)) {
+        if (!key.startsWith("n")) continue;
+        data[`p${key.slice(1)}`] = {
+          additions: Number(value),
+          deletions: 1,
+          changedFiles: 2,
+        };
+      }
+      return responseJson({ data: { repository: data } });
+    }) as typeof fetch;
+
+    // 150 PRs: one over the 100-per-request chunk, so the split is exercised.
+    const numbers = Array.from({ length: 150 }, (_, i) => i + 1);
+    const stats = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.diffStats(
+          "octo/repo",
+          numbers,
+          "token",
+          "https://api.github.test",
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(bodies).toHaveLength(2);
+    expect(stats.size).toBe(150);
+    expect(stats.get(1)).toEqual({ additions: 1, deletions: 1, changedFiles: 2 });
+    expect(stats.get(150)).toEqual({ additions: 150, deletions: 1, changedFiles: 2 });
+  });
+
+  it("keeps the PRs GitHub could answer for when others error out", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() =>
+      responseJson({
+        // GitHub's shape for a partially-resolvable aliased query: `data` is
+        // present with a null for the alias it could not answer.
+        data: { repository: { p0: { additions: 9, deletions: 3, changedFiles: 1 }, p1: null } },
+        errors: [{ message: "Could not resolve to a PullRequest with the number of 2." }],
+      }),
+    );
+
+    const stats = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.diffStats("octo/repo", [1, 2], "token", "https://api.github.test");
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(stats.size).toBe(1);
+    expect(stats.get(1)).toEqual({ additions: 9, deletions: 3, changedFiles: 1 });
+    expect(stats.has(2)).toBe(false);
+  });
+
+  it("makes no request at all for an empty repo", async () => {
+    const db = createDb(":memory:");
+    const calls = stubFetch(() => responseJson({}));
+
+    const stats = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.diffStats("octo/repo", [], "token", "https://api.github.test");
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(stats.size).toBe(0);
+  });
+});

@@ -1,16 +1,22 @@
 import type {
   AcpAgentId,
   DiffViewMode,
+  JevHookKey,
   RecapAgentChoice,
+  SettingsUpdate,
   ThemePreference,
-  ThinkingEffort,
+  ThinkingEffortSetting,
   UpdateChannel,
   UserSettings,
 } from "@revv/shared";
 import {
   AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_JEV_SETTINGS,
   DEFAULT_UPDATE_CHANNEL,
   isAcpAgentId,
+  JEV_HOOK_DEFAULTS,
+  JEV_HOOK_KEYS,
+  mergeSettingsUpdate,
   UPDATE_CHANNELS,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
@@ -57,18 +63,23 @@ const DEFAULT_SETTINGS: UserSettings = {
       trustedSignerHosts: [],
     },
   },
-  jev: {
-    enabled: false,
-    hasApiKey: false,
-    autoModel: false,
-    risk: false,
-    verdicts: false,
-    issueScoring: false,
-    hideLowSignal: true,
-    adjudicateContinuations: false,
-  },
+  jev: DEFAULT_JEV_SETTINGS,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
+
+/** DB column names for the closed hook set; missing a hook is a type error. */
+const JEV_DB_FIELDS = {
+  autoModel: "jevAutoModel",
+  risk: "jevRisk",
+  filePriority: "jevFilePriority",
+  verdicts: "jevVerdicts",
+  issueScoring: "jevIssueScoring",
+  issueSeverity: "jevIssueSeverity",
+  hideLowSignal: "jevHideLowSignal",
+  artifactQuality: "jevArtifactQuality",
+  proseVoice: "jevProseVoice",
+  adjudicateContinuations: "jevAdjudicateContinuations",
+} as const satisfies Record<JevHookKey, keyof typeof userSettings.$inferSelect>;
 
 const VALID_UPDATE_CHANNELS: ReadonlySet<UpdateChannel> = new Set(UPDATE_CHANNELS);
 function coerceUpdateChannel(value: unknown): UpdateChannel {
@@ -134,7 +145,7 @@ function normalize(raw: unknown): UserSettings {
     aiModel: typeof r.aiModel === "string" ? (r.aiModel as string) : DEFAULT_SETTINGS.aiModel,
     aiThinkingEffort:
       typeof r.aiThinkingEffort === "string"
-        ? (r.aiThinkingEffort as ThinkingEffort)
+        ? (r.aiThinkingEffort as ThinkingEffortSetting)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent: coerceAgentId(r),
     aiSuggestionsModel:
@@ -221,17 +232,14 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
 function coerceJev(value: unknown): UserSettings["jev"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
   const r = value as Record<string, unknown>;
-  const flag = (key: keyof UserSettings["jev"]): boolean =>
-    typeof r[key] === "boolean" ? (r[key] as boolean) : DEFAULT_SETTINGS.jev[key];
+  const hooks: Record<JevHookKey, boolean> = { ...DEFAULT_JEV_SETTINGS };
+  for (const key of JEV_HOOK_KEYS) {
+    hooks[key] = typeof r[key] === "boolean" ? r[key] : DEFAULT_SETTINGS.jev[key];
+  }
   return {
-    enabled: flag("enabled"),
+    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_SETTINGS.jev.enabled,
     hasApiKey: false,
-    autoModel: flag("autoModel"),
-    risk: flag("risk"),
-    verdicts: flag("verdicts"),
-    issueScoring: flag("issueScoring"),
-    hideLowSignal: flag("hideLowSignal"),
-    adjudicateContinuations: flag("adjudicateContinuations"),
+    ...hooks,
   };
 }
 
@@ -259,11 +267,15 @@ function resolveRecapAgentFromSettings(
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
 
 function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
+  const jevHooks: Record<JevHookKey, boolean> = { ...JEV_HOOK_DEFAULTS };
+  for (const key of JEV_HOOK_KEYS) {
+    jevHooks[key] = row[JEV_DB_FIELDS[key]];
+  }
   return {
     id: row.id,
     aiProvider: row.aiProvider,
     aiModel: row.aiModel,
-    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
+    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffortSetting,
     aiAgent: row.aiAgent as AcpAgentId,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
@@ -302,19 +314,14 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       // Derived at the edge from `SecretStore`, never from the row — the key
       // itself is not in this table.
       hasApiKey: false,
-      autoModel: row.jevAutoModel,
-      risk: row.jevRisk,
-      verdicts: row.jevVerdicts,
-      issueScoring: row.jevIssueScoring,
-      hideLowSignal: row.jevHideLowSignal,
-      adjudicateContinuations: row.jevAdjudicateContinuations,
+      ...jevHooks,
     },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
 }
 
 function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
-  return {
+  const row: typeof userSettings.$inferInsert = {
     id: s.id,
     aiProvider: s.aiProvider,
     aiModel: s.aiModel,
@@ -342,14 +349,12 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
     jevEnabled: s.jev.enabled,
-    jevAutoModel: s.jev.autoModel,
-    jevRisk: s.jev.risk,
-    jevVerdicts: s.jev.verdicts,
-    jevIssueScoring: s.jev.issueScoring,
-    jevHideLowSignal: s.jev.hideLowSignal,
-    jevAdjudicateContinuations: s.jev.adjudicateContinuations,
     updatedAt: new Date(),
   };
+  for (const key of JEV_HOOK_KEYS) {
+    row[JEV_DB_FIELDS[key]] = s.jev[key];
+  }
+  return row;
 }
 
 // ── JSON file migration (one-time) ───────────────────────────────────────────
@@ -401,23 +406,6 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
-/**
- * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional (standard `Partial`), but `recap`, `cache` and `jev` are recursively
- * partial so callers can patch a single nested field (e.g.
- * `{ recap: { agent: 'opencode' } }`) without spreading the whole
- * sub-object. {@link Settings.ts}'s `updateSettings` deep-merges them
- * against the current value to honour this contract.
- */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache" | "jev">> & {
-  recap?: Partial<UserSettings["recap"]>;
-  cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
-    signing?: Partial<UserSettings["cache"]["signing"]>;
-  };
-  /** `hasApiKey` is server-derived and not patchable — see {@link coerceJev}. */
-  jev?: Partial<Omit<UserSettings["jev"], "hasApiKey">>;
-};
-
 export class SettingsService extends Context.Tag("SettingsService")<
   SettingsService,
   {
@@ -459,33 +447,11 @@ export const SettingsServiceLive = Layer.effect(
       updateSettings: (partial) =>
         Effect.gen(function* () {
           const current = yield* settingsRef.get;
-          const mergedRecap =
-            partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
-          const mergedCache =
-            partial.cache !== undefined
-              ? {
-                  ...current.cache,
-                  ...partial.cache,
-                  signing:
-                    partial.cache.signing !== undefined
-                      ? { ...current.cache.signing, ...partial.cache.signing }
-                      : current.cache.signing,
-                }
-              : current.cache;
-          const mergedJev =
-            partial.jev !== undefined
-              ? { ...current.jev, ...partial.jev, hasApiKey: false }
-              : current.jev;
-          const merged: UserSettings = {
-            ...current,
-            ...partial,
-            recap: mergedRecap,
-            cache: mergedCache,
-            jev: mergedJev,
-            id: "default",
-          };
+          const merged = mergeSettingsUpdate(current, partial);
           const next: UserSettings = {
             ...merged,
+            id: "default",
+            jev: { ...merged.jev, hasApiKey: false },
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
             updateChannel: coerceUpdateChannel(merged.updateChannel),
           };

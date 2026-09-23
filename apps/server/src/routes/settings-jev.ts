@@ -54,7 +54,7 @@ export const settingsJevRoutes = new Elysia()
           Effect.catchTag("JevUnavailable", (e) =>
             Effect.succeed({
               ok: false as const,
-              error: e.message ?? TEST_FAILURE_MESSAGE[e.reason] ?? "Unknown failure.",
+              error: e.message || TEST_FAILURE_MESSAGE[e.reason] || "Unknown failure.",
             }),
           ),
         ),

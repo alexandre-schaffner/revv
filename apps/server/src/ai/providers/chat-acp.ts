@@ -70,7 +70,6 @@ export interface StreamChatViaAcpOptions {
   readonly model?: string | undefined;
   /** Selected thinking-effort tier. Propagated to Claude Code / Codex at launch. */
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  /** Selected context window. Propagated to Claude Code at launch (200K vs 1M). */
   readonly acpAgentId: AcpAgentId;
   readonly deps: AcpChatDeps;
   readonly prId: string;

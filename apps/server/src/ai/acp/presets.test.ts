@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ACP_AGENTS, getAcpAgent } from "@revv/shared";
+import { ACP_AGENTS, AUTO_SENTINEL, getAcpAgent } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { ACP_LOGIN_COMMAND } from "../providers/cli-agent";
 import {
@@ -254,5 +254,13 @@ describe("resolveGenerationModel", () => {
       "some-provider/some-model",
     );
     expect(resolveGenerationModel("opencode", null)).toBe("opencode/big-pickle");
+  });
+
+  it("collapses Auto before static and dynamic catalog resolution", () => {
+    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL)).toBe("claude-sonnet-5");
+    expect(resolveGenerationModel("opencode", AUTO_SENTINEL)).toBe("opencode/big-pickle");
+    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL, "claude-opus-5")).toBe(
+      "claude-opus-5",
+    );
   });
 });

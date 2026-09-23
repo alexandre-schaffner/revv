@@ -152,6 +152,10 @@ export interface AcpWalkthroughStreamParams {
    * "explore first, then declare the tier" instruction.
    */
   assignedRisk?: RiskLevel;
+  /** Ranked reading order from the job-start pass. See the prompt builder. */
+  filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
+  /** Split recommendation from the job-start pass, when it cleared the floor. */
+  splitRecommendation?: { readonly pieces: number };
   deps: AcpWalkthroughDeps;
 }
 
@@ -478,7 +482,7 @@ export function streamWalkthroughViaAcp(
       }
       logError("walkthrough-acp", "queryTask error:", message);
 
-      // Same reasoning as the timeout above, for the same reason. A mid-turn
+      // Same reasoning as the timeout above. A mid-turn
       // failure here is the *transport's* — an ACP adapter throwing while it
       // decodes a notification, a daemon dying — not a verdict on the review.
       // Everything the agent committed is already durable (invariant #1), and

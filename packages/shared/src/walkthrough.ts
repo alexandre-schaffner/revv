@@ -1,7 +1,43 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
 import type { Activity, ActivityResult } from "./activity";
-import type { ReviewMode } from "./types";
+import type { ReviewMode, ThinkingEffort } from "./types";
+
+/**
+ * How much attention a PR needs, and what "Auto" would pick for it, answered
+ * before any walkthrough exists.
+ *
+ * The wire contract of `GET /api/reviews/:id/walkthrough/sizing`. Shared
+ * rather than declared on each side: both the handler's return and the store's
+ * `res.json()` are this shape, and a hand-mirrored copy is a cast waiting to
+ * go stale.
+ */
+export type WalkthroughSizing =
+  /** Nothing to size — no auto half is in play and the risk hook is off. */
+  | { readonly status: "off" }
+  /** A hook is on, but the diff isn't cached yet, so there is nothing to size. */
+  | { readonly status: "pending" }
+  | {
+      readonly status: "ready";
+      /**
+       * Tier a review of this PR would be sized to. Null when the risk hook
+       * is off, in which case the agent decides its own tier mid-run and
+       * showing anything here would be a guess.
+       */
+      readonly riskLevel: RiskLevel | null;
+      /**
+       * Model this PR would launch with. Null when the model is pinned or
+       * routing declined, in which case the configured model stands.
+       */
+      readonly model: string | null;
+      /**
+       * Reasoning effort sized for this PR, already clamped to the selected
+       * agent's ladder. Null whenever the effort is pinned or routing
+       * declined — independent of {@link WalkthroughSizing.model}, which has
+       * its own opt-in and its own gating.
+       */
+      readonly thinkingEffort: ThinkingEffort | null;
+    };
 
 export type AnnotationPosition = "left" | "right";
 
@@ -104,9 +140,16 @@ export interface WalkthroughSemanticStep {
 
 // ── Issue (structured concern flagged by the AI agent) ───────────────────────
 
+/**
+ * Consequence tier of a flagged concern. Named because it is now decided in
+ * two different places — the agent, or the relevance pass when
+ * `jev.issueSeverity` is on — and both need to name the same closed set.
+ */
+export type IssueSeverity = "info" | "warning" | "critical";
+
 export interface WalkthroughIssue {
   id: string;
-  severity: "info" | "warning" | "critical";
+  severity: IssueSeverity;
   title: string;
   description: string;
   /**
@@ -287,6 +330,28 @@ export const LOW_SIGNAL_THRESHOLD = 0.4;
 /** True when a scored issue falls below {@link LOW_SIGNAL_THRESHOLD}. */
 export function isLowSignalScore(score: number | null | undefined): boolean {
   return typeof score === "number" && score < LOW_SIGNAL_THRESHOLD;
+}
+
+/**
+ * Composite score below which a flagged concern is never recorded at all.
+ *
+ * Two tiers, not one, because the two decisions carry very different blast
+ * radii. Collapsing a weak issue behind a disclosure is recoverable — the
+ * count is visible and one click undoes it. *Discarding* one is not: the
+ * reader never learns it existed. So the discard floor sits well below the
+ * low-signal threshold and only catches the concerns that failed on the
+ * grounds that matter — ungrounded, out of scope, or a restatement of
+ * something already on the board.
+ *
+ * `compositeScore`'s severity floor is the other half of the guarantee:
+ * anything the agent called `critical`, or that reads as must-fix, is pinned
+ * to 1 and can never reach either threshold.
+ */
+export const ISSUE_DISCARD_THRESHOLD = 0.2;
+
+/** True when a scored concern falls below {@link ISSUE_DISCARD_THRESHOLD}. */
+export function isDiscardedScore(score: number | null | undefined): boolean {
+  return typeof score === "number" && score < ISSUE_DISCARD_THRESHOLD;
 }
 
 // ── Pipeline phase (A→B→C→D) ────────────────────────────────────────────────
@@ -503,6 +568,22 @@ export interface WalkthroughState {
    * every run rather than carrying it in memory.
    */
   axisAdvisoryState: AxisAdvisoryState | null;
+  /**
+   * The nine verdicts, when {@link axisAdvisoryState} is `'ready'`; `null`
+   * otherwise. This is how the agent learns *which* call it is being asked to
+   * justify — `rate_axis` takes no verdict in that mode, so without this the
+   * agent would reason its way to a verdict of its own and write prose the
+   * stored row contradicts.
+   *
+   * Lists only the axes that were actually seeded. An axis missing from the
+   * list is one the pass produced no answer for; `rate_axis` still expects a
+   * verdict from the agent there.
+   */
+  assignedVerdicts: Array<{
+    axis: RatingAxis;
+    verdict: Verdict;
+    confidence: Confidence;
+  }> | null;
   ratedAxes: RatingAxis[];
   /**
    * Identities of every issue already flagged for this walkthrough. The agent
@@ -521,8 +602,7 @@ export interface WalkthroughState {
   issueCount: number;
   /**
    * Subset of `issues` filtered to entries that REQUIRE an inline review
-   * comment but don't yet have one — i.e. severity is `'warning'` or
-   * `'critical'` AND `filePath` + `startLine` are both set, AND no
+   * comment but don't yet have one — i.e. `filePath` + `startLine` are both set, AND no
    * `comment_threads` row references the issue. The walkthrough cannot
    * transition to `'complete'` until this list is empty (enforced by
    * `complete_walkthrough` AND the orchestrator). On a resumed run, the
@@ -531,7 +611,7 @@ export interface WalkthroughState {
    */
   issuesNeedingInlineComment: Array<{
     id: string;
-    severity: "warning" | "critical";
+    severity: IssueSeverity;
     title: string;
     filePath: string;
     startLine: number;
@@ -662,25 +742,6 @@ export type WalkthroughStreamEvent =
    * rows and replaying them as if they had just been written.
    */
   | { type: "lifecycle:cache-hit"; data: { walkthroughId: string; source: "remote" } }
-  /**
-   * The orchestrator's issue-scoring pass finished. One event for every
-   * issue after a single transaction, not one per issue — the pass writes
-   * them together and the UI's filtered count would flicker otherwise.
-   *
-   * Delta payload: only the issues that were scored are listed, and only
-   * their score fields change. Arrives after `lifecycle:complete`, on the
-   * global `GET /api/events` stream — the per-generation stream is already
-   * dead by then, which is the channel invariant 7's carve-out mandates for
-   * post-completion events. Subscribers that miss it reconcile by
-   * re-reading the walkthrough (invariant 8).
-   */
-  | {
-      type: "advisory:issue-scores";
-      data: {
-        walkthroughId: string;
-        scores: Array<{ issueId: string; score: number; lowSignal: boolean }>;
-      };
-    }
   /**
    * A chat-driven edit landed on a completed walkthrough (CLAUDE.md
    * invariant #7 carve-out). Stamps `lastEditedAt` on the entry; the

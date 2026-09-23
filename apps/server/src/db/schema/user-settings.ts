@@ -78,6 +78,10 @@ export const userSettings = sqliteTable("user_settings", {
   jevRisk: integer("jev_risk", { mode: "boolean" }).notNull().default(false),
   jevVerdicts: integer("jev_verdicts", { mode: "boolean" }).notNull().default(false),
   jevIssueScoring: integer("jev_issue_scoring", { mode: "boolean" }).notNull().default(false),
+  jevIssueSeverity: integer("jev_issue_severity", { mode: "boolean" }).notNull().default(false),
+  jevFilePriority: integer("jev_file_priority", { mode: "boolean" }).notNull().default(false),
+  jevArtifactQuality: integer("jev_artifact_quality", { mode: "boolean" }).notNull().default(false),
+  jevProseVoice: integer("jev_prose_voice", { mode: "boolean" }).notNull().default(false),
   jevHideLowSignal: integer("jev_hide_low_signal", { mode: "boolean" }).notNull().default(true),
   jevAdjudicateContinuations: integer("jev_adjudicate_continuations", { mode: "boolean" })
     .notNull()

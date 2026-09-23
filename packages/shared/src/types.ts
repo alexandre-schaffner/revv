@@ -1,5 +1,6 @@
-import type { AcpAgentId } from "./acp-agents";
+import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
 import type { UpdateChannel } from "./constants";
+import type { JevSettings } from "./jev-settings";
 
 export type PullRequestStatus = "open" | "closed" | "merged";
 
@@ -131,7 +132,7 @@ export interface UserSettings {
   id: string;
   aiProvider: string;
   aiModel: string;
-  aiThinkingEffort: ThinkingEffort;
+  aiThinkingEffort: ThinkingEffortSetting;
   /**
    * Selected ACP agent id (one of `ACP_AGENTS`, e.g. `claude-code`, `opencode`,
    * `codex`, `cursor`). The single agent that drives chat, walkthrough, and
@@ -225,27 +226,7 @@ export interface UserSettings {
    * independently reversible — a badly-tuned threshold on one shouldn't
    * force turning all of them off.
    */
-  jev: {
-    /** Master switch. Off disables every hook regardless of the rest. */
-    enabled: boolean;
-    /**
-     * Read-only, derived server-side from the keyring/env. The key itself
-     * never enters this DTO: `GET /api/settings` is unauthenticated.
-     */
-    hasApiKey: boolean;
-    /** Let Jev size the PR and pick the generation model tier. */
-    autoModel: boolean;
-    /** Compute `walkthroughs.risk_level` at job start instead of asking the agent. */
-    risk: boolean;
-    /** Pre-assign the nine phase-D axis verdicts after Phase C. */
-    verdicts: boolean;
-    /** Score flagged issues for groundedness, scope, actionability and novelty. */
-    issueScoring: boolean;
-    /** UI: collapse low-signal issues behind a "show N filtered" disclosure. */
-    hideLowSignal: boolean;
-    /** Ask before spending an auto-continuation on a run that looks doomed. */
-    adjudicateContinuations: boolean;
-  };
+  jev: JevSettings;
   /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
    * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by

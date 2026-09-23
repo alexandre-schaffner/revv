@@ -42,6 +42,7 @@ import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
 import {
+  chatSessionModel,
   discardAgentCommits,
   fetchWalkthroughContext,
   resolveChatTurnContext,
@@ -538,7 +539,12 @@ export const chatRoute = new Elysia()
             // Resolve the chat session for the *current* head SHA
             // only. Older SHAs are dormant — the user has moved on
             // and a fresh PR commit creates a fresh session row.
-            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
+            const row = yield* chatSessions.find(
+              pr.id,
+              agent,
+              chatSessionModel(agent, settings.aiModel),
+              pr.headSha,
+            );
             if (!row) return null;
 
             const timeline = yield* chatSessions.listTimeline(row.id);
