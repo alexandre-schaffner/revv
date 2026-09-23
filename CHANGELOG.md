@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/alexandre-schaffner/revv/compare/v0.26.0...v0.26.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **ci:** give the migration-upgrade replay test a 60s budget ([#232](https://github.com/alexandre-schaffner/revv/issues/232)) ([4e1d089](https://github.com/alexandre-schaffner/revv/commit/4e1d08940aea0f330678f59baa4f2c577be61b32))
+
 ## [0.26.0](https://github.com/alexandre-schaffner/revv/compare/v0.25.1...v0.26.0) (2026-09-23)
 
 
