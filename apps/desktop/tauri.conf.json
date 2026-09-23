@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel.rs/refs/heads/master/nickel/tauri-schema.json",
   "productName": "Revv (Alpha)",
   "identifier": "com.revv.desktop",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web/build",
@@ -69,7 +69,9 @@
     "deep-link": {
       "enable": true,
       "desktop": {
-        "schemes": ["revv"]
+        "schemes": [
+          "revv"
+        ]
       }
     },
     "updater": {
