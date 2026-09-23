@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.26.0](https://github.com/alexandre-schaffner/revv/compare/v0.25.1...v0.26.0) (2026-09-23)
+
+
+### Features
+
+* **jev:** add TypeSafe-guided review judgments ([#228](https://github.com/alexandre-schaffner/revv/issues/228)) ([4dc0747](https://github.com/alexandre-schaffner/revv/commit/4dc0747b9eaebd8266383b34b7b35a9c37b33bf1))
+
+
+### Bug Fixes
+
+* **walkthrough:** merged stamp tracks the content column; quieter ink grain ([#229](https://github.com/alexandre-schaffner/revv/issues/229)) ([055e3b7](https://github.com/alexandre-schaffner/revv/commit/055e3b75aee767b352e0e4242d6ddfbcb22fbd18))
+
 ## [0.25.1](https://github.com/alexandre-schaffner/revv/compare/v0.25.0...v0.25.1) (2026-09-21)
 
 
