@@ -17,10 +17,8 @@
 // the agent can recover from — the DB row is never touched.
 
 import type {
-  Confidence,
   RatingCitation,
   RiskLevel,
-  Verdict,
   WalkthroughPipelinePhase,
   WalkthroughRating,
 } from "@revv/shared";

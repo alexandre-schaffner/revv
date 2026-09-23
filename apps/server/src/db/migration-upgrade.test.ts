@@ -184,7 +184,9 @@ describe("database upgrades", () => {
       }
       after.close();
     }
-  });
+    // Replays every prefix of the journal, so cost grows quadratically with the
+    // migration count and outgrew bun's 5s default on CI runners.
+  }, 60_000);
 
   it("applies a migration that landed behind a newer one instead of skipping it", () => {
     const path = join(scratch, "skipped.db");
