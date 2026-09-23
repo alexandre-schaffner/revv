@@ -59,7 +59,11 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 	use:mentionReferences={mentionPills ? getReviewFiles() : null}
 	class={cn(
 		"prose prose-sm max-w-none min-w-0 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
-		ctx?.role === "user" && "rounded-2xl bg-secondary px-4 py-2.5",
+		// A user bubble is sized to fit-content inside `items-end` columns, so
+		// it can't be narrower than its min-content. `break-words` doesn't lower
+		// min-content; `wrap-anywhere` does, so a long file path wraps instead
+		// of widening the bubble past the pane and clipping its left edge.
+		ctx?.role === "user" && "rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
 		className,
 	)}
 	{...restProps}
