@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { serverEnv } from "../config";
 import { appDataDir } from "../paths";
 import * as schema from "./schema";
@@ -700,6 +701,45 @@ function recoverUnjournaledReviewRoundMigration(sqlite: Database): void {
   recordMigration(sqlite, REVIEW_ROUNDS_MIGRATION_TAG, REVIEW_ROUNDS_MIGRATION_WHEN);
 }
 
+/**
+ * Drizzle only compares against the newest ledger row: a migration whose
+ * `when` is older than that is skipped forever, even if it never ran. That
+ * happens when a migration lands on `main` after users already applied a
+ * newer one. Apply those before Drizzle runs.
+ *
+ * A migration counts as applied when either its hash or its `when` is in the
+ * ledger. Older builds recorded stale hashes at the right `when` (see
+ * `refreshMigrationHash`), so a hash-only check would replay those and crash.
+ */
+function applySkippedMigrations(sqlite: Database): void {
+  if (!tableExists(sqlite, "__drizzle_migrations")) return;
+  const ledger = sqlite.query("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{
+    hash: string;
+    created_at: number | string;
+  }>;
+  if (ledger.length === 0) return;
+  const hashes = new Set(ledger.map((row) => row.hash));
+  const whens = new Set(ledger.map((row) => Number(row.created_at)));
+  const newest = Math.max(...whens);
+
+  const skipped = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER }).filter(
+    (m) => m.folderMillis < newest && !hashes.has(m.hash) && !whens.has(m.folderMillis),
+  );
+  for (const migration of skipped) {
+    sqlite.transaction(() => {
+      for (const stmt of migration.sql) {
+        if (stmt.trim().length > 0) sqlite.run(stmt);
+      }
+      sqlite
+        .prepare('INSERT INTO "__drizzle_migrations" ("hash", "created_at") VALUES (?, ?)')
+        .run(migration.hash, migration.folderMillis);
+    })();
+    console.warn(
+      `[db] Applied migration ${migration.folderMillis} that Drizzle would have skipped`,
+    );
+  }
+}
+
 export function createDb(path?: string) {
   const dbPath = resolveDbPath(path);
 
@@ -772,6 +812,7 @@ export function createDb(path?: string) {
   recoverChatMessageAttachmentsMigration(sqlite);
   recoverChatActivityResultsMigration(sqlite);
   recoverUnjournaledReviewRoundMigration(sqlite);
+  applySkippedMigrations(sqlite);
   migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   ensureGithubClientIdColumn(sqlite);
   ensureAvatarContentSchema(sqlite);
@@ -788,6 +829,7 @@ export function createDb(path?: string) {
 export type Db = ReturnType<typeof createDb>;
 
 export const __dbRecoveryTest = {
+  applySkippedMigrations,
   columnExists,
   ensureReviewRoundSchema,
   migrationRecorded,
