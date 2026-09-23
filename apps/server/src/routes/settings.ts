@@ -1,10 +1,4 @@
-import {
-  ACP_AGENT_IDS,
-  type AcpAgentId,
-  isAcpAgentId,
-  type JevHookKey,
-  type UserSettings,
-} from "@revv/shared";
+import { ACP_AGENT_IDS, type AcpAgentId, isAcpAgentId, type UserSettings } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { agentKeychainRemediation, probeAgentKeychainReadable } from "../ai/acp/agent-keychain";
@@ -37,18 +31,6 @@ const withJevKeyState = (settings: UserSettings) =>
 const acpAgentLiterals = ACP_AGENT_IDS.map((id) => t.Literal(id));
 const aiAgentSchema = t.Union(acpAgentLiterals);
 const recapAgentSchema = t.Union([t.Literal("auto"), ...acpAgentLiterals]);
-const jevHookSchemas = {
-  autoModel: t.Boolean(),
-  risk: t.Boolean(),
-  filePriority: t.Boolean(),
-  verdicts: t.Boolean(),
-  issueScoring: t.Boolean(),
-  issueSeverity: t.Boolean(),
-  hideLowSignal: t.Boolean(),
-  artifactQuality: t.Boolean(),
-  proseVoice: t.Boolean(),
-  adjudicateContinuations: t.Boolean(),
-} satisfies Record<JevHookKey, ReturnType<typeof t.Boolean>>;
 
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   .get("/", async (ctx) => {
@@ -129,12 +111,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
               ),
             }),
           ),
-          jev: t.Partial(
-            t.Object({
-              enabled: t.Boolean(),
-              ...jevHookSchemas,
-            }),
-          ),
+          jev: t.Partial(t.Object({ enabled: t.Boolean() })),
           updateChannel: updateChannelSchema.optional,
         }),
       ),

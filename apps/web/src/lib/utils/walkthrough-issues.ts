@@ -106,7 +106,7 @@ export function partitionBySignal(
   return { shown, filtered };
 }
 
-/** `hideLowSignal` only applies while scoring is on, so turning scoring off restores the full list. */
+/** Low-signal issues collapse only while TypeSafe is on, so turning it off restores the full list. */
 export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
-  return (settings?.jev.issueScoring ?? false) && (settings?.jev.hideLowSignal ?? true);
+  return settings?.jev.enabled ?? false;
 }

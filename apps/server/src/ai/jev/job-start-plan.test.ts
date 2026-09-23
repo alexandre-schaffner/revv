@@ -6,7 +6,7 @@ import { buildJobStartPlan, shouldResolveJobStart } from "./job-start-plan";
 const settings = {
   aiModel: "revv:auto",
   aiThinkingEffort: "revv:auto",
-  jev: { ...DEFAULT_JEV_SETTINGS, enabled: true, autoModel: true, filePriority: true },
+  jev: { ...DEFAULT_JEV_SETTINGS, enabled: true },
 } as const;
 
 const answers: JobStartAnswers = {
@@ -21,24 +21,27 @@ const answers: JobStartAnswers = {
 };
 
 describe("job-start plan", () => {
-  it("runs when file priority is the only enabled judgment hook", () => {
-    const fileOnly = {
-      ...settings,
-      jev: { ...DEFAULT_JEV_SETTINGS, enabled: true, filePriority: true },
-    };
-    expect(
-      shouldResolveJobStart({ settings: fileOnly, trigger: "user", cacheWillHit: false }),
-    ).toBe(true);
+  it("runs on a user trigger when TypeSafe is on", () => {
+    expect(shouldResolveJobStart({ settings, trigger: "user", cacheWillHit: false })).toBe(true);
   });
 
-  it("projects one answer into routing and file priority without assigning disabled risk", () => {
+  it("skips when TypeSafe is off, on resume, or on a cache hit", () => {
+    const off = { ...settings, jev: DEFAULT_JEV_SETTINGS };
+    expect(shouldResolveJobStart({ settings: off, trigger: "user", cacheWillHit: false })).toBe(
+      false,
+    );
+    expect(shouldResolveJobStart({ settings, trigger: "resume", cacheWillHit: false })).toBe(false);
+    expect(shouldResolveJobStart({ settings, trigger: "user", cacheWillHit: true })).toBe(false);
+  });
+
+  it("projects one answer into risk, routing and file priority", () => {
     const plan = buildJobStartPlan({
       settings,
       agent: "claude-code",
       files: [{ filename: "a.ts" }],
       answers,
     });
-    expect(plan.assignedRisk).toBeNull();
+    expect(plan.assignedRisk).toBe("high");
     expect(plan.filePriorities).toEqual([{ filename: "a.ts", tier: 4 }]);
     expect(plan.launchOverride?.thinkingEffort).toBe("high");
   });

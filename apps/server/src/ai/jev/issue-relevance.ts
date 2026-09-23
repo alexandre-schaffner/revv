@@ -113,9 +113,7 @@ export function judgeIssue(
   return Effect.gen(function* () {
     const settingsService = yield* SettingsService;
     const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
-    const wantsGate = settings?.jev.issueScoring === true;
-    const wantsSeverity = settings?.jev.issueSeverity === true;
-    if (!wantsGate && !wantsSeverity) return null;
+    if (settings?.jev.enabled !== true) return null;
 
     const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, candidate));
     if (input === null) return null;
@@ -135,8 +133,8 @@ export function judgeIssue(
     const judgment: IssueJudgment = {
       score: raw.score,
       lowSignal: isLowSignalScore(raw.score),
-      discard: wantsGate && isDiscardedScore(raw.score),
-      severity: wantsSeverity ? severityForLevel(raw.severityLevel) : null,
+      discard: isDiscardedScore(raw.score),
+      severity: severityForLevel(raw.severityLevel),
     };
     debug(
       "jev",

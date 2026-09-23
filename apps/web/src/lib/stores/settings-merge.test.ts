@@ -25,16 +25,6 @@ const CURRENT: UserSettings = {
   jev: {
     enabled: true,
     hasApiKey: true,
-    autoModel: false,
-    risk: false,
-    verdicts: true,
-    issueScoring: true,
-    issueSeverity: true,
-    filePriority: true,
-    artifactQuality: true,
-    proseVoice: true,
-    hideLowSignal: true,
-    adjudicateContinuations: false,
   },
   updateChannel: "stable",
 };
@@ -47,13 +37,8 @@ describe("mergeSettingsUpdate", () => {
     expect(next.cache).toEqual(CURRENT.cache);
   });
 
-  it("keeps the other jev flags when one is patched", () => {
-    // Guards against a top-level spread replacing `jev` wholesale.
-    const next = mergeSettingsUpdate(CURRENT, { jev: { risk: true } });
-    expect(next.jev).toEqual({ ...CURRENT.jev, risk: true });
-  });
-
   it("keeps hasApiKey, which no client patch can carry", () => {
+    // Also guards against a top-level spread replacing `jev` wholesale.
     const next = mergeSettingsUpdate(CURRENT, { jev: { enabled: false } });
     expect(next.jev.hasApiKey).toBe(true);
   });

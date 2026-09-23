@@ -47,7 +47,6 @@ import {
 import { adjudicateContinuation } from "../ai/jev/continuation";
 import { resolveJobStart } from "../ai/jev/job-start-resolution";
 import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
-import { markAxisAdvisoryUnavailable, runAxisVerdictPass } from "../ai/jev/phase-d-verdicts";
 import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
@@ -1500,7 +1499,7 @@ export const WalkthroughJobsLive = Layer.effect(
             assignedRisk,
             filePriorities,
             splitRecommendation: startPlan.splitRecommendation,
-            adjudicateContinuations: settings.jev.enabled && settings.jev.adjudicateContinuations,
+            adjudicateContinuations: settings.jev.enabled,
           },
           params.trigger,
         );
@@ -1590,18 +1589,6 @@ export const WalkthroughJobsLive = Layer.effect(
               }).pipe(Effect.catchAll(() => Effect.void));
               continue;
             }
-
-            // kill-9 mid-pass leaves `axis_advisory_state = 'pending'`, which `rate_axis`
-            // treats as retryable; re-fire the pass, it always terminates the column.
-            yield* Effect.forkDaemon(
-              runAxisVerdictPass(db, row.id).pipe(
-                Effect.provideService(JevService, jevService),
-                Effect.provideService(SettingsService, settingsService),
-                Effect.catchAllCause(() =>
-                  Effect.sync(() => markAxisAdvisoryUnavailable(db, row.id)),
-                ),
-              ),
-            );
 
             yield* startJob({
               prId: row.pullRequestId,
@@ -1792,31 +1779,6 @@ export const WalkthroughJobsLive = Layer.effect(
                 /* notifier threw — ignore */
               }
             }
-          }
-
-          // 6. Phase C committed — fork the axis-verdict pass here, the single funnel every
-          //    MCP tool event passes through, keeping the schedule decision in the
-          //    orchestrator rather than the tool handlers.
-          //    `forkDaemon`, not `fork`: the job scope can close mid-pass (cancel or
-          //    crash-and-resume) and leaving `axis_advisory_state = 'pending'` would wedge
-          //    `rate_axis`. The pass always terminates the column.
-          if (event.type === "phase:advanced" && event.data.lastCompletedPhase === "C") {
-            yield* Effect.forkDaemon(
-              runAxisVerdictPass(db, walkthroughId).pipe(
-                Effect.provideService(JevService, jevService),
-                Effect.provideService(SettingsService, settingsService),
-                Effect.catchAllCause((cause) =>
-                  Effect.sync(() => {
-                    logError(
-                      "walkthrough-jobs",
-                      `axis verdict pass crashed for ${walkthroughId}:`,
-                      Cause.pretty(cause),
-                    );
-                    markAxisAdvisoryUnavailable(db, walkthroughId);
-                  }),
-                ),
-              ),
-            );
           }
 
           return { kind: "delivered" as const, seq };

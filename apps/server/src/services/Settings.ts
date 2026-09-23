@@ -1,7 +1,6 @@
 import type {
   AcpAgentId,
   DiffViewMode,
-  JevHookKey,
   RecapAgentChoice,
   SettingsUpdate,
   ThemePreference,
@@ -14,8 +13,6 @@ import {
   DEFAULT_JEV_SETTINGS,
   DEFAULT_UPDATE_CHANNEL,
   isAcpAgentId,
-  JEV_HOOK_DEFAULTS,
-  JEV_HOOK_KEYS,
   mergeSettingsUpdate,
   UPDATE_CHANNELS,
 } from "@revv/shared";
@@ -66,20 +63,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   jev: DEFAULT_JEV_SETTINGS,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
-
-/** DB column names for the closed hook set; missing a hook is a type error. */
-const JEV_DB_FIELDS = {
-  autoModel: "jevAutoModel",
-  risk: "jevRisk",
-  filePriority: "jevFilePriority",
-  verdicts: "jevVerdicts",
-  issueScoring: "jevIssueScoring",
-  issueSeverity: "jevIssueSeverity",
-  hideLowSignal: "jevHideLowSignal",
-  artifactQuality: "jevArtifactQuality",
-  proseVoice: "jevProseVoice",
-  adjudicateContinuations: "jevAdjudicateContinuations",
-} as const satisfies Record<JevHookKey, keyof typeof userSettings.$inferSelect>;
 
 const VALID_UPDATE_CHANNELS: ReadonlySet<UpdateChannel> = new Set(UPDATE_CHANNELS);
 function coerceUpdateChannel(value: unknown): UpdateChannel {
@@ -228,14 +211,9 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
 function coerceJev(value: unknown): UserSettings["jev"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
   const r = value as Record<string, unknown>;
-  const hooks: Record<JevHookKey, boolean> = { ...DEFAULT_JEV_SETTINGS };
-  for (const key of JEV_HOOK_KEYS) {
-    hooks[key] = typeof r[key] === "boolean" ? r[key] : DEFAULT_SETTINGS.jev[key];
-  }
   return {
     enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_SETTINGS.jev.enabled,
     hasApiKey: false,
-    ...hooks,
   };
 }
 
@@ -263,10 +241,6 @@ function resolveRecapAgentFromSettings(
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
 
 function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
-  const jevHooks: Record<JevHookKey, boolean> = { ...JEV_HOOK_DEFAULTS };
-  for (const key of JEV_HOOK_KEYS) {
-    jevHooks[key] = row[JEV_DB_FIELDS[key]];
-  }
   return {
     id: row.id,
     aiProvider: row.aiProvider,
@@ -309,14 +283,13 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       enabled: row.jevEnabled,
       // Derived from SecretStore, not this table.
       hasApiKey: false,
-      ...jevHooks,
     },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
 }
 
 function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
-  const row: typeof userSettings.$inferInsert = {
+  return {
     id: s.id,
     aiProvider: s.aiProvider,
     aiModel: s.aiModel,
@@ -346,10 +319,6 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     jevEnabled: s.jev.enabled,
     updatedAt: new Date(),
   };
-  for (const key of JEV_HOOK_KEYS) {
-    row[JEV_DB_FIELDS[key]] = s.jev[key];
-  }
-  return row;
 }
 
 // ── JSON file migration (one-time) ───────────────────────────────────────────

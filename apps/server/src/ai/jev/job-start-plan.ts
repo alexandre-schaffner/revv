@@ -24,13 +24,7 @@ export function shouldResolveJobStart(input: {
   readonly trigger: "user" | "resume" | "review_requested";
   readonly cacheWillHit: boolean;
 }): boolean {
-  const hooks = input.settings.jev;
-  return (
-    hooks.enabled &&
-    (hooks.risk || hooks.autoModel || hooks.filePriority) &&
-    input.trigger !== "resume" &&
-    !input.cacheWillHit
-  );
+  return input.settings.jev.enabled && input.trigger !== "resume" && !input.cacheWillHit;
 }
 
 /** Pure projection from one cached answer into every job-start consumer. */
@@ -50,14 +44,14 @@ export function buildJobStartPlan(input: {
     };
   }
   return {
-    assignedRisk: settings.jev.risk ? answers.riskLevel : null,
-    filePriorities: settings.jev.filePriority ? filePriorityOrder(answers, input.files) : null,
+    assignedRisk: settings.jev.enabled ? answers.riskLevel : null,
+    filePriorities: settings.jev.enabled ? filePriorityOrder(answers, input.files) : null,
     splitRecommendation: splitRecommendation(answers),
     launchOverride: routeFromAnswers(answers, {
       agent: input.agent,
       configuredModel: settings.aiModel,
       configuredEffort: settings.aiThinkingEffort,
-      autoSizing: settings.jev.autoModel,
+      autoSizing: settings.jev.enabled,
     }),
   };
 }

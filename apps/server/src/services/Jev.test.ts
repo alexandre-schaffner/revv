@@ -13,16 +13,6 @@ function fakeSettings(jev: Partial<UserSettings["jev"]>) {
     jev: {
       enabled: false,
       hasApiKey: false,
-      autoModel: false,
-      risk: false,
-      verdicts: false,
-      issueScoring: false,
-      issueSeverity: false,
-      filePriority: false,
-      artifactQuality: false,
-      proseVoice: false,
-      hideLowSignal: true,
-      adjudicateContinuations: false,
       ...jev,
     },
   } as UserSettings;

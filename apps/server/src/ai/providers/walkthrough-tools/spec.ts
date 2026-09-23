@@ -473,21 +473,15 @@ const rateAxisSchema = z.object({
     .describe(
       "Which scorecard axis this rating is for. correctness: logic errors, off-by-ones, race conditions, unhandled errors. scope: is the PR doing one thing, or has it absorbed drive-by refactors / unrelated formatting — several unrelated concerns is at least a concern, with the concrete split named in details. tests: new behavior has tests, no suspiciously deleted/weakened assertions. clarity: naming, function length, nesting depth, comment quality, dead code, magic numbers. safety: touches auth, payments, migrations, deletes, public APIs, shared packages (a risk-surface signal, not a quality score). consistency: follows existing codebase patterns (layering, module boundaries, conventions). api_changes: breaking changes to routes, schemas, event payloads, exported types. performance: N+1 queries, unbounded loops, sync work in hot paths, missing indexes. description: does the PR explain why (not just what), link issues, call out deployment concerns.",
     ),
-  // Optional, not required: ignored when get_walkthrough_state returns
-  // assignedVerdicts. Stays in the schema for the no-TypeSafe path.
   verdict: z
     .enum(["pass", "concern", "blocker"])
-    .nullable()
-    .optional()
     .describe(
-      "OMIT when get_walkthrough_state returned `assignedVerdicts` — the verdict is already decided and anything sent here is discarded; your job is the reasoning for the verdict listed there. REQUIRED otherwise. pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed.",
+      "pass: no meaningful concern on this axis (or n/a for this PR). concern: should be addressed before merge. blocker: do not merge until fixed.",
     ),
   confidence: z
     .enum(["low", "medium", "high"])
-    .nullable()
-    .optional()
     .describe(
-      "OMIT when `assignedVerdicts` was returned — it carries the confidence too. REQUIRED otherwise: how confident you are in this verdict. Use low when you couldn't find the caller / adjacent tests / relevant config — honest low confidence is more useful than a confident wrong rating.",
+      "How confident you are in this verdict. Use low when you couldn't find the caller / adjacent tests / relevant config — honest low confidence is more useful than a confident wrong rating.",
     ),
   rationale: z
     .string()
@@ -515,13 +509,6 @@ const rateAxisSchema = z.object({
     .array(blockRefSchema)
     .describe(
       "Composite identifiers of Phase-B diff blocks that explain this rating in depth, in the form { semantic_step_index, step_index }. May be empty. Each entry must reference a block already added via add_diff_step.",
-    ),
-  disputed: z
-    .boolean()
-    .nullable()
-    .optional()
-    .describe(
-      "Set ONLY when this axis was HANDED a non-pass verdict (get_walkthrough_state listed it under assignedVerdicts) that you genuinely cannot cite. There it stands in for the citation requirement and must come with a rationale explaining the absence; it is recorded as a disagreement signal and never changes the verdict. On an axis whose verdict you chose yourself it is ignored, and the citation requirement still applies — cite the evidence or downgrade to pass. Do not use it to avoid looking for evidence.",
     ),
 });
 

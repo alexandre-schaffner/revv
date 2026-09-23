@@ -105,13 +105,8 @@ export {
 } from "./external-integrations";
 export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
 export { guessImageContentType, isImagePath } from "./images";
-export type { JevHookDefinition, JevHookKey, JevHookSettings, JevSettings } from "./jev-settings";
-export {
-  DEFAULT_JEV_SETTINGS,
-  JEV_HOOK_DEFAULTS,
-  JEV_HOOK_KEYS,
-  JEV_HOOKS,
-} from "./jev-settings";
+export type { JevSettings } from "./jev-settings";
+export { DEFAULT_JEV_SETTINGS } from "./jev-settings";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export {
   detectMentionTrigger,

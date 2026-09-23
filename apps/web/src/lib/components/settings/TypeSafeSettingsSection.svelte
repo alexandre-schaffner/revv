@@ -1,5 +1,4 @@
 <script lang="ts">
-import { JEV_HOOK_DEFAULTS, JEV_HOOK_KEYS, JEV_HOOKS, type JevHookKey } from "@revv/shared";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -84,16 +83,6 @@ async function testConnection(): Promise<void> {
     testRunning = false;
   }
 }
-
-function hookDisabled(key: JevHookKey): boolean {
-  const jev = getSettings()?.jev;
-  if (!jev?.enabled) return true;
-  return key === "hideLowSignal" && !jev.issueScoring;
-}
-
-function setHook(key: JevHookKey, value: boolean): void {
-  void updateSettings({ jev: { [key]: value } });
-}
 </script>
 
 <section id="section-jev" class="settings-section">
@@ -101,16 +90,18 @@ function setHook(key: JevHookKey, value: boolean): void {
 
   <p class="section-blurb">
     TypeSafe's System One model answers closed-set questions without generating text. Revv uses it
-    where a full coding agent is overkill. Every feature degrades to the agent's own judgment when
+    where a full coding agent is overkill. Everything falls back to the agent's own judgment when
     TypeSafe is off or unreachable.
   </p>
 
   <div class="settings-subgroup">
     <div class="settings-row">
       <div class="settings-row-info">
-        <p class="settings-row-label">Enable TypeSafe</p>
+        <p class="settings-row-label">TypeSafe</p>
         <p class="settings-row-hint">
-          Off by default. When disabled, no hooks run and no requests are made.
+          Sizes each review, sets its risk tier, ranks the changed files, checks and calibrates
+          flagged issues, holds artifacts and prose to the bar, and stops doomed retries. Off by
+          default; when off, no requests are made.
         </p>
       </div>
       <Switch
@@ -178,25 +169,5 @@ function setHook(key: JevHookKey, value: boolean): void {
         </span>
       {/if}
     </div>
-  </div>
-
-  <div class="settings-subgroup">
-    <h3 class="settings-subgroup-heading">Features</h3>
-
-    {#each JEV_HOOK_KEYS as hookKey (hookKey)}
-      {@const definition = JEV_HOOKS[hookKey]}
-      <div class="settings-row">
-        <div class="settings-row-info">
-          <p class="settings-row-label">{definition.label}</p>
-          <p class="settings-row-hint">{definition.hint}</p>
-        </div>
-        <Switch
-          checked={getSettings()?.jev[hookKey] ?? JEV_HOOK_DEFAULTS[hookKey]}
-          disabled={hookDisabled(hookKey)}
-          onCheckedChange={(value) => setHook(hookKey, value)}
-          aria-label={definition.ariaLabel}
-        />
-      </div>
-    {/each}
   </div>
 </section>
