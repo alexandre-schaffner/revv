@@ -19,10 +19,8 @@
  *   on a second glyph. One icon vocabulary per row.
  * - The branch shows only when it is information. A stacked PR's base is; the
  *   source branch of a PR targeting `main` is a restatement of the title.
- * - The row carries a diffstat, which GitHub's own list does not. "How big is
- *   it" is half of triage — a one-line revert and a thousand-line rewrite are
- *   not the same decision — and it is the only fact here you would otherwise
- *   have to open the PR to learn.
+ * - The row carries a diffstat, which GitHub's list omits. Size is half of
+ *   triage, and otherwise the only way to learn it is to open the PR.
  */
 
 import At from "phosphor-svelte/lib/At";
@@ -62,40 +60,29 @@ const updatedAtExact = $derived.by(() => {
 });
 
 /**
- * GitHub's PR *list* endpoint omits `additions` / `deletions` / `changed_files`
- * — only the single-PR fetch carries them — so a freshly synced row holds the
- * column defaults until a detail fetch fills them in. Zeros here mean "not
- * known yet", not "an empty diff", and the clause stays out of the row rather
- * than asserting `0 files · +0 −0`.
+ * Zeros mean "not known yet", not "an empty diff" — the poller's diff-stat
+ * pass fills these in after the initial list sync. Omit the clause rather
+ * than assert `0 files · +0 −0`.
  */
 const hasSize = $derived(pr.changedFiles > 0 || pr.additions > 0 || pr.deletions > 0);
 
-/** Thousands separators: a five-figure diff is exactly the one worth reading twice. */
+/** Thousands separators: a five-figure diff is the one worth reading twice. */
 function fmt(n: number): string {
   return n.toLocaleString("en-US");
 }
 
 /**
- * The whole fact in words, for the screen reader that never sees the column.
- *
- * It states a zero side the visual column omits, because "0 deletions" spoken
- * is information, where a red `−0` on screen is just a colour spent on
- * nothing. Separators included: `59,699` is announced as a number, `59699`
- * often as a digit run.
+ * Spoken form for screen readers. States a zero side the visual column
+ * omits — "0 deletions" spoken is information; a red `−0` on screen isn't.
  */
 const sizeLabel = $derived(
   `${fmt(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${fmt(pr.additions)} additions, ${fmt(pr.deletions)} deletions`,
 );
 
 /**
- * The reason, as the row's leading glyph.
- *
- * `yours` is null on purpose, and the null is the point: the row already carries
- * the author's avatar and login, so on a page headed "N open pull requests
- * involve you" a row you wrote needs no further explanation. It keeps the
- * neutral pull-request mark, which is what "no special reason" looks like.
- *
- * The two that survive are the two nothing else on the row can tell you.
+ * The reason, as the row's leading glyph. `yours` maps to null: the row
+ * already shows the author's avatar and login, so it keeps the neutral
+ * pull-request mark instead.
  */
 const REASON_ICON: Record<TaggedReason, typeof Eye | null> = {
   review: Eye,
@@ -103,14 +90,7 @@ const REASON_ICON: Record<TaggedReason, typeof Eye | null> = {
   mentioned: At,
 };
 
-/*
- * Not gated on the active filter. A row's reason is a fact about the row, not
- * about which tab you happen to be standing on, and a glyph that appears and
- * disappears as you flick between "All" and "Review requested" makes the same
- * pull request look like two different things. The gate existed when this was a
- * text label in a rail — redundant once the tab named it, and it cost width —
- * and neither reason survives a glyph in a slot the row already had.
- */
+/* Not gated on the active filter — the reason is a fact about the row, not the tab you're viewing it from. */
 const ReasonIcon = $derived(REASON_ICON[row.reason]);
 
 const VISIT_LABEL: Record<VisitState, string> = {
@@ -132,21 +112,11 @@ function onNav(event: MouseEvent): void {
 <li class="row row--{visit}" class:row--draft={pr.isDraft}>
 	<a class="link" href="/review/{pr.id}" title={pr.title} onclick={onNav}>
 		<!--
-			The row's leading glyph, and the row's only marker of why it is in your
-			queue.
+			Leading glyph doubles as the row's reason marker; every PR here is open,
+			so a constant state icon would say nothing.
 
-			This slot used to be a constant: every pull request on this surface is
-			open, so a pull-request symbol repeated down the column said nothing
-			while occupying the most prominent scan position on the row. Spending it
-			on the reason costs no width and leaves every other column anchored,
-			which is why the reason is not a text label in a rail — a rail slot that
-			is empty on half the rows reads as something stranded mid-row rather
-			than as a column.
-
-			`title` needs the stacking context: the anchor's stretched `::after`
-			overlay sits above this span otherwise and swallows the hover, so the
-			tooltip never fires. Clicks still open the PR; the overlay is beneath,
-			not instead.
+			`title` needs the stacking context so the anchor's stretched `::after`
+			overlay doesn't sit above it and swallow the hover.
 		-->
 		<span
 			class="state"
@@ -204,29 +174,13 @@ function onNav(event: MouseEvent): void {
 			</span>
 		</span>
 
-		<!--
-			Spoken on every row, including the rows the glyph leaves neutral: the
-			glyph's silence is a drawing decision, and a screen reader has no author
-			column to glance at.
-		-->
+		<!-- Spoken on every row, including where the glyph is neutral — a screen reader has no author column to glance at. -->
 		<span class="sr-only">{REASON_LABEL[row.reason]}</span>
 
 		<!--
-			How big is it — the triage question the row could not answer, and the
-			one it answers by *position* rather than by prose.
-
-			It is a column, not the last clause of the metadata sentence, because
-			a sentence puts the number at a different x on every row and a number
-			you cannot line up is a number you have to read. Right-aligned with
-			tabular figures, `495` and `7` compare at a glance.
-
-			Two lines, on the body's two baselines: the file count rides the
-			title, the line counts ride the metadata. The pairing is deliberate —
-			file count is the headline (it predicts how many contexts a review
-			has to load), line counts are its detail.
-
-			Spelled out for assistive tech, because "+340 −88" read aloud as
-			arithmetic is worse than silence.
+			A column, not a metadata clause, so it lines up right-aligned across
+			rows with tabular figures. Two lines matching the body's baselines: file
+			count (the headline) rides the title, line counts ride the metadata.
 		-->
 		{#if hasSize}
 			<span class="size">
@@ -237,11 +191,7 @@ function onNav(event: MouseEvent): void {
 						<span class="size-unit">{pr.changedFiles === 1 ? "file" : "files"}</span>
 					</span>
 				{/if}
-				<!--
-					A side is printed only when it moved. `−0` in deletion red says
-					"danger, nothing happened"; the absence of the clause says the
-					same thing without spending a colour on it.
-				-->
+				<!-- Printed only when a side moved; `−0` in deletion red would read as "danger, nothing happened". -->
 				{#if pr.additions > 0 || pr.deletions > 0}
 					<span class="size-lines" aria-hidden="true">
 						{#if pr.additions > 0}
@@ -353,28 +303,11 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * Brand teal, not the warm "demands attention" orange the system nominally
-	 * reserves for a PR waiting on the viewer.
-	 *
-	 * The orange was tried and it reads as an error. That is the same finding
-	 * `.clause--attention` records four rules down, and for the same reason: a
-	 * review request is fresh work arriving, not a failure, and a warm orange
-	 * glyph reads as a failure no matter what the tooltip says. Teal is the
-	 * system's "this is live, this is where the work is" colour — the streaming
-	 * cursor, the active file row, the diff selection — which is what a pull
-	 * request waiting on you actually is.
-	 *
-	 * A row that is both review-requested and moved-since-you-read-it carries
-	 * three teal marks: this glyph, the row wash, and the "New commits" clause.
-	 * That is deliberate rather than a breach of the one-voice rule. They are
-	 * not competing for different meanings; they are one row saying "this one,
-	 * now" in three places, and that row should be the loudest in the queue.
-	 *
-	 * Colour is not carrying this alone — the glyph is a different drawing, not
-	 * a tinted copy of the same one — so the row still reads with no colour at
-	 * all. Specificity has to clear `.row--visited .state`: a read row dims its
-	 * glyph, but a review someone is waiting on does not stop being your turn
-	 * because you opened it once.
+	 * Brand teal, not the warm "attention" orange — a review request is fresh
+	 * work, not a failure, and orange reads as an error. Teal matches the
+	 * system's other "this is live" marks (streaming cursor, active file row).
+	 * Specificity clears `.row--visited .state` since a read row dims its
+	 * glyph, but a pending review request still needs you.
 	 */
 	.row .state--reason {
 		position: relative;
@@ -453,18 +386,12 @@ function onNav(event: MouseEvent): void {
 
 	/* ── Change size ────────────────────────────────────────────────────── */
 
-	/*
-	 * The rail, right-aligned, so the numbers terminate on the card's own right
-	 * inset. Being the row's last column is what fixes that edge for free.
-	 *
-	 * The floor keeps a repo of one- and two-file PRs from collapsing the column
-	 * to a hairline; the right edge itself needs no help.
-	 */
+	/* Right-aligned so numbers terminate on the card's right inset. The min-width floor keeps small diffs from collapsing the column to a hairline. */
 	.size {
 		display: flex;
 		flex-direction: column;
 		align-items: flex-end;
-		/* Matches `.body`'s gap, so the two columns share one internal rhythm. */
+		/* Matches `.body`'s gap for shared rhythm between columns. */
 		gap: 0.1875rem;
 		flex-shrink: 0;
 		min-width: 5rem;
@@ -472,12 +399,8 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * Line-heights are absolute, not ratios, and that is the whole trick: the
-	 * title's line box is 0.875rem x 1.4 = 1.225rem and the metadata's is
-	 * 0.75rem x 1.4 = 1.05rem. Restating those two numbers here makes both
-	 * columns' line boxes identical, so the file count sits on the title's
-	 * baseline and the diffstat on the metadata's — at any font size, without
-	 * a magic offset.
+	 * Absolute line-heights, not ratios: matches the title's box (0.875rem ×
+	 * 1.4 = 1.225rem) so the file count sits on the title's baseline.
 	 */
 	.size-files {
 		display: flex;
@@ -487,14 +410,11 @@ function onNav(event: MouseEvent): void {
 		white-space: nowrap;
 	}
 
-	/* The digits are the datum; the unit is a label. Weight and ink split them
-	   so the eye lands on the number, not on the word "files" repeated nine
-	   times down the column. */
+	/* Weight and ink split the digit (the datum) from the "files" label so the eye lands on the number. */
 	.size-count {
 		font-size: 0.8125rem;
 		font-weight: 600;
-		/* Without tabular figures the proportional `1` is narrow and the column
-		   only *approximately* lines up, which is worse than not aligning. */
+		/* Tabular figures: a proportional `1` is narrow and the column wouldn't line up. */
 		font-variant-numeric: tabular-nums;
 		color: var(--color-text-primary);
 	}
@@ -505,19 +425,12 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * A fixed cell, and the text right-aligned *within* it, which is what makes
-	 * both edges of this line behave at once: the count's right edge is
-	 * (block − cell − gap) and so never moves, while the word still ends flush
-	 * with the diffstat below it. Left-aligning inside the cell would hold the
-	 * count but leave the word floating 6px shy of the column edge; sizing the
-	 * cell to the text would hold the word but let a one-file PR shove the
-	 * count sideways. The singular spends its slack on the gap instead, where
-	 * nothing is trying to line up.
+	 * Fixed cell, text right-aligned within it: the count's right edge stays
+	 * put (block − cell − gap) while the word ends flush with the diffstat
+	 * below. Left-aligning or sizing to text would let either edge drift.
 	 */
 	.size-unit {
-		/* Sized to "files" itself, not padded past it: any slack lands between
-		   the count and the word, and a pair that reads as one phrase is worth
-		   more than headroom the plural never uses. */
+		/* Sized to "files" itself; slack lands in the gap rather than as unused headroom. */
 		min-width: 1.375rem;
 		text-align: right;
 		font-size: 0.6875rem;
@@ -526,11 +439,7 @@ function onNav(event: MouseEvent): void {
 		color: var(--color-text-secondary);
 	}
 
-	/*
-	 * The detail line. Mono and one step down from the count, which is the
-	 * hierarchy the old inline version had backwards: the colours made the line
-	 * counts louder than the file count they were supporting.
-	 */
+	/* Detail line: mono, one step down from the count, so it never reads louder than the file count. */
 	.size-lines {
 		display: flex;
 		align-items: baseline;
@@ -543,11 +452,7 @@ function onNav(event: MouseEvent): void {
 		letter-spacing: 0.01em;
 	}
 
-	/*
-	 * `+`/`−` carry the meaning; the colour is the redundant channel, not the
-	 * only one. These are the system's *text* diff inks, measured for body copy,
-	 * rather than the fill tints the diff gutters use.
-	 */
+	/* `+`/`−` carry the meaning; colour is redundant. Body-copy diff inks, not the gutter fill tints. */
 	.add {
 		color: var(--color-diff-add-text);
 	}
@@ -604,14 +509,9 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * Two things give way as the container narrows, in order of how little they
-	 * cost. Both stay in the DOM (visually hidden) so screen-reader output is
-	 * identical at every width.
-	 *
-	 * The branch goes first, because below ~460px it has nothing left to say — an
-	 * ellipsed source plus a clipped target is worse than no branch at all. The
-	 * reason is not on this list: a 15px glyph in a slot the row already had
-	 * costs nothing to keep.
+	 * Both hide visually, not from the DOM, so screen-reader output stays
+	 * identical at every width. Branch goes first (below ~460px an ellipsed
+	 * source plus clipped target says nothing); the reason glyph never goes.
 	 */
 	@container tagged (max-width: 460px) {
 		.branch {
@@ -623,10 +523,7 @@ function onNav(event: MouseEvent): void {
 		}
 	}
 
-	/* Last to go, and only once the row is narrow enough that a column costs
-	   the title more than the column is worth. `display: none` would be wrong:
-	   clipped, the block keeps its spelled-out label in the accessibility tree,
-	   so what a screen reader hears is identical at every width. */
+	/* Last to go, once the column costs more width than it's worth. Clipped not `display: none`, so the label stays in the accessibility tree. */
 	@container tagged (max-width: 400px) {
 		.size {
 			position: absolute;

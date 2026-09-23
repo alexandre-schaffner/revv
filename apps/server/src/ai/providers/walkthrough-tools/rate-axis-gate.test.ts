@@ -152,11 +152,9 @@ describe("rate_axis advisory gate", () => {
   });
 
   it("rejects a disputed uncited axis when no pass ran", async () => {
-    // The hatch exists to relieve a deadlock over a verdict the agent did not
-    // choose. On the agent-authored path there is no such deadlock — it can
-    // downgrade to `pass` — so `disputed` must not become a way around the
-    // citation requirement for the majority of users, who never enable
-    // TypeSafe and for whom every axis takes this path.
+    // The hatch relieves a deadlock only for a verdict the agent didn't
+    // choose; on the agent-authored path it can downgrade to `pass` instead,
+    // so `disputed` must not become a citation bypass.
     const db = seed(null);
     const res = await rateAxisHandler(
       ctxFor(db),

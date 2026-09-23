@@ -63,10 +63,9 @@ const activeTab = $derived(getActiveTab());
 // The tier a generated walkthrough carries. Null until one exists.
 const generatedRiskLevel = $derived(getWalkthroughRiskLevel());
 
-// …and the same tier resolved from the diff before anything is generated,
-// so opening a PR tells you how much attention it needs rather than making
-// you run a review to find out. Both come from the same cached answer, so
-// the badge doesn't change value when generation starts.
+// …and the same tier resolved from the diff before generation, so opening a
+// PR shows attention needed without a review. Same cached answer either way,
+// so the badge value doesn't change when generation starts.
 const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
 $effect(() => {
   const prId = pr?.id;
@@ -79,8 +78,7 @@ $effect(() => {
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
 );
-// A tier shown before any review exists describes the change, not a verdict
-// someone reached — worth saying on hover so the badge isn't read as one.
+// Pre-review, the tier describes the change, not a verdict — say so on hover.
 const riskTitle = $derived(
   generatedRiskLevel !== null
     ? "How much attention this pull request needs. It set the depth of the review below."

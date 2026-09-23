@@ -23,10 +23,8 @@ import { settingsJevRoutes } from "./settings-jev";
 /**
  * Overlay the server-derived `jev.hasApiKey` onto a settings DTO.
  *
- * The key itself lives in the keyring, never in `user_settings`, because this
- * router is mounted without `withAuth` — anything in the row is world-readable
- * from `GET /api/settings`. A boolean is all the UI needs to render "key set"
- * versus "add a key".
+ * The key lives in the keyring, never in `user_settings`: this router is
+ * mounted without `withAuth`, so anything in the row is world-readable.
  */
 const withJevKeyState = (settings: UserSettings) =>
   Effect.map(
@@ -92,8 +90,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           aiModel: t.String(),
           aiSuggestionsModel: t.String(),
           aiThinkingEffort: t.Union([
-            // The "size it for me" sentinel, alongside the concrete tiers —
-            // see AUTO_SENTINEL.
+            // "Size it for me" sentinel, see AUTO_SENTINEL.
             t.Literal("revv:auto"),
             t.Literal("ultrathink"),
             t.Literal("max"),

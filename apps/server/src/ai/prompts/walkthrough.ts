@@ -183,30 +183,20 @@ export function buildWalkthroughPrompt(
       readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
     };
     /**
-     * Risk tier the orchestrator already wrote to the row. Present flips the
-     * tier instruction from "explore first, then declare" to "this is your
-     * budget" — the agent knows its issue count before it starts exploring
-     * rather than committing to one mid-run. Absent keeps the original
-     * behaviour, which is what every run gets when TypeSafe is off.
+     * Risk tier the orchestrator already assigned. Present flips the tier
+     * instruction to "this is your budget"; absent keeps "explore first,
+     * then declare" (TypeSafe off).
      */
     assignedRisk?: RiskLevel;
     /**
-     * Reading order for the changed files, highest attention first, with the
-     * tier the orchestrator scored each at. Present flips the file list from
-     * "here is the diff, triage it yourself" to "here is the diff, already
-     * triaged" — which is the point: that triage decides what gets reviewed
-     * at all, and the agent was making it from paths alone.
-     *
-     * A `null` tier is a file past the scoring cap; it sorts to the bottom
-     * and carries no claim either way.
+     * Reading order for changed files, highest attention first, scored by
+     * the orchestrator. Flips triage from agent-guessed to pre-triaged.
+     * A null tier is past the scoring cap; sorts to the bottom, no claim.
      */
     filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
     /**
-     * Present when the PR reads as several changes wearing one hat. The
-     * system prompt already asks for a *named* split recommendation; this
-     * tells the agent that the recommendation is warranted and how many
-     * pieces to look for, so it spends its effort naming the seams rather
-     * than deciding whether to mention them.
+     * Present when the PR reads as several changes; tells the agent the
+     * split call is already made and how many pieces to name.
      */
     splitRecommendation?: { readonly pieces: number };
   },
@@ -275,11 +265,8 @@ export function buildWalkthroughPrompt(
     );
   }
 
-  // Attention tier per path, when the orchestrator scored them. The files
-  // themselves are still emitted in diff order — reordering the patches would
-  // scramble the mental model a reader builds from a diff — but each header
-  // carries its tier, and the ranked list above tells the agent where to look
-  // first.
+  // Files stay in diff order (reordering patches would scramble the
+  // reader's mental model), but each header carries its scored tier.
   const tierByPath = new Map<string, number | null>(
     (params.filePriorities ?? []).map((f) => [f.filename, f.tier]),
   );

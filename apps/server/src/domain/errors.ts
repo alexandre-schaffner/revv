@@ -90,10 +90,8 @@ export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyE
  *   'transport'    — HTTP/connection failure, including auth and rate limits
  *   'malformed'    — a 2xx whose body didn't match the expected answer shape
  *
- * The first two short-circuit with zero latency and are not failures in any
- * meaningful sense — they're the "Jev is off" path. Every call site collapses
- * all five to `null` and degrades to the pre-Jev behaviour, which is what
- * makes the hooks safe to land together.
+ * `'unconfigured'`/`'disabled'` short-circuit with zero latency. Every call
+ * site collapses all five to `null` and degrades to pre-Jev behaviour.
  */
 export type JevUnavailableReason =
   | "unconfigured"

@@ -20,8 +20,7 @@ export const walkthroughIssues = sqliteTable("walkthrough_issues", {
   // "already submitted" treatment (grayed-out, unselectable) across sessions.
   submittedAt: text("submitted_at"),
   // ── Orchestrator advisory scoring (Jev) ───────────────────────────────
-  // Local judgments: deliberately excluded from `exportWalkthroughSnapshot`
-  // so they never enter the transport-stable cache payload.
+  // Local judgments, excluded from `exportWalkthroughSnapshot` and the transport-stable cache payload.
   /** Composite signal score in [0,1]. Null = never scored. */
   advisoryScore: real("advisory_score"),
   /** ISO 8601 timestamp of the scoring pass that wrote `advisoryScore`. */

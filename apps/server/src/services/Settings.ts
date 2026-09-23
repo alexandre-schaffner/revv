@@ -224,11 +224,7 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
   };
 }
 
-/**
- * `hasApiKey` is never taken from the caller — it is derived from the keyring
- * at the edge (`withJevKeyState`) and forced to `false` everywhere else, so a
- * client PUT can't fake a configured key into the settings row.
- */
+/** `hasApiKey` is always forced `false` here; it's derived from the keyring at the edge (`withJevKeyState`), never from client input. */
 function coerceJev(value: unknown): UserSettings["jev"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
   const r = value as Record<string, unknown>;
@@ -311,8 +307,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     },
     jev: {
       enabled: row.jevEnabled,
-      // Derived at the edge from `SecretStore`, never from the row — the key
-      // itself is not in this table.
+      // Derived from SecretStore, not this table.
       hasApiKey: false,
       ...jevHooks,
     },

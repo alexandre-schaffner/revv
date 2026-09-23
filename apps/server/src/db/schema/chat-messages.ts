@@ -2,7 +2,7 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { chatSessions } from "./chat-sessions";
 
 /**
- * Right-pane chat transcript — one row per user message, and one row per
+ * Right-pane chat transcript — one row per user message, one row per
  * contiguous run of assistant prose.
  *
  * Persists what used to live only in Svelte runes + the agent's own session
@@ -18,10 +18,9 @@ import { chatSessions } from "./chat-sessions";
  *                   mid-run; content is appended to in-place via SQL `||`.
  *                   On finalize: is_streaming=0, finalized_at set. On error:
  *                   `error` populated with the inline-error chip text.
- *                   A turn that narrates, calls a tool, then narrates again
- *                   yields TWO assistant rows, one either side of the
- *                   activity's sequence — see `sealAssistantMessage` in
- *                   routes/chat-helpers.ts for why.
+ *                   A narrate→tool→narrate turn yields two assistant rows
+ *                   split by the activity; see `sealAssistantMessage` in
+ *                   routes/chat-helpers.ts.
  *
  * Sequence is per-session monotonic, allocated against
  * `chat_sessions.next_sequence` so it shares one ordering space with

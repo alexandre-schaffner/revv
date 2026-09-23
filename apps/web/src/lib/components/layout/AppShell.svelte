@@ -71,13 +71,11 @@ const showRcActions = $derived(
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
 // first successful fetch, suppressing the signal on fresh visits.
 //
-// Scoped to the *diff*, and to the Pull button only. It deliberately says
-// nothing about whether the walkthrough is outdated: the diff's loaded SHA is
-// a per-tab fetch artifact, not the SHA the walkthrough was generated at, and
-// conflating the two marked freshly-generated walkthroughs as stale the
-// moment the user reviewed new commits without also refetching the diff.
+// Scoped to the diff and the Pull button only — says nothing about whether
+// the walkthrough is outdated. Conflating the two marked freshly-generated
+// walkthroughs stale once new commits landed but the diff hadn't refetched.
 // Walkthrough staleness comes from the server (`/current`'s `stale`,
-// `lifecycle:superseded`, and the review-rounds `hasNewCommits`).
+// `lifecycle:superseded`, review-rounds `hasNewCommits`).
 //
 // Closed and merged PRs are excluded: their head is final, so there is
 // nothing to pull. Without this a merged PR whose archived row carries a

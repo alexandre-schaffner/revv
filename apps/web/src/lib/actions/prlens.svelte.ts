@@ -16,12 +16,10 @@ const BREAKOUT_HOST = "[data-prlens-breakout]";
  * How far past the reading column a diagram may reach, as a multiple of that
  * column's width.
  *
- * 1.5 is half a column of overhang, which the diagram splits evenly either side
- * of the column — a quarter-column of bleed left and right. Past that a diagram
- * stops reading as an illustration of the text it sits in and starts reading as
- * its own spread. Expressed as a ratio rather than in pixels so the cap holds in
- * the stacked layout and in any other breakout host, instead of tracking one
- * grid's gutters, which grow without bound as the window widens.
+ * 1.5 is half a column of overhang, split evenly either side; past that a
+ * diagram reads as its own spread rather than an illustration of the text.
+ * A ratio, not pixels, so the cap holds in the stacked layout and any other
+ * breakout host instead of tracking one grid's gutters.
  */
 const MAX_BREAKOUT_RATIO = 1.5;
 
@@ -37,15 +35,11 @@ const MAX_BREAKOUT_RATIO = 1.5;
  * whole drawing, lettering included, down. Prose keeps its measure; the diagram
  * takes the rest.
  *
- * The overhang is split evenly either side rather than hung entirely off the
- * right. A diagram is the one block on the page whose width is decided by its
- * own content instead of by the column, so its edges land wherever its lane
- * count puts them; anchored left, the right edge floats free of every other
- * edge on the page and the block reads as having slipped sideways. Centred, the
- * two overhangs are equal and the diagram reads as deliberately wider than the
- * text, which is what it is. Whatever one side cannot take — a narrow gutter, a
- * stacked layout — the other absorbs, so the breakout degrades to the old
- * left-anchored growth rather than to no growth at all.
+ * Overhang splits evenly either side rather than hanging off the right: a
+ * diagram's width comes from its own content, so anchored left it reads as
+ * slipped sideways, while centred it reads as deliberately wider. Whatever
+ * one side can't take, the other absorbs, degrading toward the old
+ * left-anchored growth rather than no growth.
  *
  * The room it may take is bounded twice over — by the host, and by
  * `MAX_BREAKOUT_RATIO` — because a genuinely wide diagram would otherwise take
@@ -64,8 +58,8 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   const host = container.closest<HTMLElement>(BREAKOUT_HOST);
   if (host === null || host === container) return;
 
-  // Measure the diagram where it naturally sits, not where a previous pass put
-  // it — the offset included, or the next pass measures its own displacement.
+  // Measure where the diagram naturally sits, not where a previous pass left
+  // it, or the next pass measures its own offset.
   container.style.removeProperty("width");
   container.style.removeProperty("max-width");
   container.style.removeProperty("margin-left");
@@ -78,8 +72,8 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   const box = container.getBoundingClientRect();
   if (box.width <= 0) return;
 
-  // Room past each edge of the column, floored at 0: a host narrower than the
-  // column on one side offers nothing there, it does not owe the other side.
+  // Room past each edge, floored at 0 — a narrower host on one side owes
+  // nothing to the other.
   const roomLeft = Math.max(box.left - hostLeft, 0);
   const roomRight = Math.max(hostRight - box.right, 0);
   if (!Number.isFinite(roomLeft) || !Number.isFinite(roomRight)) return;
@@ -103,9 +97,8 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   );
   if (width <= box.width) return;
 
-  // Half the overhang to the left, unless the left gutter is too shallow to
-  // take it (clamped down) or the right one is too shallow to take its own
-  // share (pushed up, so the left makes up the difference).
+  // Left gets half the overhang, or more if the right gutter can't absorb
+  // its share; capped by the left gutter's own room.
   const overhang = width - box.width;
   const shift = Math.min(Math.max(overhang / 2, overhang - roomRight), roomLeft);
 
@@ -196,12 +189,8 @@ export const prlensDiagrams: Action<HTMLElement, ResolvedTheme | undefined> = (n
       if (node.contains(diagram)) applyBreakout(diagram, naturalWidth);
       else naturalWidths.delete(diagram);
     }
-    // Drop a host once no diagram we still track resolves to it — a host is an
-    // *ancestor* of `node`, so it can never be tested with `node.contains(...)`:
-    // that unobserved every host on the first callback, and the diagrams then
-    // kept whatever width the layout had at that instant. Opening a pane after
-    // that left them sized for a column that no longer existed, hanging off the
-    // edge of the reading area.
+    // A host is an ancestor of `node`, so `node.contains(host)` is always
+    // false; drop a host only once no tracked diagram still resolves to it.
     const live = new Set<HTMLElement>();
     for (const diagram of naturalWidths.keys()) {
       const host = diagram.closest<HTMLElement>(BREAKOUT_HOST);

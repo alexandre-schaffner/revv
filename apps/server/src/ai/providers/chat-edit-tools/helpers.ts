@@ -200,8 +200,8 @@ export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): Walkthr
     ...(row.startLine !== null ? { startLine: row.startLine } : {}),
     ...(row.endLine !== null ? { endLine: row.endLine } : {}),
     ...(row.submittedAt !== null ? { submittedAt: row.submittedAt } : {}),
-    // Absent, not null, when unscored: `exactOptionalPropertyTypes` keeps the
-    // two apart and "never scored" must never read as low signal.
+    // Absent, not null, when unscored — exactOptionalPropertyTypes keeps
+    // "never scored" from reading as low signal.
     ...(row.advisoryScore !== null
       ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
       : {}),

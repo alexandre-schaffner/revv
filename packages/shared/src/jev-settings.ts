@@ -1,9 +1,7 @@
 /**
- * Closed set of independently switchable System One hooks.
- *
- * This object is the compiler boundary for every consumer. Server mappings,
- * request validation, and the settings UI all use `JevHookKey`, so adding a
- * hook cannot silently skip one of those surfaces.
+ * Closed set of independently switchable System One hooks. The compiler
+ * boundary for every consumer — server mappings, validation, and settings UI
+ * all use `JevHookKey`, so adding a hook can't silently skip a surface.
  */
 export const JEV_HOOK_KEYS = [
   "autoModel",

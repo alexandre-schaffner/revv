@@ -35,10 +35,8 @@ let { prId }: Props = $props();
 
 type Action = "approve" | "request_changes" | "comment";
 
-// Filtered once, here, rather than at each of the four consumers below
-// (the panel, select-all, the review body, the approve dialog). A
-// low-signal issue the reader never saw must not end up posted to GitHub
-// by a select-all they did see.
+// Filtered once here rather than at each of the four consumers below, so a
+// low-signal issue the reader never saw can't be posted via select-all.
 const issueSignal = $derived(
   partitionBySignal(getIssues(), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
 );

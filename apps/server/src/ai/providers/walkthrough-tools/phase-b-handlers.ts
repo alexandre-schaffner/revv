@@ -144,10 +144,8 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   const initialBlockErr = blockContentError(input.initial_block);
   if (initialBlockErr) return errorResult(initialBlockErr);
 
-  // Same craft bar as `add_diff_step`. A chapter cannot exist without its
-  // first block, so rejecting here rejects the chapter too — which is the
-  // right outcome: a chapter whose opening move is a fake artifact was going
-  // to be a weak chapter.
+  // Same craft bar as add_diff_step; rejecting here also rejects the
+  // chapter, since a chapter can't exist without its first block.
   if (input.initial_block.artifact) {
     const verdict = await ctx.jev.judgeArtifact(input.initial_block.artifact.html, {
       chapterTitle: trimmedTitle,
@@ -312,9 +310,8 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
     artifact: input.artifact,
   };
 
-  // The craft bar, before the write. Rejecting after it would leave a hole in
-  // the chapter's step_index sequence, and unlike the issue judgment there is
-  // no cheap way to undo a block the reader may already have scrolled past.
+  // Craft bar runs before the write: rejecting after would leave a hole in
+  // step_index, and there's no cheap way to undo a block already read.
   const chapterTitle = chapterTitleFor(ctx.db, ctx.walkthroughId, input.semantic_step_index);
   if (input.artifact) {
     const verdict = await ctx.jev.judgeArtifact(input.artifact.html, {
@@ -383,10 +380,8 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   if (input.markdown) {
     ctx.jev.scheduleProseCheck(input.markdown.content, chapterTitle);
   }
-  // Voice advice from an *earlier* block, if any landed while the agent was
-  // writing this one. It rides out here rather than blocking the block it was
-  // about — see `ai/jev/prose-voice.ts` on why the feedback is deliberately
-  // late rather than absent.
+  // Voice advice from an earlier block, if it landed by now; rides out on
+  // this call rather than blocking the block it's about. See ai/jev/prose-voice.ts.
   const advice = ctx.jev.takeProseAdvice() ?? "";
   return okResult(
     withArtifactWarnings(
@@ -419,17 +414,11 @@ function chapterTitleFor(db: Db, walkthroughId: string, semanticStepIndex: numbe
 // Writes: one walkthrough_issues row (upsert on deterministic id).
 // Does not advance phase.
 //
-// The row is written unconditionally and a Jev judgment is scheduled behind
-// it (`ai/jev/issue-relevance.ts`): a concern that doesn't hold up is
-// retracted a second or two later, and one whose severity the rubric
-// disagrees with is relabelled in place.
-//
-// **Scheduled, not awaited.** Blocking here put a round trip on every
-// concern, which on a high-risk PR is most of a minute the agent spends
-// waiting rather than reviewing. The cost of deferring is a brief window
-// where a doomed issue is visible; the two places that genuinely need a
-// settled issue set — the completion gate and `add_issue_comment` — get
-// consistency from `ai/jev/pending.ts` instead.
+// The row writes unconditionally; a Jev judgment is scheduled behind it
+// (ai/jev/issue-relevance.ts) that may retract or relabel it later.
+// Scheduled, not awaited — blocking would cost each concern a round trip.
+// The completion gate and add_issue_comment get consistency from
+// ai/jev/pending.ts instead.
 
 /** Read-only preconditions for `flag_issue`, evaluated inside the write transaction. */
 function checkFlagIssuePreconditions(
@@ -546,9 +535,8 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
           startLine: input.start_line ?? null,
           endLine: input.end_line ?? null,
           blockIds: JSON.stringify(blockIds),
-          // A re-flag with revised wording invalidates the prior judgment —
-          // clearing the score is what stops a stale verdict from sticking to
-          // text it was never made about.
+          // Clear the score on re-flag: a stale verdict shouldn't stick to
+          // revised wording.
           advisoryScore: null,
           advisoryScoredAt: null,
         },
@@ -571,8 +559,8 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     ctx.emit({ type: "issue", data: issueEvent });
   }
 
-  // Fire-and-forget. The row is already durable; the judgment can only
-  // remove or relabel it, never block this call.
+  // Fire-and-forget: the row is already durable; the judgment can only
+  // remove or relabel it.
   ctx.jev.scheduleIssueJudgment(issueId, {
     severity: input.severity,
     title,
@@ -582,12 +570,9 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     endLine: input.end_line ?? null,
   });
 
-  // The inline-comment instruction no longer branches on the severity the
-  // agent sent. It can't: the severity is provisional until the judgment
-  // lands, and telling the agent "info, no comment needed" for a concern
-  // about to be relabelled `warning` would send it into Phase C owing a
-  // comment it was told to skip. Anchored concerns always get one — a
-  // redundant comment on a nitpick is cheap, a missing one bounces the run.
+  // Can't branch on agent-sent severity — it's provisional until the
+  // judgment lands — so every anchored concern gets a required inline
+  // comment. A redundant comment is cheap; a missing one bounces the run.
   const hasLineAnchor = input.file_path !== null && input.start_line !== null;
   const nextStepHint = hasLineAnchor
     ? `\n\nNEXT STEP — REQUIRED: call add_issue_comment with issue_id="${issueId}", file_path="${input.file_path}", start_line=${input.start_line}, end_line=${input.end_line ?? input.start_line}, and a body that explains the concern to the coder (2–6 sentences, markdown, second-person voice). Without that follow-up call this issue has no inline comment in the diff. If the concern affects multiple call-sites, call add_issue_comment once per line range with the same issue_id.`
@@ -669,10 +654,8 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
       )
       .get();
     if (!issueRow) {
-      // Retracted out from under the agent by the relevance judgment, which
-      // runs behind `flag_issue`. Not the agent's mistake and not an error:
-      // it was handed a valid id and the concern was withdrawn afterwards.
-      // `isError` here would send it looking for a bug in its own bookkeeping.
+      // Retracted by the relevance judgment behind flag_issue — not the
+      // agent's mistake. isError here would send it hunting a bug that isn't there.
       if (ctx.jev.issueRetracted(input.issue_id)) {
         result = okResult(
           `That concern was withdrawn after you flagged it — the relevance check judged it below the bar for this pull request, so there is nothing left to comment on. This is not an error and not something to retry. Move on to the next concern or diff step.`,

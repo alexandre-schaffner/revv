@@ -148,8 +148,8 @@ export interface AcpWalkthroughStreamParams {
   acpAgentId: AcpAgentId;
   /**
    * Risk tier the orchestrator assigned before the agent started. Present
-   * means the prompt states the tier as a given; absent keeps the original
-   * "explore first, then declare the tier" instruction.
+   * means the prompt states it as a given; absent keeps the "explore first"
+   * instruction.
    */
   assignedRisk?: RiskLevel;
   /** Ranked reading order from the job-start pass. See the prompt builder. */
@@ -192,11 +192,7 @@ export function streamWalkthroughViaAcp(
   // The harness' timeout message, kept so the zero-content path can say WHY the
   // run produced nothing instead of blaming the PR's complexity.
   let timeoutReason: string | null = null;
-  /**
-   * Message from a non-abort mid-turn failure. Only surfaced when the run
-   * committed nothing — otherwise the partial goes to auto-continuation and
-   * the user never needs to see it.
-   */
+  /** Message from a non-abort mid-turn failure; surfaced only when the run committed nothing. */
   let failureReason: string | null = null;
   // Liveness for the harness' idle deadline. Poked by BOTH signals that can
   // only come from a live agent: its own ACP session updates, and the MCP
@@ -482,21 +478,13 @@ export function streamWalkthroughViaAcp(
       }
       logError("walkthrough-acp", "queryTask error:", message);
 
-      // Same reasoning as the timeout above. A mid-turn
-      // failure here is the *transport's* — an ACP adapter throwing while it
-      // decodes a notification, a daemon dying — not a verdict on the review.
-      // Everything the agent committed is already durable (invariant #1), and
-      // one observed failure discarded a walkthrough that had reached Phase C
-      // with all nine axes seeded.
-      //
-      // So don't decide here: record the reason and let the tail read the DB.
-      // With content persisted it yields `done` and the run falls into its
-      // auto-continuation budget; with nothing written it still surfaces a
-      // terminal error, now carrying this message instead of blaming the PR.
-      //
-      // An abort is excluded: user cancel and supersede are deliberate
-      // terminations that `WalkthroughJobs.handleFailure` already classifies,
-      // and retrying them would be wrong.
+      // Same reasoning as the timeout above: a mid-turn failure here is the
+      // transport's fault, not a verdict on the review, and everything
+      // committed is already durable (invariant #1). Record the reason and
+      // let the tail read the DB — content persisted falls into
+      // auto-continuation, nothing written surfaces this as a terminal
+      // error. Abort is excluded: WalkthroughJobs.handleFailure already
+      // classifies deliberate cancel/supersede.
       if (params.abortController?.signal.aborted !== true) {
         failureReason = message;
         return tokenUsage;

@@ -4,7 +4,7 @@ import type { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import type { JevService } from "../../services/Jev";
 import { type JobStartAnswers, resolveJobStartAnswers } from "./job-start";
-import { buildJobStartPlan, shouldResolveJobStart } from "./job-start-plan";
+import { buildJobStartPlan, type JobStartPlan, shouldResolveJobStart } from "./job-start-plan";
 import type { JobStartStateInput } from "./state";
 
 /** Resolve the optional cached judgment and project it into launch inputs. */
@@ -17,9 +17,7 @@ export function resolveJobStart(input: {
   readonly trigger: "user" | "resume" | "review_requested";
   readonly cacheProbe: Effect.Effect<boolean>;
 }): Effect.Effect<
-  ReturnType<typeof buildJobStartPlan> & {
-    readonly answers: JobStartAnswers | null;
-  },
+  JobStartPlan & { readonly answers: JobStartAnswers | null },
   never,
   JevService | CacheService | DbService
 > {

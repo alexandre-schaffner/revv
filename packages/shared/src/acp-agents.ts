@@ -239,35 +239,23 @@ export function getAcpAgentDefaultModel(id: AcpAgentId): string {
 
 /**
  * Stored in `aiModel` or `aiThinkingEffort` to mean "don't pin one — size the
- * PR and pick". Only consulted when the TypeSafe auto-model toggle is on; with
- * it off, the value behaves exactly like an unrecognised setting.
+ * PR and pick". Only consulted when the TypeSafe auto-model toggle is on.
  *
- * Namespaced because plain `"auto"` is already taken: the `cursor` agent ships
- * a literal `{ label: "Auto", value: "auto" }` model and defaults to it.
+ * Namespaced because plain `"auto"` is already taken by `cursor`'s own model.
+ * One constant for both fields since the two are independent opt-ins but a
+ * shared value is one fewer thing to get wrong.
  *
- * **One constant for both fields, deliberately.** They live in different
- * fields and are independent opt-ins — auto model with a pinned effort, or a
- * pinned model with auto effort, are both ordinary configurations — but one
- * value to recognise is one fewer to get wrong, and two constants holding the
- * same literal is two things that can drift.
- *
- * The sentinel is **deliberately absent from every agent's
- * `capabilities.models` and `capabilities.thinkingEfforts`**, but absence is
- * not the safety net: {@link resolveGenerationModel} and
- * {@link resolveThinkingEffort} are the arbiters, and each collapses the
- * sentinel to "unpinned" before anything downstream can see it. Every launch
- * path must go through one of them — passing a raw `settings.aiModel` to an
- * agent adapter forwards `"revv:auto"` verbatim and the launch fails.
+ * Absent from every agent's `capabilities.models` / `.thinkingEfforts`.
+ * {@link resolveGenerationModel} and {@link resolveThinkingEffort} are the
+ * arbiters that collapse it to "unpinned" — every launch path must go
+ * through one of them, or a raw `settings.aiModel` reaches the agent adapter
+ * as `"revv:auto"` and the launch fails.
  */
 export const AUTO_SENTINEL = "revv:auto";
 
 export type AutoSentinel = typeof AUTO_SENTINEL;
 
-/**
- * A type predicate rather than a plain `boolean` so narrowing does the work a
- * cast would otherwise have to: after a false branch, a
- * {@link ThinkingEffortSetting} is a {@link ThinkingEffort}.
- */
+/** Type predicate, not a plain `boolean`, so a false branch narrows {@link ThinkingEffortSetting} to {@link ThinkingEffort} without a cast. */
 export function isAutoSentinel(value: string | null | undefined): value is AutoSentinel {
   return value === AUTO_SENTINEL;
 }
@@ -276,11 +264,9 @@ export type ThinkingEffortSetting = ThinkingEffort | AutoSentinel;
 
 /**
  * Resolve the stored effort setting into a concrete tier for a launch.
- *
- * `undefined` means "say nothing and let the agent use its own default" —
- * which is what Auto resolves to everywhere there is no sizing answer to
- * apply (chat, recap, suggestions). Only walkthrough generation sizes the PR,
- * so only it passes a `sized` value.
+ * `undefined` means "let the agent use its own default" — what Auto resolves
+ * to wherever there's no sizing answer (chat, recap, suggestions). Only
+ * walkthrough generation sizes the PR, so only it passes a `sized` value.
  */
 export function resolveThinkingEffort(
   setting: ThinkingEffortSetting | null | undefined,

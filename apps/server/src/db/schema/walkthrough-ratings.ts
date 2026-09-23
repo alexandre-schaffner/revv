@@ -22,18 +22,14 @@ export const walkthroughRatings = sqliteTable(
     citations: text("citations").notNull().default("[]"), // JSON RatingCitation[]
     blockIds: text("block_ids").notNull().default("[]"), // JSON string[]
     /**
-     * `'agent'` (the original contract) or `'advisory'` when the orchestrator
-     * pre-assigned {@link verdict} from Jev and `rate_axis` only filled in
-     * the prose. Defaulted rather than nullable so pre-existing rows read as
-     * what they are.
+     * `'agent'`, or `'advisory'` when the orchestrator pre-assigned
+     * {@link verdict} from Jev and `rate_axis` only filled in the prose.
+     * Defaulted, not nullable, so pre-existing rows read as what they are.
      */
     verdictSource: text("verdict_source").$type<VerdictSource>().notNull().default("agent"),
     /** Calibrated confidence [0,1] behind an advisory verdict; null for agent verdicts. */
     verdictConfidence: real("verdict_confidence"),
-    /**
-     * The agent was handed a non-`pass` verdict and could find nothing to
-     * cite. Recorded as the disagreement signal; never changes the verdict.
-     */
+    /** Agent was handed a non-`pass` verdict and found nothing to cite; disagreement signal only, never changes the verdict. */
     disputed: integer("disputed", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
   },

@@ -1,59 +1,28 @@
 // ── Artifact craft bar ───────────────────────────────────────────────────────
+// The `artifact` block variant requires live state, a reader-varied control, and a verdict
+// (see `add_diff_step`'s schema). Three nouls turn that contract into a judgment, one per
+// clause, so a rejection names what failed.
 //
-// The `artifact` block variant carries an explicit, written-down contract —
-// "a live state readout, something the reader can vary, and a verdict; a
-// step-reveal with no changing state is a markdown list, not an artifact"
-// (see `add_diff_step`'s schema and "Interactive artifacts" in the system
-// prompt). Until now that contract was checked by string heuristics in
-// `withArtifactWarnings`, which could only *warn*.
-//
-// Three nouls turn it into a judgment the tool can act on. Each maps to one
-// clause of the contract, so a rejection names the clause that failed and the
-// agent knows what to change.
-//
-// **Blocking, unlike the issue gate — deliberately.** A gate that rejects has
-// to answer before the write, and a block that appeared and then vanished
-// would leave a hole in the chapter's `step_index` sequence. The latency
-// argument that pushed issues off the critical path doesn't apply: artifacts
-// are rare (a couple per walkthrough at most), where concerns are not.
+// Blocking, unlike the issue gate: a block that appeared then vanished would leave a hole
+// in the chapter's `step_index` sequence, and artifacts are rare enough the latency is fine.
 
+import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import type { JevState } from "../../services/Jev";
 import { JevService } from "../../services/Jev";
 import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
-import { noulQuestion } from "./questions";
 
-/** Budget. On the write path, so tight — a slow answer accepts the block. */
+/** Timeout budget; short because it sits on the write path and a slow answer accepts the block. */
 export const ARTIFACT_QUALITY_TIMEOUT_MS = 6_000;
 
-/**
- * Character ceiling on the HTML put in state.
- *
- * Generous, because the three questions are about what the document *does*
- * and the interactive parts are usually at the bottom (the script). A
- * head-truncated artifact would read as having no interactivity at all,
- * which is exactly the false positive that would make this gate hated.
- */
+/** Character ceiling on the HTML sent to Jev. Generous: the interactive parts (the script) are usually at the bottom, and truncating them would read as no interactivity at all. */
 const ARTIFACT_MAX_CHARS = 24_000;
 
-/**
- * Probability below which a clause counts as failed.
- *
- * One threshold rather than a composite, because the three clauses are
- * conjunctive in the contract — an artifact with live state and a verdict but
- * nothing to vary is still a diagram, not an artifact.
- */
+/** Probability below which a clause counts as failed. One threshold, not a composite: the three clauses are conjunctive in the contract. */
 export const ARTIFACT_CLAUSE_FLOOR = 0.35;
 
-/**
- * How many clauses may fail without the block being rejected.
- *
- * One. A single clause reading low is inside the noise band of a judgment
- * about generated HTML, and a false rejection costs the agent a rewrite of
- * its most expensive block type. Two independent clauses failing is the
- * signal that it isn't an artifact at all.
- */
+/** Clauses allowed to fail before rejection. One clause failing is noise in a judgment over generated HTML; two is the signal it isn't an artifact. */
 export const ARTIFACT_MAX_FAILED_CLAUSES = 1;
 
 export interface ArtifactVerdict {
@@ -80,13 +49,7 @@ const CLAUSE_LABELS: Record<keyof typeof CLAUSES, string> = {
   reaches_a_verdict: "no verdict — it shows behaviour without saying what it means",
 };
 
-/**
- * Judge one artifact against the craft bar.
- *
- * Never fails, and never rejects on an unavailable Jev: an artifact that
- * would have been accepted before this hook existed must still be accepted
- * when the hook can't answer.
- */
+/** Judges one artifact against the craft bar. Never fails; an unavailable Jev accepts the block rather than rejecting it. */
 export function judgeArtifact(
   html: string,
   context: { readonly chapterTitle: string; readonly annotation: string | null },
@@ -114,9 +77,9 @@ export function judgeArtifact(
         timeoutMs: ARTIFACT_QUALITY_TIMEOUT_MS,
         state,
         questions: {
-          live_state: noulQuestion(CLAUSES.live_state),
-          reader_can_vary: noulQuestion(CLAUSES.reader_can_vary),
-          reaches_a_verdict: noulQuestion(CLAUSES.reaches_a_verdict),
+          live_state: noul(CLAUSES.live_state),
+          reader_can_vary: noul(CLAUSES.reader_can_vary),
+          reaches_a_verdict: noul(CLAUSES.reaches_a_verdict),
         },
       }),
     );
@@ -126,8 +89,7 @@ export function judgeArtifact(
     const answers = result.answers;
     const failed = CLAUSE_KEYS.filter((key) => {
       const answer: unknown = answers[key];
-      // A missing answer is not a failure — see the "never rejects on
-      // unavailable" rule above, applied per clause.
+      // Missing answer counts as pass, not fail (per-clause version of the rule above).
       if (answer === null || typeof answer !== "object" || !("noul" in answer)) return false;
       return typeof answer.noul === "number" && answer.noul < ARTIFACT_CLAUSE_FLOOR;
     });

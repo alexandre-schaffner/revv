@@ -52,9 +52,7 @@ describe("filePriorityOrder", () => {
     ]);
   });
 
-  // An unjudged file is not evidence of importance. Sorting it to the top
-  // would put the least-known files first, which is the one failure mode that
-  // makes the whole ordering untrustworthy.
+  // An unjudged file isn't evidence of importance; sorting it to the top would be untrustworthy.
   it("sinks files past the scoring cap to the bottom, not the top", () => {
     const ranked = filePriorityOrder(answers({ filePriorities: { "README.md": 1 } }), files);
     expect(ranked?.[0]?.filename).toBe("README.md");
@@ -88,8 +86,6 @@ describe("splitRecommendation", () => {
     expect(splitRecommendation(answers({ splitScore: 0.9, splitCount: "many" }))?.pieces).toBe(4);
   });
 
-  // "Consider breaking this up" is the most eye-rolled sentence in code
-  // review; an unwarranted one poisons the overview it leads.
   it("keeps the floor high enough that a coin flip never recommends a split", () => {
     expect(SPLIT_RECOMMENDATION_FLOOR).toBeGreaterThan(0.5);
     expect(splitRecommendation(answers({ splitScore: 0.5, splitCount: "many" }))).toBeNull();

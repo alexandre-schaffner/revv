@@ -23,11 +23,7 @@ import IssueTestRow from "./IssueTestRow.svelte";
 
 interface Props {
   issues: readonly WalkthroughIssue[];
-  /**
-   * Issues the scoring pass rated low signal. Rendered read-only behind a
-   * disclosure: they are deliberately outside the selection model, because
-   * a select-all must never post something the reader didn't see.
-   */
+  /** Issues rated low signal. Read-only, behind a disclosure, outside the selection model — select-all must never post something the reader didn't see. */
   filteredIssues?: readonly WalkthroughIssue[];
   /** Selected-for-submit set — lives in RequestChanges so it survives
    *  remounts and persists across PR switches. Passed in so this

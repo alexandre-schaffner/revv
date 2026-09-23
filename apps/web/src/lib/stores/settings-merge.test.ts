@@ -48,9 +48,7 @@ describe("mergeSettingsUpdate", () => {
   });
 
   it("keeps the other jev flags when one is patched", () => {
-    // The bug this guards: a top-level spread replaced `jev` wholesale, so
-    // flipping `risk` read back as the master switch off, no API key, and
-    // every other feature off — until the next full fetch.
+    // Guards against a top-level spread replacing `jev` wholesale.
     const next = mergeSettingsUpdate(CURRENT, { jev: { risk: true } });
     expect(next.jev).toEqual({ ...CURRENT.jev, risk: true });
   });
@@ -66,15 +64,13 @@ describe("mergeSettingsUpdate", () => {
     expect(next.cache.bucket).toBe("team-bucket");
   });
 
-  // The generic guard. Adding a nested object to `UserSettings` and
-  // forgetting to list it in `mergeSettingsUpdate` fails here rather than
-  // shipping as "all my settings turned themselves off".
+  // A nested object added to `UserSettings` but not to `mergeSettingsUpdate`
+  // fails here rather than shipping as settings turning themselves off.
   it("deep-merges every nested object on UserSettings", () => {
     for (const [key, value] of Object.entries(CURRENT)) {
       if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
       const siblings = Object.entries(value);
-      // Patch the first sub-field with a flipped/altered value and assert
-      // the remaining sub-fields survive.
+      // Patch the first sub-field and assert the rest survive.
       const [firstKey, firstValue] = siblings[0] as [string, unknown];
       const patched = typeof firstValue === "boolean" ? !firstValue : firstValue;
       const next = mergeSettingsUpdate(CURRENT, {

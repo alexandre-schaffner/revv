@@ -151,17 +151,11 @@ export class AiService extends Context.Tag("AiService")<
       unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
       /**
        * Per-job model/effort override, resolved once at job start. Absent
-       * means "use the configured settings". Routed through
-       * `resolveGenerationModel` below so an override naming a model this
-       * agent can't run degrades to the agent default rather than launching a
-       * broken session.
+       * uses configured settings. Goes through `resolveGenerationModel` so
+       * an override naming a model this agent can't run falls back safely.
        */
       launchOverride?: GenerationLaunchOverride;
-      /**
-       * Risk tier already written to the walkthrough row by the orchestrator.
-       * Present means the prompt tells the agent the tier is a given;
-       * absent keeps the original "explore, then declare the tier".
-       */
+      /** Risk tier already written to the walkthrough row by the orchestrator; present means the prompt states it as a given. */
       assignedRisk?: RiskLevel;
       /** Ranked reading order from the job-start pass. See the prompt builder. */
       filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
@@ -286,10 +280,7 @@ export const AiServiceLive = Layer.effect(
             const clearToken = params.clearHttpMcpSessionToken;
             const registerNotifier = params.registerHttpMcpActivityNotifier;
             const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
-            // Guard the model against this agent (the chat bottom bar may
-            // have left a chat-only agent's model id, e.g. cursor). The
-            // per-job override goes through the same guard and falls back to
-            // the configured model when it doesn't survive it.
+            // Guard against a chat-only agent id left over from the bottom bar (e.g. cursor).
             const override = params.launchOverride;
             const model = resolveGenerationModel(agent, override?.model ?? settings.aiModel);
             const raw = streamWalkthroughViaAcp(
@@ -307,9 +298,7 @@ export const AiServiceLive = Layer.effect(
               },
               {
                 model,
-                // The sized effort when the user asked for Auto, their pin
-                // otherwise — `resolveThinkingEffort` is the single arbiter, so a
-                // sentinel can never reach an agent adapter.
+                // Sized effort for Auto, the user's pin otherwise.
                 thinkingEffort: resolveThinkingEffort(
                   settings.aiThinkingEffort,
                   override?.thinkingEffort ?? null,

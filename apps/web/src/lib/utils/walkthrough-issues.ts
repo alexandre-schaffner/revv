@@ -86,21 +86,11 @@ export interface SignalPartition {
 }
 
 /**
- * Split issues into what to show and what to tuck away.
- *
- * `lowSignal` is computed server-side (from the stored composite score) so
- * every surface — the walkthrough body, the Request Changes panel, the
- * per-file strip, the approve dialog, the address-issues prompt — agrees on
- * the same set without each re-deriving a threshold.
- *
- * **An unscored issue is never low signal.** That covers every walkthrough
- * generated before the feature, every cache-imported one (the importer
- * regenerates issue ids, so the scores don't travel), and every run where
- * the scoring pass was off or unreachable. Those all degrade to showing
- * everything, which is the pre-feature behaviour.
- *
- * A submitted issue is also never hidden: it is already on GitHub, and
- * quietly dropping it from the list would misrepresent what was sent.
+ * Split issues into what to show and what to tuck away. `lowSignal` is
+ * computed server-side so every surface agrees without re-deriving a
+ * threshold. An unscored issue (pre-feature walkthrough, cache-imported,
+ * scoring pass off) is never low signal. A submitted issue is never hidden —
+ * it's already on GitHub.
  */
 export function partitionBySignal(
   issues: readonly WalkthroughIssue[],
@@ -116,14 +106,7 @@ export function partitionBySignal(
   return { shown, filtered };
 }
 
-/**
- * Whether the low-signal filter applies, for the three surfaces that render
- * issues.
- *
- * `hideLowSignal` is only honoured while scoring itself is on, so turning
- * scoring off restores the full list without the user also having to find
- * this second toggle.
- */
+/** `hideLowSignal` only applies while scoring is on, so turning scoring off restores the full list. */
 export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
-  return (settings?.jev?.issueScoring ?? false) && (settings?.jev?.hideLowSignal ?? true);
+  return (settings?.jev.issueScoring ?? false) && (settings?.jev.hideLowSignal ?? true);
 }

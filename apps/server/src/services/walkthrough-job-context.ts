@@ -13,7 +13,7 @@ import { account } from "../db/schema/auth";
 import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 
-export function buildWalkthroughProviderConfig(input: {
+function buildWalkthroughProviderConfig(input: {
   readonly agent: AcpAgentId;
   readonly model: string;
   readonly configuredEffort: ThinkingEffortSetting;

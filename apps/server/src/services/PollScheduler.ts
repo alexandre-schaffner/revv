@@ -668,20 +668,14 @@ export const PollSchedulerLive = Layer.effect(
                   });
                 }
 
-                // `listOpen` reads GitHub's *simple* PR object, which carries
-                // no diff size, so every row above arrives at 0/0/0. One
-                // aliased GraphQL request fills them in — see
-                // `listPrDiffStats` for why this is not one detail fetch per
-                // PR.
+                // `listOpen` returns GitHub's *simple* PR object (no diff size, hence 0/0/0
+                // above); one aliased GraphQL request fills it in — see `listPrDiffStats`
+                // for why not one detail fetch per PR. Only requested for PRs never sized
+                // or whose head just moved, so steady state adds no extra request.
                 //
-                // Asked for only where the answer could have moved: a PR we
-                // have never sized, or one whose head just changed. In the
-                // steady state that list is empty and the poll makes no extra
-                // request at all, so this costs a burst on first sync and
-                // roughly nothing after.
-                // Apply the monotonic-head mask before deciding what to size.
-                // Otherwise a lagging list response can make us fetch and
-                // persist stats for an older head over the newer stored row.
+                // Mask before sizing/writing: sizing a stale head would persist stats over
+                // a newer stored row, and the supersede gate below reads the stored row, so
+                // a regressed `updated_at` would pass on the next cycle. See `preserveHeadOnStaleRead`.
                 const maskedPrs = prs.map((pr) =>
                   preserveHeadOnStaleRead(existingMap.get(pr.id), pr),
                 );
@@ -690,9 +684,8 @@ export const PollSchedulerLive = Layer.effect(
                   return needsDiffStats(existing, diffStatsHeadByPrId.get(pr.id), pr.headSha);
                 });
 
-                // Best-effort: on failure the rows keep their zeros, and
-                // `upsertPrs`' `changed_files > 0` guard leaves whatever the
-                // DB already knew intact.
+                // Best-effort: on failure, rows keep their zeros and `upsertPrs`'
+                // `changed_files > 0` guard leaves the DB's existing values intact.
                 const diffStats =
                   needsStats.length === 0
                     ? null
@@ -707,11 +700,6 @@ export const PollSchedulerLive = Layer.effect(
                         { errorLabel: `diffStats error for ${repo.fullName}` },
                       );
 
-                // Don't let a lagging list body rewind a head we already know
-                // about — see `preserveHeadOnStaleRead`. Masking happens here,
-                // before the write, because the supersede gate further down
-                // fires on the *stored* row and a regressed `updated_at` would
-                // make it pass on the very next cycle.
                 const rows = maskedPrs.map((pr) => {
                   const stats = diffStats?.get(pr.externalId);
                   return stats === undefined ? pr : { ...pr, ...stats };

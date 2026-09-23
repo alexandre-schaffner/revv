@@ -24,8 +24,7 @@ import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 
-// The model surface follows the selected `aiAgent`. Capabilities are the
-// registry's single source of truth.
+// The model surface follows `aiAgent`; capabilities are the registry's single source of truth.
 let currentId = $derived(resolveChatAgentId(getSettings()));
 let caps = $derived(getAgentCapabilities(currentId));
 // opencode is the only agent whose catalog is fetched live; everything else
@@ -38,12 +37,10 @@ let fetchedModels = $derived<ModelOption[]>(
 );
 let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
-// The Auto option is offered only where it can do something: the TypeSafe
-// auto-model toggle has to be on, and the agent needs a depth ladder the
-// server can route onto. opencode's catalog is fetched live, so there is no
-// static ladder and Auto would be a no-op — see `ai/jev/routing.ts`.
+// Auto needs the TypeSafe toggle on and a static depth ladder to route onto;
+// opencode's catalog is fetched live, so it has no ladder. See `ai/jev/routing.ts`.
 let autoModelOffered = $derived(
-  (getSettings()?.jev?.enabled ?? false) && (getSettings()?.jev?.autoModel ?? false) && !isDynamic,
+  (getSettings()?.jev.enabled ?? false) && (getSettings()?.jev.autoModel ?? false) && !isDynamic,
 );
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
@@ -58,18 +55,11 @@ let sizing = $derived(selectedSizing.sizing);
 /**
  * What Auto resolves to for the PR at its *current* head.
  *
- * The preview leads, deliberately. A finished run's model is what happened
- * at some earlier SHA, and after a pull that answer is stale — which is the
- * one thing this label must not be. The preview is keyed on the current head
- * and shares the server's sizing cache with the generation path, so for an
- * un-pulled PR it names exactly what a run did or would use.
- *
- * The exception is a run in flight: that is ground truth, and it may have
- * launched before a settings change the preview already reflects.
- *
- * A `ready` preview with a null model means routing declined and the agent's
- * own default stands — a real answer, so it resolves to that default rather
- * than showing blank.
+ * The preview leads: a finished run's model is stale after a pull, while the
+ * preview is keyed on the current head and shares the server's sizing cache.
+ * Exception: a run in flight is ground truth, even if it launched before a
+ * settings change the preview already reflects. A `ready` preview with a
+ * null model means routing declined, so it falls back to the agent's default.
  */
 let autoResolvedLabel = $derived.by((): string | null => {
   if (!isAuto) return null;
@@ -81,11 +71,7 @@ let autoResolvedLabel = $derived.by((): string | null => {
   return labelFor(sizing.model) ?? labelFor(getDefaultModel(currentId));
 });
 
-/**
- * Whether a sizing is actually outstanding. With no PR open there is nothing
- * to size, so the label stays a bare "Auto" rather than claiming to be
- * working on something.
- */
+/** Whether a sizing is actually outstanding; bare "Auto" when there's no PR to size. */
 let autoSizing = $derived(isAuto && autoResolvedLabel === null && selectedSizing.pending);
 
 let autoTitle = $derived(
@@ -95,9 +81,8 @@ let autoTitle = $derived(
 );
 
 let currentLabel = $derived(
-  // Checked ahead of the loading/empty branches: Auto is a real selection
-  // even while a dynamic catalog is still in flight, and without this the
-  // trigger would render the raw sentinel string.
+  // Checked ahead of loading/empty: Auto is a real selection even mid-fetch,
+  // and without this the trigger would render the raw sentinel string.
   isAuto
     ? autoResolvedLabel
       ? `Auto · ${autoResolvedLabel}`

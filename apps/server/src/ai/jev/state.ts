@@ -1,24 +1,20 @@
-// ── Jev state builders ───────────────────────────────────────────────────────
+// ── Jev state builders ──────────────────────────────────────────────────────
 //
 // One builder per hook. Each returns a plain JSON object sized to fit under
 // the System One state budget, with named fields rather than a prose blob so
 // questions can reference nested paths (`pr.title`, `issues.<id>.description`).
 //
-// Deliberately NOT sharing the walkthrough prompt builder's budget loop
-// (`ai/prompts/walkthrough.ts`): different limit, different consumer. Coupling
-// them means a change made for Jev silently shrinks the agent's prompt.
+// Not sharing the walkthrough prompt builder's budget loop
+// (`ai/prompts/walkthrough.ts`): different limit, different consumer.
 
 import type { JsonValue } from "@typesafe-ai/sdk";
 import type { JevState } from "../../services/Jev";
 import { truncatePatchToChars } from "../../services/patch-truncate";
 
 /**
- * Character ceiling for the whole `state` blob.
- *
- * System One allows 32k tokens for state plus the longest question. Against
- * the repo's own `length / 4` token heuristic, 96k chars ≈ 24k tokens, which
- * leaves comfortable headroom for the questions themselves. Chars, not bytes
- * — see `patch-truncate.ts` on why that's the right proxy here.
+ * Character ceiling for the whole `state` blob. System One allows 32k tokens
+ * for state + longest question; 96k chars ≈ 24k tokens (repo's `length / 4`
+ * heuristic), leaving headroom. Chars not bytes — see `patch-truncate.ts`.
  */
 export const JEV_STATE_MAX_CHARS = 96_000;
 
@@ -64,12 +60,9 @@ function commitSubject(message: string): string {
 
 /**
  * State for the job-start call (risk tier + review depth + wide-context).
- *
- * Patches are included because the questions are about the *change*, not the
- * description — a PR titled "small fix" that rewrites an auth middleware has
- * to read as high risk. Files are added whole-patch-first until the budget
- * runs out; the ones that don't fit still appear with their stats, so the
- * total size of the change is never understated by truncation.
+ * Patches are included because the questions are about the change, not the
+ * description. Files are added whole-patch-first until budget runs out; the
+ * rest still appear with stats, so the change size is never understated.
  */
 export interface JobStartStateInput {
   readonly pr: PrLike;
@@ -118,9 +111,7 @@ export function buildJobStartState({ pr, files, commits }: JobStartStateInput): 
     withPatch.push({ ...stats, patch: clipped.patch });
   }
 
-  // The stats-only tail isn't budgeted in the loop above (each entry is
-  // tiny), but a PR touching thousands of files would still overflow on the
-  // tail alone — hence the clamp.
+  // The stats-only tail isn't budgeted above (entries are tiny), but thousands of files could still overflow it, hence the clamp below.
   return clampState({ ...header, files: [...withPatch, ...statsOnly] });
 }
 
@@ -148,17 +139,14 @@ export interface PhaseCInput {
 }
 
 /**
- * State for the phase-D verdict pass.
+ * State for the phase-D verdict pass. Hand-written rather than reusing
+ * `exportWalkthroughSnapshot`, which asserts `status='complete'` (false here
+ * by construction) and carries full block bodies that wouldn't fit.
  *
- * Hand-written rather than reusing `exportWalkthroughSnapshot`, which asserts
- * `status='complete'` (false here by construction — Phase D hasn't run) and
- * carries full block bodies that wouldn't fit.
- *
- * The changed-file list with stats is nearly free and load-bearing: without
- * it, `tests` / `scope` / `api_changes` could only reflect whatever a chapter
- * happened to mention, and "412 added lines, zero test files touched" would
- * be invisible. Jev is judging *the review* here, not the diff — the file
- * list narrows that gap, it does not close it.
+ * The changed-file stats list is cheap and load-bearing: without it,
+ * `tests`/`scope`/`api_changes` could only reflect what a chapter happened to
+ * mention. Jev judges the review here, not the diff; the file list narrows
+ * that gap, doesn't close it.
  */
 export function buildPhaseCState(input: PhaseCInput): JevState {
   const state: JevState = {
@@ -215,17 +203,11 @@ export interface IssueRelevanceInput {
 }
 
 /**
- * State for the relevance gate on a single `flag_issue` call.
- *
- * One issue rather than a keyed map, because the gate runs while the tool
- * call is still in flight and there is exactly one candidate — questions can
- * address it as `issue.description` with no id plumbing.
- *
- * The hunk is what makes `grounded` answerable at all — without the code an
- * issue cites, "is this claim supported" degrades into "does this sound
- * plausible". `existing_issues` is what makes `duplicate` answerable: the
- * agent writes concerns one at a time and has no view of what it already
- * said three chapters ago.
+ * State for the relevance gate on a single `flag_issue` call. One issue
+ * rather than a keyed map: the gate runs mid-tool-call with exactly one
+ * candidate, so questions address it as `issue.description` with no id
+ * plumbing. The hunk grounds `grounded`; `existing_issues` grounds
+ * `duplicate` — the agent has no other view of what it already flagged.
  */
 export function buildIssueRelevanceState(input: IssueRelevanceInput): JevState {
   const { issue } = input;
@@ -268,11 +250,10 @@ export interface ContinuationInput {
 }
 
 /**
- * State for the auto-continuation adjudication. **Counters only — never
- * content.** Feeding summaries or markdown here invites the model to answer
- * "is this walkthrough good enough?", which is precisely the question
- * invariant 12 reserves for `complete_walkthrough`. This is a scheduling
- * decision. Counters also keep the call around 500 tokens, i.e. free.
+ * State for the auto-continuation adjudication. Counters only, never
+ * content — feeding summaries/markdown invites answering "is this good
+ * enough", which invariant 12 reserves for `complete_walkthrough`. This is a
+ * scheduling decision, and counters keep the call ~500 tokens.
  */
 export function buildContinuationState(input: ContinuationInput): JevState {
   return {
@@ -293,16 +274,10 @@ export function buildContinuationState(input: ContinuationInput): JevState {
 }
 
 /**
- * Last-resort clamp. The per-field slicing above is the real budget control;
- * this exists so a pathological input (hundreds of issues, each with a long
- * description) degrades to a truncated-but-valid state rather than a 422 from
- * the API.
- *
- * Shrinks the largest array/record field by halving it until the whole thing
- * fits — biased toward keeping the header fields (PR metadata, summary) that
- * every question needs over the long tail of a list. The truncation is
- * announced in-band so the model isn't reading a silently-cut fragment as
- * complete.
+ * Last-resort clamp: a pathological input degrades to a truncated-but-valid
+ * state rather than a 422. Halves the largest array/record field repeatedly
+ * until it fits, biased toward keeping header fields over list tails.
+ * Truncation is announced in-band so the model doesn't read it as complete.
  */
 function clampState(state: JevState): JevState {
   if (stateChars(state) <= JEV_STATE_MAX_CHARS) return state;

@@ -1,14 +1,8 @@
 // ── Auto-continuation adjudication ───────────────────────────────────────────
-//
-// Two hooks on the budget-exhaustion path, both deliberately small:
-//
-//   • before spending an auto-continuation, ask whether the next turn is
-//     likely to finish — and decline to spend it when it clearly isn't;
-//   • on the error branch, name the probable cause so the message the user
-//     reads says something.
-//
-// Neither can change a terminal state. That is enforced in the type, not by
-// review-time vigilance.
+// Two small hooks on the budget-exhaustion path: decline to spend an auto-
+// continuation when the next turn clearly won't finish, and name the probable
+// failure cause for the user-facing message. Neither can change a terminal
+// state — enforced in the type.
 
 import { Effect } from "effect";
 import { debug } from "../../logger";
@@ -17,13 +11,10 @@ import { optionalJev } from "./optional";
 import { buildContinuationState, type ContinuationInput } from "./state";
 
 /**
- * The only two things adjudication may say.
- *
- * **No `"complete"` arm and no `"extend"` arm.** Invariant 12 reserves
- * completion for `complete_walkthrough` plus the orchestrator, and invariant
- * 9 fixes the retry budget. Both are type-level here, so widening either is a
- * compile error. Jev can spend the existing budget better; it cannot change
- * the budget or the outcomes.
+ * The only two things adjudication may say. No `"complete"` or `"extend"` arm:
+ * invariant 12 reserves completion for `complete_walkthrough`, invariant 9 fixes
+ * the retry budget, and both are type-level here so widening either is a
+ * compile error.
  */
 export type ContinuationVerdict =
   | { readonly kind: "proceed" }
@@ -34,11 +25,7 @@ const PROCEED: ContinuationVerdict = { kind: "proceed" };
 /** Budget for the call. Counters only, so the request is tiny. */
 export const CONTINUATION_TIMEOUT_MS = 6_000;
 
-/**
- * Confidence floor for a stop. Both answers must clear it, because "stop"
- * is the arm that costs the user a walkthrough they would otherwise have
- * gotten; "proceed" costs one turn the budget already bounds.
- */
+/** Confidence floor for a stop; both answers must clear it. "Stop" costs the user a walkthrough; "proceed" only costs one turn the budget already bounds. */
 export const STOP_CONFIDENCE_FLOOR = 0.7;
 
 const PROGRESS_CRITERIA = {
@@ -60,13 +47,7 @@ export interface AdjudicateInput extends ContinuationInput {
   readonly enabled: boolean;
 }
 
-/**
- * Decide whether to spend the next auto-continuation.
- *
- * Asymmetric on purpose: stops only on "no progress AND unlikely to finish",
- * both above the confidence floor. Every other answer — and every failure
- * mode, including the feature being off — is `proceed`.
- */
+/** Decides whether to spend the next auto-continuation. Asymmetric: stops only on "no progress AND unlikely to finish", both above the confidence floor; every other answer or failure mode is `proceed`. */
 export function adjudicateContinuation(
   input: AdjudicateInput,
 ): Effect.Effect<ContinuationVerdict, never, JevService> {
@@ -131,13 +112,7 @@ const FAILURE_CRITERIA = {
 /** Budget for the enrichment. Strictly cosmetic, so it gets very little. */
 export const FAILURE_CLASSIFY_TIMEOUT_MS = 5_000;
 
-/**
- * Guess at why a run failed, for the message the user reads.
- *
- * **Strictly cosmetic** — it changes a string, never a status. Returns `null`
- * when it can't help, in which case the caller keeps today's message
- * verbatim.
- */
+/** Guesses why a run failed, for the user-facing message. Strictly cosmetic: changes a string, never a status. Returns `null` when it can't help. */
 export function classifyFailure(input: {
   readonly enabled: boolean;
   readonly state: ContinuationInput;

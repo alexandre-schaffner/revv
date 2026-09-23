@@ -32,13 +32,10 @@ import { SettingsService } from "../services/Settings";
 /**
  * The model half of a chat session's identity key `(prId, agent, model, headSha)`.
  *
- * Through {@link resolveGenerationModel}, never off `settings.aiModel` raw:
- * that field may hold {@link AUTO_SENTINEL}, and Auto is only ever sized by
- * walkthrough generation. Chat has no PR sizing to apply, so Auto resolves to
- * the agent's own default — which means the row is keyed on the model the
- * agent actually ran with rather than on the setting. Every chat-session
- * lookup must use this, or a session written under one key is searched for
- * under another and every turn starts a fresh conversation.
+ * Goes through {@link resolveGenerationModel}, never raw `settings.aiModel`:
+ * that may hold {@link AUTO_SENTINEL}, which chat can't size (no PR sizing
+ * pass), so it resolves to the agent's default instead. Every chat-session
+ * lookup must use this or it misses its own session and starts a fresh one.
  */
 export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
   return resolveGenerationModel(agent, aiModel) ?? getAcpAgentDefaultModel(agent);

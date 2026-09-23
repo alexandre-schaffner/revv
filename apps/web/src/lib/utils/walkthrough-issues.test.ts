@@ -21,8 +21,7 @@ describe("partitionBySignal", () => {
   });
 
   it("never hides an unscored issue", () => {
-    // Pre-feature rows, cache-imported rows, and every run where the pass
-    // was off or unreachable all land here. They must degrade to visible.
+    // Unscored rows (pre-feature, cache-imported, pass unreachable) degrade to visible.
     const issues = [issue({ id: "a" }), issue({ id: "b", advisoryScore: 0.9, lowSignal: false })];
     const { shown, filtered } = partitionBySignal(issues, { hideLowSignal: true });
     expect(shown.map((i) => i.id)).toEqual(["a", "b"]);

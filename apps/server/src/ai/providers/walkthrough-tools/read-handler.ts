@@ -230,19 +230,15 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     sentiment: row.sentiment ?? null,
     semanticSteps,
     diffSteps,
-    // `loadWalkthroughRow` already has the row, so this is free.
-    axisAdvisoryState: row.axisAdvisoryState ?? null,
-    // Only axes the agent has actually written count as rated — the verdict
-    // pass pre-seeds all nine rows with empty prose, and reporting those as
-    // done would tell a resuming agent Phase D was finished.
+    axisAdvisoryState: row.axisAdvisoryState,
+    // Only axes with agent-written prose count as rated — the verdict pass
+    // pre-seeds empty rows, which would otherwise look like Phase D was done.
     ratedAxes: ratingRows
       .filter((r) => r.rationale.trim().length > 0)
       .map((r) => r.axis as RatingAxis),
-    // The verdicts themselves, not just the fact that they exist. Without
-    // this the agent is told "the call has been made for you" and given no
-    // way to find out what it was — so it would write a rationale for the
-    // verdict it would have picked, which the handler then overwrites. The
-    // prose and the verdict have to come from the same place.
+    // Exposes the verdicts themselves, not just that they exist — otherwise
+    // the agent would write a rationale for a verdict it picked itself,
+    // which the handler then overwrites.
     assignedVerdicts:
       row.axisAdvisoryState === "ready"
         ? ratingRows.map((r) => ({

@@ -43,7 +43,6 @@ import {
   checkAgentKeychain,
   fetchAgentStatus,
   fetchModels,
-  fetchSettings,
   getAgentStatus,
   getAvailableModels,
   getSettings,
@@ -306,7 +305,6 @@ const userAvatarFailed = $derived(
   _userAvatarFailedForUrl !== null && _userAvatarFailedForUrl === (getUser()?.image ?? null),
 );
 
-// ── Sync interval options ─────────────────────────────────────────────────
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
 let aiStatusLoading = $state(true);

@@ -15,10 +15,8 @@ interface Props {
 
 let { filePath }: Props = $props();
 
-// No disclosure here: this strip sits inline in the diff and an extra
-// expander per file would out-weigh the handful of rows it hides. The
-// filtered issues stay reachable from the walkthrough and the Request
-// Changes panel, both of which do show the count.
+// No disclosure here: an expander per file would out-weigh the rows it
+// hides. Filtered issues stay reachable via the walkthrough and RC panel.
 const issues = $derived(
   partitionBySignal(getIssuesForFile(filePath), {
     hideLowSignal: shouldHideLowSignal(getSettings()),

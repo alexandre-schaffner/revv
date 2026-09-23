@@ -100,10 +100,8 @@ export const ServerConfig = Config.all({
   acpCommand: Config.string("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
   acpArgs: Config.string("REVV_ACP_ARGS").pipe(Config.withDefault("")),
   // ── TypeSafe System One (Jev) ───────────────────────────────────────────
-  // Dev-only escape hatch for the API key. Real storage is the OS keyring via
-  // `SecretStore` (`secret:jev-api-key`), which wins when both are set. The
-  // key never round-trips through `GET /api/settings`, which is
-  // unauthenticated — only a derived `hasApiKey` boolean does.
+  // Dev-only fallback; the OS keyring (`SecretStore`, `secret:jev-api-key`)
+  // wins when both are set. Never returned by unauthenticated `GET /api/settings`.
   jevApiKey: Config.string("REVV_JEV_API_KEY").pipe(Config.withDefault("")),
 });
 

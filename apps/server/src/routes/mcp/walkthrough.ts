@@ -7,7 +7,8 @@
 import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import { judgeArtifact as judgeArtifactQuality } from "../../ai/jev/artifact-quality";
-import { applyJudgment, judgeIssue as judgeIssueRelevance } from "../../ai/jev/issue-relevance";
+import { judgeIssue as judgeIssueRelevance } from "../../ai/jev/issue-relevance";
+import { applyJudgment } from "../../ai/jev/issue-relevance-persistence";
 import { awaitJudgments, trackJudgment, wasRetracted } from "../../ai/jev/pending";
 import {
   claimProseSample,
@@ -76,10 +77,9 @@ async function resolveContext(
     );
   };
 
-  // Every Jev hook the Phase-B tools use, resolved through AppRuntime here so
-  // the handlers stay plain async functions. Each one collapses to "no
-  // opinion" on failure: a defect in a dependency must never turn into a
-  // failed tool call, because the pre-Jev behaviour is always a valid outcome.
+  // Every Jev hook the Phase-B tools use, resolved via AppRuntime so handlers
+  // stay plain async functions. Each collapses to "no opinion" on failure —
+  // a dependency defect must never fail the tool call.
   const jev: WalkthroughToolJudgments = {
     scheduleIssueJudgment: (issueId, candidate) => {
       trackJudgment(

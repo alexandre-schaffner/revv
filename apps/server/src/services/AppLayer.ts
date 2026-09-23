@@ -63,9 +63,7 @@ const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbS
 
 const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
 
-// JevService (TypeSafe System One) reads its per-feature toggles from
-// SettingsService and its API key from the keyring via SecretStore. Both are
-// leaves, so it composes before BaseLayers and can live inside it.
+// JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
 const JevServiceWithDeps = JevServiceLive.pipe(
   Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
 );

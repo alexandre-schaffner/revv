@@ -5,7 +5,7 @@
 // live in separate modules so each can be tested without the others.
 
 import { isDiscardedScore, isLowSignalScore } from "@revv/shared";
-import type { ScoreQuestion } from "@typesafe-ai/sdk";
+import { noul, type ScoreQuestion } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import type { Db } from "../../db";
 import type { JevUnavailable } from "../../domain/errors";
@@ -16,9 +16,6 @@ import { JevService } from "../../services/Jev";
 import { SettingsService } from "../../services/Settings";
 import type { IssueCandidate, IssueJudgment } from "./contracts";
 import { collectIssueGateInput, type IssueGateInput } from "./issue-relevance-context";
-
-export { applyJudgment } from "./issue-relevance-persistence";
-
 import {
   compositeScore,
   ISSUE_RELEVANCE_CACHE_NS,
@@ -29,11 +26,7 @@ import {
   SEVERITY_LEVELS,
   severityForLevel,
 } from "./issue-relevance-policy";
-
-export { compositeScore, severityForLevel } from "./issue-relevance-policy";
-
 import { optionalJev } from "./optional";
-import { noulQuestion } from "./questions";
 import { buildIssueRelevanceState } from "./state";
 
 function answerNoul(value: unknown): number {
@@ -61,15 +54,15 @@ function ask(candidate: IssueCandidate, input: IssueGateInput) {
         existingIssues: input.existingIssues,
       }),
       questions: {
-        grounded: noulQuestion("The claim in `issue` is supported by the code in `issue.hunk`."),
-        in_scope: noulQuestion(
+        grounded: noul("The claim in `issue` is supported by the code in `issue.hunk`."),
+        in_scope: noul(
           "`issue` is about a change this pull request makes, rather than pre-existing code the diff happens to touch.",
         ),
-        actionable: noulQuestion("`issue` names a specific change a developer could make."),
-        novel: noulQuestion(
+        actionable: noul("`issue` names a specific change a developer could make."),
+        novel: noul(
           "`issue` tells the reader something they would not already get from reading the diff.",
         ),
-        duplicate: noulQuestion(
+        duplicate: noul(
           "`issue` restates a concern already covered by one of `existing_issues`, rather than raising a new one. False when `existing_issues` is empty.",
         ),
         severity: {

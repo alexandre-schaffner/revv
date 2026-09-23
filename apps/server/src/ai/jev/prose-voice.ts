@@ -1,39 +1,26 @@
 // ── Prose-voice advisory ─────────────────────────────────────────────────────
+// `PROSE_VOICE_CONTRACT` and the banned-opener list are the most-repeated,
+// least-enforced instructions in the walkthrough prompt; voice is a judgment,
+// not something a word budget can check.
 //
-// `PROSE_VOICE_CONTRACT` and the banned-opener list are the most-repeated
-// instructions in the walkthrough prompt and the only ones nothing enforces.
-// Word budgets are code-checkable and don't need a model; voice is a judgment.
+// Runs behind the agent, like the issue gate, so it doesn't put a round trip on
+// every `add_diff_step` call (Phase B's hot path). Samples only the first few
+// markdown blocks, to catch a habit while there's still a run left to fix it,
+// and hands the verdict back on a later tool result rather than rejecting
+// anything.
 //
-// The shape here is the one thing that makes it viable. A blocking check on
-// `add_diff_step` would put a round trip on *every* block — Phase B's hot
-// path — and roughly double its wall-clock. So:
-//
-//   • it runs **behind** the agent, like the issue gate;
-//   • it samples only the **first few** markdown blocks, because the point is
-//     to catch a voice the run has settled into while there is still a run
-//     left to correct;
-//   • the verdict is handed back on a **later tool result** rather than
-//     rejecting anything. Prose already written is not worth a rewrite; the
-//     next eight blocks are worth getting right.
-//
-// Advisory, never a gate. Nothing downstream reads it, `complete_walkthrough`
-// doesn't consult it, and a run that ignores it completes exactly as before.
+// Advisory, never a gate: nothing downstream reads it, and `complete_walkthrough`
+// doesn't consult it.
 
+import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import { JevService } from "../../services/Jev";
 import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
-import { noulQuestion } from "./questions";
 
 export const PROSE_VOICE_TIMEOUT_MS = 12_000;
 
-/**
- * How many markdown blocks get sampled per walkthrough.
- *
- * Three. Enough to tell a habit from a one-off, few enough that the cost is
- * noise, and early enough that the advice still has most of Phase B to act
- * on. Sampling more would mostly re-confirm the first answer.
- */
+/** Markdown blocks sampled per walkthrough. Enough to tell a habit from a one-off, early enough to leave most of Phase B to act on it. */
 export const PROSE_SAMPLE_SIZE = 3;
 
 /** Probability above which a failing habit is worth telling the agent about. */
@@ -56,12 +43,7 @@ const FAULT_ADVICE: Record<keyof typeof FAULTS, string> = {
   padding: "you are padding — say it once, and only if the diff does not already say it",
 };
 
-/**
- * Judge one markdown block's voice.
- *
- * Returns `null` when the hook is off or unavailable, and an empty array when
- * the prose is clean — the caller surfaces nothing in both cases.
- */
+/** Judges one markdown block's voice. Returns `null` when off/unavailable, `[]` when clean; the caller surfaces nothing either way. */
 export function judgeProse(
   markdown: string,
   chapterTitle: string,
@@ -86,9 +68,9 @@ export function judgeProse(
             "This is a block of a code-review walkthrough. It is meant to open on the point, lead with the claim and follow with the evidence, and tell the reader something the diff does not already say.",
         },
         questions: {
-          preamble: noulQuestion(FAULTS.preamble),
-          hedging: noulQuestion(FAULTS.hedging),
-          padding: noulQuestion(FAULTS.padding),
+          preamble: noul(FAULTS.preamble),
+          hedging: noul(FAULTS.hedging),
+          padding: noul(FAULTS.padding),
         },
       }),
     );
@@ -105,11 +87,9 @@ export function judgeProse(
 }
 
 // ── Per-walkthrough advisory mailbox ─────────────────────────────────────────
-//
-// A judgment that lands between two tool calls has nowhere to go: the call it
-// was about has already returned. It waits here and rides out on the next
-// `add_diff_step` result instead. Ephemeral and lossy on purpose — losing an
-// advisory costs a sentence of feedback, so it has no business in SQLite.
+// A judgment landing between two tool calls has nowhere to go, so it waits here
+// and rides out on the next `add_diff_step` result. Ephemeral and lossy: losing
+// an advisory costs a sentence of feedback, so it has no business in SQLite.
 
 const mailbox = new Map<string, string[]>();
 const sampled = new Map<string, number>();
@@ -129,13 +109,7 @@ export function postProseAdvice(walkthroughId: string, advice: readonly string[]
   mailbox.set(walkthroughId, box);
 }
 
-/**
- * Drain the mailbox as agent-facing text, or `null` when it's empty.
- *
- * Draining rather than peeking: the same advice repeated on every subsequent
- * block would read as nagging and train the agent to skim the result text,
- * which is where the required-next-step instructions live.
- */
+/** Drains the mailbox as agent-facing text, or `null` if empty. Drains rather than peeks: repeating the same advice on every block would read as nagging and train the agent to skim result text. */
 export function takeProseAdvice(walkthroughId: string): string | null {
   const box = mailbox.get(walkthroughId);
   if (!box || box.length === 0) return null;

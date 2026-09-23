@@ -44,12 +44,7 @@ export class SecretStore extends Context.Tag("SecretStore")<
     readonly setTokens: (accountId: string, tokens: TokenPair) => Effect.Effect<void>;
     readonly getTokens: (accountId: string) => Effect.Effect<TokenPair | null>;
     readonly deleteTokens: (accountId: string) => Effect.Effect<void>;
-    /**
-     * Generic single-string secrets (third-party API keys), stored through the
-     * same keyring probe and encrypted-file fallback as the token pairs. The
-     * `key` is the logical name, not a keyring user — see
-     * {@link JEV_API_KEY_SECRET}. Empty string is written as a delete.
-     */
+    /** Generic single-string secrets, through the same keyring/fallback path as token pairs. `key` is a logical name, see {@link JEV_API_KEY_SECRET}. */
     readonly setSecret: (key: string, value: string) => Effect.Effect<void>;
     readonly getSecret: (key: string) => Effect.Effect<string | null>;
     readonly deleteSecret: (key: string) => Effect.Effect<void>;
@@ -70,10 +65,7 @@ function secretEntryFor(key: string): Entry {
   return new Entry(keyringServiceName(), `${KEYRING_SECRET_PREFIX}${key}`);
 }
 
-/**
- * Namespace generic secrets inside the shared fallback map so a secret named
- * after an account id can't collide with that account's token pair.
- */
+/** Prefixed so a secret name can't collide with an account id's token pair in the fallback map. */
 function fallbackSecretKey(key: string): string {
   return `${KEYRING_SECRET_PREFIX}${key}`;
 }
@@ -151,11 +143,7 @@ function deriveFallbackKey(): Buffer {
   return scryptSync(loadFallbackSecret(), loadFallbackSalt(), 32);
 }
 
-/**
- * The fallback store holds both token pairs (keyed by account id) and generic
- * secrets (keyed by `secret:<name>`), so the value type is the union. The two
- * key spaces are disjoint by prefix.
- */
+/** Fallback map holds token pairs (keyed by account id) and generic secrets (keyed by `secret:<name>`), disjoint by prefix. */
 type FallbackEntry = TokenPair | string;
 
 function readFallbackMap(): Record<string, FallbackEntry> {

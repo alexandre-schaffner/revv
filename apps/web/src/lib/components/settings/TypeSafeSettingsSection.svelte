@@ -114,7 +114,7 @@ function setHook(key: JevHookKey, value: boolean): void {
         </p>
       </div>
       <Switch
-        checked={getSettings()?.jev?.enabled ?? false}
+        checked={getSettings()?.jev.enabled ?? false}
         onCheckedChange={(value) => {
           void updateSettings({ jev: { enabled: value } });
         }}
@@ -132,7 +132,7 @@ function setHook(key: JevHookKey, value: boolean): void {
         id="jev-api-key"
         type="password"
         autocomplete="off"
-        placeholder={getSettings()?.jev?.hasApiKey
+        placeholder={getSettings()?.jev.hasApiKey
           ? "A key is saved — paste a new one to replace it"
           : "apikey_…"}
         bind:value={apiKeyDraft}
@@ -152,14 +152,14 @@ function setHook(key: JevHookKey, value: boolean): void {
         variant="outline"
         size="sm"
         onclick={testConnection}
-        disabled={testRunning || !(getSettings()?.jev?.hasApiKey ?? false)}
+        disabled={testRunning || !(getSettings()?.jev.hasApiKey ?? false)}
       >
         {#if testRunning}
           <Spinner size={14} class="motion-essential-spin" />
         {/if}
         Test connection
       </Button>
-      {#if getSettings()?.jev?.hasApiKey}
+      {#if getSettings()?.jev.hasApiKey}
         <Button variant="ghost" size="sm" onclick={clearApiKey} disabled={apiKeySaving}>
           Remove key
         </Button>
@@ -191,7 +191,7 @@ function setHook(key: JevHookKey, value: boolean): void {
           <p class="settings-row-hint">{definition.hint}</p>
         </div>
         <Switch
-          checked={getSettings()?.jev?.[hookKey] ?? JEV_HOOK_DEFAULTS[hookKey]}
+          checked={getSettings()?.jev[hookKey] ?? JEV_HOOK_DEFAULTS[hookKey]}
           disabled={hookDisabled(hookKey)}
           onCheckedChange={(value) => setHook(hookKey, value)}
           aria-label={definition.ariaLabel}

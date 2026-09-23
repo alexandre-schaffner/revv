@@ -16,9 +16,7 @@ describe("diffFingerprint", () => {
   });
 
   it("ignores patch bodies", () => {
-    // Callers truncate patches differently — the preview reads the cached
-    // diff, the run reads a freshly-resolved one — so a patch-sensitive
-    // fingerprint would miss on every single lookup.
+    // Callers truncate patches differently (cached preview vs. freshly-resolved run), so a patch-sensitive fingerprint would always miss.
     const a = [file({ filename: "a.ts", patch: "@@ -1 +1 @@ short" })];
     const b = [file({ filename: "a.ts", patch: "@@ -1 +1 @@ a much longer body …" })];
     expect(diffFingerprint(a)).toBe(diffFingerprint(b));
@@ -30,8 +28,7 @@ describe("diffFingerprint", () => {
   });
 
   it("changes when a file's line counts change", () => {
-    // The case that matters: same paths, different content. A pull that
-    // rewrites a file without adding one must not reuse the old sizing.
+    // Same paths, different content: a rewrite without an added file must not reuse old sizing.
     const a = [file({ filename: "a.ts", additions: 3, deletions: 1 })];
     const b = [file({ filename: "a.ts", additions: 90, deletions: 40 })];
     expect(diffFingerprint(a)).not.toBe(diffFingerprint(b));
@@ -46,10 +43,8 @@ describe("diffFingerprint", () => {
 
 describe("jobStartCacheKey", () => {
   it("pins the diff, not just the head SHA", () => {
-    // The poller advances `pull_requests.head_sha` before it invalidates the
-    // diff cache. Keying on the SHA alone would let a preview running in
-    // that window write an answer about the *old* diff under the *new* SHA —
-    // and these entries are immutable, so it would never self-correct.
+    // The poller advances head_sha before invalidating the diff cache; keying on SHA alone
+    // would let a preview write an old diff's answer under the new SHA, never self-correcting.
     const stale = jobStartCacheKey("pr-1", "newsha", diffFingerprint([file({ filename: "a.ts" })]));
     const fresh = jobStartCacheKey(
       "pr-1",

@@ -1,16 +1,10 @@
-// ── Job-start judgment ───────────────────────────────────────────────────────
+// ── Job-start judgment ──────────────────────────────────────────────────────
 //
-// One request, every question the diff alone can answer, in parallel: the
-// risk tier that governs the agent's issue budget, the depth tier that picks
-// the model, the reasoning effort, whether the PR should have been split, and
-// a per-file attention score for every changed path.
-//
-// They batch because none depends on another's answer, and because the
-// expensive part of this request is the *state* — the patches — not the
-// questions. A per-file score asked separately would re-send the whole diff
-// for the sake of a few hundred tokens of question text. Asked here it is
-// close to free, which is the only reason judging forty files individually is
-// affordable at all.
+// One request, every question the diff alone can answer: risk tier, depth
+// tier, reasoning effort, split recommendation, per-file attention score.
+// Batched because none depends on another's answer, and the state (patches)
+// dominates cost — scoring files here is near-free vs. re-sending the diff
+// per file.
 
 import { createHash } from "node:crypto";
 import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
@@ -31,28 +25,19 @@ import type { JobStartStateInput } from "./state";
 import { buildJobStartState } from "./state";
 
 /**
- * Ceiling for the job-start call.
- *
- * This sits on the critical path of `startJobBody`, which holds the per-PR
- * `startJobMutex` — a slow Jev must not wedge "user clicked Generate". It is
- * the only place Jev latency is user-visible, which is why the budget is
- * tight and the failure is a silent fall-through.
+ * Ceiling for the job-start call. Sits on `startJobBody`'s critical path
+ * (holds `startJobMutex`), the only place Jev latency is user-visible; failure falls through silently.
  */
 export const JOB_START_TIMEOUT_MS = 8_000;
 
 /**
- * How many files get an individual attention score.
- *
- * The cap is about question budget, not cost: System One allows 32k tokens
- * for state plus the *longest* question, and the state is already carrying
- * patches. Files past the cap fall back to path order, which is what every
- * file got before this hook existed.
+ * How many files get an individual attention score. Bounded by System One's
+ * 32k-token state+question budget. Files past the cap fall back to path order.
  */
 export const FILE_PRIORITY_MAX_FILES = 50;
 
-// Criteria lifted from "Risk tiers (drive review depth)" in
-// `ai/prompts/walkthrough-system-common.md` so the tier the orchestrator
-// assigns and the depth the agent is told to work at can't drift apart.
+// Mirrors "Risk tiers (drive review depth)" in
+// `ai/prompts/walkthrough-system-common.md` so orchestrator and agent can't drift.
 const RISK_CRITERIA = {
   low: {
     what: "A quick tour is enough. Small diffs (under roughly 150 changed lines), documentation, renames, whitespace, test-only additions, isolated dependency bumps with no behavior change.",
@@ -89,13 +74,8 @@ const EFFORT_CRITERIA = {
 } as const;
 
 /**
- * Per-file attention rubric, lowest first. The index is the tier, so the
- * ladder has to stay ordered — the agent reads it as a reading order.
- *
- * Deliberately not a proxy for size. A 2000-line lockfile is tier 0 and a
- * four-line change to a permission check is tier 4; sorting by line count,
- * which is what both GitHub and the current prompt effectively do, gets that
- * exactly backwards.
+ * Per-file attention rubric, lowest first; index = tier, order matters. Not a
+ * size proxy: a 2000-line lockfile is tier 0, a 4-line permission check is tier 4.
  */
 const FILE_PRIORITY_LEVELS = [
   "Generated, vendored, or a lockfile. Do not read it — name the category and move on.",
@@ -113,11 +93,9 @@ const SPLIT_COUNT_CRITERIA = {
 } as const;
 
 /**
- * The raw answers, before any agent-specific routing.
- *
- * Cached on `(prId, headSha)` because they are a judgment about the *diff* —
- * nothing here depends on which agent or model is configured. Switching
- * agents re-routes from the same answers rather than paying for a new call.
+ * Raw answers, before agent-specific routing. Cached on `(prId, headSha)` — a
+ * judgment about the diff, independent of agent/model, so switching agents
+ * re-routes without a new call.
  */
 export interface JobStartAnswers {
   readonly riskLevel: RiskLevel;
@@ -126,50 +104,32 @@ export interface JobStartAnswers {
   readonly depthConfidence: number;
   readonly depthProbabilities: Readonly<Record<string, number>>;
   readonly reasoningEffort: ReasoningEffort;
-  /**
-   * Attention tier per changed path, 0–4. Absent for files past
-   * {@link FILE_PRIORITY_MAX_FILES}; absent entirely on entries written
-   * before the hook existed, which is why every reader treats it as optional.
-   */
+  /** Attention tier per changed path, 0-4. Absent past {@link FILE_PRIORITY_MAX_FILES}, or for pre-hook entries. */
   readonly filePriorities?: Readonly<Record<string, number>>;
   /** How strongly the PR reads as several changes wearing one hat. */
   readonly splitScore?: number;
   readonly splitCount?: "two" | "three" | "many";
 }
 
-/**
- * Probability above which the split recommendation is worth handing over.
- *
- * High, on purpose. "Consider breaking this up" is the single most
- * eye-rolled sentence in code review, and an unwarranted one poisons the
- * overview it leads. It has to be nearly certain before the agent is told to
- * say it at all.
- */
+/** Split recommendations are only handed over when near-certain; a wrong one poisons the overview. */
 export const SPLIT_RECOMMENDATION_FLOOR = 0.75;
 
 /**
- * Cache namespace. Entries are immutable — the key pins the exact diff.
- *
- * Versioned suffix because the entries are immutable: adding questions to the
- * request means older entries can never grow the new fields, and a reader
- * that had to tolerate both shapes forever would be carrying the archaeology
- * of every past version. A bump costs one re-ask per PR, once.
+ * Cache namespace; entries immutable, key pins the exact diff. Versioned
+ * suffix: adding questions means old entries can't grow new fields, so a
+ * schema change bumps the version (one re-ask per PR).
  */
 export const JOB_START_CACHE_NS = "jev:job-start:v2";
 
 /**
- * Stable fingerprint of the changed-file set: path, status and line counts,
- * sorted. Deliberately excludes patch bodies, which are truncated differently
- * by different callers and would produce spurious misses.
+ * Fingerprint of the changed-file set (path/status/line counts, sorted);
+ * excludes patch bodies, truncated inconsistently across callers.
  *
- * It is in the cache key alongside the head SHA because the two can
- * disagree. When a PR gets new commits the poller updates `pull_requests.
- * head_sha` and *then* invalidates the diff cache, so for a moment the row
- * advertises a SHA the cached diff doesn't correspond to. Keying on the SHA
- * alone would let a preview run in that window write an answer about the old
- * diff under the new SHA — and these entries are immutable, so it would
- * never correct itself. With the fingerprint, that entry is simply one the
- * real run never reads: worst case one wasted call, never a wrong answer.
+ * Combined with head SHA in the cache key: the poller updates
+ * `pull_requests.head_sha` before invalidating the diff cache, so a preview
+ * mid-window could write an old diff's answer under the new SHA — entries
+ * are immutable, so that never self-corrects. Worst case: one wasted call,
+ * never a wrong answer.
  */
 export function diffFingerprint(files: JobStartStateInput["files"]): string {
   const parts = files.map((f) => `${f.filename}:${f.status}:${f.additions}:${f.deletions}`).sort();
@@ -180,11 +140,7 @@ export function jobStartCacheKey(prId: string, headSha: string, fingerprint: str
   return `${prId}:${headSha}:${fingerprint}`;
 }
 
-/**
- * Question key for a file's attention score. Indexed rather than pathed: a
- * path can contain characters a question key can't, and the index is stable
- * against the same `files` array the state was built from.
- */
+/** Question key for a file's attention score. Indexed, not pathed: a path can contain characters a question key can't. */
 function filePriorityKey(index: number): string {
   return `file_${index}`;
 }
@@ -195,8 +151,7 @@ export function askJobStart(
 ): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
-    // Scored files are addressed by index into `state.files`, so the slice
-    // here and the array the state builder walks must be the same one.
+    // Scored files are addressed by index into `state.files`; slice here must match the state builder's array.
     const scoredFiles = input.files.slice(0, FILE_PRIORITY_MAX_FILES);
     const fileQuestions = Object.fromEntries(
       scoredFiles.map((file, index) => [
@@ -268,14 +223,9 @@ export function askJobStart(
 }
 
 /**
- * The reading order to hand the agent, or `null` when the hook is off or the
- * answers predate it.
- *
- * Stable-sorted by tier descending, so files the model scored equally keep
- * the order the diff gave them. Unscored files (past the cap) sink to the
- * bottom rather than to the top — an unjudged file is not evidence of
- * importance, and putting it first would be the one failure mode that makes
- * the whole ordering untrustworthy.
+ * Reading order to hand the agent, or `null` when the hook is off or answers
+ * predate it. Stable-sorted by tier descending; unscored files (past the cap)
+ * sink to the bottom — an unjudged file isn't evidence of importance.
  */
 export function filePriorityOrder(
   answers: JobStartAnswers,
@@ -306,11 +256,9 @@ export function splitRecommendation(answers: JobStartAnswers): { readonly pieces
 }
 
 /**
- * Turn cached answers into a launch override for a specific agent.
- *
- * Pure and cheap, so it runs at every read rather than being cached: the
- * configured agent, model and effort can all change between the preview and
- * the run, and the routing has to follow them.
+ * Turns cached answers into a launch override for a specific agent. Pure and
+ * cheap, so it runs on every read rather than being cached — the configured
+ * agent/model/effort can change between preview and run.
  */
 export function routeFromAnswers(
   answers: JobStartAnswers,
@@ -318,11 +266,7 @@ export function routeFromAnswers(
     readonly agent: AcpAgentId;
     readonly configuredModel: string | null | undefined;
     readonly configuredEffort: ThinkingEffortSetting | null | undefined;
-    /**
-     * The master TypeSafe auto-sizing switch. Off means the answers are still
-     * used for the risk tier but never move the launch — both halves stay
-     * where the user put them.
-     */
+    /** Master TypeSafe auto-sizing switch. Off: answers still set risk tier but never move the launch. */
     readonly autoSizing: boolean;
   },
 ): GenerationLaunchOverride | null {
@@ -340,15 +284,10 @@ export function routeFromAnswers(
 
 /**
  * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe
- * can't answer.
- *
- * The cache is what lets the same judgment serve both the pre-generation
- * model preview and the run itself: whichever asks first pays, and the other
- * is free. In the common case — the user opens the PR, then clicks Generate
- * — that takes the call off `startJobBody`'s critical path entirely, which
- * is the one place its latency is user-visible (it holds `startJobMutex`).
- *
- * Immutable: the key carries the head SHA, so a new commit is a new entry.
+ * can't answer. The cache lets one judgment serve both the preview and the
+ * run — whichever asks first pays, keeping Jev off `startJobBody`'s critical
+ * path in the common case. Immutable: head SHA in the key means a new commit
+ * is a new entry.
  */
 export function resolveJobStartAnswers(
   prId: string,
@@ -365,8 +304,7 @@ export function resolveJobStartAnswers(
         { immutable: true },
       )
       .pipe(
-        // A failure must not be cached — `getOrFetch` propagates it, and the
-        // next caller retries. Both the preview and the run degrade to null.
+        // Failures aren't cached; getOrFetch propagates so the next caller retries. Both preview and run degrade to null.
         Effect.catchAll((e) =>
           Effect.sync(() => {
             debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);

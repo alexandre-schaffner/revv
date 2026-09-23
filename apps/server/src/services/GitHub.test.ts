@@ -489,8 +489,7 @@ describe("listPrDiffStats", () => {
     const db = createDb(":memory:");
     stubFetch(() =>
       responseJson({
-        // GitHub's shape for a partially-resolvable aliased query: `data` is
-        // present with a null for the alias it could not answer.
+        // Partially-resolvable aliased query: null for the unanswered alias.
         data: { repository: { p0: { additions: 9, deletions: 3, changedFiles: 1 }, p1: null } },
         errors: [{ message: "Could not resolve to a PullRequest with the number of 2." }],
       }),

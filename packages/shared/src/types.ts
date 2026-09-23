@@ -217,14 +217,11 @@ export interface UserSettings {
     };
   };
   /**
-   * TypeSafe System One (Jev) — a calibrated decision model used for the
-   * closed-set judgments the review pipeline would otherwise spend a full
-   * agent turn on. Every hook degrades to today's behaviour when Jev is
-   * off, unconfigured, or unreachable, so the toggles are pure opt-in.
-   *
-   * Per-feature switches rather than one master flag because each hook is
-   * independently reversible — a badly-tuned threshold on one shouldn't
-   * force turning all of them off.
+   * TypeSafe System One (Jev) — calibrated decisions for closed-set judgments
+   * the pipeline would otherwise spend an agent turn on. Every hook degrades
+   * to today's behaviour when Jev is off, unconfigured, or unreachable.
+   * Per-feature switches, not one master flag, since each hook is
+   * independently reversible.
    */
   jev: JevSettings;
   /**

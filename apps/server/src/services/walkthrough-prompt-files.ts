@@ -67,9 +67,8 @@ export function resolveIncrementalPromptFiles(
       const nameStatus = parseNameStatusZ(
         await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
       );
-      // Counts come from git (`--numstat`) in one call, not from scanning
-      // each file's patch body — the latter forces a synchronous multi-MB
-      // split on the event loop for large/generated files.
+      // `--numstat` in one call, not scanning each patch body: that would force a
+      // synchronous multi-MB split on the event loop for large/generated files.
       const numstat = parseNumstat(await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha));
       const files: PromptFile[] = [];
       for (const file of nameStatus) {

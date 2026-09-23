@@ -175,8 +175,8 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     }
     case "claude-code": {
       if (model) env.ANTHROPIC_MODEL = model;
-      // Revv always runs at the full 1M context, which is Claude Code's own
-      // default — so the disable flag is deliberately never set.
+      // Revv always runs at Claude Code's own default 1M context, so the
+      // disable flag is never set.
       if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
       break;
     }
@@ -272,14 +272,11 @@ export function resolveAcpProcessLaunchById(
  * catalog, fall back to that agent's default model. opencode's catalog is
  * dynamic, so configured opencode models are taken on trust.
  *
- * This is also the single arbiter for {@link AUTO_SENTINEL}: Auto is a request
- * to be unpinned, so it is collapsed to `undefined` *before* the dynamic-catalog
- * branch — which takes its argument on trust and would otherwise forward
- * `"revv:auto"` verbatim into an agent adapter. Callers that have sized the PR
- * pass the sized model in `sized`; every other launch path (chat, recap,
- * suggestions) passes nothing and lands on the agent's own default. Every path
- * that hands a model to an agent must route through here — passing a raw
- * `settings.aiModel` is the bug this argument exists to prevent.
+ * Also the arbiter for {@link AUTO_SENTINEL}, collapsed to `undefined` before
+ * the dynamic-catalog branch (which would otherwise forward it verbatim).
+ * `sized` carries a pre-sized model; other callers land on the agent's
+ * default. Route every model-to-agent path through here — never pass raw
+ * `settings.aiModel`.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,

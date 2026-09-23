@@ -87,36 +87,29 @@ export interface WalkthroughToolContext {
    */
   readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
   /**
-   * The Jev-backed judgments the Phase-B tools defer to, injected as
-   * closures rather than service handles so the handlers stay free of Effect
-   * dependencies (the same reason `emit` is a callback).
-   *
-   * Every one of them degrades to "no opinion" — off, unconfigured,
-   * unreachable — and the handler's behaviour without an opinion is exactly
-   * what it was before these existed.
+   * Jev-backed judgments the Phase-B tools defer to, injected as closures
+   * (same reason `emit` is a callback) so handlers stay Effect-free. Each
+   * degrades to "no opinion" when unavailable, matching prior behavior.
    */
   readonly jev: WalkthroughToolJudgments;
 }
 
 export interface WalkthroughToolJudgments {
   /**
-   * Schedule the relevance + severity judgment for a just-committed concern.
-   * **Returns immediately**; the judgment lands behind the agent and may
-   * retract the row. See `ai/jev/issue-relevance.ts`.
+   * Schedules the relevance/severity judgment for a just-committed concern;
+   * returns immediately, may later retract the row. See ai/jev/issue-relevance.ts.
    */
   readonly scheduleIssueJudgment: (issueId: string, candidate: IssueCandidate) => void;
   /**
-   * Block until every scheduled judgment for this walkthrough has landed.
-   * Called by `complete_walkthrough` so the gate never validates an issue set
-   * that is about to change under it.
+   * Blocks until every scheduled judgment has landed. Used by
+   * complete_walkthrough so the gate never checks a set about to change.
    */
   readonly awaitIssueJudgments: () => Promise<void>;
   /** Whether a judgment already retracted this issue id. */
   readonly issueRetracted: (issueId: string) => boolean;
   /**
-   * Hold an artifact to the craft bar. **Awaited**, unlike the issue
-   * judgment: a gate that rejects has to answer before the write, and
-   * artifacts are rare enough that the round trip doesn't matter.
+   * Holds an artifact to the craft bar. Awaited, unlike the issue judgment,
+   * since a rejecting gate must answer before the write.
    */
   readonly judgeArtifact: (
     html: string,
@@ -180,11 +173,8 @@ const getCommitHistorySchema = z.object({});
 
 const setOverviewSchema = z.object({
   summary: z.string().describe(`${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT}`),
-  // Optional rather than removed. When the orchestrator has already assigned
-  // the tier (CLAUDE.md invariant 2's carve-out) the prompt tells the agent
-  // the tier is a given and the handler ignores anything sent here; when it
-  // hasn't — TypeSafe off, unconfigured, or unreachable — this is still the
-  // only source of the tier, exactly as before.
+  // Optional, not removed: ignored once the orchestrator has assigned the
+  // tier (invariant 2's carve-out); otherwise still the only source of it.
   risk_level: z
     .enum(["low", "medium", "high"])
     .nullable()
@@ -483,12 +473,8 @@ const rateAxisSchema = z.object({
     .describe(
       "Which scorecard axis this rating is for. correctness: logic errors, off-by-ones, race conditions, unhandled errors. scope: is the PR doing one thing, or has it absorbed drive-by refactors / unrelated formatting — several unrelated concerns is at least a concern, with the concrete split named in details. tests: new behavior has tests, no suspiciously deleted/weakened assertions. clarity: naming, function length, nesting depth, comment quality, dead code, magic numbers. safety: touches auth, payments, migrations, deletes, public APIs, shared packages (a risk-surface signal, not a quality score). consistency: follows existing codebase patterns (layering, module boundaries, conventions). api_changes: breaking changes to routes, schemas, event payloads, exported types. performance: N+1 queries, unbounded loops, sync work in hot paths, missing indexes. description: does the PR explain why (not just what), link issues, call out deployment concerns.",
     ),
-  // Optional rather than required. When `get_walkthrough_state` returns
-  // `assignedVerdicts`, the call has already been made and this argument is
-  // ignored outright — asking for it anyway would spend the agent's
-  // deliberation on a decision it does not own, and invite prose that argues
-  // for a verdict the row does not carry. It stays in the schema because the
-  // no-TypeSafe path (off, unconfigured, unreachable) still needs it.
+  // Optional, not required: ignored when get_walkthrough_state returns
+  // assignedVerdicts. Stays in the schema for the no-TypeSafe path.
   verdict: z
     .enum(["pass", "concern", "blocker"])
     .nullable()

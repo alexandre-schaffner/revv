@@ -27,9 +27,8 @@ describe("pending judgments", () => {
     forgetWalkthrough(id);
   });
 
-  // The agent keeps calling tools while the gate drains, so a judgment can be
-  // scheduled after the first snapshot is taken. One `Promise.all` over that
-  // snapshot would return with the new work still outstanding.
+  // A judgment can be scheduled mid-drain; one `Promise.all` over a single
+  // snapshot would miss it.
   it("drains work scheduled during the drain", async () => {
     const id = `w-${crypto.randomUUID()}`;
     let second = false;
@@ -49,8 +48,7 @@ describe("pending judgments", () => {
     forgetWalkthrough(id);
   });
 
-  // A judgment that throws must not take down the tool call that scheduled
-  // it, and must not wedge the gate that later drains it.
+  // A rejected judgment must not wedge the gate that later drains it.
   it("survives a rejected judgment", async () => {
     const id = `w-${crypto.randomUUID()}`;
     trackJudgment(id, Promise.reject(new Error("boom")));

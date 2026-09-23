@@ -6,11 +6,8 @@ import { gsapSlide, tokens } from "$lib/motion";
 
 /**
  * "Show N filtered" toggle for issues the scoring pass rated low signal.
- *
- * The count is always visible even when collapsed. That is the mitigation
- * for this being the highest-blast-radius part of the feature: a false low
- * signal on a real bug is recoverable if the reader can see that something
- * was held back, and invisible if they can't.
+ * Count stays visible when collapsed, so a false low-signal on a real bug
+ * is recoverable rather than invisible.
  */
 interface Props {
   count: number;

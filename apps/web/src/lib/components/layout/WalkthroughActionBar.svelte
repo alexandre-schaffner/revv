@@ -74,10 +74,9 @@ const genActionState = $derived.by((): GenActionState | null => {
 });
 
 /** When chat is streaming, treat it as an in-flight action so the
- *  destructive buttons are disabled with a contextual tooltip. The diff
- *  refresh that opens `handleRegenerate`'s stale branch counts too: it runs
- *  before `regenerate` takes the pending slot, so without it the pill stays
- *  live through the whole pull and reads as if the click did nothing. */
+ *  destructive buttons are disabled with a contextual tooltip. Also covers
+ *  the diff refresh in `handleRegenerate`'s stale branch, which runs before
+ *  `regenerate` takes the pending slot. */
 const pullingCommit = $derived(getIsPullingCommit(prId));
 const combinedPendingAction = $derived(
   chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
@@ -91,12 +90,10 @@ const combinedDisabledTitle = $derived(
 );
 
 /**
- * The stale pill's primary action reviews the commits that made this
- * walkthrough stale, so it has to refresh the diff first — otherwise the
- * new review lands while the diff tab still renders the old head, the Pull
- * button stays lit, and the user is told to act on the same commits twice.
- * `reviewLatestCommit` is the same pull-then-review path the tab-side Pull
- * button feeds; `complete` keeps the plain regenerate (nothing to pull).
+ * The stale pill reviews the commits that made it stale, so it refreshes
+ * the diff first via `reviewLatestCommit` (the same pull-then-review path
+ * as the tab-side Pull button); otherwise the diff tab still shows the old
+ * head and the Pull button stays lit after review.
  */
 const isStale = $derived(genActionState?.kind === "stale");
 

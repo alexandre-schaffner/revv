@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { isDiscardedScore, isLowSignalScore, LOW_SIGNAL_THRESHOLD } from "@revv/shared";
-import { compositeScore, severityForLevel } from "./issue-relevance";
+import { compositeScore, severityForLevel } from "./issue-relevance-policy";
 
 /** A concern that failed every judgment — the clearest discard case. */
 const worthless = {
@@ -33,9 +33,8 @@ describe("compositeScore", () => {
     expect(isLowSignalScore(score)).toBe(false);
   });
 
-  // The severity floor is what makes an inline discard safe at all: it puts
-  // the entire severe end of the distribution out of the gate's reach, so no
-  // combination of soft judgments can drop a finding the reader needed.
+  // The severity floor puts the entire severe end of the distribution out of the
+  // gate's reach, so no combination of soft judgments can drop it.
   it("never discards or hides a concern the agent called critical", () => {
     const score = compositeScore({ ...worthless, declaredSeverity: "critical" });
     expect(score).toBe(1);
@@ -50,8 +49,7 @@ describe("compositeScore", () => {
   });
 
   it("leaves a low-but-not-worthless concern in the collapsible band", () => {
-    // Half-grounded, half in scope, and says almost nothing the diff doesn't
-    // already say: worth collapsing, not worth deleting.
+    // Half-grounded, half in scope, says little the diff doesn't: worth collapsing, not deleting.
     const score = compositeScore({
       grounded: 0.5,
       in_scope: 0.5,
@@ -64,8 +62,8 @@ describe("compositeScore", () => {
     expect(isLowSignalScore(score)).toBe(true);
   });
 
-  // The two thresholds are a ladder, not alternatives — a score can only be
-  // discarded if it would also have been collapsed.
+  // A ladder, not alternatives: a score can only be discarded if it would
+  // also have been collapsed.
   it("keeps the discard floor strictly below the low-signal threshold", () => {
     for (let score = 0; score <= 1; score += 0.01) {
       if (isDiscardedScore(score)) expect(isLowSignalScore(score)).toBe(true);
@@ -82,8 +80,8 @@ describe("severityForLevel", () => {
     expect(severityForLevel(3)).toBe("critical");
   });
 
-  // The answer is continuous over the ordered levels, so a 1.6 is a weak
-  // "should fix", not a strong "worth knowing".
+  // Continuous over the ordered levels: 1.6 is a weak "should fix", not a
+  // strong "worth knowing".
   it("rounds a fractional level to the nearer tier", () => {
     expect(severityForLevel(1.4)).toBe("info");
     expect(severityForLevel(1.6)).toBe("warning");

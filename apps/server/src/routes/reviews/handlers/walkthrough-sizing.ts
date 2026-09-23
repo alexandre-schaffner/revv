@@ -9,19 +9,12 @@ import { SettingsService } from "../../../services/Settings";
 /**
  * GET /api/reviews/:id/walkthrough/sizing
  *
- * Sizes the PR *before* generation starts, so the review page can show how
- * much attention it needs — and the model selector can name what "Auto"
- * will pick — without waiting for a walkthrough to exist.
+ * Sizes the PR before generation starts: risk tier for the review page, and
+ * what "Auto" would pick for the model. Cached on `(prId, headSha)` and
+ * shared with `startJobBody` — same TypeSafe call, moved earlier, not an extra one.
  *
- * The answer is cached on `(prId, headSha)` and shared with `startJobBody`,
- * so this is not an extra API call per PR — it is the same call, moved
- * earlier. Clicking Generate afterwards hits the cache, which takes the
- * TypeSafe round trip off the one path where its latency is user-visible.
- *
- * Reads the **cached** diff only and never fetches from GitHub: a preview is
- * a nicety, and it must not turn opening a PR into a rate-limit risk. Before
- * the diff lands this reports `pending`, and the client tries again once the
- * review page has loaded its files.
+ * Reads the cached diff only, never GitHub, so a preview can't become a
+ * rate-limit risk. Reports `pending` until the diff lands; client retries.
  */
 export function getWalkthroughSizingHandler(
   prId: string,
@@ -31,10 +24,8 @@ export function getWalkthroughSizingHandler(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-      // Three independent reasons to size, all reading the same cached
-      // answers — so any one of them alone is enough to make the call worth
-      // making. Model and effort each only mean something when that half
-      // isn't pinned; the risk tier is useful either way.
+      // Three independent reasons to size, any one alone justifies the call.
+      // Model/effort only matter when that half isn't pinned; risk always does.
       const autoSizing = settings?.jev.autoModel === true;
       const wantsModel = autoSizing && settings?.aiModel === AUTO_SENTINEL;
       const wantsEffort = autoSizing && settings?.aiThinkingEffort === AUTO_SENTINEL;

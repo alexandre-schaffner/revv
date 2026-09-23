@@ -28,9 +28,7 @@ describe("routeSizing — model", () => {
   });
 
   it("never downgrades a pinned model", () => {
-    // Sonnet is pinned and the answer says shallow. The cost is asymmetric —
-    // an under-powered model on a PR the user cares about is worse than a
-    // few wasted cents — so the pin wins.
+    // Asymmetric cost: an under-powered model is worse than wasted cents, so the pin wins.
     expect(routeSizing(input({ depth: "shallow" }))?.model).toBeUndefined();
     expect(routeSizing(input({ depth: "standard" }))?.model).toBeUndefined();
   });
@@ -41,8 +39,7 @@ describe("routeSizing — model", () => {
   });
 
   it("leaves an off-ladder pinned model alone", () => {
-    // No way to tell whether the routed tier is an upgrade or a downgrade
-    // from a model that isn't on the ladder at all.
+    // No way to tell if the routed tier is an upgrade or downgrade from an off-ladder model.
     expect(routeSizing(input({ configuredModel: "claude-fable-5" }))?.model).toBeUndefined();
     expect(routeSizing(input({ configuredModel: null }))?.model).toBeUndefined();
   });
@@ -82,8 +79,7 @@ describe("routeSizing — model", () => {
 
 describe("routeSizing — effort", () => {
   it("carries the answered reasoning effort, not one derived from depth", () => {
-    // Depth and effort are separate questions: a change can be shallow to
-    // follow yet expensive to get wrong.
+    // A change can be shallow to follow yet expensive to get wrong.
     expect(routeSizing(input({ reasoningEffort: "minimal" }))?.thinkingEffort).toBe("low");
     expect(routeSizing(input({ reasoningEffort: "exhaustive" }))?.thinkingEffort).toBe("max");
   });
@@ -102,9 +98,6 @@ describe("routeSizing — effort", () => {
     expect(routeSizing(input({ configuredEffort: null }))?.thinkingEffort).toBeUndefined();
   });
 
-  // The regression these two guard: effort and model used to share one
-  // return value, so any reason the model half declined silently threw the
-  // effort answer away too.
   it("still sizes the effort when the model half declines", () => {
     // Pinned model at the routed tier — nothing to upgrade.
     const routed = routeSizing(input({ depth: "shallow", reasoningEffort: "exhaustive" }));

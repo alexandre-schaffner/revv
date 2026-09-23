@@ -49,29 +49,22 @@ export const walkthroughs = sqliteTable(
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /**
      * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
-     * from the Jev risk pass (CLAUDE.md invariant 2's carve-out), passed to
-     * `createPartial` so no `kill -9` window exists between row creation and
-     * its risk tier. Falls back to `'low'` when Jev is off or unreachable,
-     * which is also the value every pre-Jev row carries.
+     * from the Jev risk pass (invariant 2's carve-out), passed to
+     * `createPartial` so no `kill -9` gap exists before the row has a tier.
+     * Falls back to `'low'` when Jev is off or unreachable.
      */
     riskLevel: text("risk_level").notNull().default("low"),
-    /**
-     * Calibrated confidence [0,1] behind {@link riskLevel}, recorded purely so
-     * the tier thresholds are tunable from real data later. Null when the tier
-     * did not come from Jev.
-     */
+    /** Calibrated confidence [0,1] behind {@link riskLevel}; null when the tier didn't come from Jev. */
     riskConfidence: real("risk_confidence"),
     /**
-     * Durable three-state gate for the phase-D verdict pass —
-     * `'pending' | 'ready' | 'unavailable'`, null on rows predating it.
-     *
-     * Set to `'pending'` inside the Phase C transaction, then to `'ready'`
-     * (nine `walkthrough_ratings` rows pre-seeded with verdicts) or
-     * `'unavailable'` (Jev off/failed) by the pass itself. `rate_axis` reads
-     * it: `'pending'` is a retryable error, `'ready'` means prose-only, and
-     * `'unavailable'`/null is the pre-Jev contract where the agent supplies
-     * the verdict. In SQLite rather than memory so it survives `kill -9`
-     * (invariant 1); `resumePending()` un-strands a leftover `'pending'`.
+     * Three-state gate for the phase-D verdict pass:
+     * `'pending' | 'ready' | 'unavailable'`, null on rows predating it. Set to
+     * `'pending'` in the Phase C transaction, then `'ready'` (nine
+     * `walkthrough_ratings` rows pre-seeded with verdicts) or `'unavailable'`
+     * (Jev off/failed) by the pass itself. `rate_axis` treats `'pending'` as
+     * retryable, `'ready'` as prose-only, and `'unavailable'`/null as the
+     * pre-Jev contract. Durable per invariant 1; `resumePending()` un-strands
+     * a leftover `'pending'`.
      */
     axisAdvisoryState: text("axis_advisory_state").$type<AxisAdvisoryState>(),
     /**

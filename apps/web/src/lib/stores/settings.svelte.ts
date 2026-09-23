@@ -132,8 +132,7 @@ export async function updateSettings(
 ): Promise<void> {
   const previous = settings;
   // Optimistic local merge — apply the partial immediately so concurrent calls
-  // (e.g. model + context-window in the same popover session) don't clobber each
-  // other when server responses arrive out of order.
+  // don't clobber each other when server responses arrive out of order.
   if (settings) {
     settings = mergeSettingsUpdate(settings, partial);
   }
@@ -146,9 +145,8 @@ export async function updateSettings(
   if ("aiSuggestionsModel" in partial || "aiAgent" in partial) {
     invalidateSuggestions();
   }
-  // The sizing is routed against the current agent and model, and gated on
-  // the risk / auto-model toggles, so all four invalidate the client copy.
-  // The sizing itself is cached server-side and is not re-paid for.
+  // Sizing is routed against agent/model and gated on risk/auto-model, so any
+  // of these invalidate the client copy. Cached server-side, not re-paid for.
   if (
     "aiModel" in partial ||
     "aiThinkingEffort" in partial ||
@@ -240,20 +238,13 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
     aiSuggestionsModel: getDefaultSuggestionsModel(acpId),
   };
 
-  // "Auto" is agent-independent — it says "don't pin a model", which stays
-  // true after a switch. Clobbering it with the new agent's default would
-  // silently turn the preference off.
-  if (isAutoSentinel(getSettings()?.aiModel)) {
-    // Except where the new agent can't route: opencode's catalog is fetched
-    // live, so Auto there would leave generation on a stale pin forever.
-    if (caps.models === "dynamic") {
-      const cached = getAvailableModels(acpId);
-      update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
-    }
-  } else if (caps.models === "dynamic") {
+  if (caps.models === "dynamic") {
+    // Auto included: opencode's catalog is fetched live, so there's no ladder to
+    // route on and Auto would leave generation pinned on a stale model forever.
     const cached = getAvailableModels(acpId);
     update.aiModel = cached[0]?.value ?? getDefaultModel(acpId);
-  } else {
+  } else if (!isAutoSentinel(getSettings()?.aiModel)) {
+    // "Auto" is agent-independent, so it's left alone here.
     const defaultModel = getDefaultModel(acpId);
     const fallback = caps.models[0]?.value;
     if (caps.models.some((m) => m.value === defaultModel)) {
@@ -265,10 +256,8 @@ export function cascadeChatAgentChange(acpId: AcpAgentId): SettingsUpdate {
 
   if (caps.thinkingEfforts.length > 0) {
     const cur = getSettings()?.aiThinkingEffort;
-    // "Auto" survives the switch for the same reason the model sentinel does:
-    // it says "don't pin an effort", which stays true under any agent. Unlike
-    // the model there is no dynamic-catalog exception — every agent with a
-    // thinking-effort knob can be sized onto its own ladder.
+    // "Auto" survives for the same reason as the model sentinel; unlike the
+    // model, there's no dynamic-catalog exception here.
     if (!isAutoSentinel(cur) && (!cur || !caps.thinkingEfforts.includes(cur as ThinkingEffort))) {
       const fallback = caps.thinkingEfforts.includes("high") ? "high" : caps.thinkingEfforts[0];
       if (fallback) update.aiThinkingEffort = fallback;

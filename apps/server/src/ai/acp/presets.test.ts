@@ -98,8 +98,7 @@ describe("ACP launch presets", () => {
       thinkingEffort: "high",
     });
     expect(launch.command).toBe("npx");
-    // No `CLAUDE_CODE_DISABLE_1M_CONTEXT`: Revv always runs at the full 1M
-    // window, which is Claude Code's own default when the flag is absent.
+    // No CLAUDE_CODE_DISABLE_1M_CONTEXT: 1M is Claude Code's own default when absent.
     expect(launch.env).toEqual({
       ANTHROPIC_MODEL: "claude-opus-5",
       CLAUDE_CODE_EFFORT_LEVEL: "high",

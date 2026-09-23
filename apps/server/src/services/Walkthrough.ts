@@ -101,20 +101,12 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
   };
 }
 
-/**
- * A rating row exists as soon as the orchestrator's verdict pass seeds it,
- * which is before the agent has written a word. Only rows with prose are
- * part of the artifact — the rest would render as blank scorecard cards.
- */
+/** A seeded-but-unwritten rating row has no prose yet; exclude it so it doesn't render as a blank scorecard card. */
 function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
   return row.rationale.trim().length > 0;
 }
 
-/**
- * Advisory score fields for an issue DTO. Absent — not null — when unscored,
- * because `exactOptionalPropertyTypes` distinguishes them and "never scored"
- * must never read as low signal.
- */
+/** Absent (not null) when unscored, so `exactOptionalPropertyTypes` keeps "never scored" from reading as low signal. */
 function advisoryFields(
   advisoryScore: number | null,
 ): Pick<WalkthroughIssue, "advisoryScore" | "lowSignal"> | Record<string, never> {
@@ -386,12 +378,10 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       baseHeadSha?: string | null;
       forceNew?: boolean;
       /**
-       * Orchestrator-assigned risk tier (CLAUDE.md invariant 2's carve-out).
-       * Passed here rather than written by a follow-up `UPDATE` so no
-       * `kill -9` window exists between the row existing and carrying its
-       * risk. Omitted when the TypeSafe risk pass is off or unavailable, in
-       * which case the row keeps the `'low'` default and the agent's prompt
-       * tells it to judge the tier itself.
+       * Orchestrator-assigned risk tier (invariant 2's carve-out). Passed at
+       * insert, not a follow-up UPDATE, so no kill-9 window leaves the row
+       * without it. Omitted means the risk pass is off/unavailable; row
+       * keeps the `'low'` default and the agent judges the tier itself.
        */
       risk?: { readonly level: RiskLevel; readonly confidence: number };
     }) => Effect.Effect<string, ReviewError, DbService>;

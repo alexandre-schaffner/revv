@@ -7,34 +7,24 @@ import type { ReviewMode, ThinkingEffort } from "./types";
  * How much attention a PR needs, and what "Auto" would pick for it, answered
  * before any walkthrough exists.
  *
- * The wire contract of `GET /api/reviews/:id/walkthrough/sizing`. Shared
- * rather than declared on each side: both the handler's return and the store's
- * `res.json()` are this shape, and a hand-mirrored copy is a cast waiting to
- * go stale.
+ * Wire contract of `GET /api/reviews/:id/walkthrough/sizing`, shared so the
+ * handler's return and the store's `res.json()` can't drift out of sync.
  */
 export type WalkthroughSizing =
-  /** Nothing to size — no auto half is in play and the risk hook is off. */
+  /** No auto half in play and the risk hook is off. */
   | { readonly status: "off" }
-  /** A hook is on, but the diff isn't cached yet, so there is nothing to size. */
+  /** A hook is on, but the diff isn't cached yet. */
   | { readonly status: "pending" }
   | {
       readonly status: "ready";
-      /**
-       * Tier a review of this PR would be sized to. Null when the risk hook
-       * is off, in which case the agent decides its own tier mid-run and
-       * showing anything here would be a guess.
-       */
+      /** Tier this PR would be sized to. Null when the risk hook is off. */
       readonly riskLevel: RiskLevel | null;
-      /**
-       * Model this PR would launch with. Null when the model is pinned or
-       * routing declined, in which case the configured model stands.
-       */
+      /** Model this PR would launch with. Null when pinned or routing declined. */
       readonly model: string | null;
       /**
-       * Reasoning effort sized for this PR, already clamped to the selected
-       * agent's ladder. Null whenever the effort is pinned or routing
-       * declined — independent of {@link WalkthroughSizing.model}, which has
-       * its own opt-in and its own gating.
+       * Reasoning effort, already clamped to the agent's ladder. Null when
+       * pinned or declined — independent of {@link WalkthroughSizing.model},
+       * which has its own opt-in and gating.
        */
       readonly thinkingEffort: ThinkingEffort | null;
     };
@@ -141,9 +131,8 @@ export interface WalkthroughSemanticStep {
 // ── Issue (structured concern flagged by the AI agent) ───────────────────────
 
 /**
- * Consequence tier of a flagged concern. Named because it is now decided in
- * two different places — the agent, or the relevance pass when
- * `jev.issueSeverity` is on — and both need to name the same closed set.
+ * Consequence tier of a flagged concern. Decided by the agent, or by the
+ * relevance pass when `jev.issueSeverity` is on — both name this closed set.
  */
 export type IssueSeverity = "info" | "warning" | "critical";
 
@@ -169,15 +158,13 @@ export interface WalkthroughIssue {
   submittedAt?: string;
   /**
    * Composite signal score in [0,1] from the orchestrator's issue-scoring
-   * pass. Absent = never scored, which is correct for every pre-Jev row and
-   * for cache-imported walkthroughs (the importer regenerates issue ids).
-   * Unscored is never treated as low-signal.
+   * pass. Absent = never scored (pre-Jev rows, cache-imported walkthroughs);
+   * unscored is never treated as low-signal.
    */
   advisoryScore?: number;
   /**
-   * True when {@link advisoryScore}'s underlying judgments put this issue
-   * below the low-signal threshold. Computed server-side so every surface
-   * filters identically. Absent on unscored issues.
+   * True when {@link advisoryScore} is below the low-signal threshold.
+   * Computed server-side so every surface filters identically.
    */
   lowSignal?: boolean;
 }
@@ -284,17 +271,12 @@ export interface WalkthroughRating {
   citations: RatingCitation[];
   /** Optional links to walkthrough blocks that explain this rating in depth. */
   blockIds: string[];
-  /**
-   * Who decided {@link verdict}. `'agent'` is the original contract;
-   * `'advisory'` means the orchestrator pre-assigned it from Jev and the
-   * agent contributed prose only.
-   */
+  /** Who decided {@link verdict}: `'agent'`, or `'advisory'` when Jev pre-assigned it and the agent wrote prose only. */
   verdictSource?: VerdictSource;
   /**
-   * Set when the agent was handed a non-`pass` verdict it could find nothing
-   * to cite for. Recorded on the row and deliberately does *not* change the
-   * verdict — it is the only agent/advisory disagreement signal left once
-   * verdicts are pre-assigned.
+   * Set when the agent was handed a non-`pass` verdict it couldn't cite for.
+   * Doesn't change the verdict — the only agent/advisory disagreement signal
+   * left once verdicts are pre-assigned.
    */
   disputed?: boolean;
 }
@@ -306,24 +288,18 @@ export type VerdictSource = "agent" | "advisory";
  * Durable gate for the orchestrator's phase-D verdict pass, read by
  * `rate_axis` to decide whether the agent supplies a verdict or prose only.
  *
- *   'pending'     — Phase C has committed; the pass is in flight. `rate_axis`
- *                   returns a retryable "try again in a moment".
- *   'ready'       — nine rating rows are pre-seeded with verdicts.
- *   'unavailable' — the pass was skipped or failed; pre-Jev contract applies.
+ *   'pending'     — pass in flight; `rate_axis` returns a retryable error.
+ *   'ready'       — nine rating rows pre-seeded with verdicts.
+ *   'unavailable' — pass skipped/failed; pre-Jev contract applies.
  *
- * Null carries the same meaning as `'unavailable'` and is what every row
- * predating the feature holds.
+ * Null means `'unavailable'`; every row predating the feature holds it.
  */
 export type AxisAdvisoryState = "pending" | "ready" | "unavailable";
 
 /**
- * Composite score below which an issue is treated as low signal.
- *
- * Deliberately low. This is the highest-blast-radius threshold in the
- * feature — a false low-signal on a real bug makes it invisible until the
- * reader expands the disclosure — so it starts conservative and is tuned
- * from real runs, not from a guess. Shared so the server's DTO and any
- * client-side reasoning can't drift.
+ * Composite score below which an issue is treated as low signal. Kept low:
+ * a false positive here hides a real bug behind a disclosure. Shared so the
+ * server's DTO and client-side reasoning can't drift.
  */
 export const LOW_SIGNAL_THRESHOLD = 0.4;
 
@@ -335,17 +311,12 @@ export function isLowSignalScore(score: number | null | undefined): boolean {
 /**
  * Composite score below which a flagged concern is never recorded at all.
  *
- * Two tiers, not one, because the two decisions carry very different blast
- * radii. Collapsing a weak issue behind a disclosure is recoverable — the
- * count is visible and one click undoes it. *Discarding* one is not: the
- * reader never learns it existed. So the discard floor sits well below the
- * low-signal threshold and only catches the concerns that failed on the
- * grounds that matter — ungrounded, out of scope, or a restatement of
- * something already on the board.
- *
- * `compositeScore`'s severity floor is the other half of the guarantee:
- * anything the agent called `critical`, or that reads as must-fix, is pinned
- * to 1 and can never reach either threshold.
+ * Two tiers, not one: collapsing behind a disclosure is recoverable, but
+ * discarding means the reader never learns the concern existed, so this
+ * floor sits well below {@link LOW_SIGNAL_THRESHOLD} and only catches
+ * ungrounded, out-of-scope, or duplicate concerns. `compositeScore` pins
+ * anything the agent called `critical` to 1, so it can never reach either
+ * threshold.
  */
 export const ISSUE_DISCARD_THRESHOLD = 0.2;
 
@@ -418,12 +389,9 @@ export interface Walkthrough {
   riskLevel: RiskLevel;
   /**
    * Calibrated confidence behind {@link riskLevel}, or null when the tier
-   * came from the agent rather than the orchestrator's risk pass.
-   *
-   * Consumers use its non-nullness as "the tier is authoritative already":
-   * a generating row whose agent hasn't run yet still carries the schema
-   * default `'low'` in `riskLevel`, and rendering that as a verdict would
-   * be a lie. With a confidence present, the tier is real from job start.
+   * came from the agent rather than the orchestrator's risk pass. Consumers
+   * treat non-null as "tier is authoritative" — a generating row's schema
+   * default `'low'` isn't a real verdict until confidence is present.
    */
   riskConfidence?: number | null;
   /**
@@ -556,28 +524,20 @@ export interface WalkthroughState {
    * Whether the orchestrator's phase-D verdict pass has landed, and so
    * whether `rate_axis` expects a verdict from the agent or only prose.
    *
-   *   'pending'     — the pass is in flight; `rate_axis` returns a retryable
-   *                   "try again in a moment".
-   *   'ready'       — the nine verdicts are pre-assigned; supply prose, and
-   *                   use `disputed: true` for a non-pass axis you cannot
-   *                   cite rather than fighting the citation requirement.
+   *   'pending'     — pass in flight; `rate_axis` returns a retryable error.
+   *   'ready'       — verdicts pre-assigned; supply prose, use
+   *                   `disputed: true` for an axis you can't cite.
    *   'unavailable' — supply the verdict yourself, as before.
    *
-   * Null on rows predating the feature; read it the same as `'unavailable'`.
-   * Invariant 6 covers resume for free — the agent reads this from DB on
-   * every run rather than carrying it in memory.
+   * Null means `'unavailable'`. Invariant 6 covers resume for free — read
+   * from DB every run rather than carried in memory.
    */
   axisAdvisoryState: AxisAdvisoryState | null;
   /**
    * The nine verdicts, when {@link axisAdvisoryState} is `'ready'`; `null`
-   * otherwise. This is how the agent learns *which* call it is being asked to
-   * justify — `rate_axis` takes no verdict in that mode, so without this the
-   * agent would reason its way to a verdict of its own and write prose the
-   * stored row contradicts.
-   *
-   * Lists only the axes that were actually seeded. An axis missing from the
-   * list is one the pass produced no answer for; `rate_axis` still expects a
-   * verdict from the agent there.
+   * otherwise. Tells the agent which call it's justifying — `rate_axis`
+   * takes no verdict in that mode. Lists only seeded axes; a missing axis
+   * still expects a verdict from the agent.
    */
   assignedVerdicts: Array<{
     axis: RatingAxis;
@@ -705,18 +665,15 @@ export type WalkthroughStreamEvent =
         repoId?: string;
         /**
          * Risk tier, when the orchestrator assigned it before launching the
-         * agent. Carried here rather than waiting for the `summary` event at
-         * the end of Phase A: the tier is known seconds earlier, and it is
-         * the single most useful thing to show someone watching a
-         * walkthrough start. Absent when the agent owns the tier, in which
-         * case `summary` remains the first place it appears.
+         * agent — known seconds before the Phase A `summary` event. Absent
+         * when the agent owns the tier; `summary` is then the first place
+         * it appears.
          */
         riskLevel?: RiskLevel;
         /**
-         * The model this run actually launched with, already resolved
-         * against the agent's catalog. Present so a UI showing "Auto" can
-         * name what Auto picked — including when routing declined and the
-         * configured model stood, which is just as useful to know.
+         * The model this run actually launched with, resolved against the
+         * agent's catalog. Lets a UI showing "Auto" name what it picked,
+         * including when routing declined and the configured model stood.
          */
         modelUsed?: string;
       };

@@ -63,11 +63,7 @@ export interface WalkthroughEntry {
   blocks: WalkthroughBlock[];
   summary: string | null;
   riskLevel: RiskLevel | null;
-  /**
-   * The model the run actually launched with. Null until a walkthrough has
-   * started for this PR. Lets the model selector name what "Auto" resolved
-   * to instead of leaving the user guessing.
-   */
+  /** Model the run actually launched with; null until a walkthrough has started. Lets the selector name what "Auto" resolved to. */
   modelUsed: string | null;
   sentiment: string | null;
   lastCompletedPhase: WalkthroughPipelinePhase;
@@ -744,8 +740,7 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
-          // Present only when the orchestrator assigned the tier, in which
-          // case it is real from job start and worth showing immediately.
+          // Present only when the orchestrator assigned the tier at job start.
           if (event.data.riskLevel) entry.riskLevel = event.data.riskLevel;
           if (event.data.modelUsed) entry.modelUsed = event.data.modelUsed;
           entry.isStreaming = true;
@@ -1184,10 +1179,8 @@ async function doHydrateFromCache(
     // collections. Without this, the snapshot's stale view would clobber
     // chapters the SSE had already delivered.
     entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
-    // A generating row with no summary still carries the schema default
-    // `'low'`, so the tier is only trustworthy once either the agent has
-    // written its overview or the orchestrator's risk pass has stamped a
-    // confidence on it.
+    // A generating row with no summary still carries schema default `'low'`;
+    // trust the tier only once the overview or the risk pass has landed.
     const hasRealRisk = hasRealSummary || wt.riskConfidence != null;
     entry.riskLevel = entry.riskLevel ?? (hasRealRisk ? wt.riskLevel : null);
     entry.modelUsed = entry.modelUsed ?? wt.modelUsed ?? null;

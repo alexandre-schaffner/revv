@@ -278,10 +278,8 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     }
   })
 
-  // Sizes the PR ahead of generation: the risk tier a review would be given
-  // and the model "Auto" would pick. Shares its cached answer with the
-  // generation path, so this is the same TypeSafe call moved earlier, not an
-  // extra one.
+  // Sizes the PR ahead of generation (risk tier, "Auto" model pick). Shares
+  // its cached answer with the generation path — same TypeSafe call, moved earlier.
   .get("/:id/walkthrough/sizing", async (ctx) => {
     try {
       return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);

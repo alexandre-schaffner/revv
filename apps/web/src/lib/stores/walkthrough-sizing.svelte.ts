@@ -1,12 +1,9 @@
 // ── Pre-generation sizing ───────────────────────────────────────────────────
 //
 // How much attention a PR needs, and which model "Auto" would pick for it,
-// resolved before any walkthrough exists — so the review page can show a
-// risk tier the moment you open it rather than after a full generation.
-//
-// The server sizes the PR from its cached diff and caches the answer on
-// `(prId, headSha, diffFingerprint)`, sharing it with the generation path —
-// so asking here is the same TypeSafe call moved earlier, not an extra one.
+// resolved before any walkthrough exists so the review page can show a risk
+// tier on open. The server sizes from the cached diff and caches the answer
+// on `(prId, headSha, diffFingerprint)`, shared with the generation path.
 
 import type { WalkthroughSizing } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -14,12 +11,8 @@ import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
 
 /**
- * Keyed on `(prId, headSha)`, not `prId`.
- *
- * That is what makes a pull re-size: new commits move the PR's head SHA, the
- * key changes, the old answer stops matching and the selector asks again.
- * Keying on the PR alone would pin the first sizing for the life of the
- * branch, which is exactly wrong for a judgment about the diff.
+ * Keyed on `(prId, headSha)`, not `prId` — a pull moves the head SHA, so the
+ * old answer stops matching and re-sizes rather than pinning for the branch's life.
  */
 let sizings = $state<Record<string, WalkthroughSizing>>({});
 /** In-flight de-dupe: mount, settings change and a pull can all ask at once. */
@@ -44,10 +37,8 @@ export function getWalkthroughSizing(
 
 /**
  * Reactive selected-PR sizing shared by the model and effort selectors.
- *
- * `active` is read inside the effect so callers can include their complete
- * feature gate. This prevents a saved Auto sentinel from polling after the
- * TypeSafe master switch is turned off.
+ * `active` is read inside the effect so a saved Auto sentinel stops polling
+ * once the caller's feature gate (e.g. the TypeSafe master switch) is off.
  */
 export function sizingForSelectedPr(active: () => boolean) {
   let prId = $derived(getSelectedPrId());
@@ -69,12 +60,6 @@ export function sizingForSelectedPr(active: () => boolean) {
   });
 
   return {
-    get prId(): string | null {
-      return prId;
-    },
-    get headSha(): string | null {
-      return headSha;
-    },
     get sizing(): WalkthroughSizing | null {
       return sizing;
     },
@@ -87,11 +72,9 @@ export function sizingForSelectedPr(active: () => boolean) {
 /**
  * Fetch the preview for a PR at a specific head SHA, de-duped.
  *
- * `pending` means the server has no cached diff to size yet — normal right
- * after a pull, while the poller re-fetches. It retries on a timer rather
- * than waiting for a signal, because the thing it is waiting for (the diff
- * cache filling) has no client-visible event. Bounded so a PR whose diff
- * never caches settles instead of polling forever.
+ * `pending` means the diff isn't cached yet (normal right after a pull).
+ * Retries on a timer since diff-cache-fill has no client-visible event;
+ * bounded so a PR whose diff never caches settles instead of polling forever.
  */
 export async function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
   const key = cacheKey(prId, headSha);
@@ -133,9 +116,9 @@ export async function fetchWalkthroughSizing(prId: string, headSha: string): Pro
 }
 
 /**
- * Drop everything. Called when the model or agent setting changes, since the
- * routing — though not the underlying sizing — depends on both. The server
- * still has the sizing cached, so this re-routes rather than re-paying.
+ * Drop everything. Called on model/agent setting change: routing depends on
+ * both, but the server still has the sizing cached, so this re-routes rather
+ * than re-paying.
  */
 export function resetWalkthroughSizings(): void {
   sizings = {};

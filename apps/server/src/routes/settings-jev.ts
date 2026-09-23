@@ -1,18 +1,18 @@
 // ── TypeSafe System One key management ─────────────────────────────────────
 //
 // Composed into `settingsRoutes` via `.use()`. Every route here is
-// individually `withAuth`-guarded: the parent settings router is mounted
-// without auth, which is exactly why the key never enters its DTO.
+// individually `withAuth`-guarded, unlike the unauthenticated parent — why the key never enters its DTO.
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { clearJevApiKey, setJevApiKey } from "../ai/jev/api-key";
+import type { JevUnavailableReason } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { JevService } from "../services/Jev";
 import { handleAppError, withAuth } from "./middleware";
 
 /** Human-readable cause for the Settings "Test connection" result. */
-const TEST_FAILURE_MESSAGE: Record<string, string> = {
+const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
   unconfigured: "No API key saved.",
   disabled: "TypeSafe is turned off.",
   timeout: "The request timed out.",
@@ -42,10 +42,8 @@ export const settingsJevRoutes = new Elysia()
       return handleAppError(e, ctx);
     }
   })
-  // One-question round trip so the user can tell a bad key from a bad network
-  // without generating a walkthrough. Mirrors `/cache/signing/test`: failures
-  // come back as `{ ok: false, error }` rather than a non-2xx, because "your
-  // key is wrong" is a result, not a server error.
+  // Lets the user tell a bad key from a bad network without generating a
+  // walkthrough. Mirrors `/cache/signing/test`: failures return `{ ok: false, error }`, not a non-2xx.
   .post("/jev/test", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
@@ -54,7 +52,7 @@ export const settingsJevRoutes = new Elysia()
           Effect.catchTag("JevUnavailable", (e) =>
             Effect.succeed({
               ok: false as const,
-              error: e.message || TEST_FAILURE_MESSAGE[e.reason] || "Unknown failure.",
+              error: e.message || TEST_FAILURE_MESSAGE[e.reason],
             }),
           ),
         ),

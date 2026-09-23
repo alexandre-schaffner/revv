@@ -470,10 +470,8 @@ export const WalkthroughJobsLive = Layer.effect(
             return next;
           }),
           unregisterActivityNotifier(walkthroughId),
-          // Phase-B judgment bookkeeping is per-run and ephemeral (see
-          // `ai/jev/pending.ts`). Dropped here rather than left to a timer so
-          // a long-lived server doesn't accumulate a retracted-id set per
-          // walkthrough it ever generated.
+          // Per-run ephemeral bookkeeping (see `ai/jev/pending.ts`); dropped here
+          // so a long-lived server doesn't accumulate a set per walkthrough.
           Effect.sync(() => {
             forgetPendingJudgments(walkthroughId);
             forgetProse(walkthroughId);
@@ -513,44 +511,26 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly parentWalkthroughId: string | null;
       readonly baseHeadSha: string | null;
       /**
-       * Model/effort override resolved once at job start from the TypeSafe
-       * depth answer, or `null` to leave the configured model alone.
-       *
-       * It lives here rather than being derived per-stream because
-       * `buildStreamParams` is reused by `buildContinuationEffect` — deriving
-       * it per stream would hand a continuation a different ACP pool key,
-       * orphaning the first connection (refcount → 0 → `scheduleIdleStop`).
+       * Model/effort override from the TypeSafe depth answer, resolved once at
+       * job start (not per-stream: `buildStreamParams` is reused by
+       * `buildContinuationEffect`, and a per-stream derivation would hand a
+       * continuation a different ACP pool key, orphaning the first connection).
        */
       readonly launchOverride: GenerationLaunchOverride | null;
-      /**
-       * Risk tier the orchestrator assigned at job start, or `null` when the
-       * TypeSafe risk pass was off or unavailable. Drives the prompt: assigned
-       * means "the tier is a given, work to it"; `null` keeps the original
-       * "explore, then declare the tier" instruction.
-       */
+      /** Orchestrator-assigned risk tier; `null` means the agent judges the tier itself. */
       readonly assignedRisk: RiskLevel | null;
       /**
-       * Changed files in the order the orchestrator scored them, highest
-       * attention first, or `null` when the file-priority pass was off or
-       * unavailable. Threaded through the prompt rather than the tool surface
-       * because it shapes the plan the agent makes before its first tool call.
+       * Changed files in orchestrator-scored attention order, or `null` when
+       * unavailable. Threaded through the prompt, not the tool surface, since it
+       * shapes the agent's plan before its first tool call.
        */
       readonly filePriorities: ReadonlyArray<{
         readonly filename: string;
         readonly tier: number | null;
       }> | null;
-      /**
-       * Present when the PR was judged to carry several independent concerns.
-       * Turns the prompt's split guidance from "decide whether to recommend
-       * one" into "name the seams".
-       */
+      /** Present when the PR was judged to carry several independent concerns. */
       readonly splitRecommendation: { readonly pieces: number } | null;
-      /**
-       * Whether to adjudicate auto-continuations (and enrich the failure
-       * message) for this job. Snapshotted at job start alongside
-       * `providerConfig`, so a settings change mid-run can't flip the
-       * behaviour halfway through a retry budget.
-       */
+      /** Snapshotted at job start so a settings change mid-run can't flip behaviour halfway through a retry budget. */
       readonly adjudicateContinuations: boolean;
     };
 
@@ -565,12 +545,7 @@ export const WalkthroughJobsLive = Layer.effect(
       capturedOpencodeSessionId: string | undefined;
       /** Wall-clock start, for the adjudication state. */
       readonly startedAt: number;
-      /**
-       * Phase and content counts as they stood when the previous
-       * auto-continuation was spent. "Progress since last continuation" is
-       * undefined without them, which is also why the first continuation is
-       * never adjudicated.
-       */
+      /** Phase/counts as of the previous auto-continuation; without them "progress since" is undefined, so the first continuation is never adjudicated. */
       phaseAtLastContinuation: string | null;
       countsAtLastContinuation: Record<string, number> | null;
       /** Why the last generator stopped, for the failure classification. */
@@ -749,9 +724,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 data: { tokenUsage: currentTokenUsage },
               }).pipe(Effect.catchAll(() => Effect.void));
 
-              // The tool-level completion gate drains too, but the
-              // orchestrator is the lifecycle owner and must independently
-              // validate a stable issue set before writing `complete`.
+              // Orchestrator is the lifecycle owner; validates a stable issue set independently before writing `complete`.
               yield* Effect.promise(() => awaitJudgments(job.walkthroughId));
 
               const dbState = yield* provideDb(
@@ -982,10 +955,8 @@ export const WalkthroughJobsLive = Layer.effect(
               return;
             }
 
-            // We are about to *spend* a continuation, so ask first. Gated on
-            // having spent one already: "progress since the last
-            // continuation" is undefined on the first pass, and the first
-            // continuation is the one that most often succeeds.
+            // Skip on the first pass: "progress since last continuation" is undefined, and
+            // the first continuation is the one that most often succeeds anyway.
             if (state.autoContinuations >= 1) {
               const partialNow = yield* provideDb(
                 walkthroughService.getPartial(
@@ -1020,8 +991,7 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             state.autoContinuations++;
-            // Snapshot what "before this continuation" looked like, so the
-            // next adjudication has something to compare against.
+            // Snapshot for the next adjudication to compare against.
             state.phaseAtLastContinuation = continuation.partial.lastCompletedPhase;
             state.countsAtLastContinuation = continuationCounts(
               continuation.partial,
@@ -1097,9 +1067,7 @@ export const WalkthroughJobsLive = Layer.effect(
               prHeadSha: job.prHeadSha,
               mode: job.mode,
               trigger,
-              // The tier is already on the row by now, so send it with the
-              // very first event rather than making the UI wait for the
-              // `summary` event at the end of Phase A.
+              // Already on the row; send it now rather than making the UI wait for Phase A's `summary` event.
               ...(ctx.assignedRisk !== null ? { riskLevel: ctx.assignedRisk } : {}),
               modelUsed: ctx.modelUsed,
             },
@@ -1446,8 +1414,7 @@ export const WalkthroughJobsLive = Layer.effect(
             forceNew: params.trigger === "user" && generationMode === "full",
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
-            // Written at insert, not by a follow-up UPDATE: no `kill -9`
-            // window exists between the row existing and carrying its tier.
+            // At insert, not a follow-up UPDATE: no kill-9 window without the tier.
             ...(assignedRisk !== null && answers !== null
               ? { risk: { level: assignedRisk, confidence: answers.riskConfidence } }
               : {}),
@@ -1624,10 +1591,8 @@ export const WalkthroughJobsLive = Layer.effect(
               continue;
             }
 
-            // A `kill -9` mid-pass leaves `axis_advisory_state = 'pending'`,
-            // which `rate_axis` treats as retryable — the resumed agent
-            // would retry until its budget ran out. Re-fire the pass: it
-            // always terminates the column, so this can't loop.
+            // kill-9 mid-pass leaves `axis_advisory_state = 'pending'`, which `rate_axis`
+            // treats as retryable; re-fire the pass, it always terminates the column.
             yield* Effect.forkDaemon(
               runAxisVerdictPass(db, row.id).pipe(
                 Effect.provideService(JevService, jevService),
@@ -1829,16 +1794,12 @@ export const WalkthroughJobsLive = Layer.effect(
             }
           }
 
-          // 6. Phase C just committed — fork the axis-verdict pass. This is
-          //    the single funnel every MCP tool event passes through (both
-          //    the in-process callback and the HTTP route route here), so
-          //    hooking it keeps the schedule decision in the orchestrator
-          //    rather than handing the tool handlers a service dependency.
-          //
-          //    `forkDaemon`, not `fork`: the job scope can close while the
-          //    pass is still in flight (a cancel, or a crash-and-resume), and
-          //    leaving `axis_advisory_state = 'pending'` behind would wedge
-          //    `rate_axis`. The pass itself always terminates the column.
+          // 6. Phase C committed — fork the axis-verdict pass here, the single funnel every
+          //    MCP tool event passes through, keeping the schedule decision in the
+          //    orchestrator rather than the tool handlers.
+          //    `forkDaemon`, not `fork`: the job scope can close mid-pass (cancel or
+          //    crash-and-resume) and leaving `axis_advisory_state = 'pending'` would wedge
+          //    `rate_axis`. The pass always terminates the column.
           if (event.type === "phase:advanced" && event.data.lastCompletedPhase === "C") {
             yield* Effect.forkDaemon(
               runAxisVerdictPass(db, walkthroughId).pipe(

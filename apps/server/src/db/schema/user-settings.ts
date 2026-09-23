@@ -70,9 +70,8 @@ export const userSettings = sqliteTable("user_settings", {
   /** JSON-encoded `string[]` of trusted GitHub hosts. */
   cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
   // ── TypeSafe System One (Jev) ────────────────────────────────────────────
-  // Per-feature toggles, all default-off. The API key is NOT here — it lives
-  // in the keyring via `SecretStore` under `secret:jev-api-key`, because
-  // `GET /api/settings` is unauthenticated and this row feeds that DTO.
+  // Per-feature toggles, all default-off. API key lives in the keyring
+  // (`secret:jev-api-key`), not here — this row feeds the unauthenticated `GET /api/settings` DTO.
   jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
   jevAutoModel: integer("jev_auto_model", { mode: "boolean" }).notNull().default(false),
   jevRisk: integer("jev_risk", { mode: "boolean" }).notNull().default(false),

@@ -31,15 +31,14 @@ let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
 let isAuto = $derived(isAutoSentinel(stored));
 let currentEffort = $derived(isAuto ? null : (stored as ThinkingEffort));
 
-// Auto is offered wherever the TypeSafe sizing switch is on. Unlike the model
-// selector there is no dynamic-catalog exception: effort routing doesn't use
-// the depth ladder, so every agent with a thinking-effort knob can take it.
+// Offered wherever the TypeSafe sizing switch is on; unlike the model
+// selector, no dynamic-catalog exception since effort routing skips the
+// depth ladder.
 let autoOffered = $derived(
-  (getSettings()?.jev?.enabled ?? false) && (getSettings()?.jev?.autoModel ?? false),
+  (getSettings()?.jev.enabled ?? false) && (getSettings()?.jev.autoModel ?? false),
 );
 
-// What Auto resolves to for this PR at its current head. Tracking the SHA is
-// what makes a pull re-size.
+// What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
 const selectedSizing = sizingForSelectedPr(() => isAuto && autoOffered);
 let sizing = $derived(selectedSizing.sizing);
 

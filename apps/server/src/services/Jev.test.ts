@@ -5,10 +5,8 @@ import { JevService, JevServiceLive } from "./Jev";
 import { SecretStore } from "./SecretStore";
 import { SettingsService } from "./Settings";
 
-// The "off is free" contract: a disabled toggle or a missing key must resolve
-// without a network call at all. These tests assert that by making any fetch
-// a hard failure — if the service ever reaches the wire on these paths, the
-// test throws rather than silently passing on a mocked response.
+// "Off is free": disabled toggle / missing key must resolve with no network call.
+// Enforced by booby-trapping fetch so any wire access throws.
 
 function fakeSettings(jev: Partial<UserSettings["jev"]>) {
   const settings = {
@@ -121,9 +119,7 @@ describe("JevService", () => {
   });
 
   it("maps an unreachable API onto a 'transport' failure rather than a defect", async () => {
-    // A key that resolves, pointed at a host that cannot answer. The SDK's own
-    // retries run inside our budget; the point is only that the rejection is
-    // classified, not that it's fast.
+    // Resolvable key, unreachable host; only asserts the rejection is classified, not that it's fast.
     const previousBase = process.env.TYPESAFE_BASE_URL;
     process.env.TYPESAFE_BASE_URL = "http://127.0.0.1:1";
     try {
@@ -145,8 +141,7 @@ describe("JevService", () => {
 
   it("honours the caller's timeout budget", async () => {
     const previousBase = process.env.TYPESAFE_BASE_URL;
-    // A routable-but-black-hole address: connections hang rather than refuse,
-    // so the budget — not the OS — is what ends the call.
+    // Black-hole address: connections hang rather than refuse, so the budget (not the OS) ends the call.
     process.env.TYPESAFE_BASE_URL = "http://10.255.255.1:81";
     try {
       const startedAt = Date.now();

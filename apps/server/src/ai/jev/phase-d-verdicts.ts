@@ -1,14 +1,11 @@
 // ── Phase-D verdict pass ─────────────────────────────────────────────────────
+// Fired by the orchestrator once Phase C commits: nine `pass | concern | blocker`
+// judgments written as pre-seeded `walkthrough_ratings` rows; `rate_axis` then
+// supplies prose only.
 //
-// Fired by the orchestrator once Phase C commits: nine `pass | concern |
-// blocker` judgments over the finished review, written as nine pre-seeded
-// `walkthrough_ratings` rows. `rate_axis` then supplies prose only.
-//
-// The pass ALWAYS terminates `walkthroughs.axis_advisory_state` — `'ready'`
-// on success, `'unavailable'` on every other outcome including the feature
-// being switched off. That is load-bearing: `rate_axis` treats `'pending'` as
-// a retryable "try again in a moment", so a pass that could leave the column
-// pending would wedge the agent until its budget ran out.
+// The pass always terminates `axis_advisory_state` to `'ready'` or `'unavailable'`,
+// never leaves it `'pending'` — `rate_axis` treats `'pending'` as retryable, so a
+// stuck column would wedge the agent until its budget ran out.
 
 import type { RatingAxis, Verdict } from "@revv/shared";
 import { RATING_AXES, RATING_AXIS_LABELS } from "@revv/shared";
@@ -29,19 +26,10 @@ import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
 import { buildPhaseCState } from "./state";
 
-/**
- * Budget for the pass. Longer than the job-start ceiling because nothing is
- * blocked on a mutex here — only `rate_axis`, which retries. Still bounded:
- * the agent is sitting in a retry loop the whole time.
- */
+/** Timeout for the pass. Longer than the job-start ceiling since only `rate_axis` (which retries) blocks on it, but still bounded since the agent sits in that retry loop the whole time. */
 export const PHASE_D_TIMEOUT_MS = 10_000;
 
-/**
- * Per-axis criteria, lifted verbatim from the "Ratings (the 9-axis
- * scorecard — Phase D)" section of `ai/prompts/walkthrough-system-common.md`
- * so the question the orchestrator asks and the rubric the agent writes to
- * can't drift apart.
- */
+/** Per-axis criteria, lifted verbatim from `ai/prompts/walkthrough-system-common.md`'s Phase D rubric so the two can't drift apart. */
 const AXIS_SUBJECT: Readonly<Record<RatingAxis, string>> = {
   correctness: "logic errors, off-by-ones, wrong conditionals, races, unhandled errors",
   scope:
@@ -82,9 +70,8 @@ function axisQuestion(axis: RatingAxis): ChoiceQuestion<typeof VERDICT_CRITERIA>
     instructions: {
       axis: RATING_AXIS_LABELS[axis],
       judge: `Considering ${AXIS_SUBJECT[axis]}, what verdict does this pull request earn on the ${RATING_AXIS_LABELS[axis]} axis?`,
-      // Without this the model reads `review` as the only evidence and can
-      // only echo what a chapter happened to mention. The file list is what
-      // makes "412 added lines, zero test files touched" visible.
+      // Without this the model only echoes what a chapter mentioned; the file list
+      // surfaces omissions like "zero test files touched".
       note: "`review` is a completed code review of the change; `changed_files` lists every file the pull request touches with its line counts. Weigh both.",
     },
     criteria: VERDICT_CRITERIA,
@@ -171,12 +158,7 @@ function collectPhaseCInput(db: Db, walkthroughId: string) {
   };
 }
 
-/**
- * Clear a stranded `'pending'`, restoring the pre-TypeSafe contract. Called
- * when the pass crashes outright and by `resumePending()` for rows left
- * mid-pass by a `kill -9`. Conditional on the column still being `'pending'`,
- * so it can never walk back a `'ready'` the pass already committed.
- */
+/** Clears a stranded `'pending'` (crash, or `resumePending()` after `kill -9`) back to `'unavailable'`. Conditional on still being `'pending'` so it never walks back a committed `'ready'`. */
 export function markAxisAdvisoryUnavailable(db: Db, walkthroughId: string): void {
   setState(db, walkthroughId, "unavailable");
 }
@@ -188,24 +170,14 @@ function setState(db: Db, walkthroughId: string, state: "ready" | "unavailable")
     .run();
 }
 
-/**
- * Run the verdict pass for one walkthrough.
- *
- * Never fails: every error path lands on `'unavailable'`, which restores the
- * pre-TypeSafe contract where the agent supplies its own verdicts. Safe to
- * call when the feature is off — that's the fast path to `'unavailable'`,
- * and it is how the `'pending'` written inside the Phase C transaction gets
- * cleared on a machine that never had a key.
- */
+/** Runs the verdict pass for one walkthrough. Never fails: every error path lands on `'unavailable'`, restoring the pre-TypeSafe contract of agent-supplied verdicts. Also the path that clears a `'pending'` left by Phase C on a machine with no key. */
 export function runAxisVerdictPass(
   db: Db,
   walkthroughId: string,
 ): Effect.Effect<void, never, JevService | SettingsService> {
   return Effect.gen(function* () {
-    // Idempotence gate, and the reason `resumePending()` can fire this
-    // unconditionally for every generating row: only a row actually waiting
-    // on the pass does any work, so a resume neither re-asks for a
-    // walkthrough that already has its verdicts nor walks one back.
+    // Idempotence gate: only a row still `'pending'` does any work, so
+    // `resumePending()` can fire this unconditionally for every generating row.
     const pending = yield* Effect.sync(
       () =>
         db
@@ -251,9 +223,8 @@ export function runAxisVerdictPass(
     yield* Effect.sync(() => {
       const now = new Date().toISOString();
       db.transaction(() => {
-        // Re-read under the transaction: a resume may have already moved the
-        // column on, and seeding over rows the agent has started writing
-        // would erase its prose.
+        // Re-read inside the transaction: a resume may have already moved the column,
+        // and seeding over rows the agent started writing would erase its prose.
         const current = db
           .select({ state: walkthroughs.axisAdvisoryState })
           .from(walkthroughs)
@@ -272,9 +243,8 @@ export function runAxisVerdictPass(
               axis,
               verdict,
               confidence: confidenceBucket(answer.confidence),
-              // Empty by design: a non-empty rationale is what marks an axis
-              // as done for the phase-D counter, so a seeded row must not
-              // look finished.
+              // Empty rationale: a non-empty one marks an axis done for the phase-D
+              // counter, so a seeded row must not look finished.
               rationale: "",
               details: "",
               citations: "[]",

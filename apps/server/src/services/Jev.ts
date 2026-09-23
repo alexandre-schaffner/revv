@@ -1,23 +1,17 @@
 // ─── JevService ──────────────────────────────────────────────────────────────
 //
 // Thin Effect wrapper over TypeSafe System One (`POST /v1/systemone`): one
-// state blob plus a map of named questions, answered in parallel, returning a
-// typed `choice` / `score` / `noul` per key with probabilities and confidence.
-// The model cannot generate text — every hook built on it is a closed-set
-// judgment, never prose.
+// state blob plus named questions, answered in parallel as typed
+// choice/score/noul judgments, never prose.
 //
-// Two rules the rest of the codebase depends on:
-//
-//   1. **Off is free.** A disabled toggle or a missing key short-circuits with
-//      no network call and no latency, the same way `RemoteWalkthroughCache`
-//      gates on `cache.enabled`.
-//   2. **It never fails a walkthrough.** Every call site ends in
-//      `Effect.catchAll(() => Effect.succeed(null))` and degrades to the
-//      pre-Jev behaviour. `ask` therefore fails with exactly one error type,
-//      so that collapse is total.
+// Two invariants: (1) off is free — disabled toggle or missing key
+// short-circuits with no network call, like `RemoteWalkthroughCache` gating
+// on `cache.enabled`. (2) never fails a walkthrough — every call site
+// collapses failure to `null` (`ai/jev/optional.ts`); `ask` fails with
+// exactly one error type so that collapse is total.
 
 import type { JsonValue, Questions, SystemOneResult } from "@typesafe-ai/sdk";
-import { APITimeoutError, APIUserAbortError, TypeSafeClient } from "@typesafe-ai/sdk";
+import { APITimeoutError, APIUserAbortError, noul, TypeSafeClient } from "@typesafe-ai/sdk";
 import { Context, Duration, Effect, Layer } from "effect";
 import { resolveJevApiKey } from "../ai/jev/api-key";
 import { JevUnavailable } from "../domain/errors";
@@ -25,27 +19,17 @@ import { debug } from "../logger";
 import { SecretStore } from "./SecretStore";
 import { SettingsService } from "./Settings";
 
-/**
- * Pinned rather than `jev-latest`: every threshold in the hooks that consume
- * this is calibrated against one model version, and an alias moving under us
- * would silently re-tune them all.
- */
+/** Pinned, not `jev-latest`: consuming hooks calibrate thresholds against one model version. */
 export const JEV_MODEL = "jev-1.13.0";
 
 /**
- * The `state` half of a request: a JSON object rather than a prose blob, so
- * questions can reference nested paths (`pr.title`, `issues.<id>.hunk`).
- * Typed against the SDK's `JsonValue` so a builder can't smuggle in a `Date`
- * or an `undefined` that would serialize to something the model reads as
- * missing. Builders live in `ai/jev/state.ts`.
+ * JSON object, not prose, so questions can reference nested paths (`pr.title`,
+ * `issues.<id>.hunk`). Typed against the SDK's `JsonValue` so a builder can't
+ * smuggle in a `Date`/`undefined`. Builders live in `ai/jev/state.ts`.
  */
 export type JevState = { [key: string]: JsonValue };
 
-/**
- * Which hook a call belongs to. Used for log correlation and, later, for
- * per-hook latency attribution — the job-start call is the only one on a
- * user-visible critical path, so distinguishing it matters.
- */
+/** Which hook a call belongs to, for log correlation. */
 export type JevCallLabel =
   | "job-start"
   | "phase-c"
@@ -60,11 +44,7 @@ export interface JevRequest<Q extends Questions> {
   /** Pre-budgeted JSON. Builders in `ai/jev/state.ts` enforce the size cap. */
   readonly state: JevState;
   readonly questions: Q;
-  /**
-   * Total budget for the call including the SDK's internal retries. The outer
-   * `Effect.timeout` interrupts, which aborts the in-flight fetch through the
-   * signal — no orphaned request outlives the budget.
-   */
+  /** Total budget including the SDK's internal retries; `Effect.timeout` interrupt aborts the in-flight fetch via signal. */
   readonly timeoutMs: number;
 }
 
@@ -72,33 +52,26 @@ export class JevService extends Context.Tag("JevService")<
   JevService,
   {
     /**
-     * Ask one batch of independent questions over one state.
+     * Ask one batch of independent questions over one state. Questions run in
+     * parallel and can't see each other's answers — batch everything that
+     * doesn't depend on a prior answer.
      *
-     * Questions in a single request run in parallel and cannot see each
-     * other's answers, so batch everything that doesn't depend on a prior
-     * answer — a second request is only warranted when an answer is needed to
-     * build new state.
-     *
-     * Fails with {@link JevUnavailable} and nothing else. `disabled` and
-     * `unconfigured` are returned without touching the network.
+     * Fails with {@link JevUnavailable} only; `disabled`/`unconfigured` never touch the network.
      */
     readonly ask: <const Q extends Questions>(
       req: JevRequest<Q>,
     ) => Effect.Effect<SystemOneResult<Q>, JevUnavailable>;
 
     /**
-     * Whether the master switch is on *and* a key is present. Hooks call this
-     * before assembling state, so an off feature costs nothing but a settings
-     * read. Per-feature toggles are the caller's to check.
+     * Whether the master switch is on *and* a key is present. Per-feature
+     * toggles are the caller's to check.
      */
     readonly isAvailable: () => Effect.Effect<boolean>;
 
     /**
-     * One trivial round trip for the Settings "Test connection" button.
-     *
-     * Deliberately bypasses `jev.enabled`: the user pastes a key and tests it
-     * *before* flipping the master switch, and failing that with "disabled"
-     * would be a trap. A missing key still fails as `unconfigured`.
+     * Round trip for the Settings "Test connection" button. Bypasses
+     * `jev.enabled` since the user tests a key before flipping the master
+     * switch. A missing key still fails as `unconfigured`.
      */
     readonly testConnection: () => Effect.Effect<
       { readonly model: string; readonly latencyMs: number },
@@ -126,20 +99,14 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
       const settingsSvc = yield* SettingsService;
       const store = yield* SecretStore;
 
-      /**
-       * Clients are cheap config holders, but rebuilding one per call would
-       * also re-read the environment each time. Cache on the key so a key
-       * change in Settings takes effect on the very next call.
-       */
+      /** Cached on the key so a key change in Settings takes effect on the very next call. */
       let cached: { readonly key: string; readonly client: TypeSafeClient } | null = null;
       const clientFor = (apiKey: string): TypeSafeClient => {
         if (cached?.key === apiKey) return cached.client;
         const client = new TypeSafeClient({
           apiKey,
           defaultModel: JEV_MODEL,
-          // Our `Effect.timeout` is the authoritative budget; leaving the
-          // SDK's own per-attempt timeout unbounded would let a stalled
-          // socket sit past it.
+          // `Effect.timeout` is the authoritative budget; unbounded here would let a stalled socket outlive it.
           timeout: 10_000,
         });
         cached = { key: apiKey, client };
@@ -226,12 +193,7 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
                 clientFor(apiKey).systemOne(
                   {
                     state: { probe: "Revv connection test." },
-                    questions: {
-                      reachable: {
-                        type: "noul" as const,
-                        instructions: "`probe` is a connection test from Revv.",
-                      },
-                    },
+                    questions: { reachable: noul("`probe` is a connection test from Revv.") },
                     model: JEV_MODEL,
                   },
                   { signal },

@@ -100,8 +100,8 @@ export { computeAnchorThreadId, computeIssueId } from "./spec";
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase === 'none'.
-// Writes: walkthroughs.summary, and walkthroughs.risk_level only when the
-//   orchestrator has NOT already assigned the tier (`risk_confidence` null).
+// Writes: walkthroughs.summary, and risk_level only if not already assigned
+//   by the orchestrator (risk_confidence null).
 // Advances: last_completed_phase → 'A'.
 
 export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = async (ctx, input) => {
@@ -122,11 +122,9 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
       );
       return;
     }
-    // A non-null `riskConfidence` is the marker that the orchestrator's
-    // TypeSafe pass assigned the tier at job start. Its value wins and the
-    // agent's argument is dropped: the tier governs the issue budget the
-    // agent was already told to work to, so letting it be overwritten
-    // mid-Phase-A would contradict the prompt the agent is following.
+    // Non-null riskConfidence marks the tier as orchestrator-assigned; its
+    // value wins over the agent's argument, since the agent's issue budget
+    // was already sized to it.
     const orchestratorAssigned = row.riskConfidence !== null;
     riskLevel = orchestratorAssigned
       ? (row.riskLevel as RiskLevel)
@@ -211,13 +209,10 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
       .set({
         sentiment: markdown,
         lastCompletedPhase: "C",
-        // Opens the gate `rate_axis` reads. The orchestrator forks the
-        // verdict pass off the `phase:advanced → C` event and ALWAYS
-        // terminates this column — `'ready'` on success, `'unavailable'`
-        // when the feature is off or the call fails — so a walkthrough can
-        // never sit here. Written inside this transaction rather than after
-        // it so a `kill -9` between the two can't leave Phase C committed
-        // with no gate at all.
+        // Gate rate_axis reads. Orchestrator forks the verdict pass off
+        // phase:advanced→C and always terminates it ('ready' or
+        // 'unavailable'); written in this transaction so a kill -9 can't
+        // leave Phase C committed with no gate.
         axisAdvisoryState: "pending",
       })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
@@ -240,15 +235,10 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
 // Writes: one walkthrough_ratings row (upsert on (walkthroughId, axis)).
 // Advances: last_completed_phase → 'D' once all 9 axes carry a rationale.
 //
-// The verdict has two possible authors, decided by `axis_advisory_state`:
-//
-//   'ready'                — the orchestrator's pass pre-seeded all nine
-//                            verdicts; the agent writes prose only and a
-//                            `verdict` argument is ignored.
-//   'unavailable' / null   — the pre-TypeSafe contract: the agent's own
-//                            `verdict` is authoritative.
-//   'pending'              — the pass is in flight. A retryable error, NOT a
-//                            failure: the agent waits a beat and calls again.
+// Verdict author depends on axis_advisory_state:
+//   'ready'               — pre-seeded by the orchestrator; agent writes prose only.
+//   'unavailable' / null  — agent's own verdict is authoritative.
+//   'pending'             — pass in flight; retryable error, not a failure.
 
 export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx, input) => {
   let result: WalkthroughToolResult | null = null;
@@ -275,9 +265,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       return;
     }
 
-    // Verdict authority. When the orchestrator pre-assigned it, the seeded
-    // row's verdict wins and anything the agent sent is dropped — the agent
-    // was told the verdict up front and its job here is the reasoning.
+    // Verdict authority: a pre-assigned row's verdict wins over anything the
+    // agent sends; the agent's verdict is only consulted on the no-TypeSafe path.
     const advisory =
       row.axisAdvisoryState === "ready"
         ? (ctx.db
@@ -294,10 +283,6 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
             )
             .get() ?? null)
         : null;
-    // When the pass seeded this axis, its verdict is the only one there is —
-    // `input.verdict` isn't consulted and isn't asked for. Falling back to
-    // the agent only happens on the no-TypeSafe path, where it never had an
-    // assignment to work from.
     const verdict = (advisory?.verdict ?? input.verdict ?? null) as Verdict | null;
     const confidence = (advisory?.confidence ?? input.confidence ?? null) as Confidence | null;
     if (verdict === null || confidence === null) {
@@ -307,24 +292,12 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       return;
     }
 
-    // Citation requirement, with the escape hatch that keeps it from
-    // deadlocking. Pre-assigned verdicts mean an agent can be handed a
-    // `concern` it genuinely cannot cite; without `disputed` it would be
-    // rejected forever, burn both auto-continuations, and land in `error`.
-    // A dispute is recorded on the row and never changes the verdict — it
-    // is also the only agent/advisory disagreement signal left.
-    //
-    // **Gated on `advisory !== null`, deliberately.** The deadlock the hatch
-    // relieves only exists for a verdict the agent didn't choose. On the
-    // agent-authored path it picked the verdict itself, so "I can't cite it"
-    // has an answer that isn't an escape hatch: downgrade to `pass`. Letting
-    // `disputed` through there would hand every agent an opt-out of the
-    // citation requirement — including the majority of users, who never turn
-    // TypeSafe on and for whom `advisory` is always null.
-    // A dispute is a disagreement with an *assigned* verdict, so it is only
-    // meaningful — and only recorded — on the advisory path. On the
-    // agent-authored path the flag is dropped rather than rejected: it isn't
-    // wrong of the agent to send it, it just has nothing to disagree with.
+    // Citation requirement with an escape hatch for a pre-assigned verdict
+    // the agent genuinely cannot cite (otherwise it retries forever, burning
+    // both auto-continuations into `error`). Recorded, never changes the
+    // verdict. Gated on advisory !== null: on the agent-authored path the
+    // agent chose the verdict, so it can downgrade to `pass` instead — the
+    // flag is dropped there rather than becoming a citation opt-out.
     const disputed = input.disputed === true && advisory !== null;
     if (verdict !== "pass" && input.citations.length === 0 && !disputed) {
       result = errorResult(
@@ -409,10 +382,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       })
       .run();
 
-    // Advance to 'D' once every axis carries a rationale. Keyed on the
-    // rationale rather than on row existence because the verdict pass
-    // pre-seeds all nine rows with empty prose — "9 rows exist" would be
-    // true before the agent had written a single word.
+    // Advance to 'D' once every axis has a rationale, not just a row — the
+    // verdict pass pre-seeds all nine rows with empty prose.
     const ratedRows = ctx.db
       .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
       .from(walkthroughRatings)
@@ -471,12 +442,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthroughInput> = async (
   ctx,
 ) => {
-  // Every relevance judgment scheduled during Phase B lands before anything
-  // below counts an issue. Without this the gate could validate an issue set
-  // a retraction is about to change — passing the comment-pairing check on a
-  // concern that no longer exists, or failing it on one about to be
-  // withdrawn. The drain is bounded and degrades to "one issue judged late"
-  // rather than holding the gate open (see `ai/jev/pending.ts`).
+  // Drain every scheduled relevance judgment before validating, so the gate
+  // never checks an issue set that's about to change. Bounded; see ai/jev/pending.ts.
   await ctx.jev.awaitIssueJudgments();
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
@@ -580,11 +547,9 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     );
   }
 
-  // Every line-anchored concern must have at least one
-  // inline comment. The agent's job is `flag_issue` (sidebar card) +
-  // `add_issue_comment` (inline review comment); a concern with no
-  // inline comment is invisible to the coder at the place that matters.
-  // Exempt: PR-wide issues (file_path / start_line NULL — no anchor possible).
+  // Every line-anchored concern needs an inline comment: flag_issue writes
+  // the sidebar card, add_issue_comment writes the inline note; without it
+  // the concern is invisible to the coder. Exempt: PR-wide issues (no anchor).
   //
   // Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
   // above. Both gates MUST agree, otherwise the orchestrator can mark
