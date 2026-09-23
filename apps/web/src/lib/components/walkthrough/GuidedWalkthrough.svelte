@@ -1683,15 +1683,20 @@ function handleResume(): void {
 
 	.merged-stamp-row {
 		display: grid;
-		/* Same 6-col template as the stepper header, except col 3 is a hard
-		   820px instead of `minmax(0, 820px)`: this row's only child is a
-		   ~120px stamp, so a squeezable track collapses to the sum of the
-		   fixed ones and the right-aligned stamp lands ~180px left of the
-		   content column's real right edge. Measured in the running app. */
+		/* Byte-identical 6-col template to `.walkthrough-content` (and the
+		   stepper header / report selector), so the right-aligned stamp lands
+		   on col 3's right edge — the content column's right edge — at every
+		   main-area width. It MUST stay `minmax(0, 820px)` rather than a hard
+		   `820px`: a hard track keeps its full width once the main area drops
+		   below the 1336 geometric minimum, and the stamp then stops moving
+		   while the content re-flows around it (it also overflows the scroll
+		   container horizontally). The sub-1336 case is handled by the
+		   `@container` fallback at the bottom of this file, which this row
+		   opts into alongside every other single-column section. */
 		grid-template-columns:
 			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
-			820px
+			minmax(0, 820px)
 			40px
 			380px
 			minmax(24px, 1fr);
@@ -2671,6 +2676,7 @@ function handleResume(): void {
 		   extra horizontal padding — that would shift them inward of the
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
+		.merged-stamp-row,
 		.report-selector-row,
 		.walkthrough-stepper-header {
 			display: block;
@@ -2680,6 +2686,14 @@ function handleResume(): void {
 			padding-right: 32px;
 			margin-inline: 0;
 			box-sizing: border-box;
+		}
+
+		/* The stamp is the one right-aligned section: `justify-self: end` is a
+		   grid property and does nothing once this row is a block, so re-hang
+		   it off the content column's right edge with a flex end-alignment. */
+		.merged-stamp-row {
+			display: flex;
+			justify-content: flex-end;
 		}
 
 		.walkthrough-loading {
@@ -2693,6 +2707,7 @@ function handleResume(): void {
 		}
 
 		.walkthrough-loading > :global(*),
+		.merged-stamp-row > :global(*),
 		.report-selector-row > :global(*),
 		.walkthrough-stepper-header > * {
 			grid-column: auto;

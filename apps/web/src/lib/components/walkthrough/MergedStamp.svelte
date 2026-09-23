@@ -102,13 +102,18 @@ $effect(() => {
   alpha knock-out, which CSS cannot express, so it comes from an SVG filter:
   fine-grained turbulence, hard-thresholded into a speckle mask, composited
   through the mark's own alpha.
+
+  Grain scale is deliberately fine (baseFrequency 0.85, a single octave):
+  the speckle should sit just above the pixel grid so it reads as ink
+  texture at a glance. A second octave layers in larger blotches that
+  survive at any zoom and make the stamp look damaged instead of pressed.
 -->
 <svg width="0" height="0" aria-hidden="true" focusable="false" class="stamp-filter-host">
 	<filter id={filterId} color-interpolation-filters="sRGB">
 		<feTurbulence
 			type="fractalNoise"
-			baseFrequency="0.4"
-			numOctaves="2"
+			baseFrequency="0.85"
+			numOctaves="1"
 			seed={grainSeed}
 			result="grain"
 		/>
@@ -126,9 +131,13 @@ $effect(() => {
 		     across ~1px, so the specks are clean holes. A gentler slope leaves
 		     half-transparent ink everywhere, which reads as a blurry, washed
 		     mark rather than a pressed one. Only the low tail of the noise
-		     (n < ~0.3) punches through, keeping the ink mostly solid. -->
+		     (n < 0.26) punches through, keeping the ink mostly solid — the
+		     mark should read as dry ink, not as a chewed-up die. Push the
+		     threshold past ~0.3 and the erosion starts eating the rule and
+		     the glyphs: the border breaks into a dashed line and the word
+		     grows holes, which is noise rather than texture. -->
 		<feComponentTransfer in="grainAlpha" result="speckle">
-			<feFuncA type="linear" slope="10" intercept="-3.05" />
+			<feFuncA type="linear" slope="10" intercept="-2.6" />
 		</feComponentTransfer>
 		<feComposite in="SourceGraphic" in2="speckle" operator="in" />
 	</filter>
