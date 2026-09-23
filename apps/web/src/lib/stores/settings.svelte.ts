@@ -145,14 +145,12 @@ export async function updateSettings(
   if ("aiSuggestionsModel" in partial || "aiAgent" in partial) {
     invalidateSuggestions();
   }
-  // Sizing is routed against agent/model and gated on risk/auto-model, so any
-  // of these invalidate the client copy. Cached server-side, not re-paid for.
+  // Sizing is routed against agent/model and gated on the TypeSafe switch, so
+  // any of these invalidate the client copy. Cached server-side, not re-paid for.
   if (
     "aiModel" in partial ||
     "aiThinkingEffort" in partial ||
     "aiAgent" in partial ||
-    partial.jev?.autoModel !== undefined ||
-    partial.jev?.risk !== undefined ||
     partial.jev?.enabled !== undefined
   ) {
     resetWalkthroughSizings();

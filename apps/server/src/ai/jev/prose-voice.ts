@@ -51,7 +51,7 @@ export function judgeProse(
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
     const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.proseVoice !== true) return null;
+    if (settings?.jev.enabled !== true) return null;
     // Too short to have a voice — a one-line block is all point, by construction.
     if (markdown.trim().length < 200) return [];
 

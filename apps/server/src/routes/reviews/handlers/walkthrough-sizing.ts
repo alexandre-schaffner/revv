@@ -1,4 +1,4 @@
-import { AUTO_SENTINEL, type WalkthroughSizing } from "@revv/shared";
+import type { WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
 import { AppRuntime } from "../../../runtime";
@@ -24,17 +24,9 @@ export function getWalkthroughSizingHandler(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-      // Three independent reasons to size, any one alone justifies the call.
-      // Model/effort only matter when that half isn't pinned; risk always does.
-      const autoSizing = settings?.jev.autoModel === true;
-      const wantsModel = autoSizing && settings?.aiModel === AUTO_SENTINEL;
-      const wantsEffort = autoSizing && settings?.aiThinkingEffort === AUTO_SENTINEL;
-      const wantsRisk = settings?.jev.risk === true;
-      if (
-        settings === null ||
-        !settings.jev.enabled ||
-        (!wantsModel && !wantsEffort && !wantsRisk)
-      ) {
+      // The risk tier is always wanted when TypeSafe is on, so it alone
+      // justifies the call even when model and effort are both pinned.
+      if (settings === null || !settings.jev.enabled) {
         return { status: "off" as const };
       }
 
@@ -71,13 +63,11 @@ export function getWalkthroughSizingHandler(
         agent,
         configuredModel: settings.aiModel,
         configuredEffort: settings.aiThinkingEffort,
-        autoSizing,
+        autoSizing: true,
       });
       return {
         status: "ready" as const,
-        // Only authoritative when the risk hook is on — otherwise the agent
-        // sets its own tier during Phase A and this would contradict it.
-        riskLevel: wantsRisk ? answers.riskLevel : null,
+        riskLevel: answers.riskLevel,
         model: override?.model ?? null,
         thinkingEffort: override?.thinkingEffort ?? null,
       };

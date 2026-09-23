@@ -1499,7 +1499,7 @@ export const WalkthroughJobsLive = Layer.effect(
             assignedRisk,
             filePriorities,
             splitRecommendation: startPlan.splitRecommendation,
-            adjudicateContinuations: settings.jev.enabled && settings.jev.adjudicateContinuations,
+            adjudicateContinuations: settings.jev.enabled,
           },
           params.trigger,
         );

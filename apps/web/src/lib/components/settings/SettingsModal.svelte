@@ -1716,41 +1716,6 @@ async function handleRemoveAccount(): Promise<void> {
 		color: var(--color-danger);
 	}
 
-	.settings-subgroup-heading {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--color-text-secondary);
-		letter-spacing: -0.005em;
-	}
-
-	/* Free-floating descriptive paragraph under a section heading */
-	.section-blurb {
-		font-size: 12px;
-		line-height: 1.5;
-		color: var(--color-text-muted);
-		max-width: 64ch;
-		margin-bottom: 4px;
-	}
-
-	/* Stacked field: label above, input below (full width) */
-	.settings-field {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.settings-field-label {
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-	}
-
-	.settings-field-hint {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		line-height: 1.45;
-	}
-
 	/* ── Status line (AI status indicator) ── */
 	.status-line {
 		display: inline-flex;
@@ -1885,20 +1850,6 @@ async function handleRemoveAccount(): Promise<void> {
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 8px;
 		background: var(--color-bg-primary);
-	}
-
-	/* ── Probe result (test connection feedback) ── */
-	.probe-result {
-		font-size: 12px;
-		color: var(--color-text-muted);
-	}
-
-	.probe-result--ok {
-		color: var(--color-success);
-	}
-
-	.probe-result--err {
-		color: var(--color-danger);
 	}
 
 	/* ── Settings-scoped input refinements ── */

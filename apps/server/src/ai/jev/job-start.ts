@@ -266,7 +266,7 @@ export function routeFromAnswers(
     readonly agent: AcpAgentId;
     readonly configuredModel: string | null | undefined;
     readonly configuredEffort: ThinkingEffortSetting | null | undefined;
-    /** Master TypeSafe auto-sizing switch. Off: answers still set risk tier but never move the launch. */
+    /** TypeSafe switch. Off: answers never move the launch. */
     readonly autoSizing: boolean;
   },
 ): GenerationLaunchOverride | null {

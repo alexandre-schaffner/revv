@@ -39,9 +39,7 @@ let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode")
 let currentModel = $derived(getSettings()?.aiModel ?? "");
 // Auto needs the TypeSafe toggle on and a static depth ladder to route onto;
 // opencode's catalog is fetched live, so it has no ladder. See `ai/jev/routing.ts`.
-let autoModelOffered = $derived(
-  (getSettings()?.jev.enabled ?? false) && (getSettings()?.jev.autoModel ?? false) && !isDynamic,
-);
+let autoModelOffered = $derived((getSettings()?.jev.enabled ?? false) && !isDynamic);
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
 function labelFor(value: string | null): string | null {

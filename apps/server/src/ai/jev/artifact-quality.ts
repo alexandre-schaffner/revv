@@ -57,7 +57,7 @@ export function judgeArtifact(
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
     const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.artifactQuality !== true) {
+    if (settings?.jev.enabled !== true) {
       return { failed: [], reject: false };
     }
 
