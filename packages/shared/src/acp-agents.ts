@@ -107,12 +107,12 @@ export const ACP_AGENTS = [
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
       defaultModel: "claude-sonnet-5",
-      // Current-generation Anthropic models only. Opus 4.8 was dropped when
-      // Opus 5 superseded it; a user still on a delisted id keeps working (the
-      // value is passed through to the agent), they just can't reselect it.
+      // Current-generation Anthropic models only. A user still on a delisted
+      // id keeps working (the value is passed through to the agent), they just
+      // can't reselect it.
       models: [
-        { label: "Claude Fable 5", value: "claude-fable-5" },
-        { label: "Claude Opus 5", value: "claude-opus-5" },
+        { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
+        { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
@@ -159,20 +159,18 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
-      defaultModel: "gpt-5.6-sol",
+      defaultModel: "gpt-6-sol",
       // This maintained adapter embeds a current Codex App Server, so the
-      // selector can expose the current GPT-5.6 family. Do not replace it with
+      // selector can expose the current GPT-6 family. Do not replace it with
       // the deprecated `@zed-industries/codex-acp`: that adapter embeds an
-      // older Codex core which rejects GPT-5.6 models.
+      // older Codex core which rejects current models.
       models: [
-        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
-        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
-        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        { label: "GPT-6 Astra", value: "gpt-6-astra" },
+        { label: "GPT-6 Sol", value: "gpt-6-sol" },
+        { label: "GPT-6 Luna", value: "gpt-6-luna" },
       ],
-      // The GPT-5.6 family supports the existing selector's xhigh-or-below
-      // ladder. The adapter also supports newer tiers; keep those out of this
-      // shared setting until the UI can model each model's distinct limits.
-      thinkingEfforts: ["extra-high", "high", "medium", "low"],
+      // Every GPT-6 model supports the selector's low-through-max ladder.
+      thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
       planMode: false,
@@ -192,17 +190,19 @@ export const ACP_AGENTS = [
       // stored preference until it gains a model passthrough.
       models: [
         { label: "Auto", value: "auto" },
-        { label: "Claude Fable 5", value: "claude-fable-5" },
-        { label: "Claude Opus 5", value: "claude-opus-5" },
+        { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
+        { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
         { label: "Composer 2.5", value: "composer-2.5" },
         { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
-        { label: "Gemini 3.7 Flash", value: "gemini-3.7-flash" },
+        { label: "Gemini 3.8 Flash", value: "gemini-3.8-flash" },
         { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
         { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
         { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        { label: "Grok 4.7", value: "grok-4.7" },
         { label: "Grok 4.6", value: "grok-4.6" },
         { label: "Grok 4.5", value: "grok-4.5" },
+        { label: "Muse Spark 1.3", value: "muse-spark-1.3" },
       ],
       thinkingEfforts: [],
       // Cursor degrades generically over ACP (no resume, no MCP tools) and

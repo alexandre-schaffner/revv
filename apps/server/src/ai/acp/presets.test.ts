@@ -71,36 +71,39 @@ describe("ACP launch presets", () => {
 
   it("passes the selected model to codex-acp through CODEX_CONFIG", () => {
     if (serverEnv.acpCommand) return;
-    expect(resolveAcpLaunchById("codex", { model: "gpt-5.6-sol" })).toEqual({
+    expect(resolveAcpLaunchById("codex", { model: "gpt-6-sol" })).toEqual({
       command: "npx",
       args: ["-y", "@agentclientprotocol/codex-acp"],
-      env: { CODEX_CONFIG: JSON.stringify({ model: "gpt-5.6-sol" }) },
+      env: { CODEX_CONFIG: JSON.stringify({ model: "gpt-6-sol" }) },
     });
   });
 
   it("injects model + reasoning effort as Codex session config", () => {
     if (serverEnv.acpCommand) return;
     expect(
-      resolveAcpLaunchById("codex", { model: "gpt-5.6-sol", thinkingEffort: "extra-high" }),
+      resolveAcpLaunchById("codex", { model: "gpt-6-sol", thinkingEffort: "extra-high" }),
     ).toEqual({
       command: "npx",
       args: ["-y", "@agentclientprotocol/codex-acp"],
       env: {
-        CODEX_CONFIG: JSON.stringify({ model: "gpt-5.6-sol", model_reasoning_effort: "xhigh" }),
+        CODEX_CONFIG: JSON.stringify({ model: "gpt-6-sol", model_reasoning_effort: "xhigh" }),
       },
     });
+    expect(resolveAcpLaunchById("codex", { thinkingEffort: "max" }).env?.CODEX_CONFIG).toBe(
+      JSON.stringify({ model_reasoning_effort: "max" }),
+    );
   });
 
   it("injects Claude Code model / effort via env", () => {
     if (serverEnv.acpCommand) return;
     const launch = resolveAcpLaunchById("claude-code", {
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       thinkingEffort: "high",
     });
     expect(launch.command).toBe("npx");
     // No CLAUDE_CODE_DISABLE_1M_CONTEXT: 1M is Claude Code's own default when absent.
     expect(launch.env).toEqual({
-      ANTHROPIC_MODEL: "claude-opus-5",
+      ANTHROPIC_MODEL: "claude-opus-5-5",
       CLAUDE_CODE_EFFORT_LEVEL: "high",
     });
     // `extra-high` is Revv's key for Claude Code's `xhigh` level.
@@ -166,11 +169,11 @@ describe("ACP launch presets", () => {
 
   it("falls back from npx to bun x when only bun is available", () => {
     withPathExecutable("bun", (path) => {
-      const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.6-sol" }, {}, path);
+      const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-6-sol" }, {}, path);
 
       expect(launch.command).toBe("bun");
       expect(launch.args).toEqual(["x", "@agentclientprotocol/codex-acp"]);
-      expect(launch.env.CODEX_CONFIG).toBe(JSON.stringify({ model: "gpt-5.6-sol" }));
+      expect(launch.env.CODEX_CONFIG).toBe(JSON.stringify({ model: "gpt-6-sol" }));
     });
   });
 
@@ -188,7 +191,7 @@ describe("ACP launch presets", () => {
 
   it("never leaks CLAUDE_CONFIG_DIR to a non-claude-code adapter", () => {
     if (serverEnv.acpCommand) return;
-    const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-5.6-sol" }, {}, "/usr/bin", {
+    const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-6-sol" }, {}, "/usr/bin", {
       claudeConfigDir: "/tmp/x",
     });
 
@@ -240,7 +243,7 @@ describe("ACP login commands", () => {
 describe("resolveGenerationModel", () => {
   it("keeps a model valid for the agent", () => {
     expect(resolveGenerationModel("claude-code", "claude-sonnet-5")).toBe("claude-sonnet-5");
-    expect(resolveGenerationModel("codex", "gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(resolveGenerationModel("codex", "gpt-6-sol")).toBe("gpt-6-sol");
   });
 
   it("falls back to the agent default when the model belongs to another agent", () => {
@@ -258,8 +261,8 @@ describe("resolveGenerationModel", () => {
   it("collapses Auto before static and dynamic catalog resolution", () => {
     expect(resolveGenerationModel("claude-code", AUTO_SENTINEL)).toBe("claude-sonnet-5");
     expect(resolveGenerationModel("opencode", AUTO_SENTINEL)).toBe("opencode/big-pickle");
-    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL, "claude-opus-5")).toBe(
-      "claude-opus-5",
+    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL, "claude-opus-5-5")).toBe(
+      "claude-opus-5-5",
     );
   });
 });
