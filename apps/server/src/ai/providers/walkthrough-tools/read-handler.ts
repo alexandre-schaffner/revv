@@ -4,10 +4,8 @@
 // agent run makes, including resumes.
 
 import type {
-  Confidence,
   RatingAxis,
   RiskLevel,
-  Verdict,
   WalkthroughBlock,
   WalkthroughPipelinePhase,
   WalkthroughState,
