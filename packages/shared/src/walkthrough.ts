@@ -281,30 +281,7 @@ export interface WalkthroughRating {
   citations: RatingCitation[];
   /** Optional links to walkthrough blocks that explain this rating in depth. */
   blockIds: string[];
-  /** Who decided {@link verdict}: `'agent'`, or `'advisory'` when Jev pre-assigned it and the agent wrote prose only. */
-  verdictSource?: VerdictSource;
-  /**
-   * Set when the agent was handed a non-`pass` verdict it couldn't cite for.
-   * Doesn't change the verdict — the only agent/advisory disagreement signal
-   * left once verdicts are pre-assigned.
-   */
-  disputed?: boolean;
 }
-
-/** Origin of a {@link WalkthroughRating.verdict}. */
-export type VerdictSource = "agent" | "advisory";
-
-/**
- * Durable gate for the orchestrator's phase-D verdict pass, read by
- * `rate_axis` to decide whether the agent supplies a verdict or prose only.
- *
- *   'pending'     — pass in flight; `rate_axis` returns a retryable error.
- *   'ready'       — nine rating rows pre-seeded with verdicts.
- *   'unavailable' — pass skipped/failed; pre-Jev contract applies.
- *
- * Null means `'unavailable'`; every row predating the feature holds it.
- */
-export type AxisAdvisoryState = "pending" | "ready" | "unavailable";
 
 /**
  * Composite score below which an issue is treated as low signal. Kept low:
@@ -530,30 +507,6 @@ export interface WalkthroughState {
     stepIndex: number;
     blockType: WalkthroughBlock["type"];
   }>;
-  /**
-   * Whether the orchestrator's phase-D verdict pass has landed, and so
-   * whether `rate_axis` expects a verdict from the agent or only prose.
-   *
-   *   'pending'     — pass in flight; `rate_axis` returns a retryable error.
-   *   'ready'       — verdicts pre-assigned; supply prose, use
-   *                   `disputed: true` for an axis you can't cite.
-   *   'unavailable' — supply the verdict yourself, as before.
-   *
-   * Null means `'unavailable'`. Invariant 6 covers resume for free — read
-   * from DB every run rather than carried in memory.
-   */
-  axisAdvisoryState: AxisAdvisoryState | null;
-  /**
-   * The nine verdicts, when {@link axisAdvisoryState} is `'ready'`; `null`
-   * otherwise. Tells the agent which call it's justifying — `rate_axis`
-   * takes no verdict in that mode. Lists only seeded axes; a missing axis
-   * still expects a verdict from the agent.
-   */
-  assignedVerdicts: Array<{
-    axis: RatingAxis;
-    verdict: Verdict;
-    confidence: Confidence;
-  }> | null;
   ratedAxes: RatingAxis[];
   /**
    * Identities of every issue already flagged for this walkthrough. The agent

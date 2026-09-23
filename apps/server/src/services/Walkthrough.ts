@@ -96,12 +96,10 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
     details: row.details,
     citations,
     blockIds,
-    verdictSource: row.verdictSource,
-    disputed: row.disputed,
   };
 }
 
-/** A seeded-but-unwritten rating row has no prose yet; exclude it so it doesn't render as a blank scorecard card. */
+/** Rows seeded by the retired Jev verdict pass can still lack prose; exclude them so they don't render as a blank scorecard card. */
 function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
   return row.rationale.trim().length > 0;
 }

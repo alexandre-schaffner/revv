@@ -41,7 +41,6 @@ const jevHookSchemas = {
   autoModel: t.Boolean(),
   risk: t.Boolean(),
   filePriority: t.Boolean(),
-  verdicts: t.Boolean(),
   issueScoring: t.Boolean(),
   issueSeverity: t.Boolean(),
   hideLowSignal: t.Boolean(),

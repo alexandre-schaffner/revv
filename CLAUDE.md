@@ -167,8 +167,7 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 
    **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
    computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
-   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence` and
-   `walkthrough_ratings.verdict` / `.verdict_confidence` / `.verdict_source`. These are
+   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence`. These are
    judgments over a closed set, not prose. **All prose, citations, blocks, issues, steps, and
    sentiment remain MCP-only.** Growing this list means editing this rule — it is not a
    general licence for Elysia to write content.
@@ -225,13 +224,10 @@ agent tomorrow). Any change that violates them is wrong by construction — push
      Implicitly closes Phase B (requires ≥1 diff step).
    - **Phase D — 9-Axis Rating.** Nine atomic writes via `rate_axis(axis, ...)`. Keyed on
      `(walkthrough_id, axis)` with `onConflictDoUpdate`. `last_completed_phase` becomes
-     `'D'` only when all 9 axes carry a non-empty `rationale`. When the orchestrator's
-     verdict pass has run (`walkthroughs.axis_advisory_state = 'ready'`) the nine rows are
-     pre-seeded with a verdict, `get_walkthrough_state` hands the agent the verdicts as
-     `assignedVerdicts`, and `rate_axis` supplies prose only — `verdict` and `confidence`
-     are optional arguments the handler ignores outright. When the pass has not run
-     (`'unavailable'` or NULL) the agent supplies the verdict as before, and `rate_axis`
-     rejects a call that omits it.
+     `'D'` only when all 9 axes carry a non-empty `rationale`. The agent owns every verdict.
+     It sends all nine calls as parallel tool calls in one turn: each is still its own
+     atomic write, and because the handler is one synchronous transaction, they may land
+     in any order and exactly one of them advances the phase.
 5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,

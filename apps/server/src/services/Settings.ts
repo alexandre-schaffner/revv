@@ -72,7 +72,6 @@ const JEV_DB_FIELDS = {
   autoModel: "jevAutoModel",
   risk: "jevRisk",
   filePriority: "jevFilePriority",
-  verdicts: "jevVerdicts",
   issueScoring: "jevIssueScoring",
   issueSeverity: "jevIssueSeverity",
   hideLowSignal: "jevHideLowSignal",

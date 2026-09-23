@@ -161,7 +161,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
 //
 // Phase precondition: last_completed_phase === 'B' (and thus at least one
 // diff step persisted — Phase B can't be entered without one).
-// Writes: walkthroughs.sentiment, walkthroughs.axis_advisory_state = 'pending'.
+// Writes: walkthroughs.sentiment.
 // Advances: last_completed_phase → 'C'.
 
 export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = async (
@@ -209,11 +209,6 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
       .set({
         sentiment: markdown,
         lastCompletedPhase: "C",
-        // Gate rate_axis reads. Orchestrator forks the verdict pass off
-        // phase:advanced→C and always terminates it ('ready' or
-        // 'unavailable'); written in this transaction so a kill -9 can't
-        // leave Phase C committed with no gate.
-        axisAdvisoryState: "pending",
       })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
       .run();
@@ -225,20 +220,20 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
     type: "phase:advanced",
     data: { lastCompletedPhase: "C" },
   });
-  return okResult("Sentiment set. Phase C complete — now rate each of the 9 axes with rate_axis.");
+  return okResult(
+    "Sentiment set. Phase C complete — now rate all 9 axes with rate_axis, as nine parallel calls in one turn.",
+  );
 };
 
 // ── Handler: rate_axis (Phase D) ─────────────────────────────────────────────
 //
-// Phase precondition: last_completed_phase ∈ {'C', 'D'}, and
-//   walkthroughs.axis_advisory_state !== 'pending'.
+// Phase precondition: last_completed_phase ∈ {'C', 'D'}.
 // Writes: one walkthrough_ratings row (upsert on (walkthroughId, axis)).
 // Advances: last_completed_phase → 'D' once all 9 axes carry a rationale.
 //
-// Verdict author depends on axis_advisory_state:
-//   'ready'               — pre-seeded by the orchestrator; agent writes prose only.
-//   'unavailable' / null  — agent's own verdict is authoritative.
-//   'pending'             — pass in flight; retryable error, not a failure.
+// The agent emits all nine calls in one turn, so they can land in any order.
+// Safe because the whole body is one synchronous transaction: the rated-axis
+// count below sees every prior call's commit, and exactly one call advances.
 
 export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx, input) => {
   let result: WalkthroughToolResult | null = null;
@@ -258,52 +253,10 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       return;
     }
 
-    if (row.axisAdvisoryState === "pending") {
+    const { verdict, confidence } = input;
+    if (verdict !== "pass" && input.citations.length === 0) {
       result = errorResult(
-        "Axis verdicts are still being computed. This is not a failure — wait a moment and call rate_axis again with the same arguments.",
-      );
-      return;
-    }
-
-    // Verdict authority: a pre-assigned row's verdict wins over anything the
-    // agent sends; the agent's verdict is only consulted on the no-TypeSafe path.
-    const advisory =
-      row.axisAdvisoryState === "ready"
-        ? (ctx.db
-            .select({
-              verdict: walkthroughRatings.verdict,
-              confidence: walkthroughRatings.confidence,
-            })
-            .from(walkthroughRatings)
-            .where(
-              and(
-                eq(walkthroughRatings.walkthroughId, ctx.walkthroughId),
-                eq(walkthroughRatings.axis, input.axis),
-              ),
-            )
-            .get() ?? null)
-        : null;
-    const verdict = (advisory?.verdict ?? input.verdict ?? null) as Verdict | null;
-    const confidence = (advisory?.confidence ?? input.confidence ?? null) as Confidence | null;
-    if (verdict === null || confidence === null) {
-      result = errorResult(
-        `Error: no verdict has been assigned for '${input.axis}', so rate_axis needs one from you. Call it again with both \`verdict\` and \`confidence\`. (Call get_walkthrough_state to see which axes, if any, were assigned for you.)`,
-      );
-      return;
-    }
-
-    // Citation requirement with an escape hatch for a pre-assigned verdict
-    // the agent genuinely cannot cite (otherwise it retries forever, burning
-    // both auto-continuations into `error`). Recorded, never changes the
-    // verdict. Gated on advisory !== null: on the agent-authored path the
-    // agent chose the verdict, so it can downgrade to `pass` instead — the
-    // flag is dropped there rather than becoming a citation opt-out.
-    const disputed = input.disputed === true && advisory !== null;
-    if (verdict !== "pass" && input.citations.length === 0 && !disputed) {
-      result = errorResult(
-        advisory === null
-          ? `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`
-          : `Error: this axis was assigned verdict='${verdict}', which requires at least one citation. Either cite the specific line range, or — if you genuinely found nothing to cite — pass disputed=true with a rationale explaining the absence.`,
+        `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
       );
       return;
     }
@@ -365,7 +318,6 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
         details: input.details,
         citations: JSON.stringify(citations),
         blockIds: JSON.stringify(blockIds),
-        disputed,
         createdAt: now,
       })
       .onConflictDoUpdate({
@@ -377,13 +329,12 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
           details: input.details,
           citations: JSON.stringify(citations),
           blockIds: JSON.stringify(blockIds),
-          disputed,
         },
       })
       .run();
 
-    // Advance to 'D' once every axis has a rationale, not just a row — the
-    // verdict pass pre-seeds all nine rows with empty prose.
+    // Advance to 'D' once every axis has a rationale, not just a row — rows
+    // seeded by the retired Jev verdict pass carry empty prose.
     const ratedRows = ctx.db
       .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
       .from(walkthroughRatings)
@@ -409,8 +360,6 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       details: input.details,
       citations,
       blockIds,
-      verdictSource: advisory === null ? "agent" : "advisory",
-      disputed,
     };
     ratingEvent = rating;
   });
@@ -643,7 +592,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "rate_axis",
     description:
-      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description). Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
+      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description), sending all nine as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
     inputSchema: rateAxisSchema,
     handler: rateAxisHandler,
   },

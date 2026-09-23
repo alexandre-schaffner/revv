@@ -32,7 +32,6 @@ export type JevState = { [key: string]: JsonValue };
 /** Which hook a call belongs to, for log correlation. */
 export type JevCallLabel =
   | "job-start"
-  | "phase-c"
   | "issues"
   | "artifact"
   | "prose"

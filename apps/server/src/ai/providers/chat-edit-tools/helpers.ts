@@ -140,8 +140,6 @@ export function decodeRating(row: typeof walkthroughRatings.$inferSelect): Walkt
     details: row.details,
     citations,
     blockIds,
-    verdictSource: row.verdictSource,
-    disputed: row.disputed,
   };
 }
 

@@ -140,9 +140,7 @@ Requires at least one diff step to be persisted (Phase B must have produced outp
 
 ### Phase D — 9-Axis Rating (nine calls: rate_axis)
 
-Call `rate_axis` exactly once for each of the 9 canonical axes. See "Ratings" below. On the 9th distinct axis, `lastCompletedPhase` advances to 'D'.
-
-Check `get_walkthrough_state` for `assignedVerdicts` first: when it is present the verdicts are already decided and you write the reasoning only. See "Who decides the verdict".
+Call `rate_axis` exactly once for each of the 9 canonical axes, all nine in a single turn. See "Ratings" below. On the 9th distinct axis, `lastCompletedPhase` advances to 'D'.
 
 ### Finish (one call: complete_walkthrough)
 
@@ -567,7 +565,7 @@ Chapter counts below cover Phase B semantic steps only — the overview (Phase A
 
 ## Ratings (the 9-axis scorecard — Phase D)
 
-Every walkthrough ends with a 9-axis scorecard emitted via `rate_axis`, one call per axis. Whether the verdict is yours to make or one you are handed is decided before you get here — read "Who decides the verdict" below before writing any of them.
+Every walkthrough ends with a 9-axis scorecard emitted via `rate_axis`, one call per axis.
 
 ### The 9 axes
 
@@ -595,21 +593,10 @@ All 9 must be rated, every time. No skipping.
 - `medium` — have context, haven't seen every edge case
 - `high` — read the code and surroundings, confident
 
-### Who decides the verdict
-
-`get_walkthrough_state` reports `axisAdvisoryState`, and — when the verdicts have been decided for you — `assignedVerdicts`. Read both before your first `rate_axis` call.
-
-- `'ready'` — the verdicts were decided before you started rating, and `assignedVerdicts` lists them: one `{ axis, verdict, confidence }` per axis. **Do not send `verdict` or `confidence`; omit them.** Your job on each axis is the reasoning for the call in that list, and only that. Look up the axis you are about to rate, then write the `rationale` and `details` that justify *that* verdict and cite for it. Do not argue with it in the prose, and do not write a rationale for the verdict you would have picked — the row carries the assigned one, so the two would contradict each other on screen.
-- `'unavailable'` or `null` — no verdicts were assigned. Your `verdict` and `confidence` are required and authoritative; everything below about citations applies to the verdict you chose.
-- `'pending'` — the verdicts are still being computed. `rate_axis` will tell you to retry; wait a beat and call it again with the same arguments. This is not an error and does not count against you.
-
-If `assignedVerdicts` is present but an axis is missing from it, that axis alone falls back to the second case: send your own `verdict` and `confidence` for it.
-
 ### Citations (load-bearing for non-pass)
 
 - Non-pass verdicts MUST include at least one citation with file_path + start_line + end_line. The tool rejects you without.
 - Pass may omit citations.
-- **`disputed`** is the escape hatch, and only that. If you were handed a non-pass verdict and, having genuinely looked, can find nothing in the diff to cite for it, call `rate_axis` with `disputed: true` and a rationale that says what you looked for and why you disagree. It is recorded as a disagreement and never changes the verdict. Do not reach for it to skip the search.
 - If a rating duplicates a `flag_issue`, reuse the same `block_refs` (`[{ semantic_step_index, step_index }, ...]`) and keep the rationale short.
 
 ### Rationale formatting
@@ -620,10 +607,11 @@ If `assignedVerdicts` is present but an axis is missing from it, that axis alone
 - For `concern` and `blocker`, the `details` field ends with a concrete effort estimate for the fix, same units as an issue comment (`~15 min`, `about a day`).
 - N/A axes: rationale starts with "n/a for this PR — ".
 
-### Order
+### Emit all nine in one turn
 
-- Rate in canonical order: correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description.
-- Back-to-back calls, no prose between them.
+- Settle every verdict and gather every citation first. If an axis needs one more look at the code, do that lookup before you start rating, not between ratings.
+- Then issue all nine `rate_axis` calls together as parallel tool calls in a single message, in canonical order: correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description. No prose between them, and no waiting on one result before sending the next.
+- The calls are independent: each is keyed on its axis, and they may land in any order. If one comes back with an error, fix and resend that axis alone; the others are already saved.
 
 ---
 

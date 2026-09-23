@@ -7,7 +7,6 @@ export const JEV_HOOK_KEYS = [
   "autoModel",
   "risk",
   "filePriority",
-  "verdicts",
   "issueScoring",
   "issueSeverity",
   "hideLowSignal",
@@ -22,7 +21,6 @@ export const JEV_HOOK_DEFAULTS = {
   autoModel: false,
   risk: false,
   filePriority: false,
-  verdicts: false,
   issueScoring: false,
   issueSeverity: false,
   hideLowSignal: true,
@@ -61,11 +59,6 @@ export const JEV_HOOKS = {
     label: "Rank the changed files",
     hint: "Score each file for reviewer attention and hand the agent a reading order. This rides along in the sizing request.",
     ariaLabel: "Rank changed files with TypeSafe",
-  },
-  verdicts: {
-    label: "Scorecard verdicts",
-    hint: "Decide the nine scorecard verdicts from the finished review. The agent receives each verdict and writes its reasoning.",
-    ariaLabel: "Use TypeSafe for scorecard verdicts",
   },
   issueScoring: {
     label: "Check flagged issues",

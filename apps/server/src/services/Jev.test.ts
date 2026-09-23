@@ -15,7 +15,6 @@ function fakeSettings(jev: Partial<UserSettings["jev"]>) {
       hasApiKey: false,
       autoModel: false,
       risk: false,
-      verdicts: false,
       issueScoring: false,
       issueSeverity: false,
       filePriority: false,

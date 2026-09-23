@@ -75,7 +75,6 @@ export const userSettings = sqliteTable("user_settings", {
   jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
   jevAutoModel: integer("jev_auto_model", { mode: "boolean" }).notNull().default(false),
   jevRisk: integer("jev_risk", { mode: "boolean" }).notNull().default(false),
-  jevVerdicts: integer("jev_verdicts", { mode: "boolean" }).notNull().default(false),
   jevIssueScoring: integer("jev_issue_scoring", { mode: "boolean" }).notNull().default(false),
   jevIssueSeverity: integer("jev_issue_severity", { mode: "boolean" }).notNull().default(false),
   jevFilePriority: integer("jev_file_priority", { mode: "boolean" }).notNull().default(false),

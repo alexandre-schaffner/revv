@@ -27,7 +27,6 @@ const CURRENT: UserSettings = {
     hasApiKey: true,
     autoModel: false,
     risk: false,
-    verdicts: true,
     issueScoring: true,
     issueSeverity: true,
     filePriority: true,
