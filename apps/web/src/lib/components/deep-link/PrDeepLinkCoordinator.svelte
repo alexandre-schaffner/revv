@@ -234,7 +234,16 @@ async function copyDeviceCode(): Promise<void> {
               {/each}
             </div>
           {:else if workflow.kind === "connect-account"}
-            {#if workflow.phase === "device-code" && deviceFlow}
+            <div class="host-confirmation">
+              <span>Authorize with GitHub host</span>
+              <code>{workflow.locator.githubHost}</code>
+            </div>
+            {#if workflow.phase === "settling"}
+              <div class="status-row" aria-live="polite">
+                <Dotmatrix variant="square-13" size="small" />
+                <span>Finishing account setup</span>
+              </div>
+            {:else if workflow.phase === "device-code" && deviceFlow}
               <div class="device-code-panel">
                 <code>{deviceFlow.userCode}</code>
                 <Button variant="outline" size="sm" onclick={copyDeviceCode}>
@@ -441,6 +450,24 @@ async function copyDeviceCode(): Promise<void> {
     font-size: 12px;
     font-weight: 500;
     gap: 6px;
+  }
+
+  .host-confirmation {
+    align-items: center;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    color: var(--color-text-secondary);
+    display: flex;
+    font-size: 12px;
+    justify-content: space-between;
+    padding: 8px 10px;
+  }
+
+  .host-confirmation code {
+    color: var(--color-text-primary);
+    font-family: var(--font-mono, monospace);
+    font-weight: 600;
   }
 
   .device-code-panel {

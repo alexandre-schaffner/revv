@@ -9,6 +9,7 @@ import { createDb, type Db } from "../../db";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,
+  scopeForExternalTool,
 } from "./external-review-tools";
 
 const HEAD_SHA = "a".repeat(40);
@@ -78,7 +79,11 @@ function seededDb(): Db {
   return db;
 }
 
-function context(db: Db, provider: ExternalAgentProvider = "claude-code") {
+function context(
+  db: Db,
+  provider: ExternalAgentProvider = "claude-code",
+  prHeadSha: string = HEAD_SHA,
+) {
   const walkthroughEvents: WalkthroughStreamEvent[] = [];
   const threadEvents: ThreadEventMessage[] = [];
   const pushedReplies: string[] = [];
@@ -86,7 +91,7 @@ function context(db: Db, provider: ExternalAgentProvider = "claude-code") {
   const value = {
     db,
     prId: "pr-1",
-    prHeadSha: HEAD_SHA,
+    prHeadSha,
     userId: "user-1",
     actor: provider,
     provider,
@@ -111,6 +116,14 @@ function tool(name: string) {
 }
 
 describe("external review tools", () => {
+  it("declares exactly one authorization scope on every exposed tool", () => {
+    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(11);
+    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(11);
+    for (const spec of EXTERNAL_REVIEW_TOOL_SPECS) {
+      expect(scopeForExternalTool(spec.name)).toBe(spec.scope);
+    }
+  });
+
   it("records issue resolution once and treats an identical retry as a no-op", async () => {
     const db = seededDb();
     const ctx = context(db);
@@ -203,6 +216,24 @@ describe("external review tools", () => {
     expect(result.isError).toBe(true);
     expect(row.resolution_status).toBe("open");
     expect(ctx.walkthroughEvents).toHaveLength(0);
+  });
+
+  it("records against the reviewed head after the live PR head advances", async () => {
+    const db = seededDb();
+    const newHead = "b".repeat(40);
+    db.$client.run("UPDATE pull_requests SET head_sha = ? WHERE id = ?", [newHead, "pr-1"]);
+    const ctx = context(db, "claude-code", newHead);
+
+    const result = await tool("record_issue_resolution").handler(ctx.value, {
+      issue_id: "issue-1",
+      expected_head_sha: HEAD_SHA,
+      status: "addressed",
+      explanation: "Fixed after the reviewed commit and pushed.",
+      evidence: ["tests pass"],
+      resolving_commit_sha: newHead,
+    });
+
+    expect(result.isError).toBeUndefined();
   });
 
   it("deduplicates a retried local comment reply by integration key", async () => {

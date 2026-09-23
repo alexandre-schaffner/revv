@@ -21,6 +21,7 @@ export const externalIntegrations = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     scopes: text("scopes").notNull(),
     createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
     lastUsedAt: text("last_used_at"),
     revokedAt: text("revoked_at"),
   },

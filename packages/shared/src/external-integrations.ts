@@ -10,6 +10,22 @@ export const EXTERNAL_AGENT_PROVIDERS = ["claude-code", "codex", "opencode", "cu
 
 export type ExternalAgentProvider = (typeof EXTERNAL_AGENT_PROVIDERS)[number];
 
+export interface ExternalIntegrationStatus {
+  readonly provider: ExternalAgentProvider;
+  readonly connected: boolean;
+  /** The account-scoped client entry still exists on disk. */
+  readonly clientConfigured: boolean;
+  readonly clientName: string;
+  readonly createdAt: string | null;
+  readonly lastUsedAt: string | null;
+  readonly expiresAt: string | null;
+}
+
+export interface ExternalIntegrationConnectResult extends ExternalIntegrationStatus {
+  /** Files and directories the connect just wrote, surfaced in the UI. */
+  readonly locations: readonly string[];
+}
+
 export const EXTERNAL_AGENT_PROVIDER_NAMES: Readonly<Record<ExternalAgentProvider, string>> = {
   "claude-code": "Claude Code",
   codex: "Codex",

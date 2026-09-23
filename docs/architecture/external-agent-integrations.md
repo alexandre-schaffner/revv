@@ -9,11 +9,12 @@ mechanics differ, because each agent reads a different config file.
 ## Caller usage
 
 1. A signed-in Revv user opens **Settings → Integrations** and connects a
-   provider. Revv installs or refreshes that agent's client configuration and
-   rotates its account credential.
-2. The agent starts the stdio MCP bridge in the current project. The bridge
-   derives the repository identity and recent commit ancestry from the
-   checkout, then proxies MCP JSON-RPC to Revv's loopback server.
+   provider. Revv installs or refreshes that account's namespaced client entry
+   and rotates its 90-day credential.
+2. The agent starts the stdio MCP bridge. Handshake and tool discovery require
+   only a valid credential. For each `tools/call`, the bridge freshly derives
+   repository identity and recent commit ancestry from the checkout, then
+   proxies the request to Revv's loopback server.
 3. Revv authenticates the credential, resolves the repository and PR inside
    the credential's GitHub account, and exposes only the integration tool
    surface for that PR.
@@ -27,23 +28,28 @@ mechanics differ, because each agent reads a different config file.
 
 | Provider    | MCP configuration                       | Workflow prompt                                     |
 | ----------- | --------------------------------------- | --------------------------------------------------- |
-| Claude Code | `~/.claude/skills/revv/.mcp.json`       | `~/.claude/skills/revv/skills/address-feedback/`     |
-| Codex       | `~/.codex/config.toml` (managed block)  | `~/.codex/prompts/revv-address-feedback.md`          |
-| OpenCode    | `~/.config/opencode/opencode.json`      | `~/.config/opencode/command/revv-address-feedback.md`|
+| Claude Code | `~/.claude/skills/revv-<account>/.mcp.json` | Account-scoped plugin skill |
+| Codex       | `~/.codex/config.toml` (managed block)  | `~/.codex/prompts/revv-address-feedback-<account>.md` |
+| OpenCode    | `~/.config/opencode/opencode.json`      | `~/.config/opencode/command/revv-address-feedback-<account>.md` |
 | Cursor      | `~/.cursor/mcp.json`                    | — (Cursor has no global prompt directory)           |
 
-Claude Code loads `~/.claude/skills/<dir>` containing a plugin manifest as a
-user-scoped plugin, which is what gives its MCP server the stable
-`plugin:revv:review` name. The other three launch the bridge from a private
-copy under `~/.revv/<provider>/server/revv-mcp.ts`.
+`<account>` is a non-reversible 12-character digest of the local account id.
+Every provider uses `revv-<account>` as its MCP entry name, so connecting one
+account cannot overwrite or uninstall another account's entry. Bridge copies
+live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`.
 
 Every install is **convergent** and **non-destructive**: reconnecting
 reproduces the same end state with a rotated credential, and Revv refuses to
 overwrite or delete a directory, config section, or prompt file it did not
 create. Directory installs are staged and swapped under a `.revv-managed`
-marker; Codex's `config.toml` uses a `# >>> revv managed >>>` fenced block;
-the JSON configs get a single `revv` key that is recognized by the
+marker; Codex's `config.toml` uses an account-scoped fenced block; the JSON
+configs get an account-scoped key that is recognized by the
 `REVV_INTEGRATION_TOKEN` in its environment.
+
+Single-file config updates use a same-directory staged file followed by an
+atomic rename and force mode `0600`, including when the config already exists.
+The bridge probes both stable and development loopback ports, so the config is
+not tied to the channel that wrote it.
 
 ## Type sketch
 
@@ -68,8 +74,11 @@ interface ExternalResolvedContext {
   accountId: string
   userId: string
   prId: string
+  prHeadSha: string | null
   scopes: readonly ExternalAgentScope[]
 }
+
+type ExternalAuthorizedContext = Omit<ExternalResolvedContext, "prId" | "prHeadSha">
 
 interface ExternalIntegrationsService {
   status(accountId: string): Effect<readonly ExternalIntegrationStatus[], IntegrationError>
@@ -79,6 +88,7 @@ interface ExternalIntegrationsService {
     provider: ExternalAgentProvider
   }): Effect<ConnectResult, IntegrationError>
   disconnect(accountId: string, provider: ExternalAgentProvider): Effect<void, IntegrationError>
+  authenticate(token: string): Effect<ExternalAuthorizedContext, IntegrationError>
   resolve(
     token: string,
     project: ExternalProjectIdentity,
@@ -86,11 +96,17 @@ interface ExternalIntegrationsService {
 }
 ```
 
+When a new head supersedes a walkthrough, a resolved issue keeps its local
+resolution metadata only if severity, title, description, file path, and line
+range all match the parent walkthrough exactly. Open or changed findings
+reopen, so regeneration cannot hide a materially different concern.
+
 Each credential is stored in SQLite only as a SHA-256 digest, one row per
 `(provider, account)`. The installed client configuration gets the plaintext
 value. Reconnecting rotates the credential and atomically replaces Revv-owned
-files. The token prefix (`revv_cc`, `revv_cx`, `revv_oc`, `revv_cu`) makes a
-leaked value traceable to its provider without a database lookup.
+files. Credentials expire after 90 days and Settings shows both expiry and last
+use. The token prefix (`revv_cc`, `revv_cx`, `revv_oc`, `revv_cu`) makes a leaked
+value traceable to its provider without a database lookup.
 
 Issue resolution is durable metadata on `walkthrough_issues`:
 
@@ -139,12 +155,19 @@ regardless of which provider issued it.
 
 - Bridge input, bearer credentials, repository names, commit SHAs, MCP
   payloads, and tool arguments are validated at their entry boundaries.
+- `initialize`, `notifications/initialized`, and `tools/list` authenticate the
+  credential without requiring an open Revv PR. Project resolution is a
+  `tools/call` precondition.
 - The server never accepts a PR id from the bridge. It derives the PR from the
   credential's account plus a tracked repository and commit ancestry.
 - GitHub-submitted walkthrough issues remain immutable. External agents
   resolve their linked comment threads instead.
 - Existing chat-edit handlers remain the single implementation of walkthrough
-  content edits. The external bundle selects safe specs from that registry.
+  content edits. The external bundle selects safe specs from that registry,
+  and every exposed spec carries its authorization scope on the spec itself.
+- External writes target the latest completed walkthrough and validate
+  `expected_head_sha` against its reviewed head, not the live PR head. An
+  agent can therefore push its fix before recording the resolution.
 - Every write is attributed to the calling provider: `resolvedBy`,
   `walkthroughs.lastEditedBy`, and the reply author name all carry it.
 - The stdio bridge is stateless. SQLite is authoritative for connection,

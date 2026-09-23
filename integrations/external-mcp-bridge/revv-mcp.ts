@@ -25,8 +25,16 @@ interface JsonRpcRequest {
   readonly method?: unknown;
 }
 
+type JsonRpcPayload = JsonRpcRequest | JsonRpcRequest[];
+
 const token = process.env.REVV_INTEGRATION_TOKEN?.trim() ?? "";
-const endpoint = process.env.REVV_API_URL?.trim() || "http://127.0.0.1:45678/mcp/external";
+const configuredEndpoints = process.env.REVV_API_URL?.trim();
+const endpoints = configuredEndpoints
+  ? configuredEndpoints
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+  : ["http://127.0.0.1:45678/mcp/external", "http://127.0.0.1:45679/mcp/external"];
 // Agents differ in how they announce the active project: Claude Code exports
 // `CLAUDE_PROJECT_DIR`, the others spawn the server with the workspace as cwd.
 const projectDir =
@@ -81,7 +89,14 @@ function resolveProject(): ProjectIdentity {
   };
 }
 
-function rpcError(request: JsonRpcRequest, message: string): string | null {
+function rpcError(request: JsonRpcPayload, message: string): string | null {
+  if (Array.isArray(request)) {
+    const responses = request.flatMap((item) => {
+      const response = rpcError(item, message);
+      return response === null ? [] : [JSON.parse(response) as unknown];
+    });
+    return responses.length > 0 ? JSON.stringify(responses) : null;
+  }
   if (!("id" in request) || request.id === undefined) return null;
   return JSON.stringify({
     jsonrpc: "2.0",
@@ -90,74 +105,105 @@ function rpcError(request: JsonRpcRequest, message: string): string | null {
   });
 }
 
-let project: ProjectIdentity | null = null;
-let projectError: string | null = null;
-try {
-  project = resolveProject();
-} catch (error) {
-  projectError = error instanceof Error ? error.message : String(error);
+function requiresProject(request: JsonRpcPayload): boolean {
+  return Array.isArray(request)
+    ? request.some((item) => item.method === "tools/call")
+    : request.method === "tools/call";
+}
+
+function includesConnectionOnlyRequest(request: JsonRpcPayload): boolean {
+  return Array.isArray(request) && request.some((item) => item.method !== "tools/call");
 }
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
   if (!line.trim()) continue;
 
-  let request: JsonRpcRequest;
+  let request: JsonRpcPayload;
   try {
-    request = JSON.parse(line) as JsonRpcRequest;
+    request = JSON.parse(line) as JsonRpcPayload;
   } catch {
     process.stderr.write("[revv] ignored invalid JSON-RPC input\n");
     continue;
   }
 
-  const startupProblem = !token
-    ? "Revv is not connected to this agent. Reconnect it from Revv Settings → Integrations."
-    : projectError
-      ? `Revv could not identify this checkout: ${projectError}`
-      : null;
-  if (startupProblem || !project) {
-    const response = rpcError(request, startupProblem ?? "Revv project resolution failed");
+  if (!token) {
+    const response = rpcError(
+      request,
+      "Revv is not connected to this agent. Reconnect it from Revv Settings → Integrations.",
+    );
     if (response) process.stdout.write(`${response}\n`);
     continue;
   }
 
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-Revv-Repository": project.repositoryFullName,
-        "X-Revv-Head-Candidates": project.headCandidates.join(","),
-        ...(project.branch ? { "X-Revv-Branch": project.branch } : {}),
-      },
-      body: line,
-      // A wedged server must surface as an error, never as an endless wait.
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const body = await response.text();
-    // Error first: an error status with an empty body (a stale endpoint path
-    // 404s exactly this way) must still produce a JSON-RPC error. Anything
-    // that leaves an id-bearing request unanswered hangs the agent forever.
-    if (!response.ok) {
-      const detail = body.trim() || response.statusText || "no response body";
-      const failure = rpcError(request, `Revv returned HTTP ${response.status}: ${detail}`);
-      if (failure) process.stdout.write(`${failure}\n`);
-      continue;
+  let project: ProjectIdentity | null = null;
+  if (requiresProject(request)) {
+    try {
+      // A long-lived agent can switch branches or worktrees. Identity is
+      // request-scoped so the next tool call follows the current checkout.
+      project = resolveProject();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!includesConnectionOnlyRequest(request)) {
+        const response = rpcError(request, `Revv could not identify this checkout: ${detail}`);
+        if (response) process.stdout.write(`${response}\n`);
+        continue;
+      }
+      // Forward mixed batches without checkout headers. Revv can still answer
+      // initialize/tools/list and returns a scoped JSON-RPC error only for the
+      // tools/call entry that needs project context.
     }
-    if (body.length === 0) {
-      // Legitimate for a notification (no id) — rpcError returns null there.
-      const failure = rpcError(request, "Revv accepted the request but returned no response.");
-      if (failure) process.stdout.write(`${failure}\n`);
-      continue;
+  }
+
+  let handled = false;
+  let lastFailure = "No Revv endpoint was available.";
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...(project
+            ? {
+                "X-Revv-Repository": project.repositoryFullName,
+                "X-Revv-Head-Candidates": project.headCandidates.join(","),
+                ...(project.branch ? { "X-Revv-Branch": project.branch } : {}),
+              }
+            : {}),
+        },
+        body: line,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      const body = await response.text();
+      if (!response.ok) {
+        const detail = body.trim() || response.statusText || "no response body";
+        lastFailure = `Revv returned HTTP ${response.status}: ${detail}`;
+        const couldBeWrongChannel =
+          response.status === 401 ||
+          response.status === 403 ||
+          (response.status === 404 && body.trim() === "");
+        if (couldBeWrongChannel) continue;
+        const failure = rpcError(request, lastFailure);
+        if (failure) process.stdout.write(`${failure}\n`);
+        handled = true;
+        break;
+      }
+      if (body.length === 0) {
+        const failure = rpcError(request, "Revv accepted the request but returned no response.");
+        if (failure) process.stdout.write(`${failure}\n`);
+      } else {
+        process.stdout.write(`${body}\n`);
+      }
+      handled = true;
+      break;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      lastFailure = `Cannot reach Revv. Keep the app running in the tray and retry. (${detail})`;
     }
-    process.stdout.write(`${body}\n`);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const failure = rpcError(
-      request,
-      `Cannot reach Revv. Keep the app running in the tray and retry. (${detail})`,
-    );
+  }
+  if (!handled) {
+    const failure = rpcError(request, lastFailure);
     if (failure) process.stdout.write(`${failure}\n`);
   }
 }

@@ -70,6 +70,19 @@ let selectedIssueIds = $state<Set<string>>(new Set());
 const submittedIssueIds = $derived(
   new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
 );
+const selectableIssueIds = $derived(
+  new Set(
+    unresolvedIssues.filter((issue) => !submittedIssueIds.has(issue.id)).map((issue) => issue.id),
+  ),
+);
+const selectedIssues = $derived(unresolvedIssues.filter((issue) => selectedIssueIds.has(issue.id)));
+
+// External-agent edits can resolve an issue while this view is mounted.
+// Normalize the selection immediately so no later action can submit a stale id.
+$effect(() => {
+  const next = new Set([...selectedIssueIds].filter((id) => selectableIssueIds.has(id)));
+  if (next.size !== selectedIssueIds.size) selectedIssueIds = next;
+});
 let submitting = $state<Action | null>(null);
 let submitError = $state<string | null>(null);
 let submitSuccess = $state<{ action: Action; htmlUrl: string } | null>(null);
@@ -90,9 +103,7 @@ function handleApproveClick(): void {
   void submit("approve");
 }
 
-const selectedCount = $derived(
-  unresolvedIssues.filter((issue) => selectedIssueIds.has(issue.id)).length,
-);
+const selectedCount = $derived(selectedIssues.length);
 
 // Number of unresolved threads that carry at least one unsynced reviewer
 // message — i.e. line comments that would actually be pushed to GitHub.
@@ -127,7 +138,6 @@ function severityTag(s: "info" | "warning" | "critical"): string {
 
 function buildBody(): string {
   const parts: string[] = [];
-  const selectedIssues = unresolvedIssues.filter((i) => selectedIssueIds.has(i.id));
   if (selectedIssues.length > 0) {
     parts.push("### Walkthrough issues");
     for (const issue of selectedIssues) {
@@ -210,9 +220,7 @@ async function submit(action: Action): Promise<void> {
   try {
     const body = buildBody();
     const comments = buildComments();
-    const issueIdsForSubmit = unresolvedIssues
-      .filter((issue) => selectedIssueIds.has(issue.id))
-      .map((issue) => issue.id);
+    const issueIdsForSubmit = selectedIssues.map((issue) => issue.id);
     const { data, error } = await api.api
       .reviews({ id: prId })
       ["github-submit"].post({ action, body, comments, issueIds: issueIdsForSubmit });
@@ -289,7 +297,7 @@ async function submit(action: Action): Promise<void> {
  * chat panel and choose which commits to keep.
  */
 function generateChanges(): void {
-  const selected = unresolvedIssues.filter((i) => selectedIssueIds.has(i.id));
+  const selected = selectedIssues;
   if (selected.length === 0) {
     toast.error("Select at least one issue to address.");
     return;
@@ -306,11 +314,11 @@ function actionLabel(a: Action): string {
 }
 
 const allIssuesSelected = $derived(
-  unresolvedIssues.length > 0 && unresolvedIssues.every((i) => selectedIssueIds.has(i.id)),
+  selectableIssueIds.size > 0 && [...selectableIssueIds].every((id) => selectedIssueIds.has(id)),
 );
 
 function toggleIssue(id: string) {
-  if (submittedIssueIds.has(id) || !unresolvedIssues.some((issue) => issue.id === id)) return;
+  if (!selectableIssueIds.has(id)) return;
   const next = new Set(selectedIssueIds);
   if (next.has(id)) next.delete(id);
   else next.add(id);
@@ -321,9 +329,7 @@ function toggleAllIssues() {
   if (allIssuesSelected) {
     selectedIssueIds = new Set();
   } else {
-    selectedIssueIds = new Set(
-      unresolvedIssues.filter((i) => !submittedIssueIds.has(i.id)).map((i) => i.id),
-    );
+    selectedIssueIds = new Set(selectableIssueIds);
   }
 }
 

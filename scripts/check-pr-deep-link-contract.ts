@@ -43,4 +43,25 @@ assertContract(
 const layout = await Bun.file("apps/web/src/routes/+layout.svelte").text();
 assertContract(layout.includes("onOpenUrl") && layout.includes("getCurrent"), "root URL listeners");
 
+const deepLinkStore = await Bun.file("apps/web/src/lib/stores/pr-deep-link.svelte.ts").text();
+const connectStart = deepLinkStore.indexOf("export async function connectPrDeepLinkAccount");
+const settleStart = deepLinkStore.indexOf("export async function settlePrDeepLinkAuthorization");
+const connectBody = deepLinkStore.slice(connectStart, settleStart);
+const settleBody = deepLinkStore.slice(settleStart);
+assertContract(
+  connectBody.includes("signIn(locator.githubHost, clientId)"),
+  "transient auth config",
+);
+assertContract(
+  !connectBody.includes("setGithubConfigStrict") && settleBody.includes("setGithubConfigStrict"),
+  "GitHub config commits only after authorization",
+);
+assertContract(
+  deepLinkStore.includes('readonly phase: "settling"'),
+  "authorization settling state",
+);
+
+const deviceAuth = await Bun.file("apps/server/src/routes/device-auth.ts").text();
+assertContract(deviceAuth.includes("body?.client_id"), "transient client id reaches device auth");
+
 console.log(`PR deep-link contract OK: ${built}`);

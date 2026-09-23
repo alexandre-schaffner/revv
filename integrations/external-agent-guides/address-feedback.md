@@ -1,7 +1,9 @@
 # Address Revv feedback
 
-1. Call `get_review_context` before searching the checkout. Treat its PR head,
-   issue IDs, thread IDs, and walkthrough targeting keys as authoritative.
+1. Call `get_review_context` before searching the checkout. Treat its issue
+   IDs, thread IDs, and walkthrough targeting keys as authoritative. For
+   write tools, pass `walkthrough.reviewedHeadSha` as `expected_head_sha`;
+   `pr.headSha` may advance after you push the fix.
 2. State which issue or thread you are addressing. Inspect the referenced code
    and implement the smallest complete fix.
 3. Run the repository's required checks. Do not claim an issue is addressed

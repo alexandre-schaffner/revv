@@ -40,6 +40,13 @@ import { Input } from "$lib/components/ui/input";
 import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
+import {
+  fetchExternalIntegrationStatuses,
+  getExternalIntegrationAction,
+  getExternalIntegrationError,
+  getExternalIntegrationStatuses,
+  runExternalIntegrationAction,
+} from "$lib/stores/external-integrations.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
   type AgentKeychainResult,
@@ -240,78 +247,36 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
 let activeSection = $state<SectionId>("account");
 let contentEl = $state<HTMLElement | null>(null);
 
-interface ExternalIntegrationStatus {
-  provider: ExternalAgentProvider;
-  connected: boolean;
-  clientConfigured: boolean;
-  createdAt: string | null;
-  lastUsedAt: string | null;
+/** What the user still has to do in the agent itself after a connect. */
+function integrationActivation(provider: ExternalAgentProvider, clientName: string): string {
+  switch (provider) {
+    case "claude-code":
+      return `Run /reload-plugins in an open session, or restart Claude Code. Server: ${clientName}.`;
+    case "codex":
+      return `Restart Codex, then use /revv-address-feedback-${clientName.slice(5)}.`;
+    case "opencode":
+      return `Restart opencode, then use /revv-address-feedback-${clientName.slice(5)}.`;
+    case "cursor":
+      return `Reload the Cursor window, then enable “${clientName}” under Settings → MCP.`;
+  }
 }
 
-/** What the user still has to do in the agent itself after a connect. */
-const INTEGRATION_ACTIVATION: Record<ExternalAgentProvider, string> = {
-  "claude-code": "Run /reload-plugins in an open session, or restart Claude Code.",
-  codex: "Restart Codex, then use /revv-address-feedback.",
-  opencode: "Restart opencode, then use /revv-address-feedback.",
-  cursor: 'Reload the Cursor window, then enable "revv" under Settings → MCP.',
-};
+const integrationStatuses = $derived(getExternalIntegrationStatuses());
+const integrationAction = $derived(getExternalIntegrationAction());
+const integrationError = $derived(getExternalIntegrationError());
 
-let integrationStatuses = $state<ExternalIntegrationStatus[]>([]);
-let integrationAction = $state<{
-  provider: ExternalAgentProvider;
-  kind: "connect" | "disconnect";
-} | null>(null);
-let integrationError = $state<string | null>(null);
-
-function integrationStatusFor(provider: ExternalAgentProvider): ExternalIntegrationStatus | null {
+function integrationStatusFor(provider: ExternalAgentProvider) {
   return integrationStatuses.find((entry) => entry.provider === provider) ?? null;
 }
 
-async function integrationErrorMessage(response: Response): Promise<string> {
-  const body: unknown = await response.json().catch(() => null);
-  if (body && typeof body === "object") {
-    if ("message" in body && typeof body.message === "string") return body.message;
-    if ("error" in body && typeof body.error === "string") return body.error;
-  }
-  return `Request failed with HTTP ${response.status}.`;
-}
-
-async function fetchIntegrationStatuses(): Promise<void> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/integrations/status`, {
-      headers: await authHeaders(),
-    });
-    if (!response.ok) throw new Error(await integrationErrorMessage(response));
-    integrationStatuses = await response.json();
-    integrationError = null;
-  } catch (error) {
-    integrationError = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function runIntegrationAction(
-  provider: ExternalAgentProvider,
-  kind: "connect" | "disconnect",
-): Promise<void> {
-  if (integrationAction) return;
-  integrationAction = { provider, kind };
-  integrationError = null;
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/integrations/${provider}/${kind}`, {
-      method: kind === "connect" ? "POST" : "DELETE",
-      headers: await authHeaders(),
-    });
-    if (!response.ok) throw new Error(await integrationErrorMessage(response));
-    await fetchIntegrationStatuses();
-  } catch (error) {
-    integrationError = error instanceof Error ? error.message : String(error);
-  } finally {
-    integrationAction = null;
-  }
+function formatIntegrationTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
 }
 
 $effect(() => {
-  if (open) void fetchIntegrationStatuses();
+  if (open) void fetchExternalIntegrationStatuses();
 });
 
 // ── IntersectionObserver to highlight active nav ──────────────────────────
@@ -1344,7 +1309,13 @@ async function handleRemoveAccount(): Promise<void> {
 						<div class="settings-row">
 							<div class="settings-row-info">
 								{#if status?.connected}
-									<p class="settings-row-hint">Connected. {INTEGRATION_ACTIVATION[provider]}</p>
+									<p class="settings-row-hint">Connected. {integrationActivation(provider, status.clientName)}</p>
+									{#if formatIntegrationTimestamp(status.lastUsedAt)}
+										<p class="settings-row-hint">Last used {formatIntegrationTimestamp(status.lastUsedAt)}.</p>
+									{/if}
+									{#if formatIntegrationTimestamp(status.expiresAt)}
+										<p class="settings-row-hint">Credential expires {formatIntegrationTimestamp(status.expiresAt)}.</p>
+									{/if}
 								{:else if status?.clientConfigured}
 									<p class="settings-row-hint">
 										Configured, but the credential is inactive. Reconnect to repair it.
@@ -1358,7 +1329,7 @@ async function handleRemoveAccount(): Promise<void> {
 									<Button
 										variant="outline"
 										size="sm"
-										onclick={() => runIntegrationAction(provider, 'disconnect')}
+										onclick={() => runExternalIntegrationAction(provider, 'disconnect')}
 										disabled={integrationAction !== null}
 									>
 										{#if busy && integrationAction?.kind === 'disconnect'}
@@ -1371,7 +1342,7 @@ async function handleRemoveAccount(): Promise<void> {
 								{/if}
 								<Button
 									size="sm"
-									onclick={() => runIntegrationAction(provider, 'connect')}
+									onclick={() => runExternalIntegrationAction(provider, 'connect')}
 									disabled={integrationAction !== null}
 								>
 									{#if busy && integrationAction?.kind === 'connect'}

@@ -1,5 +1,36 @@
 import { describe, expect, it } from "bun:test";
-import { selectPullRequestForCheckout } from "./ExternalIntegrations";
+import {
+  isIntegrationCredentialActive,
+  selectPullRequestForCheckout,
+} from "./ExternalIntegrations";
+
+describe("isIntegrationCredentialActive", () => {
+  const now = Date.parse("2026-09-22T12:00:00.000Z");
+
+  it("requires an unrevoked future expiry", () => {
+    expect(
+      isIntegrationCredentialActive(
+        { revokedAt: null, expiresAt: "2026-09-23T12:00:00.000Z" },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isIntegrationCredentialActive(
+        { revokedAt: null, expiresAt: "2026-09-21T12:00:00.000Z" },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      isIntegrationCredentialActive(
+        {
+          revokedAt: "2026-09-22T11:00:00.000Z",
+          expiresAt: "2026-09-23T12:00:00.000Z",
+        },
+        now,
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("selectPullRequestForCheckout", () => {
   const pullRequests = [

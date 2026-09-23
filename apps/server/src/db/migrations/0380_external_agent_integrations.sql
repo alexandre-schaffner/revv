@@ -6,6 +6,7 @@ CREATE TABLE `external_integrations` (
 	`token_hash` text NOT NULL,
 	`scopes` text NOT NULL,
 	`created_at` text NOT NULL,
+	`expires_at` text NOT NULL,
 	`last_used_at` text,
 	`revoked_at` text,
 	FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade,

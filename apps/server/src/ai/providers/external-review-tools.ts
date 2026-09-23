@@ -19,19 +19,6 @@ import type { ChatToolContext, ChatToolResult, ChatToolSpec } from "./chat-mcp-t
 import { CHAT_TOOL_SPECS } from "./chat-mcp-tools";
 import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
 
-const SHARED_EXTERNAL_TOOL_NAMES = new Set([
-  "get_review_context",
-  "get_walkthrough_for_edit",
-  "update_overview",
-  "update_semantic_step",
-  "update_block",
-  "update_sentiment",
-  "update_rating",
-  "update_issue",
-]);
-
-const READ_TOOL_NAMES = new Set(["get_review_context", "get_walkthrough_for_edit"]);
-
 export interface ExternalReviewToolContext extends ChatToolContext {
   readonly integrationId: string;
   /** Which external agent is calling; stamped on every write it authors. */
@@ -43,27 +30,22 @@ export interface ExternalReviewToolContext extends ChatToolContext {
   readonly pushThreadStatus: (threadId: string) => Promise<void>;
 }
 
-export type ExternalReviewToolSpec = ToolSpec<ExternalReviewToolContext, ChatToolResult>;
+export type ExternalReviewToolSpec = ToolSpec<ExternalReviewToolContext, ChatToolResult> & {
+  readonly scope: ExternalAgentScope;
+};
 
-function selectedSharedSpecs(): ExternalReviewToolSpec[] {
-  return CHAT_TOOL_SPECS.filter((spec) => SHARED_EXTERNAL_TOOL_NAMES.has(spec.name)).map(
-    (spec: ChatToolSpec): ExternalReviewToolSpec => ({
-      name: spec.name,
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-      handler: async (ctx, input) => {
-        if (!READ_TOOL_NAMES.has(spec.name)) {
-          const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
-          if (!active || active.prHeadSha !== ctx.prHeadSha) {
-            return fail(
-              "The active completed walkthrough no longer matches this checkout's PR head. Refresh Revv and call get_review_context again before editing.",
-            );
-          }
-        }
-        return spec.handler(ctx, input);
-      },
-    }),
+function sharedExternalSpec(name: string, scope: ExternalAgentScope): ExternalReviewToolSpec {
+  const spec: ChatToolSpec | undefined = CHAT_TOOL_SPECS.find(
+    (candidate) => candidate.name === name,
   );
+  if (!spec) throw new Error(`Missing shared chat tool '${name}'.`);
+  return {
+    name: spec.name,
+    description: spec.description,
+    inputSchema: spec.inputSchema,
+    handler: (ctx, input) => spec.handler(ctx, input),
+    scope,
+  };
 }
 
 function canonicalEvidence(values: readonly string[]): string[] {
@@ -96,16 +78,17 @@ const recordIssueResolutionSpec: ExternalReviewToolSpec = {
   description:
     "Record verified local implementation state for a Revv issue. Idempotent for an identical payload. Submitted GitHub issues are immutable; resolve their linked thread instead.",
   inputSchema: recordIssueResolutionSchema,
+  scope: "issues:resolve",
   handler: async (ctx, input) => {
     const parsed = recordIssueResolutionSchema.parse(input);
-    if (ctx.prHeadSha === null || parsed.expected_head_sha !== ctx.prHeadSha) {
-      return fail(
-        `Stale review context: expected head ${parsed.expected_head_sha}, current Revv head ${ctx.prHeadSha ?? "unknown"}. Call get_review_context again.`,
-      );
-    }
     const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
-    if (!active || active.prHeadSha !== ctx.prHeadSha) {
-      return fail("No completed walkthrough matches the current PR head.");
+    if (active?.prHeadSha === null || active?.prHeadSha === undefined) {
+      return fail("No completed walkthrough is available for this PR.");
+    }
+    if (parsed.expected_head_sha !== active.prHeadSha) {
+      return fail(
+        `Stale review context: expected reviewed head ${parsed.expected_head_sha}, current walkthrough head ${active.prHeadSha}. Call get_review_context again.`,
+      );
     }
 
     let result: ChatToolResult | null = null;
@@ -228,9 +211,12 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
   description:
     "Add an idempotent coder reply to a Revv review thread. publish_to_github must be chosen explicitly; retries with the same key never duplicate the local reply.",
   inputSchema: replyToCommentSchema,
+  scope: "comments:write",
   handler: async (ctx, input) => {
     const parsed = replyToCommentSchema.parse(input);
-    if (ctx.prHeadSha === null || parsed.expected_head_sha !== ctx.prHeadSha) {
+    const reviewedHeadSha =
+      resolveActiveWalkthroughId(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
+    if (reviewedHeadSha === null || parsed.expected_head_sha !== reviewedHeadSha) {
       return fail("The PR head changed. Refresh review context before replying.");
     }
     const located = threadForPr(ctx, parsed.thread_id);
@@ -329,9 +315,12 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
   description:
     "Set a review thread to open, pending_coder, pending_reviewer, resolved, or wont_fix. The local write is idempotent; GitHub synchronization can be retried.",
   inputSchema: updateCommentStatusSchema,
+  scope: "comments:write",
   handler: async (ctx, input) => {
     const parsed = updateCommentStatusSchema.parse(input);
-    if (ctx.prHeadSha === null || parsed.expected_head_sha !== ctx.prHeadSha) {
+    const reviewedHeadSha =
+      resolveActiveWalkthroughId(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
+    if (reviewedHeadSha === null || parsed.expected_head_sha !== reviewedHeadSha) {
       return fail("The PR head changed. Refresh review context before changing thread status.");
     }
     const located = threadForPr(ctx, parsed.thread_id);
@@ -374,7 +363,14 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
 };
 
 export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> = [
-  ...selectedSharedSpecs(),
+  sharedExternalSpec("get_review_context", "context:read"),
+  sharedExternalSpec("get_walkthrough_for_edit", "context:read"),
+  sharedExternalSpec("update_overview", "walkthrough:edit"),
+  sharedExternalSpec("update_semantic_step", "walkthrough:edit"),
+  sharedExternalSpec("update_block", "walkthrough:edit"),
+  sharedExternalSpec("update_sentiment", "walkthrough:edit"),
+  sharedExternalSpec("update_rating", "walkthrough:edit"),
+  sharedExternalSpec("update_issue", "walkthrough:edit"),
   recordIssueResolutionSpec,
   replyToCommentSpec,
   updateCommentStatusSpec,
@@ -389,22 +385,8 @@ export const EXTERNAL_REVIEW_TOOL_BUNDLE: ToolSpecBundle<
   specs: EXTERNAL_REVIEW_TOOL_SPECS,
 };
 
-const TOOL_SCOPE: Readonly<Record<string, ExternalAgentScope>> = {
-  get_review_context: "context:read",
-  get_walkthrough_for_edit: "context:read",
-  update_overview: "walkthrough:edit",
-  update_semantic_step: "walkthrough:edit",
-  update_block: "walkthrough:edit",
-  update_sentiment: "walkthrough:edit",
-  update_rating: "walkthrough:edit",
-  update_issue: "walkthrough:edit",
-  record_issue_resolution: "issues:resolve",
-  reply_to_comment: "comments:write",
-  update_comment_status: "comments:write",
-};
-
 export function scopeForExternalTool(name: string): ExternalAgentScope | null {
-  return TOOL_SCOPE[name] ?? null;
+  return EXTERNAL_REVIEW_TOOL_SPECS.find((spec) => spec.name === name)?.scope ?? null;
 }
 
 export function hasExternalToolScope(name: string, scopes: readonly ExternalAgentScope[]): boolean {

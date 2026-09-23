@@ -7,6 +7,7 @@ import {
   CloneInProgressError,
   CloneNotReadyError,
   ExternalIntegrationError,
+  externalIntegrationHttpStatus,
   GitHubAccessDeniedError,
   GitHubApiError,
   GitHubAuthError,
@@ -169,7 +170,7 @@ export function handleAppError(
   }
 
   if (e instanceof ExternalIntegrationError) {
-    ctx.set.status = e.code === "PR_NOT_FOUND" || e.code === "INVALID_PROJECT" ? 404 : 400;
+    ctx.set.status = externalIntegrationHttpStatus(e);
     return { error: e.message };
   }
 

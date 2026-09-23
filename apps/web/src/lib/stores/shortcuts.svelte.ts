@@ -74,6 +74,13 @@ function handleKeydown(e: KeyboardEvent): void {
   // and `copySelectedPrLink` is a no-op when nothing is selected, so this
   // needs no page guard.
   if (e.shiftKey && !e.altKey && e.code === "KeyC") {
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     void copySelectedPrLink();

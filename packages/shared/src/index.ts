@@ -93,7 +93,11 @@ export {
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
-export type { ExternalAgentProvider } from "./external-integrations";
+export type {
+  ExternalAgentProvider,
+  ExternalIntegrationConnectResult,
+  ExternalIntegrationStatus,
+} from "./external-integrations";
 export {
   EXTERNAL_AGENT_PROVIDER_NAMES,
   EXTERNAL_AGENT_PROVIDERS,

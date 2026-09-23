@@ -9,14 +9,15 @@ import {
   type ExternalReviewToolContext,
   hasExternalToolScope,
 } from "../../ai/providers/external-review-tools";
+import { externalIntegrationHttpStatus } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { DbService } from "../../services/Db";
 import {
+  type ExternalAuthorizedContext,
   ExternalIntegrations,
   type ExternalProjectIdentity,
-  type ExternalResolvedContext,
 } from "../../services/ExternalIntegrations";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { SyncService } from "../../services/Sync";
@@ -38,7 +39,7 @@ function projectIdentity(request: Request): ExternalProjectIdentity | null {
 
 async function resolveContext(
   request: Request,
-): Promise<ContextResolution<ExternalReviewToolContext, ExternalResolvedContext>> {
+): Promise<ContextResolution<ExternalReviewToolContext, ExternalAuthorizedContext>> {
   const token = extractBearer(request);
   if (!token) return { ok: false, status: 401, message: "Missing bearer token" };
   const project = projectIdentity(request);
@@ -57,7 +58,7 @@ async function resolveContext(
     ),
   );
   if (!resolution.ok) {
-    const status = resolution.error.code === "INVALID_CREDENTIAL" ? 403 : 404;
+    const status = externalIntegrationHttpStatus(resolution.error);
     return { ok: false, status, message: resolution.error.message };
   }
   const resolved = resolution.value;
@@ -132,11 +133,33 @@ async function resolveContext(
   };
 }
 
+async function resolveConnection(request: Request) {
+  const token = extractBearer(request);
+  if (!token) return { ok: false as const, status: 401, message: "Missing bearer token" };
+  const resolution = await AppRuntime.runPromise(
+    Effect.flatMap(ExternalIntegrations, (integrations) => integrations.authenticate(token)).pipe(
+      Effect.match({
+        onFailure: (error) => ({ ok: false as const, error }),
+        onSuccess: (value) => ({ ok: true as const, value }),
+      }),
+    ),
+  );
+  if (!resolution.ok) {
+    return {
+      ok: false as const,
+      status: externalIntegrationHttpStatus(resolution.error),
+      message: resolution.error.message,
+    };
+  }
+  return { ok: true as const, meta: resolution.value };
+}
+
 export const mcpExternalAgentRoute = bindHttp({
   path: "/external",
   logScope: LOG_SCOPE,
   bundle: EXTERNAL_REVIEW_TOOL_BUNDLE,
   resolveContext,
+  resolveConnection,
   serverVersion: "1.0.0",
   specsForList: (specs, resolved) =>
     specs.filter((spec) => hasExternalToolScope(spec.name, resolved.scopes)),

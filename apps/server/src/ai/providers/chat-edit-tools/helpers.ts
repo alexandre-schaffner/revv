@@ -2,21 +2,14 @@
 //
 // Shared helper functions and types used by chat-edit tool handlers.
 
-import {
-  isExternalAgentProvider,
-  isLowSignalScore,
-  type RatingAxis,
-  type RatingCitation,
-  type WalkthroughBlock,
-  type WalkthroughIssue,
-  type WalkthroughRating,
-} from "@revv/shared";
+import type { RatingAxis, RatingCitation, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodeWalkthroughIssue } from "../../../services/walkthrough-issue";
 import type { ChatEditToolResult } from "./spec";
 
 // ── Result helpers ──────────────────────────────────────────────────────────
@@ -189,43 +182,4 @@ export function decodeBlock(row: typeof walkthroughBlocks.$inferSelect): Walkthr
   }
 }
 
-export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): WalkthroughIssue {
-  const blockIds = parseBlockIds(row.blockIds);
-  let resolutionEvidence: string[] = [];
-  try {
-    const parsed: unknown = JSON.parse(row.resolutionEvidence);
-    if (Array.isArray(parsed)) {
-      resolutionEvidence = parsed.filter((value): value is string => typeof value === "string");
-    }
-  } catch {
-    // Corrupt legacy metadata is treated as no evidence.
-  }
-  return {
-    id: row.id,
-    severity: row.severity as WalkthroughIssue["severity"],
-    title: row.title,
-    description: row.description,
-    blockIds,
-    ...(row.filePath !== null ? { filePath: row.filePath } : {}),
-    ...(row.startLine !== null ? { startLine: row.startLine } : {}),
-    ...(row.endLine !== null ? { endLine: row.endLine } : {}),
-    ...(row.submittedAt !== null ? { submittedAt: row.submittedAt } : {}),
-    // Absent, not null, when unscored — exactOptionalPropertyTypes keeps
-    // "never scored" from reading as low signal.
-    ...(row.advisoryScore !== null
-      ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
-      : {}),
-    ...(row.resolutionStatus === "addressed" || row.resolutionStatus === "wont_fix"
-      ? { resolutionStatus: row.resolutionStatus }
-      : {}),
-    ...(row.resolutionExplanation !== null
-      ? { resolutionExplanation: row.resolutionExplanation }
-      : {}),
-    ...(resolutionEvidence.length > 0 ? { resolutionEvidence } : {}),
-    ...(row.resolvingCommitSha !== null ? { resolvingCommitSha: row.resolvingCommitSha } : {}),
-    ...(row.resolvedAt !== null ? { resolvedAt: row.resolvedAt } : {}),
-    ...(row.resolvedBy !== null && isExternalAgentProvider(row.resolvedBy)
-      ? { resolvedBy: row.resolvedBy }
-      : {}),
-  };
-}
+export const decodeIssue = decodeWalkthroughIssue;

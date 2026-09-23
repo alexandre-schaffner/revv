@@ -3,19 +3,19 @@
 // Filesystem operations that place Revv's stdio MCP bridge and credential
 // where each coding agent can pick them up:
 //
-//   - claude-code: a user-scoped plugin directory under `~/.claude/skills`
+//   - claude-code: an account-scoped plugin directory under `~/.claude/skills`
 //                  with its own `.mcp.json` and workflow skill.
-//   - codex:       a managed `[mcp_servers.revv]` block in `config.toml` plus
-//                  a `/revv-address-feedback` custom prompt.
-//   - opencode:    an `mcp.revv` entry in `opencode.json` plus a global
-//                  `/revv-address-feedback` command.
-//   - cursor:      an `mcpServers.revv` entry in `~/.cursor/mcp.json`.
+//   - codex:       an account-scoped managed block in `config.toml` plus a
+//                  matching `/revv-address-feedback-<account>` prompt.
+//   - opencode:    an account-scoped MCP entry and matching command.
+//   - cursor:      an account-scoped entry in `~/.cursor/mcp.json`.
 //
 // Every install is convergent (reconnect yields the same end state with a
-// rotated credential) and refuses to replace files it does not own. Paths are
-// derived from an explicit home directory so tests run inside temp dirs.
+// rotated credential), isolated by a digest of the Revv account id, and
+// refuses to replace files it does not own. Paths are derived from an explicit
+// home directory so tests run inside temp dirs.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -81,8 +81,12 @@ function agentGuideSourceFile(integrationsDirectory: string): string {
 export interface BridgeInstallInput {
   readonly runtimeExecutable: string;
   readonly token: string;
-  readonly apiUrl: string;
   readonly integrationsDirectory: string;
+}
+
+/** Filesystem/config key that reveals no raw account identifier. */
+export function externalIntegrationAccountKey(accountId: string): string {
+  return createHash("sha256").update(accountId).digest("hex").slice(0, 12);
 }
 
 function assertRevvManaged(directory: string): void {
@@ -147,8 +151,19 @@ function readTextIfExists(file: string): string | null {
 
 function writePrivateTextFile(file: string, content: string): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  // `mode` only applies when the file is created; existing files keep theirs.
-  writeFileSync(file, content, { mode: 0o600 });
+  const staged = `${file}.staged-${randomUUID()}`;
+  try {
+    writeFileSync(staged, content, { mode: 0o600 });
+    chmodSync(staged, 0o600);
+    // Same-directory rename is atomic on the desktop platforms Revv ships.
+    // A crash can leave the old file or the complete new file, never a
+    // truncated config containing only part of the user's other settings.
+    renameSync(staged, file);
+    chmodSync(file, 0o600);
+  } catch (cause) {
+    if (existsSync(staged)) rmSync(staged);
+    throw cause;
+  }
 }
 
 function readManagedGuideBody(integrationsDirectory: string): string {
@@ -200,11 +215,15 @@ interface ClaudeCodePaths {
   readonly installDir: string;
 }
 
-export function claudeCodePaths(home: string = homedir()): ClaudeCodePaths {
-  return { installDir: join(home, ".claude", "skills", "revv") };
+export function claudeCodePaths(accountKey: string, home: string = homedir()): ClaudeCodePaths {
+  return { installDir: join(home, ".claude", "skills", `revv-${accountKey}`) };
 }
 
-function installClaudeCode(input: BridgeInstallInput, paths: ClaudeCodePaths): void {
+function installClaudeCode(
+  input: BridgeInstallInput,
+  paths: ClaudeCodePaths,
+  serverName: string,
+): void {
   const sourceDirectory = join(input.integrationsDirectory, "claude-code-plugin");
   if (!existsSync(join(sourceDirectory, ".claude-plugin", "plugin.json"))) {
     throw externalIntegrationError(
@@ -215,6 +234,18 @@ function installClaudeCode(input: BridgeInstallInput, paths: ClaudeCodePaths): v
   const pluginRoot = `$${"{CLAUDE_PLUGIN_ROOT}"}`;
   writeManagedDirectory(paths.installDir, (staged) => {
     cpSync(sourceDirectory, staged, { recursive: true });
+    const manifestFile = join(staged, ".claude-plugin", "plugin.json");
+    const manifest: unknown = JSON.parse(readFileSync(manifestFile, "utf8"));
+    if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
+      throw externalIntegrationError(
+        "INSTALL_FAILED",
+        "The bundled Claude Code plugin manifest is invalid. Update or reinstall Revv.",
+      );
+    }
+    writePrivateTextFile(
+      manifestFile,
+      `${JSON.stringify({ ...manifest, name: serverName }, null, 2)}\n`,
+    );
     stageBridge(staged, input.integrationsDirectory);
     writePrivateTextFile(
       join(staged, "skills", "address-feedback", "SKILL.md"),
@@ -227,7 +258,6 @@ function installClaudeCode(input: BridgeInstallInput, paths: ClaudeCodePaths): v
           args: ["run", `${pluginRoot}/server/revv-mcp.ts`],
           env: {
             REVV_INTEGRATION_TOKEN: input.token,
-            REVV_API_URL: input.apiUrl,
           },
         },
       },
@@ -246,40 +276,52 @@ export interface CodexPaths {
   readonly promptFile: string;
 }
 
-export function codexPaths(home: string = homedir()): CodexPaths {
+export function codexPaths(accountKey: string, home: string = homedir()): CodexPaths {
   const codexHome = process.env.CODEX_HOME?.trim() || join(home, ".codex");
   return {
-    installDir: join(home, ".revv", "codex"),
+    installDir: join(home, ".revv", "codex", accountKey),
     configFile: join(codexHome, "config.toml"),
-    promptFile: join(codexHome, "prompts", "revv-address-feedback.md"),
+    promptFile: join(codexHome, "prompts", `revv-address-feedback-${accountKey}.md`),
   };
 }
 
-const CODEX_BLOCK_BEGIN = "# >>> revv managed >>>";
-const CODEX_BLOCK_END = "# <<< revv managed <<<";
-const CODEX_UNMANAGED_SECTION = /^\s*\[mcp_servers\.revv(?:\.|\])/m;
+function codexBlockBegin(serverName: string): string {
+  return `# >>> ${serverName} managed >>>`;
+}
+
+function codexBlockEnd(serverName: string): string {
+  return `# <<< ${serverName} managed <<<`;
+}
 
 function tomlBasicString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function renderCodexManagedBlock(input: BridgeInstallInput, installDir: string): string {
+function renderCodexManagedBlock(
+  input: BridgeInstallInput,
+  installDir: string,
+  serverName: string,
+): string {
   return [
-    CODEX_BLOCK_BEGIN,
-    "[mcp_servers.revv]",
+    codexBlockBegin(serverName),
+    `[mcp_servers.${serverName}]`,
     `command = ${tomlBasicString(input.runtimeExecutable)}`,
     `args = ["run", ${tomlBasicString(bridgeFile(installDir))}]`,
     "",
-    "[mcp_servers.revv.env]",
+    `[mcp_servers.${serverName}.env]`,
     `REVV_INTEGRATION_TOKEN = ${tomlBasicString(input.token)}`,
-    `REVV_API_URL = ${tomlBasicString(input.apiUrl)}`,
-    CODEX_BLOCK_END,
+    codexBlockEnd(serverName),
   ].join("\n");
 }
 
-function managedBlockSpan(content: string): { begin: number; end: number } | null {
-  const begin = content.indexOf(CODEX_BLOCK_BEGIN);
-  const end = content.indexOf(CODEX_BLOCK_END);
+function managedBlockSpan(
+  content: string,
+  serverName: string,
+): { begin: number; end: number } | null {
+  const blockBegin = codexBlockBegin(serverName);
+  const blockEnd = codexBlockEnd(serverName);
+  const begin = content.indexOf(blockBegin);
+  const end = content.indexOf(blockEnd);
   if (begin === -1 && end === -1) return null;
   if (begin === -1 || end === -1 || end <= begin) {
     throw externalIntegrationError(
@@ -287,28 +329,28 @@ function managedBlockSpan(content: string): { begin: number; end: number } | nul
       "The Revv-managed section of the Codex config.toml is damaged. Remove the partial revv markers and reconnect.",
     );
   }
-  return { begin, end: end + CODEX_BLOCK_END.length };
+  return { begin, end: end + blockEnd.length };
 }
 
-function mergeCodexConfig(existing: string | null, block: string): string {
+function mergeCodexConfig(existing: string | null, block: string, serverName: string): string {
   if (existing === null || existing.trim() === "") return `${block}\n`;
-  const span = managedBlockSpan(existing);
+  const span = managedBlockSpan(existing, serverName);
   if (span) {
     const before = existing.slice(0, span.begin).replace(/\s+$/, "");
     const after = existing.slice(span.end).replace(/^\s+/, "");
     return `${[before, block, after].filter(Boolean).join("\n\n")}\n`;
   }
-  if (CODEX_UNMANAGED_SECTION.test(existing)) {
+  if (new RegExp(`^\\s*\\[mcp_servers\\.${serverName}(?:\\.|\\])`, "m").test(existing)) {
     throw externalIntegrationError(
       "INSTALL_FAILED",
-      "The Codex config.toml already has an [mcp_servers.revv] section that Revv did not create. Remove it and reconnect.",
+      `The Codex config.toml already has an [mcp_servers.${serverName}] section that Revv did not create. Remove it and reconnect.`,
     );
   }
   return `${existing.replace(/\s+$/, "")}\n\n${block}\n`;
 }
 
-function stripCodexManagedBlock(existing: string): string {
-  const span = managedBlockSpan(existing);
+function stripCodexManagedBlock(existing: string, serverName: string): string {
+  const span = managedBlockSpan(existing, serverName);
   if (!span) return existing;
   const before = existing.slice(0, span.begin).replace(/\s+$/, "");
   const after = existing.slice(span.end).replace(/^\s+/, "");
@@ -316,7 +358,7 @@ function stripCodexManagedBlock(existing: string): string {
   return merged === "" ? "" : `${merged}\n`;
 }
 
-function installCodex(input: BridgeInstallInput, paths: CodexPaths): void {
+function installCodex(input: BridgeInstallInput, paths: CodexPaths, serverName: string): void {
   writeManagedDirectory(paths.installDir, (staged) => {
     stageBridge(staged, input.integrationsDirectory);
   });
@@ -324,25 +366,26 @@ function installCodex(input: BridgeInstallInput, paths: CodexPaths): void {
     paths.configFile,
     mergeCodexConfig(
       readTextIfExists(paths.configFile),
-      renderCodexManagedBlock(input, paths.installDir),
+      renderCodexManagedBlock(input, paths.installDir, serverName),
+      serverName,
     ),
   );
   // Codex custom prompts are plain markdown; it has no front-matter contract.
   writeManagedGuide(paths.promptFile, renderGuide(input.integrationsDirectory, []));
 }
 
-function uninstallCodex(paths: CodexPaths): void {
+function uninstallCodex(paths: CodexPaths, serverName: string): void {
   const existing = readTextIfExists(paths.configFile);
   if (existing !== null) {
-    writePrivateTextFile(paths.configFile, stripCodexManagedBlock(existing));
+    writePrivateTextFile(paths.configFile, stripCodexManagedBlock(existing, serverName));
   }
   removeManagedGuide(paths.promptFile);
   removeManagedDirectory(paths.installDir);
 }
 
-function codexInstalled(paths: CodexPaths): boolean {
+function codexInstalled(paths: CodexPaths, serverName: string): boolean {
   const existing = readTextIfExists(paths.configFile);
-  return existing?.includes(CODEX_BLOCK_BEGIN) ?? false;
+  return existing?.includes(codexBlockBegin(serverName)) ?? false;
 }
 
 // ── Shared JSON config merge (OpenCode, Cursor) ─────────────────────────────
@@ -396,46 +439,51 @@ function nestedRecord(parent: Record<string, unknown>, key: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-/** Upsert the Revv server under `config[section].revv`, refusing foreign rows. */
-function upsertJsonMcpEntry(file: string, section: string, entry: Record<string, unknown>): void {
+/** Upsert one account-scoped Revv server, refusing a foreign row at that key. */
+function upsertJsonMcpEntry(
+  file: string,
+  section: string,
+  serverName: string,
+  entry: Record<string, unknown>,
+): void {
   const config = readJsonConfig(file);
   const servers = nestedRecord(config, section);
-  if (servers.revv !== undefined && !isRevvManagedEntry(servers.revv)) {
+  if (servers[serverName] !== undefined && !isRevvManagedEntry(servers[serverName])) {
     throw externalIntegrationError(
       "INSTALL_FAILED",
-      `${file} already has a ${section}.revv entry that Revv did not create. Remove it and reconnect.`,
+      `${file} already has a ${section}.${serverName} entry that Revv did not create. Remove it and reconnect.`,
     );
   }
-  servers.revv = entry;
+  servers[serverName] = entry;
   writePrivateTextFile(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function removeJsonMcpEntry(file: string, section: string): void {
+function removeJsonMcpEntry(file: string, section: string, serverName: string): void {
   const existing = readTextIfExists(file);
   if (existing === null || existing.trim() === "") return;
   const config = readJsonConfig(file);
   const servers = config[section];
   if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return;
-  const entry = (servers as Record<string, unknown>).revv;
+  const entry = (servers as Record<string, unknown>)[serverName];
   if (entry === undefined) return;
   if (!isRevvManagedEntry(entry)) {
     throw externalIntegrationError(
       "INSTALL_FAILED",
-      `Refusing to remove the non-Revv ${section}.revv entry in ${file}.`,
+      `Refusing to remove the non-Revv ${section}.${serverName} entry in ${file}.`,
     );
   }
-  delete (servers as Record<string, unknown>).revv;
+  delete (servers as Record<string, unknown>)[serverName];
   writePrivateTextFile(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function jsonMcpEntryInstalled(file: string, section: string): boolean {
+function jsonMcpEntryInstalled(file: string, section: string, serverName: string): boolean {
   try {
     const servers = readJsonConfig(file)[section];
     return (
       servers !== null &&
       typeof servers === "object" &&
       !Array.isArray(servers) &&
-      isRevvManagedEntry((servers as Record<string, unknown>).revv)
+      isRevvManagedEntry((servers as Record<string, unknown>)[serverName])
     );
   } catch {
     return false;
@@ -450,30 +498,33 @@ export interface OpenCodePaths {
   readonly commandFile: string;
 }
 
-export function openCodePaths(home: string = homedir()): OpenCodePaths {
+export function openCodePaths(accountKey: string, home: string = homedir()): OpenCodePaths {
   const configDir = join(home, ".config", "opencode");
   // Prefer the plain-JSON file; fall back to an existing JSONC file so the
   // entry lands wherever the user actually keeps their global config.
   const jsonFile = join(configDir, "opencode.json");
   const jsoncFile = join(configDir, "opencode.jsonc");
   return {
-    installDir: join(home, ".revv", "opencode"),
+    installDir: join(home, ".revv", "opencode", accountKey),
     configFile: existsSync(jsonFile) || !existsSync(jsoncFile) ? jsonFile : jsoncFile,
-    commandFile: join(configDir, "command", "revv-address-feedback.md"),
+    commandFile: join(configDir, "command", `revv-address-feedback-${accountKey}.md`),
   };
 }
 
-function installOpenCode(input: BridgeInstallInput, paths: OpenCodePaths): void {
+function installOpenCode(
+  input: BridgeInstallInput,
+  paths: OpenCodePaths,
+  serverName: string,
+): void {
   writeManagedDirectory(paths.installDir, (staged) => {
     stageBridge(staged, input.integrationsDirectory);
   });
-  upsertJsonMcpEntry(paths.configFile, "mcp", {
+  upsertJsonMcpEntry(paths.configFile, "mcp", serverName, {
     type: "local",
     command: [input.runtimeExecutable, "run", bridgeFile(paths.installDir)],
     enabled: true,
     environment: {
       REVV_INTEGRATION_TOKEN: input.token,
-      REVV_API_URL: input.apiUrl,
     },
   });
   writeManagedGuide(
@@ -484,8 +535,8 @@ function installOpenCode(input: BridgeInstallInput, paths: OpenCodePaths): void 
   );
 }
 
-function uninstallOpenCode(paths: OpenCodePaths): void {
-  removeJsonMcpEntry(paths.configFile, "mcp");
+function uninstallOpenCode(paths: OpenCodePaths, serverName: string): void {
+  removeJsonMcpEntry(paths.configFile, "mcp", serverName);
   removeManagedGuide(paths.commandFile);
   removeManagedDirectory(paths.installDir);
 }
@@ -497,36 +548,37 @@ export interface CursorPaths {
   readonly configFile: string;
 }
 
-export function cursorPaths(home: string = homedir()): CursorPaths {
+export function cursorPaths(accountKey: string, home: string = homedir()): CursorPaths {
   return {
-    installDir: join(home, ".revv", "cursor"),
+    installDir: join(home, ".revv", "cursor", accountKey),
     configFile: join(home, ".cursor", "mcp.json"),
   };
 }
 
-function installCursor(input: BridgeInstallInput, paths: CursorPaths): void {
+function installCursor(input: BridgeInstallInput, paths: CursorPaths, serverName: string): void {
   writeManagedDirectory(paths.installDir, (staged) => {
     stageBridge(staged, input.integrationsDirectory);
   });
-  upsertJsonMcpEntry(paths.configFile, "mcpServers", {
+  upsertJsonMcpEntry(paths.configFile, "mcpServers", serverName, {
     type: "stdio",
     command: input.runtimeExecutable,
     args: ["run", bridgeFile(paths.installDir)],
     env: {
       REVV_INTEGRATION_TOKEN: input.token,
-      REVV_API_URL: input.apiUrl,
     },
   });
 }
 
-function uninstallCursor(paths: CursorPaths): void {
-  removeJsonMcpEntry(paths.configFile, "mcpServers");
+function uninstallCursor(paths: CursorPaths, serverName: string): void {
+  removeJsonMcpEntry(paths.configFile, "mcpServers", serverName);
   removeManagedDirectory(paths.installDir);
 }
 
 // ── Provider registry ───────────────────────────────────────────────────────
 
 export interface ExternalIntegrationInstaller {
+  /** Account-scoped name shown in the agent's MCP configuration. */
+  readonly clientName: string;
   /** Files and directories this install owns, shown to the user on connect. */
   readonly locations: readonly string[];
   readonly install: (input: BridgeInstallInput) => void;
@@ -540,43 +592,50 @@ export interface ExternalIntegrationInstaller {
  */
 export function externalIntegrationInstaller(
   provider: ExternalAgentProvider,
+  accountId: string,
   home: string = homedir(),
 ): ExternalIntegrationInstaller {
+  const accountKey = externalIntegrationAccountKey(accountId);
+  const serverName = `revv-${accountKey}`;
   switch (provider) {
     case "claude-code": {
-      const paths = claudeCodePaths(home);
+      const paths = claudeCodePaths(accountKey, home);
       return {
+        clientName: serverName,
         locations: [paths.installDir],
-        install: (input) => installClaudeCode(input, paths),
+        install: (input) => installClaudeCode(input, paths, serverName),
         uninstall: () => removeManagedDirectory(paths.installDir),
         installed: () => existsSync(join(paths.installDir, MANAGED_MARKER)),
       };
     }
     case "codex": {
-      const paths = codexPaths(home);
+      const paths = codexPaths(accountKey, home);
       return {
+        clientName: serverName,
         locations: [paths.configFile, paths.promptFile],
-        install: (input) => installCodex(input, paths),
-        uninstall: () => uninstallCodex(paths),
-        installed: () => codexInstalled(paths),
+        install: (input) => installCodex(input, paths, serverName),
+        uninstall: () => uninstallCodex(paths, serverName),
+        installed: () => codexInstalled(paths, serverName),
       };
     }
     case "opencode": {
-      const paths = openCodePaths(home);
+      const paths = openCodePaths(accountKey, home);
       return {
+        clientName: serverName,
         locations: [paths.configFile, paths.commandFile],
-        install: (input) => installOpenCode(input, paths),
-        uninstall: () => uninstallOpenCode(paths),
-        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp"),
+        install: (input) => installOpenCode(input, paths, serverName),
+        uninstall: () => uninstallOpenCode(paths, serverName),
+        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
       };
     }
     case "cursor": {
-      const paths = cursorPaths(home);
+      const paths = cursorPaths(accountKey, home);
       return {
+        clientName: serverName,
         locations: [paths.configFile],
-        install: (input) => installCursor(input, paths),
-        uninstall: () => uninstallCursor(paths),
-        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers"),
+        install: (input) => installCursor(input, paths, serverName),
+        uninstall: () => uninstallCursor(paths, serverName),
+        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
       };
     }
   }

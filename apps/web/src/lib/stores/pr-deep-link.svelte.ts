@@ -45,7 +45,12 @@ export interface AccountChoice {
 
 export type PrDeepLinkState =
   | { readonly kind: "idle" }
-  | { readonly kind: "resolving"; readonly locator: PullRequestLocator }
+  | {
+      readonly kind: "resolving";
+      readonly locator: PullRequestLocator;
+      readonly phase: "pending" | "active";
+      readonly loadingVisible: boolean;
+    }
   | {
       readonly kind: "choose-account";
       readonly locator: PullRequestLocator;
@@ -54,7 +59,19 @@ export type PrDeepLinkState =
   | {
       readonly kind: "connect-account";
       readonly locator: PullRequestLocator;
-      readonly phase: "entry" | "device-code";
+      readonly phase: "entry";
+    }
+  | {
+      readonly kind: "connect-account";
+      readonly locator: PullRequestLocator;
+      readonly phase: "device-code";
+      readonly clientId: string;
+    }
+  | {
+      readonly kind: "connect-account";
+      readonly locator: PullRequestLocator;
+      readonly phase: "settling";
+      readonly clientId: string;
     }
   | {
       readonly kind: "confirm-repository";
@@ -70,20 +87,20 @@ export type PrDeepLinkState =
     };
 
 let state = $state<PrDeepLinkState>({ kind: "idle" });
-let loadingVisible = $state(false);
 let activeRequest: AbortController | null = null;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 let requestVersion = 0;
-let resolutionInFlight = false;
-let completingAuthorization = false;
-let accountRecoveryVersion = 0;
 
 export function getPrDeepLinkState(): PrDeepLinkState {
   return state;
 }
 
 export function getPrDeepLinkLoadingVisible(): boolean {
-  return loadingVisible;
+  return state.kind === "resolving" && state.loadingVisible;
+}
+
+function pendingResolution(locator: PullRequestLocator): PrDeepLinkState {
+  return { kind: "resolving", locator, phase: "pending", loadingVisible: false };
 }
 
 export function matchingAccountsFor(host: string): AccountChoice[] {
@@ -117,12 +134,9 @@ function clearLoadingTimer(): void {
 
 function cancelResolution(): void {
   requestVersion += 1;
-  accountRecoveryVersion += 1;
   activeRequest?.abort();
   activeRequest = null;
-  resolutionInFlight = false;
   clearLoadingTimer();
-  loadingVisible = false;
 }
 
 async function surfaceWindow(): Promise<void> {
@@ -153,9 +167,9 @@ async function safeErrorMessage(response: Response, fallback: string): Promise<s
 }
 
 async function showAccountRecovery(locator: PullRequestLocator): Promise<void> {
-  const version = ++accountRecoveryVersion;
+  const version = ++requestVersion;
   await fetchLocalAccounts();
-  if (version !== accountRecoveryVersion || state.kind === "idle") return;
+  if (version !== requestVersion || state.kind === "idle") return;
   if (state.locator !== locator) return;
   const accounts = matchingAccountsFor(locator.githubHost);
   state =
@@ -165,7 +179,7 @@ async function showAccountRecovery(locator: PullRequestLocator): Promise<void> {
 }
 
 async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> {
-  if (resolutionInFlight) return;
+  if (state.kind === "resolving" && state.phase === "active") return;
   if (!getIsAuthenticated()) {
     // Keep a link received during first-run onboarding dormant until the existing
     // device flow finishes instead of starting a competing authorization.
@@ -175,16 +189,16 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
   }
   if (!getIsOnboarded()) return;
 
-  resolutionInFlight = true;
   const version = ++requestVersion;
   const controller = new AbortController();
   activeRequest?.abort();
   activeRequest = controller;
   clearLoadingTimer();
-  loadingVisible = false;
-  state = { kind: "resolving", locator };
+  state = { kind: "resolving", locator, phase: "active", loadingVisible: false };
   loadingTimer = setTimeout(() => {
-    if (requestVersion === version && state.kind === "resolving") loadingVisible = true;
+    if (requestVersion === version && state.kind === "resolving" && state.phase === "active") {
+      state = { ...state, loadingVisible: true };
+    }
   }, 250);
 
   try {
@@ -265,10 +279,8 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
     };
   } finally {
     if (version === requestVersion) {
-      resolutionInFlight = false;
       activeRequest = null;
       clearLoadingTimer();
-      loadingVisible = false;
     }
   }
 }
@@ -287,7 +299,7 @@ export async function openPrDeepLink(rawUrl: string): Promise<void> {
     cancelSignIn();
     clearError();
   }
-  state = { kind: "resolving", locator };
+  state = pendingResolution(locator);
   await surfaceWindow();
   await resolveActiveLocator(locator);
 }
@@ -306,7 +318,7 @@ export function resumePendingPrDeepLink(): void {
 export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<void> {
   if (state.kind !== "choose-account") return;
   const locator = state.locator;
-  state = { kind: "resolving", locator };
+  state = pendingResolution(locator);
   try {
     await switchAccount(account.userId, account.host);
     await updateSettings({ githubHost: account.host }, { strict: true });
@@ -331,13 +343,10 @@ export async function connectPrDeepLinkAccount(clientId: string): Promise<string
 
   clearError();
   try {
-    await setGithubConfigStrict(
-      locator.githubHost,
-      locator.githubHost === "github.com" ? "" : trimmedClientId,
-    );
-    const started = await signIn(locator.githubHost);
+    const clientId = locator.githubHost === "github.com" ? "" : trimmedClientId;
+    const started = await signIn(locator.githubHost, clientId);
     if (!started) return getError() ?? "Failed to start authorization.";
-    state = { kind: "connect-account", locator, phase: "device-code" };
+    state = { kind: "connect-account", locator, phase: "device-code", clientId };
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -345,22 +354,25 @@ export async function connectPrDeepLinkAccount(clientId: string): Promise<string
 }
 
 export async function settlePrDeepLinkAuthorization(authError: string | null): Promise<void> {
-  if (
-    state.kind !== "connect-account" ||
-    state.phase !== "device-code" ||
-    completingAuthorization
-  ) {
+  if (state.kind !== "connect-account" || state.phase !== "device-code") {
     return;
   }
   if (authError) {
-    state = { ...state, phase: "entry" };
+    state = { kind: "connect-account", locator: state.locator, phase: "entry" };
     return;
   }
 
-  completingAuthorization = true;
   const locator = state.locator;
+  const clientId = state.clientId;
+  const version = ++requestVersion;
+  state = { kind: "connect-account", locator, phase: "settling", clientId };
   try {
+    // The deep link's host/client ID are transient device-flow inputs. Persist
+    // them globally only after GitHub has actually authorized the account.
+    await setGithubConfigStrict(locator.githubHost, clientId);
+    if (version !== requestVersion) return;
     await fetchLocalAccounts();
+    if (version !== requestVersion) return;
     const email = getUser()?.email;
     const account = matchingAccountsFor(locator.githubHost).find(
       (choice) => email === undefined || choice.email === email,
@@ -368,8 +380,9 @@ export async function settlePrDeepLinkAuthorization(authError: string | null): P
     if (account) {
       await switchAccount(account.userId, account.host);
       await updateSettings({ githubHost: account.host }, { strict: true });
+      if (version !== requestVersion) return;
     }
-    state = { kind: "resolving", locator };
+    state = pendingResolution(locator);
     if (getIsOnboarded()) await resolveActiveLocator(locator);
   } catch (error) {
     state = {
@@ -378,8 +391,6 @@ export async function settlePrDeepLinkAuthorization(authError: string | null): P
       reason: "network",
       message: error instanceof Error ? error.message : "Revv could not activate this account.",
     };
-  } finally {
-    completingAuthorization = false;
   }
 }
 
@@ -405,7 +416,7 @@ export async function addPrDeepLinkRepository(): Promise<void> {
       return;
     }
     await fetchRepos();
-    state = { kind: "resolving", locator };
+    state = pendingResolution(locator);
     await resolveActiveLocator(locator);
   } catch (error) {
     state = {
@@ -420,7 +431,7 @@ export async function addPrDeepLinkRepository(): Promise<void> {
 export function retryPrDeepLink(): void {
   if (state.kind !== "error") return;
   const locator = state.locator;
-  state = { kind: "resolving", locator };
+  state = pendingResolution(locator);
   void resolveActiveLocator(locator);
 }
 
