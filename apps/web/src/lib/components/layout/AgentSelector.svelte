@@ -1,6 +1,7 @@
 <script lang="ts">
 import { ACP_AGENTS, type AcpAgentId, type AgentStatus } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
+import { onMount } from "svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import {
   Content as PopoverContent,
@@ -25,17 +26,21 @@ let currentId = $derived(resolveChatAgentId(getSettings()));
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");
 let CurrentIcon = $derived(acpAgentIcon(current?.icon ?? "generic"));
-let status = $state(getAgentStatus());
+// `$derived`, not a `$state` copy: settings, onboarding and the embedded login
+// all refresh this, and a snapshot taken at construction would never see them.
+let status = $derived(getAgentStatus());
 let currentStatus = $derived(status?.agents[currentId] ?? null);
+
+// The dot paints long before the popover is opened, so prime it here — otherwise
+// a ready agent shows "Not checked" grey until the user opens this menu.
+onMount(() => {
+  if (!getAgentStatus()) void fetchAgentStatus();
+});
 
 $effect(() => {
   if (!open) return;
-  void refreshStatus();
+  void fetchAgentStatus();
 });
-
-async function refreshStatus(): Promise<void> {
-  status = await fetchAgentStatus();
-}
 
 function isReady(s: AgentStatus | null | undefined): boolean {
   return !!s?.installed && s.authed;

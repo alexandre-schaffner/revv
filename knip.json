@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/**/*.ts"],
+      "entry": ["scripts/**/*.ts", "integrations/external-mcp-bridge/*.ts"],
       "ignoreDependencies": ["@tauri-apps/cli", "concurrently"]
     },
     "apps/web": {

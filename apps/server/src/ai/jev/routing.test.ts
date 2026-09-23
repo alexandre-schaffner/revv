@@ -24,7 +24,7 @@ function input(over: Partial<RouteSizingInput> = {}): RouteSizingInput {
 
 describe("routeSizing — model", () => {
   it("upgrades a pinned model when the answer is confident", () => {
-    expect(routeSizing(input())?.model).toBe("claude-opus-5");
+    expect(routeSizing(input())?.model).toBe("claude-opus-5-5");
   });
 
   it("never downgrades a pinned model", () => {
@@ -48,7 +48,9 @@ describe("routeSizing — model", () => {
     expect(
       routeSizing(input({ confidence: DEPTH_CONFIDENCE_FLOOR - 0.01 }))?.model,
     ).toBeUndefined();
-    expect(routeSizing(input({ confidence: DEPTH_CONFIDENCE_FLOOR }))?.model).toBe("claude-opus-5");
+    expect(routeSizing(input({ confidence: DEPTH_CONFIDENCE_FLOOR }))?.model).toBe(
+      "claude-opus-5-5",
+    );
   });
 
   it("declines when the runner-up is within the margin", () => {

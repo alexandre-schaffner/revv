@@ -13,6 +13,7 @@ import { SshSignerLive } from "./cache-signing/index";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
+import { ExternalIntegrationsLive } from "./ExternalIntegrations";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
@@ -61,6 +62,8 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
 // at the same boundary other DB-dependent services do.
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
+
 const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
 
 // JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
@@ -92,6 +95,7 @@ const BaseLayers = Layer.mergeAll(
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
+  ExternalIntegrationsWithDeps,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
   // publishers yet; CacheStats is ready for per-namespace registrations as
   // existing services migrate to adapters in M2.

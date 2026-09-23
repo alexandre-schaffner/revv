@@ -1,0 +1,9 @@
+{
+  "name": "revv",
+  "description": "Bring Revv walkthroughs, issues, and review conversations into Claude Code.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Revv"
+  },
+  "homepage": "https://github.com/alexandre-schaffner/revv"
+}

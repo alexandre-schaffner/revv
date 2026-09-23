@@ -8,6 +8,7 @@ export { chatSessions } from "./chat-sessions";
 export { chatSubagentInvocations } from "./chat-subagent-invocations";
 export { chatTasks } from "./chat-tasks";
 export { commentThreads } from "./comment-threads";
+export { externalIntegrations } from "./external-integrations";
 export { fileContentCache } from "./file-content-cache";
 export { githubEtagCache } from "./github-etag-cache";
 export { hunkDecisions } from "./hunk-decisions";

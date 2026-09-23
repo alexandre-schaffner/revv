@@ -6,6 +6,8 @@ import {
   CloneError,
   CloneInProgressError,
   CloneNotReadyError,
+  ExternalIntegrationError,
+  externalIntegrationHttpStatus,
   GitHubAccessDeniedError,
   GitHubApiError,
   GitHubAuthError,
@@ -164,6 +166,11 @@ export function handleAppError(
 
   if (e instanceof ValidationError) {
     ctx.set.status = 400;
+    return { error: e.message };
+  }
+
+  if (e instanceof ExternalIntegrationError) {
+    ctx.set.status = externalIntegrationHttpStatus(e);
     return { error: e.message };
   }
 

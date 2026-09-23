@@ -1,4 +1,5 @@
 import { goto } from "$app/navigation";
+import { copySelectedPrLink } from "./pr-link.svelte";
 import { setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
 import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
@@ -64,6 +65,25 @@ function handleKeydown(e: KeyboardEvent): void {
     } else {
       openPalette("search");
     }
+    return;
+  }
+
+  // Cmd+Shift+C → copy the selected PR's `revv://` deep link.
+  //
+  // Match on `e.code`: Shift rewrites the produced character on some layouts,
+  // and `copySelectedPrLink` is a no-op when nothing is selected, so this
+  // needs no page guard.
+  if (e.shiftKey && !e.altKey && e.code === "KeyC") {
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    void copySelectedPrLink();
     return;
   }
 

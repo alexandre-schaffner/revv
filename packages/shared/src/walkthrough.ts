@@ -1,6 +1,7 @@
 // ── Block types ─────────────────────────────────────────────────────────────
 
 import type { Activity, ActivityResult } from "./activity";
+import type { ExternalAgentProvider } from "./external-integrations";
 import type { ReviewMode, ThinkingEffort } from "./types";
 
 /**
@@ -136,6 +137,8 @@ export interface WalkthroughSemanticStep {
  */
 export type IssueSeverity = "info" | "warning" | "critical";
 
+export type IssueResolutionStatus = "open" | "addressed" | "wont_fix";
+
 export interface WalkthroughIssue {
   id: string;
   severity: IssueSeverity;
@@ -167,6 +170,13 @@ export interface WalkthroughIssue {
    * Computed server-side so every surface filters identically.
    */
   lowSignal?: boolean;
+  /** Local implementation lifecycle; omitted on legacy/open issues. */
+  resolutionStatus?: IssueResolutionStatus;
+  resolutionExplanation?: string;
+  resolutionEvidence?: string[];
+  resolvingCommitSha?: string;
+  resolvedAt?: string;
+  resolvedBy?: ExternalAgentProvider;
 }
 
 // ── Risk & token tracking ───────────────────────────────────────────────────

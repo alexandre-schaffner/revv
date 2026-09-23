@@ -65,6 +65,7 @@ export interface AcpProcessEnvOptions {
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. The maintained
 // Codex ACP adapter merges this into the session config through CODEX_CONFIG.
 const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
+  max: "max",
   "extra-high": "xhigh",
   high: "high",
   medium: "medium",

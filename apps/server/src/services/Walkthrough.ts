@@ -41,7 +41,6 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { isLowSignalScore } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -57,6 +56,7 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import { ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
+import { decodeWalkthroughIssue } from "./walkthrough-issue";
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
 
@@ -106,14 +106,6 @@ function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
   return row.rationale.trim().length > 0;
 }
 
-/** Absent (not null) when unscored, so `exactOptionalPropertyTypes` keeps "never scored" from reading as low signal. */
-function advisoryFields(
-  advisoryScore: number | null,
-): Pick<WalkthroughIssue, "advisoryScore" | "lowSignal"> | Record<string, never> {
-  if (advisoryScore === null) return {};
-  return { advisoryScore, lowSignal: isLowSignalScore(advisoryScore) };
-}
-
 function rowToWalkthrough(
   row: typeof walkthroughs.$inferSelect,
   semanticSteps: Array<typeof walkthroughSemanticSteps.$inferSelect>,
@@ -134,31 +126,7 @@ function rowToWalkthrough(
     .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
     .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-  const sortedIssues = [...issues]
-    .sort((a, b) => a.order - b.order)
-    .map((i): WalkthroughIssue => {
-      let blockIds: string[] = [];
-      try {
-        const parsed: unknown = JSON.parse(i.blockIds);
-        if (Array.isArray(parsed)) {
-          blockIds = parsed.filter((v): v is string => typeof v === "string");
-        }
-      } catch {
-        // Legacy row or corrupt JSON — fall back to empty linkage.
-      }
-      return {
-        id: i.id,
-        severity: i.severity as WalkthroughIssue["severity"],
-        title: i.title,
-        description: i.description,
-        blockIds,
-        ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-        ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-        ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-        ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-        ...advisoryFields(i.advisoryScore),
-      };
-    });
+  const sortedIssues = [...issues].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
 
   // Ratings are ordered by insertion (createdAt) so the grid receives them
   // in arrival order. The UI re-orders by canonical RATING_AXES for display.
@@ -1529,31 +1497,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
         .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-      const issues = [...issueRows]
-        .sort((a, b) => a.order - b.order)
-        .map((i): WalkthroughIssue => {
-          let blockIds: string[] = [];
-          try {
-            const parsed: unknown = JSON.parse(i.blockIds);
-            if (Array.isArray(parsed)) {
-              blockIds = parsed.filter((v): v is string => typeof v === "string");
-            }
-          } catch {
-            // corrupt JSON — fall back to empty
-          }
-          return {
-            id: i.id,
-            severity: i.severity as WalkthroughIssue["severity"],
-            title: i.title,
-            description: i.description,
-            blockIds,
-            ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-            ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-            ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-            ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-            ...advisoryFields(i.advisoryScore),
-          };
-        });
+      const issues = [...issueRows].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
 
       const ratings = ratingRows
         .filter(hasRationale)

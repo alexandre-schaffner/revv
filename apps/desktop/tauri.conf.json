@@ -67,7 +67,10 @@
   },
   "plugins": {
     "deep-link": {
-      "enable": true
+      "enable": true,
+      "desktop": {
+        "schemes": ["revv"]
+      }
     },
     "updater": {
       "active": true,

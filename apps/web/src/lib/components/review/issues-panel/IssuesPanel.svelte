@@ -15,6 +15,7 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { SvelteMap } from "svelte/reactivity";
 import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
@@ -60,6 +61,10 @@ const sortedIssues = $derived(
   groupIssuesBySeverityWithIndex(issues).flatMap((g) => g.issues.map((gi) => gi.issue)),
 );
 
+function isResolved(issue: WalkthroughIssue): boolean {
+  return issue.resolutionStatus === "addressed" || issue.resolutionStatus === "wont_fix";
+}
+
 const counts = $derived.by(() => {
   let critical = 0;
   let warning = 0;
@@ -70,14 +75,15 @@ const counts = $derived.by(() => {
     if (issue.severity === "critical") critical++;
     else if (issue.severity === "warning") warning++;
     else info++;
-    if (selectedIds.has(issue.id)) selected++;
-    if (!submittedIds.has(issue.id)) submittable++;
+    if (!isResolved(issue) && selectedIds.has(issue.id)) selected++;
+    if (!submittedIds.has(issue.id) && !isResolved(issue)) submittable++;
   }
   return { critical, warning, info, total: issues.length, selected, submittable };
 });
 
 const allSelected = $derived(
-  counts.submittable > 0 && issues.every((i) => submittedIds.has(i.id) || selectedIds.has(i.id)),
+  counts.submittable > 0 &&
+    issues.every((i) => isResolved(i) || submittedIds.has(i.id) || selectedIds.has(i.id)),
 );
 
 // ── Expand / collapse state (tri-state) ──────────────────
@@ -129,7 +135,7 @@ const visibleIssues = $derived.by(() => {
     list = list.filter((i) => i.severity === "critical");
   }
   if (onlyUnselected) {
-    list = list.filter((i) => !selectedIds.has(i.id) && !submittedIds.has(i.id));
+    list = list.filter((i) => !isResolved(i) && !selectedIds.has(i.id) && !submittedIds.has(i.id));
   }
   return list;
 });
@@ -139,7 +145,7 @@ const visibleIssues = $derived.by(() => {
 // Non-reactive ref map — rows push their trigger elements in via a
 // callback prop on mount, null out on unmount. Plain Map because we
 // only read from keyboard handlers (no templating over it).
-const rowRefs = new Map<string, HTMLElement | null>();
+const rowRefs = new SvelteMap<string, HTMLElement | null>();
 
 function setRowRef(id: string, el: HTMLElement | null): void {
   if (el) rowRefs.set(id, el);
@@ -152,7 +158,9 @@ function focusIssue(id: string): void {
 }
 
 function focusableIssues(): WalkthroughIssue[] {
-  return visibleIssues.filter((issue) => !submittedIds.has(issue.id) && rowRefs.get(issue.id));
+  return visibleIssues.filter(
+    (issue) => !isResolved(issue) && !submittedIds.has(issue.id) && rowRefs.get(issue.id),
+  );
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
@@ -186,7 +194,8 @@ function onPanelKeydown(e: KeyboardEvent): void {
     // `x` toggles selection for the focused row — mirrors vim-style
     // mark keys. Space already triggers the Collapsible by default,
     // so we avoid hijacking it.
-    if (!submittedIds.has(focusedId)) {
+    const focusedIssue = visibleIssues.find((issue) => issue.id === focusedId);
+    if (focusedIssue && !isResolved(focusedIssue) && !submittedIds.has(focusedId)) {
       e.preventDefault();
       onToggleSelect(focusedId);
     }
@@ -248,7 +257,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
                 {#each visibleIssues as issue, i (issue.id)}
                     <IssueTestRow
                         {issue}
-                        selected={selectedIds.has(issue.id)}
+                        selected={selectedIds.has(issue.id) && !isResolved(issue)}
                         submitted={submittedIds.has(issue.id)}
                         open={isRowOpen(issue.id)}
                         index={i}

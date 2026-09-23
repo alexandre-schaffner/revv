@@ -334,6 +334,19 @@ export function replacePullRequests(incoming: PullRequest[]): void {
   archivedPrs = archivedPrs.filter((pr) => !openIds.has(pr.id));
 }
 
+/** Merge a targeted deep-link result before navigation mounts the review page. */
+export function upsertPullRequest(pullRequest: PullRequest): void {
+  const nextOpen = pullRequests.filter((item) => item.id !== pullRequest.id);
+  const nextArchived = archivedPrs.filter((item) => item.id !== pullRequest.id);
+  if (pullRequest.status === "open") {
+    pullRequests = [pullRequest, ...nextOpen];
+    archivedPrs = nextArchived;
+  } else {
+    pullRequests = nextOpen;
+    archivedPrs = [pullRequest, ...nextArchived];
+  }
+}
+
 let repositoryLoadSeq = 0;
 
 export async function setRepositories(repos: Repository[]): Promise<void> {

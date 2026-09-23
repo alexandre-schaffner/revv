@@ -65,6 +65,34 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
   readonly field?: string;
 }> {}
 
+export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrationError")<{
+  readonly message: string;
+  readonly code:
+    | "INVALID_CREDENTIAL"
+    | "INVALID_PROJECT"
+    | "PR_NOT_FOUND"
+    | "INSTALL_FAILED"
+    | "NOT_CONNECTED"
+    | "INTERNAL";
+  readonly cause?: unknown;
+}> {}
+
+export function externalIntegrationHttpStatus(error: ExternalIntegrationError): number {
+  switch (error.code) {
+    case "INVALID_CREDENTIAL":
+      return 403;
+    case "INVALID_PROJECT":
+    case "PR_NOT_FOUND":
+      return 404;
+    case "NOT_CONNECTED":
+      return 409;
+    case "INSTALL_FAILED":
+      return 400;
+    case "INTERNAL":
+      return 500;
+  }
+}
+
 // AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;

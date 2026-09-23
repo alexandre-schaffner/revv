@@ -288,6 +288,13 @@
       "when": 1779675000000,
       "tag": "0370_pr_diff_stats_head",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1779680000000,
+      "tag": "0380_external_agent_integrations",
+      "breakpoints": true
     }
   ]
 }

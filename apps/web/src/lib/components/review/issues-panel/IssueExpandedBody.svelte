@@ -10,7 +10,11 @@
  * walkthrough steps that explain this issue).
  */
 
-import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import {
+  EXTERNAL_AGENT_PROVIDER_NAMES,
+  type WalkthroughBlock,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
@@ -54,6 +58,35 @@ const hasReferences = $derived(
     <div class="description">
         <p class="description-text">{issue.description}</p>
     </div>
+
+    {#if issue.resolutionStatus === 'addressed' || issue.resolutionStatus === 'wont_fix'}
+        <div class="section-divider" aria-hidden="true">
+            <span class="section-divider-label">resolution</span>
+        </div>
+        <div class="resolution">
+            <p class="resolution-head">
+                <strong>{issue.resolutionStatus === 'addressed' ? 'Addressed' : "Won't fix"}</strong>
+                {#if issue.resolvedBy}
+                    <span class="resolution-agent"
+                        >by {EXTERNAL_AGENT_PROVIDER_NAMES[issue.resolvedBy]}</span
+                    >
+                {/if}
+            </p>
+            {#if issue.resolutionExplanation}
+                <p>{issue.resolutionExplanation}</p>
+            {/if}
+            {#if issue.resolvingCommitSha}
+                <code>commit {issue.resolvingCommitSha.slice(0, 12)}</code>
+            {/if}
+            {#if issue.resolutionEvidence?.length}
+                <ul>
+                    {#each issue.resolutionEvidence as evidence (evidence)}
+                        <li>{evidence}</li>
+                    {/each}
+                </ul>
+            {/if}
+        </div>
+    {/if}
 
     {#if hasReferences}
         <div class="section-divider" aria-hidden="true">
@@ -129,6 +162,44 @@ const hasReferences = $derived(
         color: var(--color-text-primary);
         margin: 0;
         max-width: 65ch;
+    }
+
+    .resolution {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: var(--color-text-secondary);
+    }
+
+    .resolution-head {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+    }
+
+    .resolution strong {
+        color: var(--color-success);
+        font-family: var(--font-sans);
+        font-size: 13px;
+    }
+
+    .resolution-agent {
+        color: var(--color-text-muted);
+        font-size: 12px;
+    }
+
+    .resolution p,
+    .resolution ul {
+        margin: 0;
+    }
+
+    .resolution ul {
+        padding-left: 18px;
+    }
+
+    .resolution code {
+        width: fit-content;
+        color: var(--color-text-muted);
     }
 
     /* ── Section divider — uppercase mono, echo RatingExpandedBody ─ */

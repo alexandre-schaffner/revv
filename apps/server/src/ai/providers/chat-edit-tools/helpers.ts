@@ -2,20 +2,14 @@
 //
 // Shared helper functions and types used by chat-edit tool handlers.
 
-import type {
-  RatingAxis,
-  RatingCitation,
-  WalkthroughBlock,
-  WalkthroughIssue,
-  WalkthroughRating,
-} from "@revv/shared";
-import { isLowSignalScore } from "@revv/shared";
+import type { RatingAxis, RatingCitation, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodeWalkthroughIssue } from "../../../services/walkthrough-issue";
 import type { ChatEditToolResult } from "./spec";
 
 // ── Result helpers ──────────────────────────────────────────────────────────
@@ -188,22 +182,4 @@ export function decodeBlock(row: typeof walkthroughBlocks.$inferSelect): Walkthr
   }
 }
 
-export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): WalkthroughIssue {
-  const blockIds = parseBlockIds(row.blockIds);
-  return {
-    id: row.id,
-    severity: row.severity as WalkthroughIssue["severity"],
-    title: row.title,
-    description: row.description,
-    blockIds,
-    ...(row.filePath !== null ? { filePath: row.filePath } : {}),
-    ...(row.startLine !== null ? { startLine: row.startLine } : {}),
-    ...(row.endLine !== null ? { endLine: row.endLine } : {}),
-    ...(row.submittedAt !== null ? { submittedAt: row.submittedAt } : {}),
-    // Absent, not null, when unscored — exactOptionalPropertyTypes keeps
-    // "never scored" from reading as low signal.
-    ...(row.advisoryScore !== null
-      ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
-      : {}),
-  };
-}
+export const decodeIssue = decodeWalkthroughIssue;

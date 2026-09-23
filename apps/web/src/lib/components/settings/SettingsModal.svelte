@@ -4,6 +4,9 @@ import {
   type AcpAgentId,
   type AgentStatus,
   type AgentStatusReport,
+  EXTERNAL_AGENT_PROVIDER_NAMES,
+  EXTERNAL_AGENT_PROVIDERS,
+  type ExternalAgentProvider,
   getAgentKeychainAuth,
   type InstallEvent,
   type RecapAgentChoice,
@@ -17,6 +20,7 @@ import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
 import Download from "phosphor-svelte/lib/Download";
 import Gauge from "phosphor-svelte/lib/Gauge";
+import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
 import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
@@ -36,6 +40,13 @@ import { Input } from "$lib/components/ui/input";
 import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
 import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
+import {
+  fetchExternalIntegrationStatuses,
+  getExternalIntegrationAction,
+  getExternalIntegrationError,
+  getExternalIntegrationStatuses,
+  runExternalIntegrationAction,
+} from "$lib/stores/external-integrations.svelte";
 import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
 import {
   type AgentKeychainResult,
@@ -87,6 +98,7 @@ const navItems: NavItem[] = [
   { id: "recap", label: "Project Recap", icon: CalendarDots },
   { id: "cache", label: "Team Cache", icon: Cloud },
   { id: "jev", label: "TypeSafe", icon: Gauge },
+  { id: "integrations", label: "Integrations", icon: PlugsConnected },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: ArrowCounterClockwise },
   { id: "updates", label: "Updates", icon: Download },
@@ -234,6 +246,38 @@ const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
 
 let activeSection = $state<SectionId>("account");
 let contentEl = $state<HTMLElement | null>(null);
+
+/** What the user still has to do in the agent itself after a connect. */
+function integrationActivation(provider: ExternalAgentProvider, clientName: string): string {
+  switch (provider) {
+    case "claude-code":
+      return `Run /reload-plugins in an open session, or restart Claude Code. Server: ${clientName}.`;
+    case "codex":
+      return `Restart Codex, then use /revv-address-feedback-${clientName.slice(5)}.`;
+    case "opencode":
+      return `Restart opencode, then use /revv-address-feedback-${clientName.slice(5)}.`;
+    case "cursor":
+      return `Reload the Cursor window, then enable “${clientName}” under Settings → MCP.`;
+  }
+}
+
+const integrationStatuses = $derived(getExternalIntegrationStatuses());
+const integrationAction = $derived(getExternalIntegrationAction());
+const integrationError = $derived(getExternalIntegrationError());
+
+function integrationStatusFor(provider: ExternalAgentProvider) {
+  return integrationStatuses.find((entry) => entry.provider === provider) ?? null;
+}
+
+function formatIntegrationTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+}
+
+$effect(() => {
+  if (open) void fetchExternalIntegrationStatuses();
+});
 
 // ── IntersectionObserver to highlight active nav ──────────────────────────
 $effect(() => {
@@ -1247,6 +1291,76 @@ async function handleRemoveAccount(): Promise<void> {
 			</section>
 
 				<TypeSafeSettingsSection />
+
+			<!-- Integrations -->
+			<section id="section-integrations" class="settings-section">
+				<h2 class="section-head-title">Integrations</h2>
+				<p class="settings-row-hint">
+					Give a coding agent the current PR's walkthrough, issues, and comment threads. It can
+					record verified fixes, update walkthrough content, and reply to or resolve comments.
+					Revv must stay running while the agent is in use.
+				</p>
+
+				{#each EXTERNAL_AGENT_PROVIDERS as provider (provider)}
+					{@const status = integrationStatusFor(provider)}
+					{@const busy = integrationAction?.provider === provider}
+					<div class="settings-subgroup">
+						<h3 class="settings-subgroup-heading">{EXTERNAL_AGENT_PROVIDER_NAMES[provider]}</h3>
+						<div class="settings-row">
+							<div class="settings-row-info">
+								{#if status?.connected}
+									<p class="settings-row-hint">Connected. {integrationActivation(provider, status.clientName)}</p>
+									{#if formatIntegrationTimestamp(status.lastUsedAt)}
+										<p class="settings-row-hint">Last used {formatIntegrationTimestamp(status.lastUsedAt)}.</p>
+									{/if}
+									{#if formatIntegrationTimestamp(status.expiresAt)}
+										<p class="settings-row-hint">Credential expires {formatIntegrationTimestamp(status.expiresAt)}.</p>
+									{/if}
+								{:else if status?.clientConfigured}
+									<p class="settings-row-hint">
+										Configured, but the credential is inactive. Reconnect to repair it.
+									</p>
+								{:else}
+									<p class="settings-row-hint">Not connected.</p>
+								{/if}
+							</div>
+							<div class="flex shrink-0 items-center gap-2">
+								{#if status?.connected}
+									<Button
+										variant="outline"
+										size="sm"
+										onclick={() => runExternalIntegrationAction(provider, 'disconnect')}
+										disabled={integrationAction !== null}
+									>
+										{#if busy && integrationAction?.kind === 'disconnect'}
+											<Spinner size={14} class="motion-essential-spin" />
+											Disconnecting…
+										{:else}
+											Disconnect
+										{/if}
+									</Button>
+								{/if}
+								<Button
+									size="sm"
+									onclick={() => runExternalIntegrationAction(provider, 'connect')}
+									disabled={integrationAction !== null}
+								>
+									{#if busy && integrationAction?.kind === 'connect'}
+										<Spinner size={14} class="motion-essential-spin" />
+										Connecting…
+									{:else}
+										{status?.connected ? 'Reconnect' : 'Connect'}
+									{/if}
+								</Button>
+							</div>
+						</div>
+					</div>
+				{/each}
+
+				{#if integrationError}
+					<p class="probe-result probe-result--err" role="alert">{integrationError}</p>
+				{/if}
+			</section>
 
 			<PreferencesSettingsSection />
 

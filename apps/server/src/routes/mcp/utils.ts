@@ -85,6 +85,10 @@ export type ContextResolution<Ctx, Meta> =
   | { ok: true; ctx: Ctx; meta: Meta }
   | { ok: false; status: number; message: string };
 
+export type ConnectionResolution<Meta> =
+  | { ok: true; meta: Meta }
+  | { ok: false; status: number; message: string };
+
 export interface HttpToolCall<Ctx, Meta> {
   readonly toolName: string;
   readonly ctx: Ctx;
@@ -97,6 +101,11 @@ export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
   readonly logScope: string;
   readonly bundle: ToolSpecBundle<Ctx, Result>;
   readonly resolveContext: (req: Request) => Promise<ContextResolution<Ctx, Meta>>;
+  /**
+   * Optional credential-only resolution for initialize/notifications/tools/list.
+   * Tool calls still resolve the full project-bound context.
+   */
+  readonly resolveConnection?: (req: Request) => Promise<ConnectionResolution<Meta>>;
   readonly serverVersion?: string;
   readonly logInbound?: boolean;
   readonly specsForList?: (
@@ -226,12 +235,26 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       });
     }
 
-    const resolved = await options.resolveContext(req);
-    if (!resolved.ok) {
+    let fullResolution: ContextResolution<Ctx, Meta> | null = null;
+    let connectionResolution: ConnectionResolution<Meta> | null = null;
+
+    if (options.resolveConnection) {
+      // A pure tools/call request can go straight to full resolution. Mixed
+      // batches authenticate once up front so handshake/list responses remain
+      // independent from a checkout-resolution failure in a sibling call.
+      if (requests.some((rpc) => rpc?.method !== "tools/call")) {
+        connectionResolution = await options.resolveConnection(req);
+      }
+    } else {
+      fullResolution = await options.resolveContext(req);
+      connectionResolution = fullResolution;
+    }
+
+    if (connectionResolution && !connectionResolution.ok) {
       return new Response(
-        JSON.stringify(jsonRpcError(requests[0]?.id ?? null, -32000, resolved.message)),
+        JSON.stringify(jsonRpcError(requests[0]?.id ?? null, -32000, connectionResolution.message)),
         {
-          status: resolved.status,
+          status: connectionResolution.status,
           headers: { "Content-Type": "application/json" },
         },
       );
@@ -252,11 +275,27 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
             responses.push(jsonRpcSuccess(rpcId, null));
           }
         } else if (rpc.method === "tools/list") {
+          if (!connectionResolution?.ok) {
+            responses.push(jsonRpcError(rpcId, -32603, "MCP connection was not resolved"));
+            continue;
+          }
           const specs =
-            options.specsForList?.(options.bundle.specs, resolved.meta) ?? options.bundle.specs;
+            options.specsForList?.(options.bundle.specs, connectionResolution.meta) ??
+            options.bundle.specs;
           responses.push(handleToolsList(rpcId, specs));
         } else if (rpc.method === "tools/call") {
-          responses.push(await handleToolsCall(rpcId, rpc.params, resolved, options));
+          if (fullResolution === null) {
+            fullResolution = await options.resolveContext(req);
+          }
+          if (!fullResolution?.ok) {
+            responses.push(
+              jsonRpcError(rpcId, -32000, fullResolution.message, {
+                httpStatus: fullResolution.status,
+              }),
+            );
+          } else {
+            responses.push(await handleToolsCall(rpcId, rpc.params, fullResolution, options));
+          }
         } else {
           responses.push(jsonRpcError(rpcId, -32601, `Unknown method '${rpc.method}'`));
         }
@@ -277,7 +316,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       }
     }
 
-    const served = options.servedMessage?.(requests, resolved.ctx, resolved.meta);
+    const served =
+      fullResolution?.ok === true
+        ? options.servedMessage?.(requests, fullResolution.ctx, fullResolution.meta)
+        : null;
     if (served) {
       debug(options.logScope, served);
     }

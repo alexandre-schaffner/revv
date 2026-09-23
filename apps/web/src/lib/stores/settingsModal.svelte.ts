@@ -4,6 +4,7 @@ export type SettingsSectionId =
   | "recap"
   | "cache"
   | "jev"
+  | "integrations"
   | "preferences"
   | "onboarding"
   | "updates"

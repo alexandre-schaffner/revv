@@ -21,6 +21,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodeWalkthroughIssue, isSameResolvedFinding } from "../../../services/walkthrough-issue";
 import { renderArtifactRejection } from "../../jev/artifact-quality";
 import { decodePlainText } from "../agent-text";
 import {
@@ -426,7 +427,7 @@ function checkFlagIssuePreconditions(
   walkthroughId: string,
   input: FlagIssueInput,
 ):
-  | { readonly ok: true; readonly blockIds: string[] }
+  | { readonly ok: true; readonly blockIds: string[]; readonly parentWalkthroughId: string | null }
   | { readonly ok: false; readonly error: string } {
   const row = loadWalkthroughRow(db, walkthroughId);
   if (!row) return { ok: false, error: `Walkthrough ${walkthroughId} not found.` };
@@ -474,6 +475,7 @@ function checkFlagIssuePreconditions(
   return {
     ok: true,
     blockIds: uniqueRefs.map((r) => blockIdFor(walkthroughId, r.semantic_step_index, r.step_index)),
+    parentWalkthroughId: row.parentWalkthroughId,
   };
 }
 
@@ -509,6 +511,28 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
       .all();
     const order = existing.find((e) => e.id === issueId)?.order ?? existing.length;
 
+    // A new head produces a new immutable walkthrough row. Preserve a local
+    // resolution only when the regenerated concern is byte-for-byte the same
+    // finding at the same location; changed findings deliberately reopen.
+    const { parentWalkthroughId } = guard;
+    const priorResolution = parentWalkthroughId
+      ? ctx.db
+          .select()
+          .from(walkthroughIssues)
+          .where(eq(walkthroughIssues.walkthroughId, parentWalkthroughId))
+          .all()
+          .find((issue) =>
+            isSameResolvedFinding(issue, {
+              severity: input.severity,
+              title,
+              description,
+              filePath: input.file_path ?? null,
+              startLine: input.start_line ?? null,
+              endLine: input.end_line ?? null,
+            }),
+          )
+      : undefined;
+
     const now = new Date().toISOString();
     ctx.db
       .insert(walkthroughIssues)
@@ -524,6 +548,16 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
         endLine: input.end_line ?? null,
         blockIds: JSON.stringify(blockIds),
         createdAt: now,
+        ...(priorResolution
+          ? {
+              resolutionStatus: priorResolution.resolutionStatus,
+              resolutionExplanation: priorResolution.resolutionExplanation,
+              resolutionEvidence: priorResolution.resolutionEvidence,
+              resolvingCommitSha: priorResolution.resolvingCommitSha,
+              resolvedAt: priorResolution.resolvedAt,
+              resolvedBy: priorResolution.resolvedBy,
+            }
+          : {}),
       })
       .onConflictDoUpdate({
         target: walkthroughIssues.id,
@@ -543,16 +577,12 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
       })
       .run();
 
-    issueEvent = {
-      id: issueId,
-      severity: input.severity,
-      title,
-      description,
-      blockIds,
-      ...(input.file_path !== null ? { filePath: input.file_path } : {}),
-      ...(input.start_line !== null ? { startLine: input.start_line } : {}),
-      ...(input.end_line !== null ? { endLine: input.end_line } : {}),
-    };
+    const persisted = ctx.db
+      .select()
+      .from(walkthroughIssues)
+      .where(eq(walkthroughIssues.id, issueId))
+      .get();
+    if (persisted) issueEvent = decodeWalkthroughIssue(persisted);
   });
   if (result) return result;
   if (issueEvent) {

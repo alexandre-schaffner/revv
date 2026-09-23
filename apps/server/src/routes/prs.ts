@@ -26,6 +26,7 @@ import {
   toCachedDiffFiles,
 } from "../services/DiffCache";
 import { GitHubGateway } from "../services/GitHub";
+import { apiBaseForHost } from "../services/github-rest";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
 import {
@@ -35,6 +36,7 @@ import {
   type SsrDiffOptions,
 } from "../services/PrerenderCache";
 import { PullRequestService } from "../services/PullRequest";
+import { resolvePullRequestLink } from "../services/pr-deep-link";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
@@ -143,6 +145,61 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       }
     },
     { query: t.Object({ repo: t.Optional(t.String()) }) },
+  )
+  .post(
+    "/resolve-link",
+    async (ctx) => {
+      const expectedHost = ctx.body.githubHost.toLowerCase();
+      const activeHost = (ctx.account.host ?? "github.com").toLowerCase();
+
+      // This branch must stay before AppRuntime/service access. A mismatched
+      // account is a recovery state, not permission to probe another
+      // account's database rows or GitHub token.
+      if (activeHost !== expectedHost) {
+        return { status: "account_mismatch" as const, activeHost, expectedHost };
+      }
+
+      try {
+        return await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const repositoryService = yield* RepositoryService;
+            const pullRequestService = yield* PullRequestService;
+            const github = yield* GitHubGateway;
+            const { accountId, accessToken } = ctx.account;
+
+            return yield* resolvePullRequestLink(
+              {
+                findRepository: (fullName) =>
+                  repositoryService.getRepoByFullName(fullName, accountId),
+                findCachedPullRequest: (id) =>
+                  pullRequestService.getPr(id, accountId).pipe(Effect.option),
+                fetchPullRequest: (repository, number) =>
+                  github.prs.get(
+                    repository.fullName,
+                    number,
+                    accessToken,
+                    apiBaseForHost(repository.githubHost),
+                  ),
+                upsertPullRequest: (pullRequest) => pullRequestService.upsertPrs([pullRequest]),
+              },
+              ctx.body,
+            );
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      body: t.Object({
+        githubHost: t.String({ minLength: 1, pattern: "^[A-Za-z0-9.-]+$" }),
+        repositoryFullName: t.String({
+          minLength: 3,
+          pattern: "^[^/\\s]+/[^/\\s]+$",
+        }),
+        number: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      }),
+    },
   )
   .get(
     "/archived",

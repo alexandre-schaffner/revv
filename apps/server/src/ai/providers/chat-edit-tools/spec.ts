@@ -10,7 +10,11 @@
 // or `lastCompletedPhase`; they stamp `lastEditedAt` / `lastEditedBy` on the
 // parent row and broadcast `walkthrough:edited` envelopes via the global SSE bus.
 
-import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
+import type {
+  ExternalAgentProvider,
+  ThreadEventMessage,
+  WalkthroughStreamEvent,
+} from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import {
@@ -24,10 +28,11 @@ import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gat
 // ── Handler execution context ───────────────────────────────────────────────
 
 /**
- * Actor identifier stamped on `walkthroughs.lastEditedBy`. All chat edits
- * run on the unified ACP transport, so the only value today is `'chat:acp'`.
+ * Actor identifier stamped on `walkthroughs.lastEditedBy`. The value records
+ * whether the edit came from in-app chat or, for every external coding agent
+ * Revv integrates with, which agent authored it.
  */
-export type ChatEditActor = "chat:acp";
+export type ChatEditActor = "chat:acp" | ExternalAgentProvider;
 
 export interface ChatWalkthroughEditContext {
   /** Direct DB handle (Bun sqlite + drizzle). */

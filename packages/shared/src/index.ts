@@ -93,6 +93,16 @@ export {
 } from "./constants";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
+export type {
+  ExternalAgentProvider,
+  ExternalIntegrationConnectResult,
+  ExternalIntegrationStatus,
+} from "./external-integrations";
+export {
+  EXTERNAL_AGENT_PROVIDER_NAMES,
+  EXTERNAL_AGENT_PROVIDERS,
+  isExternalAgentProvider,
+} from "./external-integrations";
 export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
 export { guessImageContentType, isImagePath } from "./images";
 export type { JevHookDefinition, JevHookKey, JevHookSettings, JevSettings } from "./jev-settings";
@@ -124,6 +134,8 @@ export {
   PIERRE_THEMES,
   PR_DIFF_RENDER_OPTIONS,
 } from "./pierre-diffs";
+export type { PullRequestLocator } from "./pr-deep-link";
+export { buildPullRequestDeepLink, parsePullRequestDeepLink } from "./pr-deep-link";
 export { isPrLensFenceLang, toGraphDocInput } from "./prlens";
 export type {
   ProjectRecap,

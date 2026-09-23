@@ -39,14 +39,14 @@ export const DEPTH_MARGIN_FLOOR = 0.15;
  * model half (configured model stands); effort routing is unaffected.
  *
  *   • **opencode**: 75+ models fetched live (`caps.models === "dynamic"`), no static table.
- *   • **codex**: three sibling GPT-5.6 variants, not a cost/capability ladder to order.
+ *   • **codex**: three sibling GPT-6 variants, not a cost/capability ladder to order.
  *   • **cursor**: ACP adapter doesn't forward a selected model at all.
  */
 const DEPTH_LADDERS: Partial<Record<AcpAgentId, Readonly<Record<ReviewDepth, string>>>> = {
   "claude-code": {
     shallow: "claude-haiku-4-5-20251001",
     standard: "claude-sonnet-5",
-    deep: "claude-opus-5",
+    deep: "claude-opus-5-5",
   },
 };
 
