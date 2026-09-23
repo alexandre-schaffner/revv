@@ -44,13 +44,30 @@ export class SecretStore extends Context.Tag("SecretStore")<
     readonly setTokens: (accountId: string, tokens: TokenPair) => Effect.Effect<void>;
     readonly getTokens: (accountId: string) => Effect.Effect<TokenPair | null>;
     readonly deleteTokens: (accountId: string) => Effect.Effect<void>;
+    /** Generic single-string secrets, through the same keyring/fallback path as token pairs. `key` is a logical name, see {@link JEV_API_KEY_SECRET}. */
+    readonly setSecret: (key: string, value: string) => Effect.Effect<void>;
+    readonly getSecret: (key: string) => Effect.Effect<string | null>;
+    readonly deleteSecret: (key: string) => Effect.Effect<void>;
   }
 >() {}
 
+/** Logical name of the TypeSafe System One API key in {@link SecretStore}. */
+export const JEV_API_KEY_SECRET = "jev-api-key";
+
 const KEYRING_USER_PREFIX = "github-tokens:";
+const KEYRING_SECRET_PREFIX = "secret:";
 
 function entryFor(accountId: string): Entry {
   return new Entry(keyringServiceName(), `${KEYRING_USER_PREFIX}${accountId}`);
+}
+
+function secretEntryFor(key: string): Entry {
+  return new Entry(keyringServiceName(), `${KEYRING_SECRET_PREFIX}${key}`);
+}
+
+/** Prefixed so a secret name can't collide with an account id's token pair in the fallback map. */
+function fallbackSecretKey(key: string): string {
+  return `${KEYRING_SECRET_PREFIX}${key}`;
 }
 
 export function serialize(tokens: TokenPair): string {
@@ -126,7 +143,10 @@ function deriveFallbackKey(): Buffer {
   return scryptSync(loadFallbackSecret(), loadFallbackSalt(), 32);
 }
 
-function readFallbackMap(): Record<string, TokenPair> {
+/** Fallback map holds token pairs (keyed by account id) and generic secrets (keyed by `secret:<name>`), disjoint by prefix. */
+type FallbackEntry = TokenPair | string;
+
+function readFallbackMap(): Record<string, FallbackEntry> {
   try {
     if (!existsSync(fallbackDataPath())) return {};
     const raw = readFileSync(fallbackDataPath());
@@ -137,14 +157,14 @@ function readFallbackMap(): Record<string, TokenPair> {
     const decipher = createDecipheriv("aes-256-gcm", deriveFallbackKey(), iv);
     decipher.setAuthTag(tag);
     const json = Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
-    return JSON.parse(json) as Record<string, TokenPair>;
+    return JSON.parse(json) as Record<string, FallbackEntry>;
   } catch (e) {
     logError("SecretStore", "fallback store read failed:", e);
     return {};
   }
 }
 
-function writeFallbackMap(map: Record<string, TokenPair>): void {
+function writeFallbackMap(map: Record<string, FallbackEntry>): void {
   ensureAppDir();
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", deriveFallbackKey(), iv);
@@ -198,7 +218,8 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
           }
         }
         const map = readFallbackMap();
-        return map[accountId] ?? null;
+        const entry = map[accountId];
+        return entry === undefined || typeof entry === "string" ? null : entry;
       }),
 
     deleteTokens: (accountId) =>
@@ -213,6 +234,52 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
         const map = readFallbackMap();
         if (accountId in map) {
           delete map[accountId];
+          writeFallbackMap(map);
+        }
+      }),
+
+    setSecret: (key, value) =>
+      Effect.sync(() => {
+        if (useKeyring) {
+          try {
+            secretEntryFor(key).setPassword(value);
+            return;
+          } catch (e) {
+            logError("SecretStore", `keyring set failed for secret ${key}; using fallback:`, e);
+          }
+        }
+        const map = readFallbackMap();
+        map[fallbackSecretKey(key)] = value;
+        writeFallbackMap(map);
+      }),
+
+    getSecret: (key) =>
+      Effect.sync((): string | null => {
+        if (useKeyring) {
+          try {
+            const v = secretEntryFor(key).getPassword();
+            if (v) return v;
+          } catch (e) {
+            logError("SecretStore", `keyring get failed for secret ${key}; using fallback:`, e);
+          }
+        }
+        const entry = readFallbackMap()[fallbackSecretKey(key)];
+        return typeof entry === "string" && entry.length > 0 ? entry : null;
+      }),
+
+    deleteSecret: (key) =>
+      Effect.sync(() => {
+        if (useKeyring) {
+          try {
+            secretEntryFor(key).deletePassword();
+          } catch {
+            // No matching entry / backend hiccup — nothing to clean up.
+          }
+        }
+        const map = readFallbackMap();
+        const mapKey = fallbackSecretKey(key);
+        if (mapKey in map) {
+          delete map[mapKey];
           writeFallbackMap(map);
         }
       }),

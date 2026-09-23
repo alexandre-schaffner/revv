@@ -6,7 +6,7 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getReviewMode } from "$lib/stores/review.svelte";
+import { getIsPullingCommit, getReviewMode, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
@@ -74,11 +74,36 @@ const genActionState = $derived.by((): GenActionState | null => {
 });
 
 /** When chat is streaming, treat it as an in-flight action so the
- *  destructive buttons are disabled with a contextual tooltip. */
-const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
-const combinedDisabledTitle = $derived(
-  chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
+ *  destructive buttons are disabled with a contextual tooltip. Also covers
+ *  the diff refresh in `handleRegenerate`'s stale branch, which runs before
+ *  `regenerate` takes the pending slot. */
+const pullingCommit = $derived(getIsPullingCommit(prId));
+const combinedPendingAction = $derived(
+  chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
 );
+const combinedDisabledTitle = $derived(
+  chatStreaming
+    ? "Chat edit in progress. Wait for it to finish before regenerating."
+    : pullingCommit
+      ? "Fetching the new commits…"
+      : undefined,
+);
+
+/**
+ * The stale pill reviews the commits that made it stale, so it refreshes
+ * the diff first via `reviewLatestCommit` (the same pull-then-review path
+ * as the tab-side Pull button); otherwise the diff tab still shows the old
+ * head and the Pull button stays lit after review.
+ */
+const isStale = $derived(genActionState?.kind === "stale");
+
+function handleRegenerate(): void {
+  if (isStale) {
+    void reviewLatestCommit(prId, selectedMode);
+    return;
+  }
+  void regenerateWalkthrough(prId, selectedMode);
+}
 </script>
 
 {#if genActionState}
@@ -103,7 +128,7 @@ const combinedDisabledTitle = $derived(
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId, selectedMode)}
         onGenerate={() => generateWalkthrough(prId, selectedMode)}
-        onRegenerate={() => regenerateWalkthrough(prId, selectedMode)}
+        onRegenerate={handleRegenerate}
         onRegenerateFromScratch={() => regenerateWalkthroughFromScratch(prId)}
       />
 

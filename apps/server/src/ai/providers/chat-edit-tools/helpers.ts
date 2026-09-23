@@ -9,6 +9,7 @@ import type {
   WalkthroughIssue,
   WalkthroughRating,
 } from "@revv/shared";
+import { isLowSignalScore } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -145,6 +146,8 @@ export function decodeRating(row: typeof walkthroughRatings.$inferSelect): Walkt
     details: row.details,
     citations,
     blockIds,
+    verdictSource: row.verdictSource,
+    disputed: row.disputed,
   };
 }
 
@@ -197,5 +200,10 @@ export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): Walkthr
     ...(row.startLine !== null ? { startLine: row.startLine } : {}),
     ...(row.endLine !== null ? { endLine: row.endLine } : {}),
     ...(row.submittedAt !== null ? { submittedAt: row.submittedAt } : {}),
+    // Absent, not null, when unscored — exactOptionalPropertyTypes keeps
+    // "never scored" from reading as low signal.
+    ...(row.advisoryScore !== null
+      ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
+      : {}),
   };
 }

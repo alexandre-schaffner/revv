@@ -19,11 +19,15 @@
  *   on a second glyph. One icon vocabulary per row.
  * - The branch shows only when it is information. A stacked PR's base is; the
  *   source branch of a PR targeting `main` is a restatement of the title.
+ * - The row carries a diffstat, which GitHub's list omits. Size is half of
+ *   triage, and otherwise the only way to learn it is to open the PR.
  */
 
+import At from "phosphor-svelte/lib/At";
+import Eye from "phosphor-svelte/lib/Eye";
 import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import Avatar from "$lib/components/recaps/Avatar.svelte";
-import { REASON_LABEL, type TaggedRow } from "$lib/prs/tagged-prs";
+import { REASON_LABEL, type TaggedReason, type TaggedRow } from "$lib/prs/tagged-prs";
 import { getVisitState, type VisitState } from "$lib/stores/pr-visits.svelte";
 import { selectPr } from "$lib/stores/prs.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
@@ -33,11 +37,9 @@ interface Props {
   row: TaggedRow;
   /** Lets the row drop the "→ main" that would otherwise repeat under nearly every title. */
   defaultBranch: string;
-  /** False while a reason filter is active, where the per-row reason is noise. */
-  showReason: boolean;
 }
 
-let { row, defaultBranch, showReason }: Props = $props();
+let { row, defaultBranch }: Props = $props();
 
 const pr = $derived(row.pr);
 const visit = $derived(getVisitState(pr.id, pr.headSha));
@@ -57,6 +59,40 @@ const updatedAtExact = $derived.by(() => {
   return Number.isNaN(ms) ? updatedAt : new Date(ms).toLocaleString();
 });
 
+/**
+ * Zeros mean "not known yet", not "an empty diff" — the poller's diff-stat
+ * pass fills these in after the initial list sync. Omit the clause rather
+ * than assert `0 files · +0 −0`.
+ */
+const hasSize = $derived(pr.changedFiles > 0 || pr.additions > 0 || pr.deletions > 0);
+
+/** Thousands separators: a five-figure diff is the one worth reading twice. */
+function fmt(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+/**
+ * Spoken form for screen readers. States a zero side the visual column
+ * omits — "0 deletions" spoken is information; a red `−0` on screen isn't.
+ */
+const sizeLabel = $derived(
+  `${fmt(pr.changedFiles)} ${pr.changedFiles === 1 ? "file" : "files"} changed, ${fmt(pr.additions)} additions, ${fmt(pr.deletions)} deletions`,
+);
+
+/**
+ * The reason, as the row's leading glyph. `yours` maps to null: the row
+ * already shows the author's avatar and login, so it keeps the neutral
+ * pull-request mark instead.
+ */
+const REASON_ICON: Record<TaggedReason, typeof Eye | null> = {
+  review: Eye,
+  yours: null,
+  mentioned: At,
+};
+
+/* Not gated on the active filter — the reason is a fact about the row, not the tab you're viewing it from. */
+const ReasonIcon = $derived(REASON_ICON[row.reason]);
+
 const VISIT_LABEL: Record<VisitState, string> = {
   unvisited: "Not opened yet",
   visited: "Already opened",
@@ -75,8 +111,24 @@ function onNav(event: MouseEvent): void {
 
 <li class="row row--{visit}" class:row--draft={pr.isDraft}>
 	<a class="link" href="/review/{pr.id}" title={pr.title} onclick={onNav}>
-		<span class="state" aria-hidden="true">
-			<GitPullRequest size={15} />
+		<!--
+			Leading glyph doubles as the row's reason marker; every PR here is open,
+			so a constant state icon would say nothing.
+
+			`title` needs the stacking context so the anchor's stretched `::after`
+			overlay doesn't sit above it and swallow the hover.
+		-->
+		<span
+			class="state"
+			class:state--reason={ReasonIcon !== null}
+			title={ReasonIcon === null ? undefined : REASON_LABEL[row.reason]}
+			aria-hidden="true"
+		>
+			{#if ReasonIcon !== null}
+				<ReasonIcon size={15} weight="bold" />
+			{:else}
+				<GitPullRequest size={15} />
+			{/if}
 		</span>
 
 		<span class="body">
@@ -122,12 +174,40 @@ function onNav(event: MouseEvent): void {
 			</span>
 		</span>
 
+		<!-- Spoken on every row, including where the glyph is neutral — a screen reader has no author column to glance at. -->
+		<span class="sr-only">{REASON_LABEL[row.reason]}</span>
+
+		<!--
+			A column, not a metadata clause, so it lines up right-aligned across
+			rows with tabular figures. Two lines matching the body's baselines: file
+			count (the headline) rides the title, line counts ride the metadata.
+		-->
+		{#if hasSize}
+			<span class="size">
+				<span class="sr-only">{sizeLabel}</span>
+				{#if pr.changedFiles > 0}
+					<span class="size-files" aria-hidden="true">
+						<span class="size-count">{fmt(pr.changedFiles)}</span>
+						<span class="size-unit">{pr.changedFiles === 1 ? "file" : "files"}</span>
+					</span>
+				{/if}
+				<!-- Printed only when a side moved; `−0` in deletion red would read as "danger, nothing happened". -->
+				{#if pr.additions > 0 || pr.deletions > 0}
+					<span class="size-lines" aria-hidden="true">
+						{#if pr.additions > 0}
+							<span class="add">+{fmt(pr.additions)}</span>
+						{/if}
+						{#if pr.deletions > 0}
+							<span class="del">&minus;{fmt(pr.deletions)}</span>
+						{/if}
+					</span>
+				{/if}
+			</span>
+		{/if}
+
 		<span class="sr-only">{VISIT_LABEL[visit]}</span>
 	</a>
 
-	{#if showReason}
-		<span class="reason reason--{row.reason}">{REASON_LABEL[row.reason]}</span>
-	{/if}
 </li>
 
 <style>
@@ -222,6 +302,19 @@ function onNav(event: MouseEvent): void {
 		color: var(--color-text-muted);
 	}
 
+	/*
+	 * Brand teal, not the warm "attention" orange — a review request is fresh
+	 * work, not a failure, and orange reads as an error. Teal matches the
+	 * system's other "this is live" marks (streaming cursor, active file row).
+	 * Specificity clears `.row--visited .state` since a read row dims its
+	 * glyph, but a pending review request still needs you.
+	 */
+	.row .state--reason {
+		position: relative;
+		z-index: 1;
+		color: var(--color-accent);
+	}
+
 	.body {
 		display: flex;
 		flex-direction: column;
@@ -291,6 +384,83 @@ function onNav(event: MouseEvent): void {
 		flex-shrink: 0;
 	}
 
+	/* ── Change size ────────────────────────────────────────────────────── */
+
+	/* Right-aligned so numbers terminate on the card's right inset. The min-width floor keeps small diffs from collapsing the column to a hairline. */
+	.size {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		/* Matches `.body`'s gap for shared rhythm between columns. */
+		gap: 0.1875rem;
+		flex-shrink: 0;
+		min-width: 5rem;
+		padding-left: 0.75rem;
+	}
+
+	/*
+	 * Absolute line-heights, not ratios: matches the title's box (0.875rem ×
+	 * 1.4 = 1.225rem) so the file count sits on the title's baseline.
+	 */
+	.size-files {
+		display: flex;
+		align-items: baseline;
+		gap: 0.25rem;
+		line-height: 1.225rem;
+		white-space: nowrap;
+	}
+
+	/* Weight and ink split the digit (the datum) from the "files" label so the eye lands on the number. */
+	.size-count {
+		font-size: 0.8125rem;
+		font-weight: 600;
+		/* Tabular figures: a proportional `1` is narrow and the column wouldn't line up. */
+		font-variant-numeric: tabular-nums;
+		color: var(--color-text-primary);
+	}
+
+	.row--visited .size-count {
+		font-weight: 500;
+		color: var(--color-text-secondary);
+	}
+
+	/*
+	 * Fixed cell, text right-aligned within it: the count's right edge stays
+	 * put (block − cell − gap) while the word ends flush with the diffstat
+	 * below. Left-aligning or sizing to text would let either edge drift.
+	 */
+	.size-unit {
+		/* Sized to "files" itself; slack lands in the gap rather than as unused headroom. */
+		min-width: 1.375rem;
+		text-align: right;
+		font-size: 0.6875rem;
+		font-weight: 400;
+		/* ink-secondary, not ink-muted — same reason as `.meta`. */
+		color: var(--color-text-secondary);
+	}
+
+	/* Detail line: mono, one step down from the count, so it never reads louder than the file count. */
+	.size-lines {
+		display: flex;
+		align-items: baseline;
+		gap: 0.3125rem;
+		line-height: 1.05rem;
+		white-space: nowrap;
+		font-family: var(--font-mono);
+		font-size: 0.6875rem;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0.01em;
+	}
+
+	/* `+`/`−` carry the meaning; colour is redundant. Body-copy diff inks, not the gutter fill tints. */
+	.add {
+		color: var(--color-diff-add-text);
+	}
+
+	.del {
+		color: var(--color-diff-del-text);
+	}
+
 	.clause {
 		flex-shrink: 0;
 	}
@@ -339,54 +509,10 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * The reason, spelled out on the right rail.
-	 *
-	 * As text it needs neither a column header nor a legend, and right-aligned
-	 * it forms the scannable vertical column the old "WHY" glyph gutter was
-	 * reaching for. Only the actionable reason takes colour, and it takes the
-	 * "your turn" marker rather than the brand accent, so the accent budget is
-	 * untouched.
+	 * Both hide visually, not from the DOM, so screen-reader output stays
+	 * identical at every width. Branch goes first (below ~460px an ellipsed
+	 * source plus clipped target says nothing); the reason glyph never goes.
 	 */
-	.reason {
-		flex-shrink: 0;
-		align-self: center;
-		font-size: 0.6875rem;
-		font-weight: 500;
-		line-height: 1.4;
-		white-space: nowrap;
-		color: var(--color-text-secondary);
-	}
-
-	/* Weight and ink, not colour. The actionable reason still leads the rail,
-	   but the warm orange is reserved for the one state that is genuinely
-	   time-sensitive — see `.clause--attention`. This mirrors how the toolbar
-	   marks its active filter, so the component has one emphasis language. */
-	.reason--review {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
-
-	/*
-	 * Two things give way as the container narrows, in order of how little they
-	 * cost. Both stay in the DOM (visually hidden) so screen-reader output is
-	 * identical at every width.
-	 *
-	 * The reason goes first: it competes with the title for width and the
-	 * toolbar already names the active filter. The branch goes next, because
-	 * below ~460px it has nothing left to say — an ellipsed source plus a
-	 * clipped target is worse than no branch at all.
-	 */
-	@container tagged (max-width: 520px) {
-		.reason {
-			position: absolute;
-			width: 1px;
-			height: 1px;
-			overflow: hidden;
-			clip-path: inset(50%);
-			white-space: nowrap;
-		}
-	}
-
 	@container tagged (max-width: 460px) {
 		.branch {
 			position: absolute;
@@ -394,6 +520,20 @@ function onNav(event: MouseEvent): void {
 			height: 1px;
 			overflow: hidden;
 			clip-path: inset(50%);
+		}
+	}
+
+	/* Last to go, once the column costs more width than it's worth. Clipped not `display: none`, so the label stays in the accessibility tree. */
+	@container tagged (max-width: 400px) {
+		.size {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			min-width: 0;
+			padding: 0;
+			overflow: hidden;
+			clip-path: inset(50%);
+			white-space: nowrap;
 		}
 	}
 </style>

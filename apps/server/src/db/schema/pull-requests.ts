@@ -23,6 +23,11 @@ export const pullRequests = sqliteTable(
     deletions: integer("deletions").notNull().default(0),
     changedFiles: integer("changed_files").notNull().default(0),
     /**
+     * Head SHA for which additions/deletions/changedFiles came from the
+     * GraphQL stats endpoint. Distinguishes a real 0/0/0 from the list endpoint's placeholder.
+     */
+    diffStatsHeadSha: text("diff_stats_head_sha"),
+    /**
      * How many `pr_diff_files` rows the last complete GitHub files fetch
      * produced for this PR. Written only by `DiffCacheService.cacheFiles`, in
      * the same transaction as the rows themselves, and cleared when the cache

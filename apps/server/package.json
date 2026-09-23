@@ -31,6 +31,7 @@
     "@pierre/diffs": "^1.1.15",
     "@revv/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
+    "@typesafe-ai/sdk": "^0.6.0",
     "better-auth": "^1.6.3",
     "drizzle-orm": "^0.38",
     "effect": "^3",

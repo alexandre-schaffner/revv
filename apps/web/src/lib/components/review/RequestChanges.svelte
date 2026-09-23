@@ -14,6 +14,7 @@ import {
   jumpToWalkthroughBlock,
   loadSession,
 } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import {
   getBlocks,
@@ -22,6 +23,7 @@ import {
   markIssuesAsSubmitted,
 } from "$lib/stores/walkthrough.svelte";
 import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
+import { partitionBySignal, shouldHideLowSignal } from "$lib/utils/walkthrough-issues";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
 import CommentsPanel from "./comments-panel/CommentsPanel.svelte";
 import IssuesPanel from "./issues-panel/IssuesPanel.svelte";
@@ -33,7 +35,13 @@ let { prId }: Props = $props();
 
 type Action = "approve" | "request_changes" | "comment";
 
-const issues = $derived(getIssues());
+// Filtered once here rather than at each of the four consumers below, so a
+// low-signal issue the reader never saw can't be posted via select-all.
+const issueSignal = $derived(
+  partitionBySignal(getIssues(), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
+);
+const issues = $derived(issueSignal.shown);
+const filteredIssues = $derived(issueSignal.filtered);
 const threads = $derived(getThreads());
 const unresolvedThreads = $derived(
   threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
@@ -337,6 +345,7 @@ $effect(() => {
 	<div class="rc-sections">
 		<IssuesPanel
 			{issues}
+			{filteredIssues}
 			selectedIds={selectedIssueIds}
 			submittedIds={submittedIssueIds}
 			onToggleSelect={toggleIssue}

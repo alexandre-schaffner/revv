@@ -260,6 +260,34 @@
       "when": 1779655000000,
       "tag": "0330_decode_plain_text_entities",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1779660000000,
+      "tag": "0340_jev_advisory",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1779665000000,
+      "tag": "0350_drop_ai_context_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1779670000000,
+      "tag": "0360_jev_generation_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1779675000000,
+      "tag": "0370_pr_diff_stats_head",
+      "breakpoints": true
     }
   ]
 }

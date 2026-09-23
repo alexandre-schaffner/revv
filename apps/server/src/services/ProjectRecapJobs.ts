@@ -17,6 +17,7 @@
 // handlers in `ai/providers/recap-tools/`.
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
+import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
@@ -843,8 +844,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               modelUsed:
                 resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5",
               acpAgentId,
-              thinkingEffort: settings?.aiThinkingEffort,
-              contextWindow: settings?.aiContextWindow,
+              thinkingEffort: resolveThinkingEffort(settings?.aiThinkingEffort),
               repoWorkingDir: repo.clonePath ?? process.cwd(),
               sessionDeps,
               onCompleted: () => {

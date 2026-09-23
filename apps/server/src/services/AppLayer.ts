@@ -17,6 +17,7 @@ import { FileContentServiceLive } from "./FileContent";
 import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { IdentityLive } from "./Identity";
+import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
@@ -62,6 +63,11 @@ const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbS
 
 const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
 
+// JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
+const JevServiceWithDeps = JevServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
+);
+
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
@@ -76,6 +82,7 @@ const BaseLayers = Layer.mergeAll(
   ReviewServiceLive,
   RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,
+  JevServiceWithDeps,
   WalkthroughServiceLive,
   ProjectRecapServiceLive,
   DiffCacheServiceLive,

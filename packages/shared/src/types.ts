@@ -1,5 +1,6 @@
-import type { AcpAgentId } from "./acp-agents";
+import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
 import type { UpdateChannel } from "./constants";
+import type { JevSettings } from "./jev-settings";
 
 export type PullRequestStatus = "open" | "closed" | "merged";
 
@@ -76,8 +77,6 @@ export interface PullRequest {
  */
 export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
 
-export type ContextWindow = "200k" | "1m";
-
 /**
  * Per-feature override for which agent generates project recaps.
  * `'auto'` (default) inherits the global `aiAgent`; an explicit ACP agent id
@@ -133,14 +132,13 @@ export interface UserSettings {
   id: string;
   aiProvider: string;
   aiModel: string;
-  aiThinkingEffort: ThinkingEffort;
+  aiThinkingEffort: ThinkingEffortSetting;
   /**
    * Selected ACP agent id (one of `ACP_AGENTS`, e.g. `claude-code`, `opencode`,
    * `codex`, `cursor`). The single agent that drives chat, walkthrough, and
    * recap generation.
    */
   aiAgent: AcpAgentId;
-  aiContextWindow: ContextWindow;
   /**
    * Low-cost model used for one-shot, no-tools PR-aware suggestion
    * generation (right-panel empty-state prompts). Follows the global
@@ -218,6 +216,14 @@ export interface UserSettings {
       trustedSignerHosts: string[];
     };
   };
+  /**
+   * TypeSafe System One (Jev) — calibrated decisions for closed-set judgments
+   * the pipeline would otherwise spend an agent turn on. Every hook degrades
+   * to today's behaviour when Jev is off, unconfigured, or unreachable.
+   * Per-feature switches, not one master flag, since each hook is
+   * independently reversible.
+   */
+  jev: JevSettings;
   /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
    * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by

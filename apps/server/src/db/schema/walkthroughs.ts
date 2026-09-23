@@ -1,8 +1,9 @@
-import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
+import { type AxisAdvisoryState, REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   integer,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -46,8 +47,26 @@ export const walkthroughs = sqliteTable(
      * `author` is a self-review/preflight pass for the PR author.
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
-    /** Phase A output: `'low' | 'medium' | 'high'`. Written by `set_overview` MCP tool. */
+    /**
+     * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
+     * from the Jev risk pass (invariant 2's carve-out), passed to
+     * `createPartial` so no `kill -9` gap exists before the row has a tier.
+     * Falls back to `'low'` when Jev is off or unreachable.
+     */
     riskLevel: text("risk_level").notNull().default("low"),
+    /** Calibrated confidence [0,1] behind {@link riskLevel}; null when the tier didn't come from Jev. */
+    riskConfidence: real("risk_confidence"),
+    /**
+     * Three-state gate for the phase-D verdict pass:
+     * `'pending' | 'ready' | 'unavailable'`, null on rows predating it. Set to
+     * `'pending'` in the Phase C transaction, then `'ready'` (nine
+     * `walkthrough_ratings` rows pre-seeded with verdicts) or `'unavailable'`
+     * (Jev off/failed) by the pass itself. `rate_axis` treats `'pending'` as
+     * retryable, `'ready'` as prose-only, and `'unavailable'`/null as the
+     * pre-Jev contract. Durable per invariant 1; `resumePending()` un-strands
+     * a leftover `'pending'`.
+     */
+    axisAdvisoryState: text("axis_advisory_state").$type<AxisAdvisoryState>(),
     /**
      * Phase C output: final "Overall Sentiment" paragraph. Nullable until
      * Phase C completes. Written by `set_sentiment` MCP tool.

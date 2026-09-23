@@ -177,6 +177,13 @@ export interface PrCommit {
   readonly date: string | null;
 }
 
+/** Per-PR diff size, as returned by {@link GitHubGatewayFlatService.listPrDiffStats}. */
+export interface PrDiffStats {
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
 interface GitHubGatewayFlatService {
   readonly listPrs: (
     repoFullName: string,
@@ -190,6 +197,25 @@ interface GitHubGatewayFlatService {
     token: string,
     apiBase?: string,
   ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * Diff size for many PRs of one repo, keyed by PR number.
+   *
+   * {@link listPrs} can't supply this: the list endpoint's simple PR object
+   * omits `additions`/`deletions`/`changed_files`. One aliased GraphQL
+   * request per 100 PRs, on GraphQL's separate budget, instead of one REST
+   * detail fetch per PR.
+   *
+   * Best-effort: GitHub returns partial data plus per-alias errors, so a
+   * deleted/inaccessible PR is simply absent from the map. Treat absence as
+   * "unknown", never zero — see the `changed_files > 0` guard in
+   * `PullRequestService.upsertPrs`.
+   */
+  readonly listPrDiffStats: (
+    repoFullName: string,
+    prNumbers: readonly number[],
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Map<number, PrDiffStats>, GitHubError, SettingsService>;
   /**
    * Find PR numbers closed (or merged) in a time window via GitHub's
    * issue-search API. Used by the recap pipeline to discover PRs that
@@ -622,6 +648,69 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         apiBase,
       );
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
+    }).pipe(retryTransient),
+
+  listPrDiffStats: (repoFullName, prNumbers, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const result = new Map<number, PrDiffStats>();
+      if (prNumbers.length === 0) return result;
+
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+
+      // Each aliased node is 3 scalar fields, well below GitHub's node budget;
+      // 100 also keeps the request body comfortable on GHE.
+      const CHUNK_SIZE = 100;
+      for (let start = 0; start < prNumbers.length; start += CHUNK_SIZE) {
+        const chunk = prNumbers.slice(start, start + CHUNK_SIZE);
+        const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
+        const fields = chunk
+          .map((_, i) => `p${i}: pullRequest(number: $n${i}) { additions deletions changedFiles }`)
+          .join("\n");
+        const variables: Record<string, string | number> = { owner, name: repo };
+        chunk.forEach((n, i) => {
+          variables[`n${i}`] = n;
+        });
+
+        const query = `query PrDiffStats($owner: String!, $name: String!, ${argDefs}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`;
+
+        // Direct fetch, not the shared GraphQL helper (same reason as
+        // `getOpenPrCounts`): the helper rejects on any error entry, but one
+        // unreachable PR shouldn't cost the other 99 their stats.
+        const response = yield* Effect.tryPromise({
+          try: async () => {
+            const res = await fetch(`${apiBase}/graphql`, {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify({ query, variables }),
+            });
+            assertGitHubOk(res, "/graphql");
+            return (await res.json()) as {
+              data?: { repository?: Record<string, PrDiffStats | null> | null };
+            };
+          },
+          catch: toGitHubError,
+        });
+
+        const repository = response.data?.repository;
+        if (!repository) continue;
+        chunk.forEach((n, i) => {
+          const node = repository[`p${i}`];
+          if (node) {
+            result.set(n, {
+              additions: node.additions,
+              deletions: node.deletions,
+              changedFiles: node.changedFiles,
+            });
+          }
+        });
+      }
+
+      return result;
     }).pipe(retryTransient),
 
   searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token, explicitApiBase) =>
@@ -1567,6 +1656,7 @@ export interface GitHubGatewayService {
   readonly prs: {
     readonly listOpen: GitHubGatewayFlat["listPrs"];
     readonly get: GitHubGatewayFlat["getPr"];
+    readonly diffStats: GitHubGatewayFlat["listPrDiffStats"];
     readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
     readonly meta: GitHubGatewayFlat["getPrMeta"];
     readonly files: GitHubGatewayFlat["getPrFiles"];
@@ -1620,6 +1710,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   prs: {
     listOpen: githubGatewayFlat.listPrs,
     get: githubGatewayFlat.getPr,
+    diffStats: githubGatewayFlat.listPrDiffStats,
     searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,
     meta: githubGatewayFlat.getPrMeta,
     files: githubGatewayFlat.getPrFiles,

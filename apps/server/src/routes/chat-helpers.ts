@@ -7,11 +7,12 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChatSessionContext } from "@revv/shared";
+import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
+import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
-import { applyAcpAgentOverride } from "../ai/acp/presets";
+import { applyAcpAgentOverride, resolveGenerationModel } from "../ai/acp/presets";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
@@ -27,6 +28,18 @@ import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * The model half of a chat session's identity key `(prId, agent, model, headSha)`.
+ *
+ * Goes through {@link resolveGenerationModel}, never raw `settings.aiModel`:
+ * that may hold {@link AUTO_SENTINEL}, which chat can't size (no PR sizing
+ * pass), so it resolves to the agent's default instead. Every chat-session
+ * lookup must use this or it misses its own session and starts a fresh one.
+ */
+export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
+  return resolveGenerationModel(agent, aiModel) ?? getAcpAgentDefaultModel(agent);
+}
 
 /**
  * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
@@ -68,7 +81,7 @@ export const resolveChatReadContext = (
 
     const settings = yield* settingsService.getSettings();
     const agent = yield* settingsService.resolveChatAgentId();
-    const model = settings.aiModel;
+    const model = chatSessionModel(agent, settings.aiModel);
 
     // No head SHA → no session can match (rows are keyed on it), so skip the
     // lookup. Otherwise a null row means a fresh start (e.g. the user just
@@ -191,9 +204,8 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
 
     // Capabilities + slash commands from the agent connection.
     const config = {
-      model: settings.aiModel ?? undefined,
-      thinkingEffort: settings.aiThinkingEffort ?? undefined,
-      contextWindow: settings.aiContextWindow ?? undefined,
+      model: resolveGenerationModel(acpAgent, settings.aiModel),
+      thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
     };
     const handle = yield* Effect.promise(() =>
       warm

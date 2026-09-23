@@ -4,8 +4,10 @@
 // agent run makes, including resumes.
 
 import type {
+  Confidence,
   RatingAxis,
   RiskLevel,
+  Verdict,
   WalkthroughBlock,
   WalkthroughPipelinePhase,
   WalkthroughState,
@@ -69,7 +71,12 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     .all();
 
   const ratingRows = ctx.db
-    .select({ axis: walkthroughRatings.axis })
+    .select({
+      axis: walkthroughRatings.axis,
+      rationale: walkthroughRatings.rationale,
+      verdict: walkthroughRatings.verdict,
+      confidence: walkthroughRatings.confidence,
+    })
     .from(walkthroughRatings)
     .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
     .all();
@@ -223,7 +230,23 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     sentiment: row.sentiment ?? null,
     semanticSteps,
     diffSteps,
-    ratedAxes: ratingRows.map((r) => r.axis as RatingAxis),
+    axisAdvisoryState: row.axisAdvisoryState,
+    // Only axes with agent-written prose count as rated — the verdict pass
+    // pre-seeds empty rows, which would otherwise look like Phase D was done.
+    ratedAxes: ratingRows
+      .filter((r) => r.rationale.trim().length > 0)
+      .map((r) => r.axis as RatingAxis),
+    // Exposes the verdicts themselves, not just that they exist — otherwise
+    // the agent would write a rationale for a verdict it picked itself,
+    // which the handler then overwrites.
+    assignedVerdicts:
+      row.axisAdvisoryState === "ready"
+        ? ratingRows.map((r) => ({
+            axis: r.axis as RatingAxis,
+            verdict: r.verdict as Verdict,
+            confidence: r.confidence as Confidence,
+          }))
+        : null,
     issues,
     issueCount: issues.length,
     issuesNeedingInlineComment,
@@ -237,7 +260,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   const stateJson = JSON.stringify(state);
   const text =
     issuesNeedingInlineComment.length > 0
-      ? `WARNING: ${issuesNeedingInlineComment.length} line-anchored issue(s) at severity 'warning' or 'critical' have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
+      ? `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
       : stateJson;
 
   return {

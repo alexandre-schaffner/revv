@@ -13,6 +13,7 @@ import { TokenProvider, TokenProviderLive } from "./TokenProvider";
 
 function makeFakeStore(initial?: Record<string, TokenPair>) {
   const map = new Map<string, TokenPair>(Object.entries(initial ?? {}));
+  const secrets = new Map<string, string>();
   const layer = Layer.succeed(SecretStore, {
     setTokens: (id: string, tokens: TokenPair) =>
       Effect.sync(() => {
@@ -23,8 +24,17 @@ function makeFakeStore(initial?: Record<string, TokenPair>) {
       Effect.sync(() => {
         map.delete(id);
       }),
+    setSecret: (key: string, value: string) =>
+      Effect.sync(() => {
+        secrets.set(key, value);
+      }),
+    getSecret: (key: string) => Effect.sync(() => secrets.get(key) ?? null),
+    deleteSecret: (key: string) =>
+      Effect.sync(() => {
+        secrets.delete(key);
+      }),
   });
-  return { layer, map };
+  return { layer, map, secrets };
 }
 
 function makeFakeHub() {

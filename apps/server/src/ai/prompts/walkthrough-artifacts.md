@@ -6,6 +6,8 @@ An `artifact` block is a small interactive HTML island rendered inline in the wa
 
 Before writing any HTML, answer these three. If any answer is weak, drop the artifact and write a numbered markdown list instead.
 
+These three are also checked when you submit the block, and a block that misses two of them is refused with the clauses that failed named. Treat a refusal as the answer to a question you should have asked yourself first: either find the state that actually changes and build the widget around varying it, or send the same content as `markdown`. Rewriting the same non-artifact with more HTML will be refused again.
+
 1. **What state changes?** Name the concrete values the reader watches move: a permission set, a queue, a cursor, a lock, a cache entry, a flag, a row count. "The next line of the trace appears" is **not** state. An artifact whose only behaviour is un-dimming the next line of a list is a list — write it as one.
 2. **What can the reader vary?** There must be at least one input that changes the outcome — the proposed guard on/off, the before/after implementation, the concurrent-vs-sequential ordering, the empty/typical/pathological input. A trace with a single possible path is a list.
 3. **What is the payoff?** Running the interaction to the end must produce a conclusion the reader could not read off the code: where it breaks, which branch wins, what value is wrong. If the payoff is already stated in the annotation, the artifact adds nothing.

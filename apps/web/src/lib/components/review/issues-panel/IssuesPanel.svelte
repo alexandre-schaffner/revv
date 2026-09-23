@@ -15,6 +15,7 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
 import IssueSummaryBar from "./IssueSummaryBar.svelte";
@@ -22,6 +23,8 @@ import IssueTestRow from "./IssueTestRow.svelte";
 
 interface Props {
   issues: readonly WalkthroughIssue[];
+  /** Issues rated low signal. Read-only, behind a disclosure, outside the selection model — select-all must never post something the reader didn't see. */
+  filteredIssues?: readonly WalkthroughIssue[];
   /** Selected-for-submit set — lives in RequestChanges so it survives
    *  remounts and persists across PR switches. Passed in so this
    *  panel stays stateless w.r.t. that data. */
@@ -37,6 +40,7 @@ interface Props {
 
 let {
   issues,
+  filteredIssues = [],
   selectedIds,
   submittedIds,
   onToggleSelect,
@@ -209,7 +213,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
 }
 </script>
 
-{#if issues.length > 0}
+{#if issues.length > 0 || filteredIssues.length > 0}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section
         class="issues-panel"
@@ -258,6 +262,29 @@ function onPanelKeydown(e: KeyboardEvent): void {
                 {/each}
             </div>
         {/if}
+
+        {#if filteredIssues.length > 0}
+            <div class="low-signal-slot">
+                <LowSignalDisclosure count={filteredIssues.length}>
+                    <div class="issue-rows" role="list">
+                        {#each filteredIssues as issue, i (issue.id)}
+                            <IssueTestRow
+                                {issue}
+                                selected={false}
+                                submitted={true}
+                                open={isRowOpen(issue.id)}
+                                index={i}
+                                onToggleSelect={() => {}}
+                                onToggleOpen={() => toggleRow(issue.id)}
+                                {onFileClick}
+                                {blocks}
+                                {onBlockJump}
+                            />
+                        {/each}
+                    </div>
+                </LowSignalDisclosure>
+            </div>
+        {/if}
     </section>
 {:else}
     <section class="issues-panel issues-panel--empty" aria-label="Walkthrough issues">
@@ -266,6 +293,11 @@ function onPanelKeydown(e: KeyboardEvent): void {
 {/if}
 
 <style>
+    .low-signal-slot {
+        border-top: 1px solid var(--color-border);
+        padding: 4px 6px 6px;
+    }
+
     .issues-panel {
         display: flex;
         flex-direction: column;

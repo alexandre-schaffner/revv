@@ -63,6 +63,8 @@ export interface WalkthroughEntry {
   blocks: WalkthroughBlock[];
   summary: string | null;
   riskLevel: RiskLevel | null;
+  /** Model the run actually launched with; null until a walkthrough has started. Lets the selector name what "Auto" resolved to. */
+  modelUsed: string | null;
   sentiment: string | null;
   lastCompletedPhase: WalkthroughPipelinePhase;
   isStreaming: boolean;
@@ -168,6 +170,7 @@ export function freshEntry(): WalkthroughEntry {
     blocks: [],
     summary: null,
     riskLevel: null,
+    modelUsed: null,
     sentiment: null,
     lastCompletedPhase: "none",
     isStreaming: true,
@@ -302,6 +305,10 @@ export function getSummary(): string | null {
 export function getRiskLevel(): RiskLevel | null {
   return _active?.riskLevel ?? null;
 }
+/** Model the active PR's latest walkthrough launched with, if any has. */
+export function getWalkthroughModelUsed(): string | null {
+  return _active?.modelUsed ?? null;
+}
 export function getIsStreaming(): boolean {
   return _active?.isStreaming ?? false;
 }
@@ -350,23 +357,6 @@ export function getSentiment(): string | null {
 }
 export function getLastCompletedPhase(): WalkthroughPipelinePhase {
   return _active?.lastCompletedPhase ?? "none";
-}
-export function getIsSuperseded(): boolean {
-  return _active?.superseded ?? false;
-}
-
-export function markWalkthroughStale(prId: string): void {
-  // Called from a `$effect` (AppShell's new-commit watcher). The early return
-  // leaves the cloned entry untouched, so `updateEntry`'s no-op dirty-check
-  // skips the `store.entries` write — that is what stops the effect from
-  // re-invalidating on its own output (`effect_update_depth_exceeded`).
-  updateEntry(prId, (entry) => {
-    if (!entry.doneReceived || entry.superseded) return;
-    entry.superseded = true;
-    entry.isStreaming = false;
-    entry.liveGeneration = false;
-    entry.streamError = null;
-  });
 }
 export function getSource(): "local" | "remote" {
   return _active?.source ?? "local";
@@ -750,6 +740,9 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         case "lifecycle:started":
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
+          // Present only when the orchestrator assigned the tier at job start.
+          if (event.data.riskLevel) entry.riskLevel = event.data.riskLevel;
+          if (event.data.modelUsed) entry.modelUsed = event.data.modelUsed;
           entry.isStreaming = true;
           entry.doneReceived = false;
           entry.streamError = null;
@@ -1116,6 +1109,8 @@ async function doHydrateFromCache(
       mode?: WalkthroughMode;
       summary: string;
       riskLevel: RiskLevel;
+      riskConfidence?: number | null;
+      modelUsed?: string;
       sentiment?: string | null;
       lastCompletedPhase?: WalkthroughPipelinePhase;
       errorMessage?: string | null;
@@ -1184,7 +1179,11 @@ async function doHydrateFromCache(
     // collections. Without this, the snapshot's stale view would clobber
     // chapters the SSE had already delivered.
     entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
-    entry.riskLevel = entry.riskLevel ?? (hasRealSummary ? wt.riskLevel : null);
+    // A generating row with no summary still carries schema default `'low'`;
+    // trust the tier only once the overview or the risk pass has landed.
+    const hasRealRisk = hasRealSummary || wt.riskConfidence != null;
+    entry.riskLevel = entry.riskLevel ?? (hasRealRisk ? wt.riskLevel : null);
+    entry.modelUsed = entry.modelUsed ?? wt.modelUsed ?? null;
     entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
 
     const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");

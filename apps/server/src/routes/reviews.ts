@@ -21,6 +21,7 @@ import {
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
 import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
+import { getWalkthroughSizingHandler } from "./reviews/handlers/walkthrough-sizing";
 
 /**
  * Review routes — thin Elysia router. Handler bodies live in
@@ -272,6 +273,16 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         ctx.session.user.id,
         coerceWalkthroughMode(ctx.query.mode),
       );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // Sizes the PR ahead of generation (risk tier, "Auto" model pick). Shares
+  // its cached answer with the generation path — same TypeSafe call, moved earlier.
+  .get("/:id/walkthrough/sizing", async (ctx) => {
+    try {
+      return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);
     } catch (e) {
       return handleAppError(e, ctx);
     }

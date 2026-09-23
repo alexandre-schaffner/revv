@@ -1,4 +1,4 @@
-import type { WalkthroughIssue } from "@revv/shared";
+import type { UserSettings, WalkthroughIssue } from "@revv/shared";
 
 export type IssueSeverity = WalkthroughIssue["severity"];
 
@@ -76,4 +76,37 @@ export function groupIssuesBySeverityWithIndex(
     label: group.label,
     issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
   }));
+}
+
+export interface SignalPartition {
+  /** Issues to render. Everything unscored lands here. */
+  shown: WalkthroughIssue[];
+  /** Issues collapsed behind the "show N filtered" disclosure. */
+  filtered: WalkthroughIssue[];
+}
+
+/**
+ * Split issues into what to show and what to tuck away. `lowSignal` is
+ * computed server-side so every surface agrees without re-deriving a
+ * threshold. An unscored issue (pre-feature walkthrough, cache-imported,
+ * scoring pass off) is never low signal. A submitted issue is never hidden —
+ * it's already on GitHub.
+ */
+export function partitionBySignal(
+  issues: readonly WalkthroughIssue[],
+  opts: { hideLowSignal: boolean },
+): SignalPartition {
+  if (!opts.hideLowSignal) return { shown: [...issues], filtered: [] };
+  const shown: WalkthroughIssue[] = [];
+  const filtered: WalkthroughIssue[] = [];
+  for (const issue of issues) {
+    if (issue.lowSignal === true && issue.submittedAt === undefined) filtered.push(issue);
+    else shown.push(issue);
+  }
+  return { shown, filtered };
+}
+
+/** `hideLowSignal` only applies while scoring is on, so turning scoring off restores the full list. */
+export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
+  return (settings?.jev.issueScoring ?? false) && (settings?.jev.hideLowSignal ?? true);
 }

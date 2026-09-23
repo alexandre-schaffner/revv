@@ -37,8 +37,6 @@ export interface AcpAgentCapabilities {
    * itself has no model protocol, so static catalogs are curated per agent.
    */
   readonly models: readonly AcpAgentModel[] | "dynamic";
-  /** Whether the 200K / 1M context-window control applies (Claude Code only). */
-  readonly contextWindow: boolean;
   /** Thinking-effort tiers offered; empty = no thinking-effort control. */
   readonly thinkingEfforts: readonly ThinkingEffort[];
   /**
@@ -118,7 +116,6 @@ export const ACP_AGENTS = [
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
-      contextWindow: true,
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
       // retained for existing settings and is mapped to `max` at launch.
       thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
@@ -148,7 +145,6 @@ export const ACP_AGENTS = [
       // opencode exposes 75+ models across providers; fetched live via the
       // server's `opencode models` parse rather than curated here.
       models: "dynamic",
-      contextWindow: false,
       thinkingEfforts: [],
       // opencode ships a read-only `plan` agent, selected via the session's
       // advertised modes.
@@ -173,7 +169,6 @@ export const ACP_AGENTS = [
         { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
         { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
       ],
-      contextWindow: false,
       // The GPT-5.6 family supports the existing selector's xhigh-or-below
       // ladder. The adapter also supports newer tiers; keep those out of this
       // shared setting until the UI can model each model's distinct limits.
@@ -209,7 +204,6 @@ export const ACP_AGENTS = [
         { label: "Grok 4.6", value: "grok-4.6" },
         { label: "Grok 4.5", value: "grok-4.5" },
       ],
-      contextWindow: false,
       thinkingEfforts: [],
       // Cursor degrades generically over ACP (no resume, no MCP tools) and
       // advertises no read-only/plan mode.
@@ -241,6 +235,46 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
 /** Revv's persisted-model default for an ACP agent. */
 export function getAcpAgentDefaultModel(id: AcpAgentId): string {
   return getAcpAgent(id).capabilities.defaultModel;
+}
+
+/**
+ * Stored in `aiModel` or `aiThinkingEffort` to mean "don't pin one — size the
+ * PR and pick". Only consulted when the TypeSafe auto-model toggle is on.
+ *
+ * Namespaced because plain `"auto"` is already taken by `cursor`'s own model.
+ * One constant for both fields since the two are independent opt-ins but a
+ * shared value is one fewer thing to get wrong.
+ *
+ * Absent from every agent's `capabilities.models` / `.thinkingEfforts`.
+ * {@link resolveGenerationModel} and {@link resolveThinkingEffort} are the
+ * arbiters that collapse it to "unpinned" — every launch path must go
+ * through one of them, or a raw `settings.aiModel` reaches the agent adapter
+ * as `"revv:auto"` and the launch fails.
+ */
+export const AUTO_SENTINEL = "revv:auto";
+
+export type AutoSentinel = typeof AUTO_SENTINEL;
+
+/** Type predicate, not a plain `boolean`, so a false branch narrows {@link ThinkingEffortSetting} to {@link ThinkingEffort} without a cast. */
+export function isAutoSentinel(value: string | null | undefined): value is AutoSentinel {
+  return value === AUTO_SENTINEL;
+}
+
+export type ThinkingEffortSetting = ThinkingEffort | AutoSentinel;
+
+/**
+ * Resolve the stored effort setting into a concrete tier for a launch.
+ * `undefined` means "let the agent use its own default" — what Auto resolves
+ * to wherever there's no sizing answer (chat, recap, suggestions). Only
+ * walkthrough generation sizes the PR, so only it passes a `sized` value.
+ */
+export function resolveThinkingEffort(
+  setting: ThinkingEffortSetting | null | undefined,
+  sized?: ThinkingEffort | null,
+): ThinkingEffort | undefined {
+  if (setting === null || setting === undefined) return undefined;
+  if (isAutoSentinel(setting)) return sized ?? undefined;
+  return setting;
 }
 
 /**

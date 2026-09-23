@@ -4,6 +4,7 @@ import {
   type CommentThread,
   guessImageContentType,
   PR_DIFF_RENDER_OPTIONS,
+  resolveThinkingEffort,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -788,8 +789,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
           acpAgentId,
           cwd: process.cwd(),
           model,
-          thinkingEffort: settings.aiThinkingEffort,
-          contextWindow: settings.aiContextWindow,
+          thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
         }),
       // Provider has its own internal fallback; this catch is
       // belt-and-suspenders for the rare case where the Promise

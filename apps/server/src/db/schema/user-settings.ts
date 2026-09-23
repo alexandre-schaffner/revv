@@ -10,7 +10,6 @@ export const userSettings = sqliteTable("user_settings", {
   aiModel: text("ai_model").notNull(),
   aiThinkingEffort: text("ai_thinking_effort").notNull(),
   aiAgent: text("ai_agent").notNull(),
-  aiContextWindow: text("ai_context_window").notNull(),
   aiSuggestionsModel: text("ai_suggestions_model").notNull(),
   aiMaxTurns: integer("ai_max_turns").notNull(),
   theme: text("theme").notNull(),
@@ -70,5 +69,21 @@ export const userSettings = sqliteTable("user_settings", {
   cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
   /** JSON-encoded `string[]` of trusted GitHub hosts. */
   cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
+  // ── TypeSafe System One (Jev) ────────────────────────────────────────────
+  // Per-feature toggles, all default-off. API key lives in the keyring
+  // (`secret:jev-api-key`), not here — this row feeds the unauthenticated `GET /api/settings` DTO.
+  jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
+  jevAutoModel: integer("jev_auto_model", { mode: "boolean" }).notNull().default(false),
+  jevRisk: integer("jev_risk", { mode: "boolean" }).notNull().default(false),
+  jevVerdicts: integer("jev_verdicts", { mode: "boolean" }).notNull().default(false),
+  jevIssueScoring: integer("jev_issue_scoring", { mode: "boolean" }).notNull().default(false),
+  jevIssueSeverity: integer("jev_issue_severity", { mode: "boolean" }).notNull().default(false),
+  jevFilePriority: integer("jev_file_priority", { mode: "boolean" }).notNull().default(false),
+  jevArtifactQuality: integer("jev_artifact_quality", { mode: "boolean" }).notNull().default(false),
+  jevProseVoice: integer("jev_prose_voice", { mode: "boolean" }).notNull().default(false),
+  jevHideLowSignal: integer("jev_hide_low_signal", { mode: "boolean" }).notNull().default(true),
+  jevAdjudicateContinuations: integer("jev_adjudicate_continuations", { mode: "boolean" })
+    .notNull()
+    .default(false),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

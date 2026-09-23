@@ -4,7 +4,9 @@ import { eq, inArray } from "drizzle-orm";
 import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { account, user } from "../db/schema/auth";
+import { pullRequests } from "../db/schema/pull-requests";
 import {
+  DbError,
   GitHubAccessDeniedError,
   GitHubAuthError,
   type GitHubError,
@@ -22,6 +24,7 @@ import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost, githubFetch } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
+import { needsDiffStats } from "./pr-diff-stats";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
 import { RemoteUserService } from "./RemoteUser";
 import { RepoCloneService } from "./RepoClone";
@@ -433,6 +436,18 @@ export const PollSchedulerLive = Layer.effect(
           // produced anything worth broadcasting at all.
           const existingPrs = yield* withDb(prService.listPrs());
           const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
+          const diffStatsHeadRows = yield* Effect.try({
+            try: () =>
+              db
+                .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
+                .from(pullRequests)
+                .all(),
+            catch: (cause) =>
+              new DbError({ message: "Failed to read PR diff-stat watermarks", cause }),
+          });
+          const diffStatsHeadByPrId = new Map(
+            diffStatsHeadRows.map((row) => [row.id, row.headSha]),
+          );
 
           // ── Refresh repo metadata (avatar URL, default branch) ────────────────
           // Bypasses the ETag cache — some GitHub Enterprise instances return
@@ -653,21 +668,83 @@ export const PollSchedulerLive = Layer.effect(
                   });
                 }
 
-                // Don't let a lagging list body rewind a head we already know
-                // about — see `preserveHeadOnStaleRead`. Masking happens here,
-                // before the write, because the supersede gate further down
-                // fires on the *stored* row and a regressed `updated_at` would
-                // make it pass on the very next cycle.
-                const rows = prs.map((pr) => preserveHeadOnStaleRead(existingMap.get(pr.id), pr));
+                // `listOpen` returns GitHub's *simple* PR object (no diff size, hence 0/0/0
+                // above); one aliased GraphQL request fills it in — see `listPrDiffStats`
+                // for why not one detail fetch per PR. Only requested for PRs never sized
+                // or whose head just moved, so steady state adds no extra request.
+                //
+                // Mask before sizing/writing: sizing a stale head would persist stats over
+                // a newer stored row, and the supersede gate below reads the stored row, so
+                // a regressed `updated_at` would pass on the next cycle. See `preserveHeadOnStaleRead`.
+                const maskedPrs = prs.map((pr) =>
+                  preserveHeadOnStaleRead(existingMap.get(pr.id), pr),
+                );
+                const needsStats = maskedPrs.filter((pr) => {
+                  const existing = existingMap.get(pr.id);
+                  return needsDiffStats(existing, diffStatsHeadByPrId.get(pr.id), pr.headSha);
+                });
 
-                yield* withDb(prService.upsertPrs(rows)).pipe(
+                // Best-effort: on failure, rows keep their zeros and `upsertPrs`'
+                // `changed_files > 0` guard leaves the DB's existing values intact.
+                const diffStats =
+                  needsStats.length === 0
+                    ? null
+                    : yield* tryGuarded(
+                        live.acc,
+                        github.prs.diffStats(
+                          repo.fullName,
+                          needsStats.map((pr) => pr.externalId),
+                          live.token,
+                          apiBaseForHost(repo.githubHost),
+                        ),
+                        { errorLabel: `diffStats error for ${repo.fullName}` },
+                      );
+
+                const rows = maskedPrs.map((pr) => {
+                  const stats = diffStats?.get(pr.externalId);
+                  return stats === undefined ? pr : { ...pr, ...stats };
+                });
+
+                const upserted = yield* withDb(prService.upsertPrs(rows)).pipe(
+                  Effect.as(true),
                   Effect.tapError((err) =>
                     Effect.sync(() => {
                       logError("PollScheduler", `upsertPrs error for ${repo.fullName}:`, err);
                     }),
                   ),
-                  Effect.orElseSucceed(() => undefined),
+                  Effect.orElseSucceed(() => false),
                 );
+
+                if (upserted && diffStats !== null) {
+                  yield* Effect.try({
+                    try: () =>
+                      db.transaction(() => {
+                        for (const pr of needsStats) {
+                          const stats = diffStats.get(pr.externalId);
+                          if (stats === undefined) continue;
+                          db.update(pullRequests)
+                            .set({
+                              additions: stats.additions,
+                              deletions: stats.deletions,
+                              changedFiles: stats.changedFiles,
+                              diffStatsHeadSha: pr.headSha,
+                            })
+                            .where(eq(pullRequests.id, pr.id))
+                            .run();
+                          diffStatsHeadByPrId.set(pr.id, pr.headSha);
+                        }
+                      }),
+                    catch: (cause) =>
+                      new DbError({ message: "Failed to persist PR diff-stat watermarks", cause }),
+                  }).pipe(
+                    Effect.tapError((error) =>
+                      Effect.sync(() => {
+                        logError("PollScheduler", "diff-stat watermark write failed:", error);
+                      }),
+                    ),
+                    Effect.orElseSucceed(() => undefined),
+                  );
+                }
 
                 // The masked rows, not the raw payload: everything downstream
                 // (the supersede gate, the change detection, the broadcast)

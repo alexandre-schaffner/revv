@@ -156,13 +156,7 @@ interface ConnectionEntry {
 const pool = new Map<string, Promise<ConnectionEntry>>();
 
 function poolKey(cwd: string, agent: AcpAgentId, config: AcpLaunchConfig): string {
-  return [
-    agent,
-    config.model ?? "",
-    config.thinkingEffort ?? "",
-    config.contextWindow ?? "",
-    cwd,
-  ].join("\0");
+  return [agent, config.model ?? "", config.thinkingEffort ?? "", cwd].join("\0");
 }
 
 function buildClient(entry: () => ConnectionEntry): Client {

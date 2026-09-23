@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { walkthroughs } from "./walkthroughs";
 
 export const walkthroughIssues = sqliteTable("walkthrough_issues", {
@@ -19,4 +19,10 @@ export const walkthroughIssues = sqliteTable("walkthrough_issues", {
   // via the Request Changes flow. Null = not yet sent. Used to persist the
   // "already submitted" treatment (grayed-out, unselectable) across sessions.
   submittedAt: text("submitted_at"),
+  // ── Orchestrator advisory scoring (Jev) ───────────────────────────────
+  // Local judgments, excluded from `exportWalkthroughSnapshot` and the transport-stable cache payload.
+  /** Composite signal score in [0,1]. Null = never scored. */
+  advisoryScore: real("advisory_score"),
+  /** ISO 8601 timestamp of the scoring pass that wrote `advisoryScore`. */
+  advisoryScoredAt: text("advisory_scored_at"),
 });

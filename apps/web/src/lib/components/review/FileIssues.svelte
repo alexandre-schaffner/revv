@@ -1,8 +1,13 @@
 <script lang="ts">
 import IssueCard from "$lib/components/walkthrough/IssueCard.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { getIssuesForFile } from "$lib/stores/walkthrough.svelte";
-import { groupIssuesBySeverity } from "$lib/utils/walkthrough-issues";
+import {
+  groupIssuesBySeverity,
+  partitionBySignal,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
 
 interface Props {
   filePath: string;
@@ -10,7 +15,13 @@ interface Props {
 
 let { filePath }: Props = $props();
 
-const issues = $derived(getIssuesForFile(filePath));
+// No disclosure here: an expander per file would out-weigh the rows it
+// hides. Filtered issues stay reachable via the walkthrough and RC panel.
+const issues = $derived(
+  partitionBySignal(getIssuesForFile(filePath), {
+    hideLowSignal: shouldHideLowSignal(getSettings()),
+  }).shown,
+);
 const issueGroups = $derived(groupIssuesBySeverity(issues));
 </script>
 

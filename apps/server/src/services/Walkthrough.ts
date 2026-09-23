@@ -41,6 +41,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { isLowSignalScore } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -95,7 +96,22 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
     details: row.details,
     citations,
     blockIds,
+    verdictSource: row.verdictSource,
+    disputed: row.disputed,
   };
+}
+
+/** A seeded-but-unwritten rating row has no prose yet; exclude it so it doesn't render as a blank scorecard card. */
+function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
+  return row.rationale.trim().length > 0;
+}
+
+/** Absent (not null) when unscored, so `exactOptionalPropertyTypes` keeps "never scored" from reading as low signal. */
+function advisoryFields(
+  advisoryScore: number | null,
+): Pick<WalkthroughIssue, "advisoryScore" | "lowSignal"> | Record<string, never> {
+  if (advisoryScore === null) return {};
+  return { advisoryScore, lowSignal: isLowSignalScore(advisoryScore) };
 }
 
 function rowToWalkthrough(
@@ -140,12 +156,14 @@ function rowToWalkthrough(
         ...(i.startLine !== null ? { startLine: i.startLine } : {}),
         ...(i.endLine !== null ? { endLine: i.endLine } : {}),
         ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+        ...advisoryFields(i.advisoryScore),
       };
     });
 
   // Ratings are ordered by insertion (createdAt) so the grid receives them
   // in arrival order. The UI re-orders by canonical RATING_AXES for display.
-  const sortedRatings = [...ratings]
+  const sortedRatings = ratings
+    .filter(hasRationale)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map(rowToRating);
 
@@ -189,6 +207,7 @@ function rowToWalkthrough(
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
     riskLevel: row.riskLevel as RiskLevel,
+    riskConfidence: row.riskConfidence,
     generatedAt: row.generatedAt,
     modelUsed: row.modelUsed,
     tokenUsage: JSON.parse(row.tokenUsage) as WalkthroughTokenUsage,
@@ -358,6 +377,13 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       parentWalkthroughId?: string | null;
       baseHeadSha?: string | null;
       forceNew?: boolean;
+      /**
+       * Orchestrator-assigned risk tier (invariant 2's carve-out). Passed at
+       * insert, not a follow-up UPDATE, so no kill-9 window leaves the row
+       * without it. Omitted means the risk pass is off/unavailable; row
+       * keeps the `'low'` default and the agent judges the tier itself.
+       */
+      risk?: { readonly level: RiskLevel; readonly confidence: number };
     }) => Effect.Effect<string, ReviewError, DbService>;
 
     /**
@@ -699,7 +725,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 pullRequestId: params.prId,
                 summary: "",
                 mode,
-                riskLevel: "low",
+                riskLevel: params.risk?.level ?? "low",
+                riskConfidence: params.risk?.confidence ?? null,
                 sentiment: null,
                 status: "generating",
                 lastCompletedPhase: "none",
@@ -1524,10 +1551,12 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             ...(i.startLine !== null ? { startLine: i.startLine } : {}),
             ...(i.endLine !== null ? { endLine: i.endLine } : {}),
             ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
+            ...advisoryFields(i.advisoryScore),
           };
         });
 
-      const ratings = [...ratingRows]
+      const ratings = ratingRows
+        .filter(hasRationale)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map(rowToRating);
 

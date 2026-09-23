@@ -12,12 +12,12 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
   type AcpAgentId,
-  type ContextWindow,
   clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   isAcpAgentId,
+  isAutoSentinel,
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
@@ -45,7 +45,6 @@ export interface AcpProcessLaunch {
 export interface AcpLaunchConfig {
   readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
 }
 
 export interface AcpProcessEnvOptions {
@@ -156,7 +155,7 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
   const def = getAcpAgent(id);
   const args = [...def.args];
   const env: Record<string, string> = {};
-  const { model, thinkingEffort, contextWindow } = config;
+  const { model, thinkingEffort } = config;
 
   switch (id) {
     case "codex": {
@@ -176,10 +175,8 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     }
     case "claude-code": {
       if (model) env.ANTHROPIC_MODEL = model;
-      // 1M context is on by default in Claude Code; disable it for the 200K tier.
-      if (contextWindow) {
-        env.CLAUDE_CODE_DISABLE_1M_CONTEXT = contextWindow === "1m" ? "false" : "true";
-      }
+      // Revv always runs at Claude Code's own default 1M context, so the
+      // disable flag is never set.
       if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
       break;
     }
@@ -274,15 +271,23 @@ export function resolveAcpProcessLaunchById(
  * resolved agent. Guard against that: if the configured id isn't in the agent's
  * catalog, fall back to that agent's default model. opencode's catalog is
  * dynamic, so configured opencode models are taken on trust.
+ *
+ * Also the arbiter for {@link AUTO_SENTINEL}, collapsed to `undefined` before
+ * the dynamic-catalog branch (which would otherwise forward it verbatim).
+ * `sized` carries a pre-sized model; other callers land on the agent's
+ * default. Route every model-to-agent path through here — never pass raw
+ * `settings.aiModel`.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,
   configuredModel: string | null | undefined,
+  sized?: string | null,
 ): string | undefined {
   const caps = getAgentCapabilities(agent);
-  if (caps.models === "dynamic") return configuredModel ?? getAcpAgentDefaultModel(agent);
-  if (configuredModel && caps.models.some((m) => m.value === configuredModel)) {
-    return configuredModel;
+  const pinned = isAutoSentinel(configuredModel) ? (sized ?? null) : configuredModel;
+  if (caps.models === "dynamic") return pinned ?? getAcpAgentDefaultModel(agent);
+  if (pinned && caps.models.some((m) => m.value === pinned)) {
+    return pinned;
   }
   const defaultModel = getAcpAgentDefaultModel(agent);
   if (caps.models.some((m) => m.value === defaultModel)) return defaultModel;

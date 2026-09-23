@@ -33,8 +33,8 @@ import {
   getPendingWalkthroughBlockJump,
   getReviewMode,
   jumpToDiffLine,
-  reviewLatestCommit,
 } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
@@ -48,7 +48,6 @@ import {
   getGeneratedBy,
   getIsLiveGeneration,
   getIsStreaming,
-  getIsSuperseded,
   getIssues,
   getLastCompletedPhase,
   getLastWalkthroughEventAt,
@@ -90,8 +89,13 @@ import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
-import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
+import {
+  groupIssuesBySeverityWithIndex,
+  partitionBySignal,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
 import IssueCard from "./IssueCard.svelte";
+import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
@@ -118,7 +122,14 @@ const explorationInputs = $derived(getExplorationInputs());
 const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
-const issues = $derived(getIssues());
+const allIssues = $derived(getIssues());
+// Low-signal issues are split out, not dropped: the count is always
+// rendered and the disclosure holds the rest.
+const issueSignal = $derived(
+  partitionBySignal(allIssues, { hideLowSignal: shouldHideLowSignal(getSettings()) }),
+);
+const issues = $derived(issueSignal.shown);
+const filteredIssues = $derived(issueSignal.filtered);
 const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 const ratings = $derived(getRatings());
 const isLiveGeneration = $derived(getIsLiveGeneration());
@@ -139,8 +150,6 @@ const sentiment = $derived(getSentiment());
 const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : "");
 // Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
 const lastCompletedPhase = $derived(getLastCompletedPhase());
-// Newer commit invalidated this walkthrough mid-render.
-const superseded = $derived(getIsSuperseded());
 // Attribution + cache-source — drives the mono footer (matches the recap
 // detail footer pattern) shown under the walkthrough body. Leads with the
 // originating user when available, falls back to the model name, then trails
@@ -288,7 +297,6 @@ let hydrating = $state(true);
 let hydratedForMode: WalkthroughMode | null = $state(null);
 let lastStreamErrorToast: string | null = null;
 let lastCloneErrorToast: string | null = null;
-let lastSupersededToastPrId: string | null = null;
 
 $effect(() => {
   void loadReviewRounds(prId, selectedMode);
@@ -335,26 +343,6 @@ $effect(() => {
     id: `repo-clone-error-${cloneRepoId ?? prId}`,
     description: cloneError,
     duration: 8000,
-  });
-});
-
-$effect(() => {
-  if (!isActive || !superseded) {
-    if (!superseded) lastSupersededToastPrId = null;
-    return;
-  }
-
-  if (lastSupersededToastPrId === prId) return;
-  lastSupersededToastPrId = prId;
-
-  toast.warning("This walkthrough is outdated", {
-    id: `walkthrough-superseded-${prId}`,
-    description: "The PR has new commits since this review was generated.",
-    action: {
-      label: "Review new commits",
-      onClick: () => reviewLatestCommit(prId, selectedMode),
-    },
-    duration: Number.POSITIVE_INFINITY,
   });
 });
 
@@ -1339,7 +1327,7 @@ function handleResume(): void {
 			     reviewer's eye lands on blockers before nice-to-knows. The overall
 			     "N issues flagged" line is preserved as the section header; each
 			     bucket then carries its own labeled sub-header with a count. -->
-			{#if issues.length > 0}
+			{#if issues.length > 0 || filteredIssues.length > 0}
 				<div
 					class="issues-section"
 					class:issues-section--no-anim={issuesSectionAnimated}
@@ -1395,6 +1383,18 @@ function handleResume(): void {
 							</div>
 						{/each}
 					</div>
+
+					<LowSignalDisclosure count={filteredIssues.length}>
+						{#each filteredIssues as issue (issue.id)}
+							<IssueCard
+								{issue}
+								stepTag={null}
+								noAnim
+								onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+								hideFileBadge={true}
+							/>
+						{/each}
+					</LowSignalDisclosure>
 				</div>
 			{/if}
 

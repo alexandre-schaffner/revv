@@ -162,21 +162,74 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 2. **Agent content writes go through MCP, only.** Orchestrator lifecycle writes stay in
    Elysia and must not be routed through MCP. The MCP *transport* may vary; the *handlers*
    are shared.
+
+   **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
+   computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
+   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence` and
+   `walkthrough_ratings.verdict` / `.verdict_confidence` / `.verdict_source`. These are
+   judgments over a closed set, not prose. **All prose, citations, blocks, issues, steps, and
+   sentiment remain MCP-only.** Growing this list means editing this rule — it is not a
+   general licence for Elysia to write content.
+
+   `walkthrough_issues.advisory_score` / `.advisory_scored_at` are the same kind of judgment
+   but need no carve-out: they are written by the `flag_issue` handler itself, in the same
+   transaction as the row they describe. A judgment a tool handler can make inline belongs
+   in the tool handler — the carve-out is only for judgments the orchestrator has to make
+   outside any tool call.
 3. **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
    Replays are no-ops.
 4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in
    order. Schema enforces it; tool surface enforces it; orchestrator enforces it.
-   - **Phase A — Overview + Risk.** One atomic write: `set_overview(summary, risk_level)`.
-     `last_completed_phase` becomes `'A'`.
+   - **Phase A — Overview.** One atomic write: `set_overview(summary)`.
+     `last_completed_phase` becomes `'A'`. The risk tier is **not** the agent's to set — it
+     is written by the orchestrator at job start (invariant 2's carve-out) and handed to the
+     agent as a given that governs its issue budget and depth.
    - **Phase B — Diff Analysis.** Multi-step. Each step is exactly one atomic write:
      `add_diff_step(step_index, markdown, code_snippet?, annotations?)`. Deterministically
      keyed on `(walkthrough_id, step_index)`. Agent calls one step per call; batching is
      forbidden at the tool-surface level.
+
+     Two Phase-B tools defer to a Jev judgment, in opposite directions:
+
+     `flag_issue` writes its row and returns, then a **background** judgment retracts the
+     concern if it doesn't clear the relevance floor and relabels its severity against a
+     fixed rubric. Non-blocking on purpose — a round trip per concern sat on Phase B's
+     critical path. That makes the issue set eventually consistent during Phase B, which is
+     fine everywhere except two places, both closed in `ai/jev/pending.ts`:
+     `complete_walkthrough` drains every scheduled judgment before it validates anything,
+     and `add_issue_comment` answers a retracted id with an explanatory non-error rather
+     than "unknown issue". A retraction deletes linked `comment_threads` by FK cascade and
+     broadcasts `issue:deleted`; a concern already pushed to GitHub (`submittedAt`) is never
+     touched. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
+     pinned above the floor and can never be retracted. Because severity isn't final when
+     `flag_issue` returns, **every line-anchored concern owes an inline comment**, whatever
+     severity the agent sent.
+
+     `add_diff_step` / `add_semantic_step` hold an `artifact` block to its craft bar
+     **synchronously**, and refuse a block that fails two of the three clauses. A gate that
+     rejects has to answer before the write — a block that appeared and then vanished would
+     leave a hole in the chapter's `step_index` sequence — and artifacts are rare enough
+     that the round trip doesn't matter.
+
+     Both degrade to the pre-Jev behaviour when the judgment is unavailable: an unjudged
+     concern stands as written, an unjudged artifact is accepted. Judgments are cached on
+     content, so a replay stays a no-op (invariant 3).
+     A third hook is purely advisory and gates nothing: a voice check samples the first
+     few markdown blocks in the background and hands its verdict back on a *later*
+     `add_diff_step` result, so the agent can course-correct without any block paying a
+     round trip. Nothing downstream reads it.
+
    - **Phase C — Overall Sentiment.** One atomic write: `set_sentiment(markdown)`.
      Implicitly closes Phase B (requires ≥1 diff step).
    - **Phase D — 9-Axis Rating.** Nine atomic writes via `rate_axis(axis, ...)`. Keyed on
      `(walkthrough_id, axis)` with `onConflictDoUpdate`. `last_completed_phase` becomes
-     `'D'` only when all 9 axes are rated.
+     `'D'` only when all 9 axes carry a non-empty `rationale`. When the orchestrator's
+     verdict pass has run (`walkthroughs.axis_advisory_state = 'ready'`) the nine rows are
+     pre-seeded with a verdict, `get_walkthrough_state` hands the agent the verdicts as
+     `assignedVerdicts`, and `rate_axis` supplies prose only — `verdict` and `confidence`
+     are optional arguments the handler ignores outright. When the pass has not run
+     (`'unavailable'` or NULL) the agent supplies the verdict as before, and `rate_axis`
+     rejects a call that omits it.
 5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,

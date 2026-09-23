@@ -1,15 +1,18 @@
 import type {
   ChatAttachment,
   InteractionMode,
+  RiskLevel,
   WalkthroughMode,
   WalkthroughStreamEvent,
 } from "@revv/shared";
+import { resolveThinkingEffort } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   applyAcpAgentOverride,
   isAcpAgentAvailable,
   resolveGenerationModel,
 } from "../ai/acp/presets";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -146,6 +149,18 @@ export class AiService extends Context.Tag("AiService")<
         callback: (event: WalkthroughStreamEvent) => void,
       ) => Promise<void>;
       unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
+      /**
+       * Per-job model/effort override, resolved once at job start. Absent
+       * uses configured settings. Goes through `resolveGenerationModel` so
+       * an override naming a model this agent can't run falls back safely.
+       */
+      launchOverride?: GenerationLaunchOverride;
+      /** Risk tier already written to the walkthrough row by the orchestrator; present means the prompt states it as a given. */
+      assignedRisk?: RiskLevel;
+      /** Ranked reading order from the job-start pass. See the prompt builder. */
+      filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
+      /** Split recommendation from the job-start pass, when it cleared the floor. */
+      splitRecommendation?: { readonly pieces: number };
     }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
@@ -265,6 +280,9 @@ export const AiServiceLive = Layer.effect(
             const clearToken = params.clearHttpMcpSessionToken;
             const registerNotifier = params.registerHttpMcpActivityNotifier;
             const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+            // Guard against a chat-only agent id left over from the bottom bar (e.g. cursor).
+            const override = params.launchOverride;
+            const model = resolveGenerationModel(agent, override?.model ?? settings.aiModel);
             const raw = streamWalkthroughViaAcp(
               {
                 ...params,
@@ -278,10 +296,14 @@ export const AiServiceLive = Layer.effect(
                   unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
                 },
               },
-              // Guard the shared model against this agent (the chat bottom bar
-              // may have left a chat-only agent's model id, e.g. cursor).
-              resolveGenerationModel(agent, settings.aiModel),
-              settings,
+              {
+                model,
+                // Sized effort for Auto, the user's pin otherwise.
+                thinkingEffort: resolveThinkingEffort(
+                  settings.aiThinkingEffort,
+                  override?.thinkingEffort ?? null,
+                ),
+              },
             );
             return guardWalkthroughStream(raw, {
               label: "walkthrough-acp",
@@ -330,9 +352,8 @@ export const AiServiceLive = Layer.effect(
               cwd: params.cwd,
               onSessionId: params.onSessionId,
               abortController: params.abortController,
-              model: settings.aiModel ?? undefined,
-              thinkingEffort: settings.aiThinkingEffort ?? undefined,
-              contextWindow: settings.aiContextWindow ?? undefined,
+              model: resolveGenerationModel(acpAgentId, settings.aiModel),
+              thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
               acpAgentId,
               deps: {
                 issueChatMcpToken: (args: {
@@ -376,9 +397,8 @@ export const AiServiceLive = Layer.effect(
             cwd: params.cwd,
             onSessionId: undefined,
             abortController: params.abortController,
-            model: settings.aiModel ?? undefined,
-            thinkingEffort: settings.aiThinkingEffort ?? undefined,
-            contextWindow: settings.aiContextWindow ?? undefined,
+            model: resolveGenerationModel(acpAgentId, settings.aiModel),
+            thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
             acpAgentId,
             deps: {
               issueChatMcpToken: (args: {

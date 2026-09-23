@@ -15,12 +15,10 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import Cloud from "phosphor-svelte/lib/Cloud";
 import Cpu from "phosphor-svelte/lib/Cpu";
-import Desktop from "phosphor-svelte/lib/Desktop";
 import Download from "phosphor-svelte/lib/Download";
-import Moon from "phosphor-svelte/lib/Moon";
+import Gauge from "phosphor-svelte/lib/Gauge";
 import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import Sun from "phosphor-svelte/lib/Sun";
 import Trash from "phosphor-svelte/lib/Trash";
 import User from "phosphor-svelte/lib/User";
 import Warning from "phosphor-svelte/lib/Warning";
@@ -56,17 +54,14 @@ import {
   type SettingsSectionId,
 } from "$lib/stores/settingsModal.svelte";
 import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
-import {
   type AgentInstallState,
   agentInstallLog,
   appendAgentInstallLog,
   runAgentInstall,
 } from "$lib/utils/agent-install";
 import { authHeaders } from "$lib/utils/session-token";
+import PreferencesSettingsSection from "./PreferencesSettingsSection.svelte";
+import TypeSafeSettingsSection from "./TypeSafeSettingsSection.svelte";
 import UpdatesSection from "./UpdatesSection.svelte";
 import "./settings-layout.css";
 
@@ -91,6 +86,7 @@ const navItems: NavItem[] = [
   { id: "ai", label: "AI Configuration", icon: Cpu },
   { id: "recap", label: "Project Recap", icon: CalendarDots },
   { id: "cache", label: "Team Cache", icon: Cloud },
+  { id: "jev", label: "TypeSafe", icon: Gauge },
   { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
   { id: "onboarding", label: "Onboarding", icon: ArrowCounterClockwise },
   { id: "updates", label: "Updates", icon: Download },
@@ -308,16 +304,6 @@ let _userAvatarFailedForUrl = $state<string | null>(null);
 const userAvatarFailed = $derived(
   _userAvatarFailedForUrl !== null && _userAvatarFailedForUrl === (getUser()?.image ?? null),
 );
-
-// ── Sync interval options ─────────────────────────────────────────────────
-const intervalOptions = [
-  { label: "Disabled", value: 0 },
-  { label: "1 minute", value: 1 },
-  { label: "5 minutes", value: 5 },
-  { label: "10 minutes", value: 10 },
-  { label: "15 minutes", value: 15 },
-  { label: "30 minutes", value: 30 },
-];
 
 // ── AI Configuration ──────────────────────────────────────────────────────
 let aiConfigured = $state(false);
@@ -577,14 +563,6 @@ async function handleRemoveAccount(): Promise<void> {
     deleting = false;
   }
 }
-
-// ── Theme options ────────────────────────────────────────────────────────
-
-const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "system", label: "System", icon: Desktop },
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-];
 </script>
 
 <DialogPrimitive.Root
@@ -832,8 +810,8 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 					{/if}
 				</div>
 
-				<!-- Suggestions model (agent, review model, context window, and thinking
-				     effort are configured from the chat bottom bar). -->
+				<!-- Suggestions model (agent, review model, and thinking effort are
+				     configured from the chat bottom bar). -->
 				<div class="settings-subgroup">
 					<h3 class="settings-subgroup-heading">Models</h3>
 
@@ -1268,64 +1246,9 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
 				</div>
 			</section>
 
-			<!-- Preferences -->
-			<section id="section-preferences" class="settings-section">
-				<h2 class="section-head-title">Preferences</h2>
+				<TypeSafeSettingsSection />
 
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Appearance</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Theme</p>
-							<p class="settings-row-hint">Light, dark, or follow system preference.</p>
-						</div>
-						<div class="flex items-center gap-1 rounded-md border border-border-subtle bg-bg-elevated p-0.5 w-fit">
-							{#each themeOptions as opt (opt.value)}
-								<button
-									type="button"
-									class="flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors"
-									class:bg-bg-primary={getThemePreference() === opt.value}
-									class:text-text-primary={getThemePreference() === opt.value}
-									class:text-text-muted={getThemePreference() !== opt.value}
-									onclick={() => setThemePreference(opt.value)}
-								>
-									<opt.icon size={11} />
-									{opt.label}
-								</button>
-							{/each}
-						</div>
-					</div>
-
-				</div>
-
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Sync</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Sync interval</p>
-							<p class="settings-row-hint">How often Revv polls GitHub for new PRs.</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={String(getSettings()?.autoFetchInterval ?? 5)}
-							onValueChange={(v) => {
-								if (v) void updateSettings({ autoFetchInterval: Number(v) });
-							}}
-						>
-							<Select.Trigger class="w-40 text-xs">
-								{intervalOptions.find((o) => o.value === (getSettings()?.autoFetchInterval ?? 5))?.label ?? '5 minutes'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each intervalOptions as opt (opt.value)}
-									<Select.Item value={String(opt.value)} class="text-xs">{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				</div>
-			</section>
+			<PreferencesSettingsSection />
 
 			<!-- Onboarding -->
 			<section id="section-onboarding" class="settings-section">
