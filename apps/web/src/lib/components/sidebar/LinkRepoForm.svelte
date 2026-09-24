@@ -12,6 +12,7 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { addRepo, getRepositories, retryClone } from "$lib/stores/prs.svelte";
+import { toastAddRepoError } from "./add-repo-toast";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
@@ -87,7 +88,7 @@ async function submit(): Promise<void> {
     await addRepo({ fullName, mode: "link", clonePath: clonePath.trim() });
     linkedFullName = fullName;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to link repository");
+    toastAddRepoError(e, "Failed to link repository");
   } finally {
     adding = false;
   }

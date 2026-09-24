@@ -29,6 +29,7 @@ import {
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
+import { toastAddRepoError } from "./add-repo-toast";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
@@ -170,7 +171,7 @@ async function handleAdd(repoFullName: string) {
     await addRepo(addBody(repoFullName));
     rememberCloneBase();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     const next = new Set(addingRepos);
     next.delete(repoFullName);
@@ -210,7 +211,7 @@ async function handleManualImport() {
     search = "";
     onClose?.();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     isManualLoading = false;
   }

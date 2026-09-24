@@ -16,6 +16,7 @@ import {
   GitHubRateLimitError,
   isReviewError,
   NotFoundError,
+  RepoNotAccessibleError,
   SyncError,
   ValidationError,
 } from "../domain/errors";
@@ -136,7 +137,7 @@ export function unwrapEffectError(e: unknown): unknown {
 export function handleAppError(
   raw: unknown,
   ctx: { set: { status?: number | string } },
-): { error: string } {
+): { error: string; detail?: string; action?: { label: string; url: string } } {
   const e = unwrapEffectError(raw);
 
   if (e instanceof NotFoundError) {
@@ -147,6 +148,11 @@ export function handleAppError(
   if (e instanceof GitHubAuthError) {
     ctx.set.status = 401;
     return { error: "GitHub token expired or invalid" };
+  }
+
+  if (e instanceof RepoNotAccessibleError) {
+    ctx.set.status = 404;
+    return { error: e.message, detail: e.detail, ...(e.action ? { action: e.action } : {}) };
   }
 
   if (e instanceof GitHubNotFoundError) {
