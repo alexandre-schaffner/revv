@@ -62,6 +62,13 @@ let prsFetchAttempted = $state(false);
 // haven't landed yet" (show nothing), which are the same empty array.
 let reposFetchAttempted = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
+// PRs resolved one at a time by a `revv://` link, kept apart from the list
+// reads so a list replacement can't drop them. A stale `fetchPrs()` (the window
+// focus the link itself triggers fires one alongside `resolve-link`) or a
+// first-page-only archived read would otherwise remove the row the review page
+// is showing, leaving it on "Loading…" for good. The lists stay authoritative:
+// a row there always wins over the copy held here.
+let linkedPrs = $state<Map<string, PullRequest>>(new Map());
 // Cursor for the next page of archived PRs. Null = exhausted or never
 // fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
 // from the first page) and `fetchMoreArchived` (appends, advances cursor).
@@ -131,11 +138,7 @@ const needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.r
 
 const archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
 
-const selectedPr = $derived(
-  pullRequests.find((pr) => pr.id === selectedPrId) ??
-    archivedPrs.find((pr) => pr.id === selectedPrId) ??
-    null,
-);
+const selectedPr = $derived(selectedPrId ? getPrById(selectedPrId) : null);
 
 const selectedRepo = $derived(
   selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
@@ -246,7 +249,12 @@ export function getSelectedPr(): PullRequest | null {
  * SHA for a merged PR.
  */
 export function getPrById(prId: string): PullRequest | null {
-  return pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
+  return (
+    pullRequests.find((p) => p.id === prId) ??
+    archivedPrs.find((p) => p.id === prId) ??
+    linkedPrs.get(prId) ??
+    null
+  );
 }
 
 /**
@@ -280,9 +288,7 @@ export function getReviewModeForPr(prId: string): ReviewMode {
  */
 export function isReviewModeResolved(prId: string): boolean {
   if (!hasAttemptedIdentityLoad()) return false;
-  if (pullRequests.some((p) => p.id === prId) || archivedPrs.some((p) => p.id === prId)) {
-    return true;
-  }
+  if (getPrById(prId)) return true;
   // The row may never arrive — a deep link can point at a PR outside the
   // synced set. Once the list fetch has settled, "reviewer" is the real
   // answer rather than a placeholder, so callers must not keep waiting.
@@ -336,6 +342,9 @@ export function replacePullRequests(incoming: PullRequest[]): void {
 
 /** Merge a targeted deep-link result before navigation mounts the review page. */
 export function upsertPullRequest(pullRequest: PullRequest): void {
+  const nextLinked = new Map(linkedPrs);
+  nextLinked.set(pullRequest.id, pullRequest);
+  linkedPrs = nextLinked;
   const nextOpen = pullRequests.filter((item) => item.id !== pullRequest.id);
   const nextArchived = archivedPrs.filter((item) => item.id !== pullRequest.id);
   if (pullRequest.status === "open") {
@@ -1094,6 +1103,7 @@ export function reset(): void {
   isLoading = false;
   reposFetchAttempted = false;
   archivedPrs = [];
+  linkedPrs = new Map();
   archivedNextCursor = null;
   archivedLoadingMore = false;
   pinnedPrIds = new Set();
