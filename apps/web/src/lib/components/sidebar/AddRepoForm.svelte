@@ -9,6 +9,7 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
@@ -29,7 +30,6 @@ import {
   getRepositories,
   retryClone,
 } from "$lib/stores/prs.svelte";
-import { toastAddRepoError } from "./add-repo-toast";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";

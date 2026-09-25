@@ -7,12 +7,12 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { addRepo, getRepositories, retryClone } from "$lib/stores/prs.svelte";
-import { toastAddRepoError } from "./add-repo-toast";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 
