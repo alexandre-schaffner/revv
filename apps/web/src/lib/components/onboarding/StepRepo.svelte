@@ -8,6 +8,7 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   addRepo,
@@ -204,7 +205,7 @@ async function select(repo: Repository) {
     // Don't advance here — the clone-status $effect handles it
   } catch (e) {
     // If addRepo itself fails, stop waiting
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
     resetAddingAfterFailure();
   }
 }
@@ -219,7 +220,7 @@ async function submitManual(slug: string) {
   try {
     await addRepo(slug);
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
     resetAddingAfterFailure();
   }
 }
@@ -294,7 +295,7 @@ async function submitLink(): Promise<void> {
     await addRepo({ fullName, mode: "link", clonePath: path });
     // Don't advance here — the clone-status $effect handles linked repos too.
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to link repository");
+    toastAddRepoError(e, "Failed to link repository");
     resetAddingAfterFailure();
   }
 }

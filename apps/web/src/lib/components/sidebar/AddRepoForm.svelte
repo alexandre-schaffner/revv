@@ -9,6 +9,7 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
@@ -170,7 +171,7 @@ async function handleAdd(repoFullName: string) {
     await addRepo(addBody(repoFullName));
     rememberCloneBase();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     const next = new Set(addingRepos);
     next.delete(repoFullName);
@@ -210,7 +211,7 @@ async function handleManualImport() {
     search = "";
     onClose?.();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     isManualLoading = false;
   }

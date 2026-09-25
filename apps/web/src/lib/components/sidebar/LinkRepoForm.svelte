@@ -7,6 +7,7 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -87,7 +88,7 @@ async function submit(): Promise<void> {
     await addRepo({ fullName, mode: "link", clonePath: clonePath.trim() });
     linkedFullName = fullName;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to link repository");
+    toastAddRepoError(e, "Failed to link repository");
   } finally {
     adding = false;
   }

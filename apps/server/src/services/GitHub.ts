@@ -184,6 +184,19 @@ export interface PrDiffStats {
   readonly changedFiles: number;
 }
 
+/**
+ * One installation of the GitHub App the user signed in through, as returned
+ * by {@link GitHubGatewayFlatService.listUserAppInstallations}.
+ */
+export interface AppInstallation {
+  /** Login of the org or user the app is installed on. */
+  readonly accountLogin: string;
+  readonly repositorySelection: "all" | "selected";
+  /** The installation's settings page, where its repository access is edited. */
+  readonly htmlUrl: string;
+  readonly appSlug: string;
+}
+
 interface GitHubGatewayFlatService {
   readonly listPrs: (
     repoFullName: string,
@@ -274,6 +287,17 @@ interface GitHubGatewayFlatService {
     token: string,
   ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
   readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
+  /**
+   * Installations of the GitHub App behind a user access token
+   * (`GET /user/installations`). Only meaningful for a token minted by a
+   * GitHub App: such a token sees a repository only where the app is
+   * installed, so this is how a 404 on a repo the user can reach in the
+   * browser gets explained.
+   */
+  readonly listUserAppInstallations: (
+    token: string,
+    apiBase: string,
+  ) => Effect.Effect<AppInstallation[], GitHubError>;
   /**
    * Teams (and their members) for a single org. Requires the token to carry
    * the `read:org` scope and the user to be an org member; otherwise GitHub
@@ -866,6 +890,21 @@ ${fields}
         login: raw.login as string,
         avatarUrl: (raw.avatar_url as string | null) ?? null,
       }));
+    }).pipe(retryTransient),
+
+  listUserAppInstallations: (token, apiBase) =>
+    Effect.gen(function* () {
+      const data = (yield* githubFetch("/user/installations?per_page=100", token, apiBase)) as {
+        installations?: Record<string, unknown>[];
+      };
+      return (data.installations ?? []).map(
+        (raw): AppInstallation => ({
+          accountLogin: (raw.account as Record<string, unknown>).login as string,
+          repositorySelection: raw.repository_selection === "all" ? "all" : "selected",
+          htmlUrl: raw.html_url as string,
+          appSlug: raw.app_slug as string,
+        }),
+      );
     }).pipe(retryTransient),
 
   listTeamsForOrg: (org, token, explicitApiBase) =>
@@ -1688,6 +1727,7 @@ export interface GitHubGatewayService {
     readonly listForUser: GitHubGatewayFlat["listUserRepos"];
     readonly openPrCounts: GitHubGatewayFlat["getOpenPrCounts"];
     readonly orgsForUser: GitHubGatewayFlat["listUserOrgs"];
+    readonly appInstallationsForUser: GitHubGatewayFlat["listUserAppInstallations"];
     readonly teamsForOrg: GitHubGatewayFlat["listTeamsForOrg"];
     readonly collaboratorPermission: GitHubGatewayFlat["getCollaboratorPermission"];
   };
@@ -1742,6 +1782,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     listForUser: githubGatewayFlat.listUserRepos,
     openPrCounts: githubGatewayFlat.getOpenPrCounts,
     orgsForUser: githubGatewayFlat.listUserOrgs,
+    appInstallationsForUser: githubGatewayFlat.listUserAppInstallations,
     teamsForOrg: githubGatewayFlat.listTeamsForOrg,
     collaboratorPermission: githubGatewayFlat.getCollaboratorPermission,
   },

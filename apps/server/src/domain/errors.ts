@@ -46,6 +46,18 @@ export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")
   readonly id: string;
 }> {}
 
+/**
+ * An add-repo lookup 404'd. GitHub answers 404 both for a repo that doesn't
+ * exist and for one the token can't see — and a GitHub App token can't see
+ * any repo the app isn't installed on — so this carries the diagnosis the
+ * user needs: what's missing and, when known, the page that fixes it.
+ */
+export class RepoNotAccessibleError extends Data.TaggedError("RepoNotAccessibleError")<{
+  readonly message: string;
+  readonly detail: string;
+  readonly action: { readonly label: string; readonly url: string } | null;
+}> {}
+
 export type GitHubError =
   | GitHubRateLimitError
   | GitHubAuthError

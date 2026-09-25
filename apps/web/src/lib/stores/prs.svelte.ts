@@ -738,12 +738,34 @@ function toAddRepoBody(input: AddRepoInput): AddRepoBody {
   return input;
 }
 
+/**
+ * A rejected add, carrying the server's diagnosis: why GitHub couldn't see
+ * the repo and, when known, the page that grants access.
+ */
+export class AddRepoError extends Error {
+  constructor(
+    message: string,
+    readonly detail: string | null,
+    readonly action: { readonly label: string; readonly url: string } | null,
+  ) {
+    super(message);
+    this.name = "AddRepoError";
+  }
+}
+
 export async function addRepo(input: AddRepoInput): Promise<void> {
   const { error } = await api.api.repos.post(toAddRepoBody(input));
   if (error) {
-    const value = error.value as { error?: string; message?: string } | undefined;
+    const value = error.value as
+      | {
+          error?: string;
+          message?: string;
+          detail?: string;
+          action?: { label: string; url: string };
+        }
+      | undefined;
     const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
-    throw new Error(msg);
+    throw new AddRepoError(msg, value?.detail ?? null, value?.action ?? null);
   }
   await fetchRepos();
   // Trigger a sync so PRs for the new repo are fetched immediately.
