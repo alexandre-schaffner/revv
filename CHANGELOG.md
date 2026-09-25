@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.27.0](https://github.com/alexandre-schaffner/revv/compare/v0.26.1...v0.27.0) (2026-09-25)
+
+
+### Features
+
+* explain add-repo 404s from GitHub App access, and fix stuck deep links ([#235](https://github.com/alexandre-schaffner/revv/issues/235)) ([3247488](https://github.com/alexandre-schaffner/revv/commit/3247488aa11138c6fbd9f268e48c28858099c895))
+
+
+### Bug Fixes
+
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([2b5708b](https://github.com/alexandre-schaffner/revv/commit/2b5708b01ec312839bbeaab1759fdc1b5c4a3651))
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([50f11f4](https://github.com/alexandre-schaffner/revv/commit/50f11f4ad0409de2c7a15bbf2d484727f7c37b41))
+
 ## [0.26.1](https://github.com/alexandre-schaffner/revv/compare/v0.26.0...v0.26.1) (2026-09-23)
 
 
