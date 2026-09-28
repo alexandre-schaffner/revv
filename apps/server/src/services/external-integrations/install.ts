@@ -423,116 +423,68 @@ function readJsonConfig(file: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-/** Key path to the object holding MCP servers: `["mcpServers"]`, `["mcp", "servers"]`. */
-type McpSection = readonly [string, ...string[]];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/** Walk (creating as needed) to the section's object, refusing a non-object on the way. */
-function ensureSection(
-  config: Record<string, unknown>,
-  section: McpSection,
-): Record<string, unknown> {
-  let parent = config;
-  for (const key of section) {
-    const value = parent[key];
-    if (value === undefined) {
-      const created: Record<string, unknown> = {};
-      parent[key] = created;
-      parent = created;
-      continue;
-    }
-    if (!isRecord(value)) {
-      throw externalIntegrationError(
-        "INSTALL_FAILED",
-        `Expected "${section.join(".")}" to be an object in the MCP configuration. Fix the file and reconnect.`,
-      );
-    }
-    parent = value;
+function nestedRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = parent[key];
+  if (value === undefined) {
+    const created: Record<string, unknown> = {};
+    parent[key] = created;
+    return created;
   }
-  return parent;
-}
-
-interface FoundSection {
-  readonly parent: Record<string, unknown>;
-  readonly key: string;
-  readonly servers: Record<string, unknown>;
-}
-
-/** The section's object, with its parent and key, or undefined when any key is missing. */
-function findSection(
-  config: Record<string, unknown>,
-  section: McpSection,
-): FoundSection | undefined {
-  let found: FoundSection | undefined;
-  let current: unknown = config;
-  for (const key of section) {
-    if (!isRecord(current)) return undefined;
-    const next = current[key];
-    if (!isRecord(next)) return undefined;
-    found = { parent: current, key, servers: next };
-    current = next;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw externalIntegrationError(
+      "INSTALL_FAILED",
+      `Expected "${key}" to be an object in the MCP configuration. Fix the file and reconnect.`,
+    );
   }
-  return found;
+  return value as Record<string, unknown>;
 }
 
 /** Upsert one account-scoped Revv server, refusing a foreign row at that key. */
 function upsertJsonMcpEntry(
   file: string,
-  section: McpSection,
+  section: string,
   serverName: string,
   entry: Record<string, unknown>,
 ): void {
   const config = readJsonConfig(file);
-  const servers = ensureSection(config, section);
+  const servers = nestedRecord(config, section);
   if (servers[serverName] !== undefined && !isRevvManagedEntry(servers[serverName])) {
     throw externalIntegrationError(
       "INSTALL_FAILED",
-      `${file} already has a ${section.join(".")}.${serverName} entry that Revv did not create. Remove it and reconnect.`,
+      `${file} already has a ${section}.${serverName} entry that Revv did not create. Remove it and reconnect.`,
     );
   }
   servers[serverName] = entry;
   writePrivateTextFile(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-/**
- * Remove Revv's server from a section. A foreign row at that key is refused
- * unless `foreign: "keep"`, which leaves it alone (used when sweeping a legacy
- * location Revv may never have written). An emptied nested section
- * (`mcp.servers`) is dropped; a top-level one is kept, as it always was.
- */
-function removeJsonMcpEntry(
-  file: string,
-  section: McpSection,
-  serverName: string,
-  { foreign = "refuse" }: { readonly foreign?: "refuse" | "keep" } = {},
-): void {
+function removeJsonMcpEntry(file: string, section: string, serverName: string): void {
   const existing = readTextIfExists(file);
   if (existing === null || existing.trim() === "") return;
   const config = readJsonConfig(file);
-  const found = findSection(config, section);
-  if (!found) return;
-  const entry = found.servers[serverName];
+  const servers = config[section];
+  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return;
+  const entry = (servers as Record<string, unknown>)[serverName];
   if (entry === undefined) return;
   if (!isRevvManagedEntry(entry)) {
-    if (foreign === "keep") return;
     throw externalIntegrationError(
       "INSTALL_FAILED",
-      `Refusing to remove the non-Revv ${section.join(".")}.${serverName} entry in ${file}.`,
+      `Refusing to remove the non-Revv ${section}.${serverName} entry in ${file}.`,
     );
   }
-  delete found.servers[serverName];
-  if (section.length > 1 && Object.keys(found.servers).length === 0) {
-    delete found.parent[found.key];
-  }
+  delete (servers as Record<string, unknown>)[serverName];
   writePrivateTextFile(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-function jsonMcpEntryInstalled(file: string, section: McpSection, serverName: string): boolean {
+function jsonMcpEntryInstalled(file: string, section: string, serverName: string): boolean {
   try {
-    return isRevvManagedEntry(findSection(readJsonConfig(file), section)?.servers[serverName]);
+    const servers = readJsonConfig(file)[section];
+    return (
+      servers !== null &&
+      typeof servers === "object" &&
+      !Array.isArray(servers) &&
+      isRevvManagedEntry((servers as Record<string, unknown>)[serverName])
+    );
   } catch {
     return false;
   }
@@ -540,18 +492,17 @@ function jsonMcpEntryInstalled(file: string, section: McpSection, serverName: st
 
 // ── OpenCode (opencode.json mcp entry + global command) ─────────────────────
 
-// opencode 2 nests MCP servers under `mcp.servers`. opencode 1 put them
-// directly under `mcp`, where earlier Revv builds wrote their entry; opencode 2
-// still loads that shape, so a leftover would start the bridge twice.
-const OPENCODE_MCP_SECTION: McpSection = ["mcp", "servers"];
-const LEGACY_OPENCODE_MCP_SECTION: McpSection = ["mcp"];
+// Written in opencode 1's layout — the server directly under `mcp` with
+// `enabled`, the command in `command/` — which every opencode reads: opencode 2
+// normalizes such an entry into its own `mcp.servers` and scans both
+// `command/` and `commands/`. opencode 2's native `mcp.servers` makes opencode
+// 1 (through at least 1.18.0) reject the whole config as invalid, which takes
+// down the CLI, Revv's own opencode chat and walkthroughs included.
 
 export interface OpenCodePaths {
   readonly installDir: string;
   readonly configFile: string;
   readonly commandFile: string;
-  /** opencode 1's singular `command/` directory, still read by opencode 2. */
-  readonly legacyCommandFile: string;
 }
 
 export function openCodePaths(accountKey: string, home: string = homedir()): OpenCodePaths {
@@ -560,23 +511,11 @@ export function openCodePaths(accountKey: string, home: string = homedir()): Ope
   // entry lands wherever the user actually keeps their global config.
   const jsonFile = join(configDir, "opencode.json");
   const jsoncFile = join(configDir, "opencode.jsonc");
-  const commandName = `revv-address-feedback-${accountKey}.md`;
   return {
     installDir: join(home, ".revv", "opencode", accountKey),
     configFile: existsSync(jsonFile) || !existsSync(jsoncFile) ? jsonFile : jsoncFile,
-    commandFile: join(configDir, "commands", commandName),
-    legacyCommandFile: join(configDir, "command", commandName),
+    commandFile: join(configDir, "command", `revv-address-feedback-${accountKey}.md`),
   };
-}
-
-/** Drop what an opencode-1-era install left behind; foreign files are kept. */
-function removeLegacyOpenCodeInstall(paths: OpenCodePaths, serverName: string): void {
-  removeJsonMcpEntry(paths.configFile, LEGACY_OPENCODE_MCP_SECTION, serverName, {
-    foreign: "keep",
-  });
-  if (readTextIfExists(paths.legacyCommandFile)?.includes(MANAGED_COMMENT)) {
-    removeManagedGuide(paths.legacyCommandFile);
-  }
 }
 
 function installOpenCode(
@@ -587,9 +526,10 @@ function installOpenCode(
   writeManagedDirectory(paths.installDir, (staged) => {
     stageBridge(staged, input.integrationsDirectory);
   });
-  upsertJsonMcpEntry(paths.configFile, OPENCODE_MCP_SECTION, serverName, {
+  upsertJsonMcpEntry(paths.configFile, "mcp", serverName, {
     type: "local",
     command: [input.runtimeExecutable, "run", bridgeFile(paths.installDir)],
+    enabled: true,
     environment: {
       REVV_INTEGRATION_TOKEN: input.token,
     },
@@ -600,26 +540,15 @@ function installOpenCode(
       "description: Address Revv review feedback in the current checkout",
     ]),
   );
-  removeLegacyOpenCodeInstall(paths, serverName);
 }
 
 function uninstallOpenCode(paths: OpenCodePaths, serverName: string): void {
-  removeJsonMcpEntry(paths.configFile, OPENCODE_MCP_SECTION, serverName);
+  removeJsonMcpEntry(paths.configFile, "mcp", serverName);
   removeManagedGuide(paths.commandFile);
-  removeLegacyOpenCodeInstall(paths, serverName);
   removeManagedDirectory(paths.installDir);
 }
 
-function openCodeInstalled(paths: OpenCodePaths, serverName: string): boolean {
-  return (
-    jsonMcpEntryInstalled(paths.configFile, OPENCODE_MCP_SECTION, serverName) ||
-    jsonMcpEntryInstalled(paths.configFile, LEGACY_OPENCODE_MCP_SECTION, serverName)
-  );
-}
-
 // ── Cursor (~/.cursor/mcp.json) ─────────────────────────────────────────────
-
-const CURSOR_MCP_SECTION: McpSection = ["mcpServers"];
 
 export interface CursorPaths {
   readonly installDir: string;
@@ -637,7 +566,7 @@ function installCursor(input: BridgeInstallInput, paths: CursorPaths, serverName
   writeManagedDirectory(paths.installDir, (staged) => {
     stageBridge(staged, input.integrationsDirectory);
   });
-  upsertJsonMcpEntry(paths.configFile, CURSOR_MCP_SECTION, serverName, {
+  upsertJsonMcpEntry(paths.configFile, "mcpServers", serverName, {
     type: "stdio",
     command: input.runtimeExecutable,
     args: ["run", bridgeFile(paths.installDir)],
@@ -648,7 +577,7 @@ function installCursor(input: BridgeInstallInput, paths: CursorPaths, serverName
 }
 
 function uninstallCursor(paths: CursorPaths, serverName: string): void {
-  removeJsonMcpEntry(paths.configFile, CURSOR_MCP_SECTION, serverName);
+  removeJsonMcpEntry(paths.configFile, "mcpServers", serverName);
   removeManagedDirectory(paths.installDir);
 }
 
@@ -703,7 +632,7 @@ export function externalIntegrationInstaller(
         locations: [paths.configFile, paths.commandFile],
         install: (input) => installOpenCode(input, paths, serverName),
         uninstall: () => uninstallOpenCode(paths, serverName),
-        installed: () => openCodeInstalled(paths, serverName),
+        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcp", serverName),
       };
     }
     case "cursor": {
@@ -713,7 +642,7 @@ export function externalIntegrationInstaller(
         locations: [paths.configFile],
         install: (input) => installCursor(input, paths, serverName),
         uninstall: () => uninstallCursor(paths, serverName),
-        installed: () => jsonMcpEntryInstalled(paths.configFile, CURSOR_MCP_SECTION, serverName),
+        installed: () => jsonMcpEntryInstalled(paths.configFile, "mcpServers", serverName),
       };
     }
   }

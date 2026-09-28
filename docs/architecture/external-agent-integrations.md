@@ -30,7 +30,7 @@ mechanics differ, because each agent reads a different config file.
 | ----------- | --------------------------------------- | --------------------------------------------------- |
 | Claude Code | `~/.claude/skills/revv-<account>/.mcp.json` | Account-scoped plugin skill |
 | Codex       | `~/.codex/config.toml` (managed block)  | `~/.codex/prompts/revv-address-feedback-<account>.md` |
-| OpenCode    | `~/.config/opencode/opencode.json` (`mcp.servers`) | `~/.config/opencode/commands/revv-address-feedback-<account>.md` |
+| OpenCode    | `~/.config/opencode/opencode.json`      | `~/.config/opencode/command/revv-address-feedback-<account>.md` |
 | Cursor      | `~/.cursor/mcp.json`                    | — (Cursor has no global prompt directory)           |
 
 `<account>` is a non-reversible 12-character digest of the local account id.
@@ -38,10 +38,10 @@ Every provider uses `revv-<account>` as its MCP entry name, so connecting one
 account cannot overwrite or uninstall another account's entry. Bridge copies
 live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`.
 
-OpenCode targets opencode 2's config shape. Installs from earlier Revv builds put
-the entry directly under `mcp` and the command in the singular `command/`
-directory (opencode 1's layout, which opencode 2 still loads). Reconnecting or
-disconnecting removes those leftovers, so the bridge never starts twice.
+OpenCode's entry keeps opencode 1's layout (directly under `mcp`, with
+`enabled: true`, and the singular `command/` directory). opencode 2 still reads
+it, normalizing the entry into its own `mcp.servers`, while opencode 1 (through
+at least 1.18.0) rejects a config that uses `mcp.servers` outright.
 
 Every install is **convergent** and **non-destructive**: reconnecting
 reproduces the same end state with a rotated credential, and Revv refuses to

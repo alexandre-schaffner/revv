@@ -42,13 +42,12 @@ describe("resolveSessionModes", () => {
     };
     expect(resolveSessionModes({ modes, configOptions: OPENCODE_CONFIG_OPTIONS })).toEqual({
       modes,
-      source: { kind: "modes" },
     });
   });
 
   it("reads opencode 2's mode config option", () => {
     const resolved = resolveSessionModes({ configOptions: OPENCODE_CONFIG_OPTIONS });
-    expect(resolved.source).toEqual({ kind: "config-option", configId: "mode" });
+    expect(resolved.modeConfigId).toBe("mode");
     expect(resolved.modes?.currentModeId).toBe("build");
     expect(resolved.modes?.availableModes.map((m) => m.id)).toEqual(["build", "plan"]);
     expect(findPlanModeId(resolved.modes)).toBe("plan");
@@ -71,7 +70,49 @@ describe("resolveSessionModes", () => {
   });
 
   it("reports no modes when neither shape is present", () => {
-    expect(resolveSessionModes({})).toEqual({ modes: null, source: { kind: "modes" } });
+    expect(resolveSessionModes({})).toEqual({ modes: null });
+  });
+});
+
+// Claude Code's ACP adapter (claude-agent-acp 0.82): `default` is described as
+// "Always ask before making changes" and must not be taken for the plan mode.
+const CLAUDE_MODES = {
+  currentModeId: "default",
+  availableModes: [
+    { id: "default", name: "Manual", description: "Always ask before making changes" },
+    { id: "acceptEdits", name: "Accept edits", description: "Automatically accept all file edits" },
+    { id: "plan", name: "Plan", description: "Create a plan before making changes" },
+    { id: "dontAsk", name: "Don't ask", description: "Skip permission prompts" },
+  ],
+};
+
+describe("findPlanModeId", () => {
+  it("ignores descriptions and picks Claude Code's plan mode", () => {
+    expect(findPlanModeId(CLAUDE_MODES)).toBe("plan");
+  });
+
+  it("does not read dontAsk as an ask mode", () => {
+    expect(
+      findPlanModeId({
+        currentModeId: "default",
+        availableModes: [
+          { id: "dontAsk", name: "Don't ask" },
+          { id: "ask", name: "Ask" },
+        ],
+      }),
+    ).toBe("ask");
+  });
+
+  it("falls back to a mode whose id mentions read-only", () => {
+    expect(
+      findPlanModeId({
+        currentModeId: "auto",
+        availableModes: [
+          { id: "auto", name: "Default" },
+          { id: "read-only", name: "Read Only" },
+        ],
+      }),
+    ).toBe("read-only");
   });
 });
 
@@ -86,6 +127,7 @@ describe("modeToExitPlan", () => {
   });
 
   it("leaves a session outside plan mode alone", () => {
+    expect(modeToExitPlan(CLAUDE_MODES)).toBe(undefined);
     expect(
       modeToExitPlan(resolveSessionModes({ configOptions: OPENCODE_CONFIG_OPTIONS }).modes),
     ).toBe(undefined);

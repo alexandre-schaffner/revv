@@ -183,63 +183,17 @@ describe("install safety", () => {
     expect(Object.keys(openCodeConfig.mcp)).toEqual(["other"]);
   });
 
-  it("writes the OpenCode server under opencode 2's mcp.servers and commands/", () => {
+  it("writes the OpenCode server in the layout opencode 1 and 2 both read", () => {
     const home = temporaryHome();
     const paths = openCodePaths(ACCOUNT_KEY, home);
     installer("opencode", home).install(input(home, "token"));
 
     const config = JSON.parse(readFileSync(paths.configFile, "utf8")) as {
-      mcp: { servers: Record<string, Record<string, unknown>> };
+      mcp: Record<string, Record<string, unknown>>;
     };
-    const entry = config.mcp.servers[`revv-${ACCOUNT_KEY}`];
-    expect(entry?.type).toBe("local");
-    expect(entry?.environment).toEqual({ REVV_INTEGRATION_TOKEN: "token" });
-    expect("enabled" in (entry ?? {})).toBe(false);
-    expect(paths.commandFile).toContain(join("opencode", "commands"));
-    expect(existsSync(paths.commandFile)).toBe(true);
-    expect(installer("opencode", home).installed()).toBe(true);
-
-    installer("opencode", home).uninstall();
-    expect(JSON.parse(readFileSync(paths.configFile, "utf8"))).toEqual({ mcp: {} });
-    expect(installer("opencode", home).installed()).toBe(false);
-  });
-
-  it("migrates an opencode-1-era OpenCode install and keeps foreign legacy files", () => {
-    const home = temporaryHome();
-    const paths = openCodePaths(ACCOUNT_KEY, home);
-    const serverName = `revv-${ACCOUNT_KEY}`;
-    // Reproduce what an earlier Revv build left: the entry directly under `mcp`
-    // and the command in the singular `command/` directory.
-    installer("opencode", home).install(input(home, "old"));
-    const written = JSON.parse(readFileSync(paths.configFile, "utf8")) as {
-      mcp: { servers: Record<string, object> };
-    };
-    writeFileSync(
-      paths.configFile,
-      JSON.stringify({
-        mcp: { [serverName]: { ...written.mcp.servers[serverName], enabled: true }, other: {} },
-      }),
-    );
-    mkdirSync(join(home, ".config", "opencode", "command"), { recursive: true });
-    writeFileSync(paths.legacyCommandFile, readFileSync(paths.commandFile, "utf8"));
-    rmSync(paths.commandFile);
-    expect(installer("opencode", home).installed()).toBe(true);
-
-    installer("opencode", home).install(input(home, "new"));
-
-    const config = JSON.parse(readFileSync(paths.configFile, "utf8")) as {
-      mcp: { servers: Record<string, { environment: unknown }> };
-    };
-    expect(Object.keys(config.mcp).sort()).toEqual(["other", "servers"]);
-    expect(config.mcp.servers[serverName]?.environment).toEqual({ REVV_INTEGRATION_TOKEN: "new" });
-    expect(existsSync(paths.commandFile)).toBe(true);
-    expect(existsSync(paths.legacyCommandFile)).toBe(false);
-
-    // A legacy command file Revv didn't write is left alone.
-    writeFileSync(paths.legacyCommandFile, "my own command\n");
-    installer("opencode", home).uninstall();
-    expect(readFileSync(paths.legacyCommandFile, "utf8")).toBe("my own command\n");
-    expect(JSON.parse(readFileSync(paths.configFile, "utf8"))).toEqual({ mcp: { other: {} } });
+    expect(Object.keys(config.mcp)).toEqual([`revv-${ACCOUNT_KEY}`]);
+    expect(config.mcp[`revv-${ACCOUNT_KEY}`]?.enabled).toBe(true);
+    expect(paths.commandFile).toContain(join("opencode", "command", "revv-"));
   });
 
   it("writes the shared agent guide wherever a provider supports prompts", () => {

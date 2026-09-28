@@ -9,7 +9,6 @@ import {
   resolveAcpLaunchById,
   resolveAcpProcessLaunchById,
   resolveGenerationModel,
-  selectsModelViaSessionConfig,
 } from "./presets";
 
 function withPathExecutable(command: string, fn: (path: string) => void): void {
@@ -223,16 +222,29 @@ describe("ACP launch presets", () => {
     expect(launch.env.ANTHROPIC_API_KEY).toBe("api-key");
   });
 
-  it("launches opencode acp without a model — it is applied per session over ACP", () => {
+  it("hands opencode the model at launch and per session", () => {
     if (serverEnv.acpCommand) return;
-    // `opencode acp` rejects a `--model` flag and opencode 2 ignores
-    // OPENCODE_CONFIG_CONTENT's model, so the launch carries none.
+    // `opencode acp` rejects a `--model` flag. opencode 1 honors the inline
+    // config override; opencode 2 ignores it and takes the per-session model.
     expect(resolveAcpLaunchById("opencode", { model: "anthropic/claude-sonnet-4-6" })).toEqual({
       command: "opencode",
       args: ["acp"],
+      env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "anthropic/claude-sonnet-4-6" }) },
+      sessionModel: "anthropic/claude-sonnet-4-6",
     });
-    expect(selectsModelViaSessionConfig("opencode")).toBe(true);
-    expect(selectsModelViaSessionConfig("claude-code")).toBe(false);
+  });
+
+  it("applies no per-session model to agents that take it at launch", () => {
+    if (serverEnv.acpCommand) return;
+    const launch = resolveAcpProcessLaunchById(
+      "claude-code",
+      { model: "claude-sonnet-5" },
+      {},
+      "/usr/bin",
+      { claudeSubscriptionAuth: false },
+    );
+    expect(launch.env.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(launch.sessionModel).toBeUndefined();
   });
 });
 
@@ -258,6 +270,10 @@ describe("resolveGenerationModel", () => {
       "some-provider/some-model",
     );
     expect(resolveGenerationModel("opencode", null)).toBe("opencode/big-pickle");
+  });
+
+  it("drops another agent's static model id for opencode", () => {
+    expect(resolveGenerationModel("opencode", "claude-sonnet-5")).toBe("opencode/big-pickle");
   });
 
   it("collapses Auto before static and dynamic catalog resolution", () => {

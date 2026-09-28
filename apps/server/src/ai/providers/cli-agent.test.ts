@@ -1,11 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { serverEnv } from "../../config";
 import { resolveClaudeConfigDir } from "../acp/claude-config";
-import {
-  claudeStatusCommandEnv,
-  parseOpencodeModelList,
-  resolveDesktopCodexBin,
-} from "./cli-agent";
+import { claudeStatusCommandEnv, resolveDesktopCodexBin } from "./cli-agent";
 
 describe("resolveDesktopCodexBin", () => {
   it("uses the first executable bundled Codex CLI", () => {
@@ -54,29 +50,5 @@ describe("claudeStatusCommandEnv", () => {
     if (serverEnv.claudeConfigIsolation) return;
     const env = claudeStatusCommandEnv();
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
-  });
-});
-
-describe("parseOpencodeModelList", () => {
-  it("maps opencode 2's /api/model rows to provider/model options", () => {
-    const body = JSON.stringify({
-      location: { directory: "/tmp" },
-      data: [
-        { id: "mimo-v2.6-flash-free", providerID: "opencode", name: "MiMo Free", enabled: true },
-        { id: "big-pickle", providerID: "opencode", name: "Big Pickle", enabled: true },
-        { id: "old", providerID: "opencode", name: "Old", enabled: false },
-        { id: "claude-opus-5", providerID: "github-copilot", name: "", enabled: true },
-        { providerID: "broken" },
-      ],
-    });
-    expect(parseOpencodeModelList(body)).toEqual([
-      { label: "github-copilot/claude-opus-5", value: "github-copilot/claude-opus-5" },
-      { label: "Big Pickle", value: "opencode/big-pickle" },
-      { label: "MiMo Free", value: "opencode/mimo-v2.6-flash-free" },
-    ]);
-  });
-
-  it("treats a still-settling empty snapshot as no models", () => {
-    expect(parseOpencodeModelList('{"location":{"directory":"/tmp"},"data":[]}')).toEqual([]);
   });
 });
