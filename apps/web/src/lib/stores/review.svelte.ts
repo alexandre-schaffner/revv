@@ -13,6 +13,7 @@ import { RequestState, type RequestState as RequestStateType } from "$lib/stores
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
@@ -667,15 +668,19 @@ export function getThreadsForFile(filePath: string): CommentThread[] {
 }
 
 // --- Diff view mode ---
+// Persisted as `settings.diffViewMode`, so the review toggle and the Settings
+// default are one value. The override only covers the window before settings
+// load, when there is nothing to merge the optimistic write into yet.
 type DiffMode = "unified" | "split";
-let diffMode = $state<DiffMode>("unified");
+let diffModeOverride = $state<DiffMode | null>(null);
 
 export function getDiffMode(): DiffMode {
-  return diffMode;
+  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
 }
 
 export function setDiffMode(mode: DiffMode): void {
-  diffMode = mode;
+  diffModeOverride = getSettings() ? null : mode;
+  void updateSettings({ diffViewMode: mode });
 }
 
 // --- Pending diff jump ---

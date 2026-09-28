@@ -1,14 +1,13 @@
 export type SettingsSectionId =
+  | "general"
   | "account"
+  | "repositories"
   | "ai"
   | "recap"
-  | "cache"
   | "jev"
   | "integrations"
-  | "preferences"
-  | "onboarding"
-  | "updates"
-  | "danger";
+  | "cache"
+  | "updates";
 
 let open = $state(false);
 let targetSection = $state<SettingsSectionId | null>(null);

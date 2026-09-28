@@ -2,6 +2,7 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import { SvelteMap } from "svelte/reactivity";
 import { getUser } from "$lib/stores/auth.svelte";
+import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import {
   addThread,
   addThreadMessage,
@@ -77,8 +78,12 @@ const pendingEndLines = new SvelteMap<string, number>();
 
 const mode = $derived(getDiffMode());
 
+const wrap = $derived(getDiffWrap());
+
 // Key changes → Svelte destroys + recreates DiffViewerInner (full lifecycle).
-const viewKey = $derived(file ? `${file.path}::${mode}` : "");
+// Wrap is keyed too: Pierre lays out overflow at render, and a prerendered
+// (scrolling) SSR body can't be re-flowed in place.
+const viewKey = $derived(file ? `${file.path}::${mode}::${wrap ? "wrap" : "scroll"}` : "");
 
 // Build annotations from current thread + pending input state
 const annotations = $derived.by((): DiffLineAnnotation<ThreadMeta>[] => {
@@ -276,6 +281,7 @@ async function handlePushThread(threadId: string) {
 		<DiffViewerInner
 			{file}
 			{mode}
+			{wrap}
 			{annotations}
 			{threadMessages}
 			{threadById}

@@ -14,8 +14,13 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { THINKING_EFFORT_OPTIONS } from "$lib/constants/models";
-import { getSettings, resolveChatAgentId, updateSettings } from "$lib/stores/settings.svelte";
+import {
+  getSettings,
+  getThinkingEffortOptions,
+  isAutoEffortOffered,
+  resolveChatAgentId,
+  updateSettings,
+} from "$lib/stores/settings.svelte";
 import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
@@ -24,16 +29,12 @@ let open = $state(false);
 let currentId = $derived(resolveChatAgentId(getSettings()));
 let caps = $derived(getAgentCapabilities(currentId));
 let visible = $derived(caps.thinkingEfforts.length > 0);
-let options = $derived(
-  THINKING_EFFORT_OPTIONS.filter((o) => caps.thinkingEfforts.includes(o.value)),
-);
+let options = $derived(getThinkingEffortOptions(currentId));
 let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
 let isAuto = $derived(isAutoSentinel(stored));
 let currentEffort = $derived(isAuto ? null : (stored as ThinkingEffort));
 
-// Offered whenever TypeSafe is on; unlike the model selector, no
-// dynamic-catalog exception since effort routing skips the depth ladder.
-let autoOffered = $derived(getSettings()?.jev.enabled ?? false);
+let autoOffered = $derived(isAutoEffortOffered());
 
 // What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
 const selectedSizing = sizingForSelectedPr(() => isAuto && autoOffered);

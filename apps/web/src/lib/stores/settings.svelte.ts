@@ -15,6 +15,7 @@ import {
   getDefaultModel,
   getDefaultSuggestionsModel,
   type ModelOption,
+  THINKING_EFFORT_OPTIONS,
 } from "$lib/constants/models";
 import { invalidateSuggestions } from "$lib/stores/suggestions.svelte";
 import { resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
@@ -85,6 +86,41 @@ export function getAvailableModels(agent?: AcpAgentId): ModelOption[] {
 
 export function areModelsLoaded(agent: AcpAgentId): boolean {
   return modelsLoadedByAgent[agent] ?? false;
+}
+
+// ── Review model / thinking-effort choices ───────────────────────────────────
+// One definition for every picker (the chat bottom bar and Settings → AI
+// agent), so the two can never offer different options.
+
+/**
+ * Review-model choices for `agent`: the live catalog for dynamic agents
+ * (opencode), the registry's curated list otherwise. Excludes Auto — see
+ * {@link isAutoModelOffered}.
+ */
+export function getReviewModelOptions(agent: AcpAgentId): ModelOption[] {
+  const caps = getAgentCapabilities(agent);
+  return caps.models === "dynamic"
+    ? getAvailableModels(agent)
+    : caps.models.map((m) => ({ label: m.label, value: m.value }));
+}
+
+/**
+ * Auto needs the TypeSafe toggle on and a static depth ladder to route onto;
+ * a live-fetched catalog has no ladder. See `ai/jev/routing.ts`.
+ */
+export function isAutoModelOffered(agent: AcpAgentId): boolean {
+  return (settings?.jev.enabled ?? false) && getAgentCapabilities(agent).models !== "dynamic";
+}
+
+/** Thinking-effort tiers `agent` supports, strongest first. Empty when it has no effort knob. */
+export function getThinkingEffortOptions(agent: AcpAgentId): typeof THINKING_EFFORT_OPTIONS {
+  const caps = getAgentCapabilities(agent);
+  return THINKING_EFFORT_OPTIONS.filter((o) => caps.thinkingEfforts.includes(o.value));
+}
+
+/** Effort Auto only needs TypeSafe on: effort routing skips the depth ladder. */
+export function isAutoEffortOffered(): boolean {
+  return settings?.jev.enabled ?? false;
 }
 
 export async function fetchSettings(): Promise<void> {

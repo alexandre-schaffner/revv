@@ -13,8 +13,9 @@ import { getDefaultModel, type ModelOption } from "$lib/constants/models";
 import {
   areModelsLoaded,
   fetchModels,
-  getAvailableModels,
+  getReviewModelOptions,
   getSettings,
+  isAutoModelOffered,
   resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
@@ -30,16 +31,10 @@ let caps = $derived(getAgentCapabilities(currentId));
 // opencode is the only agent whose catalog is fetched live; everything else
 // uses the curated static list baked into the registry.
 let isDynamic = $derived(caps.models === "dynamic");
-let fetchedModels = $derived<ModelOption[]>(
-  caps.models === "dynamic"
-    ? getAvailableModels("opencode")
-    : caps.models.map((m) => ({ label: m.label, value: m.value })),
-);
+let fetchedModels = $derived<ModelOption[]>(getReviewModelOptions(currentId));
 let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
-// Auto needs the TypeSafe toggle on and a static depth ladder to route onto;
-// opencode's catalog is fetched live, so it has no ladder. See `ai/jev/routing.ts`.
-let autoModelOffered = $derived((getSettings()?.jev.enabled ?? false) && !isDynamic);
+let autoModelOffered = $derived(isAutoModelOffered(currentId));
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
 function labelFor(value: string | null): string | null {
