@@ -268,7 +268,9 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
 
     upsertPullRequest(result.pullRequest);
     state = { kind: "idle" };
-    await goto(`/review/${encodeURIComponent(result.pullRequest.id)}`);
+    // Same URL shape as every other PR navigation (`selectPr`), so the
+    // same-PR checks that compare against `window.location.pathname` hold.
+    await goto(`/review/${result.pullRequest.id}`);
   } catch (error) {
     if (controller.signal.aborted || version !== requestVersion) return;
     state = {

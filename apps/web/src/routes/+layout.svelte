@@ -44,9 +44,13 @@ let cacheInspectorOpen = $state(false);
 // navigating back. Deriving from the URL here makes the URL the
 // single source of truth for every entry/exit path (Cmd+W, sidebar
 // settings link, logout, mouse back, deep link, SSE-driven nav, …).
+//
+// Read the decoded route param, not `page.url.pathname`: PR ids are
+// `<repoId>:<number>`, and a URL carrying the colon as `%3A` left the raw
+// pathname segment matching no PR — the review page loaded the diff (it
+// reads the decoded param) but sat on "Loading…" with no PR row.
 $effect(() => {
-  const match = page.url.pathname.match(/^\/review\/([^/]+)/);
-  setSelectedPrId(match?.[1] ?? null);
+  setSelectedPrId(page.route.id === "/review/[prId]" ? (page.params.prId ?? null) : null);
 });
 
 // URL → selectedRepoId. The rail's active highlight and the project
