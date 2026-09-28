@@ -3,7 +3,7 @@ import { untrack } from "svelte";
 
 export type { ThemePreference };
 
-type DiffThemePreference = "sync" | "light" | "dark";
+export type DiffThemePreference = "sync" | "light" | "dark";
 
 const THEME_KEY = "revv-theme";
 const DIFF_THEME_KEY = "revv-diff-theme";
@@ -140,6 +140,10 @@ export function setThemePreference(pref: ThemePreference): void {
   preference = pref;
   localStorage.setItem(THEME_KEY, pref);
   apply(pref);
+}
+
+export function getDiffThemePreference(): DiffThemePreference {
+  return diffPreference;
 }
 
 export function setDiffThemePreference(pref: DiffThemePreference): void {

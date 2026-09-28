@@ -35,6 +35,7 @@ import {
   sendProposedFeedback,
   updateProposedComment,
 } from "$lib/stores/chat.svelte";
+import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
@@ -245,6 +246,7 @@ function buildOptions(
   return {
     diffStyle,
     theme: PIERRE_THEME,
+    overflow: getDiffWrap() ? "wrap" : "scroll",
     // Collapse unchanged regions by default so line-info separators have
     // something to expand. With `true`, Pierre flattens the whole file
     // inline and no separator clicks would be meaningful.

@@ -9,6 +9,7 @@ import { AiService } from "../services/Ai";
 import { BlobStore } from "../services/blob/BlobStore";
 import { SshSigner } from "../services/cache-signing/index";
 import { PollScheduler } from "../services/PollScheduler";
+import { RecapScheduler } from "../services/RecapScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
 import { updateChannelSchema } from "./schemas";
@@ -56,6 +57,19 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             const result = yield* settingsSvc.updateSettings(ctx.body);
             if (ctx.body.autoFetchInterval !== undefined) {
               yield* scheduler.restart(ctx.body.autoFetchInterval);
+            }
+            // `start` reads the just-written toggles and only forks the
+            // cadences still enabled, so a stop/start pair applies them live.
+            // An agent-only change skips it: a restart sweeps immediately.
+            const recap = ctx.body.recap;
+            if (
+              recap?.enabled !== undefined ||
+              recap?.dailyEnabled !== undefined ||
+              recap?.weeklyEnabled !== undefined
+            ) {
+              const recapScheduler = yield* RecapScheduler;
+              yield* recapScheduler.stop();
+              yield* recapScheduler.start();
             }
             return yield* withJevKeyState(result);
           }),

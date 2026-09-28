@@ -57,6 +57,8 @@ export interface TokenHoverInfo {
 interface Props {
   file: ReviewFile;
   mode: "unified" | "split";
+  /** Soft-wrap long lines instead of scrolling. Read once at mount; the parent re-keys on change. */
+  wrap: boolean;
   annotations: DiffLineAnnotation<ThreadMeta>[];
   /** Map from threadId → messages, for expanded thread rendering */
   threadMessages: Record<string, ThreadMessage[]>;
@@ -85,6 +87,7 @@ interface Props {
 let {
   file,
   mode,
+  wrap,
   annotations,
   threadMessages,
   threadById,
@@ -472,6 +475,7 @@ onMount(() => {
     const options: FileDiffOptions<ThreadMeta> = {
       ...PR_DIFF_RENDER_OPTIONS,
       diffStyle: mode,
+      overflow: wrap ? "wrap" : "scroll",
       theme: PIERRE_THEME,
       enableGutterUtility: true,
       enableLineSelection: true,
@@ -626,7 +630,8 @@ onMount(() => {
     // populate the header slots after hydrate using the exported slot
     // IDs — Pierre's shadow DOM has `<slot name="...">` placeholders
     // that project these light-DOM children.
-    if (file.prerenderedHtml !== undefined && mode === "unified") {
+    // The prerendered HTML is laid out for `overflow: scroll`, so wrap skips it too.
+    if (file.prerenderedHtml !== undefined && mode === "unified" && !wrap) {
       instance = new FileDiff<ThreadMeta>(options, workerManager);
       // Match the render() DOM structure: a <diffs-container> custom element
       // as the shadow host inside wrapperEl. The tag name matters — app.css

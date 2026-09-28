@@ -1,80 +1,47 @@
 <script lang="ts">
-import {
-  ACP_AGENTS,
-  type AcpAgentId,
-  type AgentStatus,
-  type AgentStatusReport,
-  EXTERNAL_AGENT_PROVIDER_NAMES,
-  EXTERNAL_AGENT_PROVIDERS,
-  type ExternalAgentProvider,
-  getAgentKeychainAuth,
-  type InstallEvent,
-  type RecapAgentChoice,
-  type Repository,
-} from "@revv/shared";
 import { Dialog as DialogPrimitive } from "bits-ui";
-import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
-import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import Cloud from "phosphor-svelte/lib/Cloud";
-import Cpu from "phosphor-svelte/lib/Cpu";
 import Download from "phosphor-svelte/lib/Download";
+import FolderSimple from "phosphor-svelte/lib/FolderSimple";
 import Gauge from "phosphor-svelte/lib/Gauge";
+import GearSix from "phosphor-svelte/lib/GearSix";
+import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
 import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
-import SlidersHorizontal from "phosphor-svelte/lib/SlidersHorizontal";
-import Spinner from "phosphor-svelte/lib/Spinner";
-import Trash from "phosphor-svelte/lib/Trash";
+import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
-import Warning from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
-import { onDestroy } from "svelte";
-import { SvelteMap } from "svelte/reactivity";
-import { goto } from "$app/navigation";
-import { API_BASE_URL } from "$lib/api/base-url";
-import SignInButton from "$lib/components/auth/SignInButton.svelte";
-import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
-import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
-import { Button } from "$lib/components/ui/button/index.js";
+import { type Component, tick, untrack } from "svelte";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
-import { Input } from "$lib/components/ui/input";
-import * as Select from "$lib/components/ui/select";
-import { Switch } from "$lib/components/ui/switch";
-import { getUser, removeAccount, resetOnboarding, signOut } from "$lib/stores/auth.svelte";
+import {
+  bitsAnim,
+  dialogSpringIn,
+  dialogSpringOut,
+  gsapFade,
+  prefersReducedMotion,
+  settingFlash,
+} from "$lib/motion";
+import { getUser } from "$lib/stores/auth.svelte";
 import {
   fetchExternalIntegrationStatuses,
-  getExternalIntegrationAction,
-  getExternalIntegrationError,
   getExternalIntegrationStatuses,
-  runExternalIntegrationAction,
 } from "$lib/stores/external-integrations.svelte";
-import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
-import {
-  type AgentKeychainResult,
-  cascadeChatAgentChange,
-  checkAgentKeychain,
-  fetchAgentStatus,
-  fetchModels,
-  getAgentStatus,
-  getAvailableModels,
-  getSettings,
-  updateSettings,
-} from "$lib/stores/settings.svelte";
+import { fetchAgentStatus, getAgentStatus, getSettings } from "$lib/stores/settings.svelte";
 import {
   clearSettingsTargetSection,
   getSettingsTargetSection,
   type SettingsSectionId,
 } from "$lib/stores/settingsModal.svelte";
-import {
-  type AgentInstallState,
-  agentInstallLog,
-  appendAgentInstallLog,
-  runAgentInstall,
-} from "$lib/utils/agent-install";
-import { authHeaders } from "$lib/utils/session-token";
-import PreferencesSettingsSection from "./PreferencesSettingsSection.svelte";
-import TypeSafeSettingsSection from "./TypeSafeSettingsSection.svelte";
-import UpdatesSection from "./UpdatesSection.svelte";
-import "./settings-layout.css";
+import AccountPane from "./panes/AccountPane.svelte";
+import AgentPane from "./panes/AgentPane.svelte";
+import GeneralPane from "./panes/GeneralPane.svelte";
+import IntegrationsPane from "./panes/IntegrationsPane.svelte";
+import RecapsPane from "./panes/RecapsPane.svelte";
+import RepositoriesPane from "./panes/RepositoriesPane.svelte";
+import TeamCachePane from "./panes/TeamCachePane.svelte";
+import TypeSafePane from "./panes/TypeSafePane.svelte";
+import UpdatesPane from "./panes/UpdatesPane.svelte";
+import { SETTINGS_PANES, type SettingsSearchHit, searchSettings } from "./settings-index";
 
 interface Props {
   open: boolean;
@@ -83,530 +50,174 @@ interface Props {
 
 let { open, onClose }: Props = $props();
 
-// ── Nav sections ──────────────────────────────────────────────────────────
-type SectionId = SettingsSectionId;
-
+// ── Navigation ────────────────────────────────────────────────────────────
 interface NavItem {
-  id: SectionId;
-  label: string;
-  icon: typeof User;
+  id: SettingsSectionId;
+  icon: Component<{ size?: number | string }>;
 }
 
-const navItems: NavItem[] = [
-  { id: "account", label: "Account", icon: User },
-  { id: "ai", label: "AI Configuration", icon: Cpu },
-  { id: "recap", label: "Project Recap", icon: CalendarDots },
-  { id: "cache", label: "Team Cache", icon: Cloud },
-  { id: "jev", label: "TypeSafe", icon: Gauge },
-  { id: "integrations", label: "Integrations", icon: PlugsConnected },
-  { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
-  { id: "onboarding", label: "Onboarding", icon: ArrowCounterClockwise },
-  { id: "updates", label: "Updates", icon: Download },
-  { id: "danger", label: "Danger Zone", icon: Warning },
+/** Unlabeled clusters, split by a gap: you → what the agent does → team → the app. */
+const navClusters: NavItem[][] = [
+  [
+    { id: "general", icon: GearSix },
+    { id: "account", icon: User },
+    { id: "repositories", icon: FolderSimple },
+  ],
+  [
+    { id: "ai", icon: Robot },
+    { id: "recap", icon: CalendarDots },
+    { id: "jev", icon: Gauge },
+    { id: "integrations", icon: PlugsConnected },
+  ],
+  [{ id: "cache", icon: Cloud }],
+  [{ id: "updates", icon: Download }],
 ];
 
-// ── Team-cache "Test connection" state ────────────────────────────────────
-let cacheTestState = $state<{ healthy: boolean; detail: string } | null>(null);
-let cacheTestRunning = $state(false);
-async function testCacheConnection(): Promise<void> {
-  if (cacheTestRunning) return;
-  cacheTestRunning = true;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/cache/status`, {
-      headers: await authHeaders(),
-    });
-    if (!res.ok) {
-      cacheTestState = { healthy: false, detail: `HTTP ${res.status}` };
-      return;
-    }
-    cacheTestState = (await res.json()) as { healthy: boolean; detail: string };
-  } catch (e) {
-    cacheTestState = {
-      healthy: false,
-      detail: e instanceof Error ? e.message : String(e),
-    };
-  } finally {
-    cacheTestRunning = false;
-  }
+const panes: Record<SettingsSectionId, Component> = {
+  general: GeneralPane,
+  account: AccountPane,
+  repositories: RepositoriesPane,
+  ai: AgentPane,
+  recap: RecapsPane,
+  jev: TypeSafePane,
+  integrations: IntegrationsPane,
+  cache: TeamCachePane,
+  updates: UpdatesPane,
+};
+
+let activePane = $state<SettingsSectionId>("general");
+let query = $state("");
+let paneEl = $state<HTMLElement | null>(null);
+let navEl = $state<HTMLElement | null>(null);
+const ActivePane = $derived(panes[activePane]);
+
+function selectPane(id: SettingsSectionId): void {
+  if (id === activePane) return;
+  activePane = id;
+  if (paneEl) paneEl.scrollTop = 0;
 }
 
-// ── ADC (Application Default Credentials) status ──────────────────────────
-type AdcStatus =
-  | { available: true; source: string; gcloudFound: boolean; gcloudPath: string | null }
-  | {
-      available: false;
-      source: null;
-      gcloudFound: boolean;
-      gcloudPath: string | null;
-      adcPath: string | null;
-    };
-let adcStatus = $state<AdcStatus | null>(null);
-let adcPolling = $state(false);
-
-async function fetchAdcStatus(): Promise<void> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/cache/adc-status`, {
-      headers: await authHeaders(),
-    });
-    if (!res.ok) return;
-    adcStatus = (await res.json()) as AdcStatus;
-  } catch {
-    // ignore
-  }
-}
-
-async function startAdcLogin(): Promise<void> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/cache/adc-login`, {
-      method: "POST",
-      headers: await authHeaders(),
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { started: boolean; error?: string };
-    if (!data.started) return;
-    // Poll until ADC becomes available
-    adcPolling = true;
-    const interval = setInterval(async () => {
-      await fetchAdcStatus();
-      if (adcStatus?.available) {
-        clearInterval(interval);
-        adcPolling = false;
-      }
-    }, 2000);
-    // Stop polling after 60 seconds
-    setTimeout(() => {
-      clearInterval(interval);
-      adcPolling = false;
-    }, 60000);
-  } catch {
-    // ignore
-  }
-}
-
+// Every open starts on General, unless a caller asked for a pane.
 $effect(() => {
-  if (open && getSettings()?.cache?.enabled) {
-    void fetchAdcStatus();
-  }
-});
-
-// ── Cache signing — "Test signing" state ──────────────────────────────────
-// Round-trips a probe message through the local SSH key + the user's published
-// `.keys`. Surfaces the specific signer service error verbatim so a user can
-// see e.g. "no key in ~/.ssh matches your GitHub keys" or ssh-keygen output.
-type SigningTestResult =
-  | { ok: true; signerLogin: string; signerHost: string; signatureNamespace: string }
-  | { ok: false; error: string };
-let signingTestState = $state<SigningTestResult | null>(null);
-let signingTestRunning = $state(false);
-async function testCacheSigning(): Promise<void> {
-  if (signingTestRunning) return;
-  signingTestRunning = true;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/cache/signing/test`, {
-      method: "POST",
-      headers: await authHeaders(),
-    });
-    if (!res.ok) {
-      signingTestState = { ok: false, error: `HTTP ${res.status}` };
-      return;
-    }
-    signingTestState = (await res.json()) as SigningTestResult;
-  } catch (e) {
-    signingTestState = {
-      ok: false,
-      error: e instanceof Error ? e.message : String(e),
-    };
-  } finally {
-    signingTestRunning = false;
-  }
-}
-
-const signingModeOptions: { value: "off" | "permissive" | "strict"; label: string }[] = [
-  { value: "strict", label: "Strict — require valid signature" },
-  { value: "permissive", label: "Permissive — sign on push, warn on bad sig" },
-  { value: "off", label: "Off — no signing or verification" },
-];
-
-function trustedHostsToText(hosts: readonly string[] | undefined): string {
-  return (hosts ?? []).join(", ");
-}
-
-function parseTrustedHosts(text: string): string[] {
-  return text
-    .split(/[\s,]+/)
-    .map((h) => h.trim())
-    .filter(Boolean);
-}
-
-// ── Recap agent selector options ──────────────────────────────────────────
-const recapAgentOptions: { value: RecapAgentChoice; label: string }[] = [
-  { value: "auto", label: "Auto (follow main agent)" },
-  ...ACP_AGENTS.map((a) => ({ value: a.id, label: a.label })),
-];
-
-let activeSection = $state<SectionId>("account");
-let contentEl = $state<HTMLElement | null>(null);
-
-/** What the user still has to do in the agent itself after a connect. */
-function integrationActivation(provider: ExternalAgentProvider, clientName: string): string {
-  switch (provider) {
-    case "claude-code":
-      return `Run /reload-plugins in an open session, or restart Claude Code. Server: ${clientName}.`;
-    case "codex":
-      return `Restart Codex, then use /revv-address-feedback-${clientName.slice(5)}.`;
-    case "opencode":
-      return `Restart opencode, then use /revv-address-feedback-${clientName.slice(5)}.`;
-    case "cursor":
-      return `Reload the Cursor window, then enable “${clientName}” under Settings → MCP.`;
-  }
-}
-
-const integrationStatuses = $derived(getExternalIntegrationStatuses());
-const integrationAction = $derived(getExternalIntegrationAction());
-const integrationError = $derived(getExternalIntegrationError());
-
-function integrationStatusFor(provider: ExternalAgentProvider) {
-  return integrationStatuses.find((entry) => entry.provider === provider) ?? null;
-}
-
-function formatIntegrationTimestamp(value: string | null): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
-}
-
-$effect(() => {
-  if (open) void fetchExternalIntegrationStatuses();
-});
-
-// ── IntersectionObserver to highlight active nav ──────────────────────────
-$effect(() => {
-  if (!contentEl || !open) return;
-
-  const sectionEls = navItems
-    .map((n) => contentEl?.querySelector<HTMLElement>(`#section-${n.id}`))
-    .filter((el): el is HTMLElement => el !== null);
-
-  if (sectionEls.length === 0) return;
-
-  const ratios = new SvelteMap<string, number>();
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        ratios.set(entry.target.id, entry.intersectionRatio);
-      }
-      // Pick the section with the highest intersection ratio
-      let bestId: string | null = null;
-      let bestRatio = -1;
-      for (const [id, ratio] of ratios) {
-        if (ratio > bestRatio) {
-          bestRatio = ratio;
-          bestId = id;
-        }
-      }
-      if (bestId) {
-        activeSection = bestId.replace("section-", "") as SectionId;
-      }
-    },
-    {
-      root: contentEl,
-      threshold: [0, 0.1, 0.25, 0.5, 0.75, 1.0],
-    },
-  );
-
-  for (const el of sectionEls) {
-    observer.observe(el);
-  }
-
-  return () => observer.disconnect();
-});
-
-function scrollToSection(id: SectionId): void {
-  if (!contentEl) return;
-  const el = contentEl.querySelector<HTMLElement>(`#section-${id}`);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-}
-
-$effect(() => {
-  const target = getSettingsTargetSection();
-  if (!open || !contentEl || !target) return;
-
-  requestAnimationFrame(() => {
-    scrollToSection(target);
-    activeSection = target;
+  if (!open) return;
+  untrack(() => {
+    query = "";
+    activePane = getSettingsTargetSection() ?? "general";
     clearSettingsTargetSection();
   });
+  void fetchAgentStatus();
+  void fetchExternalIntegrationStatuses();
 });
+
+// `openSettings("ai")` while already open retargets the visible pane.
+$effect(() => {
+  const target = getSettingsTargetSection();
+  if (!target || !open) return;
+  selectPane(target);
+  clearSettingsTargetSection();
+});
+
+// ── Nav status accessories ────────────────────────────────────────────────
+// Never color alone: every dot carries its meaning as an aria-label / title.
+const agentNeedsAction = $derived.by(() => {
+  const report = getAgentStatus();
+  if (!report) return false;
+  const s = report.agents[getSettings()?.aiAgent ?? "opencode"];
+  return !(s?.installed && s.authed);
+});
+const connectedIntegrations = $derived(
+  getExternalIntegrationStatuses().filter((s) => s.connected).length,
+);
+const cacheOn = $derived(getSettings()?.cache?.enabled ?? false);
+
+function focusNavItem(list: HTMLElement | null, e: KeyboardEvent, onEscapeTop?: () => void): void {
+  if (!list) return;
+  const items = [...list.querySelectorAll<HTMLElement>("[data-roving]")];
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  let next = at;
+  if (e.key === "ArrowDown") next = at + 1;
+  else if (e.key === "ArrowUp") next = at - 1;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = items.length - 1;
+  else return;
+  e.preventDefault();
+  if (next < 0) {
+    onEscapeTop?.();
+    return;
+  }
+  items[Math.min(next, items.length - 1)]?.focus();
+}
+
+// ── Search ────────────────────────────────────────────────────────────────
+let searchEl = $state<HTMLInputElement | null>(null);
+let resultsEl = $state<HTMLElement | null>(null);
+const hits = $derived(searchSettings(query));
+const searching = $derived(query.trim().length > 0);
+
+function splitLabel(hit: SettingsSearchHit): [string, string, string] {
+  const { label } = hit.entry;
+  if (!hit.match) return [label, "", ""];
+  return [
+    label.slice(0, hit.match.start),
+    label.slice(hit.match.start, hit.match.end),
+    label.slice(hit.match.end),
+  ];
+}
+
+async function openHit(hit: SettingsSearchHit): Promise<void> {
+  query = "";
+  selectPane(hit.entry.pane);
+  await tick();
+  // A row behind a switch that's off (e.g. the team-cache bucket) isn't
+  // rendered: land on the pane's first row, which is that switch.
+  const row =
+    paneEl?.querySelector<HTMLElement>(`[data-setting-id="${hit.entry.id}"]`) ??
+    paneEl?.querySelector<HTMLElement>("[data-setting-id]");
+  if (!row) return;
+  const reduced = prefersReducedMotion();
+  row.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+  row
+    .querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]')
+    ?.focus({ preventScroll: true });
+  if (!reduced) settingFlash(row);
+}
+
+function handleSearchKeydown(e: KeyboardEvent): void {
+  if (e.key === "Enter") {
+    const first = hits[0];
+    if (first) {
+      e.preventDefault();
+      void openHit(first);
+    }
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    (searching ? resultsEl : navEl)?.querySelector<HTMLElement>("[data-roving]")?.focus();
+  }
+}
+
+// Esc peels one layer at a time: a search query first, then the dialog.
+function handleEscapeKeydown(e: KeyboardEvent): void {
+  if (!query) return;
+  e.preventDefault();
+  query = "";
+  searchEl?.focus();
+}
+
+function handleKeydown(e: KeyboardEvent): void {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    searchEl?.focus();
+    searchEl?.select();
+  }
+}
 
 // ── Avatar ────────────────────────────────────────────────────────────────
 // URL-keyed: failed state is only true while the current URL is the one that
 // errored. If the URL rotates (e.g. after re-login), the new URL is retried.
-let _userAvatarFailedForUrl = $state<string | null>(null);
-const userAvatarFailed = $derived(
-  _userAvatarFailedForUrl !== null && _userAvatarFailedForUrl === (getUser()?.image ?? null),
+let avatarFailedForUrl = $state<string | null>(null);
+const avatarFailed = $derived(
+  avatarFailedForUrl !== null && avatarFailedForUrl === (getUser()?.image ?? null),
 );
-
-// ── AI Configuration ──────────────────────────────────────────────────────
-let aiConfigured = $state(false);
-let aiStatusLoading = $state(true);
-let providerStatus = $state<AgentStatusReport | null>(getAgentStatus());
-let providerStatusLoading = $state(false);
-let aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
-let currentAgent = $derived(ACP_AGENTS.find((a) => a.id === aiAgent));
-let currentAgentStatus = $derived(providerStatus?.agents[aiAgent] ?? null);
-let modelOptions = $derived(getAvailableModels(aiAgent));
-let currentSuggestionsModel = $derived(getSettings()?.aiSuggestionsModel ?? "");
-let currentSuggestionsModelLabel = $derived(
-  modelOptions.find((o) => o.value === currentSuggestionsModel)?.label ?? currentSuggestionsModel,
-);
-
-let providerInstall = $state<AgentInstallState>({ kind: "idle" });
-let providerInstallAbort: AbortController | null = null;
-let signingInAgent = $state<AcpAgentId | null>(null);
-let selectedLoginCommand = $derived(currentAgentStatus?.loginCommand ?? `${aiAgent} login`);
-
-$effect(() => {
-  if (open) {
-    fetchAiStatus();
-    void refreshProviderStatus();
-    // Populate the suggestions-model dropdown for the current agent (boot
-    // prefetch usually covers this; this backstops a cold cache).
-    void fetchModels(aiAgent);
-  }
-});
-
-onDestroy(() => {
-  providerInstallAbort?.abort();
-});
-
-// ── Agent keychain access check (Solution B: guide, don't store) ───────────
-// Shown only for keychain-backed agents (registry-declared); today that's
-// Claude Code, but any provider that adds `keychainAuth` surfaces here.
-let agentKeychainAuth = $derived(getAgentKeychainAuth(aiAgent));
-let keychainChecking = $state(false);
-let keychainResult = $state<AgentKeychainResult | null>(null);
-
-async function handleCheckAgentKeychain(): Promise<void> {
-  keychainChecking = true;
-  try {
-    keychainResult = await checkAgentKeychain(aiAgent);
-  } finally {
-    keychainChecking = false;
-  }
-}
-
-// Drop a stale result when the selected agent changes.
-$effect(() => {
-  void aiAgent;
-  keychainResult = null;
-  providerInstallAbort?.abort();
-  providerInstallAbort = null;
-  providerInstall = { kind: "idle" };
-  signingInAgent = null;
-});
-
-async function fetchAiStatus(): Promise<void> {
-  aiStatusLoading = true;
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/ai-status`, {
-      headers: authHeaders(),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { configured: boolean; model: string };
-      aiConfigured = data.configured;
-    }
-  } catch {
-    // Ignore — status will show as unconfigured
-  } finally {
-    aiStatusLoading = false;
-  }
-}
-
-async function refreshProviderStatus(options: { refresh?: boolean } = {}): Promise<void> {
-  providerStatusLoading = true;
-  try {
-    providerStatus = await fetchAgentStatus(options);
-  } finally {
-    providerStatusLoading = false;
-  }
-}
-
-function providerReady(s: AgentStatus | null | undefined): boolean {
-  return !!s?.installed && s.authed;
-}
-
-function providerStatusText(s: AgentStatus | null | undefined): string {
-  if (!s) return "Not checked";
-  if (!s.installed) return "Agent not installed";
-  if (!s.authed) return "Needs sign-in";
-  return s.authLabel;
-}
-
-function providerStateLabel(s: AgentStatus | null | undefined): string {
-  if (!providerReady(s)) return "Action needed";
-  return s?.verified ? "Connected" : "Configured";
-}
-
-function agentLabel(agent: AcpAgentId): string {
-  return ACP_AGENTS.find((a) => a.id === agent)?.label ?? agent;
-}
-
-function providerInstallLabel(state: AgentInstallState): string {
-  return state.kind === "idle" ? "" : agentLabel(state.agent);
-}
-
-function retryProviderInstall(state: AgentInstallState): void {
-  if (state.kind !== "failed") return;
-  void handleProviderInstall(state.agent);
-}
-
-async function handleProviderChange(value: string | undefined): Promise<void> {
-  if (!value || value === aiAgent) return;
-  const agent = value as AcpAgentId;
-  if (agent === "opencode") void fetchModels("opencode");
-  await updateSettings(cascadeChatAgentChange(agent));
-  void fetchModels(agent);
-  void refreshProviderStatus();
-}
-
-function currentProviderLog(): string[] {
-  return agentInstallLog(providerInstall);
-}
-
-async function handleProviderInstall(agent: AcpAgentId): Promise<void> {
-  providerInstallAbort?.abort();
-  providerInstall = { kind: "running", agent, log: [] };
-  try {
-    const ctrl = new AbortController();
-    providerInstallAbort = ctrl;
-    await runAgentInstall(agent, ctrl.signal, (event) => applyProviderInstallEvent(event, agent));
-  } catch (err) {
-    if ((err as Error)?.name === "AbortError") return;
-    providerInstall = {
-      kind: "failed",
-      agent,
-      log: currentProviderLog(),
-      error: err instanceof Error ? err.message : "Install failed",
-    };
-  } finally {
-    providerInstallAbort = null;
-  }
-}
-
-async function applyProviderInstallEvent(event: InstallEvent, agent: AcpAgentId): Promise<void> {
-  if (event.type === "log") {
-    providerInstall = appendAgentInstallLog(providerInstall, agent, event.line);
-    return;
-  }
-  if (!event.success) {
-    providerInstall = {
-      kind: "failed",
-      agent,
-      log: currentProviderLog(),
-      error: event.error ?? "Install failed",
-    };
-    return;
-  }
-
-  providerStatus = await fetchAgentStatus();
-  providerInstall = { kind: "idle" };
-  if (providerStatus?.agents[agent]?.authed === false && providerStatus.embeddedLoginSupported) {
-    signingInAgent = agent;
-  }
-}
-
-function handleProviderSignIn(agent: AcpAgentId): void {
-  signingInAgent = agent;
-}
-
-async function onProviderLoginDone(): Promise<void> {
-  providerStatus = await fetchAgentStatus();
-  signingInAgent = null;
-  await fetchAiStatus();
-}
-
-function onProviderLoginSkip(): void {
-  signingInAgent = null;
-}
-
-// ── Max turns ─────────────────────────────────────────────────────────────
-const MAX_TURNS_MIN = 10;
-const MAX_TURNS_MAX = 500;
-let maxTurnsDraft = $state<string>(String(getSettings()?.aiMaxTurns ?? 60));
-let lastCommittedMaxTurns = $state<number | null>(getSettings()?.aiMaxTurns ?? null);
-
-$effect(() => {
-  const current = getSettings()?.aiMaxTurns;
-  if (typeof current !== "number") return;
-  if (current !== lastCommittedMaxTurns) {
-    maxTurnsDraft = String(current);
-    lastCommittedMaxTurns = current;
-  }
-});
-
-function commitMaxTurns(): void {
-  const parsed = Number.parseInt(maxTurnsDraft, 10);
-  const current = getSettings()?.aiMaxTurns ?? 60;
-  if (!Number.isFinite(parsed)) {
-    maxTurnsDraft = String(current);
-    return;
-  }
-  const clamped = Math.min(MAX_TURNS_MAX, Math.max(MAX_TURNS_MIN, parsed));
-  maxTurnsDraft = String(clamped);
-  if (clamped === current) return;
-  lastCommittedMaxTurns = clamped;
-  void updateSettings({ aiMaxTurns: clamped });
-}
-
-// ── Onboarding ────────────────────────────────────────────────────────────
-let replaying = $state(false);
-
-async function handleReplayOnboarding(): Promise<void> {
-  replaying = true;
-  try {
-    await resetOnboarding();
-    onClose();
-    await goto("/");
-  } finally {
-    replaying = false;
-  }
-}
-
-// ── Danger Zone ───────────────────────────────────────────────────────────
-let showDeleteConfirm = $state(false);
-let deleting = $state(false);
-let deleteError = $state<string | null>(null);
-
-let removingRepoId = $state<string | null>(null);
-let repoPendingDelete = $state<Repository | null>(null);
-
-async function handleDeleteRepo(id: string): Promise<void> {
-  removingRepoId = id;
-  try {
-    await deleteRepo(id);
-    repoPendingDelete = null;
-  } catch {
-    // The store restores optimistic state and shows the failure toast.
-  } finally {
-    removingRepoId = null;
-  }
-}
-
-async function handleRemoveAccount(): Promise<void> {
-  deleting = true;
-  deleteError = null;
-  try {
-    await removeAccount();
-    onClose();
-  } catch (e) {
-    deleteError = e instanceof Error ? e.message : "Failed to remove account. Please try again.";
-  } finally {
-    deleting = false;
-  }
-}
 </script>
 
 <DialogPrimitive.Root
@@ -617,965 +228,185 @@ async function handleRemoveAccount(): Promise<void> {
 >
 	<Dialog.Portal>
 		<Dialog.Overlay />
-		<DialogPrimitive.Content
-			data-slot="dialog-content"
-			class="settings-modal"
-		>
-			<!-- Left sidebar nav -->
-			<nav class="settings-sidebar" aria-label="Settings navigation">
-				<div class="settings-sidebar-header">
-					<span class="settings-title">Settings</span>
-				</div>
-				<ul class="settings-nav" role="list">
-					{#each navItems as item (item.id)}
-						<li>
-							<button
-								class="settings-nav-item"
-								class:settings-nav-item--active={activeSection === item.id}
-								class:settings-nav-item--danger={item.id === 'danger'}
-								onclick={() => scrollToSection(item.id)}
-								type="button"
-							>
-								<item.icon size={13} class="settings-nav-icon" />
-								<span class="settings-nav-label">{item.label}</span>
-							</button>
-						</li>
-					{/each}
-				</ul>
-				<!-- User info at bottom of sidebar -->
-				{#if getUser()}
-					<div class="settings-sidebar-user">
-						{#if getUser()?.image && !userAvatarFailed}
-							<img
-								src={getUser()?.image}
-								alt=""
-								class="settings-sidebar-avatar"
-								referrerpolicy="no-referrer"
-								onerror={() => (_userAvatarFailedForUrl = getUser()?.image ?? null)}
+		<DialogPrimitive.Content onEscapeKeydown={handleEscapeKeydown}>
+			{#snippet child({ props })}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					{...props}
+					class="settings-modal"
+					use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}
+					onkeydown={handleKeydown}
+				>
+					<aside class="sidebar">
+						<DialogPrimitive.Title class="settings-title">Settings</DialogPrimitive.Title>
+
+						<div class="search">
+							<MagnifyingGlass size={13} class="search-icon" />
+							<input
+								bind:this={searchEl}
+								bind:value={query}
+								class="search-input"
+								type="search"
+								placeholder="Search"
+								aria-label="Search settings"
+								aria-keyshortcuts="Meta+F"
+								autocomplete="off"
+								spellcheck="false"
+								onkeydown={handleSearchKeydown}
 							/>
+							{#if query}
+								<button
+									type="button"
+									class="search-clear"
+									aria-label="Clear search"
+									onclick={() => {
+										query = '';
+										searchEl?.focus();
+									}}
+								>
+									<X size={11} />
+								</button>
+							{/if}
+						</div>
+
+						{#if searching}
+							<div class="results" bind:this={resultsEl}>
+								{#if hits.length === 0}
+									<p class="results-empty">No settings match “{query.trim()}”</p>
+								{:else}
+									<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+									<ul
+										class="nav-list"
+										aria-label="Search results"
+										onkeydown={(e) => focusNavItem(resultsEl, e, () => searchEl?.focus())}
+									>
+										{#each hits as hit (hit.entry.id)}
+											{@const [before, match, after] = splitLabel(hit)}
+											<li>
+												<button type="button" class="result" data-roving onclick={() => openHit(hit)}>
+													<span class="result-label">{before}<strong>{match}</strong>{after}</span>
+													<span class="result-pane">{SETTINGS_PANES[hit.entry.pane].title}</span>
+												</button>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+							</div>
 						{:else}
-							<span class="settings-sidebar-avatar settings-sidebar-avatar--fallback" aria-hidden="true">
-								<User size={11} />
-							</span>
+							<nav class="nav" aria-label="Settings sections" bind:this={navEl}>
+								<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+								<ul
+									class="nav-list"
+									onkeydown={(e) => focusNavItem(navEl, e, () => searchEl?.focus())}
+								>
+									{#each navClusters as cluster, i (i)}
+										{#each cluster as item, j (item.id)}
+											<li class:nav-cluster-start={i > 0 && j === 0}>
+												<button
+													type="button"
+													class="nav-item"
+													class:nav-item--active={activePane === item.id}
+													aria-current={activePane === item.id ? 'page' : undefined}
+													tabindex={activePane === item.id ? 0 : -1}
+													data-roving
+													onclick={() => selectPane(item.id)}
+												>
+													<item.icon size={14} />
+													<span class="nav-label">{SETTINGS_PANES[item.id].title}</span>
+													{#if item.id === 'ai' && agentNeedsAction}
+														<span
+															class="nav-dot"
+															role="img"
+															aria-label="Needs attention"
+															title="The selected agent needs setup"
+														></span>
+													{:else if item.id === 'integrations' && connectedIntegrations > 0}
+														<span class="nav-accessory" title="{connectedIntegrations} connected">
+															<span class="sr-only">, </span>{connectedIntegrations}<span class="sr-only"> connected</span>
+														</span>
+													{:else if item.id === 'cache' && cacheOn}
+														<span class="nav-accessory">On</span>
+													{/if}
+												</button>
+											</li>
+										{/each}
+									{/each}
+								</ul>
+							</nav>
 						{/if}
-						<span class="settings-sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
-					</div>
-				{/if}
-			</nav>
 
-			<!-- Right scrollable content -->
-			<div class="settings-content" bind:this={contentEl}>
-			<!-- Close button -->
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				style="position: absolute; top: 12px; right: 12px; z-index: 10;"
-				onclick={onClose}
-				aria-label="Close settings"
-			>
-					<X size={14} />
-				</Button>
-
-				<!-- Account -->
-				<section id="section-account" class="settings-section">
-					<h2 class="section-head-title">Account</h2>
-					{#if getUser()}
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-3">
-								{#if getUser()?.image && !userAvatarFailed}
+						{#if getUser()}
+							<div class="sidebar-user">
+								{#if getUser()?.image && !avatarFailed}
 									<img
 										src={getUser()?.image}
-										alt={getUser()?.name}
-										class="h-9 w-9 rounded-full"
+										alt=""
+										class="sidebar-avatar"
 										referrerpolicy="no-referrer"
-										onerror={() => (_userAvatarFailedForUrl = getUser()?.image ?? null)}
+										onerror={() => (avatarFailedForUrl = getUser()?.image ?? null)}
 									/>
 								{:else}
-									<div class="flex h-9 w-9 items-center justify-center rounded-full bg-bg-elevated text-text-muted">
-										<User size={18} aria-hidden="true" />
-									</div>
+									<span class="sidebar-avatar sidebar-avatar--fallback" aria-hidden="true">
+										<User size={11} />
+									</span>
 								{/if}
-								<div>
-									<p class="text-sm font-medium text-text-primary">{getUser()?.name}</p>
-									<p class="text-xs text-text-muted">{getUser()?.email}</p>
-								</div>
-							</div>
-							<Button variant="outline" size="sm" onclick={signOut} class="text-xs hover:border-danger hover:text-danger">
-								Sign out
-							</Button>
-						</div>
-						<p class="mt-3 text-xs text-text-muted">
-							Signing out clears Revv's local copy of your GitHub token. To revoke Revv's access on
-							GitHub's side, visit
-							<a
-								href="https://github.com/settings/applications"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="inline-flex items-center gap-1 text-accent underline underline-offset-2 hover:text-accent-hover"
-							>
-								your authorized applications
-								<ArrowSquareOut size={10} />
-							</a>.
-						</p>
-					{:else}
-						<div class="flex items-center justify-between">
-							<p class="text-sm text-text-muted">Not signed in</p>
-							<SignInButton />
-						</div>
-					{/if}
-			</section>
-
-			<!-- AI Configuration -->
-			<section id="section-ai" class="settings-section">
-				<h2 class="section-head-title">AI Configuration</h2>
-
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Provider</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Active provider</p>
-							<p class="settings-row-hint">
-								{#if providerStatusLoading}
-									Checking provider connection…
-								{:else}
-									{providerStatusText(currentAgentStatus)}
-								{/if}
-							</p>
-							{#if currentAgentStatus?.authWarning}
-								<p class="provider-warning">
-									<Warning size={12} weight="fill" />
-									<span>{currentAgentStatus.authWarning}</span>
-								</p>
-							{/if}
-						</div>
-						<div class="provider-status-action">
-							<Select.Root type="single" value={aiAgent} onValueChange={handleProviderChange}>
-								<Select.Trigger class="w-40 text-xs truncate">
-									{currentAgent?.label ?? 'Agent'}
-								</Select.Trigger>
-								<Select.Content>
-									{#each ACP_AGENTS as agent (agent.id)}
-										<Select.Item value={agent.id} class="text-xs">{agent.label}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-							<div class="status-line">
-								{#if providerStatusLoading}
-									<Spinner size={11} class="motion-essential-spin text-text-muted" />
-									<span class="status-line-text">Checking</span>
-								{:else if providerReady(currentAgentStatus)}
-									<span
-										class="status-line-dot"
-										class:status-line-dot--success={currentAgentStatus?.verified}
-										class:status-line-dot--warning={!currentAgentStatus?.verified}
-										aria-hidden="true"
-									></span>
-									<span class="status-line-text">{providerStateLabel(currentAgentStatus)}</span>
-								{:else}
-									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-									<span class="status-line-text">Action needed</span>
-								{/if}
-							</div>
-							<Button
-								variant="ghost"
-								size="sm"
-								onclick={() => refreshProviderStatus({ refresh: true })}
-								disabled={providerStatusLoading}
-								class="text-xs"
-							>
-								Check again
-							</Button>
-						</div>
-					</div>
-
-					{#if signingInAgent}
-						<div class="provider-login-terminal">
-							<AgentLoginTerminal
-								agent={signingInAgent}
-								agentLabel={ACP_AGENTS.find((a) => a.id === signingInAgent)?.label ?? signingInAgent}
-								onDone={onProviderLoginDone}
-								onSkip={onProviderLoginSkip}
-							/>
-						</div>
-					{:else if providerInstall.kind === 'running'}
-						<div class="provider-setup-panel">
-							<div class="provider-setup-heading">
-								<Spinner size={12} class="motion-essential-spin text-text-muted" />
-								<span>Installing {providerInstallLabel(providerInstall)}</span>
-							</div>
-							<div class="provider-install-log">
-								{#if providerInstall.log.length > 0}
-									{#each providerInstall.log as line, i (i)}
-										<div class="provider-install-log-line">{line}</div>
-									{/each}
-								{:else}
-									<div class="provider-install-log-line provider-install-log-line--muted">Starting installer…</div>
-								{/if}
-							</div>
-						</div>
-					{:else if providerInstall.kind === 'failed'}
-						<div class="provider-setup-panel provider-setup-panel--error">
-							<div class="provider-install-log">
-								{#each providerInstall.log as line, i (i)}
-									<div class="provider-install-log-line">{line}</div>
-								{/each}
-								<div class="provider-install-log-line provider-install-log-line--error">{providerInstall.error}</div>
-							</div>
-							<div class="provider-setup-actions">
-								<Button size="sm" class="text-xs" onclick={() => retryProviderInstall(providerInstall)}>
-									Retry install
-								</Button>
-							</div>
-						</div>
-					{:else if currentAgentStatus && !currentAgentStatus.installed}
-						<div class="provider-setup-actions">
-							<Button size="sm" class="text-xs" onclick={() => handleProviderInstall(aiAgent)}>
-								Install {currentAgent?.label ?? 'provider'}
-							</Button>
-						</div>
-					{:else if currentAgentStatus && !currentAgentStatus.authed && providerStatus?.embeddedLoginSupported}
-						<div class="provider-setup-actions">
-							<Button size="sm" class="text-xs" onclick={() => handleProviderSignIn(aiAgent)}>
-								Sign in to {currentAgent?.label ?? 'provider'}
-							</Button>
-						</div>
-					{:else if currentAgentStatus && !currentAgentStatus.authed}
-						<div class="provider-manual-login">
-							<span>Run this in a terminal, then click Check again:</span>
-							<code>{selectedLoginCommand}</code>
-						</div>
-					{:else if currentAgentStatus?.installed && currentAgentStatus.authed && providerStatus?.embeddedLoginSupported}
-						<div class="provider-setup-actions">
-							<Button size="sm" variant="secondary" class="text-xs" onclick={() => handleProviderSignIn(aiAgent)}>
-								Reconnect {currentAgent?.label ?? 'provider'}
-							</Button>
-						</div>
-					{/if}
-				</div>
-
-				<!-- Suggestions model (agent, review model, and thinking effort are
-				     configured from the chat bottom bar). -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Models</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Suggestions model</p>
-							<p class="settings-row-hint">
-								Low-cost model used for PR-aware suggestion prompts in the right panel.
-							</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={currentSuggestionsModel}
-							onValueChange={(v) => {
-								if (v) void updateSettings({ aiSuggestionsModel: v });
-							}}
-						>
-							<Select.Trigger class="w-52 text-xs truncate">
-								{currentSuggestionsModelLabel || 'Select model…'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each modelOptions as opt (opt.value)}
-									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				</div>
-
-				<!-- Keychain access (only for keychain-backed agents, e.g. Claude Code) -->
-				{#if agentKeychainAuth}
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">Keychain access</h3>
-
-						<div class="settings-row">
-							<div class="settings-row-info">
-								<p class="settings-row-label">Background access</p>
-								<p class="settings-row-hint">
-									Report generation runs in Revv's background service, which needs permission to
-									read your {currentAgent?.label ?? 'agent'} login from the macOS Keychain. Check
-									whether it's allowed.
-								</p>
-							</div>
-							<Button
-								size="sm"
-								variant="secondary"
-								class="text-xs"
-								disabled={keychainChecking}
-								onclick={handleCheckAgentKeychain}
-							>
-								{#if keychainChecking}
-									<Spinner size={12} class="motion-essential-spin" />
-									Checking…
-								{:else}
-									Check access
-								{/if}
-							</Button>
-						</div>
-
-						{#if keychainResult}
-							<div class="status-line">
-								{#if keychainResult.readable === true}
-									<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
-									<span class="status-line-text"
-										>Revv can read your {currentAgent?.label ?? 'agent'} login — you're set.</span
-									>
-								{:else if keychainResult.readable === false}
-									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-									<span class="status-line-text">{keychainResult.remediation}</span>
-								{:else}
-									<span class="status-line-dot status-line-dot--muted" aria-hidden="true"></span>
-									<span class="status-line-text">Check unavailable on this platform.</span>
-								{/if}
+								<span class="sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
 							</div>
 						{/if}
-					</div>
-				{/if}
+					</aside>
 
-				<!-- Limits -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Limits</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Max turns</p>
-							<p class="settings-row-hint">
-								Maximum agent turns per review ({MAX_TURNS_MIN}–{MAX_TURNS_MAX}).
-							</p>
-						</div>
-						<Input
-							type="number"
-							min={MAX_TURNS_MIN}
-							max={MAX_TURNS_MAX}
-							class="w-28 text-xs"
-							value={maxTurnsDraft}
-							oninput={(e) => (maxTurnsDraft = (e.currentTarget as HTMLInputElement).value)}
-							onblur={commitMaxTurns}
-							onkeydown={(e) => { if (e.key === 'Enter') commitMaxTurns(); }}
-						/>
-					</div>
-
-					<!-- AI status indicator -->
-					<div class="status-line">
-						{#if aiStatusLoading}
-							<Spinner size={11} class="motion-essential-spin text-text-muted" />
-							<span class="status-line-text">Checking status…</span>
-						{:else if aiConfigured}
-							<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
-							<span class="status-line-text">AI configured and ready</span>
-						{:else}
-							<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-							<span class="status-line-text">AI not configured</span>
-						{/if}
+					<div class="pane" bind:this={paneEl}>
+						{#key activePane}
+							<div class="pane-inner" in:gsapFade>
+								<ActivePane />
+							</div>
+						{/key}
 					</div>
 				</div>
-			</section>
-
-			<!-- Project Recap -->
-			<section id="section-recap" class="settings-section">
-				<h2 class="section-head-title">Project Recap</h2>
-
-				<div class="settings-subgroup">
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Recap agent</p>
-							<p class="settings-row-hint">
-								Which agent generates daily and weekly project recaps. Auto follows your main agent.
-							</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={getSettings()?.recap?.agent ?? 'auto'}
-							onValueChange={(v) => {
-								if (!v) return;
-								const next = v as RecapAgentChoice;
-								const currentRecap = getSettings()?.recap;
-								void updateSettings({
-									recap: {
-										enabled: currentRecap?.enabled ?? true,
-										dailyEnabled: currentRecap?.dailyEnabled ?? true,
-										weeklyEnabled: currentRecap?.weeklyEnabled ?? true,
-										agent: next,
-									},
-								});
-							}}
-						>
-							<Select.Trigger class="w-44 shrink-0 truncate text-xs">
-								{recapAgentOptions.find((o) => o.value === (getSettings()?.recap?.agent ?? 'auto'))?.label ?? 'Auto'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each recapAgentOptions as opt (opt.value)}
-									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				</div>
-			</section>
-
-			<!-- Team Cache -->
-			<section id="section-cache" class="settings-section">
-				<h2 class="section-head-title">Team Cache</h2>
-
-				<p class="section-blurb">
-					Share walkthrough results with your team via a Google Cloud Storage bucket.
-					When enabled, teammates who open a PR you've already reviewed hydrate instantly
-					instead of re-running the agent.
-				</p>
-
-				<!-- Master switch -->
-				<div class="settings-subgroup">
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Enable remote cache</p>
-							<p class="settings-row-hint">
-								Off by default. Master switch — when disabled, no probes, uploads, or
-								downloads happen.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.cache?.enabled ?? false}
-							onCheckedChange={(v) => {
-								void updateSettings({ cache: { enabled: v } });
-							}}
-							aria-label="Enable remote cache"
-						/>
-					</div>
-				</div>
-
-				<!-- Connection details -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Connection</h3>
-
-					<div class="settings-field">
-						<label class="settings-field-label" for="cache-bucket">GCS bucket name</label>
-						<Input
-							id="cache-bucket"
-							type="text"
-							placeholder="my-team-revv-cache"
-							value={getSettings()?.cache?.bucket ?? ''}
-							oninput={(e) => {
-								void updateSettings({
-									cache: { bucket: (e.target as HTMLInputElement).value },
-								});
-							}}
-						/>
-					</div>
-
-					<!-- ADC status -->
-					<div class="settings-field">
-						{#if adcStatus === null}
-							<div class="flex items-center gap-2">
-								<Spinner size={12} class="motion-essential-spin text-text-muted" />
-								<span class="text-xs text-text-muted">Checking credentials…</span>
-							</div>
-						{:else if adcStatus.available}
-							<div class="flex items-center gap-2">
-								<span class="status-line-dot status-line-dot--success" aria-hidden="true"></span>
-								<span class="text-xs text-text-secondary">Application Default Credentials ready</span>
-							</div>
-						{:else if adcStatus.gcloudFound}
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center gap-2">
-									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-									<span class="text-xs text-text-muted">Not signed in to Google Cloud</span>
-								</div>
-								<Button
-									variant="outline"
-									size="sm"
-									onclick={startAdcLogin}
-									disabled={adcPolling}
-									class="w-fit"
-								>
-									{#if adcPolling}
-										<Spinner size={14} class="motion-essential-spin" />
-										Waiting for sign-in…
-									{:else}
-										Sign in with Google Cloud
-									{/if}
-								</Button>
-							</div>
-						{:else}
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center gap-2">
-									<span class="status-line-dot status-line-dot--warning" aria-hidden="true"></span>
-									<span class="text-xs text-text-muted">Google Cloud SDK not found</span>
-								</div>
-								<p class="settings-field-hint">
-									Install the <a href="https://cloud.google.com/sdk/docs/install" target="_blank" rel="noopener noreferrer" class="text-accent underline underline-offset-2 hover:text-accent-hover">Google Cloud SDK</a>,
-									then run <code>gcloud auth application-default login</code> in your terminal.
-								</p>
-							</div>
-						{/if}
-					</div>
-
-					<div class="flex items-center gap-3 pt-1">
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={testCacheConnection}
-							disabled={cacheTestRunning}
-						>
-							{#if cacheTestRunning}
-								<Spinner size={14} class="motion-essential-spin" />
-							{/if}
-							Test connection
-						</Button>
-						{#if cacheTestState}
-							<span
-								class="probe-result"
-								class:probe-result--ok={cacheTestState.healthy}
-								class:probe-result--err={!cacheTestState.healthy}
-							>
-								{cacheTestState.detail}
-							</span>
-						{/if}
-					</div>
-				</div>
-
-				<!-- Behavior -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Behavior</h3>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Upload completed walkthroughs</p>
-							<p class="settings-row-hint">
-								Push your generations to the bucket so teammates can hydrate from them.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.cache?.uploadsEnabled ?? true}
-							onCheckedChange={(v) => {
-								void updateSettings({ cache: { uploadsEnabled: v } });
-							}}
-							aria-label="Upload completed walkthroughs"
-						/>
-					</div>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Hydrate from team cache</p>
-							<p class="settings-row-hint">
-								On a cache hit, skip the agent and load the teammate's snapshot.
-							</p>
-						</div>
-						<Switch
-							checked={getSettings()?.cache?.downloadsEnabled ?? true}
-							onCheckedChange={(v) => {
-								void updateSettings({ cache: { downloadsEnabled: v } });
-							}}
-							aria-label="Hydrate from team cache"
-						/>
-					</div>
-				</div>
-
-				<!-- Signing -->
-				<div class="settings-subgroup">
-					<h3 class="settings-subgroup-heading">Signing</h3>
-					<p class="settings-field-hint">
-						Sign uploaded snapshots with your GitHub SSH key. On download, signatures are
-						verified against the signer's published keys at
-						<code>https://&lt;host&gt;/&lt;login&gt;.keys</code> and the signer must currently
-						have write access to the repo.
-					</p>
-
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Verification mode</p>
-							<p class="settings-row-hint">
-								Strict is the default. Permissive accepts unsigned blobs with a warning.
-							</p>
-						</div>
-						<Select.Root
-							type="single"
-							value={getSettings()?.cache?.signing?.mode ?? 'strict'}
-							onValueChange={(v) => {
-								if (v !== 'off' && v !== 'permissive' && v !== 'strict') return;
-								void updateSettings({ cache: { signing: { mode: v } } });
-							}}
-						>
-							<Select.Trigger class="w-64 text-xs">
-								{signingModeOptions.find(
-									(o) => o.value === (getSettings()?.cache?.signing?.mode ?? 'strict'),
-								)?.label ?? 'Strict'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each signingModeOptions as opt (opt.value)}
-									<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-
-					<div class="settings-field">
-						<label class="settings-field-label" for="cache-signing-key-path">
-							SSH private key path
-						</label>
-						<Input
-							id="cache-signing-key-path"
-							type="text"
-							placeholder="Auto-detect from ~/.ssh"
-							value={getSettings()?.cache?.signing?.keyPath ?? ''}
-							oninput={(e) => {
-								void updateSettings({
-									cache: {
-										signing: { keyPath: (e.target as HTMLInputElement).value },
-									},
-								});
-							}}
-						/>
-						<p class="settings-field-hint">
-							Leave empty to auto-pick the first key in <code>~/.ssh</code> whose public
-							half is on your GitHub <code>.keys</code> page. The private key is never
-							read by Revv — <code>ssh-keygen</code> handles signing.
-						</p>
-					</div>
-
-					<div class="settings-field">
-						<label class="settings-field-label" for="cache-trusted-hosts">
-							Trusted signer hosts
-						</label>
-						<Input
-							id="cache-trusted-hosts"
-							type="text"
-							placeholder="github.com, acme.ghe.com"
-							value={trustedHostsToText(getSettings()?.cache?.signing?.trustedSignerHosts)}
-							onchange={(e) => {
-								void updateSettings({
-									cache: {
-										signing: {
-											trustedSignerHosts: parseTrustedHosts(
-												(e.target as HTMLInputElement).value,
-											),
-										},
-									},
-								});
-							}}
-						/>
-						<p class="settings-field-hint">
-							Comma-separated. Blobs whose signer host is not in this list are rejected
-							before any network call.
-						</p>
-					</div>
-
-					<div class="flex items-center gap-3 pt-1">
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={testCacheSigning}
-							disabled={signingTestRunning}
-						>
-							{#if signingTestRunning}
-								<Spinner size={14} class="motion-essential-spin" />
-							{/if}
-							Test signing
-						</Button>
-						{#if signingTestState}
-							<span
-								class="probe-result"
-								class:probe-result--ok={signingTestState.ok}
-								class:probe-result--err={!signingTestState.ok}
-							>
-								{#if signingTestState.ok}
-									Signed &amp; verified as {signingTestState.signerLogin}@{signingTestState.signerHost}
-								{:else}
-									{signingTestState.error}
-								{/if}
-							</span>
-						{/if}
-					</div>
-				</div>
-			</section>
-
-				<TypeSafeSettingsSection />
-
-			<!-- Integrations -->
-			<section id="section-integrations" class="settings-section">
-				<h2 class="section-head-title">Integrations</h2>
-				<p class="settings-row-hint">
-					Give a coding agent the current PR's walkthrough, issues, and comment threads. It can
-					record verified fixes, update walkthrough content, and reply to or resolve comments.
-					Revv must stay running while the agent is in use.
-				</p>
-
-				{#each EXTERNAL_AGENT_PROVIDERS as provider (provider)}
-					{@const status = integrationStatusFor(provider)}
-					{@const busy = integrationAction?.provider === provider}
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">{EXTERNAL_AGENT_PROVIDER_NAMES[provider]}</h3>
-						<div class="settings-row">
-							<div class="settings-row-info">
-								{#if status?.connected}
-									<p class="settings-row-hint">Connected. {integrationActivation(provider, status.clientName)}</p>
-									{#if formatIntegrationTimestamp(status.lastUsedAt)}
-										<p class="settings-row-hint">Last used {formatIntegrationTimestamp(status.lastUsedAt)}.</p>
-									{/if}
-									{#if formatIntegrationTimestamp(status.expiresAt)}
-										<p class="settings-row-hint">Credential expires {formatIntegrationTimestamp(status.expiresAt)}.</p>
-									{/if}
-								{:else if status?.clientConfigured}
-									<p class="settings-row-hint">
-										Configured, but the credential is inactive. Reconnect to repair it.
-									</p>
-								{:else}
-									<p class="settings-row-hint">Not connected.</p>
-								{/if}
-							</div>
-							<div class="flex shrink-0 items-center gap-2">
-								{#if status?.connected}
-									<Button
-										variant="outline"
-										size="sm"
-										onclick={() => runExternalIntegrationAction(provider, 'disconnect')}
-										disabled={integrationAction !== null}
-									>
-										{#if busy && integrationAction?.kind === 'disconnect'}
-											<Spinner size={14} class="motion-essential-spin" />
-											Disconnecting…
-										{:else}
-											Disconnect
-										{/if}
-									</Button>
-								{/if}
-								<Button
-									size="sm"
-									onclick={() => runExternalIntegrationAction(provider, 'connect')}
-									disabled={integrationAction !== null}
-								>
-									{#if busy && integrationAction?.kind === 'connect'}
-										<Spinner size={14} class="motion-essential-spin" />
-										Connecting…
-									{:else}
-										{status?.connected ? 'Reconnect' : 'Connect'}
-									{/if}
-								</Button>
-							</div>
-						</div>
-					</div>
-				{/each}
-
-				{#if integrationError}
-					<p class="probe-result probe-result--err" role="alert">{integrationError}</p>
-				{/if}
-			</section>
-
-			<PreferencesSettingsSection />
-
-			<!-- Onboarding -->
-			<section id="section-onboarding" class="settings-section">
-				<h2 class="section-head-title">Onboarding</h2>
-
-				<div class="settings-subgroup">
-					<div class="settings-row">
-						<div class="settings-row-info">
-							<p class="settings-row-label">Replay onboarding</p>
-							<p class="settings-row-hint">Walk through the setup flow again from the beginning.</p>
-						</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={handleReplayOnboarding}
-							disabled={replaying}
-							class="flex shrink-0 items-center gap-1.5 text-xs"
-						>
-							{#if replaying}
-								<Spinner size={12} class="motion-essential-spin" />
-								Starting…
-							{:else}
-								<ArrowCounterClockwise size={12} />
-								Replay
-							{/if}
-						</Button>
-					</div>
-				</div>
-			</section>
-
-			<!-- Updates -->
-			<UpdatesSection />
-
-		<!-- Danger Zone -->
-		{#if getUser()}
-				<section id="section-danger" class="settings-section danger-section">
-					<h2 class="section-head-title section-head-title--danger">
-						<Warning size={14} weight="fill" />
-						Danger Zone
-					</h2>
-
-					<!-- Tracked repositories -->
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">Tracked repositories</h3>
-
-						{#if getRepositories().length === 0}
-							<p class="text-xs text-text-muted">No repositories tracked yet.</p>
-						{:else}
-							<ul class="repo-list" role="list">
-								{#each getRepositories() as repo (repo.id)}
-									<li class="repo-list-item">
-										<span class="text-sm text-text-primary">{repo.fullName}</span>
-										<button
-											type="button"
-											class="repo-delete-btn"
-											disabled={removingRepoId === repo.id}
-											onclick={() => (repoPendingDelete = repo)}
-											aria-label="Remove {repo.fullName}"
-										>
-											{#if removingRepoId === repo.id}
-												<Spinner size={12} class="motion-essential-spin" />
-											{:else}
-												<Trash size={12} />
-											{/if}
-										</button>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-					</div>
-
-					<!-- Account removal -->
-					<div class="settings-subgroup">
-						<h3 class="settings-subgroup-heading">Account</h3>
-
-						<div class="settings-row">
-							<div class="settings-row-info">
-								<p class="settings-row-label">Remove account</p>
-								<p class="settings-row-hint">
-									Permanently deletes your account and all local data. This cannot be undone.
-								</p>
-							</div>
-							{#if !showDeleteConfirm}
-								<Button
-									variant="destructive"
-									size="sm"
-									onclick={() => (showDeleteConfirm = true)}
-									class="flex shrink-0 items-center gap-1.5 text-xs"
-								>
-									<Warning size={12} weight="fill" />
-									Remove account
-								</Button>
-							{:else}
-								<div class="flex items-center gap-2">
-									<Button
-										variant="ghost"
-										size="sm"
-										onclick={() => (showDeleteConfirm = false)}
-										disabled={deleting}
-										class="text-xs text-text-muted"
-									>
-										Cancel
-									</Button>
-									<Button
-										variant="destructive"
-										size="sm"
-										onclick={handleRemoveAccount}
-										disabled={deleting}
-										class="flex items-center gap-1.5 text-xs"
-									>
-										{#if deleting}
-											<Spinner size={12} class="motion-essential-spin" />
-											Removing…
-										{:else}
-											<Warning size={12} weight="fill" />
-											Confirm remove
-										{/if}
-									</Button>
-								</div>
-							{/if}
-						</div>
-
-						{#if deleteError}
-							<p class="mt-2 text-xs text-danger">{deleteError}</p>
-						{/if}
-					</div>
-				</section>
-			{/if}
-				<!-- Spacer so the last section can scroll fully to the top -->
-				<div aria-hidden="true" style="min-height: 50vh; flex-shrink: 0;"></div>
-			</div>
+			{/snippet}
 		</DialogPrimitive.Content>
 	</Dialog.Portal>
 </DialogPrimitive.Root>
 
-<RepoDeleteConfirm
-	repo={repoPendingDelete}
-	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepoId === repoPendingDelete.id : false}
-	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || removingRepoId !== repoPendingDelete.id)) {
-			repoPendingDelete = null;
-		}
-	}}
-	onConfirm={() => {
-		if (repoPendingDelete) void handleDeleteRepo(repoPendingDelete.id);
-	}}
-/>
-
 <style>
-	@keyframes settings-modal-in {
-		0% {
-			opacity: 0;
-			scale: 0.97;
-			translate: 0 10px;
-		}
-		100% {
-			opacity: 1;
-			scale: 1;
-			translate: 0 0;
-		}
-	}
-
-	:global(.settings-modal) {
-		position: fixed !important;
-		top: 50% !important;
-		left: 50% !important;
-		transform: translate(-50%, -50%) !important;
+	.settings-modal {
+		position: fixed;
+		inset: 0;
 		z-index: 50;
 		display: flex;
-		flex-direction: row;
-		width: 100%;
-		max-width: 1080px;
-		height: 760px;
-		max-height: 90vh;
-		border-radius: 16px;
+		width: min(1040px, calc(100vw - 48px));
+		height: min(720px, 90vh);
+		margin: auto;
 		overflow: hidden;
-		outline: none;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 14px;
 		background: var(--color-bg-primary);
-		backdrop-filter: blur(20px) saturate(1.4);
-		-webkit-backdrop-filter: blur(20px) saturate(1.4);
-		border: 1px solid var(--color-glass-border);
+		outline: none;
+		/* DESIGN.md XL: dialogs and modals. */
 		box-shadow:
-			0 32px 80px rgba(0, 0, 0, 0.4),
-			0 8px 24px rgba(0, 0, 0, 0.18),
-			0 0 0 1px rgba(255, 255, 255, 0.02),
-			inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
+			0 16px 48px rgba(42, 40, 37, 0.18),
+			0 4px 12px rgba(42, 40, 37, 0.1);
 	}
 
-	:global(.settings-modal[data-state='open']) {
-		animation: settings-modal-in var(--duration-slow) var(--ease-out-expo) both;
+	:global(.dark) .settings-modal {
+		border-color: var(--color-border);
+		box-shadow:
+			0 16px 48px rgba(0, 0, 0, 0.45),
+			0 4px 12px rgba(0, 0, 0, 0.25);
 	}
 
-	/* ── Left sidebar ── */
-	.settings-sidebar {
+	/* ── Sidebar ── */
+	.sidebar {
 		display: flex;
-		flex-direction: column;
-		width: 220px;
+		width: 232px;
 		flex-shrink: 0;
+		flex-direction: column;
 		border-right: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-primary);
-		padding: 0;
-		overflow: hidden;
 	}
 
-	.settings-sidebar-header {
-		display: flex;
-		align-items: center;
-		padding: 22px 20px;
-		border-bottom: 1px solid var(--color-border-subtle);
-	}
-
-	.settings-title {
+	:global(.settings-title) {
+		padding: 24px 20px 14px;
 		font-family: "Newsreader", Georgia, serif;
 		font-size: 22px;
 		font-weight: 500;
@@ -1584,89 +415,210 @@ async function handleRemoveAccount(): Promise<void> {
 		color: var(--color-text-primary);
 	}
 
-	.settings-nav {
+	.search {
+		position: relative;
+		display: flex;
+		align-items: center;
+		margin: 0 12px 10px;
+	}
+
+	.search :global(.search-icon) {
+		position: absolute;
+		left: 9px;
+		color: var(--color-text-secondary);
+		pointer-events: none;
+	}
+
+	.search-input {
+		width: 100%;
+		height: 30px;
+		padding: 0 28px 0 28px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 8px;
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		font: inherit;
+		font-size: 12.5px;
+		outline: none;
+		transition: box-shadow var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.search-input::placeholder {
+		color: var(--color-text-muted);
+	}
+
+	.search-input::-webkit-search-cancel-button {
+		appearance: none;
+	}
+
+	.search-input:focus-visible {
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent);
+	}
+
+	.search-clear {
+		position: absolute;
+		right: 6px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		border: none;
+		border-radius: 50%;
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+		cursor: pointer;
+	}
+
+	.nav,
+	.results {
 		flex: 1;
-		list-style: none;
-		margin: 0;
-		padding: 14px 8px;
+		min-height: 0;
+		overflow-y: auto;
+		padding: 4px 8px 12px;
+	}
+
+	.nav-list {
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
-		overflow-y: auto;
+		margin: 0;
+		padding: 0;
+		list-style: none;
 	}
 
-	.settings-nav-item {
+	.nav-cluster-start {
+		margin-top: 10px;
+	}
+
+	.nav-item {
+		position: relative;
 		display: flex;
 		align-items: center;
 		gap: 10px;
 		width: 100%;
-		padding: 8px 12px;
+		height: 32px;
+		padding: 0 10px 0 12px;
 		border: none;
 		border-radius: 6px;
 		background: transparent;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		font-family: inherit;
+		color: var(--color-text-secondary);
+		font: inherit;
 		font-size: 13px;
-		font-weight: 500;
 		text-align: left;
-		position: relative;
+		cursor: pointer;
+		outline: none;
 		transition:
 			color var(--duration-quick) var(--ease-out-expo),
 			background-color var(--duration-quick) var(--ease-out-expo);
 	}
 
-	.settings-nav-item::before {
+	.nav-item::before {
 		content: "";
 		position: absolute;
-		left: -8px;
 		top: 50%;
-		transform: translateY(-50%) scaleY(0);
+		left: -8px;
 		width: 2px;
 		height: 18px;
-		background: var(--color-accent);
 		border-radius: 0 2px 2px 0;
+		background: var(--color-accent);
+		transform: translateY(-50%) scaleY(0);
 		transition: transform var(--duration-quick) var(--ease-out-expo);
 	}
 
-	:global(.settings-nav-icon) {
-		flex-shrink: 0;
-		opacity: 0.85;
-	}
-
-	.settings-nav-label {
-		font-size: 13px;
-	}
-
-	.settings-nav-item:hover {
-		color: var(--color-text-secondary);
-		background: var(--color-bg-tertiary);
-	}
-
-	.settings-nav-item--active {
+	.nav-item:hover {
 		color: var(--color-text-primary);
 		background: var(--color-bg-tertiary);
 	}
 
-	.settings-nav-item--active::before {
+	.nav-item:focus-visible {
+		box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 40%, transparent);
+	}
+
+	.nav-item--active {
+		color: var(--color-text-primary);
+		background: var(--color-bg-tertiary);
+	}
+
+	.nav-item--active::before {
 		transform: translateY(-50%) scaleY(1);
 	}
 
-	.settings-nav-item--danger:hover {
-		color: var(--color-danger);
-		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+	.nav-label {
+		min-width: 0;
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.settings-nav-item--danger.settings-nav-item--active {
-		color: var(--color-danger);
-		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+	.nav-dot {
+		width: 7px;
+		height: 7px;
+		flex-shrink: 0;
+		border-radius: 50%;
+		background: var(--color-warning);
 	}
 
-	.settings-nav-item--danger.settings-nav-item--active::before {
-		background: var(--color-danger);
+	.nav-accessory {
+		flex-shrink: 0;
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+		font-size: 11px;
+		color: var(--color-text-secondary);
+		font-variant-numeric: tabular-nums;
 	}
 
-	.settings-sidebar-user {
+	/* ── Search results ── */
+	.result {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		width: 100%;
+		padding: 7px 10px;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+		outline: none;
+		transition: background-color var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.result:hover,
+	.result:focus-visible {
+		background: var(--color-bg-tertiary);
+	}
+
+	.result:focus-visible {
+		box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 40%, transparent);
+	}
+
+	.result-label {
+		font-size: 13px;
+		font-weight: 400;
+		color: var(--color-text-primary);
+	}
+
+	.result-label strong {
+		font-weight: 600;
+	}
+
+	.result-pane {
+		font-size: 11.5px;
+		color: var(--color-text-secondary);
+	}
+
+	.results-empty {
+		padding: 8px 10px;
+		font-size: 12.5px;
+		line-height: 1.45;
+		color: var(--color-text-secondary);
+		overflow-wrap: anywhere;
+	}
+
+	/* ── User footer ── */
+	.sidebar-user {
 		display: flex;
 		align-items: center;
 		gap: 10px;
@@ -1674,331 +626,60 @@ async function handleRemoveAccount(): Promise<void> {
 		border-top: 1px solid var(--color-border-subtle);
 	}
 
-	.settings-sidebar-avatar {
+	.sidebar-avatar {
 		width: 22px;
 		height: 22px;
+		flex-shrink: 0;
 		border-radius: 50%;
 		object-fit: cover;
-		flex-shrink: 0;
 	}
 
-	.settings-sidebar-avatar--fallback {
+	.sidebar-avatar--fallback {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--color-bg-elevated);
-		color: var(--color-text-muted);
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
 	}
 
-	.settings-sidebar-username {
+	.sidebar-username {
+		min-width: 0;
+		overflow: hidden;
 		font-size: 12px;
 		color: var(--color-text-secondary);
-		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		min-width: 0;
 	}
 
-	/* ── Right content area ── */
-	.settings-content {
+	/* ── Pane ── */
+	.pane {
+		position: relative;
+		min-width: 0;
 		flex: 1;
 		overflow-y: auto;
-		position: relative;
-		padding: 0;
-		scroll-behavior: smooth;
 		background: var(--color-bg-secondary);
 	}
 
-	.section-head-title--danger {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: var(--color-danger);
+	/* Controls inside panes sit one tone below their warm-paper group card. */
+	.pane :global([data-slot="select-trigger"]),
+	.pane :global([data-slot="input"]) {
+		height: 30px;
+		border-color: var(--color-border-subtle);
+		background: var(--color-bg-secondary);
+		font-size: 12.5px;
 	}
 
-	/* ── Status line (AI status indicator) ── */
-	.status-line {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--color-text-secondary);
-	}
-
-	.status-line-dot {
-		display: inline-block;
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		flex-shrink: 0;
-	}
-
-	.status-line-dot--success {
-		background: var(--color-success);
-	}
-
-	.status-line-dot--warning {
-		background: var(--color-warning);
-	}
-
-	.provider-status-action {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		flex-shrink: 0;
-	}
-
-	.provider-warning {
-		margin-top: 6px;
-		display: flex;
-		align-items: flex-start;
-		gap: 6px;
-		max-width: 440px;
-		font-size: 11px;
-		line-height: 1.45;
-		color: var(--color-warning);
-	}
-
-	.provider-setup-actions {
-		display: flex;
-		justify-content: flex-end;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.provider-setup-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-		padding: 12px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 8px;
-		background: var(--color-bg-primary);
-	}
-
-	.provider-setup-panel--error {
-		border-color: color-mix(in srgb, var(--color-danger) 32%, var(--color-border-subtle));
-	}
-
-	.provider-setup-heading {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--color-text-secondary);
-	}
-
-	.provider-install-log {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		max-height: 132px;
-		overflow: auto;
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 10.5px;
-		line-height: 1.45;
-		color: var(--color-text-secondary);
-	}
-
-	.provider-install-log-line {
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-	}
-
-	.provider-install-log-line--muted {
-		color: var(--color-text-muted);
-	}
-
-	.provider-install-log-line--error {
-		color: var(--color-danger);
-	}
-
-	.provider-manual-login {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: flex-end;
-		align-items: center;
-		gap: 8px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-	}
-
-	.provider-manual-login code {
-		padding: 4px 6px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 6px;
-		background: var(--color-bg-primary);
-		color: var(--color-text-secondary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-	}
-
-	.provider-login-terminal {
-		--ob-bg: var(--color-bg-secondary);
-		--ob-border: var(--color-border-subtle);
-		--ob-border-btn: var(--color-border);
-		--ob-error: var(--color-danger);
-		--ob-hover-subtle: var(--color-bg-primary);
-		--ob-row-highlight: color-mix(in srgb, var(--color-accent) 14%, transparent);
-		--ob-text: var(--color-text-primary);
-		--ob-text-body: var(--color-text-secondary);
-		--ob-text-dimmed: var(--color-text-muted);
-		--ob-text-heading: var(--color-text-primary);
-		--ob-text-italic: var(--color-accent);
-		--ob-text-label: var(--color-danger);
-		--ob-text-muted: var(--color-text-muted);
-		padding: 12px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 8px;
-		background: var(--color-bg-primary);
-	}
-
-	/* ── Settings-scoped input refinements ── */
-
-	/* Select triggers: borderless, subtle bg, smaller text */
-	:global(.settings-modal [data-slot="select-trigger"]) {
-		border: 1px solid transparent;
-		background: var(--color-bg-primary);
-		font-size: 13px;
-		height: 34px;
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-		transition:
-			background-color var(--duration-quick) var(--ease-out-expo),
-			border-color var(--duration-quick) var(--ease-out-expo),
-			box-shadow var(--duration-quick) var(--ease-out-expo);
-	}
-
-	:global(.settings-modal [data-slot="select-trigger"]:hover) {
+	:global(.dark) .pane :global([data-slot="select-trigger"]),
+	:global(.dark) .pane :global([data-slot="input"]) {
 		background: var(--color-bg-elevated);
-		border-color: var(--color-border);
 	}
 
-	:global(.settings-modal [data-slot="select-trigger"]:focus) {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
+	.pane :global([data-slot="select-trigger"]:hover) {
+		background: var(--color-bg-tertiary);
 	}
 
-	/* Inputs: match the select style */
-	:global(.settings-modal [data-slot="input"]) {
-		border: 1px solid var(--color-border-subtle);
-		background: var(--color-bg-primary);
-		font-size: 13px;
-		height: 34px;
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-		text-align: left;
-		transition:
-			background-color var(--duration-quick) var(--ease-out-expo),
-			border-color var(--duration-quick) var(--ease-out-expo),
-			box-shadow var(--duration-quick) var(--ease-out-expo);
-	}
-
-	:global(.settings-modal [data-slot="input"]:hover) {
-		border-color: var(--color-border);
-	}
-
-	:global(.settings-modal [data-slot="input"]:focus) {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
-		background: var(--color-bg-primary);
-	}
-
-	/* Number inputs get centered, tabular numerals (Max turns, etc.) */
-	:global(.settings-modal [data-slot="input"][type="number"]) {
-		text-align: center;
-		font-variant-numeric: tabular-nums;
-	}
-
-	/* Textarea: match input visuals */
-	:global(.settings-modal textarea.settings-textarea) {
-		width: 100%;
-		border: 1px solid var(--color-border-subtle);
-		background: var(--color-bg-primary);
-		font-size: 12px;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		padding: 10px 12px;
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-		color: var(--color-text-primary);
-		resize: vertical;
-		transition:
-			background-color var(--duration-quick) var(--ease-out-expo),
-			border-color var(--duration-quick) var(--ease-out-expo),
-			box-shadow var(--duration-quick) var(--ease-out-expo);
-	}
-
-	:global(.settings-modal textarea.settings-textarea:hover) {
-		border-color: var(--color-border);
-	}
-
-	:global(.settings-modal textarea.settings-textarea:focus) {
-		border-color: var(--color-accent);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
-		outline: none;
-	}
-
-	:global(.settings-modal textarea.settings-textarea::placeholder) {
-		color: var(--color-text-muted);
-	}
-
-	/* Hide number input spinners for a cleaner look */
-	:global(.settings-modal [data-slot="input"]::-webkit-inner-spin-button),
-	:global(.settings-modal [data-slot="input"]::-webkit-outer-spin-button) {
-		-webkit-appearance: none;
-		margin: 0;
-	}
-
-	:global(.settings-modal [data-slot="input"][type="number"]) {
-		-moz-appearance: textfield;
-		appearance: textfield;
-	}
-
-	/* ── Danger Zone ── */
-	.danger-section {
-		border-bottom: none;
-	}
-
-	.repo-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-
-	.repo-list-item {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		padding: 8px 0;
-		border-bottom: 1px solid var(--color-border-subtle);
-	}
-
-	.repo-list-item:first-child {
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.repo-delete-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 4px;
-		border: none;
-		border-radius: 4px;
-		background: transparent;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		transition:
-			color var(--duration-quick) var(--ease-out-expo),
-			background-color var(--duration-quick) var(--ease-out-expo);
-	}
-
-	.repo-delete-btn:hover:not(:disabled) {
-		color: var(--color-danger);
-		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-	}
-
-	.repo-delete-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+	.pane :global([data-slot="input"]:focus-visible) {
+		border-color: var(--color-border-subtle);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent);
 	}
 </style>
