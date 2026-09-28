@@ -1,5 +1,5 @@
 import { and, eq, lt } from "drizzle-orm";
-import { Context, Effect, Layer, Runtime } from "effect";
+import { Context, Effect, type Exit, Layer, Runtime } from "effect";
 import { kvCache } from "../db/schema/index";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
@@ -77,7 +77,7 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
   const memory = new Map<string, MemEntry>();
   const cacheKey = (ns: string, key: string) => `${ns}\0${key}`;
 
-  // In-flight dedup — one Promise per (ns,key) shared across concurrent callers.
+  // In-flight dedup — one Promise of the fetcher's Exit per (ns,key), shared across concurrent callers.
   const inflight = new Map<string, Promise<unknown>>();
 
   let hits = 0;
@@ -241,32 +241,31 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       const pending = inflight.get(dedupKey);
       if (pending) {
         inflightDedups++;
-        return (yield* Effect.promise(() => pending as Promise<T>)) as T;
+        const exit = yield* Effect.promise(() => pending as Promise<Exit.Exit<T, E>>);
+        return yield* exit;
       }
 
       // Materialize the fetcher as a Promise so concurrent callers can share
-      // it. We still surface errors through Effect's error channel via the
-      // sync path below.
+      // it. The Promise carries the fetcher's Exit and never rejects, so every
+      // caller — owner and deduplicated alike — sees a typed failure in the
+      // error channel. A rejecting Promise would reach joiners as a defect,
+      // slipping past their `catchAll`.
       // The fetcher chain also writes through `set`, which requires
       // DbService. Grab a runtime that carries both.
       const runtime = yield* Effect.runtime<R | DbService>();
-      const runPromise = Runtime.runPromise(runtime);
-      const promise = new Promise<T>((resolve, reject) => {
-        const eff = fetcher().pipe(
+      const promise = Runtime.runPromise(runtime)(
+        fetcher().pipe(
           Effect.tap((value) =>
             set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),
           ),
-        );
-        runPromise(eff).then(resolve, reject);
-      });
+          Effect.exit,
+        ),
+      );
 
       inflight.set(dedupKey, promise);
       try {
-        const value = yield* Effect.tryPromise({
-          try: () => promise,
-          catch: (err) => err as E,
-        });
-        return value;
+        const exit = yield* Effect.promise(() => promise);
+        return yield* exit;
       } finally {
         inflight.delete(dedupKey);
       }
