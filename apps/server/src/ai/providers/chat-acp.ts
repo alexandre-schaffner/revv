@@ -26,6 +26,7 @@ import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
 import { getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { findPlanModeId, modeToExitPlan } from "../acp/session-config";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -80,16 +81,6 @@ export interface StreamChatViaAcpOptions {
 }
 
 const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
-
-/** Pick a read-only/plan/architect mode from the agent's advertised modes. */
-function findPlanModeId(modes: SessionModeState | null): string | undefined {
-  if (!modes) return undefined;
-  for (const mode of modes.availableModes) {
-    const haystack = `${mode.id} ${mode.name} ${mode.description ?? ""}`.toLowerCase();
-    if (/(plan|ask|architect|read.?only|readonly)/.test(haystack)) return mode.id;
-  }
-  return undefined;
-}
 
 function attachmentUri(name: string): string {
   return `attachment://${encodeURIComponent(name)}`;
@@ -227,6 +218,9 @@ export function streamChatViaAcp(
           if (!planModeId) throw new AgentUnavailableError("plan");
           await h.setMode(turnSessionId, planModeId);
           h.setPlanMode(turnSessionId, true);
+        } else {
+          const exitModeId = modeToExitPlan(modes);
+          if (exitModeId) await h.setMode(turnSessionId, exitModeId);
         }
 
         // Map normalized events → ChatStreamFrame. Same shape as the opencode

@@ -6,7 +6,9 @@
 // entry there. This module holds the server-only concerns: the `REVV_ACP_AGENT`
 // / `REVV_ACP_COMMAND` overrides, availability checks, and — since ACP has no
 // model protocol — per-adapter injection of the selected model / thinking-effort
-// / context-window at launch time (env for Codex/Claude Code/opencode).
+// / context-window at launch time (env for Codex/Claude Code). opencode 2 is the
+// exception: it takes the model over ACP itself (see
+// `selectsModelViaSessionConfig`), so nothing is injected at launch.
 
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -182,12 +184,10 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
       break;
     }
     case "opencode": {
-      // `opencode acp` does NOT accept a `--model` flag (unlike `opencode run` /
-      // the TUI) — passing one makes yargs print help and exit 1, which surfaces
-      // as "ACP connection closed". Inject the model the way the ACP subcommand
-      // honors it: an inline config override via OPENCODE_CONFIG_CONTENT, whose
-      // `model` field takes the same `provider/model` format as the config file.
-      if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model });
+      // Nothing to inject: `opencode acp` rejects a `--model` flag, and opencode
+      // 2's ACP server seeds new sessions from its own default model, ignoring
+      // OPENCODE_CONFIG_CONTENT. The model is applied per session over ACP
+      // instead — see `selectsModelViaSessionConfig`.
       break;
     }
     case "cursor": {
@@ -204,6 +204,16 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     args,
     ...(Object.keys(env).length > 0 ? { env } : {}),
   };
+}
+
+/**
+ * Whether an agent takes the selected model over ACP — `session/set_config_option`
+ * on the session's `model` option, applied by the connection layer after every
+ * `session/new` / `session/load` — rather than at launch. opencode 2 publishes
+ * its whole catalog that way and honors no launch-time model.
+ */
+export function selectsModelViaSessionConfig(id: AcpAgentId): boolean {
+  return id === "opencode";
 }
 
 /**

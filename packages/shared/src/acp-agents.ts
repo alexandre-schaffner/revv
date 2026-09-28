@@ -33,7 +33,7 @@ export interface AcpAgentCapabilities {
   readonly defaultModel: string;
   /**
    * Static model catalog (label + id), or the literal `"dynamic"` when the list
-   * must be fetched live from the server (opencode runs `opencode models`). ACP
+   * must be fetched live from the server (opencode's `GET /api/model`). ACP
    * itself has no model protocol, so static catalogs are curated per agent.
    */
   readonly models: readonly AcpAgentModel[] | "dynamic";
@@ -142,12 +142,13 @@ export const ACP_AGENTS = [
     args: ["acp"],
     capabilities: {
       defaultModel: "opencode/big-pickle",
-      // opencode exposes 75+ models across providers; fetched live via the
-      // server's `opencode models` parse rather than curated here.
+      // opencode exposes 75+ models across providers; fetched live from its
+      // server API rather than curated here, and applied per session through
+      // the ACP `model` config option.
       models: "dynamic",
       thinkingEfforts: [],
-      // opencode ships a read-only `plan` agent, selected via the session's
-      // advertised modes.
+      // opencode ships a read-only `plan` agent, advertised as the session's
+      // `mode` config option.
       planMode: true,
     },
   },

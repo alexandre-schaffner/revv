@@ -681,10 +681,42 @@ export function detectAgentStatus(): AgentStatusReport {
 export type CliModelOption = { label: string; value: string };
 
 /**
+ * Parse opencode 2's `GET /api/model` response (via `opencode api`) into picker
+ * options. Values are `provider/model` — the same ids opencode's ACP `model`
+ * config option takes. Disabled models are dropped, and rows are ordered by
+ * value so each provider's models stay together (the API orders by release).
+ */
+export function parseOpencodeModelList(text: string): CliModelOption[] {
+  const parsed: unknown = JSON.parse(text);
+  const data =
+    parsed && typeof parsed === "object" && "data" in parsed && Array.isArray(parsed.data)
+      ? (parsed.data as unknown[])
+      : [];
+  const models: CliModelOption[] = [];
+  for (const row of data) {
+    if (!row || typeof row !== "object") continue;
+    const { id, providerID, name, enabled } = row as Record<string, unknown>;
+    if (typeof id !== "string" || typeof providerID !== "string" || enabled === false) continue;
+    const value = `${providerID}/${id}`;
+    models.push({ label: typeof name === "string" && name ? name : value, value });
+  }
+  return models.sort((a, b) => a.value.localeCompare(b.value));
+}
+
+// opencode 2 serves its catalog from a shared background service, which
+// `opencode api` starts on demand. A service that is still starting answers
+// with an empty snapshot (the catalog "may precede initial plugin settlement"),
+// so an empty list is retried briefly before it is believed. The CLI itself
+// waits two minutes for a service that won't start; cap each call well below.
+const OPENCODE_MODEL_LIST_ATTEMPTS = 10;
+const OPENCODE_MODEL_LIST_RETRY_MS = 500;
+const OPENCODE_MODEL_LIST_TIMEOUT_MS = 20_000;
+
+/**
  * List models available to the selected ACP agent. Agents with a static
  * catalog (claude-code, codex, cursor) return it straight from the shared
- * registry; opencode is the only dynamic catalog, probed by running
- * `opencode models --verbose` and parsing the output.
+ * registry; opencode is the only dynamic catalog, read from its server API
+ * with `opencode api GET /api/model`.
  */
 export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]> {
   // Static catalogs come straight from the shared ACP registry — the single
@@ -695,70 +727,39 @@ export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]
     return caps.models.map((m) => ({ label: m.label, value: m.value }));
   }
 
-  // opencode: run `opencode models --verbose` and parse interleaved output
-  // Format: line with "provider/id", then JSON blob with model metadata, repeated
   const opencodeBin = resolveCliBin("opencode");
   debug("listCliModels", "opencode binary:", opencodeBin);
   try {
-    const proc = Bun.spawn([opencodeBin, "models", "--verbose"], {
-      stdout: "pipe",
-      stderr: "pipe",
-      // Inherit the login-shell PATH so the spawn can resolve a bare binary
-      // name even when the server process inherits a sanitized PATH.
-      env: { ...process.env, PATH: resolveUserPath() },
-    });
-    const text = await new Response(proc.stdout).text();
-    const stderrText = await new Response(proc.stderr).text();
-    await proc.exited;
+    for (let attempt = 1; attempt <= OPENCODE_MODEL_LIST_ATTEMPTS; attempt++) {
+      const proc = Bun.spawn([opencodeBin, "api", "GET", "/api/model"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: OPENCODE_MODEL_LIST_TIMEOUT_MS,
+        // Inherit the login-shell PATH so the spawn can resolve a bare binary
+        // name even when the server process inherits a sanitized PATH.
+        env: { ...process.env, PATH: resolveUserPath() },
+      });
+      const [text, stderrText] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      await proc.exited;
 
-    if (proc.exitCode !== 0) {
-      logError(
-        "listCliModels",
-        `opencode models --verbose exited ${proc.exitCode ?? "with signal"}`,
-        stderrText.slice(0, 500),
-      );
-      return [];
-    }
-
-    const models: CliModelOption[] = [];
-    const lines = text.split("\n");
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i]?.trim();
-      if (!line) {
-        i++;
-        continue;
+      if (proc.exitCode !== 0) {
+        logError(
+          "listCliModels",
+          `opencode api GET /api/model exited ${proc.exitCode ?? "with signal"}`,
+          stderrText.slice(0, 500),
+        );
+        return [];
       }
 
-      // Check if this line looks like a model ID (e.g. "provider/model-id")
-      if (!line.startsWith("{") && line.includes("/")) {
-        const modelId = line;
-        // Next non-empty content should be a JSON blob — collect until balanced braces
-        let jsonStr = "";
-        let depth = 0;
-        i++;
-        while (i < lines.length) {
-          const jsonLine = lines[i] ?? "";
-          jsonStr += `${jsonLine}\n`;
-          for (const ch of jsonLine) {
-            if (ch === "{") depth++;
-            else if (ch === "}") depth--;
-          }
-          i++;
-          if (depth === 0 && jsonStr.trim().startsWith("{")) break;
-        }
-        try {
-          const meta = JSON.parse(jsonStr.trim()) as { name?: string; providerID?: string };
-          const label = meta.name ?? modelId;
-          models.push({ label, value: modelId });
-        } catch {
-          models.push({ label: modelId, value: modelId });
-        }
-      } else {
-        i++;
-      }
+      const models = parseOpencodeModelList(text);
+      if (models.length > 0) return models;
+      if (attempt < OPENCODE_MODEL_LIST_ATTEMPTS) await Bun.sleep(OPENCODE_MODEL_LIST_RETRY_MS);
     }
-    return models;
+    logError("listCliModels", "opencode reported no models");
+    return [];
   } catch (e) {
     logError(
       "listCliModels",

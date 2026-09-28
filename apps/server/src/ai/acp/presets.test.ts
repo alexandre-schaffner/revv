@@ -9,6 +9,7 @@ import {
   resolveAcpLaunchById,
   resolveAcpProcessLaunchById,
   resolveGenerationModel,
+  selectsModelViaSessionConfig,
 } from "./presets";
 
 function withPathExecutable(command: string, fn: (path: string) => void): void {
@@ -222,15 +223,16 @@ describe("ACP launch presets", () => {
     expect(launch.env.ANTHROPIC_API_KEY).toBe("api-key");
   });
 
-  it("injects the selected model into opencode acp via OPENCODE_CONFIG_CONTENT", () => {
+  it("launches opencode acp without a model — it is applied per session over ACP", () => {
     if (serverEnv.acpCommand) return;
-    // `opencode acp` rejects a `--model` flag, so the model rides in as an inline
-    // config override the ACP subcommand honors.
+    // `opencode acp` rejects a `--model` flag and opencode 2 ignores
+    // OPENCODE_CONFIG_CONTENT's model, so the launch carries none.
     expect(resolveAcpLaunchById("opencode", { model: "anthropic/claude-sonnet-4-6" })).toEqual({
       command: "opencode",
       args: ["acp"],
-      env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "anthropic/claude-sonnet-4-6" }) },
     });
+    expect(selectsModelViaSessionConfig("opencode")).toBe(true);
+    expect(selectsModelViaSessionConfig("claude-code")).toBe(false);
   });
 });
 
