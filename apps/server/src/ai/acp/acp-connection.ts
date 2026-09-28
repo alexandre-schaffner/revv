@@ -87,9 +87,19 @@ export type AcpSessionUpdate = SessionUpdate;
 /** Listener invoked for every `session/update` notification on a session. */
 export type AcpUpdateListener = (update: AcpSessionUpdate) => void;
 
-export interface AcpNewSessionResult {
-  readonly sessionId: string;
+/** What a just-opened or loaded session reports back. */
+export interface AcpSessionState {
   readonly modes: SessionModeState | null;
+  /**
+   * The per-session model the agent's catalog lacks — a stale setting — which
+   * left the session on the agent's default model. Callers that face the user
+   * surface it, since the reply won't come from the model the picker shows.
+   */
+  readonly unavailableModel?: string;
+}
+
+export interface AcpNewSessionResult extends AcpSessionState {
+  readonly sessionId: string;
 }
 
 export interface AcpConnectionHandle {
@@ -114,10 +124,7 @@ export interface AcpConnectionHandle {
    * Resume an existing session by id. Returns its mode state (for plan mode).
    * Like `newSession`, applies the launch's per-session model, if any.
    */
-  readonly loadSession: (
-    sessionId: string,
-    mcpServers: McpServer[],
-  ) => Promise<SessionModeState | null>;
+  readonly loadSession: (sessionId: string, mcpServers: McpServer[]) => Promise<AcpSessionState>;
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
   readonly cancel: (sessionId: string) => Promise<void>;
@@ -386,8 +393,8 @@ export type SessionSelectionConnection = Pick<
 >;
 
 export interface SessionSelections {
-  /** Apply the per-session model to a just-opened/loaded session and return its modes. */
-  readonly adopt: (sessionId: string, res: SessionConfigSource) => Promise<SessionModeState | null>;
+  /** Apply the per-session model to a just-opened/loaded session and return its state. */
+  readonly adopt: (sessionId: string, res: SessionConfigSource) => Promise<AcpSessionState>;
   /** Switch a session's mode through whichever channel it advertised its modes on. */
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly clear: () => void;
@@ -398,7 +405,7 @@ export interface SessionSelections {
  * missing from the session's catalog is a stale setting (the picker lists a
  * subset of opencode's ACP catalog): like a stale id in a static catalog (see
  * `resolveGenerationModel`), it leaves the session on the agent's default
- * rather than failing the turn.
+ * rather than failing the turn, and is reported as `unavailableModel`.
  */
 export function createSessionSelections(
   connection: SessionSelectionConnection,
@@ -410,11 +417,12 @@ export function createSessionSelections(
   // `session/set_mode`.
   const modeConfigIds = new Map<string, string>();
 
+  /** Apply the model; returns it when the session's catalog lacks it. */
   const applyModel = async (
     sessionId: string,
     configOptions: SessionConfigSource["configOptions"],
-  ): Promise<void> => {
-    if (!sessionModel) return;
+  ): Promise<string | undefined> => {
+    if (!sessionModel) return undefined;
     const selection = planModelSelection(configOptions, sessionModel);
     switch (selection.kind) {
       case "switch":
@@ -423,25 +431,27 @@ export function createSessionSelections(
           configId: selection.configId,
           value: sessionModel,
         });
-        return;
+        return undefined;
       case "unavailable":
         logError("acp-connection", `${agent} has no model "${sessionModel}"; using its default`);
-        return;
+        return sessionModel;
       case "none":
+        // Not a known fallback: an agent without the option may still have
+        // taken the model at launch (opencode 1's config env).
         logError("acp-connection", `${agent} offers no model option; ignoring "${sessionModel}"`);
-        return;
+        return undefined;
       case "current":
-        return;
+        return undefined;
     }
   };
 
   return {
     adopt: async (sessionId, res) => {
-      await applyModel(sessionId, res.configOptions);
+      const unavailableModel = await applyModel(sessionId, res.configOptions);
       const { modes, modeConfigId } = resolveSessionModes(res);
       if (modeConfigId) modeConfigIds.set(sessionId, modeConfigId);
       else modeConfigIds.delete(sessionId);
-      return modes;
+      return { modes, ...(unavailableModel ? { unavailableModel } : {}) };
     },
     setMode: async (sessionId, modeId) => {
       const configId = modeConfigIds.get(sessionId);
@@ -512,7 +522,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         cwd: entry.cwd,
         mcpServers: sanitizeMcpServers(mcpServers),
       });
-      return { sessionId: res.sessionId, modes: await entry.selections.adopt(res.sessionId, res) };
+      return { sessionId: res.sessionId, ...(await entry.selections.adopt(res.sessionId, res)) };
     },
     loadSession: async (sessionId, mcpServers) => {
       const res = await connection.loadSession({

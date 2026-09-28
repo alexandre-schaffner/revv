@@ -105,19 +105,23 @@ describe("createSessionSelections", () => {
   it("applies the session model and switches modes through the mode config option", async () => {
     const { connection, calls } = recordingConnection();
     const selections = createSessionSelections(connection, "anthropic/claude-sonnet-5", "opencode");
-    const modes = await selections.adopt("s1", { configOptions: OPENCODE_OPTIONS });
+    const { modes, unavailableModel } = await selections.adopt("s1", {
+      configOptions: OPENCODE_OPTIONS,
+    });
     await selections.setMode("s1", "plan");
     expect(modes?.currentModeId).toBe("build");
+    expect(unavailableModel).toBeUndefined();
     expect(calls).toEqual([
       { method: "setSessionConfigOption", configId: "model", value: "anthropic/claude-sonnet-5" },
       { method: "setSessionConfigOption", configId: "mode", value: "plan" },
     ]);
   });
 
-  it("leaves a session on its default for a model outside the catalog", async () => {
+  it("reports a model outside the catalog and leaves the session on its default", async () => {
     const { connection, calls } = recordingConnection();
     const selections = createSessionSelections(connection, "gone/model", "opencode");
-    await selections.adopt("s1", { configOptions: OPENCODE_OPTIONS });
+    const { unavailableModel } = await selections.adopt("s1", { configOptions: OPENCODE_OPTIONS });
+    expect(unavailableModel).toBe("gone/model");
     expect(calls).toEqual([]);
   });
 

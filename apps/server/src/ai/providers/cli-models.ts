@@ -76,16 +76,19 @@ export function parseOpencodeVerboseModels(text: string): CliModelOption[] {
 // with the user's own opencode sessions, so Revv never stops it (unlike the
 // agent daemons it owns). A service that is still starting answers
 // with an empty snapshot (the catalog "may precede initial plugin settlement"),
-// so an empty list is retried briefly before it is believed. The whole listing
-// shares one deadline, well below the two minutes the CLI itself waits for a
-// service that won't start, since the settings route awaits it.
+// so an empty list is retried briefly before it is believed — as is a failed
+// or timed-out call, which is what a service that is slow to come up looks
+// like. Each call is capped so a hung one leaves room for a retry, and the
+// whole listing shares one deadline, well below the two minutes the CLI itself
+// waits for a service that won't start, since the settings route awaits it.
 const OPENCODE_MODEL_LIST_BUDGET_MS = 20_000;
+const OPENCODE_MODEL_LIST_ATTEMPT_MS = 8_000;
 const OPENCODE_MODEL_LIST_RETRY_MS = 500;
 
 type CliRun = { readonly ok: true; readonly text: string } | { readonly ok: false };
 
 async function runOpencode(bin: string, args: string[], deadline: number): Promise<CliRun> {
-  const timeout = deadline - Date.now();
+  const timeout = Math.min(deadline - Date.now(), OPENCODE_MODEL_LIST_ATTEMPT_MS);
   if (timeout <= 0) return { ok: false };
   const proc = Bun.spawn([bin, ...args], {
     stdout: "pipe",
@@ -109,26 +112,28 @@ async function runOpencode(bin: string, args: string[], deadline: number): Promi
   return { ok: false };
 }
 
-async function listOpencodeModels(bin: string): Promise<CliModelOption[]> {
+export async function listOpencodeModels(bin: string): Promise<CliModelOption[]> {
   const deadline = Date.now() + OPENCODE_MODEL_LIST_BUDGET_MS;
+  let triedLegacy = false;
   for (;;) {
     const res = await runOpencode(bin, ["api", "GET", "/api/model"], deadline);
-    // opencode 1 has no `api` subcommand; it lists its catalog directly.
-    if (!res.ok) break;
-    const models = parseOpencodeModelList(res.text);
-    if (models.length > 0) return models;
+    if (res.ok) {
+      const models = parseOpencodeModelList(res.text);
+      if (models.length > 0) return models;
+    } else if (!triedLegacy) {
+      // opencode 1 has no `api` subcommand; it lists its catalog directly.
+      // opencode 2 rejects `--verbose`, so a failure here means the `api`
+      // call itself failed, and it is retried.
+      triedLegacy = true;
+      const legacy = await runOpencode(bin, ["models", "--verbose"], deadline);
+      if (legacy.ok) return parseOpencodeVerboseModels(legacy.text);
+    }
     if (Date.now() + OPENCODE_MODEL_LIST_RETRY_MS >= deadline) {
-      logError("listCliModels", "opencode reported no models");
+      logError("listCliModels", "opencode listed no models before the deadline");
       return [];
     }
     await Bun.sleep(OPENCODE_MODEL_LIST_RETRY_MS);
   }
-  const legacy = await runOpencode(bin, ["models", "--verbose"], deadline);
-  if (!legacy.ok) {
-    logError("listCliModels", "could not list opencode models");
-    return [];
-  }
-  return parseOpencodeVerboseModels(legacy.text);
 }
 
 /**
