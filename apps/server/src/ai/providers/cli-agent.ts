@@ -7,11 +7,9 @@ import {
   type AcpAgentId,
   type AgentStatus,
   type AgentStatusReport,
-  getAgentCapabilities,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { CLI_CACHE_TTL_MS } from "../../constants";
-import { debug, logError } from "../../logger";
 import { resolveClaudeConfigDir } from "../acp/claude-config";
 
 // ── CLI agent detection ──────────────────────────────────────────────────────
@@ -674,98 +672,4 @@ export function detectAgentStatus(): AgentStatusReport {
   ) as Record<AcpAgentId, AgentStatus>;
   // Revv is macOS-only, so the embedded PTY login is always available.
   return { embeddedLoginSupported: true, agents };
-}
-
-// ── Dynamic model listing ─────────────────────────────────────────────────────
-
-export type CliModelOption = { label: string; value: string };
-
-/**
- * List models available to the selected ACP agent. Agents with a static
- * catalog (claude-code, codex, cursor) return it straight from the shared
- * registry; opencode is the only dynamic catalog, probed by running
- * `opencode models --verbose` and parsing the output.
- */
-export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]> {
-  // Static catalogs come straight from the shared ACP registry — the single
-  // source of truth — so there's no second copy to keep in sync. Only opencode
-  // has a dynamic catalog that must be probed at runtime.
-  const caps = getAgentCapabilities(agent);
-  if (caps.models !== "dynamic") {
-    return caps.models.map((m) => ({ label: m.label, value: m.value }));
-  }
-
-  // opencode: run `opencode models --verbose` and parse interleaved output
-  // Format: line with "provider/id", then JSON blob with model metadata, repeated
-  const opencodeBin = resolveCliBin("opencode");
-  debug("listCliModels", "opencode binary:", opencodeBin);
-  try {
-    const proc = Bun.spawn([opencodeBin, "models", "--verbose"], {
-      stdout: "pipe",
-      stderr: "pipe",
-      // Inherit the login-shell PATH so the spawn can resolve a bare binary
-      // name even when the server process inherits a sanitized PATH.
-      env: { ...process.env, PATH: resolveUserPath() },
-    });
-    const text = await new Response(proc.stdout).text();
-    const stderrText = await new Response(proc.stderr).text();
-    await proc.exited;
-
-    if (proc.exitCode !== 0) {
-      logError(
-        "listCliModels",
-        `opencode models --verbose exited ${proc.exitCode ?? "with signal"}`,
-        stderrText.slice(0, 500),
-      );
-      return [];
-    }
-
-    const models: CliModelOption[] = [];
-    const lines = text.split("\n");
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i]?.trim();
-      if (!line) {
-        i++;
-        continue;
-      }
-
-      // Check if this line looks like a model ID (e.g. "provider/model-id")
-      if (!line.startsWith("{") && line.includes("/")) {
-        const modelId = line;
-        // Next non-empty content should be a JSON blob — collect until balanced braces
-        let jsonStr = "";
-        let depth = 0;
-        i++;
-        while (i < lines.length) {
-          const jsonLine = lines[i] ?? "";
-          jsonStr += `${jsonLine}\n`;
-          for (const ch of jsonLine) {
-            if (ch === "{") depth++;
-            else if (ch === "}") depth--;
-          }
-          i++;
-          if (depth === 0 && jsonStr.trim().startsWith("{")) break;
-        }
-        try {
-          const meta = JSON.parse(jsonStr.trim()) as { name?: string; providerID?: string };
-          const label = meta.name ?? modelId;
-          models.push({ label, value: modelId });
-        } catch {
-          models.push({ label: modelId, value: modelId });
-        }
-      } else {
-        i++;
-      }
-    }
-    return models;
-  } catch (e) {
-    logError(
-      "listCliModels",
-      "failed to list opencode models",
-      e instanceof Error ? e.message : String(e),
-    );
-    // Fallback: empty list (frontend will show empty state)
-    return [];
-  }
 }

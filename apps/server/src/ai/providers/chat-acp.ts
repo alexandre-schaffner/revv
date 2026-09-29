@@ -12,7 +12,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ContentBlock, McpServer, SessionModeState } from "@agentclientprotocol/sdk";
+import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import {
   type AcpAgentId,
   type ChatAttachment,
@@ -24,8 +24,9 @@ import { serverEnv } from "../../config";
 import { CHAT_IDLE_TIMEOUT_MS, CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
-import { getAcpConnection } from "../acp/acp-connection";
+import { type AcpSessionState, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { findPlanModeId, modeToExitPlan } from "../acp/session-config";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -80,16 +81,6 @@ export interface StreamChatViaAcpOptions {
 }
 
 const CHAT_CONTEXT_MCP_SERVER = "revv-chat-context";
-
-/** Pick a read-only/plan/architect mode from the agent's advertised modes. */
-function findPlanModeId(modes: SessionModeState | null): string | undefined {
-  if (!modes) return undefined;
-  for (const mode of modes.availableModes) {
-    const haystack = `${mode.id} ${mode.name} ${mode.description ?? ""}`.toLowerCase();
-    if (/(plan|ask|architect|read.?only|readonly)/.test(haystack)) return mode.id;
-  }
-  return undefined;
-}
 
 function attachmentUri(name: string): string {
   return `attachment://${encodeURIComponent(name)}`;
@@ -208,16 +199,27 @@ export function streamChatViaAcp(
 
         // Resolve the session: resume via session/load when supported, else a
         // fresh session/new whose id we report so the route can persist it.
-        let modes: SessionModeState | null = null;
+        let session: AcpSessionState;
         if (sessionId && h.loadSessionSupported) {
-          modes = await h.loadSession(sessionId, mcpServers);
+          session = await h.loadSession(sessionId, mcpServers);
         } else {
           const created = await h.newSession(mcpServers);
           sessionId = created.sessionId;
-          modes = created.modes;
+          session = created;
           if (opts.onSessionId) await opts.onSessionId(sessionId);
         }
         const turnSessionId = sessionId;
+        const { modes } = session;
+
+        // The saved model is missing from the agent's catalog, so this turn runs
+        // on the agent's default. Say so, or the reply silently comes from a
+        // model other than the one the picker shows.
+        if (session.unavailableModel) {
+          controller.enqueue({
+            kind: "text",
+            data: `_Model "${session.unavailableModel}" isn't available, so this reply uses the agent's default model. Pick another model to change it._\n\n`,
+          });
+        }
 
         // Plan mode: switch the agent into its read-only mode. Mirrors the
         // opencode driver's behaviour — if the agent has no such mode, surface a
@@ -227,6 +229,9 @@ export function streamChatViaAcp(
           if (!planModeId) throw new AgentUnavailableError("plan");
           await h.setMode(turnSessionId, planModeId);
           h.setPlanMode(turnSessionId, true);
+        } else {
+          const exitModeId = modeToExitPlan(modes);
+          if (exitModeId) await h.setMode(turnSessionId, exitModeId);
         }
 
         // Map normalized events → ChatStreamFrame. Same shape as the opencode

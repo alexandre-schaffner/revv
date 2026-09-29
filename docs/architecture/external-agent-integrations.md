@@ -38,6 +38,11 @@ Every provider uses `revv-<account>` as its MCP entry name, so connecting one
 account cannot overwrite or uninstall another account's entry. Bridge copies
 live under `~/.revv/<provider>/<account>/server/revv-mcp.ts`.
 
+OpenCode's entry keeps opencode 1's layout (directly under `mcp`, with
+`enabled: true`, and the singular `command/` directory). opencode 2 still reads
+it, normalizing the entry into its own `mcp.servers`, while opencode 1 (through
+at least 1.18.0) rejects a config that uses `mcp.servers` outright.
+
 Every install is **convergent** and **non-destructive**: reconnecting
 reproduces the same end state with a rotated credential, and Revv refuses to
 overwrite or delete a directory, config section, or prompt file it did not

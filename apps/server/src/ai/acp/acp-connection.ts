@@ -32,10 +32,15 @@ import {
   type StopReason,
 } from "@agentclientprotocol/sdk";
 import type { AcpAgentId } from "@revv/shared";
-import { debug } from "../../logger";
+import { debug, logError } from "../../logger";
 import { resolveUserPath } from "../providers/cli-agent";
 import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
 import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
+import {
+  planModelSelection,
+  resolveSessionModes,
+  type SessionConfigSource,
+} from "./session-config";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 
@@ -82,9 +87,19 @@ export type AcpSessionUpdate = SessionUpdate;
 /** Listener invoked for every `session/update` notification on a session. */
 export type AcpUpdateListener = (update: AcpSessionUpdate) => void;
 
-export interface AcpNewSessionResult {
-  readonly sessionId: string;
+/** What a just-opened or loaded session reports back. */
+export interface AcpSessionState {
   readonly modes: SessionModeState | null;
+  /**
+   * The per-session model the agent's catalog lacks — a stale setting — which
+   * left the session on the agent's default model. Callers that face the user
+   * surface it, since the reply won't come from the model the picker shows.
+   */
+  readonly unavailableModel?: string;
+}
+
+export interface AcpNewSessionResult extends AcpSessionState {
+  readonly sessionId: string;
 }
 
 export interface AcpConnectionHandle {
@@ -105,11 +120,11 @@ export interface AcpConnectionHandle {
   readonly listAvailableCommands: (timeoutMs?: number) => Promise<readonly AvailableCommand[]>;
   /** Open a fresh session, handing the agent the supplied MCP servers. */
   readonly newSession: (mcpServers: McpServer[]) => Promise<AcpNewSessionResult>;
-  /** Resume an existing session by id. Returns its mode state (for plan mode). */
-  readonly loadSession: (
-    sessionId: string,
-    mcpServers: McpServer[],
-  ) => Promise<SessionModeState | null>;
+  /**
+   * Resume an existing session by id. Returns its mode state (for plan mode).
+   * Like `newSession`, applies the launch's per-session model, if any.
+   */
+  readonly loadSession: (sessionId: string, mcpServers: McpServer[]) => Promise<AcpSessionState>;
   readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
   readonly prompt: (sessionId: string, prompt: ContentBlock[]) => Promise<StopReason>;
   readonly cancel: (sessionId: string) => Promise<void>;
@@ -140,6 +155,8 @@ interface ConnectionEntry {
   // session after the first turn, and survives churn through session ids.
   lastCommands: AvailableCommand[] | null;
   readonly planModeSessions: Set<string>;
+  // Per-session model/mode routing (see `createSessionSelections`).
+  readonly selections: SessionSelections;
   loadSessionSupported: boolean;
   httpMcpSupported: boolean;
   promptImage: boolean;
@@ -149,10 +166,10 @@ interface ConnectionEntry {
   alive: boolean;
 }
 
-// Keyed by agent + model + thinking-effort + context-window + cwd. Any of those
-// changing must not reuse an older ACP subprocess launched under different
-// model/effort/context (which are baked into its launch args/env), so they all
-// participate in the key.
+// Keyed by agent + model + thinking-effort + cwd. A change to any of them must
+// not reuse an older ACP subprocess launched under a different model/effort:
+// both ride in its launch env (opencode 1 reads the model only from there, even
+// though opencode 2 takes it per session), so they all participate in the key.
 const pool = new Map<string, Promise<ConnectionEntry>>();
 
 function poolKey(cwd: string, agent: AcpAgentId, config: AcpLaunchConfig): string {
@@ -213,7 +230,7 @@ async function spawnConnection(
   const claudeConfigDir = resolveClaudeConfigDir(agent);
   if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
 
-  const { command, args, env } = resolveAcpProcessLaunchById(
+  const { command, args, env, sessionModel } = resolveAcpProcessLaunchById(
     agent,
     config,
     process.env,
@@ -262,6 +279,7 @@ async function spawnConnection(
     availableCommands: new Map(),
     lastCommands: null,
     planModeSessions: new Set(),
+    selections: createSessionSelections(connection, sessionModel, agent),
     loadSessionSupported: false,
     httpMcpSupported: false,
     promptImage: false,
@@ -293,12 +311,7 @@ async function spawnConnection(
   void proc.exited.then((code) => {
     entry.alive = false;
     pool.delete(entry.key);
-    // Drop every per-session map so a long-lived connection that churns
-    // through many sessions can't leak entries (the listener clear also
-    // releases any in-flight notification handlers).
-    entry.listeners.clear();
-    entry.availableCommands.clear();
-    entry.planModeSessions.clear();
+    clearSessionState(entry);
     debug("acp-connection", `${entry.agent} agent for ${cwd} exited (code=${code ?? "?"})`);
   });
 
@@ -331,6 +344,18 @@ async function spawnConnection(
   return entry;
 }
 
+/**
+ * Drop every per-session map so a long-lived connection that churns through
+ * many sessions can't leak entries (the listener clear also releases any
+ * in-flight notification handlers).
+ */
+function clearSessionState(entry: ConnectionEntry): void {
+  entry.listeners.clear();
+  entry.availableCommands.clear();
+  entry.planModeSessions.clear();
+  entry.selections.clear();
+}
+
 function scheduleIdleStop(entry: ConnectionEntry): void {
   if (entry.idleTimer) clearTimeout(entry.idleTimer);
   entry.idleTimer = setTimeout(() => {
@@ -353,14 +378,91 @@ function stopEntry(entry: ConnectionEntry): void {
     clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
   }
-  entry.listeners.clear();
-  entry.availableCommands.clear();
-  entry.planModeSessions.clear();
+  clearSessionState(entry);
   try {
     entry.proc.kill();
   } catch {
     /* already gone */
   }
+}
+
+/** The two ACP selection calls {@link createSessionSelections} routes between. */
+export type SessionSelectionConnection = Pick<
+  ClientSideConnection,
+  "setSessionConfigOption" | "setSessionMode"
+>;
+
+export interface SessionSelections {
+  /** Apply the per-session model to a just-opened/loaded session and return its state. */
+  readonly adopt: (sessionId: string, res: SessionConfigSource) => Promise<AcpSessionState>;
+  /** Switch a session's mode through whichever channel it advertised its modes on. */
+  readonly setMode: (sessionId: string, modeId: string) => Promise<void>;
+  readonly clear: () => void;
+}
+
+/**
+ * Per-connection routing of a session's model and mode over ACP. A model
+ * missing from the session's catalog is a stale setting (the picker lists a
+ * subset of opencode's ACP catalog): like a stale id in a static catalog (see
+ * `resolveGenerationModel`), it leaves the session on the agent's default
+ * rather than failing the turn, and is reported as `unavailableModel`.
+ */
+export function createSessionSelections(
+  connection: SessionSelectionConnection,
+  sessionModel: string | undefined,
+  agent: AcpAgentId,
+): SessionSelections {
+  // Sessions whose modes are a `mode`-category config option (opencode, which
+  // advertises no `modes`), switched through that option's id rather than
+  // `session/set_mode`.
+  const modeConfigIds = new Map<string, string>();
+
+  /** Apply the model; returns it when the session's catalog lacks it. */
+  const applyModel = async (
+    sessionId: string,
+    configOptions: SessionConfigSource["configOptions"],
+  ): Promise<string | undefined> => {
+    if (!sessionModel) return undefined;
+    const selection = planModelSelection(configOptions, sessionModel);
+    switch (selection.kind) {
+      case "switch":
+        await connection.setSessionConfigOption({
+          sessionId,
+          configId: selection.configId,
+          value: sessionModel,
+        });
+        return undefined;
+      case "unavailable":
+        logError("acp-connection", `${agent} has no model "${sessionModel}"; using its default`);
+        return sessionModel;
+      case "none":
+        // Not a known fallback: an agent without the option may still have
+        // taken the model at launch (opencode 1's config env).
+        logError("acp-connection", `${agent} offers no model option; ignoring "${sessionModel}"`);
+        return undefined;
+      case "current":
+        return undefined;
+    }
+  };
+
+  return {
+    adopt: async (sessionId, res) => {
+      const unavailableModel = await applyModel(sessionId, res.configOptions);
+      const { modes, modeConfigId } = resolveSessionModes(res);
+      if (modeConfigId) modeConfigIds.set(sessionId, modeConfigId);
+      else modeConfigIds.delete(sessionId);
+      return { modes, ...(unavailableModel ? { unavailableModel } : {}) };
+    },
+    setMode: async (sessionId, modeId) => {
+      const configId = modeConfigIds.get(sessionId);
+      if (configId) {
+        await connection.setSessionConfigOption({ sessionId, configId, value: modeId });
+      } else {
+        await connection.setSessionMode({ sessionId, modeId });
+      }
+    },
+    clear: () => modeConfigIds.clear(),
+  };
 }
 
 function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
@@ -420,7 +522,7 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         cwd: entry.cwd,
         mcpServers: sanitizeMcpServers(mcpServers),
       });
-      return { sessionId: res.sessionId, modes: res.modes ?? null };
+      return { sessionId: res.sessionId, ...(await entry.selections.adopt(res.sessionId, res)) };
     },
     loadSession: async (sessionId, mcpServers) => {
       const res = await connection.loadSession({
@@ -428,11 +530,9 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
         cwd: entry.cwd,
         mcpServers: sanitizeMcpServers(mcpServers),
       });
-      return res.modes ?? null;
+      return entry.selections.adopt(sessionId, res);
     },
-    setMode: async (sessionId, modeId) => {
-      await connection.setSessionMode({ sessionId, modeId });
-    },
+    setMode: (sessionId, modeId) => entry.selections.setMode(sessionId, modeId),
     prompt: async (sessionId, prompt) => {
       const res = await connection.prompt({ sessionId, prompt });
       return res.stopReason;

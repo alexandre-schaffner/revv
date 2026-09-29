@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { sanitizeMcpServerName, selectAcpAuthMethod } from "./acp-connection";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import {
+  createSessionSelections,
+  type SessionSelectionConnection,
+  sanitizeMcpServerName,
+  selectAcpAuthMethod,
+} from "./acp-connection";
 
 describe("selectAcpAuthMethod", () => {
   it("prefers the ChatGPT session over an API key for Codex", () => {
@@ -34,5 +40,99 @@ describe("sanitizeMcpServerName", () => {
 
   it("replaces every unsafe character, not just the first", () => {
     expect(sanitizeMcpServerName("revv chat:ctx/2467.x")).toBe("revv-chat-ctx-2467-x");
+  });
+});
+
+type SelectionCall =
+  | {
+      readonly method: "setSessionConfigOption";
+      readonly configId: string;
+      readonly value: unknown;
+    }
+  | { readonly method: "setSessionMode"; readonly modeId: string };
+
+function recordingConnection(): {
+  readonly connection: SessionSelectionConnection;
+  readonly calls: SelectionCall[];
+} {
+  const calls: SelectionCall[] = [];
+  return {
+    calls,
+    connection: {
+      setSessionConfigOption: async (params) => {
+        calls.push({
+          method: "setSessionConfigOption",
+          configId: params.configId,
+          value: params.value,
+        });
+        return { configOptions: [] };
+      },
+      setSessionMode: async (params) => {
+        calls.push({ method: "setSessionMode", modeId: params.modeId });
+        return {};
+      },
+    },
+  };
+}
+
+// opencode's `session/new` shape: no `modes`, model and agents as config options.
+const OPENCODE_OPTIONS: SessionConfigOption[] = [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: "opencode/big-pickle",
+    options: [
+      { value: "opencode/big-pickle", name: "Big Pickle" },
+      { value: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" },
+    ],
+  },
+  {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    type: "select",
+    currentValue: "build",
+    options: [
+      { value: "build", name: "Build" },
+      { value: "plan", name: "Plan" },
+    ],
+  },
+];
+
+describe("createSessionSelections", () => {
+  it("applies the session model and switches modes through the mode config option", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, "anthropic/claude-sonnet-5", "opencode");
+    const { modes, unavailableModel } = await selections.adopt("s1", {
+      configOptions: OPENCODE_OPTIONS,
+    });
+    await selections.setMode("s1", "plan");
+    expect(modes?.currentModeId).toBe("build");
+    expect(unavailableModel).toBeUndefined();
+    expect(calls).toEqual([
+      { method: "setSessionConfigOption", configId: "model", value: "anthropic/claude-sonnet-5" },
+      { method: "setSessionConfigOption", configId: "mode", value: "plan" },
+    ]);
+  });
+
+  it("reports a model outside the catalog and leaves the session on its default", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, "gone/model", "opencode");
+    const { unavailableModel } = await selections.adopt("s1", { configOptions: OPENCODE_OPTIONS });
+    expect(unavailableModel).toBe("gone/model");
+    expect(calls).toEqual([]);
+  });
+
+  it("uses session/set_mode, and no model call, for agents with dedicated modes", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, undefined, "claude-code");
+    await selections.adopt("s1", {
+      modes: { currentModeId: "default", availableModes: [{ id: "plan", name: "Plan" }] },
+      configOptions: OPENCODE_OPTIONS,
+    });
+    await selections.setMode("s1", "plan");
+    expect(calls).toEqual([{ method: "setSessionMode", modeId: "plan" }]);
   });
 });

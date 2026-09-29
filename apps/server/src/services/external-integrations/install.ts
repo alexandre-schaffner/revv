@@ -492,6 +492,13 @@ function jsonMcpEntryInstalled(file: string, section: string, serverName: string
 
 // ── OpenCode (opencode.json mcp entry + global command) ─────────────────────
 
+// Written in opencode 1's layout — the server directly under `mcp` with
+// `enabled`, the command in `command/` — which every opencode reads: opencode 2
+// normalizes such an entry into its own `mcp.servers` and scans both
+// `command/` and `commands/`. opencode 2's native `mcp.servers` makes opencode
+// 1 (through at least 1.18.0) reject the whole config as invalid, which takes
+// down the CLI, Revv's own opencode chat and walkthroughs included.
+
 export interface OpenCodePaths {
   readonly installDir: string;
   readonly configFile: string;

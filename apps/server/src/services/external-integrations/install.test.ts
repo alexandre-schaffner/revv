@@ -183,6 +183,19 @@ describe("install safety", () => {
     expect(Object.keys(openCodeConfig.mcp)).toEqual(["other"]);
   });
 
+  it("writes the OpenCode server in the layout opencode 1 and 2 both read", () => {
+    const home = temporaryHome();
+    const paths = openCodePaths(ACCOUNT_KEY, home);
+    installer("opencode", home).install(input(home, "token"));
+
+    const config = JSON.parse(readFileSync(paths.configFile, "utf8")) as {
+      mcp: Record<string, Record<string, unknown>>;
+    };
+    expect(Object.keys(config.mcp)).toEqual([`revv-${ACCOUNT_KEY}`]);
+    expect(config.mcp[`revv-${ACCOUNT_KEY}`]?.enabled).toBe(true);
+    expect(paths.commandFile).toContain(join("opencode", "command", "revv-"));
+  });
+
   it("writes the shared agent guide wherever a provider supports prompts", () => {
     const home = temporaryHome();
     installer("codex", home).install(input(home, "token"));

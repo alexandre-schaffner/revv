@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { agentKeychainRemediation, probeAgentKeychainReadable } from "../ai/acp/agent-keychain";
 import { hasJevApiKey } from "../ai/jev/api-key";
-import { listCliModels } from "../ai/providers/cli-agent";
+import { listCliModels } from "../ai/providers/cli-models";
 import { AppRuntime } from "../runtime";
 import { AiService } from "../services/Ai";
 import { BlobStore } from "../services/blob/BlobStore";
