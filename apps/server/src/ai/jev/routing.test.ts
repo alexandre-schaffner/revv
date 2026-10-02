@@ -15,7 +15,7 @@ function input(over: Partial<RouteSizingInput> = {}): RouteSizingInput {
     depth: "deep",
     confidence: 0.9,
     probabilities: { shallow: 0.02, standard: 0.08, deep: 0.9 },
-    configuredModel: "claude-sonnet-5",
+    configuredModel: "claude-sonnet-5-5",
     configuredEffort: AUTO_SENTINEL,
     reasoningEffort: "thorough",
     ...over,

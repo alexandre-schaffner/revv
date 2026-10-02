@@ -106,14 +106,14 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
-      defaultModel: "claude-sonnet-5",
+      defaultModel: "claude-sonnet-5-5",
       // Current-generation Anthropic models only. A user still on a delisted
       // id keeps working (the value is passed through to the agent), they just
       // can't reselect it.
       models: [
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
         { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
-        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
       ],
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
@@ -160,13 +160,15 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
-      defaultModel: "gpt-6-sol",
+      defaultModel: "gpt-6.1-sol",
       // This maintained adapter embeds a current Codex App Server, so the
-      // selector can expose the current GPT-6 family. Do not replace it with
-      // the deprecated `@zed-industries/codex-acp`: that adapter embeds an
-      // older Codex core which rejects current models.
+      // selector can expose the current GPT-6 family. GPT-6.1 Sol is Codex's
+      // recommended default; GPT-6 Sol stays listed while it rolls out. Do not
+      // replace it with the deprecated `@zed-industries/codex-acp`: that
+      // adapter embeds an older Codex core which rejects current models.
       models: [
         { label: "GPT-6 Astra", value: "gpt-6-astra" },
+        { label: "GPT-6.1 Sol", value: "gpt-6.1-sol" },
         { label: "GPT-6 Sol", value: "gpt-6-sol" },
         { label: "GPT-6 Luna", value: "gpt-6-luna" },
       ],
@@ -193,7 +195,7 @@ export const ACP_AGENTS = [
         { label: "Auto", value: "auto" },
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
         { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
-        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
         { label: "Composer 2.5", value: "composer-2.5" },
         { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
         { label: "Gemini 3.8 Flash", value: "gemini-3.8-flash" },

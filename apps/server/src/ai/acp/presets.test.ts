@@ -238,12 +238,12 @@ describe("ACP launch presets", () => {
     if (serverEnv.acpCommand) return;
     const launch = resolveAcpProcessLaunchById(
       "claude-code",
-      { model: "claude-sonnet-5" },
+      { model: "claude-sonnet-5-5" },
       {},
       "/usr/bin",
       { claudeSubscriptionAuth: false },
     );
-    expect(launch.env.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(launch.env.ANTHROPIC_MODEL).toBe("claude-sonnet-5-5");
     expect(launch.sessionModel).toBeUndefined();
   });
 });
@@ -256,13 +256,14 @@ describe("ACP login commands", () => {
 
 describe("resolveGenerationModel", () => {
   it("keeps a model valid for the agent", () => {
-    expect(resolveGenerationModel("claude-code", "claude-sonnet-5")).toBe("claude-sonnet-5");
+    expect(resolveGenerationModel("claude-code", "claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
     expect(resolveGenerationModel("codex", "gpt-6-sol")).toBe("gpt-6-sol");
+    expect(resolveGenerationModel("codex", "gpt-6.1-sol")).toBe("gpt-6.1-sol");
   });
 
   it("falls back to the agent default when the model belongs to another agent", () => {
     // A Cursor model id left in the shared setting must not reach Claude Code.
-    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-sonnet-5");
+    expect(resolveGenerationModel("claude-code", "sonnet-4.6")).toBe("claude-sonnet-5-5");
   });
 
   it("trusts opencode's dynamic catalog", () => {
@@ -273,11 +274,11 @@ describe("resolveGenerationModel", () => {
   });
 
   it("drops another agent's static model id for opencode", () => {
-    expect(resolveGenerationModel("opencode", "claude-sonnet-5")).toBe("opencode/big-pickle");
+    expect(resolveGenerationModel("opencode", "claude-sonnet-5-5")).toBe("opencode/big-pickle");
   });
 
   it("collapses Auto before static and dynamic catalog resolution", () => {
-    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL)).toBe("claude-sonnet-5");
+    expect(resolveGenerationModel("claude-code", AUTO_SENTINEL)).toBe("claude-sonnet-5-5");
     expect(resolveGenerationModel("opencode", AUTO_SENTINEL)).toBe("opencode/big-pickle");
     expect(resolveGenerationModel("claude-code", AUTO_SENTINEL, "claude-opus-5-5")).toBe(
       "claude-opus-5-5",
