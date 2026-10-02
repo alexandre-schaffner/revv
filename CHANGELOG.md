@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.28.0](https://github.com/alexandre-schaffner/revv/compare/v0.27.0...v0.28.0) (2026-09-29)
+
+
+### Features
+
+* **server:** migrate the opencode integration to opencode 2 ([#238](https://github.com/alexandre-schaffner/revv/issues/238)) ([8a5ec85](https://github.com/alexandre-schaffner/revv/commit/8a5ec8558c3b4c46b16253c570ffeae6b3c0f121))
+* **web:** redesign the settings modal as one pane at a time ([#240](https://github.com/alexandre-schaffner/revv/issues/240)) ([92b44d6](https://github.com/alexandre-schaffner/revv/commit/92b44d6aca66950ac1ca46944e5ab4dcba886696))
+
+
+### Bug Fixes
+
+* **server:** stop a failed Jev call from 500ing walkthrough start ([#237](https://github.com/alexandre-schaffner/revv/issues/237)) ([7e452e6](https://github.com/alexandre-schaffner/revv/commit/7e452e6327985301251a05ba4d4884c292f147cc))
+* **web:** stop revv:// deep links hanging the review page on "Loading…" ([#241](https://github.com/alexandre-schaffner/revv/issues/241)) ([a8ca213](https://github.com/alexandre-schaffner/revv/commit/a8ca213122262a380f780b58b43308d0372513cf))
+
 ## [0.27.0](https://github.com/alexandre-schaffner/revv/compare/v0.26.1...v0.27.0) (2026-09-25)
 
 
