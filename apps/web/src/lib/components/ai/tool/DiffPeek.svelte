@@ -21,7 +21,7 @@ let { path, oldText, newText }: Props = $props();
 let instance: FileDiff<never> | null = null;
 
 function mountDiff(el: HTMLDivElement) {
-  const options: FileDiffOptions<never> = {
+  const options: FileDiffOptions<never, undefined> = {
     diffStyle: "unified",
     theme: PIERRE_THEME,
     overflow: "scroll",

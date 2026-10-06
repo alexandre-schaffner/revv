@@ -35,7 +35,10 @@ export const PR_DIFF_RENDER_OPTIONS: PrDiffRenderOptions = {
   expansionLineCount: 20,
   collapsedContextThreshold: 3,
   diffIndicators: "bars",
-  expandUnchanged: true,
+  // PR files are patch-only (no full contents), so there is nothing to expand.
+  // Pierre 1.5+ treats `true` as "load both files and expand everything" and
+  // throws without a `loadDiffFiles` loader.
+  expandUnchanged: false,
   lineHoverHighlight: "both",
   hunkSeparators: "line-info",
 } as const;

@@ -262,7 +262,7 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
 
     const responses: JsonRpcResponse[] = [];
     for (const rpc of requests) {
-      if (!rpc || rpc.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
+      if (rpc?.jsonrpc !== "2.0" || typeof rpc.method !== "string") {
         responses.push(jsonRpcError(rpc?.id ?? null, -32600, "Invalid JSON-RPC 2.0 request"));
         continue;
       }

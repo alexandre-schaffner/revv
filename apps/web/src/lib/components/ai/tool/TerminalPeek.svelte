@@ -159,6 +159,8 @@ onDestroy(() => {
 
 	.terminal {
 		width: 100%;
+		/* xterm 6's scrollbar paints a black inset shadow once scrolled. */
+		--vscode-scrollbar-shadow: transparent;
 	}
 
 	.terminal-peek :global(.xterm) {

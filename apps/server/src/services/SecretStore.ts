@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Entry } from "@napi-rs/keyring";
+import { Entry, type EntryOptions } from "@napi-rs/keyring";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { account } from "../db/schema";
@@ -57,12 +57,24 @@ export const JEV_API_KEY_SECRET = "jev-api-key";
 const KEYRING_USER_PREFIX = "github-tokens:";
 const KEYRING_SECRET_PREFIX = "secret:";
 
+/**
+ * On Linux, require the Secret Service. Without the pin the binding silently
+ * falls back to the kernel keyring, which lives in memory and is wiped on
+ * reboot; required, a missing Secret Service throws, the probe below fails,
+ * and the encrypted-file store takes over, which persists. Ignored elsewhere.
+ */
+const ENTRY_OPTIONS: EntryOptions = { linux: { store: "secret-service" } };
+
+function keyringEntry(username: string): Entry {
+  return new Entry(keyringServiceName(), username, ENTRY_OPTIONS);
+}
+
 function entryFor(accountId: string): Entry {
-  return new Entry(keyringServiceName(), `${KEYRING_USER_PREFIX}${accountId}`);
+  return keyringEntry(`${KEYRING_USER_PREFIX}${accountId}`);
 }
 
 function secretEntryFor(key: string): Entry {
-  return new Entry(keyringServiceName(), `${KEYRING_SECRET_PREFIX}${key}`);
+  return keyringEntry(`${KEYRING_SECRET_PREFIX}${key}`);
 }
 
 /** Prefixed so a secret name can't collide with an account id's token pair in the fallback map. */
@@ -180,7 +192,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
   // split-brain where a token lands in one store and is read from the other.
   let useKeyring = true;
   try {
-    new Entry(keyringServiceName(), "__revv_probe__").getPassword();
+    keyringEntry("__revv_probe__").getPassword();
   } catch (e) {
     useKeyring = false;
     logError(

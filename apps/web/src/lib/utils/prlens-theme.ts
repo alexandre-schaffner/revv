@@ -32,13 +32,21 @@ const TOKEN_BY_ROLE: Record<keyof Palette, string | null> = {
   // mapped to fixed surfaces: we have designed diff surfaces for added and
   // removed but nothing for modified, and a diagram whose three deltas came
   // from two different sources would not read as one system.
+  //
+  // The `*Text` roles are badge text, which PR Lens darkens below the stroke so
+  // it stays legible on a light ground. Our semantic colours are already the
+  // deep -700 shades in the light theme (and lift for dark), so stroke and
+  // text share one token.
   added: "var(--color-success)",
+  addedText: "var(--color-success)",
   addedFill: "color-mix(in srgb, var(--color-success) 15%, transparent)",
   addedBorder: "color-mix(in srgb, var(--color-success) 45%, transparent)",
   modified: "var(--color-warning)",
+  modifiedText: "var(--color-warning)",
   modifiedFill: "color-mix(in srgb, var(--color-warning) 15%, transparent)",
   modifiedBorder: "color-mix(in srgb, var(--color-warning) 45%, transparent)",
   removed: "var(--color-danger)",
+  removedText: "var(--color-danger)",
   removedFill: "color-mix(in srgb, var(--color-danger) 15%, transparent)",
   removedBorder: "color-mix(in srgb, var(--color-danger) 45%, transparent)",
 

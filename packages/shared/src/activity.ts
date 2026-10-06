@@ -113,7 +113,7 @@ export function encodeToolDiffOutput(path: string, oldText: string, newText: str
  * common plain-text case never hits `JSON.parse`.
  */
 export function decodeToolDiffOutput(output: string | undefined): ToolDiffOutput | null {
-  if (!output || output[0] !== "{") return null;
+  if (output?.[0] !== "{") return null;
   try {
     const parsed = JSON.parse(output) as Record<string, unknown>;
     if (parsed[DIFF_OUTPUT_SENTINEL] !== true) return null;

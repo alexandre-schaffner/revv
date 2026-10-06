@@ -31,22 +31,13 @@ import {
 } from "./spec";
 
 export type {
-  AddPrEntryInput,
-  CompleteRecapInput,
-  GetPrDiffInput,
-  GetRecapStateInput,
-  GetRepoContextInput,
-  ListOpenPrsInput,
   RecapSourceBundle,
   RecapSourcePr,
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
   RecapSourcePrDigest,
   RecapToolContext,
-  RecapToolHandler,
   RecapToolResult,
-  SetLedeInput,
-  SetThemeSummaryInput,
 } from "./spec";
 export {
   addPrEntryHandler,

@@ -425,7 +425,7 @@ function patchActivityByCallId(
   const idx = items.findLastIndex((i) => i.kind === "activity" && i.callId === callId);
   if (idx === -1) return;
   const item = items[idx];
-  if (!item || item.kind !== "activity") return;
+  if (item?.kind !== "activity") return;
   const next = [...items];
   next[idx] = patch(item);
   setItems(prId, next);

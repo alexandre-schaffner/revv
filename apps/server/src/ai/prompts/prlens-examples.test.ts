@@ -48,16 +48,17 @@ describe("the prompt's prlens examples", () => {
     expect(examples.length).toBe(2);
   });
 
-  it.each(
-    examples.map((body, index) => [index, body] as const),
-  )("example %i parses under the current schema", (_index, body) => {
-    const parsed = safeParseGraphDoc(toGraphDocInput(JSON.parse(body), SCHEMA_VERSION));
-    // Surface the schema's own complaint rather than a bare `false`, so the
-    // failure names the field that moved.
-    const reason = parsed.ok ? "" : formatIssues(parsed.error.issues);
-    expect(reason).toBe("");
-    expect(parsed.ok).toBe(true);
-  });
+  it.each(examples.map((body, index) => [index, body] as const))(
+    "example %i parses under the current schema",
+    (_index, body) => {
+      const parsed = safeParseGraphDoc(toGraphDocInput(JSON.parse(body), SCHEMA_VERSION));
+      // Surface the schema's own complaint rather than a bare `false`, so the
+      // failure names the field that moved.
+      const reason = parsed.ok ? "" : formatIssues(parsed.error.issues);
+      expect(reason).toBe("");
+      expect(parsed.ok).toBe(true);
+    },
+  );
 
   it("declare exactly one lens each, as the prompt instructs", () => {
     for (const body of examples) {

@@ -242,7 +242,7 @@ function annotationsFor(file: FileDiffMetadata): DiffLineAnnotation<CommentMeta>
 function buildOptions(
   file: FileDiffMetadata,
   diffStyle: "unified" | "split",
-): FileDiffOptions<CommentMeta> {
+): FileDiffOptions<CommentMeta, undefined> {
   return {
     diffStyle,
     theme: PIERRE_THEME,

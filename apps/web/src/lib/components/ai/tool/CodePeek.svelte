@@ -29,7 +29,7 @@ let { path, content, startLine, lineCount }: Props = $props();
 let instance: PierreFile<never> | null = null;
 
 function mountCodeBlock(el: HTMLDivElement) {
-  const options: FileOptions<never> = {
+  const options: FileOptions<never, undefined> = {
     theme: PIERRE_THEME,
     overflow: "scroll",
     // We render our own card chrome around the peek; suppress Pierre's header.

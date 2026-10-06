@@ -342,6 +342,8 @@ onDestroy(() => {
 	.terminal {
 		width: 100%;
 		height: 100%;
+		/* xterm 6's scrollbar paints a black inset shadow once scrolled. */
+		--vscode-scrollbar-shadow: transparent;
 	}
 
 	.login-error {
