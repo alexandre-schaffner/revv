@@ -18,6 +18,7 @@ export {
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   getAgentKeychainAuth,
+  getModelThinkingEfforts,
   isAcpAgentId,
   isAutoSentinel,
   resolveThinkingEffort,
@@ -104,6 +105,29 @@ export {
   isExternalAgentProvider,
 } from "./external-integrations";
 export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
+export type {
+  HunkRange,
+  HunkScanEnsureResult,
+  HunkScanRow,
+  HunkScanSnapshot,
+  HunkScanStatus,
+  HunkSkipReason,
+  HunkSmell,
+  LeadVerdict,
+  WalkthroughLead,
+} from "./hunk-scan";
+export {
+  flaggedHunkSmells,
+  HUNK_SCAN_STATUSES,
+  HUNK_SKIP_REASONS,
+  HUNK_SMELL_FLOORS,
+  HUNK_SMELL_META,
+  HUNK_SMELLS,
+  hunkKey,
+  hunkNewEnd,
+  isHunkRowPending,
+  isHunkScanFinished,
+} from "./hunk-scan";
 export { guessImageContentType, isImagePath } from "./images";
 export type { JevSettings } from "./jev-settings";
 export { DEFAULT_JEV_SETTINGS } from "./jev-settings";

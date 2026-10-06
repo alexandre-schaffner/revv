@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import {
+  HUNK_SMELL_META,
+  hunkNewEnd,
   type RatingAxis,
   REVIEW_MODE,
   type RiskLevel,
   type WalkthroughBlock,
+  type WalkthroughLead,
   type WalkthroughMode,
 } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
@@ -164,8 +167,88 @@ function tierLabel(tier: number | null): string {
   }
 }
 
+/** `lines 42–68`, or `line 42` for a one-line hunk. */
+function leadRange(lead: WalkthroughLead): string {
+  const end = hunkNewEnd(lead);
+  return end === lead.newStart ? `line ${lead.newStart}` : `lines ${lead.newStart}–${end}`;
+}
+
+/** Most confirmed leads raised as `info` that sit outside the risk tier's issue budget. */
+const LEAD_INFO_ALLOWANCE = 3;
+
+/**
+ * The first pass, framed so the agent verifies rather than transcribes. The
+ * scan saw each hunk alone and can't see callers, so a lead that holds up in
+ * the file is worth raising, and one that doesn't is noise to drop. The bug
+ * bar's "not cosmetic" clause and the tier budget would otherwise drop every
+ * readability lead before it was weighed, so a confirmed lead is exempt from
+ * the one and gets a small allowance outside the other. Every lead owes a
+ * `resolve_lead` verdict, which is what tells the reader the lead was read.
+ */
+function renderHunkLeadRules(count: number): string[] {
+  return [
+    "### First-pass leads",
+    "",
+    `Before you started, a fast pass judged each hunk of this diff in isolation, without the rest of the file or its callers. It flagged ${count} hunk${count === 1 ? "" : "s"}, listed under each file's header below as "First-pass leads", each with an id (\`L1\`, \`L2\`, …). They are leads, not findings: when you reach a file, check each of its leads against the code, and raise an issue only where the lead holds up once you can see the context. Never argue with a lead, and never mention the first pass, these leads, or their scores in the walkthrough itself.`,
+    "",
+    `A confirmed lead still has to clear the bug bar, with one exception: clause 1's "not cosmetic" does not apply to it. Readability is the impact of a long comment, an unclean hunk, or a hard-to-read one. Raise a confirmed readability lead as \`info\`. Up to ${LEAD_INFO_ALLOWANCE} confirmed leads raised as \`info\` sit outside the risk tier's issue budget; a lead you raise as \`warning\` or \`critical\` takes a slot like any other concern.`,
+    "",
+    "A long-comment lead holds up when you can name the sentences that go without losing a reason the code cannot express; the inline comment names them. A redundant-test lead holds up only when you can name what already protects that behaviour — another test you can point to, or the fact that nothing the code does could make the assertion fail; the issue then proposes deleting the test, not rewriting it.",
+    "",
+    "Give every lead a verdict with `resolve_lead` as soon as you have judged it: `confirmed` with the `issue_id` of the issue you raised for it (one issue may confirm several leads), or `rejected` with a one-sentence `reason` naming what in the code answers it. Independent verdicts can go out as parallel calls. `complete_walkthrough` refuses while any lead is unresolved.",
+  ];
+}
+
+/** One file's leads, in line order, for the block under its diff header. */
+function renderFileLeads(leads: ReadonlyArray<WalkthroughLead>, withPath: boolean): string[] {
+  return [
+    "First-pass leads:",
+    ...[...leads]
+      .sort((a, b) => a.filePath.localeCompare(b.filePath) || a.newStart - b.newStart)
+      .map(
+        (lead) =>
+          `- \`${lead.id}\` ${withPath ? `\`${lead.filePath}\` ` : ""}${leadRange(lead)} — ${lead.smells
+            .map(
+              (s) =>
+                `${HUNK_SMELL_META[s.smell].label.toLowerCase()} (${s.probability.toFixed(2)})`,
+            )
+            .join(", ")}`,
+      ),
+  ];
+}
+
+/**
+ * What the orchestrator worked out before the agent started, each one a given
+ * the prompt states rather than a question it asks. Every field is optional:
+ * absent means TypeSafe was off or had nothing to say.
+ */
+export interface WalkthroughPromptHints {
+  /**
+   * Risk tier the orchestrator already assigned. Present flips the tier
+   * instruction to "this is your budget"; absent keeps "explore first,
+   * then declare" (TypeSafe off).
+   */
+  assignedRisk?: RiskLevel;
+  /**
+   * Reading order for changed files, highest attention first, scored by
+   * the orchestrator. Flips triage from agent-guessed to pre-triaged.
+   * A null tier is past the scoring cap; sorts to the bottom, no claim.
+   */
+  filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
+  /**
+   * Present when the PR reads as several changes; tells the agent the
+   * split call is already made and how many pieces to name.
+   */
+  splitRecommendation?: { readonly pieces: number };
+  /**
+   * Hunks the orchestrator's first pass flagged, strongest first. Leads to
+   * verify, never findings — see {@link renderHunkLeadRules}.
+   */
+  hunkLeads?: ReadonlyArray<WalkthroughLead>;
+}
+
 export function buildWalkthroughPrompt(
-  params: {
+  params: WalkthroughPromptHints & {
     pr: {
       title: string;
       body: string | null;
@@ -182,23 +265,6 @@ export function buildWalkthroughPrompt(
       readonly headSha: string;
       readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
     };
-    /**
-     * Risk tier the orchestrator already assigned. Present flips the tier
-     * instruction to "this is your budget"; absent keeps "explore first,
-     * then declare" (TypeSafe off).
-     */
-    assignedRisk?: RiskLevel;
-    /**
-     * Reading order for changed files, highest attention first, scored by
-     * the orchestrator. Flips triage from agent-guessed to pre-triaged.
-     * A null tier is past the scoring cap; sorts to the bottom, no claim.
-     */
-    filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
-    /**
-     * Present when the PR reads as several changes; tells the agent the
-     * split call is already made and how many pieces to name.
-     */
-    splitRecommendation?: { readonly pieces: number };
   },
   maxTokenBudget = 40000,
   continuation?: PromptContinuationContext,
@@ -254,6 +320,15 @@ export function buildWalkthroughPrompt(
         ? "### Changed Files (full PR diff fallback — incremental range unavailable)"
         : "### Changed Files in Incremental Range (diff — prior reviewed head to current head)"
       : "### Changed Files (diff — you can read full file contents with your tools)";
+
+  // Leads ride under their file's header, so the agent meets each one while
+  // it is reading that file rather than in a list it saw before the diff.
+  const hunkLeads = params.hunkLeads ?? [];
+  const leadsByPath = Map.groupBy(hunkLeads, (lead) => lead.filePath);
+  if (hunkLeads.length > 0) {
+    lines.push("", ...renderHunkLeadRules(hunkLeads.length));
+  }
+
   lines.push("", changedFilesHeading, "");
 
   if (params.files.length === 0) {
@@ -286,7 +361,12 @@ export function buildWalkthroughPrompt(
   for (const file of params.files) {
     const tier = tierByPath.get(file.filename);
     const tierSuffix = tier === undefined || tier === null ? "" : `, ${tierLabel(tier)}`;
-    const header = `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions}${tierSuffix})`;
+    const fileLeads = leadsByPath.get(file.filename);
+    leadsByPath.delete(file.filename);
+    const header = [
+      `#### ${file.filename} (${file.status}, +${file.additions} -${file.deletions}${tierSuffix})`,
+      ...(fileLeads ? renderFileLeads(fileLeads, false) : []),
+    ].join("\n");
     if (file.patch) {
       const patchTokens = file.patch.length / 4;
       if (approxTokens + patchTokens > maxTokenBudget) {
@@ -298,6 +378,15 @@ export function buildWalkthroughPrompt(
     } else {
       lines.push(header, "[No patch available — binary or too large]", "");
     }
+  }
+
+  // Leads are recorded at the first start and a resume prompts with the same
+  // set, so if the file list changed in between (an incremental range that
+  // only resolves on the retry), a lead can name a file missing above. It
+  // still owes a verdict, so it still reaches the agent.
+  const strayLeads = [...leadsByPath.values()].flat();
+  if (strayLeads.length > 0) {
+    lines.push("#### Other files", ...renderFileLeads(strayLeads, true), "");
   }
 
   lines.push(

@@ -127,22 +127,26 @@ export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyE
  *   'unconfigured' — no API key in the keyring or `REVV_JEV_API_KEY`
  *   'disabled'     — the master switch or this hook's toggle is off
  *   'timeout'      — the call exceeded the caller's budget
- *   'transport'    — HTTP/connection failure, including auth and rate limits
+ *   'rate_limited' — a 429 (the SDK doesn't retry those; see `JevServiceLive`)
+ *   'transport'    — any other HTTP/connection failure, auth included
  *   'malformed'    — a 2xx whose body didn't match the expected answer shape
  *
  * `'unconfigured'`/`'disabled'` short-circuit with zero latency. Every call
- * site collapses all five to `null` and degrades to pre-Jev behaviour.
+ * site collapses all six to `null` and degrades to pre-Jev behaviour.
  */
 export type JevUnavailableReason =
   | "unconfigured"
   | "disabled"
   | "timeout"
+  | "rate_limited"
   | "transport"
   | "malformed";
 
 export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
   readonly reason: JevUnavailableReason;
   readonly message?: string;
+  /** Server's `Retry-After`, on `rate_limited` only, when it sent one. */
+  readonly retryAfterMs?: number;
   readonly cause?: unknown;
 }> {}
 

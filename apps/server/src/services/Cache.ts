@@ -262,13 +262,16 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
         ),
       );
 
+      // The entry lives exactly as long as the fetch, which runs detached:
+      // an interrupted owner leaves it running, and a later caller must join
+      // it rather than start a second one. Settling drops it, failure
+      // included, so a failed fetch is never replayed to the next caller.
       inflight.set(dedupKey, promise);
-      try {
-        const exit = yield* Effect.promise(() => promise);
-        return yield* exit;
-      } finally {
-        inflight.delete(dedupKey);
-      }
+      void promise.then(() => {
+        if (inflight.get(dedupKey) === promise) inflight.delete(dedupKey);
+      });
+      const exit = yield* Effect.promise(() => promise);
+      return yield* exit;
     });
 
   const stats = () =>

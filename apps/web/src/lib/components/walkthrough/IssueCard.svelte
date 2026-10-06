@@ -1,5 +1,6 @@
 <script lang="ts">
-import type { WalkthroughIssue } from "@revv/shared";
+import { HUNK_SMELL_META, type HunkSmell, type WalkthroughIssue } from "@revv/shared";
+import Waveform from "phosphor-svelte/lib/Waveform";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
@@ -23,6 +24,8 @@ interface Props {
   onfileclick?: (filePath: string, line: number) => void;
   stepTag?: string | null;
   hideFileBadge?: boolean;
+  /** Smells the first pass flagged on this issue's hunk, before the review ran. */
+  firstPassSmells?: readonly HunkSmell[] | undefined;
 }
 
 let {
@@ -39,7 +42,14 @@ let {
   onfileclick,
   stepTag = null,
   hideFileBadge = false,
+  firstPassSmells,
 }: Props = $props();
+
+const firstPassLabel = $derived(
+  firstPassSmells && firstPassSmells.length > 0
+    ? `The first pass flagged this hunk: ${firstPassSmells.map((s) => HUNK_SMELL_META[s].label.toLowerCase()).join(", ")}`
+    : null,
+);
 
 const severityLabels: Record<string, string> = {
   info: "Info",
@@ -150,6 +160,11 @@ function onAnimEnd(event: AnimationEvent): void {
 				{/if}
 				{#if resolutionLabel}
 					<span class="issue-card-resolution-badge">{resolutionLabel}</span>
+				{/if}
+				{#if firstPassLabel}
+					<span class="issue-card-first-pass" role="img" aria-label={firstPassLabel} title={firstPassLabel}>
+						<Waveform size={12} weight="bold" />
+					</span>
 				{/if}
 			</span>
 			<span class="issue-card-title">{issue.title}</span>
@@ -440,6 +455,15 @@ function onAnimEnd(event: AnimationEvent): void {
 		background: color-mix(in srgb, var(--color-success) 15%, transparent);
 		color: var(--color-success);
 		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
+	}
+
+	/* ── First-pass mark ─────────────────────────────────────────────── */
+	/* Corroboration, not a status: an icon in the card's own tone, quiet
+	   enough to skim past and specific enough on hover. */
+	.issue-card-first-pass {
+		display: inline-flex;
+		align-self: center;
+		color: color-mix(in srgb, var(--severity-color, var(--color-text-muted)) 70%, var(--color-text-muted));
 	}
 
 	/* ── Severity badge ──────────────────────────────────────────────── */

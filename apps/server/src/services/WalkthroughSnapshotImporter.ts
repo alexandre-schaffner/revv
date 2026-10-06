@@ -27,6 +27,7 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
+import { walkthroughLeads } from "../db/schema/walkthrough-leads";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
@@ -111,6 +112,11 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
             db.delete(walkthroughSemanticSteps)
               .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughId))
               .run();
+            // The interrupted run's leads describe a review that never
+            // happened; the imported one carries none.
+            db.delete(walkthroughLeads)
+              .where(eq(walkthroughLeads.walkthroughId, walkthroughId))
+              .run();
 
             // ── Phase A + C: content lives on the row ────────────────────
             // `summary` + `riskLevel` are Phase A outputs; `sentiment` is
@@ -131,6 +137,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 generatedByDisplayName: snapshot.generatedBy.displayName,
                 generatedByAvatarUrl: snapshot.generatedBy.avatarContent,
                 providerConfig: JSON.stringify(snapshot.providerConfig),
+                leadsSelectedAt: null,
               })
               .where(eq(walkthroughs.id, walkthroughId))
               .run();

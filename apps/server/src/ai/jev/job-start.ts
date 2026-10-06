@@ -14,7 +14,7 @@ import { debug } from "../../logger";
 import { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
-import { scoreAnswerAt } from "./questions";
+import { numericAnswerAt } from "./questions";
 import {
   type GenerationLaunchOverride,
   type ReasoningEffort,
@@ -204,7 +204,7 @@ export function askJobStart(
 
     const filePriorities: Record<string, number> = {};
     for (const [index, file] of scoredFiles.entries()) {
-      const score = scoreAnswerAt(answers, filePriorityKey(index));
+      const score = numericAnswerAt(answers, filePriorityKey(index), "score");
       if (score !== null) filePriorities[file.filename] = score;
     }
 

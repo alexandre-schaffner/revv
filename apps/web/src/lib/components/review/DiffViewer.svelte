@@ -37,6 +37,8 @@ export interface LineClickInfo {
 // ── Props ─────────────────────────────────────────────────────────────────
 
 interface Props {
+  /** The PR under review; its first pass marks the gutter. */
+  prId: string;
   file: ReviewFile | null;
   onLineClick?: (info: LineClickInfo) => void;
   onModeChange?: (mode: "unified" | "split") => void;
@@ -52,6 +54,7 @@ interface Props {
 }
 
 let {
+  prId,
   file,
   onLineClick,
   onModeChange,
@@ -279,6 +282,7 @@ async function handlePushThread(threadId: string) {
 {#if file}
 	{#key viewKey}
 		<DiffViewerInner
+			{prId}
 			{file}
 			{mode}
 			{wrap}

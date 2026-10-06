@@ -207,6 +207,44 @@ export function buildContinuationState(input: ContinuationInput): JevState {
 }
 
 /**
+ * Most characters of hunk per first-pass call. The scan cuts a longer hunk
+ * into windows of about this size, so the whole of a large new file is read
+ * rather than its head; the clip below only ever bites on a single line
+ * longer than this.
+ */
+export const HUNK_PATCH_MAX_CHARS = 12_000;
+
+export interface HunkScanStateInput {
+  readonly path: string;
+  readonly status: string;
+  readonly header: string;
+  readonly body: string;
+  /** Which window of a hunk too long for one call; null when the patch is the whole hunk. */
+  readonly part: { readonly index: number; readonly count: number } | null;
+}
+
+/**
+ * State for one first-pass call: the hunk and the file it sits in, nothing
+ * else. No PR title or body, on purpose — the answer is then a function of the
+ * hunk's content alone, which is what lets it be cached across commits,
+ * supersedes, and resumes. Well under the budget by construction, so no clamp.
+ */
+export function buildHunkScanState(input: HunkScanStateInput): JevState {
+  return {
+    file: { path: input.path, status: input.status },
+    hunk: {
+      header: input.header,
+      patch: truncatePatchToChars(input.body, HUNK_PATCH_MAX_CHARS, "hunk").patch,
+      ...(input.part
+        ? {
+            part: `Window ${input.part.index} of ${input.part.count} of a hunk too long to show at once; the lines before and after it are elided, not missing.`,
+          }
+        : {}),
+    },
+  };
+}
+
+/**
  * Last-resort clamp: a pathological input degrades to a truncated-but-valid
  * state rather than a 422. Halves the largest array/record field repeatedly
  * until it fits, biased toward keeping header fields over list tails.

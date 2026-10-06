@@ -1,8 +1,4 @@
 <script lang="ts">
-import { onDestroy, onMount, untrack } from "svelte";
-
-const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
-
 import type {
   WalkthroughBlock,
   WalkthroughMode,
@@ -14,6 +10,7 @@ import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
 import Warning from "phosphor-svelte/lib/Warning";
+import { onDestroy, onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -21,15 +18,15 @@ import { Shimmer } from "$lib/components/ai/shimmer";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
-import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import * as Popover from "$lib/components/ui/popover";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
-import { gsapFadeY, tokens } from "$lib/motion";
+import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
+  getLoadedHeadSha,
   getPendingWalkthroughBlockJump,
   getReviewMode,
   jumpToDiffLine,
@@ -51,6 +48,7 @@ import {
   getIssues,
   getLastCompletedPhase,
   getLastWalkthroughEventAt,
+  getLeads,
   getPhase,
   getProviderConfig,
   getRatings,
@@ -64,6 +62,7 @@ import {
   getStreamStartedAt,
   getSummary,
   getTimeline,
+  getWalkthroughUiState,
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
@@ -87,6 +86,7 @@ import {
 } from "$lib/utils/agent-auth-recovery";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
+import { firstPassView } from "$lib/utils/hunk-scan";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
 import {
@@ -94,6 +94,10 @@ import {
   partitionBySignal,
   shouldHideLowSignal,
 } from "$lib/utils/walkthrough-issues";
+import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
+import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
+import FirstPassPreview from "./first-pass/FirstPassPreview.svelte";
+import FirstPassRibbon from "./first-pass/FirstPassRibbon.svelte";
 import IssueCard from "./IssueCard.svelte";
 import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
@@ -132,6 +136,16 @@ const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
 const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 const ratings = $derived(getRatings());
+// The first pass for the head on screen. It runs on its own, so it's here
+// before Generate; a stale walkthrough reviewed an older head, and its issues
+// can't confirm or miss this head's leads, so it shows none. Leads the review
+// took up mark their issue card; the rest fold under the issues.
+const firstPass = $derived.by(() => {
+  const scan = getHunkScan(prId, getLoadedHeadSha(prId));
+  const rows = getWalkthroughUiState().kind === "complete-stale" ? [] : scan.rows;
+  return firstPassView(rows, scan.status, allIssues, !isStreaming, getLeads());
+});
+let firstPassOpen = $state(false);
 const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
@@ -496,12 +510,27 @@ const CHAPTERS = [
   {
     id: "rated",
     label: "Rating",
-    blurb: "Across 9 axis",
+    blurb: "Across 9 axes",
     activeBlurb: "Scoring each axis…",
     spinner: "prism-bloom",
     targetId: "walkthrough-rating",
   },
 ] as const;
+
+// ── First pass chapter ──────────────────────────────────────────────
+// Prepended only when this head has scan rows (TypeSafe is on), so older
+// walkthroughs keep their four cells. The agent waits for it, so while it runs
+// it is the active cell and every agent chapter is queued — until the job
+// hands the agent its leads. The scan can outlive that (past the join budget,
+// or interrupted by a newer head and left `running` on disk), and the agent's
+// chapters take over regardless.
+const FIRST_PASS_SPINNER = "square-5";
+const agentStarted = $derived(getLeads() !== null || lastCompletedPhase !== "none");
+const stepperActiveId = $derived(
+  firstPass.rows.length > 0 && firstPass.running && !agentStarted
+    ? "first-pass"
+    : (CHAPTERS[activeChapterIndex]?.id ?? CHAPTERS[0].id),
+);
 
 // ── Recent tool calls under the active chapter ───────────────────────
 // The active chapter cell renders a vertical list of the last 3 tool
@@ -568,16 +597,33 @@ const visibleBlocks = $derived.by(() => {
   );
 });
 
-// ── Per-chapter availability ────────────────────────────────────────
+// ── Stepper chapters ────────────────────────────────────────────────
 // A chapter is "available" when its target section has been written —
 // clicking it should land on real content, not an empty anchor. Used
 // post-streaming to gate clickability and pick the right visual state.
-const chapterAvailability = $derived([
-  summary !== null,
-  visibleBlocks.length > 0,
-  sentiment !== null,
-  ratings.length > 0,
-]);
+const chapters = $derived.by((): StepperChapter[] => {
+  const written = [
+    summary !== null,
+    visibleBlocks.length > 0,
+    sentiment !== null,
+    ratings.length > 0,
+  ];
+  const agent = CHAPTERS.map((chapter, i) => ({ ...chapter, available: written[i] ?? false }));
+  if (firstPass.rows.length === 0) return agent;
+  const scan: StepperChapter = {
+    id: "first-pass",
+    label: "First pass",
+    blurb: firstPass.result,
+    activeBlurb: firstPass.scanning,
+    spinner: FIRST_PASS_SPINNER,
+    targetId: "walkthrough-first-pass",
+    // The unraised leads fold under the issues, in the content branch.
+    available: summary !== null && firstPass.hasLeads,
+    extra: firstPassRibbon,
+    onjump: () => (firstPassOpen = true),
+  };
+  return [scan, ...agent];
+});
 
 // Show a skeleton placeholder at the bottom of the diff section while
 // Phase B is active — i.e. overview landed but diff analysis hasn't
@@ -1072,6 +1118,10 @@ function handleResume(): void {
 }
 </script>
 
+{#snippet firstPassRibbon()}
+	<FirstPassRibbon rows={firstPass.rows} />
+{/snippet}
+
 <div class="walkthrough">
 	{#if isMerged}
 		<!-- Pressed into the top-right of the content column. Its own grid row
@@ -1149,69 +1199,13 @@ function handleResume(): void {
 			class:walkthrough-stepper-header--no-anim={stepperAnimated}
 			onanimationend={(e) => lockContainerAnimation('stepper', e)}
 		>
-			<div
-				class="chapter-stepper"
-				role="progressbar"
-				aria-label="Walkthrough chapters"
-				aria-valuenow={activeChapterIndex + 1}
-				aria-valuemin={1}
-				aria-valuemax={CHAPTERS.length}
-			>
-				{#each CHAPTERS as chapter, i (chapter.id)}
-					{@const active = isStreaming && i === activeChapterIndex}
-					{@const done = isStreaming && i < activeChapterIndex}
-					{@const queued = isStreaming && i > activeChapterIndex}
-					{@const available = chapterAvailability[i] ?? false}
-					{@const clickable = !active && available}
-					<button
-						type="button"
-						class="chapter-cell"
-						class:chapter-cell--active={active}
-						class:chapter-cell--done={done}
-						class:chapter-cell--queued={queued}
-						class:chapter-cell--available={!isStreaming && available}
-						class:chapter-cell--unavailable={!isStreaming && !available}
-						class:chapter-cell--clickable={clickable}
-						disabled={!clickable}
-						aria-label={clickable ? `Jump to ${chapter.label}` : chapter.label}
-						onclick={clickable ? () => jumpToSection(chapter.targetId) : undefined}
-					>
-						<div class="chapter-eyebrow">Step {String(i + 1).padStart(2, '0')}</div>
-						{#if active}
-							<div class="chapter-active-layout">
-								<div class="chapter-title">{chapter.label}</div>
-								<div class="chapter-active-row">
-							<Dotmatrix variant={chapter.spinner} active={active} />
-									{#if recentExplorationSteps.length > 0}
-										<div class="chapter-tool-calls">
-											{#each recentExplorationSteps.slice(-2) as { step, ordinal }, i (ordinal)}
-												<div
-													class="chapter-tool-call"
-													style="top: {i * TOOL_CALL_ROW_H}px"
-													in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-													out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-												>
-													<span class="chapter-tool-call-tool">{step.toolName}</span>
-													<span class="chapter-tool-call-desc">{step.summary}</span>
-												</div>
-											{/each}
-										</div>
-									{:else}
-										<span>{chapter.activeBlurb}</span>
-									{/if}
-								</div>
-							</div>
-						{:else}
-							<div class="chapter-title-row">
-								<div class="chapter-title">{chapter.label}</div>
-							</div>
-							<div class="chapter-body">
-								<div class="chapter-blurb">{chapter.blurb}</div>
-							</div>
-						{/if}
-					</button>
-				{/each}
-			</div>
+			<ChapterStepper
+				{chapters}
+				activeId={stepperActiveId}
+				{isStreaming}
+				toolCalls={stepperActiveId === 'first-pass' ? [] : recentExplorationSteps}
+				onjump={jumpToSection}
+			/>
 		</div>
 	{/if}
 
@@ -1266,9 +1260,15 @@ function handleResume(): void {
 			{/if}
 		</div>
 	{:else if !isStreaming && !summary && blocks.length === 0 && !streamError && !cloneInProgress && !hydrating}
-		<div class="walkthrough-empty">
-			<p class="loading-text">No walkthrough generated yet for this PR.</p>
-		</div>
+		{#if firstPass.rows.length > 0}
+			<div class="walkthrough-loading">
+				<FirstPassPreview view={firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToDiffLine} />
+			</div>
+		{:else}
+			<div class="walkthrough-empty">
+				<p class="loading-text">No walkthrough generated yet for this PR.</p>
+			</div>
+		{/if}
 	{:else if !summary && blocks.length === 0 && sentiment === null && ratings.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed. Only shown before the
 		     first MCP write lands. The moment Phase A's summary (or any later
@@ -1367,6 +1367,7 @@ function handleResume(): void {
 												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
 												hideFileBadge={true}
+												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 											/>
 										{:else}
 											<IssueCard
@@ -1376,6 +1377,7 @@ function handleResume(): void {
 												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
 												hideFileBadge={true}
+												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 											/>
 										{/if}
 									{/each}
@@ -1392,11 +1394,28 @@ function handleResume(): void {
 								noAnim
 								onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
 								hideFileBadge={true}
+								firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 							/>
 						{/each}
 					</LowSignalDisclosure>
+
+					{#if firstPass.hasLeads}
+						<div id="walkthrough-first-pass">{@render firstPassLeads()}</div>
+					{/if}
 				</div>
+			{:else if firstPass.hasLeads}
+				<div id="walkthrough-first-pass" class="first-pass-section">{@render firstPassLeads()}</div>
 			{/if}
+
+			{#snippet firstPassLeads()}
+				<FirstPassLeads
+					leads={firstPass.unraised}
+					note={firstPass.note}
+					isComplete={!isStreaming}
+					bind:open={firstPassOpen}
+					onjump={jumpToDiffLine}
+				/>
+			{/snippet}
 
 			<!-- Body — every chapter renders as a collapsible WalkthroughSection.
 			     The Phase A summary becomes the virtual first chapter ("Overview");
@@ -1594,6 +1613,7 @@ function handleResume(): void {
 	   one-character-wide sliver pinned to the far left. */
 	.walkthrough-content > .partial-error,
 	.walkthrough-content > .issues-section,
+	.walkthrough-content > .first-pass-section,
 	.walkthrough-content > .walkthrough-footer,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
@@ -1876,7 +1896,7 @@ function handleResume(): void {
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) both;
 	}
 
-	.walkthrough-stepper-header > * {
+	.walkthrough-stepper-header > :global(*) {
 		grid-column: 3;
 	}
 
@@ -1891,216 +1911,6 @@ function handleResume(): void {
 	.walkthrough-stepper-header + .walkthrough-loading,
 	.walkthrough-stepper-header + .walkthrough-content {
 		padding-top: 14px;
-	}
-
-	/* ── Chapters stepper ────────────────────────────────────────────────
-	   Four-cell horizontal grid. Active cell: 2px accent top rule, italic
-	   serif eyebrow, big serif title, body row of {dot-matrix spinner +
-	   "reading" verb + live mono file path}. Past/queued cells: same title
-	   with a static blurb under it — no "done" affordance, just absence of
-	   the active treatment. */
-
-	.chapter-stepper {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		column-gap: 16px;
-	}
-
-	.chapter-cell {
-		/* Reset button defaults — the cell is rendered as a <button> so it can
-		   participate in tab order and fire onclick when clickable. Inheriting
-		   the surrounding type styles keeps the visual output identical to the
-		   prior <div>-based markup. */
-		appearance: none;
-		background: transparent;
-		border: none;
-		border-radius: 0;
-		font: inherit;
-		color: inherit;
-		text-align: left;
-		display: block;
-		width: 100%;
-
-		min-width: 0;
-		padding: 10px 0 0;
-		/* `--color-border` (not `--color-border-subtle`): in dark mode the
-		   `subtle` token collapses onto the tertiary surface and the rule
-		   becomes invisible. Border is a tier up — visible against
-		   `--color-bg-primary` in both light and dark themes. */
-		border-top: 2px solid var(--color-border);
-		transition: border-color var(--duration-smooth) var(--ease-soft), opacity var(--duration-smooth) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft), background-color var(--duration-quick) var(--ease-soft);
-		cursor: default;
-	}
-
-	.chapter-cell:disabled {
-		cursor: default;
-	}
-
-	.chapter-cell--active {
-		border-top-color: var(--color-accent);
-	}
-
-	.chapter-cell--done {
-		border-top-color: var(--color-accent);
-		opacity: 0.5;
-	}
-
-	.chapter-cell--queued {
-		opacity: 0.35;
-	}
-
-	/* ── Navigation mode (post-streaming) ─────────────────────────────────
-	   Once generation finishes, the stepper persists as a chapter index for
-	   quick jumps to any section. Chapters whose content was written get a
-	   highlighted top rule + clickable hover/focus treatment; chapters that
-	   never wrote (e.g., generation aborted before Phase D) stay muted. */
-
-	.chapter-cell--available {
-		border-top-color: var(--color-accent);
-	}
-
-	.chapter-cell--unavailable {
-		opacity: 0.35;
-	}
-
-	.chapter-cell--clickable {
-		cursor: pointer;
-	}
-
-	/* Done cells (already-completed phases during streaming) drop to 0.5
-	   opacity by default to read as "past." Bump opacity on hover so the
-	   click affordance is unambiguous when the user reaches for one. */
-	.chapter-cell--clickable.chapter-cell--done:hover {
-		opacity: 1;
-	}
-
-	.chapter-cell--clickable:hover .chapter-title {
-		color: var(--color-accent);
-	}
-
-	.chapter-cell--clickable:hover .chapter-blurb {
-		color: var(--color-text-secondary);
-	}
-
-	.chapter-cell--clickable:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-		border-radius: 4px;
-	}
-
-	.chapter-cell--clickable:active {
-		transform: translateY(1px);
-	}
-
-	.chapter-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
-		font-style: italic;
-		font-size: 11.5px;
-		font-weight: 500;
-		letter-spacing: 0.3px;
-		color: var(--color-text-muted);
-		margin-bottom: 2px;
-		white-space: nowrap;
-		transition: color var(--duration-smooth) var(--ease-soft);
-	}
-
-	.chapter-cell--active .chapter-eyebrow,
-	.chapter-cell--done .chapter-eyebrow,
-	.chapter-cell--available .chapter-eyebrow {
-		color: var(--color-accent);
-	}
-
-	.chapter-active-layout {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-		margin-bottom: 6px;
-
-	}
-
-	/* inactive path only */
-	.chapter-title-row {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		margin-bottom: 6px;
-		min-width: 0;
-	}
-
-	.chapter-title {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 18px;
-		font-weight: 500;
-		letter-spacing: -0.012em;
-		line-height: 1.05;
-		color: var(--color-text-primary);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		transition: color var(--duration-smooth) var(--ease-soft);
-	}
-
-
-
-	.chapter-body {
-		min-height: 32px;
-	}
-
-	.chapter-active-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10px;
-		color: var(--color-accent);
-		min-width: 0;
-	}
-
-	.chapter-tool-calls {
-		position: relative;
-		flex: 1;
-		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
-		min-width: 0;
-		overflow: hidden;
-	}
-
-	.chapter-tool-call {
-		position: absolute;
-		left: 0;
-		right: 0;
-		display: flex;
-		gap: 6px;
-		min-width: 0;
-		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
-		   transition (used inline) writes inline `transform`, and a base-class
-		   transform would compose unpredictably with it. The animated property
-		   is bounded to ±14px so the layout cost is trivial. */
-		transition: top var(--duration-smooth) var(--ease-standard);
-	}
-
-	.chapter-tool-call-tool {
-		color: var(--color-accent);
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-
-	.chapter-tool-call-desc {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		min-width: 0;
-		color: var(--color-text-muted);
-	}
-
-	.chapter-blurb {
-		font-size: 10.5px;
-		line-height: 1.35;
-		color: var(--color-text-muted);
-		white-space: nowrap;
-		overflow: hidden;
-		transition: color var(--duration-smooth) var(--ease-soft);
-		text-overflow: ellipsis;
 	}
 
 	/* ── Exploration feed (error branch only) ────────────────────────────
@@ -2164,6 +1974,11 @@ function handleResume(): void {
 		flex-direction: column;
 		gap: 10px;
 		animation: content-enter var(--duration-ceremonial-medium) var(--ease-standard) 0.15s both;
+	}
+
+	/* No issues to sit under: the leads take the issues' slot. */
+	.first-pass-section {
+		margin-top: 20px;
 	}
 
 	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
@@ -2336,9 +2151,8 @@ function handleResume(): void {
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
-		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
 		border-radius: 8px;
 		outline: 2px solid transparent;
@@ -2456,7 +2270,7 @@ function handleResume(): void {
 		padding: 4px 0;
 		/* Match the block's entrance timing so rail text appears in sync
 		   with its block. Paired with the --enter-delay inline style. */
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 
@@ -2667,6 +2481,7 @@ function handleResume(): void {
 
 		/* Children no longer need explicit column placement. */
 		.walkthrough-content > .issues-section,
+		.walkthrough-content > .first-pass-section,
 		.walkthrough-content > :global([data-slot="separator"]) {
 			grid-column: auto;
 		}
@@ -2709,7 +2524,7 @@ function handleResume(): void {
 		.walkthrough-loading > :global(*),
 		.merged-stamp-row > :global(*),
 		.report-selector-row > :global(*),
-		.walkthrough-stepper-header > * {
+		.walkthrough-stepper-header > :global(*) {
 			grid-column: auto;
 		}
 

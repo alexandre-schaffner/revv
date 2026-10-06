@@ -11,8 +11,14 @@
 // exactly one error type so that collapse is total.
 
 import type { JsonValue, Questions, SystemOneResult } from "@typesafe-ai/sdk";
-import { APITimeoutError, APIUserAbortError, noul, TypeSafeClient } from "@typesafe-ai/sdk";
-import { Context, Duration, Effect, Layer } from "effect";
+import {
+  APITimeoutError,
+  APIUserAbortError,
+  noul,
+  RateLimitError,
+  TypeSafeClient,
+} from "@typesafe-ai/sdk";
+import { Context, Duration, Effect, Layer, RateLimiter } from "effect";
 import { resolveJevApiKey } from "../ai/jev/api-key";
 import { JevUnavailable } from "../domain/errors";
 import { debug } from "../logger";
@@ -21,6 +27,13 @@ import { SettingsService } from "./Settings";
 
 /** Pinned, not `jev-latest`: consuming hooks calibrate thresholds against one model version. */
 export const JEV_MODEL = "jev-1.13.0";
+
+/**
+ * Requests per second across every hook. TypeSafe allows 1,200 a minute per
+ * key; staying just under keeps a large first pass from tripping the quota
+ * and failing its own tail, or starving the Phase-B hooks of the same key.
+ */
+const JEV_REQUESTS_PER_SECOND = 18;
 
 /**
  * JSON object, not prose, so questions can reference nested paths (`pr.title`,
@@ -36,6 +49,7 @@ export type JevCallLabel =
   | "artifact"
   | "prose"
   | "continuation"
+  | "hunk-scan"
   | "connection-test";
 
 export interface JevRequest<Q extends Questions> {
@@ -79,10 +93,30 @@ export class JevService extends Context.Tag("JevService")<
   }
 >() {}
 
+/**
+ * The SDK's default retry set minus 429. Waiting out a `Retry-After` (up to
+ * 60 s by default) inside a call whose budget is a few seconds turns every
+ * rate limit into a `timeout`, which the first pass's circuit breaker counts
+ * as Jev being down. A 429 surfaces as `rate_limited` instead, which the
+ * first pass waits out and the other call sites degrade on.
+ */
+const RETRIED_STATUSES: ReadonlySet<number> = new Set([
+  408,
+  ...Array.from({ length: 100 }, (_, i) => 500 + i),
+]);
+
 /** Map an SDK rejection onto the closed reason set. */
 function classify(cause: unknown): JevUnavailable {
   if (cause instanceof APITimeoutError || cause instanceof APIUserAbortError) {
     return new JevUnavailable({ reason: "timeout", cause });
+  }
+  if (cause instanceof RateLimitError) {
+    return new JevUnavailable({
+      reason: "rate_limited",
+      message: cause.message,
+      ...(cause.retryAfterMs === undefined ? {} : { retryAfterMs: cause.retryAfterMs }),
+      cause,
+    });
   }
   return new JevUnavailable({
     reason: "transport",
@@ -92,11 +126,15 @@ function classify(cause: unknown): JevUnavailable {
 }
 
 export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | SecretStore> =
-  Layer.effect(
+  Layer.scoped(
     JevService,
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const store = yield* SecretStore;
+      const paced = yield* RateLimiter.make({
+        limit: JEV_REQUESTS_PER_SECOND,
+        interval: "1 seconds",
+      });
 
       /** Cached on the key so a key change in Settings takes effect on the very next call. */
       let cached: { readonly key: string; readonly client: TypeSafeClient } | null = null;
@@ -139,29 +177,31 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
           Effect.gen(function* () {
             const apiKey = yield* resolveKey;
             const client = clientFor(apiKey);
-            const startedAt = Date.now();
-
-            const result = yield* Effect.tryPromise({
-              // The signal is Effect's: an interrupt (including the timeout
-              // below) aborts the HTTP request rather than leaking it.
-              try: (signal) =>
-                client.systemOne(
-                  { state: req.state, questions: req.questions, model: JEV_MODEL },
-                  { signal },
-                ),
-              catch: classify,
-            }).pipe(
-              Effect.timeoutFail({
-                duration: Duration.millis(req.timeoutMs),
-                onTimeout: () =>
-                  new JevUnavailable({
-                    reason: "timeout",
-                    message: `Jev ${req.label} exceeded ${req.timeoutMs}ms`,
-                  }),
-              }),
+            // Paced before the clock starts: waiting for a slot isn't Jev being slow.
+            const [elapsed, response] = yield* paced(
+              Effect.tryPromise({
+                // The signal is Effect's: an interrupt (including the timeout
+                // below) aborts the HTTP request rather than leaking it.
+                try: (signal) =>
+                  client.systemOne(
+                    { state: req.state, questions: req.questions, model: JEV_MODEL },
+                    { signal, retry: { httpStatuses: RETRIED_STATUSES } },
+                  ),
+                catch: classify,
+              }).pipe(
+                Effect.timeoutFail({
+                  duration: Duration.millis(req.timeoutMs),
+                  onTimeout: () =>
+                    new JevUnavailable({
+                      reason: "timeout",
+                      message: `Jev ${req.label} exceeded ${req.timeoutMs}ms`,
+                    }),
+                }),
+                Effect.timed,
+              ),
             );
 
-            if (result.answers === null || typeof result.answers !== "object") {
+            if (response.answers === null || typeof response.answers !== "object") {
               return yield* Effect.fail(
                 new JevUnavailable({ reason: "malformed", message: "response carried no answers" }),
               );
@@ -169,10 +209,10 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
 
             debug(
               "jev",
-              `${req.label}: ${Object.keys(req.questions).length}q in ${Date.now() - startedAt}ms`,
-              `(${result.usage.input_tokens} input tokens, ${result.model})`,
+              `${req.label}: ${Object.keys(req.questions).length}q in ${Math.round(Duration.toMillis(elapsed))}ms`,
+              `(${response.usage.input_tokens} input tokens, ${response.model})`,
             );
-            return result;
+            return response;
           }),
 
         isAvailable: () =>

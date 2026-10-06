@@ -9,19 +9,17 @@ import type { WalkthroughSizing } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { authHeaders } from "$lib/utils/session-token";
+import { createPendingPoll } from "./pending-poll";
 
 /**
  * Keyed on `(prId, headSha)`, not `prId` — a pull moves the head SHA, so the
  * old answer stops matching and re-sizes rather than pinning for the branch's life.
  */
 let sizings = $state<Record<string, WalkthroughSizing>>({});
-/** In-flight de-dupe: mount, settings change and a pull can all ask at once. */
-const inFlight = new Map<string, Promise<void>>();
-/** Bounded `pending` retries per key, so a never-cached diff can't spin. */
-const attempts = new Map<string, number>();
-
-const MAX_PENDING_RETRIES = 6;
-const PENDING_RETRY_MS = 2_500;
+/** Keys whose ask failed for real (auth, unknown PR, network): not pending, and not re-asked. */
+let failed = $state<Record<string, true>>({});
+/** Mount, settings change and a pull can all ask at once; `pending` re-asks. */
+const poll = createPendingPoll();
 
 function cacheKey(prId: string, headSha: string): string {
   return `${prId}@${headSha}`;
@@ -44,18 +42,20 @@ export function sizingForSelectedPr(active: () => boolean) {
   let prId = $derived(getSelectedPrId());
   let headSha = $derived(prId ? (getPrById(prId)?.headSha ?? null) : null);
   let sizing = $derived(getWalkthroughSizing(prId, headSha));
+  let failedHere = $derived(
+    prId !== null && headSha !== null && failed[cacheKey(prId, headSha)] === true,
+  );
   let pending = $derived.by(
     () =>
       active() &&
       prId !== null &&
+      !failedHere &&
       (sizing === null ||
-        (sizing.status === "pending" &&
-          headSha !== null &&
-          (attempts.get(cacheKey(prId, headSha)) ?? 0) < MAX_PENDING_RETRIES)),
+        (sizing.status === "pending" && headSha !== null && !poll.gaveUp(cacheKey(prId, headSha)))),
   );
 
   $effect(() => {
-    if (!active() || prId === null || headSha === null || sizing !== null) return;
+    if (!active() || prId === null || headSha === null || sizing !== null || failedHere) return;
     void fetchWalkthroughSizing(prId, headSha);
   });
 
@@ -72,47 +72,33 @@ export function sizingForSelectedPr(active: () => boolean) {
 /**
  * Fetch the preview for a PR at a specific head SHA, de-duped.
  *
- * `pending` means the diff isn't cached yet (normal right after a pull).
- * Retries on a timer since diff-cache-fill has no client-visible event;
- * bounded so a PR whose diff never caches settles instead of polling forever.
+ * `pending` means the diff isn't cached yet (normal right after a pull), so it
+ * is asked again on a timer. An HTTP error (auth, unknown PR) is not pending:
+ * it is recorded as failed, so callers stop showing a pending state and show nothing.
  */
-export async function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
+export function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
   const key = cacheKey(prId, headSha);
-  const existing = sizings[key];
-  if (existing && existing.status !== "pending") return;
-  const running = inFlight.get(key);
-  if (running) return running;
-
-  const task = (async () => {
+  return poll.pollWhilePending(key, async () => {
+    const existing = sizings[key];
+    if (existing && existing.status !== "pending") return "done";
     try {
       const res = await fetch(
         `${API_BASE_URL}/api/reviews/${encodeURIComponent(prId)}/walkthrough/sizing`,
         { headers: authHeaders(), credentials: "include" },
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        failed = { ...failed, [key]: true };
+        return "done";
+      }
       const next = (await res.json()) as WalkthroughSizing;
       sizings = { ...sizings, [key]: next };
-
-      if (next.status === "pending") {
-        const tried = (attempts.get(key) ?? 0) + 1;
-        attempts.set(key, tried);
-        if (tried < MAX_PENDING_RETRIES) {
-          setTimeout(() => {
-            // Only chase a key still on screen and still unresolved.
-            if (sizings[key]?.status === "pending") void fetchWalkthroughSizing(prId, headSha);
-          }, PENDING_RETRY_MS);
-        }
-      } else {
-        attempts.delete(key);
-      }
+      return next.status === "pending" ? "pending" : "done";
     } catch {
       // Best-effort: callers fall back to showing nothing.
-    } finally {
-      inFlight.delete(key);
+      failed = { ...failed, [key]: true };
+      return "done";
     }
-  })();
-  inFlight.set(key, task);
-  return task;
+  });
 }
 
 /**
@@ -122,6 +108,6 @@ export async function fetchWalkthroughSizing(prId: string, headSha: string): Pro
  */
 export function resetWalkthroughSizings(): void {
   sizings = {};
-  inFlight.clear();
-  attempts.clear();
+  failed = {};
+  poll.reset();
 }

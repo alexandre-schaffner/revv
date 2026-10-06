@@ -16,6 +16,7 @@ const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
   unconfigured: "No API key saved.",
   disabled: "TypeSafe is turned off.",
   timeout: "The request timed out.",
+  rate_limited: "The API key is over its request quota; try again shortly.",
   transport: "Could not reach the TypeSafe API.",
   malformed: "The API returned an unexpected response.",
 };

@@ -13,8 +13,8 @@
  * diff before it is sent.
  */
 
-/** A hunk header carrying explicit ranges: `@@ -a[,b] +c[,d] @@`. */
-const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+/** A hunk header carrying explicit ranges: `@@ -a[,b] +c[,d] @@`. An omitted count means 1. */
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 /** The line numbers one hunk exposes on each side of the diff. */
 interface HunkLines {
@@ -45,7 +45,7 @@ export function commentableLines(patch: string): HunkLines[] {
     if (header) {
       if (current) hunks.push(current);
       leftLine = Number(header[1]);
-      rightLine = Number(header[2]);
+      rightLine = Number(header[3]);
       current = { left: [], right: [] };
       continue;
     }
@@ -62,6 +62,60 @@ export function commentableLines(patch: string): HunkLines[] {
     }
   }
   if (current) hunks.push(current);
+  return hunks;
+}
+
+/** One `@@` hunk of a patch, with the ranges its header declares. */
+export interface PatchHunk {
+  /** Position among the patch's hunks — the same `hunkIndex` `@pierre/diffs` assigns. */
+  readonly index: number;
+  readonly header: string;
+  readonly oldStart: number;
+  readonly oldLines: number;
+  readonly newStart: number;
+  readonly newLines: number;
+  /** The header line and every line under it, joined with `\n`. */
+  readonly body: string;
+  /** Added lines, `+` stripped. */
+  readonly addedLines: readonly string[];
+}
+
+/** Split a unified patch into its hunks. Preamble before the first header is dropped. */
+export function splitHunks(patch: string): PatchHunk[] {
+  const hunks: PatchHunk[] = [];
+  let current: { header: RegExpExecArray; lines: string[]; added: string[] } | null = null;
+
+  const flush = () => {
+    if (!current) return;
+    const [line, oldStart, oldLines, newStart, newLines] = current.header;
+    hunks.push({
+      index: hunks.length,
+      header: line,
+      oldStart: Number(oldStart),
+      oldLines: oldLines === undefined ? 1 : Number(oldLines),
+      newStart: Number(newStart),
+      newLines: newLines === undefined ? 1 : Number(newLines),
+      body: current.lines.join("\n"),
+      addedLines: current.added,
+    });
+  };
+
+  const lines = patch.split("\n");
+  // Same trailing-newline handling as `commentableLines`.
+  if (lines.at(-1) === "") lines.pop();
+
+  for (const line of lines) {
+    const header = HUNK_HEADER.exec(line);
+    if (header) {
+      flush();
+      current = { header, lines: [line], added: [] };
+      continue;
+    }
+    if (!current) continue;
+    current.lines.push(line);
+    if (line.startsWith("+")) current.added.push(line.slice(1));
+  }
+  flush();
   return hunks;
 }
 

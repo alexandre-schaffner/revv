@@ -6,6 +6,7 @@
 // This is the single server -> client realtime channel. Inbound commands use
 // REST endpoints instead of this stream.
 
+import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
 import type {
   NewPrCommit,
   NewPrMessage,
@@ -55,6 +56,51 @@ export interface WalkthroughEventEnvelope {
     event: WalkthroughStreamEvent;
   };
 }
+
+// ── First pass (per PR head, independent of any walkthrough) ───────────────
+//
+// Rows are committed to `hunk_scan_rows` before each event, so a client that
+// misses one reconciles from `POST /api/reviews/:id/hunk-scan`. Every arm is
+// keyed on `(prId, headSha)`: a pull starts a new scan rather than mutating
+// the old one.
+
+/**
+ * Full-state: every hunk the scan will consider, skipped ones included, with
+ * `signals: null` for the rows still to be asked. Re-sent when a scan cut off
+ * mid-run (a restart) picks up again; replaces what the client holds.
+ */
+export interface HunkScanStartedEnvelope {
+  type: "hunk-scan:started";
+  data: { prId: string; headSha: string; rows: HunkScanRow[] };
+}
+
+/** Delta: one row after Jev answered it. Keyed on `(filePath, hunkIndex)`. */
+export interface HunkScanHunkEnvelope {
+  type: "hunk-scan:hunk";
+  data: { prId: string; headSha: string; row: HunkScanRow };
+}
+
+/**
+ * Signal: the scan is over, with its persisted outcome. On `partial` the
+ * unanswered rows are now `unscanned`; on `failed` the rows are deleted and
+ * the client drops them.
+ */
+export interface HunkScanCompleteEnvelope {
+  type: "hunk-scan:complete";
+  data: {
+    prId: string;
+    headSha: string;
+    status: Exclude<HunkScanStatus, "running">;
+    scanned: number;
+    flagged: number;
+    durationMs: number;
+  };
+}
+
+export type HunkScanEventMessage =
+  | HunkScanStartedEnvelope
+  | HunkScanHunkEnvelope
+  | HunkScanCompleteEnvelope;
 
 export interface PrsUpdatedEnvelope {
   type: "prs:updated";
@@ -291,6 +337,7 @@ export type ThreadEventMessage =
 
 export type ServerEventMessage =
   | WalkthroughEventEnvelope
+  | HunkScanEventMessage
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope
   | PrsSyncStartedEnvelope

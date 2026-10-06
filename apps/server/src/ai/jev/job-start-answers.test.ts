@@ -5,7 +5,7 @@ import {
   SPLIT_RECOMMENDATION_FLOOR,
   splitRecommendation,
 } from "./job-start";
-import { scoreAnswerAt } from "./questions";
+import { numericAnswerAt } from "./questions";
 
 function answers(over: Partial<JobStartAnswers> = {}): JobStartAnswers {
   return {
@@ -92,10 +92,12 @@ describe("splitRecommendation", () => {
   });
 });
 
-describe("scoreAnswerAt", () => {
-  it("reads dynamic SDK score answers without trusting their shape", () => {
-    expect(scoreAnswerAt({ file_0: { score: 3 } }, "file_0")).toBe(3);
-    expect(scoreAnswerAt({ file_0: { score: "3" } }, "file_0")).toBeNull();
-    expect(scoreAnswerAt({}, "file_0")).toBeNull();
+describe("numericAnswerAt", () => {
+  it("reads dynamic SDK answers without trusting their shape", () => {
+    expect(numericAnswerAt({ file_0: { score: 3 } }, "file_0", "score")).toBe(3);
+    expect(numericAnswerAt({ file_0: { score: "3" } }, "file_0", "score")).toBeNull();
+    expect(numericAnswerAt({ file_0: { score: 3 } }, "file_0", "noul")).toBeNull();
+    expect(numericAnswerAt({ slop: { noul: 0.7 } }, "slop", "noul")).toBe(0.7);
+    expect(numericAnswerAt({}, "file_0", "score")).toBeNull();
   });
 });

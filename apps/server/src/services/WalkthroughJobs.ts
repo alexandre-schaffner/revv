@@ -73,6 +73,7 @@ import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { HunkScanService } from "./HunkScan";
 import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
@@ -92,6 +93,7 @@ import {
   finishWalkthroughAtBudgetEnd,
 } from "./walkthrough-job-budget";
 import { resolveWalkthroughLaunch, resolveWalkthroughOwner } from "./walkthrough-job-context";
+import { leadsRecorded, prepareFirstPassLeads } from "./walkthrough-leads";
 import { type PromptFile, resolveIncrementalPromptFiles } from "./walkthrough-prompt-files";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -352,6 +354,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const walkthroughService = yield* WalkthroughService;
     const remoteCache = yield* RemoteWalkthroughCache;
     const jevService = yield* JevService;
+    const hunkScanService = yield* HunkScanService;
     const cacheService = yield* CacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const broadcaster = yield* Broadcaster;
@@ -575,7 +578,25 @@ export const WalkthroughJobsLive = Layer.effect(
           }),
         );
 
-        const { worktreePath } = yield* repoCloneService
+        // The first pass runs alongside the worktree checkout, which hides most of
+        // its latency. Usually the review page already started it for this head,
+        // and this joins that run (or reads its result) — for at most
+        // HUNK_SCAN_JOIN_BUDGET_MS, so a large or slow scan never holds Phase A.
+        // A resume is prompted with the leads its first run recorded, so it
+        // doesn't wait on the scan at all.
+        const resumedLeads = yield* Effect.try({
+          try: () => leadsRecorded(db, job.walkthroughId),
+          catch: (cause) => new DbError({ message: "leadsRecorded failed", cause }),
+        }).pipe(Effect.orElseSucceed(() => false));
+        const hunkScan = resumedLeads
+          ? Effect.succeed([])
+          : hunkScanService.run({
+              prId: ctx.pr.id,
+              headSha: ctx.prHeadSha,
+              files: ctx.files,
+              filePriorities: ctx.filePriorities,
+            });
+        const worktree = repoCloneService
           .acquirePrWorktree({
             repoId: ctx.repoId,
             prNumber: ctx.pr.externalId,
@@ -594,6 +615,9 @@ export const WalkthroughJobsLive = Layer.effect(
               return new AiGenerationError({ cause: e, message });
             }),
           );
+        const [{ worktreePath }, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
+          concurrency: 2,
+        });
 
         // Generator construction — resume vs fresh. Note: content
         // writes now happen INSIDE the MCP tool handlers, so the
@@ -604,6 +628,16 @@ export const WalkthroughJobsLive = Layer.effect(
         let generator: AsyncGenerator<WalkthroughStreamEvent>;
         let capturedOpencodeSessionId: string | undefined;
         const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath);
+        const hunkLeads = yield* prepareFirstPassLeads(
+          db,
+          job.walkthroughId,
+          hunkScanRows,
+          promptInput,
+        );
+        yield* emitEvent(job.walkthroughId, {
+          type: "leads",
+          data: { leads: hunkLeads },
+        }).pipe(Effect.catchAll(() => Effect.void));
 
         const buildStreamParams = (overrideContinuation?: ContinuationContext) => ({
           pr: {
@@ -630,6 +664,7 @@ export const WalkthroughJobsLive = Layer.effect(
           ...(ctx.assignedRisk ? { assignedRisk: ctx.assignedRisk } : {}),
           ...(ctx.filePriorities ? { filePriorities: ctx.filePriorities } : {}),
           ...(ctx.splitRecommendation ? { splitRecommendation: ctx.splitRecommendation } : {}),
+          ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
           },

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { commentableLines, fitAnchorToPatch } from "./diff-anchors";
+import { parsePatchFiles } from "@pierre/diffs";
+import { buildGitPatchHeader } from "@revv/shared";
+import { commentableLines, fitAnchorToPatch, splitHunks } from "./diff-anchors";
 
 // Two hunks: new lines 10-13 and 30-32, old lines 10-12 and 30-33.
 const PATCH = [
@@ -97,5 +99,47 @@ describe("fitAnchorToPatch", () => {
       startLine: 900,
       endLine: 900,
     });
+  });
+});
+
+describe("splitHunks", () => {
+  it("splits on every header and reads both ranges", () => {
+    const hunks = splitHunks(PATCH);
+    expect(hunks.map((h) => [h.index, h.oldStart, h.oldLines, h.newStart, h.newLines])).toEqual([
+      [0, 10, 3, 10, 4],
+      [1, 30, 4, 30, 3],
+    ]);
+    expect(hunks[0]?.addedLines).toEqual(["add b", "add c"]);
+    expect(hunks[1]?.body.split("\n")[0]).toBe("@@ -30,4 +30,3 @@ context header");
+    // The trailing newline doesn't leave an empty context line on the last hunk.
+    expect(hunks[1]?.body.endsWith(" keep i")).toBe(true);
+  });
+
+  it("defaults an omitted count to 1 and keeps the no-newline marker out of added lines", () => {
+    const [hunk] = splitHunks("@@ -7 +7 @@\n-old\n+new\n\\ No newline at end of file\n");
+    expect(hunk).toMatchObject({ oldStart: 7, oldLines: 1, newStart: 7, newLines: 1 });
+    expect(hunk?.addedLines).toEqual(["new"]);
+  });
+
+  it("drops the preamble before the first header", () => {
+    const hunks = splitHunks(`diff --git a/x b/x\n--- a/x\n+++ b/x\n${PATCH}`);
+    expect(hunks).toHaveLength(2);
+    expect(hunks[0]?.addedLines).toEqual(["add b", "add c"]);
+  });
+
+  it("returns no hunks for an empty patch", () => {
+    expect(splitHunks("")).toEqual([]);
+  });
+
+  // The diff tab addresses hunks by Pierre's index; the scan rows must agree.
+  it("indexes hunks the way @pierre/diffs does", () => {
+    const patch = `${PATCH}@@ -50 +49,2 @@\n x\n+y\n\\ No newline at end of file\n`;
+    const header = buildGitPatchHeader({ path: "src/a.ts" });
+    const pierre = parsePatchFiles(`${header}\n${patch}`)[0]?.files[0]?.hunks ?? [];
+    const ours = splitHunks(patch).map((h) => [h.newStart, h.newLines, h.oldStart, h.oldLines]);
+    expect(ours).toEqual(
+      pierre.map((h) => [h.additionStart, h.additionCount, h.deletionStart, h.deletionCount]),
+    );
+    expect(ours).toHaveLength(3);
   });
 });

@@ -18,6 +18,7 @@ import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
+import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
 import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
@@ -133,6 +134,18 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   // the orchestrator and `complete_walkthrough` use — single source of
   // truth (see findIssuesMissingInlineComment).
   const issuesNeedingInlineComment = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
+  // Leads in prompt order with their verdicts, so a resume knows which ones
+  // it has already judged. Same query as complete_walkthrough's gate.
+  const leads = readWalkthroughLeads(ctx.db, ctx.walkthroughId).map((lead) => ({
+    id: lead.id,
+    filePath: lead.filePath,
+    newStart: lead.newStart,
+    newLines: lead.newLines,
+    smells: lead.smells.map((s) => s.smell),
+    verdict: lead.verdict,
+    issueId: lead.issueId,
+  }));
+  const leadsNeedingVerdict = leads.filter((lead) => lead.verdict === null).map((lead) => lead.id);
   const priorReview = row.parentWalkthroughId
     ? (() => {
         const prior = ctx.db
@@ -236,6 +249,8 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     issues,
     issueCount: issues.length,
     issuesNeedingInlineComment,
+    leads,
+    leadsNeedingVerdict,
   };
 
   // Loud, plain-text banner when the agent has unfinished comment work.
@@ -244,10 +259,19 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   // missing this would lead straight back to the same complete_walkthrough
   // validation failure.
   const stateJson = JSON.stringify(state);
-  const text =
-    issuesNeedingInlineComment.length > 0
-      ? `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.\n\n${stateJson}`
-      : stateJson;
+  const warnings = [
+    ...(issuesNeedingInlineComment.length > 0
+      ? [
+          `WARNING: ${issuesNeedingInlineComment.length} line-anchored concern(s) have no inline comment yet — call add_issue_comment for each before complete_walkthrough.`,
+        ]
+      : []),
+    ...(leadsNeedingVerdict.length > 0 && row.lastCompletedPhase !== "none"
+      ? [
+          `WARNING: ${leadsNeedingVerdict.length} first-pass lead(s) have no verdict yet (${leadsNeedingVerdict.join(", ")}) — call resolve_lead for each before complete_walkthrough.`,
+        ]
+      : []),
+  ];
+  const text = warnings.length > 0 ? `${warnings.join("\n")}\n\n${stateJson}` : stateJson;
 
   return {
     content: [{ type: "text" as const, text }],

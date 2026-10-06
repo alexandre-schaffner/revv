@@ -2,9 +2,8 @@ import type { WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";
 import { resolveJobStartAnswers, routeFromAnswers } from "../../../ai/jev/job-start";
 import { AppRuntime } from "../../../runtime";
-import { DiffCacheService } from "../../../services/DiffCache";
-import { PrContextService } from "../../../services/PrContext";
 import { SettingsService } from "../../../services/Settings";
+import { loadCachedPrDiff } from "./cached-pr-diff";
 
 /**
  * GET /api/reviews/:id/walkthrough/sizing
@@ -13,8 +12,8 @@ import { SettingsService } from "../../../services/Settings";
  * what "Auto" would pick for the model. Cached on `(prId, headSha)` and
  * shared with `startJobBody` — same TypeSafe call, moved earlier, not an extra one.
  *
- * Reads the cached diff only, never GitHub, so a preview can't become a
- * rate-limit risk. Reports `pending` until the diff lands; client retries.
+ * Reads the cached diff only (`loadCachedPrDiff`). Reports `pending` until
+ * the diff lands; client retries.
  */
 export function getWalkthroughSizingHandler(
   prId: string,
@@ -30,26 +29,12 @@ export function getWalkthroughSizingHandler(
         return { status: "off" as const };
       }
 
-      const prContext = yield* PrContextService;
-      const { pr } = yield* prContext.resolveBasic(prId, userId);
-      const headSha = pr.headSha;
-      if (!headSha) return { status: "pending" as const };
+      const diff = yield* loadCachedPrDiff(prId, userId);
+      if (diff === null) return { status: "pending" as const };
 
-      const diffCache = yield* DiffCacheService;
-      const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
-      if (cachedFiles === null || cachedFiles.length === 0) {
-        return { status: "pending" as const };
-      }
-
-      const answers = yield* resolveJobStartAnswers(pr.id, headSha, {
-        pr,
-        files: cachedFiles.map((f) => ({
-          filename: f.path,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: f.patch,
-        })),
+      const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
+        pr: diff.pr,
+        files: diff.files,
         // Commit subjects are a sizing nicety, not load-bearing; skipping
         // them keeps this off the GitHub path.
         commits: [],
@@ -71,6 +56,6 @@ export function getWalkthroughSizingHandler(
         model: override?.model ?? null,
         thinkingEffort: override?.thinkingEffort ?? null,
       };
-    }).pipe(Effect.catchAll(() => Effect.succeed({ status: "pending" as const }))),
+    }),
   );
 }
