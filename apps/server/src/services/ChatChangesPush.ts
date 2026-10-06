@@ -61,6 +61,7 @@ import { Broadcaster } from "./Broadcaster";
 import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
 import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
+import { DiffCacheService } from "./DiffCache";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
   abortCherryPick,
@@ -318,6 +319,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     const chatSessions = yield* ChatSessionService;
     const broadcaster = yield* Broadcaster;
     const prService = yield* PullRequestService;
+    const diffCache = yield* DiffCacheService;
     const ai = yield* AiService;
 
     // Per-PR push lock — refuses overlap.
@@ -704,6 +706,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // now: at worst a few seconds ahead of GitHub's value, which errs
           // toward rejecting stale reads rather than accepting them.
           const updatedAt = headSha === fresh.headSha ? fresh.updatedAt : now;
+          // The cached diff belongs to the old head. Drop it before the new
+          // head lands, or the review page pairs the new head with the old
+          // files until the next poll notices.
+          if (headSha !== fresh.headSha) yield* diffCache.invalidateFiles(params.pr.id);
           yield* prService
             .upsertPrs([
               {

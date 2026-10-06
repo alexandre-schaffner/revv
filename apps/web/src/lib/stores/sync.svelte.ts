@@ -142,6 +142,37 @@ export function refreshPrHead(prId: string): void {
     });
 }
 
+// Client-side throttle for `freshenPrList`, matching the server's: it skips a
+// freshen when any sync cycle started in the last 2 minutes, so asking more
+// often only spends requests. Every window focus calls this, so without it a
+// burst of alt-tabs is a burst of POSTs.
+const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
+let lastFreshenAt = 0;
+
+/**
+ * Ask the server to check GitHub for PR-list changes, because the user is
+ * looking at the list right now.
+ *
+ * The list on screen is painted from SQLite, which only the server's poll
+ * fiber advances — so on launch, or on coming back to the window, it can be a
+ * full poll interval behind GitHub. This closes that gap for the whole list
+ * the way {@link refreshPrHead} does for one PR: the server runs a sync cycle,
+ * and if anything moved, the `prs:updated` it broadcasts updates the store in
+ * place. Nothing changes on screen otherwise.
+ *
+ * Fire-and-forget, and must only run with the SSE stream open: the result
+ * arrives as an event, and an event sent before this client's stream is
+ * registered is lost.
+ */
+export function freshenPrList(): void {
+  const now = Date.now();
+  if (now - lastFreshenAt < FRESHEN_MIN_INTERVAL_MS) return;
+  lastFreshenAt = now;
+  // A failure isn't retried early: the periodic poll still runs, and retrying
+  // on every focus is exactly the spam the throttle exists to stop.
+  void api.api.prs.freshen.post().catch(() => undefined);
+}
+
 /** Mark a PR's threads sync as in-flight (called when we send the request). */
 export function markThreadsSyncing(prId: string): void {
   const next = new Set(threadsSyncingByPr);
