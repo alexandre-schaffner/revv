@@ -359,12 +359,16 @@ $effect(() => {
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
 	}
 
+	/* `backwards`, not `both`, and no `will-change`: either one keeps every
+	   block (and annotation) on its own compositing layer after the entrance
+	   ends — `both` by holding `filter: blur(0)` + an identity transform. A
+	   long walkthrough then runs WKWebView out of layer budget and the page
+	   flickers as tiles are dropped and repainted deep into the scroll. */
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
-		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
 		border-radius: 8px;
 		outline: 2px solid transparent;
@@ -392,7 +396,7 @@ $effect(() => {
 	.block-annotation {
 		align-self: start;
 		padding: 4px 0;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 

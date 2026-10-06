@@ -44,6 +44,12 @@ let shellEl: HTMLDivElement | null = null;
 const MOUNT_TIMEOUT_MS = 4000;
 let mountWatchdog: ReturnType<typeof setTimeout> | null = null;
 
+// Bounds on the frame height the host reports. The cap is also handed to the
+// host: below it the frame is sized to its content and never scrolls, above
+// it the artifact scrolls inside a capped frame.
+const MIN_FRAME_HEIGHT = 160;
+const MAX_FRAME_HEIGHT = 1600;
+
 const hostUrl = $derived.by(() => {
   if (!browser) return "about:blank";
   // macOS WKWebView exposes the custom URI scheme as `artifact://localhost/...`,
@@ -104,6 +110,7 @@ function postMount(html: string): void {
       html,
       theme,
       tokens: collectThemeTokens(),
+      maxHeight: MAX_FRAME_HEIGHT,
     },
     "*",
   );
@@ -187,7 +194,10 @@ function onHostMessage(event: MessageEvent): void {
   }
 
   if (event.data.kind === "resize") {
-    iframeHeight = Math.min(Math.max(Math.ceil(event.data.height), 160), 1600);
+    iframeHeight = Math.min(
+      Math.max(Math.ceil(event.data.height), MIN_FRAME_HEIGHT),
+      MAX_FRAME_HEIGHT,
+    );
     return;
   }
 
