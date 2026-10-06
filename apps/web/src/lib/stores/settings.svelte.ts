@@ -3,6 +3,7 @@ import {
   type AcpAgentId,
   type AgentStatusReport,
   getAgentCapabilities,
+  getModelThinkingEfforts,
   isAutoSentinel,
   mergeSettingsUpdate,
   type SettingsUpdate,
@@ -114,8 +115,8 @@ export function isAutoModelOffered(agent: AcpAgentId): boolean {
 
 /** Thinking-effort tiers `agent` supports, strongest first. Empty when it has no effort knob. */
 export function getThinkingEffortOptions(agent: AcpAgentId): typeof THINKING_EFFORT_OPTIONS {
-  const caps = getAgentCapabilities(agent);
-  return THINKING_EFFORT_OPTIONS.filter((o) => caps.thinkingEfforts.includes(o.value));
+  const allowed = getModelThinkingEfforts(agent, settings?.aiModel);
+  return THINKING_EFFORT_OPTIONS.filter((o) => allowed.includes(o.value));
 }
 
 /** Effort Auto only needs TypeSafe on: effort routing skips the depth ladder. */

@@ -70,6 +70,9 @@ const EFFORT_TIERS: Readonly<Record<ReasoningEffort, ThinkingEffort>> = {
 function ladderIndex(agent: AcpAgentId, model: string | null | undefined): number | null {
   const ladder = DEPTH_LADDERS[agent];
   if (!ladder || !model) return null;
+  // The previous Sonnet remains a standard-tier pin after the catalog upgrade.
+  if (agent === "claude-code" && model === "claude-sonnet-5")
+    return REVIEW_DEPTHS.indexOf("standard");
   const found = REVIEW_DEPTHS.findIndex((depth) => ladder[depth] === model);
   return found === -1 ? null : found;
 }

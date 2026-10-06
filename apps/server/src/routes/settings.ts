@@ -88,6 +88,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           aiThinkingEffort: t.Union([
             // "Size it for me" sentinel, see AUTO_SENTINEL.
             t.Literal("revv:auto"),
+            t.Literal("ultra"),
             t.Literal("ultrathink"),
             t.Literal("max"),
             t.Literal("extra-high"),

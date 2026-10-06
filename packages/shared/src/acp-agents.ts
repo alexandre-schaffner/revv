@@ -21,6 +21,8 @@ export type AcpAgentIconKey = "anthropic" | "openai" | "opencode" | "cursor" | "
 export interface AcpAgentModel {
   readonly label: string;
   readonly value: string;
+  /** Model-specific effort limits; omitted models inherit the agent ladder. */
+  readonly thinkingEfforts?: readonly ThinkingEffort[];
 }
 
 /**
@@ -88,6 +90,7 @@ export interface AcpAgentDescriptor {
 
 /** Every thinking-effort tier, strongest first — the order the web renders. */
 export const THINKING_EFFORT_ORDER = [
+  "ultra",
   "ultrathink",
   "max",
   "extra-high",
@@ -107,18 +110,18 @@ export const ACP_AGENTS = [
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
-      // Current-generation Anthropic models only. A user still on a delisted
-      // id keeps working (the value is passed through to the agent), they just
-      // can't reselect it.
+      // Verified against https://code.claude.com/docs/en/model-config (2026-10-05).
+      // Keep Sonnet 5 selectable for existing installations.
       models: [
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
         { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
         { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
-        { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
+        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001", thinkingEfforts: [] },
       ],
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
-      // retained for existing settings and is mapped to `max` at launch.
-      thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
+      // retained in the persisted type and mapped to `max` at launch.
+      thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
     },
@@ -167,13 +170,18 @@ export const ACP_AGENTS = [
       // replace it with the deprecated `@zed-industries/codex-acp`: that
       // adapter embeds an older Codex core which rejects current models.
       models: [
+        // https://learn.chatgpt.com/docs/models (2026-10-05).
         { label: "GPT-6 Astra", value: "gpt-6-astra" },
         { label: "GPT-6.1 Sol", value: "gpt-6.1-sol" },
         { label: "GPT-6 Sol", value: "gpt-6-sol" },
-        { label: "GPT-6 Luna", value: "gpt-6-luna" },
+        {
+          label: "GPT-6 Luna",
+          value: "gpt-6-luna",
+          thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
+        },
       ],
-      // Every GPT-6 model supports the selector's low-through-max ladder.
-      thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
+      // Ultra is a Codex control; Luna tops out at Max.
+      thinkingEfforts: ["ultra", "max", "extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
       planMode: false,
@@ -188,7 +196,7 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
-      // Cursor documents these exact IDs in its Models & Pricing catalog. The
+      // https://cursor.com/docs/models-and-pricing (2026-10-05). The
       // ACP adapter does not yet forward a selected model, so this remains a
       // stored preference until it gains a model passthrough.
       models: [
@@ -233,6 +241,17 @@ export function getAcpAgent(id: AcpAgentId): AcpAgentDescriptor {
 /** The model / context-window / thinking-effort surface Revv exposes for an agent. */
 export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
+}
+
+/** Effort choices for the selected model, or the agent default when unpinned. */
+export function getModelThinkingEfforts(id: AcpAgentId, model?: string): readonly ThinkingEffort[] {
+  const caps = getAgentCapabilities(id);
+  const selected = model && !isAutoSentinel(model) ? model : caps.defaultModel;
+  return (
+    (caps.models === "dynamic"
+      ? undefined
+      : caps.models.find((m) => m.value === selected)?.thinkingEfforts) ?? caps.thinkingEfforts
+  );
 }
 
 /** Revv's persisted-model default for an ACP agent. */
@@ -293,9 +312,10 @@ export function resolveThinkingEffort(
 export function clampThinkingEffort(
   id: AcpAgentId,
   effort: ThinkingEffort | undefined,
+  model?: string,
 ): ThinkingEffort | undefined {
   if (!effort) return undefined;
-  const allowed = getAgentCapabilities(id).thinkingEfforts;
+  const allowed = getModelThinkingEfforts(id, model);
   if (allowed.length === 0) return undefined;
   if (allowed.includes(effort)) return effort;
   // THINKING_EFFORT_ORDER is strongest-first, so the first allowed tier at or

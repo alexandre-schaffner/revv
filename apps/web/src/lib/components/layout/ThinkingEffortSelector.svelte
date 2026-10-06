@@ -1,7 +1,7 @@
 <script lang="ts">
 import {
   AUTO_SENTINEL,
-  getAgentCapabilities,
+  clampThinkingEffort,
   isAutoSentinel,
   type ThinkingEffort,
   type ThinkingEffortSetting,
@@ -27,12 +27,13 @@ import SelectTrigger from "./SelectTrigger.svelte";
 let open = $state(false);
 // Thinking-effort options follow the selected chat agent's capabilities.
 let currentId = $derived(resolveChatAgentId(getSettings()));
-let caps = $derived(getAgentCapabilities(currentId));
-let visible = $derived(caps.thinkingEfforts.length > 0);
 let options = $derived(getThinkingEffortOptions(currentId));
+let visible = $derived(options.length > 0);
 let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
 let isAuto = $derived(isAutoSentinel(stored));
-let currentEffort = $derived(isAuto ? null : (stored as ThinkingEffort));
+let currentEffort = $derived(
+  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings()?.aiModel),
+);
 
 let autoOffered = $derived(isAutoEffortOffered());
 

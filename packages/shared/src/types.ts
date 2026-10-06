@@ -75,7 +75,14 @@ export interface PullRequest {
  * before the tier was retired still parse — no agent offers it, and both the
  * selector and `applyAgentDefaults` coerce it away on next render.
  */
-export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
+export type ThinkingEffort =
+  | "ultra"
+  | "ultrathink"
+  | "max"
+  | "extra-high"
+  | "high"
+  | "medium"
+  | "low";
 
 /**
  * Per-feature override for which agent generates project recaps.
