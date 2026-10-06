@@ -309,6 +309,20 @@
       "when": 1779690000000,
       "tag": "0400_drop_jev_hook_toggles",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1779700000000,
+      "tag": "0410_hunk_scans",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1779710000000,
+      "tag": "0420_walkthrough_leads",
+      "breakpoints": true
     }
   ]
 }

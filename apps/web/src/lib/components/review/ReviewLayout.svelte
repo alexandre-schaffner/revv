@@ -30,6 +30,7 @@ import { setTopbarSubtitle } from "$lib/stores/topbar.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
+import FileFirstPass from "./FileFirstPass.svelte";
 import FileIssues from "./FileIssues.svelte";
 import FileViewer from "./FileViewer.svelte";
 import ImageDiffViewer from "./ImageDiffViewer.svelte";
@@ -487,10 +488,12 @@ const panel = $derived(getActivePanel());
 					<h1 class="file-title">{activeFileName}</h1>
 				</div>
 				<FileIssues filePath={activeFile.path} />
+				<FileFirstPass {prId} filePath={activeFile.path} patch={activeFile.patch} />
 				{#if activeFileIsImage}
 					<ImageDiffViewer {prId} file={activeFile} />
 				{:else}
 					<DiffViewer
+						{prId}
 						file={activeFile}
 						onModeChange={(m) => setDiffMode(m)}
 						commentTrigger={pendingCommentTrigger}
@@ -515,6 +518,7 @@ const panel = $derived(getActivePanel());
 				/>
 			{:else}
 				<DiffViewer
+					{prId}
 					file={null}
 					onModeChange={(m) => setDiffMode(m)}
 					commentTrigger={pendingCommentTrigger}

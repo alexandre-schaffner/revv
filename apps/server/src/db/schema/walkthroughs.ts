@@ -144,6 +144,13 @@ export const walkthroughs = sqliteTable(
      */
     lastEditedBy: text("last_edited_by"),
     /**
+     * When the orchestrator recorded which first-pass leads this walkthrough's
+     * agent was handed (`walkthrough_leads`, possibly none). Null for rows
+     * that predate lead tracking or arrived from the remote cache, whose
+     * leads can only be inferred from where their issues sit.
+     */
+    leadsSelectedAt: text("leads_selected_at"),
+    /**
      * PR commit list (JSON of `PrCommit[]`) captured from GitHub at job
      * start. Surfaced to the agent on demand via the `get_commit_history`
      * MCP read tool — never inlined in the prompt, since long PRs would

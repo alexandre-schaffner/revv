@@ -39,6 +39,11 @@ import {
   unwrapJsonWrappedString,
 } from "./helpers";
 import {
+  findUnresolvedLeads,
+  renderUnresolvedLeadsError,
+  resolveLeadHandler,
+} from "./lead-handler";
+import {
   addDiffStepHandler,
   addIssueCommentHandler,
   addSemanticStepHandler,
@@ -62,6 +67,7 @@ import {
   RATING_AXES as RATING_AXES_SPEC,
   type RateAxisInput,
   rateAxisSchema,
+  resolveLeadSchema,
   type SetOverviewInput,
   type SetSentimentInput,
   setOverviewSchema,
@@ -74,24 +80,11 @@ import {
 
 // ── Re-exports (preserve public API) ────────────────────────────────────────
 
-export type { MissingInlineComment } from "./helpers";
 export {
   blockIdFor,
   findIssuesMissingInlineComment,
-  renderMissingInlineCommentError,
   unwrapJsonWrappedString,
 } from "./helpers";
-export {
-  addDiffStepHandler,
-  addIssueCommentHandler,
-  addSemanticStepHandler,
-  flagIssueHandler,
-} from "./phase-b-handlers";
-export {
-  getCommitHistoryHandler,
-  getRepoContextHandler,
-  getWalkthroughStateHandler,
-} from "./read-handler";
 export type { WalkthroughToolJudgments } from "./spec";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
@@ -381,7 +374,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 // ── Handler: complete_walkthrough (validation gate) ──────────────────────────
 //
 // Phase precondition: last_completed_phase === 'D' AND all 9 axes rated AND
-// sentiment non-empty AND ≥1 diff step. The actual `status='complete'`
+// sentiment non-empty AND ≥1 diff step AND every first-pass lead resolved. The actual `status='complete'`
 // transition is performed by WalkthroughJobs in response to the `done` event —
 // this handler only validates, then emits `done`. Doctrine invariant #11:
 // status transitions are orchestrator-only.
@@ -506,6 +499,15 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     return errorResult(renderMissingInlineCommentError(uncommented));
   }
 
+  // Every first-pass lead owes a verdict. This gate is the tool's alone: the
+  // orchestrator completes a run without one, because a lead is a hint and an
+  // unread hint shouldn't cost the whole review. Refusing here is what makes
+  // the agent finish the job while it still has the context to do it.
+  const unresolved = findUnresolvedLeads(ctx.db, ctx.walkthroughId);
+  if (unresolved.length > 0) {
+    return errorResult(renderUnresolvedLeadsError(unresolved));
+  }
+
   // Deliberately NO stream emit here. The AI provider's generator end
   // (stream-guard synthesizes `done` with real token accounting) is the
   // authoritative completion signal that WalkthroughJobs observes. This
@@ -581,6 +583,13 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
     handler: addIssueCommentHandler,
   },
   {
+    name: "resolve_lead",
+    description:
+      "Phase B onward. Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
+    inputSchema: resolveLeadSchema,
+    handler: resolveLeadHandler,
+  },
+  {
     name: "set_sentiment",
     description:
       "Phase C. Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
@@ -597,7 +606,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "complete_walkthrough",
     description:
-      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, and ≥1 diff step. The orchestrator observes the emitted `done` event and performs the final status transition.",
+      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator observes the emitted `done` event and performs the final status transition.",
     inputSchema: completeWalkthroughSchema,
     handler: completeWalkthroughHandler,
   },

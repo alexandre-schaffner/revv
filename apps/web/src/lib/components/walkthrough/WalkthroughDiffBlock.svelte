@@ -31,7 +31,7 @@ const targetLine = $derived.by(() => {
 let instance: FileDiff<never> | null = null;
 
 function mountDiffBlock(el: HTMLDivElement) {
-  const options: FileDiffOptions<never> = {
+  const options: FileDiffOptions<never, undefined> = {
     diffStyle: "unified",
     theme: PIERRE_THEME,
     overflow: "scroll",

@@ -8,6 +8,7 @@ import {
 export type ModelOption = { label: string; value: string };
 
 const THINKING_EFFORT_LABELS: Record<ThinkingEffort, string> = {
+  ultra: "Ultra",
   ultrathink: "Ultrathink",
   max: "Max",
   "extra-high": "Extra High",

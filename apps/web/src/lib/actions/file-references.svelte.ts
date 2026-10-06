@@ -92,7 +92,7 @@ function resolveRef(raw: string, lookup: FileLookup): ResolvedRef | null {
   // to `src/foo.ts` — but only when exactly one changed file owns that name.
   const base = basename(candidate);
   const owners = lookup.byBasename.get(base);
-  if (!owners || owners.size !== 1) return null;
+  if (owners?.size !== 1) return null;
   const [only] = owners;
   if (!only) return null;
   // A path-bearing candidate (`a/foo.ts`) must be a suffix of the real path to

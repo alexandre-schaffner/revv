@@ -47,7 +47,6 @@ import {
   updateSentimentSchema,
 } from "./spec";
 
-export { resolveActiveWalkthroughId } from "./helpers";
 export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
 
 // ── Canonical spec list ─────────────────────────────────────────────────────

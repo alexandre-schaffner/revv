@@ -21,6 +21,12 @@ import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.
 import { onChatQuestionResolved } from "./chat.svelte";
 import { setError } from "./errors.svelte";
 import {
+  ensureHunkScan,
+  onHunkScanComplete,
+  onHunkScanHunk,
+  onHunkScanStarted,
+} from "./hunk-scan.svelte";
+import {
   fetchPinnedPrs,
   fetchPrs,
   fetchRepos,
@@ -32,6 +38,7 @@ import {
 } from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import {
+  getLoadedHeadSha,
   loadSession,
   onThreadCreated,
   onThreadDeleted,
@@ -43,6 +50,7 @@ import {
 import { getGithubHost } from "./settings.svelte";
 import {
   applySynced,
+  freshenPrList,
   refreshPrHead,
   requestThreadSync,
   setPrListSyncing,
@@ -118,6 +126,8 @@ function reconcileOnReconnect(): void {
   const selectedPrId = getSelectedPrId();
   if (selectedPrId) {
     void hydrateFromCache(selectedPrId, { activate: false });
+    const loadedHeadSha = getLoadedHeadSha(selectedPrId);
+    if (loadedHeadSha) void ensureHunkScan(selectedPrId, loadedHeadSha);
     requestThreadSync(selectedPrId);
     void loadSession(selectedPrId);
     // A dropped connection means we may also have missed a head-SHA move; the
@@ -141,10 +151,17 @@ function reconcileOnReconnect(): void {
  * a DB read can't see a commit the poll fiber hasn't fetched yet — which is what
  * left the "Pull" affordance dark for up to a full poll interval. `refreshPrHead`
  * carries its own longer debounce because it costs a GitHub request.
+ *
+ * The list gets the same treatment through `freshenPrList`: the DB reads can
+ * only show what the poll fiber already fetched, so the server is also asked
+ * to check GitHub, and patches the list over SSE if anything moved.
  */
 function reconcileOnForeground(): void {
   if (document.visibilityState !== "visible") return;
   if (!source || source.readyState === EventSource.CLOSED) return;
+  // CONNECTING defers to the `open` handler, which asks once the stream that
+  // carries the answer is registered.
+  if (source.readyState === EventSource.OPEN) freshenPrList();
   const selectedPrId = getSelectedPrId();
   if (selectedPrId) refreshPrHead(selectedPrId);
   const now = Date.now();
@@ -195,6 +212,11 @@ export function connect(token: string, hostOverride?: string): void {
     // failures here mean the sidebar spinner shows up late, not data loss.
     void hydrateActiveWalkthroughs();
 
+    // The list just painted from SQLite can be a poll interval behind GitHub.
+    // Asked here rather than at hydration because the answer comes back over
+    // this stream, which is only guaranteed to be registered once it's open.
+    freshenPrList();
+
     // On RECONNECT only, refetch the active PR's snapshot. Events broadcast
     // during the disconnect gap hit zero writers and are gone from this
     // client; hydrateFromCache merges the DB snapshot back into the entry.
@@ -232,6 +254,15 @@ function dispatch(msg: ServerEventMessage): void {
   switch (msg.type) {
     case "walkthrough:event":
       onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
+      break;
+    case "hunk-scan:started":
+      onHunkScanStarted(msg.data);
+      break;
+    case "hunk-scan:hunk":
+      onHunkScanHunk(msg.data);
+      break;
+    case "hunk-scan:complete":
+      onHunkScanComplete(msg.data);
       break;
     case "prs:updated":
       replacePullRequests(msg.data);

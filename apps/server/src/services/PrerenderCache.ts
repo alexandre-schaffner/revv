@@ -101,7 +101,7 @@ function stableOptionsKey(options: object): string {
  * and DOM-producing fields stay client-side where they belong.
  */
 export type SsrDiffOptions = Pick<
-  FileDiffOptions<unknown>,
+  FileDiffOptions<unknown, undefined>,
   | "diffStyle"
   | "theme"
   | "disableFileHeader"

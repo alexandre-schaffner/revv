@@ -47,12 +47,15 @@
             .replace(/\u2029/g, "\\u2029");
         }
 
-        function bridgeScript(theme, tokens) {
+        function bridgeScript(theme, tokens, maxHeight) {
           const payload = escapeForScript({ theme, tokens });
+          // A number literal, or the identifier `Infinity` (JSON has no spelling for it).
+          const maxHeightLiteral = Number.isFinite(maxHeight) ? String(maxHeight) : "Infinity";
           return `<script>
 (() => {
   const parentWindow = window.parent;
   let current = ${payload};
+  const maxFrameHeight = ${maxHeightLiteral};
 
   function post(message) {
     parentWindow.postMessage(message, "*");
@@ -91,6 +94,14 @@
       body.offsetHeight,
       bottom > 0 ? bottom + window.scrollY + padBottom : 0
     );
+    // The parent sizes the frame to this height, so below its cap the frame
+    // must never scroll. A legacy (non-overlay) scrollbar narrows the layout;
+    // if that wraps a row, the content outgrows the frame and keeps the bar
+    // up. One artifact measured 229 in a 197px frame (bar shown) and 197 in a
+    // 229px one (no bar), so the frame flipped every frame and jolted the
+    // whole walkthrough below it. Above the cap the artifact scrolls inside
+    // the capped frame, as before.
+    document.documentElement.style.overflowY = height > maxFrameHeight ? "auto" : "hidden";
     post({ kind: "resize", height: Math.ceil(height) });
   }
 
@@ -200,8 +211,8 @@ ${"<"}/style>`;
           return `<head>${head}</head>${html}`;
         }
 
-        function injectArtifact(html, theme, tokens) {
-          const bridge = bridgeScript(theme, tokens);
+        function injectArtifact(html, theme, tokens, maxHeight) {
+          const bridge = bridgeScript(theme, tokens, maxHeight);
           const withBridge = /<\/body\s*>/i.test(html)
             ? html.replace(/<\/body\s*>/i, `${bridge}</body>`)
             : `${html}${bridge}`;
@@ -220,7 +231,9 @@ ${"<"}/style>`;
           if (typeof data.html !== "string") return;
           if (data.theme !== "light" && data.theme !== "dark") return;
           if (!data.tokens || typeof data.tokens !== "object") return;
-          injectArtifact(data.html, data.theme, data.tokens);
+          const maxHeight =
+            typeof data.maxHeight === "number" && data.maxHeight > 0 ? data.maxHeight : Infinity;
+          injectArtifact(data.html, data.theme, data.tokens, maxHeight);
         });
 
         post({ kind: "ready" });

@@ -2,6 +2,7 @@
 
 import type { Activity, ActivityResult } from "./activity";
 import type { ExternalAgentProvider } from "./external-integrations";
+import type { HunkSmell, WalkthroughLead } from "./hunk-scan";
 import type { ReviewMode, ThinkingEffort } from "./types";
 
 /**
@@ -395,6 +396,12 @@ export interface Walkthrough {
   blocks: WalkthroughBlock[];
   issues: WalkthroughIssue[];
   ratings: WalkthroughRating[];
+  /**
+   * The first-pass leads this walkthrough's agent was handed, with its
+   * verdicts. Null when the row predates lead tracking or came
+   * from the remote cache — then only where its issues sit says anything.
+   */
+  leads: WalkthroughLead[] | null;
   /** Current phase pointer. See {@link WalkthroughPipelinePhase}. */
   lastCompletedPhase: WalkthroughPipelinePhase;
   /** Last terminal generation failure, if this row is in `status='error'`. */
@@ -539,6 +546,17 @@ export interface WalkthroughState {
     filePath: string;
     startLine: number;
   }>;
+  /** The first-pass leads this run was handed, in prompt order, with any verdict given. */
+  leads: Array<
+    Pick<WalkthroughLead, "id" | "filePath" | "newStart" | "newLines" | "verdict" | "issueId"> & {
+      smells: HunkSmell[];
+    }
+  >;
+  /**
+   * Ids from `leads` with no verdict yet. `complete_walkthrough` refuses
+   * until it is empty; the orchestrator does not wait on it.
+   */
+  leadsNeedingVerdict: string[];
 }
 
 // ── SSE stream events ───────────────────────────────────────────────────────
@@ -587,6 +605,13 @@ export type WalkthroughStreamEvent =
    */
   | { type: "exploration-input"; data: { callId: string; payload: unknown } }
   | { type: "issue"; data: WalkthroughIssue }
+  /**
+   * The leads this run's agent was handed, recorded at job start before the
+   * prompt goes out. Full state: replaces whatever the client held.
+   */
+  | { type: "leads"; data: { leads: WalkthroughLead[] } }
+  /** A lead's verdict landed (`resolve_lead`). Full state for that lead. */
+  | { type: "lead"; data: WalkthroughLead }
   | { type: "rating"; data: WalkthroughRating }
   | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
   | {

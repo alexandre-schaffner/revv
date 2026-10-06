@@ -94,6 +94,28 @@ describe("ACP launch presets", () => {
     );
   });
 
+  it("passes Ultra to eligible Codex models and clamps it for Luna and Claude", () => {
+    if (serverEnv.acpCommand) return;
+    expect(
+      resolveAcpLaunchById("codex", { model: "gpt-6.1-sol", thinkingEffort: "ultra" }).env
+        ?.CODEX_CONFIG,
+    ).toBe(JSON.stringify({ model: "gpt-6.1-sol", model_reasoning_effort: "ultra" }));
+    expect(
+      resolveAcpLaunchById("codex", { model: "gpt-6-luna", thinkingEffort: "ultra" }).env
+        ?.CODEX_CONFIG,
+    ).toBe(JSON.stringify({ model: "gpt-6-luna", model_reasoning_effort: "max" }));
+    expect(
+      resolveAcpLaunchById("claude-code", { thinkingEffort: "ultra" }).env
+        ?.CLAUDE_CODE_EFFORT_LEVEL,
+    ).toBe("max");
+    expect(
+      resolveAcpLaunchById("claude-code", {
+        model: "claude-haiku-4-5-20251001",
+        thinkingEffort: "max",
+      }).env,
+    ).not.toHaveProperty("CLAUDE_CODE_EFFORT_LEVEL");
+  });
+
   it("injects Claude Code model / effort via env", () => {
     if (serverEnv.acpCommand) return;
     const launch = resolveAcpLaunchById("claude-code", {

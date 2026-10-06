@@ -500,6 +500,22 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     }
   })
 
+  // Background freshness check, sent by the client when the window opens or
+  // comes back to the foreground: the DB list it just painted can be a full
+  // poll interval old. Same cycle as `/sync`, forked for the same reason, but
+  // throttled server-side and never forcing a broadcast. An unchanged account
+  // costs one GraphQL probe (about a point per 80 repos) and nothing on the wire.
+  .post("/freshen", async (ctx) => {
+    try {
+      await AppRuntime.runPromise(
+        Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.freshen())),
+      );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
   // Targeted refresh of a single PR. Bounded to a couple of GitHub requests, so
   // unlike `/sync` it is awaited and reports failure directly. Prefer this
   // wherever the user is asking about one PR rather than the whole list.

@@ -13,10 +13,16 @@ import { logError } from "../logger";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
+  listOpenPrsViaGraphql,
+  type OpenPrListSignature,
+  probeOpenPrListSignatures,
+} from "./github-graphql-prs";
+import {
   apiBaseForHost,
   assertGitHubOk,
   conditionalFetch,
   conditionalFetchPaginated,
+  type GraphqlConnection,
   githubDelete,
   githubFetch,
   githubFetchPaginated,
@@ -25,6 +31,7 @@ import {
   githubPatch,
   githubPost,
   githubPut,
+  paginateGraphql,
   parseLinkNext,
   retryTransient,
   toGitHubError,
@@ -198,12 +205,47 @@ export interface AppInstallation {
 }
 
 interface GitHubGatewayFlatService {
+  /**
+   * Every open PR of one repo, most recently updated first.
+   *
+   * GraphQL, not `GET /pulls`: the REST list embeds two full repository
+   * objects per PR (~20 KB each), so a 65-PR repo came back as 1.3 MB, and on
+   * GitHub Enterprise its ETag never matched — every author's `avatar_url`
+   * carries a per-request signed token, so the body differs on every read and
+   * the conditional cache never saw a 304. This asks for the list fields only
+   * (~40 KB for the same repo) at 1 GraphQL point per 100 PRs.
+   *
+   * Diff sizes are left at 0/0/0, as the REST list did; `listPrDiffStats`
+   * fills them in for the PRs whose head moved.
+   */
   readonly listPrs: (
     repoFullName: string,
     repositoryId: string,
     token: string,
     apiBase?: string,
+  ) => Effect.Effect<PullRequest[], GitHubError, SettingsService>;
+  /**
+   * {@link listPrs} over REST's `GET /pulls`, for when the GraphQL budget is
+   * spent. Heavier per changed page, but conditional: a 304 costs nothing
+   * against the REST limit, so a quiet repo stays free (except on GitHub
+   * Enterprise, whose signed avatar URLs defeat the ETag).
+   */
+  readonly listPrsRest: (
+    repoFullName: string,
+    repositoryId: string,
+    token: string,
+    apiBase?: string,
   ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * The open-PR list signature of many repos (same host, same token) in one
+   * GraphQL point per 80 repos — what lets the poll skip {@link listPrs} for
+   * repos where nothing moved. See `probeOpenPrListSignatures`.
+   */
+  readonly probeOpenPrLists: (
+    repoFullNames: readonly string[],
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Map<string, OpenPrListSignature>, GitHubError, SettingsService>;
   readonly getPr: (
     repoFullName: string,
     prNumber: number,
@@ -213,10 +255,10 @@ interface GitHubGatewayFlatService {
   /**
    * Diff size for many PRs of one repo, keyed by PR number.
    *
-   * {@link listPrs} can't supply this: the list endpoint's simple PR object
-   * omits `additions`/`deletions`/`changed_files`. One aliased GraphQL
-   * request per 100 PRs, on GraphQL's separate budget, instead of one REST
-   * detail fetch per PR.
+   * {@link listPrs} leaves these out: GitHub computes them per PR, so asking
+   * for every open PR on every poll would slow the list down to size PRs whose
+   * head hasn't moved. One aliased GraphQL request per 100 PRs, for just the
+   * PRs that need it, instead of one REST detail fetch per PR.
    *
    * Best-effort: GitHub returns partial data plus per-alias errors, so a
    * deleted/inaccessible PR is simply absent from the map. Treat absence as
@@ -644,22 +686,31 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      // A few active repos can exceed 1,000 open PRs. Keep the sync
-      // bounded for rate-limit safety, but do not drop rows at GitHub's
-      // first 10 pages when the user needs to filter down to their team.
+      return yield* listOpenPrsViaGraphql(owner, repo, repositoryId, token, apiBase);
+    }).pipe(retryTransient),
+
+  listPrsRest: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
         token,
         50,
         apiBase,
-        // This endpoint is sorted by updated_at desc, so any new or recently
-        // changed PR changes page 1's ETag. Replaying a 304 is therefore safe
-        // even for large repos with 100+ open PRs; forcing a full refetch on
-        // every poll burns rate limit and leaves those repos stuck on stale DB
-        // state once GitHub starts returning 403 rate-limit responses.
+        // Sorted by updated_at desc, so any new or recently changed PR changes
+        // page 1's ETag. Replaying a 304 is therefore safe even for repos with
+        // 100+ open PRs, and forcing a full refetch would spend the very
+        // budget this path exists to save.
         { canReplayCached: () => true },
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
+    }).pipe(retryTransient),
+
+  probeOpenPrLists: (repoFullNames, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      return yield* probeOpenPrListSignatures(repoFullNames, token, apiBase);
     }).pipe(retryTransient),
 
   getPr: (repoFullName, prNumber, token, explicitApiBase) =>
@@ -1394,43 +1445,33 @@ ${fields}
 					}
 				}
 			`;
+      interface ReviewThreadNode {
+        id: string;
+        isResolved: boolean;
+        comments: { nodes: Array<{ databaseId: number }> };
+      }
       interface ReviewThreadsResp {
         repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: boolean; endCursor: string | null };
-              nodes: Array<{
-                id: string;
-                isResolved: boolean;
-                comments: { nodes: Array<{ databaseId: number }> };
-              }>;
-            };
-          };
-        };
+          pullRequest: { reviewThreads: GraphqlConnection<ReviewThreadNode> } | null;
+        } | null;
       }
-      const out: GhReviewThread[] = [];
-      let cursor: string | null = null;
-      for (let p = 0; p < 5; p++) {
-        const data: ReviewThreadsResp = yield* githubGraphql<ReviewThreadsResp>(
-          query,
-          { owner, repo, number: prNumber, cursor },
-          token,
-          apiBase,
-        );
-        const page = data.repository.pullRequest.reviewThreads;
-        for (const node of page.nodes) {
-          out.push({
-            nodeId: node.id,
-            isResolved: node.isResolved,
-            commentDatabaseIds: node.comments.nodes.map(
-              (n: { databaseId: number }) => n.databaseId,
-            ),
-          });
-        }
-        if (!page.pageInfo.hasNextPage) break;
-        cursor = page.pageInfo.endCursor;
-      }
-      return out;
+      const nodes = yield* paginateGraphql<ReviewThreadsResp, ReviewThreadNode>({
+        query,
+        variables: { owner, repo, number: prNumber },
+        selectConnection: (data) => data.repository?.pullRequest?.reviewThreads,
+        maxPages: 5,
+        token,
+        apiBase,
+        notFound: () =>
+          new GitHubNotFoundError({ resource: "pull_request", id: `${repoFullName}#${prNumber}` }),
+      });
+      return nodes.map(
+        (node): GhReviewThread => ({
+          nodeId: node.id,
+          isResolved: node.isResolved,
+          commentDatabaseIds: node.comments.nodes.map((n) => n.databaseId),
+        }),
+      );
     }).pipe(retryTransient),
 
   resolveReviewThread: (threadNodeId, token, explicitApiBase) =>
@@ -1694,6 +1735,8 @@ type GitHubGatewayFlat = typeof githubGatewayFlat;
 export interface GitHubGatewayService {
   readonly prs: {
     readonly listOpen: GitHubGatewayFlat["listPrs"];
+    readonly listOpenRest: GitHubGatewayFlat["listPrsRest"];
+    readonly probeOpenLists: GitHubGatewayFlat["probeOpenPrLists"];
     readonly get: GitHubGatewayFlat["getPr"];
     readonly diffStats: GitHubGatewayFlat["listPrDiffStats"];
     readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
@@ -1749,6 +1792,8 @@ export class GitHubGateway extends Context.Tag("GitHubGateway")<
 export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   prs: {
     listOpen: githubGatewayFlat.listPrs,
+    listOpenRest: githubGatewayFlat.listPrsRest,
+    probeOpenLists: githubGatewayFlat.probeOpenPrLists,
     get: githubGatewayFlat.getPr,
     diffStats: githubGatewayFlat.listPrDiffStats,
     searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,

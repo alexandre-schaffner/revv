@@ -99,16 +99,16 @@ describe("renderPrLens", () => {
     expect("svg" in result).toBe(true);
     if (!("svg" in result)) return;
 
-    const css = /<style>([\s\S]*?)<\/style>/.exec(result.svg)?.[1] ?? "";
-    expect(css).not.toBe("");
-
-    const selectors = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].map((m) => (m[1] ?? "").trim());
-    expect(selectors.length).toBeGreaterThan(10);
-    // Every rule — including the bare `text{…}` that would otherwise restyle
-    // every inline SVG on the page — is scoped.
-    for (const selector of selectors) {
-      for (const part of selector.split(",")) {
-        expect(part.trim().startsWith(".prlens-diagram ")).toBe(true);
+    // The renderer inlines its styles since 0.3, so there may be no sheet at
+    // all. Any it does emit must be scoped: a bare `text{…}` would otherwise
+    // restyle every inline SVG on the page.
+    const sheets = [...result.svg.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1] ?? "");
+    for (const css of sheets) {
+      const selectors = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].map((m) => (m[1] ?? "").trim());
+      for (const selector of selectors) {
+        for (const part of selector.split(",")) {
+          expect(part.trim().startsWith(".prlens-diagram ")).toBe(true);
+        }
       }
     }
   });

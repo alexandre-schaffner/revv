@@ -127,7 +127,7 @@ export interface TokenHoverInfo {
 	let wrapperEl: HTMLDivElement | null = null;
 	let instance = $state.raw<PierreFile<ThreadMeta> | VirtualizedFile<ThreadMeta> | null>(null);
 	let error = $state<string | null>(null);
-	let initialOptions: FileOptions<ThreadMeta> | null = null;
+	let initialOptions: FileOptions<ThreadMeta, undefined> | null = null;
 	let virtualizer = $state.raw<ReturnType<typeof createPierreVirtualizer> | null>(null);
 
 	function captureEl(el: HTMLDivElement) {
@@ -213,7 +213,7 @@ export interface TokenHoverInfo {
 		if (!wrapperEl) return;
 
 		try {
-			const options: FileOptions<ThreadMeta> = {
+			const options: FileOptions<ThreadMeta, undefined> = {
 				theme: PIERRE_THEME,
 				overflow: 'scroll',
 				lineHoverHighlight: 'both',
@@ -238,7 +238,7 @@ export interface TokenHoverInfo {
 				// ── Header metadata: file size ────────────────────────────────
 				// Sits in the same right-hand slot as the diff viewer's
 				// view-mode pill / additions-deletions counts.
-				renderCustomMetadata(_file) {
+				renderHeaderMetadata(_file) {
 					if (size <= 0) return null;
 					const span = document.createElement('span');
 					span.textContent = formatSize(size);

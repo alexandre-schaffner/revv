@@ -32,6 +32,7 @@ import type {
   WalkthroughBlock,
   WalkthroughGenerationMode,
   WalkthroughIssue,
+  WalkthroughLead,
   WalkthroughMode,
   WalkthroughPipelinePhase,
   WalkthroughRating,
@@ -43,6 +44,7 @@ import type {
 } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../db";
 import { commentThreads } from "../db/schema/comment-threads";
 import { pullRequests } from "../db/schema/pull-requests";
 import { remoteUsers } from "../db/schema/remote-users";
@@ -57,6 +59,7 @@ import { ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
 import { decodeWalkthroughIssue } from "./walkthrough-issue";
+import { loadWalkthroughLeads } from "./walkthrough-leads";
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
 
@@ -110,6 +113,7 @@ function rowToWalkthrough(
   blocks: Array<typeof walkthroughBlocks.$inferSelect>,
   issues: Array<typeof walkthroughIssues.$inferSelect>,
   ratings: Array<typeof walkthroughRatings.$inferSelect>,
+  leads: WalkthroughLead[] | null,
   avatarContent: string | null = null,
 ): Walkthrough {
   const sortedSemanticSteps: WalkthroughSemanticStep[] = [...semanticSteps]
@@ -169,6 +173,7 @@ function rowToWalkthrough(
     blocks: sortedBlocks,
     issues: sortedIssues,
     ratings: sortedRatings,
+    leads,
     mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
@@ -184,6 +189,27 @@ function rowToWalkthrough(
     generatedBy,
     providerConfig,
   };
+}
+
+/** A walkthrough row with its child tables loaded, as the DTO. */
+function hydrateWalkthrough(
+  db: Db,
+  row: typeof walkthroughs.$inferSelect,
+  avatarContent: string | null,
+): Walkthrough {
+  return rowToWalkthrough(
+    row,
+    db
+      .select()
+      .from(walkthroughSemanticSteps)
+      .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
+      .all(),
+    db.select().from(walkthroughBlocks).where(eq(walkthroughBlocks.walkthroughId, row.id)).all(),
+    db.select().from(walkthroughIssues).where(eq(walkthroughIssues.walkthroughId, row.id)).all(),
+    db.select().from(walkthroughRatings).where(eq(walkthroughRatings.walkthroughId, row.id)).all(),
+    loadWalkthroughLeads(db, row.id, row.leadsSelectedAt),
+    avatarContent,
+  );
 }
 
 function isPrCommit(v: unknown): v is PrCommit {
@@ -891,32 +917,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
-      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
+      return hydrateWalkthrough(db, row, avatarContent);
     }),
 
   getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
@@ -952,33 +953,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
       return {
-        ...rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent),
+        ...hydrateWalkthrough(db, row, avatarContent),
         status: row.status as "generating" | "error",
         opencodeSessionId: row.opencodeSessionId ?? null,
       };
@@ -1230,32 +1206,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
-      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
+      return hydrateWalkthrough(db, row, avatarContent);
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
   getReport: (prId, walkthroughId, mode = "reviewer") =>
@@ -1284,33 +1235,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
       return {
-        walkthrough: rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent),
+        walkthrough: hydrateWalkthrough(db, row, avatarContent),
         status: row.status as WalkthroughStatus,
       };
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),

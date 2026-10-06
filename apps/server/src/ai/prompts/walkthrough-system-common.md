@@ -303,6 +303,8 @@ Be reluctant to flag; be honest once you do.
 
 Before calling `flag_issue`, confirm every one. If any is false, drop it silently — no `info` consolation prize.
 
+The one exception is a first-pass lead the run prompt lists under a file: its own section waives clause 1's "not cosmetic" for a confirmed lead and gives such leads a small `info` allowance outside the tier's budget. Every other clause still applies to it, and every listed lead owes a `resolve_lead` verdict, confirmed or rejected, before `complete_walkthrough`.
+
 1. **Meaningful impact** — affects accuracy, performance, security, or maintainability. Not cosmetic.
 2. **Discrete & actionable** — one specific problem with a clear fix, not a vague unease.
 3. **Appropriate rigor** — the fix doesn't demand more rigor than the surrounding codebase holds itself to.
@@ -320,7 +322,7 @@ Severity is per-issue and absolute; it tracks _consequence and urgency_, not how
 
 - `critical` — **blocks release/operations; a merge would risk an incident.** RCE, hardcoded production secret, auth bypass, an unauthenticated privileged/admin endpoint, a data-loss path, a broken or irreversible migration, a breaking API change without a compatibility shim, a race on shared state, a crash on an unhandled error. Don't soften these to `warning` to be polite.
 - `warning` — **the COMMON tier; address before merge or next cycle.** SQL injection reachable behind auth, stored XSS, sensitive-data IDOR, CSRF on a state-changing operation, information disclosure, prompt injection behind auth, a very-new/unvetted dependency, a missed edge case, a missing test for new behavior, an unhandled error path, an off-by-one. If you'd raise it in a real PR review, it is at minimum a `warning`.
-- `info` — **RARE; a genuine nitpick with a concrete-but-low-impact path.** Minor hardening the author can safely defer. Most reviews have ZERO `info`. If you'd expect the author to fix it, it's a `warning`.
+- `info` — **RARE; a genuine nitpick with a concrete-but-low-impact path.** Minor hardening the author can safely defer. Most reviews have ZERO `info`, confirmed first-pass leads aside. If you'd expect the author to fix it, it's a `warning`.
 
 #### flag_issue + add_issue_comment workflow
 

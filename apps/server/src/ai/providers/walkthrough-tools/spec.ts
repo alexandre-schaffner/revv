@@ -1,17 +1,4 @@
-import type {
-  ArtifactBlock,
-  CodeBlock,
-  DiffBlock,
-  MarkdownBlock,
-  RatingAxis,
-  RatingCitation,
-  RiskLevel,
-  ThreadEventMessage,
-  WalkthroughIssue,
-  WalkthroughRating,
-  WalkthroughSemanticStep,
-  WalkthroughStreamEvent,
-} from "@revv/shared";
+import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
@@ -37,6 +24,7 @@ import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gat
 //   Phase A — set_overview     (one call; fills walkthroughs.summary + risk)
 //   Phase B — add_diff_step    (many calls; one per step)
 //            flag_issue        (any number; only during B, linked to steps)
+//            resolve_lead      (one verdict per first-pass lead; B onward)
 //   Phase C — set_sentiment    (one call; fills walkthroughs.sentiment)
 //   Phase D — rate_axis        (nine calls, one per RatingAxis)
 //   Finish  — complete_walkthrough (validation gate; advances status)
@@ -388,7 +376,7 @@ const flagIssueSchema = z.object({
   severity: z
     .enum(["info", "warning", "critical"])
     .describe(
-      "Two decisions, kept separate. (1) WHETHER TO FLAG — a HIGH bar: flag only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by THIS diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. If any fails, do not flag. (2) SEVERITY ONCE FLAGGED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero. Security examples are illustrative per tier, not a narrowing — correctness/perf/tests/maintainability map the same way.",
+      "Two decisions, kept separate. (1) WHETHER TO FLAG — a HIGH bar: flag only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by THIS diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. If any fails, do not flag. (2) SEVERITY ONCE FLAGGED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero, except for confirmed first-pass leads, which follow the run prompt's First-pass leads rules. Security examples are illustrative per tier, not a narrowing — correctness/perf/tests/maintainability map the same way.",
     ),
   title: z.string().describe(`Short title of the concern (10 words max). ${PLAIN_TEXT_FIELD}`),
   description: z
@@ -446,6 +434,34 @@ const addIssueCommentSchema = z.object({
     .string()
     .describe(
       `Markdown body of the comment. ${ISSUE_COMMENT_CONTRACT} ${PROSE_VOICE_CONTRACT} Idempotency: a retry with the same anchor (issue_id + file_path + start_line + end_line + diff_side) replaces the body of the existing comment rather than creating a duplicate.`,
+    ),
+});
+
+/**
+ * Phase B onward: the agent's verdict on one first-pass lead, keyed on
+ * `(walkthrough_id, lead_id)`. A later call replaces the verdict, so a
+ * replay is a no-op and a changed mind is one more call.
+ */
+const resolveLeadSchema = z.object({
+  lead_id: z.string().describe("The lead's id from the prompt's First-pass leads, e.g. `L3`."),
+  verdict: z
+    .enum(["confirmed", "rejected"])
+    .describe(
+      "confirmed: the lead held up once you read the code, and you raised an issue for it. rejected: it didn't hold up.",
+    ),
+  issue_id: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Required when confirmed: the id flag_issue returned for the issue this lead became. Several leads may share one issue.",
+    ),
+  reason: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      `Required when rejected: one sentence (≤ 40 words) naming what in the code answers the lead — the caller that guarantees the value, the test that already covers it. ${PLAIN_TEXT_FIELD}`,
     ),
 });
 
@@ -524,6 +540,7 @@ export type AddSemanticStepInput = z.infer<typeof addSemanticStepSchema>;
 export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
 export type FlagIssueInput = z.infer<typeof flagIssueSchema>;
 export type AddIssueCommentInput = z.infer<typeof addIssueCommentSchema>;
+export type ResolveLeadInput = z.infer<typeof resolveLeadSchema>;
 export type SetSentimentInput = z.infer<typeof setSentimentSchema>;
 export type RateAxisInput = z.infer<typeof rateAxisSchema>;
 export type CompleteWalkthroughInput = z.infer<typeof completeWalkthroughSchema>;
@@ -540,6 +557,7 @@ export {
   getRepoContextSchema,
   getWalkthroughStateSchema,
   rateAxisSchema,
+  resolveLeadSchema,
   setOverviewSchema,
   setSentimentSchema,
 };
@@ -550,9 +568,6 @@ export {
 // consume). Keeping the handler implementations there keeps the DB-imports
 // out of this spec file so tests can stub handlers without pulling in
 // SQLite.
-
-// Re-exported constants for handler shape callers
-export type { WalkthroughPipelinePhase, WalkthroughState } from "@revv/shared";
 
 // ── Shared helpers reused by handlers ──────────────────────────────────────
 
@@ -601,18 +616,6 @@ export async function computeAnchorThreadId(
 
 // Re-export the canonical types used by handlers so walkthrough-tools.ts does
 // not need separate @revv/shared imports.
-export type {
-  ArtifactBlock,
-  CodeBlock,
-  DiffBlock,
-  MarkdownBlock,
-  RatingAxis,
-  RatingCitation,
-  RiskLevel,
-  WalkthroughIssue,
-  WalkthroughRating,
-  WalkthroughSemanticStep,
-  WalkthroughStreamEvent,
-};
+export type { WalkthroughStreamEvent };
 /** Canonical RATING_AXES re-export so handlers can reference it locally. */
 export { RATING_AXES };

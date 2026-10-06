@@ -97,7 +97,7 @@ async function testConnection(): Promise<void> {
 		<SettingsRow
 			id="jev-enabled"
 			label="Use TypeSafe judgments"
-			hint="Sizes each review, sets its risk tier, ranks the changed files, checks and calibrates flagged issues, holds artifacts and prose to the bar, and stops doomed retries. When off, no requests are made."
+			hint="Sizes each review, sets its risk tier, ranks the changed files, runs a hunk-by-hunk first pass, checks and calibrates flagged issues, holds artifacts and prose to the bar, and stops doomed retries. When off, no requests are made."
 		>
 			{#snippet control()}
 				<Switch

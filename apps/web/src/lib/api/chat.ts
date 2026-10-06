@@ -11,7 +11,6 @@
 import type {
   AcpAgentId,
   Activity,
-  ActivityKind,
   ChatAttachment,
   ChatAttachmentMetadata,
   ChatSessionContext,
@@ -19,21 +18,13 @@ import type {
   ChatTask,
   InteractionMode,
   NormalizedQuestion,
-  NormalizedQuestionOption,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
 
 // Re-export activity types used by stores and components.
-export type {
-  Activity,
-  ActivityKind,
-  ChatTask,
-  InteractionMode,
-  NormalizedQuestion,
-  NormalizedQuestionOption,
-};
+export type { Activity, ChatTask, InteractionMode, NormalizedQuestion };
 
 export interface ChatRequestParams {
   prId: string;

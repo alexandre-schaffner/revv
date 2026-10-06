@@ -17,6 +17,7 @@ import { ExternalIntegrationsLive } from "./ExternalIntegrations";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { HunkScanServiceLive } from "./HunkScan";
 import { IdentityLive } from "./Identity";
 import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
@@ -138,6 +139,10 @@ const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
 );
 const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
 
+// The first pass, per PR head. One instance: the review page and
+// WalkthroughJobs must share its in-flight map so a head is scanned once.
+const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
+
 // WalkthroughJobs is the central orchestrator for walkthrough generation —
 // it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
 // worktrees), Ai (to run the actual generator), Review (for session ids),
@@ -153,6 +158,7 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RepoCloneServiceWithDeps,
       RemoteWalkthroughCacheWithDeps,
       WalkthroughSnapshotImporterWithDeps,
+      HunkScanServiceWithDeps,
     ),
   ),
 );
@@ -199,6 +205,7 @@ export const AppLayer = Layer.mergeAll(
   AiServiceWithDeps,
   RepoCloneServiceWithDeps,
   WalkthroughJobsWithDeps,
+  HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,
   RecapSchedulerWithDeps,
   DbMaintenanceWithDeps,

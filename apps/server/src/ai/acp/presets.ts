@@ -73,6 +73,7 @@ export interface AcpProcessEnvOptions {
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. The maintained
 // Codex ACP adapter merges this into the session config through CODEX_CONFIG.
 const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
+  ultra: "ultra",
   max: "max",
   "extra-high": "xhigh",
   high: "high",
@@ -87,6 +88,7 @@ const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
 // it here was a no-op. `ultrathink` is not an effort level — it's a prompt
 // keyword — so a stale persisted value lands on the deepest real tier.
 const CLAUDE_EFFORT_LEVEL: Record<ThinkingEffort, string> = {
+  ultra: "max",
   low: "low",
   medium: "medium",
   high: "high",
@@ -170,7 +172,7 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     case "codex": {
       // Clamp rather than trust the persisted tier: effort and agent are stored
       // independently, so a tier picked on Claude Code outlives a switch here.
-      const tier = clampThinkingEffort(id, thinkingEffort);
+      const tier = clampThinkingEffort(id, thinkingEffort, model);
       const effort = tier ? CODEX_REASONING_EFFORT[tier] : undefined;
       // `@agentclientprotocol/codex-acp` starts Codex's App Server and reads
       // CODEX_CONFIG, rather than forwarding the legacy adapter's `-c` flags.
@@ -186,7 +188,8 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
       if (model) env.ANTHROPIC_MODEL = model;
       // Revv always runs at Claude Code's own default 1M context, so the
       // disable flag is never set.
-      if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
+      const tier = clampThinkingEffort(id, thinkingEffort, model);
+      if (tier) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[tier];
       break;
     }
     case "opencode": {

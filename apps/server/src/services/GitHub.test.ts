@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Either, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
-import { GitHubApiError, GitHubRateLimitError } from "../domain/errors";
+import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
 import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
@@ -78,6 +78,39 @@ function rawPr(number: number): Record<string, unknown> {
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     closed_at: null,
+  };
+}
+
+function gqlPr(number: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    number,
+    title: `PR ${number}`,
+    body: "",
+    isDraft: false,
+    url: `https://github.test/pull/${number}`,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    closedAt: null,
+    headRefName: "feature",
+    baseRefName: "main",
+    headRefOid: `head-${number}`,
+    baseRefOid: "base",
+    author: { __typename: "User", login: "author", avatarUrl: null },
+    reviewRequests: { nodes: [] },
+    ...overrides,
+  };
+}
+
+function gqlPrPage(
+  nodes: Record<string, unknown>[],
+  endCursor: string | null = null,
+): Record<string, unknown> {
+  return {
+    data: {
+      repository: {
+        pullRequests: { pageInfo: { hasNextPage: endCursor !== null, endCursor }, nodes },
+      },
+    },
   };
 }
 
@@ -186,50 +219,6 @@ describe("GitHubGateway conditional pagination", () => {
     expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
   });
 
-  // `listOpen` replays a cached 304 unconditionally, including a multi-page
-  // cached set. That is safe *because of the sort*: `?sort=updated&direction=desc`
-  // moves any changed PR onto page 1, so page 1's ETag — the one we send
-  // If-None-Match against — moves whenever anything anywhere in the list moves.
-  // A 304 there genuinely means "no page changed".
-  //
-  // Contrast `listComments` below, which does force a refetch on a full page.
-  it("replays the whole cached open-PR set on a 304, across pages", async () => {
-    const db = createDb(":memory:");
-    const firstPage = Array.from({ length: 100 }, (_, i) => rawPr(i + 1));
-    const calls = stubFetch((_call, index) => {
-      if (index === 0) {
-        return responseJson(firstPage, {
-          headers: {
-            ETag: '"prs-v1"',
-            Link: '<https://api.github.test/repos/octo/repo/pulls?page=2>; rel="next"',
-          },
-        });
-      }
-      if (index === 1) {
-        return responseJson([rawPr(101)], { headers: { ETag: '"prs-v1-page2"' } });
-      }
-      return new Response(null, { status: 304 });
-    });
-
-    const prs = await Effect.runPromise(
-      Effect.gen(function* () {
-        const github = yield* GitHubGateway;
-        yield* github.prs.listOpen("octo/repo", "repo-1", "token", "https://api.github.test");
-        return yield* github.prs.listOpen(
-          "octo/repo",
-          "repo-1",
-          "token",
-          "https://api.github.test",
-        );
-      }).pipe(Effect.provide(gatewayLayer(db))),
-    );
-
-    // Both pages of the first fetch, served back from cache.
-    expect(prs).toHaveLength(101);
-    expect(calls).toHaveLength(3);
-    expect(calls[2]?.headers.get("If-None-Match")).toBe('"prs-v1"');
-  });
-
   it("refuses to replay a cached review-comment page that was full", async () => {
     const db = createDb(":memory:");
     const fullPage = Array.from({ length: 100 }, (_, i) => rawComment(i + 1));
@@ -325,14 +314,14 @@ describe("GitHubGateway per-host API base", () => {
 
   it("separates ETag cache entries by API base and token", async () => {
     const db = createDb(":memory:");
-    const calls = stubFetch(() => responseJson([rawPr(1)], { headers: { ETag: '"prs-v1"' } }));
+    const calls = stubFetch(() => responseJson(rawPr(1), { headers: { ETag: '"pr-1"' } }));
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        yield* github.prs.listOpen("octo/repo", "repo-1", "token-a", "https://api.github.test");
-        yield* github.prs.listOpen("octo/repo", "repo-1", "token-a", "https://api.github.example");
-        yield* github.prs.listOpen("octo/repo", "repo-1", "token-b", "https://api.github.test");
+        yield* github.prs.get("octo/repo", 1, "token-a", "https://api.github.test");
+        yield* github.prs.get("octo/repo", 1, "token-a", "https://api.github.example");
+        yield* github.prs.get("octo/repo", 1, "token-b", "https://api.github.test");
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -354,9 +343,7 @@ describe("GitHubGateway error classification", () => {
   it("retries a 5xx as transient", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch((_call, index) =>
-      index < 1
-        ? new Response("boom", { status: 503 })
-        : responseJson([rawPr(1)], { headers: { ETag: '"prs-v1"' } }),
+      index < 1 ? new Response("boom", { status: 503 }) : responseJson(gqlPrPage([gqlPr(1)])),
     );
 
     const prs = await Effect.runPromise(
@@ -414,6 +401,260 @@ describe("GitHubGateway error classification", () => {
       expect(result.left).toBeInstanceOf(GitHubApiError);
       expect(String((result.left as GitHubApiError).cause)).toContain("nope");
     }
+  });
+});
+
+describe("listPrs", () => {
+  const listOpen = (db: Db) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs
+          .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
+          .pipe(Effect.either);
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+  it("follows the cursor across pages", async () => {
+    const db = createDb(":memory:");
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return bodies.length === 1
+        ? responseJson(gqlPrPage([gqlPr(2), gqlPr(1)], "cursor-1"))
+        : responseJson(gqlPrPage([gqlPr(3)]));
+    }) as typeof fetch;
+
+    const result = await listOpen(db);
+
+    expect(Either.isRight(result) && result.right.map((pr) => pr.externalId)).toEqual([2, 1, 3]);
+    expect(bodies).toHaveLength(2);
+    expect((bodies[0] as { variables: unknown }).variables).toEqual({
+      owner: "octo",
+      name: "repo",
+      cursor: null,
+    });
+    expect((bodies[1] as { variables: { cursor: string } }).variables.cursor).toBe("cursor-1");
+  });
+
+  // Every other login in the DB came from REST, so a GraphQL row must match
+  // what `GET /pulls` would have stored or bot and ghost PRs drift out of the
+  // author filters.
+  it("maps nodes to the row the REST list produced", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() =>
+      responseJson(
+        gqlPrPage([
+          gqlPr(1, {
+            author: { __typename: "Bot", login: "dependabot", avatarUrl: "https://a.test/bot" },
+            reviewRequests: {
+              nodes: [
+                { requestedReviewer: { __typename: "User", login: "alice" } },
+                { requestedReviewer: { __typename: "Team" } },
+                { requestedReviewer: null },
+              ],
+            },
+          }),
+          gqlPr(2, { author: null, body: "Fixes #1", isDraft: true }),
+        ]),
+      ),
+    );
+
+    const result = await listOpen(db);
+
+    expect(Either.isRight(result)).toBe(true);
+    if (!Either.isRight(result)) return;
+    const [bot, ghost] = result.right;
+    expect(bot).toMatchObject({
+      id: "repo-1:1",
+      repositoryId: "repo-1",
+      authorLogin: "dependabot[bot]",
+      authorAvatarUrl: "https://a.test/bot",
+      requestedReviewers: ["alice"],
+      body: null,
+      status: "open",
+      headSha: "head-1",
+      baseSha: "base",
+      sourceBranch: "feature",
+      targetBranch: "main",
+      additions: 0,
+      changedFiles: 0,
+    });
+    expect(ghost).toMatchObject({ authorLogin: "ghost", body: "Fixes #1", isDraft: true });
+  });
+
+  it("classifies a GraphQL RATE_LIMITED answer as a rate limit", async () => {
+    const db = createDb(":memory:");
+    const calls = stubFetch(() =>
+      responseJson(
+        { errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] },
+        { headers: { "X-RateLimit-Reset": "1800000000" } },
+      ),
+    );
+
+    const result = await listOpen(db);
+
+    expect(calls).toHaveLength(1);
+    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubRateLimitError);
+    if (Either.isLeft(result) && result.left._tag === "GitHubRateLimitError") {
+      expect(result.left.resetAt.getTime()).toBe(1_800_000_000_000);
+      expect(result.left.resource).toBe("graphql");
+    }
+  });
+
+  it("fails instead of reporting zero PRs for a repo it cannot see", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() => responseJson({ data: { repository: null } }));
+
+    const result = await listOpen(db);
+
+    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubNotFoundError);
+  });
+});
+
+// The fallback for a spent GraphQL budget. It replays a cached 304
+// unconditionally, including a multi-page cached set. That is safe *because of
+// the sort*: `?sort=updated&direction=desc` moves any changed PR onto page 1, so
+// page 1's ETag — the one we send If-None-Match against — moves whenever
+// anything anywhere in the list moves. A 304 there genuinely means "no page
+// changed", and costs nothing against the REST limit.
+describe("listPrsRest", () => {
+  it("replays the whole cached open-PR set on a 304, across pages", async () => {
+    const db = createDb(":memory:");
+    const firstPage = Array.from({ length: 100 }, (_, i) => rawPr(i + 1));
+    const calls = stubFetch((_call, index) => {
+      if (index === 0) {
+        return responseJson(firstPage, {
+          headers: {
+            ETag: '"prs-v1"',
+            Link: '<https://api.github.test/repos/octo/repo/pulls?page=2>; rel="next"',
+          },
+        });
+      }
+      if (index === 1) {
+        return responseJson([rawPr(101)], { headers: { ETag: '"prs-v1-page2"' } });
+      }
+      return new Response(null, { status: 304 });
+    });
+
+    const prs = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        yield* github.prs.listOpenRest("octo/repo", "repo-1", "token", "https://api.github.test");
+        return yield* github.prs.listOpenRest(
+          "octo/repo",
+          "repo-1",
+          "token",
+          "https://api.github.test",
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    // Both pages of the first fetch, served back from cache.
+    expect(prs).toHaveLength(101);
+    expect(prs[0]?.id).toBe("repo-1:1");
+    expect(calls).toHaveLength(3);
+    expect(calls[2]?.headers.get("If-None-Match")).toBe('"prs-v1"');
+  });
+});
+
+describe("probeOpenPrLists", () => {
+  const probe = (db: Db, fullNames: readonly string[]) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs
+          .probeOpenLists(fullNames, "token", "https://api.github.test")
+          .pipe(Effect.either);
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+  it("asks for every repo in one request and skips the ones GitHub can't resolve", async () => {
+    const db = createDb(":memory:");
+    const bodies: Array<{ query: string; variables: Record<string, string> }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return responseJson({
+        data: {
+          r0: {
+            pullRequests: { totalCount: 3, nodes: [{ updatedAt: "2026-01-02T00:00:00Z" }] },
+          },
+          r1: null,
+          r2: { pullRequests: { totalCount: 0, nodes: [] } },
+        },
+        errors: [{ type: "NOT_FOUND", message: "Could not resolve to a Repository" }],
+      });
+    }) as typeof fetch;
+
+    const result = await probe(db, ["octo/a", "octo/gone", "octo/empty"]);
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.variables).toMatchObject({ o0: "octo", n0: "a", n1: "gone", n2: "empty" });
+    expect(Either.isRight(result)).toBe(true);
+    if (!Either.isRight(result)) return;
+    expect([...result.right.entries()]).toEqual([
+      ["octo/a", { count: 3, latestUpdatedAt: "2026-01-02T00:00:00Z" }],
+      ["octo/empty", { count: 0, latestUpdatedAt: null }],
+    ]);
+  });
+
+  it("still classifies RATE_LIMITED as a GraphQL rate limit", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() =>
+      responseJson(
+        { data: null, errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] },
+        { headers: { "X-RateLimit-Reset": "1800000000" } },
+      ),
+    );
+
+    const result = await probe(db, ["octo/a"]);
+
+    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubRateLimitError);
+    if (Either.isLeft(result) && result.left._tag === "GitHubRateLimitError") {
+      expect(result.left.resource).toBe("graphql");
+    }
+  });
+});
+
+describe("listReviewThreads", () => {
+  it("follows the cursor and fails rather than reporting no threads for a missing PR", async () => {
+    const db = createDb(":memory:");
+    const thread = (id: string) => ({
+      id,
+      isResolved: false,
+      comments: { nodes: [{ databaseId: 1 }] },
+    });
+    const page = (nodes: unknown[], endCursor: string | null) => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { pageInfo: { hasNextPage: endCursor !== null, endCursor }, nodes },
+          },
+        },
+      },
+    });
+    stubFetch((_call, index) =>
+      index === 0
+        ? responseJson(page([thread("t1")], "c1"))
+        : index === 1
+          ? responseJson(page([thread("t2")], null))
+          : responseJson({ data: { repository: { pullRequest: null } } }),
+    );
+
+    const run = () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const github = yield* GitHubGateway;
+          return yield* github.reviews
+            .listThreads("octo/repo", 1, "token", "https://api.github.test")
+            .pipe(Effect.either);
+        }).pipe(Effect.provide(gatewayLayer(db))),
+      );
+
+    const first = await run();
+    expect(Either.isRight(first) && first.right.map((t) => t.nodeId)).toEqual(["t1", "t2"]);
+    const missing = await run();
+    expect(Either.isLeft(missing) && missing.left).toBeInstanceOf(GitHubNotFoundError);
   });
 });
 

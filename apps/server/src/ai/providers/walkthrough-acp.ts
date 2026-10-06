@@ -33,7 +33,6 @@ import type { McpServer } from "@agentclientprotocol/sdk";
 import type {
   AcpAgentId,
   RatingAxis,
-  RiskLevel,
   WalkthroughBlock,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
@@ -65,7 +64,11 @@ import {
   withAgentTurn,
   ZERO_TOKEN_USAGE,
 } from "../agent-stream";
-import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
+import {
+  buildWalkthroughPrompt,
+  buildWalkthroughSystemPrompt,
+  type WalkthroughPromptHints,
+} from "../prompts/walkthrough";
 
 /** Avoid "Internal error.. Nothing had been written" when joining clauses. */
 function trimTrailingPeriod(message: string): string {
@@ -122,7 +125,7 @@ export interface AcpWalkthroughDeps {
   unregisterActivityNotifier: (walkthroughId: string) => Promise<void>;
 }
 
-export interface AcpWalkthroughStreamParams {
+export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   walkthroughId: string;
   db: Db;
   pr: {
@@ -146,16 +149,6 @@ export interface AcpWalkthroughStreamParams {
   abortController?: AbortController;
   /** Resolved ACP registry agent id that drives this generation. */
   acpAgentId: AcpAgentId;
-  /**
-   * Risk tier the orchestrator assigned before the agent started. Present
-   * means the prompt states it as a given; absent keeps the "explore first"
-   * instruction.
-   */
-  assignedRisk?: RiskLevel;
-  /** Ranked reading order from the job-start pass. See the prompt builder. */
-  filePriorities?: ReadonlyArray<{ readonly filename: string; readonly tier: number | null }>;
-  /** Split recommendation from the job-start pass, when it cleared the floor. */
-  splitRecommendation?: { readonly pieces: number };
   deps: AcpWalkthroughDeps;
 }
 

@@ -457,11 +457,23 @@ export function githubDelete(
   });
 }
 
-export function githubGraphql<T = unknown>(
+interface GraphqlPayload<T> {
+  readonly data?: T | null;
+  readonly errors?: ReadonlyArray<{ readonly message: string; readonly type?: string }>;
+}
+
+/**
+ * POST one GraphQL request and classify the answer. `tolerateErrors` decides
+ * what a 200 carrying `errors` means: a rejected query (the default), or an
+ * aliased query where one unreachable field shouldn't cost the others theirs.
+ * A `RATE_LIMITED` entry is a rate limit either way.
+ */
+function postGraphql<T>(
   query: string,
   variables: Record<string, unknown>,
   token: string,
   apiBase: string,
+  tolerateErrors: boolean,
 ): Effect.Effect<T, GitHubError> {
   const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
   return Effect.withSpan("GitHub.graphql", {
@@ -479,13 +491,26 @@ export function githubGraphql<T = unknown>(
           "/graphql",
         );
         assertGitHubOk(res, "/graphql");
-        const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+        const payload = (await res.json()) as GraphqlPayload<T>;
+        // GraphQL's primary limit answers 200 with a `RATE_LIMITED` error, not
+        // the 403 `assertGitHubOk` recognises. Classify it so callers pause
+        // GraphQL work until the reset instead of retrying into the wall.
+        // `resource: "graphql"` is load-bearing: GraphQL has its own budget,
+        // and callers must not read this as the REST budget running out.
+        if (payload.errors?.some((e) => e.type === "RATE_LIMITED")) {
+          const resetHeader = res.headers.get("X-RateLimit-Reset");
+          throw new GitHubRateLimitError({
+            resetAt: resetHeader ? new Date(Number(resetHeader) * 1000) : new Date(),
+            kind: "primary",
+            resource: "graphql",
+          });
+        }
         // A 200 carrying `errors` means GraphQL parsed and rejected the query
         // (unknown field, missing scope, node not visible). That verdict is
         // stable, so this must NOT be a retryable network error — otherwise
         // every such call costs 4 attempts and ~14s of backoff, which in the
         // sequential thread sweep stalls every PR behind it.
-        if (payload.errors && payload.errors.length > 0) {
+        if (!tolerateErrors && payload.errors && payload.errors.length > 0) {
           throw new GitHubApiError({
             status: res.status,
             cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
@@ -499,6 +524,75 @@ export function githubGraphql<T = unknown>(
       catch: toGitHubError,
     }),
   );
+}
+
+export function githubGraphql<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, false);
+}
+
+/**
+ * {@link githubGraphql} for aliased queries: GitHub answers a field it can't
+ * resolve (repo renamed, access revoked) with `null` plus an `errors` entry,
+ * and that one field must not fail the rest. Callers treat a `null` alias as
+ * "unknown".
+ */
+export function githubGraphqlPartial<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true);
+}
+
+/** One page of a GraphQL connection, as selected out of a query's response. */
+export interface GraphqlConnection<N> {
+  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  readonly nodes: ReadonlyArray<N | null>;
+}
+
+/**
+ * Walk a cursor-paginated GraphQL connection. The query must declare a
+ * `$cursor: String` variable and pass it as the connection's `after`.
+ *
+ * `selectConnection` returning nothing means the parent node isn't there (repo
+ * or PR not visible to the token) and fails with `notFound()`, rather than
+ * passing for an empty list.
+ */
+export function paginateGraphql<T, N>(opts: {
+  readonly query: string;
+  readonly variables: Record<string, unknown>;
+  readonly selectConnection: (data: T) => GraphqlConnection<N> | null | undefined;
+  readonly maxPages: number;
+  readonly token: string;
+  readonly apiBase: string;
+  readonly notFound: () => GitHubError;
+}): Effect.Effect<N[], GitHubError> {
+  return Effect.gen(function* () {
+    const out: N[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < opts.maxPages; page++) {
+      const data: T = yield* githubGraphql<T>(
+        opts.query,
+        { ...opts.variables, cursor },
+        opts.token,
+        opts.apiBase,
+      );
+      const connection = opts.selectConnection(data);
+      if (!connection) return yield* Effect.fail(opts.notFound());
+      for (const node of connection.nodes) {
+        if (node !== null) out.push(node);
+      }
+      if (!connection.pageInfo.hasNextPage) break;
+      cursor = connection.pageInfo.endCursor;
+    }
+    return out;
+  });
 }
 
 export function parseLinkNext(linkHeader: string | null): string | null {

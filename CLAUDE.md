@@ -167,8 +167,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 
    **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
    computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
-   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence`. These are
-   judgments over a closed set, not prose. **All prose, citations, blocks, issues, steps, and
+   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence`,
+   `hunk_scan_rows.signals` (the first pass, below), and the `walkthrough_leads` selection
+   (which flagged hunks a run's agent is handed, recorded once at job start; its verdict
+   columns are written only by `resolve_lead`). These are judgments over a
+   closed set, not prose. **All prose, citations, blocks, issues, steps, and
    sentiment remain MCP-only.** Growing this list means editing this rule — it is not a
    general licence for Elysia to write content.
 
@@ -181,6 +184,24 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    Replays are no-ops.
 4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in
    order. Schema enforces it; tool surface enforces it; orchestrator enforces it.
+   Before Phase A, the agent gets the **first pass**: one Jev call per substantive hunk
+   (long hunks in windows, no cap) scores nine smells into `hunk_scan_rows`, and the flagged
+   hunks reach the agent as prompt leads to verify — never as findings, and never through a
+   tool. The leads a run is handed (capped, with a few slots reserved per smell) are recorded
+   in `walkthrough_leads` under ids `L1…Ln` before the prompt goes out, so a resume sees the
+   same set; the agent answers each with `resolve_lead` — `confirmed` with the issue it raised,
+   or `rejected` with a one-line reason. The scan belongs to the PR head, not the walkthrough: `HunkScanService`
+   (`services/HunkScan.ts`) starts it when the review page loads the diff, and a walkthrough
+   job for the same head joins that run or reads its result — waiting at most
+   `HUNK_SCAN_JOIN_BUDGET_MS`, then starting with the leads answered so far (one run per PR,
+   at most two PRs scanning at once; the scan lives in a daemon fiber, so a walkthrough Stop
+   doesn't cut it short, and a newer head interrupts it). Its lifecycle is
+   `hunk_scans.status`, keyed on `(pr_id, head_sha)`: `running` → `complete` | `partial` (a
+   circuit breaker stopped it after Jev stopped answering) | `failed` (nothing answered; rows
+   deleted, as if it never ran). A walkthrough never reruns a finished scan; reopening the
+   review page retries a `failed` or `partial` one. A scan whose rows no longer match the
+   diff it's handed (it was seeded from a stale diff) is re-seeded, keeping the answers that
+   still match. A scan cut off while `running` resumes from the journal on the next ask.
    - **Phase A — Overview.** One atomic write: `set_overview(summary)`.
      `last_completed_phase` becomes `'A'`. The risk tier is **not** the agent's to set — it
      is written by the orchestrator at job start (invariant 2's carve-out) and handed to the
@@ -271,7 +292,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     set by `WalkthroughJobs`.
 12. **`complete_walkthrough` is a validation gate.** Asserts `last_completed_phase = 'D'`
     AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step. Only then does
-    the orchestrator transition `status` to `complete`.
+    the orchestrator transition `status` to `complete`. It also refuses while a first-pass
+    lead has no verdict, but that check is the tool's alone: the orchestrator completes a run
+    with unresolved leads, so a skipped hint never costs the review.
 13. **Agent-path parity.** Both agent paths (Claude Agent SDK, opencode) must exhibit
     byte-for-byte identical externally-observable behavior during a review. Divergence in
     the model's reasoning style is allowed; divergence in events, lifecycle, phase

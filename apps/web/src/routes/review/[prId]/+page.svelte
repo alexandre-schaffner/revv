@@ -9,6 +9,7 @@ import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
 import {
@@ -17,6 +18,7 @@ import {
   getActiveTab,
   getFilesError,
   getIsLoadingFiles,
+  getLoadedHeadSha,
   getPrScrollPosition,
   getReviewFiles,
   getReviewMode,
@@ -29,6 +31,7 @@ import {
   setReviewFiles,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
 import {
   deactivate as deactivateWalkthrough,
@@ -73,6 +76,20 @@ $effect(() => {
   if (!prId || !headSha || generatedRiskLevel !== null) return;
   if (sizing !== null) return;
   void fetchWalkthroughSizing(prId, headSha);
+});
+
+// The first pass, for the head the diff on screen was loaded against. Asked
+// once that diff has loaded, which is also when the server's diff cache is
+// warm; it runs on its own, so the Diff tab has it before any walkthrough.
+// Untracked: the store's rows change on every `hunk-scan:hunk`, and reading
+// them here would re-ask the server for each one.
+const loadedHeadSha = $derived(getLoadedHeadSha(page.params.prId ?? ""));
+const jevEnabled = $derived(getSettings()?.jev.enabled ?? false);
+$effect(() => {
+  const prId = page.params.prId;
+  const headSha = loadedHeadSha;
+  if (!prId || !headSha || !jevEnabled) return;
+  untrack(() => void ensureHunkScan(prId, headSha));
 });
 
 const walkthroughRiskLevel = $derived(

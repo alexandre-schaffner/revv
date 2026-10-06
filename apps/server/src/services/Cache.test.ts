@@ -48,6 +48,55 @@ describe("CacheService.getOrFetch", () => {
     }
   });
 
+  // Failures aren't cached, in memory either: the next caller fetches again.
+  it("lets the next caller retry after a failed fetch", async () => {
+    let calls = 0;
+    const fetcher = () =>
+      Effect.suspend(() =>
+        ++calls === 1 ? Effect.fail(new FetchFailed({ reason: "blip" })) : Effect.succeed("ok"),
+      );
+    const result = await run(
+      Effect.gen(function* () {
+        const cache = yield* CacheService;
+        const first = yield* Effect.either(
+          cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
+        );
+        const second = yield* cache.getOrFetch("ns", "k", fetcher, { immutable: true });
+        return { first: first._tag, second };
+      }),
+    );
+    expect(result).toEqual({ first: "Left", second: "ok" });
+    expect(calls).toBe(2);
+  });
+
+  // The fetch runs detached, so interrupting the caller that started it
+  // doesn't stop it; a later caller must join it, not send a second one.
+  it("keeps an interrupted owner's fetch joinable", async () => {
+    let calls = 0;
+    const value = await run(
+      Effect.gen(function* () {
+        const cache = yield* CacheService;
+        const release = yield* Deferred.make<void>();
+        const fetcher = () =>
+          Effect.sync(() => calls++).pipe(
+            Effect.zipRight(Deferred.await(release)),
+            Effect.as("value"),
+          );
+        const owner = yield* Effect.fork(cache.getOrFetch("ns", "k", fetcher, { immutable: true }));
+        yield* Effect.yieldNow();
+        yield* Fiber.interrupt(owner);
+        const joiner = yield* Effect.fork(
+          cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
+        );
+        yield* Effect.yieldNow();
+        yield* Deferred.succeed(release, undefined);
+        return yield* Fiber.join(joiner);
+      }),
+    );
+    expect(value).toBe("value");
+    expect(calls).toBe(1);
+  });
+
   it("shares a successful fetch with a deduplicated caller", async () => {
     let calls = 0;
     const [a, b] = await run(

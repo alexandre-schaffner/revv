@@ -40,8 +40,6 @@ import {
 import { AgentUnavailableError } from "./chat-agent-errors";
 import type { RawChatStreamFrame } from "./chat-types";
 
-export { AgentUnavailableError } from "./chat-agent-errors";
-
 export interface AcpChatDeps {
   /**
    * Mint a bearer token bound to the current PR/user/actor/interaction mode for

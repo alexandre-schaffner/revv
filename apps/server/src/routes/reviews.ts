@@ -14,6 +14,7 @@ import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
+import { ensureHunkScanHandler } from "./reviews/handlers/hunk-scan";
 import {
   coerceWalkthroughMode,
   getCachedWalkthroughHandler,
@@ -283,6 +284,16 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   .get("/:id/walkthrough/sizing", async (ctx) => {
     try {
       return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // The first pass for the PR's current head, started on first ask. Owned by
+  // the PR head, not a walkthrough, so the Diff tab has it before Generate.
+  .post("/:id/hunk-scan", async (ctx) => {
+    try {
+      return await ensureHunkScanHandler(ctx.params.id, ctx.session.user.id);
     } catch (e) {
       return handleAppError(e, ctx);
     }

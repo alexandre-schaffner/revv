@@ -25,6 +25,7 @@ import type {
   RiskLevel,
   WalkthroughBlock,
   WalkthroughIssue,
+  WalkthroughLead,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
   WalkthroughPipelinePhase,
@@ -95,6 +96,12 @@ export interface WalkthroughEntry {
   timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
   ratings: WalkthroughRating[];
+  /**
+   * The first-pass leads this walkthrough's agent was handed, with its
+   * verdicts. Null when nothing recorded them (an older or imported row):
+   * the UI then infers outcomes from where the issues sit.
+   */
+  leads: WalkthroughLead[] | null;
   phase: WalkthroughLifecyclePhase;
   phaseMessage: string;
   streamStartedAt: number | null;
@@ -185,6 +192,7 @@ export function freshEntry(): WalkthroughEntry {
     timeline: [],
     issues: [],
     ratings: [],
+    leads: null,
     phase: "connecting",
     phaseMessage: "Connecting...",
     streamStartedAt: Date.now(),
@@ -337,6 +345,9 @@ export function getIssuesForFile(filePath: string): WalkthroughIssue[] {
 export function getRatings(): WalkthroughRating[] {
   return _active?.ratings ?? [];
 }
+export function getLeads(): WalkthroughLead[] | null {
+  return _active?.leads ?? null;
+}
 export function getPhase(): WalkthroughLifecyclePhase {
   return _active?.phase ?? "connecting";
 }
@@ -430,6 +441,17 @@ const _uiState: WalkthroughUiState = $derived.by((): WalkthroughUiState => {
 
 export function getWalkthroughUiState(): WalkthroughUiState {
   return _uiState;
+}
+
+/**
+ * A review of the loaded head is on screen, past its empty start: its issues
+ * and lead verdicts can say what became of a first-pass lead.
+ */
+export function getReviewsLoadedHead(): boolean {
+  const { kind } = _uiState;
+  return (
+    kind === "streaming" || kind === "complete" || kind === "resumable" || kind === "error-partial"
+  );
 }
 
 // ── Pending action tracker ──────────────────────────────────────────────────
@@ -673,6 +695,17 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           }
           break;
         }
+        case "leads":
+          entry.leads = event.data.leads;
+          break;
+        case "lead": {
+          const lead = event.data;
+          const leads = entry.leads ?? [];
+          entry.leads = leads.some((l) => l.id === lead.id)
+            ? leads.map((l) => (l.id === lead.id ? lead : l))
+            : [...leads, lead];
+          break;
+        }
         case "rating": {
           const idx = entry.ratings.findIndex((r) => r.axis === event.data.axis);
           if (idx >= 0) {
@@ -738,6 +771,9 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         //    streaming/completion/error/superseded state without touching
         //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
+          // Another walkthrough's verdicts don't describe this one; its own
+          // selection arrives as a `leads` event once the job records it.
+          if (entry.walkthroughId !== event.data.walkthroughId) entry.leads = null;
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
           // Present only when the orchestrator assigned the tier at job start.
@@ -1118,6 +1154,7 @@ async function doHydrateFromCache(
       blocks: WalkthroughBlock[];
       issues: WalkthroughIssue[];
       ratings: WalkthroughRating[];
+      leads?: WalkthroughLead[] | null;
       tokenUsage: unknown;
       reviewSessionId: string;
       generatedBy?: {
@@ -1212,6 +1249,19 @@ async function doHydrateFromCache(
     for (const r of wt.ratings) ratingMap.set(r.axis, r);
     for (const r of entry.ratings) ratingMap.set(r.axis, r);
     entry.ratings = Array.from(ratingMap.values());
+
+    // A verdict the SSE delivered during the fetch is newer than the snapshot's,
+    // but only for the same walkthrough: lead ids (`L1`…) repeat across runs.
+    if (wt.leads != null) {
+      const leadMap = new Map<string, WalkthroughLead>();
+      for (const l of wt.leads) leadMap.set(l.id, l);
+      if (entry.walkthroughId === wt.id) {
+        for (const l of entry.leads ?? []) leadMap.set(l.id, l);
+      }
+      entry.leads = Array.from(leadMap.values());
+    } else if (entry.walkthroughId !== wt.id) {
+      entry.leads = null;
+    }
 
     entry.walkthroughId = wt.id;
     entry.doneReceived = !isGenerating && !isError;
