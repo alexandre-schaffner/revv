@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.30.0](https://github.com/alexandre-schaffner/revv/compare/v0.29.0...v0.30.0) (2026-10-09)
+
+
+### Features
+
+* **server:** let external coding agents request and await a walkthrough ([#246](https://github.com/alexandre-schaffner/revv/issues/246)) ([af4bd2b](https://github.com/alexandre-schaffner/revv/commit/af4bd2b550c3165f595c0f32f2c171420aba7115))
+* user-picked walkthrough perspective + walkthrough history in the commits menu ([#245](https://github.com/alexandre-schaffner/revv/issues/245)) ([b4d7861](https://github.com/alexandre-schaffner/revv/commit/b4d7861a8755cd9bd1a077c8718c6e5d839b452b))
+
 ## [0.29.0](https://github.com/alexandre-schaffner/revv/compare/v0.28.0...v0.29.0) (2026-10-06)
 
 
