@@ -580,7 +580,12 @@ export type WalkthroughLifecyclePhase =
  * plus `cache-import` for the snapshot-replay fast path. Treat as an open
  * string union; new variants don't break existing clients.
  */
-export type WalkthroughStartTrigger = "user" | "resume" | "review_requested" | "cache-import";
+export type WalkthroughStartTrigger =
+  | "user"
+  | "external_agent"
+  | "resume"
+  | "review_requested"
+  | "cache-import";
 
 export type WalkthroughStreamEvent =
   | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }

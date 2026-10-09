@@ -16,7 +16,7 @@
     },
     "apps/server": {
       "name": "@revv/server",
-      "version": "0.27.0",
+      "version": "0.29.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "^1.5.1",
         "@coldtea/pr-lens-schema": "^0.6.0",
@@ -52,7 +52,7 @@
     },
     "apps/web": {
       "name": "@revv/web",
-      "version": "0.27.0",
+      "version": "0.29.0",
       "dependencies": {
         "@coldtea/pr-lens-renderer": "^0.3.1",
         "@coldtea/pr-lens-schema": "^0.6.0",
@@ -100,7 +100,7 @@
     },
     "packages/shared": {
       "name": "@revv/shared",
-      "version": "0.27.0",
+      "version": "0.29.0",
       "devDependencies": {
         "typescript": "^6.0.3",
       },

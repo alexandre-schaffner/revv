@@ -35,7 +35,7 @@ import { ExternalIntegrationError } from "../../domain/errors";
 const MANAGED_MARKER = ".revv-managed";
 const MANAGED_COMMENT = "Managed by Revv.";
 const GUIDE_DESCRIPTION =
-  "Use when implementing or responding to review feedback from Revv, including walkthrough issues and reviewer comment threads.";
+  "Use when implementing or responding to review feedback from Revv, including walkthrough issues and reviewer comment threads, or when asking Revv to re-review pushed changes.";
 
 export function externalIntegrationError(
   code: ExternalIntegrationError["code"],

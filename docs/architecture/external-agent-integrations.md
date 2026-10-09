@@ -21,7 +21,12 @@ mechanics differ, because each agent reads a different config file.
 4. The agent calls `get_review_context`, edits and verifies the checkout, and
    may then record an issue resolution, update supported walkthrough content,
    reply to a review thread, or change a thread's status.
-5. Revv commits each mutation to SQLite before broadcasting it. GitHub thread
+5. After pushing, the agent may ask Revv to review the new head
+   (`request_walkthrough`) and poll it to completion (`wait_for_walkthrough`),
+   then read the new findings with `get_review_context`. Repeating 4–5 is the
+   adversarial review loop: one agent fixes, Revv's own walkthrough agent
+   reviews.
+6. Revv commits each mutation to SQLite before broadcasting it. GitHub thread
    pushes happen after the local commit and are retryable.
 
 ## Per-provider install targets
@@ -64,6 +69,7 @@ type ExternalAgentProvider = "claude-code" | "codex" | "opencode" | "cursor"
 type ExternalAgentScope =
   | "context:read"
   | "walkthrough:edit"
+  | "walkthrough:generate"
   | "issues:resolve"
   | "comments:write"
 
@@ -100,6 +106,11 @@ interface ExternalIntegrationsService {
   ): Effect<ExternalResolvedContext, IntegrationError>
 }
 ```
+
+Credentials are always issued with every scope. Migration 0430 therefore
+granted `walkthrough:generate` to credentials issued before it existed, so
+agents installed earlier can start reviews, which spend the user's AI budget,
+without reconnecting.
 
 When a new head supersedes a walkthrough, a resolved issue keeps its local
 resolution metadata only if severity, title, description, file path, and line
@@ -151,6 +162,10 @@ regardless of which provider issued it.
   external MCP tool bundle and its idempotent issue/comment handlers.
 - `apps/server/src/routes/mcp/external-agent.ts` binds authenticated project
   context to the shared tool gateway at `POST /mcp/external`.
+- `apps/server/src/services/walkthrough-request.ts` turns a
+  `request_walkthrough` call into a `WalkthroughJobs.startJob` pinned to the
+  pushed head (`expectedHeadSha`), behind the stopped-run and run-budget
+  guards below.
 - `apps/server/src/routes/integrations.ts` exposes signed-in status, connect,
   and disconnect operations to the desktop UI.
 - `walkthrough_issues` stores local resolution metadata; `external_integrations`
@@ -173,6 +188,25 @@ regardless of which provider issued it.
 - External writes target the latest completed walkthrough and validate
   `expected_head_sha` against its reviewed head, not the live PR head. An
   agent can therefore push its fix before recording the resolution.
+- `request_walkthrough` names a commit, never a walkthrough row or a status.
+  Generation goes through `WalkthroughJobs`, which alone owns lifecycle
+  writes. The call is idempotent per head: a completed review of that head is
+  returned, a run in progress is joined, and nothing starts unless GitHub
+  already serves that head. `startJob` checks the head under its per-PR lock,
+  after its own GitHub fetch, and only then retires other heads' reviews, so a
+  push racing the call can't make it review a head the agent didn't name. The
+  review lands in the mode the PR's review page reads (`author` on the user's
+  own PR). A walkthrough agent that sees this tool through the user's global
+  MCP config can therefore only rejoin its own run.
+- The caller is a loop, so the server bounds it rather than the guide alone.
+  A run the user stopped in Revv is never restarted by `request_walkthrough`.
+  A head gets at most three runs and a PR at most six an hour; both count
+  every run in the journal, whoever started it. Runs it starts carry the
+  `external_agent` trigger, with the same do-over semantics as `user`.
+- `wait_for_walkthrough` is a bounded DB long-poll (at most 50 s, under the
+  60 s tool-call timeout some clients default to and the bridge's 120 s
+  request budget; `check:external-agents` holds the latter); callers loop on
+  it rather than holding one request open for a whole generation.
 - Every write is attributed to the calling provider: `resolvedBy`,
   `walkthroughs.lastEditedBy`, and the reply author name all carry it.
 - The stdio bridge is stateless. SQLite is authoritative for connection,

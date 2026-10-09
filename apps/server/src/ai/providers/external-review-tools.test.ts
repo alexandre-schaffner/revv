@@ -6,6 +6,7 @@ import {
   type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
+import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,
@@ -83,6 +84,12 @@ function context(
   db: Db,
   provider: ExternalAgentProvider = "claude-code",
   prHeadSha: string = HEAD_SHA,
+  requestOutcome: () => Promise<WalkthroughRequestOutcome> = async () => ({
+    kind: "started",
+    walkthroughId: "walkthrough-2",
+    headSha: HEAD_SHA,
+    mode: "reviewer",
+  }),
 ) {
   const walkthroughEvents: WalkthroughStreamEvent[] = [];
   const threadEvents: ThreadEventMessage[] = [];
@@ -105,6 +112,8 @@ function context(
     pushThreadStatus: async (threadId) => {
       pushedStatuses.push(threadId);
     },
+    requestWalkthrough: requestOutcome,
+    walkthroughPollMs: 5,
   } satisfies ExternalReviewToolContext;
   return { value, walkthroughEvents, threadEvents, pushedReplies, pushedStatuses };
 }
@@ -117,8 +126,8 @@ function tool(name: string) {
 
 describe("external review tools", () => {
   it("declares exactly one authorization scope on every exposed tool", () => {
-    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(11);
-    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(11);
+    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(13);
+    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(13);
     for (const spec of EXTERNAL_REVIEW_TOOL_SPECS) {
       expect(scopeForExternalTool(spec.name)).toBe(spec.scope);
     }
@@ -282,5 +291,153 @@ describe("external review tools", () => {
     expect(thread.status).toBe("resolved");
     expect(thread.resolved_at).toBeString();
     expect(ctx.pushedStatuses).toHaveLength(0);
+  });
+
+  it("reports the walkthrough a review request started", async () => {
+    const db = seededDb();
+    const ctx = context(db);
+
+    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]?.text ?? "")).toMatchObject({
+      outcome: "started",
+      walkthroughId: "walkthrough-2",
+      headSha: HEAD_SHA,
+    });
+  });
+
+  it("asks the agent to push when GitHub serves another head", async () => {
+    const db = seededDb();
+    const githubHeadSha = "c".repeat(40);
+    const ctx = context(db, "claude-code", HEAD_SHA, async () => ({
+      kind: "head_mismatch",
+      githubHeadSha,
+    }));
+
+    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain(githubHeadSha);
+    expect(result.content[0]?.text).toContain("Push");
+  });
+
+  it("tells the agent not to restart a run the user stopped", async () => {
+    const db = seededDb();
+    const ctx = context(db, "claude-code", HEAD_SHA, async () => ({
+      kind: "stopped_by_user",
+      walkthroughId: "walkthrough-1",
+    }));
+
+    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("The user stopped");
+    expect(result.content[0]?.text).toContain("Don't retry");
+  });
+
+  it("tells the agent a run budget is spent", async () => {
+    const db = seededDb();
+    const ctx = context(db, "claude-code", HEAD_SHA, async () => ({
+      kind: "budget_exhausted",
+      scope: "head",
+      runs: 3,
+    }));
+
+    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("already run 3 reviews");
+  });
+
+  it("surfaces an orchestrator failure as a tool error", async () => {
+    const db = seededDb();
+    const ctx = context(db, "claude-code", HEAD_SHA, async () => {
+      throw new Error("Revv is still cloning this repository. Retry in a minute.");
+    });
+
+    const result = await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toBe(
+      "Revv could not start the walkthrough: Revv is still cloning this repository. Retry in a minute.",
+    );
+  });
+
+  it("accepts an uppercase head SHA and passes it on lowercased", async () => {
+    const db = seededDb();
+    const requested: string[] = [];
+    const ctx = context(db);
+    const result = await tool("request_walkthrough").handler(
+      {
+        ...ctx.value,
+        requestWalkthrough: async ({ headSha }) => {
+          requested.push(headSha);
+          return { kind: "started", walkthroughId: "walkthrough-2", headSha, mode: "reviewer" };
+        },
+      },
+      { head_sha: HEAD_SHA.toUpperCase() },
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(requested).toEqual([HEAD_SHA]);
+  });
+
+  it("summarizes a completed walkthrough's findings", async () => {
+    const db = seededDb();
+    const ctx = context(db);
+
+    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+      walkthrough_id: "walkthrough-1",
+      timeout_seconds: "0",
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]?.text ?? "")).toMatchObject({
+      status: "complete",
+      reviewedHeadSha: HEAD_SHA,
+      issues: { total: 1, open: 1, bySeverity: { warning: 1 } },
+    });
+  });
+
+  it("waits for a generating walkthrough to finish", async () => {
+    const db = seededDb();
+    db.$client.run("UPDATE walkthroughs SET status = 'generating' WHERE id = ?", ["walkthrough-1"]);
+    const ctx = context(db);
+    setTimeout(() => {
+      db.$client.run("UPDATE walkthroughs SET status = 'complete' WHERE id = ?", ["walkthrough-1"]);
+    }, 50);
+
+    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+      walkthrough_id: "walkthrough-1",
+      timeout_seconds: 10,
+    });
+
+    expect(JSON.parse(result.content[0]?.text ?? "")).toMatchObject({ status: "complete" });
+  });
+
+  it("returns a still-generating walkthrough once the wait elapses", async () => {
+    const db = seededDb();
+    db.$client.run("UPDATE walkthroughs SET status = 'generating' WHERE id = ?", ["walkthrough-1"]);
+    const ctx = context(db);
+
+    const result = await tool("wait_for_walkthrough").handler(ctx.value, {
+      walkthrough_id: "walkthrough-1",
+      timeout_seconds: 0,
+    });
+
+    expect(JSON.parse(result.content[0]?.text ?? "")).toMatchObject({ status: "generating" });
+  });
+
+  it("refuses a walkthrough from another pull request", async () => {
+    const db = seededDb();
+    const ctx = context(db);
+
+    const result = await tool("wait_for_walkthrough").handler(
+      { ...ctx.value, prId: "pr-other" },
+      { walkthrough_id: "walkthrough-1", timeout_seconds: 0 },
+    );
+
+    expect(result.isError).toBe(true);
   });
 });

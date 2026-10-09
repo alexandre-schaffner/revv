@@ -206,6 +206,29 @@ export function freshEntry(): WalkthroughEntry {
   };
 }
 
+/** Drop everything a walkthrough authored, keeping the entry's lifecycle fields. */
+function clearWalkthroughContent(entry: WalkthroughEntry): void {
+  const fresh = freshEntry();
+  entry.semanticSteps = fresh.semanticSteps;
+  entry.blocks = fresh.blocks;
+  entry.summary = fresh.summary;
+  entry.riskLevel = fresh.riskLevel;
+  entry.sentiment = fresh.sentiment;
+  entry.lastCompletedPhase = fresh.lastCompletedPhase;
+  entry.explorationSteps = fresh.explorationSteps;
+  entry.explorationResults = fresh.explorationResults;
+  entry.explorationInputs = fresh.explorationInputs;
+  entry.timeline = fresh.timeline;
+  entry.issues = fresh.issues;
+  entry.ratings = fresh.ratings;
+  entry.tokenUsage = fresh.tokenUsage;
+  entry.modelUsed = fresh.modelUsed;
+  entry.source = fresh.source;
+  entry.generatedBy = fresh.generatedBy;
+  entry.providerConfig = fresh.providerConfig;
+  entry.streamStartedAt = null;
+}
+
 // ── Reactive state ──────────────────────────────────────────────────────────
 
 export const store = $state({
@@ -771,9 +794,19 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         //    streaming/completion/error/superseded state without touching
         //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
-          // Another walkthrough's verdicts don't describe this one; its own
-          // selection arrives as a `leads` event once the job records it.
-          if (entry.walkthroughId !== event.data.walkthroughId) entry.leads = null;
+          if (entry.walkthroughId !== event.data.walkthroughId) {
+            // Another walkthrough's verdicts don't describe this one; its own
+            // selection arrives as a `leads` event once the job records it.
+            entry.leads = null;
+            // A run this page didn't start — "Review new commits" clears the
+            // entry itself, an external agent's `request_walkthrough` doesn't.
+            // Drop the previous review rather than merging the new run into it.
+            if (entry.walkthroughId !== null) {
+              clearWalkthroughContent(entry);
+              newBlocks = null;
+              clearAnimationTrackers(prId);
+            }
+          }
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
           // Present only when the orchestrator assigned the tier at job start.

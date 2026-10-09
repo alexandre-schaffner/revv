@@ -275,7 +275,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    Cursor) are additional scoped callers of the same chat-edit handlers. Their
    `record_issue_resolution` tool may update only the local resolution
    metadata of an unsubmitted issue; GitHub-submitted issues remain immutable
-   and must be addressed through their comment thread. All four share one
+   and must be addressed through their comment thread. Their
+   `request_walkthrough` tool asks the orchestrator to generate a review of a
+   pushed head; it goes through `WalkthroughJobs.startJob` (pinned to that
+   head, `trigger: 'external_agent'`) and never writes lifecycle fields
+   itself. All four share one
    credential model, one stdio bridge, and one MCP route — see
    `docs/architecture/external-agent-integrations.md`.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE

@@ -1,12 +1,23 @@
 import { createHash } from "node:crypto";
-import type { ExternalAgentProvider, ThreadMessage, ThreadStatus } from "@revv/shared";
+import type {
+  ExternalAgentProvider,
+  ThreadMessage,
+  ThreadStatus,
+  WalkthroughGenerationMode,
+  WalkthroughStatus,
+} from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { reviewSessions } from "../../db/schema/review-sessions";
 import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
-import type { ExternalAgentScope } from "../../services/ExternalIntegrations";
+import { walkthroughs } from "../../db/schema/walkthroughs";
+import { type ExternalAgentScope, SHA_PATTERN } from "../../services/ExternalIntegrations";
+import type {
+  WalkthroughRequestOutcome,
+  WalkthroughRequestRefusal,
+} from "../../services/walkthrough-request";
 import {
   assertStillComplete,
   decodeIssue,
@@ -28,6 +39,13 @@ export interface ExternalReviewToolContext extends ChatToolContext {
   readonly prHeadSha: string | null;
   readonly pushReply: (messageId: string) => Promise<void>;
   readonly pushThreadStatus: (threadId: string) => Promise<void>;
+  /** Start (or join) generation through the orchestrator; see `walkthrough-request.ts`. */
+  readonly requestWalkthrough: (input: {
+    readonly headSha: string;
+    readonly generationMode: WalkthroughGenerationMode;
+  }) => Promise<WalkthroughRequestOutcome>;
+  /** How often `wait_for_walkthrough` re-reads the row; tests shorten it. */
+  readonly walkthroughPollMs?: number;
 }
 
 export type ExternalReviewToolSpec = ToolSpec<ExternalReviewToolContext, ChatToolResult> & {
@@ -48,6 +66,9 @@ function sharedExternalSpec(name: string, scope: ExternalAgentScope): ExternalRe
   };
 }
 
+/** Normalized to lowercase so it compares equal to the SHAs Revv stores. */
+const shaSchema = z.string().regex(SHA_PATTERN).toLowerCase();
+
 function canonicalEvidence(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
 }
@@ -55,14 +76,11 @@ function canonicalEvidence(values: readonly string[]): string[] {
 const recordIssueResolutionSchema = z
   .object({
     issue_id: z.string().min(1),
-    expected_head_sha: z.string().regex(/^[0-9a-f]{40}$/i),
+    expected_head_sha: shaSchema,
     status: z.enum(["open", "addressed", "wont_fix"]),
     explanation: z.string().trim().min(1).nullable(),
     evidence: z.array(z.string().trim().min(1)).max(20),
-    resolving_commit_sha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/i)
-      .nullable(),
+    resolving_commit_sha: shaSchema.nullable(),
   })
   .superRefine((value, ctx) => {
     if (value.status !== "open" && value.explanation === null) {
@@ -200,7 +218,7 @@ function replyId(integrationId: string, threadId: string, idempotencyKey: string
 
 const replyToCommentSchema = z.object({
   thread_id: z.string().min(1),
-  expected_head_sha: z.string().regex(/^[0-9a-f]{40}$/i),
+  expected_head_sha: shaSchema,
   body: z.string().trim().min(1).max(65_536),
   idempotency_key: z.string().trim().min(8).max(200),
   publish_to_github: z.boolean(),
@@ -305,7 +323,7 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
 
 const updateCommentStatusSchema = z.object({
   thread_id: z.string().min(1),
-  expected_head_sha: z.string().regex(/^[0-9a-f]{40}$/i),
+  expected_head_sha: shaSchema,
   status: z.enum(["open", "pending_coder", "pending_reviewer", "resolved", "wont_fix"]),
   publish_to_github: z.boolean(),
 });
@@ -362,6 +380,156 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
   },
 };
 
+const requestWalkthroughSchema = z.object({
+  head_sha: shaSchema,
+  generation_mode: z.enum(["incremental", "full"]).default("incremental"),
+});
+
+function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: string): string {
+  switch (outcome.kind) {
+    case "head_mismatch":
+      return `GitHub reports the PR head as ${outcome.githubHeadSha}, not ${requestedHeadSha}. Push your commits, then retry; GitHub can take a few seconds to serve a fresh push.`;
+    case "stopped_by_user":
+      return `The user stopped Revv's review of ${requestedHeadSha} (walkthrough ${outcome.walkthroughId}). Don't retry; tell the user, who can restart it from Revv.`;
+    case "budget_exhausted":
+      return outcome.scope === "head"
+        ? `Revv has already run ${outcome.runs} reviews of ${requestedHeadSha} without one completing. Don't retry; report this to the user.`
+        : `Revv has started ${outcome.runs} reviews of this PR in the last hour. Don't retry now; report this to the user.`;
+  }
+}
+
+const requestWalkthroughSpec: ExternalReviewToolSpec = {
+  name: "request_walkthrough",
+  description:
+    "Ask Revv to review the PR at head_sha: the commit you just pushed (`git rev-parse HEAD`). Push first — Revv reviews what GitHub serves. Returns a walkthroughId at once; generation takes minutes, so pass it to wait_for_walkthrough. Idempotent per head: a finished review of that head is returned instead of a new run, and a run in progress is joined. Refuses to restart a run the user stopped, and refuses once a head or PR has used its run budget. generation_mode 'incremental' (default) reviews the commits since the last review and re-checks its findings; 'full' re-reviews the whole PR.",
+  inputSchema: requestWalkthroughSchema,
+  scope: "walkthrough:generate",
+  handler: async (ctx, input) => {
+    const parsed = requestWalkthroughSchema.parse(input);
+    let outcome: WalkthroughRequestOutcome;
+    try {
+      outcome = await ctx.requestWalkthrough({
+        headSha: parsed.head_sha,
+        generationMode: parsed.generation_mode,
+      });
+    } catch (error) {
+      return fail(
+        `Revv could not start the walkthrough: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (
+      outcome.kind === "head_mismatch" ||
+      outcome.kind === "stopped_by_user" ||
+      outcome.kind === "budget_exhausted"
+    ) {
+      return fail(describeRefusal(outcome, parsed.head_sha));
+    }
+    return ok(
+      JSON.stringify(
+        {
+          outcome: outcome.kind,
+          walkthroughId: outcome.walkthroughId,
+          headSha: outcome.headSha,
+          mode: outcome.mode,
+          next:
+            outcome.kind === "already_complete"
+              ? "Call get_review_context to read this review."
+              : "Call wait_for_walkthrough with this walkthroughId until its status is no longer 'generating'.",
+        },
+        null,
+        2,
+      ),
+    );
+  },
+};
+
+/**
+ * Under the 60 s tool-call timeout some clients default to (Codex), and so
+ * under the bridge's 120 s request budget too — the bridge is single-lane, so
+ * a wait the client abandons still holds it.
+ */
+export const MAX_WAIT_SECONDS = 50;
+const DEFAULT_WAIT_POLL_MS = 2_000;
+
+const waitForWalkthroughSchema = z.object({
+  walkthrough_id: z.string().min(1),
+  timeout_seconds: z.coerce.number().int().min(0).max(MAX_WAIT_SECONDS).default(40),
+});
+
+const WAIT_NEXT_STEP: Record<WalkthroughStatus, string> = {
+  generating: "Still generating. Call wait_for_walkthrough again.",
+  complete: "Call get_review_context to read the findings.",
+  error:
+    "Generation failed, or the user stopped it in Revv. Retry with request_walkthrough at the same head_sha only if the error looks transient; Revv refuses to restart a run the user stopped.",
+  superseded:
+    "A newer head replaced this review. Call request_walkthrough for the head you want reviewed.",
+};
+
+function walkthroughForPr(ctx: ExternalReviewToolContext, walkthroughId: string) {
+  return ctx.db
+    .select()
+    .from(walkthroughs)
+    .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, ctx.prId)))
+    .get();
+}
+
+function summarizeIssues(ctx: ExternalReviewToolContext, walkthroughId: string) {
+  const issues = ctx.db
+    .select({
+      severity: walkthroughIssues.severity,
+      resolutionStatus: walkthroughIssues.resolutionStatus,
+    })
+    .from(walkthroughIssues)
+    .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
+    .all();
+  const bySeverity: Record<string, number> = {};
+  for (const issue of issues) {
+    bySeverity[issue.severity] = (bySeverity[issue.severity] ?? 0) + 1;
+  }
+  return {
+    total: issues.length,
+    open: issues.filter((issue) => issue.resolutionStatus === "open").length,
+    bySeverity,
+  };
+}
+
+const waitForWalkthroughSpec: ExternalReviewToolSpec = {
+  name: "wait_for_walkthrough",
+  description: `Wait up to timeout_seconds (default 40, max ${MAX_WAIT_SECONDS} — keep it under your client's tool-call timeout) for a walkthrough from request_walkthrough to leave 'generating', then report its status. Safe to call repeatedly. When complete, it summarizes the findings by severity; read them with get_review_context.`,
+  inputSchema: waitForWalkthroughSchema,
+  scope: "context:read",
+  handler: async (ctx, input) => {
+    const parsed = waitForWalkthroughSchema.parse(input);
+    const pollMs = ctx.walkthroughPollMs ?? DEFAULT_WAIT_POLL_MS;
+    const deadline = Date.now() + parsed.timeout_seconds * 1000;
+    let row = walkthroughForPr(ctx, parsed.walkthrough_id);
+    while (row?.status === "generating" && Date.now() < deadline) {
+      await Bun.sleep(Math.min(pollMs, deadline - Date.now()));
+      row = walkthroughForPr(ctx, parsed.walkthrough_id);
+    }
+    if (!row) return fail(`Walkthrough '${parsed.walkthrough_id}' is not part of this PR.`);
+
+    return ok(
+      JSON.stringify(
+        {
+          walkthroughId: row.id,
+          status: row.status,
+          lastCompletedPhase: row.lastCompletedPhase,
+          reviewedHeadSha: row.prHeadSha,
+          generationMode: row.generationMode,
+          ...(row.status === "error" ? { error: row.errorMessage } : {}),
+          ...(row.status === "complete"
+            ? { riskLevel: row.riskLevel, issues: summarizeIssues(ctx, row.id) }
+            : {}),
+          next: WAIT_NEXT_STEP[row.status],
+        },
+        null,
+        2,
+      ),
+    );
+  },
+};
+
 export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> = [
   sharedExternalSpec("get_review_context", "context:read"),
   sharedExternalSpec("get_walkthrough_for_edit", "context:read"),
@@ -374,6 +542,8 @@ export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> =
   recordIssueResolutionSpec,
   replyToCommentSpec,
   updateCommentStatusSpec,
+  requestWalkthroughSpec,
+  waitForWalkthroughSpec,
 ];
 
 export const EXTERNAL_REVIEW_TOOL_BUNDLE: ToolSpecBundle<

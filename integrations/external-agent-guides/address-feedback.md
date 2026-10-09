@@ -26,3 +26,23 @@
 Never mark feedback resolved merely because code was edited. Record the actual
 verification result, and leave the item open if verification failed or was not
 run.
+
+## Request another review
+
+To have Revv re-review your work (an adversarial review loop):
+
+1. Commit and push. Pass the pushed commit (`git rev-parse HEAD`) to
+   `request_walkthrough`. Keep the default `incremental` mode for a follow-up
+   round: it reviews the new commits and re-checks the earlier findings.
+   Use `full` only when the PR changed shape.
+2. Call `wait_for_walkthrough` with the returned `walkthroughId` until its
+   status leaves `generating`. A review takes several minutes; keep calling.
+3. On `complete`, call `get_review_context` and address the new findings as
+   above. On `error`, retry `request_walkthrough` with the same head only if
+   the error looks transient. Revv refuses to restart a run the user stopped,
+   and refuses once a head or PR has used its run budget; when it refuses,
+   stop and tell the user.
+4. Stop when no open `critical` or `warning` issue remains, or after three
+   rounds, whichever comes first, and report what is left. When you disagree
+   with a finding, record it as `wont_fix` with your reasoning instead of
+   requesting another round.
