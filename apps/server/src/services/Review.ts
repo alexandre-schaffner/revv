@@ -20,6 +20,7 @@ import { threadMessages } from "../db/schema/thread-messages";
 import { ReviewError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
 import type { DbService } from "./Db";
+import { resolveReviewModeForPr } from "./review-mode";
 
 // ── Row-to-domain converters ─────────────────────────────────────────────────
 
@@ -114,6 +115,17 @@ export class ReviewService extends Context.Tag("ReviewService")<
     readonly getOrCreateActiveSession: (
       prId: string,
       mode?: ReviewMode,
+    ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    /**
+     * The session the UI reads for this PR: keyed on the identity-derived
+     * mode (see `resolveReviewModeForPr`), never on a walkthrough's
+     * perspective. An author who generates a reviewer-perspective walkthrough
+     * still reads their PR through the author session, so its issues and
+     * threads must land there. An unresolved identity falls back to
+     * `reviewer`, the same answer the web gives before it knows the viewer.
+     */
+    readonly getOrCreateIdentitySession: (
+      prId: string,
     ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
     readonly getActiveSession: (
       prId: string,
@@ -247,46 +259,56 @@ export class ReviewService extends Context.Tag("ReviewService")<
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
+const getOrCreateActiveSession = (
+  prId: string,
+  mode: ReviewMode = "reviewer",
+): Effect.Effect<ReviewSession, ReviewError, DbService> =>
+  Effect.gen(function* () {
+    const existing = yield* tryDb("find active session", (db) =>
+      db
+        .select()
+        .from(reviewSessions)
+        .where(
+          and(
+            eq(reviewSessions.pullRequestId, prId),
+            eq(reviewSessions.mode, mode),
+            eq(reviewSessions.status, "active"),
+          ),
+        )
+        .get(),
+    );
+
+    if (existing) return rowToSession(existing);
+
+    const id = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+
+    yield* tryDb("create session", (db) =>
+      db
+        .insert(reviewSessions)
+        .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
+        .run(),
+    );
+
+    return {
+      id,
+      pullRequestId: prId,
+      mode,
+      startedAt,
+      completedAt: null,
+      status: "active" as const,
+    };
+  });
+
 export const ReviewServiceLive = Layer.succeed(ReviewService, {
   // ── Sessions ──────────────────────────────────────────────────────────────
 
-  getOrCreateActiveSession: (prId, mode = "reviewer") =>
-    Effect.gen(function* () {
-      const existing = yield* tryDb("find active session", (db) =>
-        db
-          .select()
-          .from(reviewSessions)
-          .where(
-            and(
-              eq(reviewSessions.pullRequestId, prId),
-              eq(reviewSessions.mode, mode),
-              eq(reviewSessions.status, "active"),
-            ),
-          )
-          .get(),
-      );
+  getOrCreateActiveSession,
 
-      if (existing) return rowToSession(existing);
-
-      const id = crypto.randomUUID();
-      const startedAt = new Date().toISOString();
-
-      yield* tryDb("create session", (db) =>
-        db
-          .insert(reviewSessions)
-          .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
-          .run(),
-      );
-
-      return {
-        id,
-        pullRequestId: prId,
-        mode,
-        startedAt,
-        completedAt: null,
-        status: "active" as const,
-      };
-    }),
+  getOrCreateIdentitySession: (prId) =>
+    resolveReviewModeForPr(prId).pipe(
+      Effect.flatMap(({ mode }) => getOrCreateActiveSession(prId, mode)),
+    ),
 
   getActiveSession: (prId, mode = "reviewer") =>
     Effect.gen(function* () {

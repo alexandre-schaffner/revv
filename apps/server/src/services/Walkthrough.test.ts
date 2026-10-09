@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { reviewRounds, walkthroughs } from "../db/schema";
 import { DbService } from "./Db";
@@ -71,20 +71,33 @@ describe("deriveRoundFocusTitle", () => {
   });
 });
 
-function seedWalkthroughRound(db: Db): void {
+/**
+ * Insert walkthrough rows for PR `pr-1` without seeding the PR / session rows
+ * they reference (foreign keys off). Each row overrides the defaults.
+ */
+function insertWalkthroughs(
+  db: Db,
+  ...rows: readonly (Partial<typeof walkthroughs.$inferInsert> & { id: string })[]
+): void {
   const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } }).session
     .client;
   sqlite.run("PRAGMA foreign_keys = OFF");
-  db.insert(walkthroughs)
-    .values({
-      id: "wt-1",
-      reviewSessionId: "session-1",
-      pullRequestId: "pr-1",
-      generatedAt: "2026-01-01T00:00:00Z",
-      modelUsed: "test-model",
-      prHeadSha: "head-1",
-    })
-    .run();
+  for (const row of rows) {
+    db.insert(walkthroughs)
+      .values({
+        reviewSessionId: "session-1",
+        pullRequestId: "pr-1",
+        generatedAt: "2026-01-01T00:00:00Z",
+        modelUsed: "test-model",
+        prHeadSha: "head-1",
+        ...row,
+      })
+      .run();
+  }
+}
+
+function seedWalkthroughRound(db: Db): void {
+  insertWalkthroughs(db, { id: "wt-1" });
   db.insert(reviewRounds)
     .values({
       id: "round-1",
@@ -134,24 +147,14 @@ describe("setStatus", () => {
 describe("walkthrough risk hydration", () => {
   it("returns an orchestrator-assigned risk before Phase A has written a summary", async () => {
     const db = createDb(":memory:");
-    const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } })
-      .session.client;
-    sqlite.run("PRAGMA foreign_keys = OFF");
-    db.insert(walkthroughs)
-      .values({
-        id: "wt-risk",
-        reviewSessionId: "session-1",
-        pullRequestId: "pr-1",
-        summary: "",
-        riskLevel: "high",
-        riskConfidence: 0.99,
-        status: "generating",
-        lastCompletedPhase: "none",
-        generatedAt: "2026-01-01T00:00:00Z",
-        modelUsed: "test-model",
-        prHeadSha: "head-1",
-      })
-      .run();
+    insertWalkthroughs(db, {
+      id: "wt-risk",
+      summary: "",
+      riskLevel: "high",
+      riskConfidence: 0.99,
+      status: "generating",
+      lastCompletedPhase: "none",
+    });
 
     const partial = await Effect.runPromise(
       Effect.gen(function* () {
@@ -175,40 +178,27 @@ describe("walkthrough risk hydration", () => {
 // the existing incremental row, and tried to INSERT a duplicate id.
 describe("resume incremental walkthrough", () => {
   function seedIncrementalGenerating(db: Db): void {
-    const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } })
-      .session.client;
-    sqlite.run("PRAGMA foreign_keys = OFF");
-    db.insert(walkthroughs)
-      .values({
-        id: "wt-inc",
-        reviewSessionId: "session-1",
-        pullRequestId: "pr-1",
-        generatedAt: "2026-01-01T00:00:00Z",
-        modelUsed: "test-model",
-        prHeadSha: "head-2",
-        status: "generating",
-        mode: "author",
-        generationMode: "incremental",
-        parentWalkthroughId: "wt-parent",
-        baseHeadSha: "head-1",
-      })
-      .run();
+    insertWalkthroughs(db, {
+      id: "wt-inc",
+      prHeadSha: "head-2",
+      status: "generating",
+      mode: "author",
+      generationMode: "incremental",
+      parentWalkthroughId: "wt-parent",
+      baseHeadSha: "head-1",
+    });
   }
 
   function seedFullGeneratingAtSameSha(db: Db): void {
-    db.insert(walkthroughs)
-      .values({
-        id: "wt-full",
-        reviewSessionId: "session-2",
-        pullRequestId: "pr-1",
-        generatedAt: "2026-01-01T00:01:00Z",
-        modelUsed: "test-model",
-        prHeadSha: "head-2",
-        status: "generating",
-        mode: "author",
-        generationMode: "full",
-      })
-      .run();
+    insertWalkthroughs(db, {
+      id: "wt-full",
+      reviewSessionId: "session-2",
+      generatedAt: "2026-01-01T00:01:00Z",
+      prHeadSha: "head-2",
+      status: "generating",
+      mode: "author",
+      generationMode: "full",
+    });
   }
 
   it("listGenerating surfaces generationMode so resume can preserve it", async () => {
@@ -306,23 +296,13 @@ describe("resume incremental walkthrough", () => {
 // new job, content and all. The handler now sweeps unconditionally.
 describe("regenerate after a stopped generation", () => {
   function seedStoppedDraft(db: Db): void {
-    const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } })
-      .session.client;
-    sqlite.run("PRAGMA foreign_keys = OFF");
-    db.insert(walkthroughs)
-      .values({
-        id: "wt-stopped",
-        reviewSessionId: "session-1",
-        pullRequestId: "pr-1",
-        generatedAt: "2026-01-01T00:00:00Z",
-        modelUsed: "test-model",
-        prHeadSha: "head-1",
-        status: "generating",
-        lastCompletedPhase: "B",
-        mode: "author",
-        generationMode: "full",
-      })
-      .run();
+    insertWalkthroughs(db, {
+      id: "wt-stopped",
+      status: "generating",
+      lastCompletedPhase: "B",
+      mode: "author",
+      generationMode: "full",
+    });
   }
 
   const freshRowParams = {
@@ -378,5 +358,85 @@ describe("regenerate after a stopped generation", () => {
 
     // `forceNew` does not help: createPartial returns any in-flight row first.
     expect(reusedId).toBe("wt-stopped");
+  });
+});
+
+const runWalkthrough = <A, E>(
+  db: Db,
+  f: (service: Context.Tag.Service<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* f(yield* WalkthroughService);
+    }).pipe(
+      Effect.provide(WalkthroughServiceLive),
+      Effect.provide(Layer.succeed(DbService, { db })),
+    ),
+  );
+
+describe("getLatestMode", () => {
+  const latestMode = (db: Db) => runWalkthrough(db, (s) => s.getLatestMode("pr-1"));
+
+  it("is null when the PR has no walkthrough", async () => {
+    expect(await latestMode(createDb(":memory:"))).toBeNull();
+  });
+
+  it("follows the newest row, whatever its perspective", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(
+      db,
+      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
+      { id: "b", mode: "reviewer", status: "generating", generatedAt: "2026-01-02T00:00:00Z" },
+    );
+    expect(await latestMode(db)).toBe("reviewer");
+  });
+
+  it("counts superseded rows, so a stale walkthrough keeps its perspective", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(
+      db,
+      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
+      { id: "b", mode: "reviewer", status: "superseded", generatedAt: "2026-01-02T00:00:00Z" },
+    );
+    expect(await latestMode(db)).toBe("reviewer");
+  });
+});
+
+// Only one perspective is active per PR, so a switch retires the other one's
+// walkthrough. Its report must stay readable from the history.
+describe("history across perspectives", () => {
+  function seedSwitch(db: Db): void {
+    insertWalkthroughs(
+      db,
+      {
+        id: "wt-author",
+        mode: "author",
+        status: "superseded",
+        generatedAt: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "wt-reviewer",
+        mode: "reviewer",
+        status: "complete",
+        generatedAt: "2026-01-02T00:00:00Z",
+      },
+    );
+  }
+
+  it("lists rounds from both perspectives, each labelled", async () => {
+    const db = createDb(":memory:");
+    seedSwitch(db);
+    const { rounds } = await runWalkthrough(db, (s) => s.listReviewRounds("pr-1", "head-1"));
+    expect(rounds.map((r) => [r.walkthroughId, r.mode])).toEqual([
+      ["wt-author", "author"],
+      ["wt-reviewer", "reviewer"],
+    ]);
+  });
+
+  it("opens a report in the other perspective", async () => {
+    const db = createDb(":memory:");
+    seedSwitch(db);
+    const report = await runWalkthrough(db, (s) => s.getReport("pr-1", "wt-author"));
+    expect(report?.walkthrough.mode).toBe("author");
   });
 });

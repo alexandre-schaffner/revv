@@ -47,7 +47,9 @@ export const PROSE_VOICE_CONTRACT =
   "No binary contrast ('not just X, it's Y'), colon reveal, faux-insight setup, editorialising " +
   "-ing clause, metadiscourse, or 'best practice suggests' without a `path:line` citation. Banned " +
   "words include leverage, utilize, robust, seamless, crucial, comprehensive, intricate. One name " +
-  "per thing. Direct verbs. `**bold**` only as a line-start label. At most one em-dash.";
+  "per thing. Direct verbs. `**bold**` only as a line-start label. At most one em-dash. Write for " +
+  "a reviewer who has not read the code: no labels you coined, introduce each thing in plain words " +
+  "on first mention, and give every claim its consequence.";
 
 /** `set_overview.summary` / `update_overview.summary`. */
 export const SUMMARY_CONTRACT =
@@ -55,10 +57,13 @@ export const SUMMARY_CONTRACT =
   "markdown and a single newline breaks the line, so write them as four lines. " +
   "Line 1 is the takeaway, unlabelled, one sentence, MAX 25 WORDS: what kind of attention this " +
   "PR needs (the headline risk, the one behavior that changes, or plainly that it is mechanical " +
-  "and safe). Never the PR title restated. Lines 2-4 are labelled, one sentence each, MAX 20 " +
+  "and safe). Never the PR title restated. Lines 2-4 are labelled, one sentence each, MAX 25 " +
   "WORDS each, in this order: `**Why** — ` the problem being solved; `**What changed** — ` the " +
-  "approach in terms of behavior; `**Watch** — ` where the reader should look hardest, or " +
-  "`nothing — mechanical change`. Hard caps: 90 words total, 2 backticked identifiers per line, " +
+  "approach in terms of behavior; `**Watch** — ` where the reader should look hardest and what " +
+  "could go wrong there, or `nothing — mechanical change`. The overview is read before any " +
+  "chapter, so it defines its own terms: no coined labels ('creator merges', 'the authority " +
+  "flag'), only identifiers, terms from the PR description, or plain descriptions. Hard caps: " +
+  "110 words total, 2 backticked identifiers per line, " +
   "one clause per sentence. Do NOT inventory files or count lines — the UI already lists every " +
   "changed file. If a line needs a semicolon or a second dash to fit, it is too long: cut it.";
 

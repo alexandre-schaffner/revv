@@ -1,8 +1,11 @@
 // ── Review-mode resolution ───────────────────────────────────────────────────
 //
-// `ReviewMode` is not a user choice: it is derived from identity — `author`
-// when the signed-in user created the PR, `reviewer` otherwise. Every UI read
-// of a review session carries that answer as `?mode=`.
+// A review session's `ReviewMode` is not a user choice: it is derived from
+// identity — `author` when the signed-in user created the PR, `reviewer`
+// otherwise. Every UI read of a review session carries that answer as
+// `?mode=`. (A walkthrough's perspective IS the user's pick, but its threads
+// still land in this identity-derived session — see
+// `ReviewService.getOrCreateIdentitySession`.)
 //
 // Background workers have no request to read it from, so they resolve the same
 // answer from the DB here. Getting this wrong is not cosmetic: review sessions

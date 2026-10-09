@@ -346,6 +346,10 @@ export interface WalkthroughReviewRound {
   previousWalkthroughId: string | null;
   roundNumber: number;
   kind: WalkthroughGenerationMode;
+  /** The perspective the round's walkthrough was written in. History spans
+   *  both: switching perspective retires the other one's walkthrough, and
+   *  its rounds stay readable here. */
+  mode: WalkthroughMode;
   visibility: "visible" | "hidden";
   status: WalkthroughStatus;
   fromSha: string | null;

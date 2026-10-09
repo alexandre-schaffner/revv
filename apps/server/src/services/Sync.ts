@@ -291,8 +291,7 @@ export const SyncServiceLive = Layer.effect(
       userLogin: string | null,
     ): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
-        const { mode } = yield* resolveReviewModeForPr(prId);
-        const session = yield* reviewService.getOrCreateActiveSession(prId, mode);
+        const session = yield* reviewService.getOrCreateIdentitySession(prId);
         const threads = yield* reviewService.getThreadsForSession(session.id);
 
         let role: UserRole = "unknown";

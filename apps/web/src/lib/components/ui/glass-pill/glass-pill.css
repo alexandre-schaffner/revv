@@ -1,9 +1,11 @@
-.glass-pill {
+/* The glass surface: shape, material and type. `.glass-surface` is the bare
+   surface for compound controls (GlassSplitPill) that host their own buttons;
+   `.glass-pill` adds the single-button interaction rules below. */
+.glass-pill,
+.glass-surface {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   height: 36px;
-  padding: 0 16px;
   background: var(--color-tab-track-bg);
   /* 10px is the standing-chrome blur cap. Floating chrome stays light;
      short-lived overlays (dialogs, popovers, command palette) keep 16px. */
@@ -20,14 +22,19 @@
   letter-spacing: -0.01em;
   line-height: 1;
   color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  white-space: nowrap;
+}
+
+.glass-pill {
+  gap: 8px;
+  padding: 0 16px;
   cursor: pointer;
   transition:
     background-color var(--duration-snap),
     color var(--duration-snap),
     box-shadow var(--duration-snap),
     transform var(--duration-instant);
-  -webkit-font-smoothing: antialiased;
-  white-space: nowrap;
 }
 
 .glass-pill:hover {

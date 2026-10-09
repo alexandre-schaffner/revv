@@ -6,11 +6,12 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getIsPullingCommit, getReviewMode, reviewLatestCommit } from "$lib/stores/review.svelte";
+import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
   getHasUnreviewedCommits,
+  getSelectedMode,
   getPendingAction as getWalkthroughPendingAction,
   getRatings as getWalkthroughRatings,
   getWalkthroughUiState,
@@ -25,6 +26,10 @@ import {
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
 } from "$lib/stores/walkthroughNav.svelte";
+import {
+  WALKTHROUGH_PERSPECTIVE_OPTIONS,
+  WALKTHROUGH_PERSPECTIVES,
+} from "$lib/utils/walkthrough-perspective";
 
 interface Props {
   prId: string;
@@ -37,12 +42,12 @@ const walkthroughPendingAction = $derived(getWalkthroughPendingAction(prId));
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
-const selectedMode = $derived(getReviewMode(prId));
-const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId, selectedMode));
+const selectedMode = $derived(getSelectedMode(prId));
+const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
 const reviewNewCommitsLabel = "Review new commits";
 
 $effect(() => {
-  void loadReviewRounds(prId, selectedMode);
+  void loadReviewRounds(prId);
 });
 
 /** Map walkthrough-specific state to the normalised GenActionState. */
@@ -53,7 +58,7 @@ const genActionState = $derived.by((): GenActionState | null => {
       if (hasUnreviewedCommits) {
         return { kind: "stale", label: reviewNewCommitsLabel };
       }
-      return { kind: "empty", label: "Generate walkthrough" };
+      return { kind: "empty", label: WALKTHROUGH_PERSPECTIVES[selectedMode].generateLabel };
     case "streaming":
       return { kind: "streaming" };
     case "resumable":
@@ -72,6 +77,11 @@ const genActionState = $derived.by((): GenActionState | null => {
       return null;
   }
 });
+
+// The walkthrough's perspective is the user's pick; the caret on the pills
+// that start a fresh run offers the other one. Comments and the diff stay on
+// the identity-derived session either way.
+const perspective = $derived({ value: selectedMode, options: WALKTHROUGH_PERSPECTIVE_OPTIONS });
 
 /** When chat is streaming, treat it as an in-flight action so the
  *  destructive buttons are disabled with a contextual tooltip. Also covers
@@ -127,9 +137,11 @@ function handleRegenerate(): void {
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId, selectedMode)}
-        onGenerate={() => generateWalkthrough(prId, selectedMode)}
+        onGenerate={(next) => generateWalkthrough(prId, next ?? selectedMode)}
         onRegenerate={handleRegenerate}
-        onRegenerateFromScratch={() => regenerateWalkthroughFromScratch(prId)}
+        onRegenerateFromScratch={(next) =>
+          regenerateWalkthroughFromScratch(prId, next ?? selectedMode)}
+        {perspective}
       />
 
       {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
