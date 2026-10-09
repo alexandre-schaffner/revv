@@ -62,6 +62,7 @@ import {
   CloneNotReadyError,
   DbError,
   type GitHubError,
+  HeadShaMismatchError,
   type NotFoundError,
   type ReviewError,
   type ValidationError,
@@ -175,7 +176,43 @@ interface ActiveJob {
   prerenderFailures: number;
 }
 
-export type StartJobTrigger = "user" | "resume" | "review_requested";
+/**
+ * Who asked for the run. `external_agent` is a coding agent outside Revv
+ * (`request_walkthrough`) acting on the user's behalf, so it gets the same
+ * do-over semantics as `user`; it is its own value so spans and
+ * `lifecycle:started` can tell the two apart.
+ */
+export type StartJobTrigger = "user" | "external_agent" | "resume" | "review_requested";
+
+/** `errorMessage` of a row whose run was cancelled (the user's Stop, or a supersede). */
+export const WALKTHROUGH_CANCELLED_MESSAGE = "Walkthrough cancelled";
+
+const isUserInitiated = (trigger: StartJobTrigger): boolean =>
+  trigger === "user" || trigger === "external_agent";
+
+export interface StartJobParams {
+  readonly prId: string;
+  readonly userId: string;
+  readonly trigger: StartJobTrigger;
+  readonly walkthroughId?: string;
+  readonly mode?: WalkthroughMode;
+  readonly generationMode?: WalkthroughGenerationMode;
+  /**
+   * Review exactly this head or nothing. Checked under the per-PR lock
+   * against the head GitHub serves — a mismatch fails with
+   * `HeadShaMismatchError` before anything is cancelled — and, once it
+   * matches, every other head's review in this mode is retired, as
+   * PollScheduler would on its next tick: the PR is at this head, so they
+   * are stale.
+   */
+  readonly expectedHeadSha?: string;
+}
+
+export interface StartJobResult {
+  readonly walkthroughId: string;
+  /** An in-flight job (or the row being resumed) was returned; nothing new launched. */
+  readonly reused: boolean;
+}
 
 /** Error union surfaced by `startJob`. Inherited from its transitive calls. */
 export type StartJobError =
@@ -184,6 +221,7 @@ export type StartJobError =
   | CloneInProgressError
   | CloneNotReadyError
   | GitHubError
+  | HeadShaMismatchError
   | NotFoundError
   | ReviewError
   | ValidationError;
@@ -200,14 +238,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
      * concurrent duplicate start upserts onto the same row. The fast path
      * here also short-circuits when an in-memory job already exists.
      */
-    readonly startJob: (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }) => Effect.Effect<{ readonly walkthroughId: string }, StartJobError>;
+    readonly startJob: (params: StartJobParams) => Effect.Effect<StartJobResult, StartJobError>;
 
     /**
      * Probe the remote team cache for `(prId, headSha)` and, on a hit,
@@ -1160,7 +1191,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
               const failureOpt = Cause.failureOption(cause);
               const message = cancelledByUser
-                ? "Walkthrough cancelled"
+                ? WALKTHROUGH_CANCELLED_MESSAGE
                 : failureOpt._tag === "Some"
                   ? (failureOpt.value as { cause?: unknown }).cause instanceof Error
                     ? (
@@ -1250,14 +1281,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return null;
       });
 
-    const startJob = (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
+    const startJob = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         // Resume fast-path: if the caller passed a specific walkthroughId
@@ -1269,7 +1293,7 @@ export const WalkthroughJobsLive = Layer.effect(
         if (params.walkthroughId !== undefined) {
           const cached = yield* findActiveByPr(params.prId, mode);
           if (cached !== null && cached.walkthroughId === params.walkthroughId) {
-            return { walkthroughId: cached.walkthroughId };
+            return { walkthroughId: cached.walkthroughId, reused: true };
           }
         }
 
@@ -1282,14 +1306,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return yield* mutex.withPermits(1)(startJobBody(params));
       });
 
-    const startJobBody = (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
+    const startJobBody = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         // Re-check the registry now that we hold the mutex — a concurrent
@@ -1300,13 +1317,19 @@ export const WalkthroughJobsLive = Layer.effect(
           existing !== null &&
           existing.walkthroughId === params.walkthroughId
         ) {
-          return { walkthroughId: existing.walkthroughId };
+          return { walkthroughId: existing.walkthroughId, reused: true };
         }
 
         const resolved = yield* provideInfra(
           prContextService.resolveWithDiff(params.prId, params.userId),
         );
         const { pr, repo, token, meta, files, commits } = resolved;
+        const pinnedHead = params.expectedHeadSha?.toLowerCase();
+        if (pinnedHead !== undefined && meta.headSha.toLowerCase() !== pinnedHead) {
+          return yield* Effect.fail(
+            new HeadShaMismatchError({ expectedHeadSha: pinnedHead, githubHeadSha: meta.headSha }),
+          );
+        }
 
         // SHA-aware dedup against the in-flight job (if any). The original
         // fast-path here returned the existing walkthroughId regardless of
@@ -1324,9 +1347,7 @@ export const WalkthroughJobsLive = Layer.effect(
               params.walkthroughId === undefined ||
               params.walkthroughId === existing.walkthroughId
             ) {
-              return {
-                walkthroughId: existing.walkthroughId,
-              };
+              return { walkthroughId: existing.walkthroughId, reused: true };
             }
           } else {
             yield* cancel(existing.walkthroughId, "superseded");
@@ -1350,6 +1371,12 @@ export const WalkthroughJobsLive = Layer.effect(
           );
         }
 
+        // See `expectedHeadSha`. After the clone check, so a run that can't
+        // start leaves the previous review standing.
+        if (pinnedHead !== undefined) {
+          yield* supersedeForPr(pr.id, meta.headSha, mode);
+        }
+
         const requestedGenerationMode = params.generationMode ?? "full";
         let partial = yield* provideDb(
           walkthroughService.getPartial(pr.id, meta.headSha, mode, requestedGenerationMode),
@@ -1361,7 +1388,7 @@ export const WalkthroughJobsLive = Layer.effect(
         ) {
           partial = null;
         }
-        if (params.trigger === "user" && partial?.status === "error") {
+        if (isUserInitiated(params.trigger) && partial?.status === "error") {
           partial = null;
         }
 
@@ -1445,7 +1472,7 @@ export const WalkthroughJobsLive = Layer.effect(
             generationMode,
             parentWalkthroughId,
             baseHeadSha,
-            forceNew: params.trigger === "user" && generationMode === "full",
+            forceNew: isUserInitiated(params.trigger) && generationMode === "full",
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
             // At insert, not a follow-up UPDATE: no kill-9 window without the tier.
@@ -1480,7 +1507,7 @@ export const WalkthroughJobsLive = Layer.effect(
           markComplete: setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE }),
           emitEvent: (event) => emitEvent(walkthroughId, event),
         });
-        if (importedFromCache) return { walkthroughId };
+        if (importedFromCache) return { walkthroughId, reused: false };
 
         // On user-triggered resume, sync the stored modelUsed to current settings
         // so the DB reflects which agent is actually running this continuation.
@@ -1539,7 +1566,7 @@ export const WalkthroughJobsLive = Layer.effect(
           params.trigger,
         );
 
-        return { walkthroughId };
+        return { walkthroughId, reused: false };
       });
 
     const subscribe = (

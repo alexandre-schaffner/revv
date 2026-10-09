@@ -182,6 +182,16 @@ export class CloneInProgressError extends Data.TaggedError("CloneInProgressError
 }> {}
 
 /**
+ * A caller pinned the head it wants reviewed (`startJob`'s `expectedHeadSha`)
+ * and GitHub serves a different one — typically a push GitHub hasn't caught
+ * up with yet. Nothing was cancelled or started.
+ */
+export class HeadShaMismatchError extends Data.TaggedError("HeadShaMismatchError")<{
+  readonly expectedHeadSha: string;
+  readonly githubHeadSha: string;
+}> {}
+
+/**
  * Raised when the PR head SHA has advanced but the worktree has unpushed
  * agent commits on top of the OLD head. Callers must discard or rebase
  * those commits before advancing the worktree.

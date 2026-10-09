@@ -14,7 +14,7 @@ export function resolveJobStart(input: {
   readonly state: JobStartStateInput;
   readonly settings: Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev">;
   readonly agent: AcpAgentId;
-  readonly trigger: "user" | "resume" | "review_requested";
+  readonly trigger: "user" | "external_agent" | "resume" | "review_requested";
   readonly cacheProbe: Effect.Effect<boolean>;
 }): Effect.Effect<
   JobStartPlan & { readonly answers: JobStartAnswers | null },

@@ -37,7 +37,7 @@ function buildWalkthroughProviderConfig(input: {
 /** Resolve the guarded model and the immutable provider snapshot for one job. */
 export function resolveWalkthroughLaunch(input: {
   readonly agent: AcpAgentId;
-  readonly trigger: "user" | "resume" | "review_requested";
+  readonly trigger: "user" | "external_agent" | "resume" | "review_requested";
   readonly configuredModel: string;
   readonly routedModel: string | null | undefined;
   readonly priorModel: string | null | undefined;

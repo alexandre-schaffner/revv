@@ -21,7 +21,7 @@ type JobStartSettings = Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev
 
 export function shouldResolveJobStart(input: {
   readonly settings: JobStartSettings;
-  readonly trigger: "user" | "resume" | "review_requested";
+  readonly trigger: "user" | "external_agent" | "resume" | "review_requested";
   readonly cacheWillHit: boolean;
 }): boolean {
   return input.settings.jev.enabled && input.trigger !== "resume" && !input.cacheWillHit;

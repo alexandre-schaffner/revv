@@ -1,4 +1,4 @@
-import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
+import { REVIEW_MODE, type WalkthroughMode, type WalkthroughStatus } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
@@ -69,7 +69,7 @@ export const walkthroughs = sqliteTable(
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
      *   `superseded` — a newer walkthrough (see `supersededBy`) replaced this
      */
-    status: text("status").notNull().default("generating"),
+    status: text("status").$type<WalkthroughStatus>().notNull().default("generating"),
     /**
      * Last terminal generation failure surfaced to the user. Cleared whenever
      * the row re-enters `generating` or reaches `complete`.

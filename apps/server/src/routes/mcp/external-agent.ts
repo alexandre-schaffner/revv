@@ -22,6 +22,10 @@ import {
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { SyncService } from "../../services/Sync";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import {
+  describeWalkthroughRequestError,
+  requestWalkthroughAtHead,
+} from "../../services/walkthrough-request";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const LOG_SCOPE = "mcp-external";
@@ -127,6 +131,15 @@ async function resolveContext(
           Effect.flatMap(SyncService, (sync) =>
             sync.pushThreadStatus(threadId).pipe(Effect.asVoid),
           ),
+        ),
+      requestWalkthrough: ({ headSha, generationMode }) =>
+        AppRuntime.runPromise(
+          requestWalkthroughAtHead({
+            prId: resolved.prId,
+            userId: resolved.userId,
+            headSha,
+            generationMode,
+          }).pipe(Effect.mapError((error) => new Error(describeWalkthroughRequestError(error)))),
         ),
     },
     meta: resolved,

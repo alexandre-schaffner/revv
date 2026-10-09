@@ -30,6 +30,7 @@ import {
 export const EXTERNAL_AGENT_SCOPES = [
   "context:read",
   "walkthrough:edit",
+  "walkthrough:generate",
   "issues:resolve",
   "comments:write",
 ] as const;
@@ -119,8 +120,11 @@ function isProvider(value: string): value is ExternalAgentProvider {
   return (EXTERNAL_AGENT_PROVIDERS as readonly string[]).includes(value);
 }
 
+/** A full 40-hex commit SHA, either case. */
+export const SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
 function isSha(value: string): boolean {
-  return /^[0-9a-f]{40}$/i.test(value);
+  return SHA_PATTERN.test(value);
 }
 
 export function isIntegrationCredentialActive(
