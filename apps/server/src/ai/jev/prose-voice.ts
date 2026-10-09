@@ -33,14 +33,18 @@ const FAULTS = {
     "The text hedges: 'it seems', 'may possibly', 'one could argue', concessive openers like 'While X is generally fine, ...' that delay the actual claim.",
   padding:
     "The text says in several sentences what one sentence would carry — restating the diff in prose rather than telling the reader something the diff does not.",
+  opaque:
+    "The text relies on shorthand a reviewer who has not read the code cannot decode: labels the writer invented, internal names used without saying what they are, or references like 'the flag' or 'the switch' that were never introduced.",
 } as const satisfies Record<string, string>;
 
-const FAULT_KEYS = ["preamble", "hedging", "padding"] as const;
+const FAULT_KEYS = ["preamble", "hedging", "padding", "opaque"] as const;
 
 const FAULT_ADVICE: Record<keyof typeof FAULTS, string> = {
   preamble: "you are opening on preamble — cut the first sentence and start on the point",
   hedging: "you are hedging — state the claim, then the evidence, and drop the concessive openers",
   padding: "you are padding — say it once, and only if the diff does not already say it",
+  opaque:
+    "you are writing in shorthand — introduce each thing in plain words on first mention, and say what goes wrong, not just where",
 };
 
 /** Judges one markdown block's voice. Returns `null` when off/unavailable, `[]` when clean; the caller surfaces nothing either way. */
@@ -65,12 +69,13 @@ export function judgeProse(
           chapter: chapterTitle,
           block: markdown.slice(0, 8_000),
           voice:
-            "This is a block of a code-review walkthrough. It is meant to open on the point, lead with the claim and follow with the evidence, and tell the reader something the diff does not already say.",
+            "This is a block of a code-review walkthrough. It is meant to open on the point, lead with the claim and follow with the evidence, tell the reader something the diff does not already say, and be understandable to a reviewer who has not read the code.",
         },
         questions: {
           preamble: noul(FAULTS.preamble),
           hedging: noul(FAULTS.hedging),
           padding: noul(FAULTS.padding),
+          opaque: noul(FAULTS.opaque),
         },
       }),
     );

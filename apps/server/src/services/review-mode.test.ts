@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { DbService } from "./Db";
+import { ReviewService, ReviewServiceLive } from "./Review";
 import { resolveReviewModeForPr } from "./review-mode";
 
 const PR_ID = "repo-1:7";
@@ -122,5 +123,34 @@ describe("resolveReviewModeForPr", () => {
       })
       .run();
     expect(await resolve(db)).toEqual({ mode: "author", resolved: true });
+  });
+});
+
+// A walkthrough's perspective is the user's pick, but the session its threads
+// land in must be the one the UI reads — keyed on identity. An author asking
+// for a reviewer-perspective walkthrough of their own PR still gets the author
+// session, or its issues would vanish from the Diff tab.
+describe("ReviewService.getOrCreateIdentitySession", () => {
+  const session = (db: Db) =>
+    Effect.runPromise(
+      Effect.flatMap(ReviewService, (s) => s.getOrCreateIdentitySession(PR_ID)).pipe(
+        Effect.provide(ReviewServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+  it("uses the author session on the viewer's own PR", async () => {
+    const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
+    expect((await session(db)).mode).toBe("author");
+  });
+
+  it("uses the reviewer session on someone else's PR", async () => {
+    const db = seedIdentity({ authorLogin: "picodes", userLogin: "alex" });
+    expect((await session(db)).mode).toBe("reviewer");
+  });
+
+  it("returns the same session on every call", async () => {
+    const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
+    expect((await session(db)).id).toBe((await session(db)).id);
   });
 });

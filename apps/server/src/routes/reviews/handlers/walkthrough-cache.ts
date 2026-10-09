@@ -120,11 +120,11 @@ export function getCachedWalkthroughHandler(
  * handed the stopped row straight back to the new job — Regenerate
  * silently resumed the abandoned draft instead of starting a fresh one.
  */
-export function regenerateWalkthroughHandler(prId: string, mode?: WalkthroughMode) {
+export function regenerateWalkthroughHandler(prId: string) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const jobs = yield* WalkthroughJobs;
-      yield* jobs.supersedeForPr(prId, undefined, mode);
+      yield* jobs.supersedeForPr(prId);
     }),
   );
 }

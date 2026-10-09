@@ -5,6 +5,7 @@ import type {
   ReviewMode,
   ThreadMessage,
   ThreadStatus,
+  WalkthroughMode,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
@@ -211,7 +212,7 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
  * Pull the current head through the same path as the tab-side Pull button,
  * then start the incremental walkthrough requested by the superseded toast.
  */
-export async function reviewLatestCommit(prId: string, mode: ReviewMode): Promise<void> {
+export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): Promise<void> {
   await reviewNewCommits({
     pull: () => pullLatestCommit(prId),
     regenerate: () => regenerate(prId, mode, "incremental"),
@@ -222,10 +223,11 @@ export async function reviewLatestCommit(prId: string, mode: ReviewMode): Promis
 let sessionId = $state<string | null>(null);
 let _sessionLoading = $state(false);
 /**
- * The active review lens for a PR. Derived purely from identity (PR author
+ * The review-session lens for a PR. Derived purely from identity (PR author
  * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
- * override. The server still keeps an author and a reviewer walkthrough per
- * head SHA; we always resolve to the one matching the viewer's role.
+ * override: comments, threads and the diff are keyed on it. The walkthrough's
+ * perspective is separate and user-picked; see `getSelectedMode` in the
+ * walkthrough store.
  */
 export function getReviewMode(prId: string): ReviewMode {
   return getReviewModeForPr(prId);

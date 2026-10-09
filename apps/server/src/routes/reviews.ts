@@ -245,9 +245,9 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
-          const reviewService = yield* ReviewService;
+          // `mode` is the walkthrough's perspective, which the user picks. The
+          // review session is the identity-derived one; `startJob` owns it.
           const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
-          yield* reviewService.getOrCreateActiveSession(ctx.params.id, mode);
           const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
           if (existing !== null) {
             return { walkthroughId: existing.walkthroughId };
@@ -269,10 +269,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .get("/:id/walkthrough/current", async (ctx) => {
     try {
+      // No `mode` → the server picks the perspective (see the handler).
       return await getCurrentWalkthroughHandler(
         ctx.params.id,
         ctx.session.user.id,
-        coerceWalkthroughMode(ctx.query.mode),
+        ctx.query.mode === undefined ? undefined : coerceWalkthroughMode(ctx.query.mode),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -305,7 +306,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const { db } = yield* DbService;
           const walkthroughService = yield* WalkthroughService;
-          const mode = coerceWalkthroughMode(ctx.query.mode);
           const pr = db
             .select({ id: pullRequests.id, headSha: pullRequests.headSha })
             .from(pullRequests)
@@ -327,7 +327,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           // (`walkthroughs.prCommits`), so this high-frequency endpoint stays
           // DB-only. The client refreshes it for every active PR on each
           // `prs:updated`, so GitHub calls here add avoidable rate-limit pressure.
-          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, mode);
+          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha);
         }),
       );
     } catch (e) {
@@ -341,9 +341,8 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
           const walkthroughService = yield* WalkthroughService;
-          const mode = coerceWalkthroughMode(ctx.query.mode);
           const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
-          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId, mode);
+          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
           if (!report) return { status: "not_found" as const };
           const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);
           return {
@@ -377,13 +376,10 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/regenerate", async (ctx) => {
     try {
-      // `generationMode` still rides along in the body — it is the *start*
-      // call that consumes it. Regenerate itself sweeps unconditionally.
-      const body = ctx.body as { mode?: unknown } | undefined;
-      await regenerateWalkthroughHandler(
-        ctx.params.id,
-        body?.mode === undefined ? undefined : coerceWalkthroughMode(body.mode),
-      );
+      // `mode` / `generationMode` still ride along in the body — it is the
+      // *start* call that consumes them. Regenerate itself sweeps every
+      // perspective: only one is active per PR (see `startJobBody`).
+      await regenerateWalkthroughHandler(ctx.params.id);
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);

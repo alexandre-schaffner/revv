@@ -500,71 +500,53 @@ const reviewRounds = $state({
 
 const pendingReviewRoundLoads = new Map<string, Promise<WalkthroughReviewRoundsResponse | null>>();
 
-function reviewRoundsKey(prId: string, mode: WalkthroughMode): string {
-  return `${prId}:${mode}`;
-}
-
-export function getReviewRounds(
-  prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): WalkthroughReviewRoundsResponse | null {
-  const entry = reviewRounds.entries.get(reviewRoundsKey(prId, mode));
+/** A PR's review rounds, both perspectives in one timeline (each round
+ *  carries its `mode`): only one perspective is active per PR at a time. */
+export function getReviewRounds(prId: string): WalkthroughReviewRoundsResponse | null {
+  const entry = reviewRounds.entries.get(prId);
   return entry?.status === "ready" ? entry.data : null;
 }
 
-export function getHasUnreviewedCommits(
-  prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): boolean {
-  return getReviewRounds(prId, mode)?.hasNewCommits ?? false;
+export function getHasUnreviewedCommits(prId: string): boolean {
+  return getReviewRounds(prId)?.hasNewCommits ?? false;
 }
 
 export async function loadReviewRounds(
   prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
 ): Promise<WalkthroughReviewRoundsResponse | null> {
-  const key = reviewRoundsKey(prId, mode);
-  const inflight = pendingReviewRoundLoads.get(key);
+  const inflight = pendingReviewRoundLoads.get(prId);
   if (inflight) return inflight;
 
   const promise = (async () => {
-    reviewRounds.entries.set(key, { status: "loading" });
+    reviewRounds.entries.set(prId, { status: "loading" });
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds?mode=${mode}`,
-        {
-          headers: authHeaders(),
-          credentials: "include",
-        },
-      );
+      const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds`, {
+        headers: authHeaders(),
+        credentials: "include",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as WalkthroughReviewRoundsResponse;
-      reviewRounds.entries.set(key, { status: "ready", data });
+      reviewRounds.entries.set(prId, { status: "ready", data });
       return data;
     } catch (e) {
-      reviewRounds.entries.set(key, {
+      reviewRounds.entries.set(prId, {
         status: "error",
         error: e instanceof Error ? e.message : String(e),
       });
       return null;
     } finally {
-      pendingReviewRoundLoads.delete(key);
+      pendingReviewRoundLoads.delete(prId);
     }
   })();
 
-  pendingReviewRoundLoads.set(key, promise);
+  pendingReviewRoundLoads.set(prId, promise);
   return promise;
 }
 
 export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
   for (const prId of prIds) {
-    const mode = getSelectedMode(prId);
-    if (
-      reviewRounds.entries.has(reviewRoundsKey(prId, mode)) ||
-      store.entries.has(prId) ||
-      store.activePrId === prId
-    ) {
-      void loadReviewRounds(prId, mode);
+    if (reviewRounds.entries.has(prId) || store.entries.has(prId) || store.activePrId === prId) {
+      void loadReviewRounds(prId);
     }
   }
 }
@@ -572,13 +554,11 @@ export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
 export async function selectWalkthroughReport(
   prId: string,
   walkthroughId: string | null,
-  mode: WalkthroughMode = getSelectedMode(prId),
 ): Promise<void> {
   store.selectedReportIds.set(prId, walkthroughId);
   store.activePrId = prId;
   clearAnimationTrackers(prId);
   const ok = await hydrateFromCache(prId, {
-    mode,
     reportId: walkthroughId,
     replace: true,
   });
@@ -901,7 +881,7 @@ export function onWalkthroughEvent(
       `onWalkthroughEvent-foreign wt=${walkthroughId} active=${entry?.walkthroughId ?? "none"} type=${event.type}`,
     );
     if (event.type === "lifecycle:complete") {
-      void loadReviewRounds(prId, getSelectedMode(prId));
+      void loadReviewRounds(prId);
       if (store.activePrId !== prId) {
         toast.success("Walkthrough ready", {
           description: "Switch to that PR to review.",
@@ -953,7 +933,7 @@ export function onWalkthroughEvent(
     ) {
       void hydrateFromCache(prId, { activate: store.activePrId === prId });
     }
-    void loadReviewRounds(prId, getSelectedMode(prId));
+    void loadReviewRounds(prId);
   }
 
   // Background-completion toast: only if the completion event landed on a
@@ -1008,7 +988,6 @@ export async function hydrateActiveWalkthroughs(): Promise<void> {
       }
       const hydrated = await hydrateFromCache(row.prId, {
         activate: store.activePrId === row.prId,
-        mode,
       });
       if (hydrated) {
         const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
@@ -1085,14 +1064,22 @@ export function deactivate(): void {
 
 const pendingHydration = new Map<string, Promise<boolean>>();
 
+// ── Walkthrough perspective ─────────────────────────────────────────────────
+//
+// The perspective a walkthrough is written from is the user's pick (the caret
+// on Generate / From scratch / Regenerate). It lives on the walkthrough itself
+// (`walkthroughs.mode`), and only one perspective is active per PR, so the
+// entry on screen is the record: `/current` hands back the newest row's
+// perspective and a seed carries the one the user just picked. The review
+// session (comments, threads, the diff) is NOT keyed on this; it stays on the
+// identity-derived `getReviewModeForPr`.
+
 /**
- * The walkthrough mode for a PR. Derived purely from identity (author vs.
- * signed-in user) via the PR store — no manual selection. Both an author and
- * a reviewer walkthrough may exist server-side per head SHA; the viewer's
- * role decides which one this client hydrates and generates.
+ * The walkthrough perspective for a PR: the one on the entry (hydrated from
+ * the server, or seeded by a fresh run), else the identity-derived default.
  */
 export function getSelectedMode(prId: string): WalkthroughMode {
-  return getReviewModeForPr(prId);
+  return store.entries.get(prId)?.mode ?? getReviewModeForPr(prId);
 }
 
 /**
@@ -1106,21 +1093,19 @@ export async function hydrateFromCache(
   prId: string,
   options?: {
     activate?: boolean;
-    mode?: WalkthroughMode;
     replace?: boolean;
     reportId?: string | null;
   },
 ): Promise<boolean> {
-  const mode = options?.mode ?? getSelectedMode(prId);
   const reportId = options?.reportId ?? null;
-  const key = `${prId}:${mode}:${reportId ?? "current"}`;
+  const key = `${prId}:${reportId ?? "current"}`;
   const inflight = pendingHydration.get(key);
   if (inflight) {
     wtTrace("lifecycle", `hydrateFromCache deduped prId=${prId}`);
     return inflight;
   }
 
-  const promise = doHydrateFromCache(prId, { ...options, mode });
+  const promise = doHydrateFromCache(prId, options);
   pendingHydration.set(key, promise);
   try {
     return await promise;
@@ -1133,20 +1118,25 @@ async function doHydrateFromCache(
   prId: string,
   options?: {
     activate?: boolean;
-    mode?: WalkthroughMode;
     replace?: boolean;
     reportId?: string | null;
   },
 ): Promise<boolean> {
-  const mode = options?.mode ?? getSelectedMode(prId);
   const reportId = options?.reportId ?? null;
   wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
+  // A fresh run is starting: `/current` would still answer with the row it
+  // is about to retire (possibly the other perspective's) and merge that into
+  // the seed. The start path does its own `replace` hydrate by id, and
+  // `lifecycle:started` adopts the new row.
+  if (!options?.replace && reportId === null && pendingActions.map.has(prId)) {
+    wtTrace("lifecycle", `hydrateFromCache skip prId=${prId} reason=start-pending`);
+    return false;
+  }
   const existing = store.entries.get(prId);
   if (
     !options?.replace &&
     reportId === null &&
     existing &&
-    existing.mode === mode &&
     existing.summary !== null &&
     existing.blocks.length > 0 &&
     existing.doneReceived &&
@@ -1162,8 +1152,8 @@ async function doHydrateFromCache(
   try {
     const endpoint =
       reportId === null
-        ? `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current?mode=${mode}`
-        : `${API_BASE_URL}/api/reviews/${prId}/walkthrough/report/${reportId}?mode=${mode}`;
+        ? `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current`
+        : `${API_BASE_URL}/api/reviews/${prId}/walkthrough/report/${reportId}`;
     const res = await fetch(endpoint, {
       headers: authHeaders(),
       credentials: "include",
@@ -1206,7 +1196,7 @@ async function doHydrateFromCache(
     };
 
     const body = (await res.json()) as
-      | { status: "not_found" }
+      | { status: "not_found"; mode?: WalkthroughMode }
       | {
           status: "complete" | "generating" | "error" | "superseded";
           walkthrough: WalkthroughPayload;
@@ -1218,6 +1208,14 @@ async function doHydrateFromCache(
 
     if (body.status === "not_found") {
       wtTrace("lifecycle", `hydrateFromCache prId=${prId} status=not_found → false`);
+      // The server names the perspective Generate defaults to. Only an entry
+      // that isn't following a walkthrough takes it.
+      const defaultMode = body.mode;
+      if (defaultMode !== undefined) {
+        updateEntry(prId, (e) => {
+          if (e.walkthroughId === null) e.mode = defaultMode;
+        });
+      }
       return false;
     }
 
@@ -1240,7 +1238,7 @@ async function doHydrateFromCache(
     // entry fresh (the "reload shows nothing, but switching PRs and back fixes
     // it" bug). A fresh object guarantees the write is observed.
     const entry: WalkthroughEntry = previous ? { ...previous } : freshEntry();
-    entry.mode = wt.mode ?? mode;
+    entry.mode = wt.mode ?? entry.mode;
     const hasRealSummary = wt.summary !== "";
 
     // Entry-wins merge: SSE events applied to `entry` during the REST fetch
@@ -1543,8 +1541,11 @@ export async function regenerate(
   }
 }
 
-export function regenerateFromScratch(prId: string): Promise<void> {
-  return regenerate(prId, getSelectedMode(prId), "full");
+export function regenerateFromScratch(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
+  return regenerate(prId, mode, "full");
 }
 
 async function runRegenerate(
@@ -1598,7 +1599,6 @@ async function runRegenerate(
   const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
   if (started?.walkthroughId) {
     await hydrateFromCache(prId, {
-      mode,
       reportId: started.walkthroughId,
       replace: true,
     });

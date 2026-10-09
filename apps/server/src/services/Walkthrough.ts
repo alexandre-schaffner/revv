@@ -55,7 +55,7 @@ import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
-import { ReviewError } from "../domain/errors";
+import { DbError, ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
 import { decodeWalkthroughIssue } from "./walkthrough-issue";
@@ -626,24 +626,35 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     ) => Effect.Effect<Walkthrough | null, never, DbService>;
 
     /**
-     * Return a specific walkthrough for a PR/mode. This is a read-only
-     * historical report view: callers use it to display an older report, not
-     * to resume or mutate the row.
+     * The perspective of the PR's newest walkthrough row, any status, or
+     * `null` when it has none. The walkthrough perspective is the user's
+     * choice; this is the record of their last one, so `/current` reopens on
+     * the walkthrough they actually generated. Superseded rows count: after
+     * a push, the stale walkthrough keeps its perspective.
+     */
+    readonly getLatestMode: (
+      prId: string,
+    ) => Effect.Effect<WalkthroughMode | null, DbError, DbService>;
+
+    /**
+     * Return a specific walkthrough for a PR, whatever its perspective. This
+     * is a read-only historical report view: callers use it to display an
+     * older report, not to resume or mutate the row.
      */
     readonly getReport: (
       prId: string,
       walkthroughId: string,
-      mode?: WalkthroughMode,
     ) => Effect.Effect<
       { readonly walkthrough: Walkthrough; readonly status: WalkthroughStatus } | null,
       never,
       DbService
     >;
 
+    /** The PR's review rounds across both perspectives (one is active at a
+     *  time, so the history is a single timeline). */
     readonly listReviewRounds: (
       prId: string,
       currentHeadSha: string | null,
-      mode?: WalkthroughMode,
     ) => Effect.Effect<WalkthroughReviewRoundsResponse, never, DbService>;
   }
 >() {}
@@ -1209,7 +1220,23 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return hydrateWalkthrough(db, row, avatarContent);
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
-  getReport: (prId, walkthroughId, mode = "reviewer") =>
+  getLatestMode: (prId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = yield* Effect.try({
+        try: () =>
+          db
+            .select({ mode: walkthroughs.mode })
+            .from(walkthroughs)
+            .where(eq(walkthroughs.pullRequestId, prId))
+            .orderBy(desc(walkthroughs.generatedAt))
+            .get(),
+        catch: (cause) => new DbError({ message: `getLatestMode(${prId})`, cause }),
+      });
+      return row?.mode ?? null;
+    }),
+
+  getReport: (prId, walkthroughId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const result = db
@@ -1222,13 +1249,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
           ),
         )
-        .where(
-          and(
-            eq(walkthroughs.id, walkthroughId),
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-          ),
-        )
+        .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)))
         .get();
 
       if (!result) return null;
@@ -1241,7 +1262,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       };
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
-  listReviewRounds: (prId, currentHeadSha, mode = "reviewer") =>
+  listReviewRounds: (prId, currentHeadSha) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const rows = db
@@ -1251,6 +1272,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           previousWalkthroughId: reviewRounds.previousWalkthroughId,
           roundNumber: reviewRounds.roundNumber,
           kind: reviewRounds.kind,
+          mode: walkthroughs.mode,
           visibility: reviewRounds.visibility,
           status: reviewRounds.status,
           fromSha: reviewRounds.fromSha,
@@ -1263,7 +1285,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         })
         .from(reviewRounds)
         .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(and(eq(reviewRounds.pullRequestId, prId), eq(walkthroughs.mode, mode)))
+        .where(eq(reviewRounds.pullRequestId, prId))
         .orderBy(asc(reviewRounds.roundNumber))
         .all();
 
@@ -1273,6 +1295,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         previousWalkthroughId: row.previousWalkthroughId ?? null,
         roundNumber: row.roundNumber,
         kind: row.kind === "incremental" ? "incremental" : "full",
+        mode: row.mode,
         visibility:
           row.visibility === "hidden" || (row.kind === "incremental" && row.fromSha === row.toSha)
             ? "hidden"
@@ -1299,10 +1322,11 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             prCommits: walkthroughs.prCommits,
             prHeadSha: walkthroughs.prHeadSha,
             generationMode: walkthroughs.generationMode,
+            mode: walkthroughs.mode,
             baseHeadSha: walkthroughs.baseHeadSha,
           })
           .from(walkthroughs)
-          .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.mode, mode)))
+          .where(eq(walkthroughs.pullRequestId, prId))
           .orderBy(asc(walkthroughs.generatedAt))
           .all();
 
@@ -1312,6 +1336,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           previousWalkthroughId: row.previousWalkthroughId ?? null,
           roundNumber: index + 1,
           kind: row.generationMode === "incremental" ? "incremental" : "full",
+          mode: row.mode,
           visibility:
             row.generationMode === "incremental" && row.baseHeadSha === row.prHeadSha
               ? "hidden"

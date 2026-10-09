@@ -27,14 +27,15 @@
 // setStatus('error'). No `addBlock` / `addIssue` / `addRating` calls exist
 // here anymore (doctrine invariant #2).
 
-import type {
-  RiskLevel,
-  Walkthrough,
-  WalkthroughGenerationMode,
-  WalkthroughMode,
-  WalkthroughStatus,
-  WalkthroughStreamEvent,
-  WalkthroughTokenUsage,
+import {
+  REVIEW_MODE,
+  type RiskLevel,
+  type Walkthrough,
+  type WalkthroughGenerationMode,
+  type WalkthroughMode,
+  type WalkthroughStatus,
+  type WalkthroughStreamEvent,
+  type WalkthroughTokenUsage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect";
@@ -213,6 +214,9 @@ export interface StartJobResult {
   /** An in-flight job (or the row being resumed) was returned; nothing new launched. */
   readonly reused: boolean;
 }
+
+const otherWalkthroughMode = (mode: WalkthroughMode): WalkthroughMode =>
+  mode === REVIEW_MODE.author ? REVIEW_MODE.reviewer : REVIEW_MODE.author;
 
 /** Error union surfaced by `startJob`. Inherited from its transitive calls. */
 export type StartJobError =
@@ -1377,6 +1381,15 @@ export const WalkthroughJobsLive = Layer.effect(
           yield* supersedeForPr(pr.id, meta.headSha, mode);
         }
 
+        // One perspective at a time. Both perspectives write their AI threads
+        // into the same identity session, so a fresh user start retires the
+        // other perspective's rows (and their unsubmitted threads) the same
+        // way Regenerate retires this one's. Otherwise Submit would post both
+        // walkthroughs' comments.
+        if (isUserInitiated(params.trigger)) {
+          yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
+        }
+
         const requestedGenerationMode = params.generationMode ?? "full";
         let partial = yield* provideDb(
           walkthroughService.getPartial(pr.id, meta.headSha, mode, requestedGenerationMode),
@@ -1392,7 +1405,7 @@ export const WalkthroughJobsLive = Layer.effect(
           partial = null;
         }
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(pr.id));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
@@ -1898,7 +1911,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const snapshot = snapshotOpt.value;
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(prId, mode));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(prId));
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
             reviewSessionId: reviewSession.id,

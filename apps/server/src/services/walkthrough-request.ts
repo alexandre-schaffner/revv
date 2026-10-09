@@ -76,11 +76,22 @@ export const requestWalkthroughAtHead = (params: {
     const { db } = yield* DbService;
     const jobs = yield* WalkthroughJobs;
     const { headSha } = params;
-    // The mode the PR's review page reads: a review the agent asks for must
-    // land in the session the user actually sees (`author` on their own PR).
-    // An unresolved verdict is still the right answer to write under: the web
+    // The perspective the PR's review page shows (`getCurrentWalkthroughHandler`):
+    // the newest walkthrough's — the user's last pick — else identity. Asking
+    // in the other perspective would retire the one the user chose. An
+    // unresolved identity is still the right answer to write under: the web
     // falls back to the same `reviewer` while identity is unknown.
-    const { mode } = yield* resolveReviewModeForPr(params.prId);
+    const newest = yield* Effect.try({
+      try: () =>
+        db
+          .select({ mode: walkthroughs.mode })
+          .from(walkthroughs)
+          .where(eq(walkthroughs.pullRequestId, params.prId))
+          .orderBy(desc(walkthroughs.generatedAt))
+          .get(),
+      catch: (cause) => new DbError({ message: "requestWalkthroughAtHead: latest mode", cause }),
+    });
+    const mode = newest?.mode ?? (yield* resolveReviewModeForPr(params.prId)).mode;
 
     const runsAtHead = yield* Effect.try({
       try: () =>

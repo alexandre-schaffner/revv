@@ -1,12 +1,4 @@
-<script lang="ts">
-import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import PenNib from "phosphor-svelte/lib/PenNib";
-import Play from "phosphor-svelte/lib/Play";
-import StopCircle from "phosphor-svelte/lib/StopCircle";
-import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-
+<script module lang="ts">
 /** Normalised lifecycle state for any generation pipeline
  *  (walkthrough, recap, etc.). */
 export type GenActionState =
@@ -17,6 +9,32 @@ export type GenActionState =
   | { kind: "complete" }
   | { kind: "stale"; label?: string };
 
+/** One perspective a fresh run can be written from (walkthrough: reviewer /
+ *  author). */
+interface GenPerspectiveOption<P extends string> {
+  readonly value: P;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** The perspective the main segments use, and the menu the caret offers. */
+interface GenPerspective<P extends string> {
+  readonly value: P;
+  readonly options: readonly GenPerspectiveOption<P>[];
+}
+</script>
+
+<script lang="ts" generics="T extends string">
+import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import Check from "phosphor-svelte/lib/Check";
+import PenNib from "phosphor-svelte/lib/PenNib";
+import Play from "phosphor-svelte/lib/Play";
+import StopCircle from "phosphor-svelte/lib/StopCircle";
+import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import GlassSplitPill from "$lib/components/ui/glass-pill/GlassSplitPill.svelte";
+import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
+
 interface Props {
   uiState: GenActionState;
   /** In-flight destructive action (regenerate, resume, stop). */
@@ -26,9 +44,14 @@ interface Props {
   disabledTitle?: string | undefined;
   onStop?: () => void;
   onResume?: () => void;
-  onGenerate?: () => void;
-  onRegenerate: () => void;
-  onRegenerateFromScratch?: () => void;
+  /** `perspective` is the caret's pick; absent from the main segment. */
+  onGenerate?: (perspective?: T) => void;
+  onRegenerate: (perspective?: T) => void;
+  onRegenerateFromScratch?: (perspective?: T) => void;
+  /** Puts a perspective caret on every pill that starts a fresh run
+   *  (Generate, From scratch, Regenerate after a stop). Absent → plain pills
+   *  (recaps). */
+  perspective?: GenPerspective<T> | undefined;
 }
 
 let {
@@ -40,6 +63,7 @@ let {
   onGenerate,
   onRegenerate,
   onRegenerateFromScratch,
+  perspective,
 }: Props = $props();
 
 const destructiveDisabled = $derived(pendingAction !== null);
@@ -55,7 +79,78 @@ const destructiveTitle = $derived(
             ? "Starting…"
             : undefined),
 );
+
+function generate(next?: T): void {
+  if (onGenerate) onGenerate(next);
+  else onRegenerate(next);
+}
+
+/** A run in another perspective is always a fresh one. */
+function regenerateFromScratch(next?: T): void {
+  if (onRegenerateFromScratch) onRegenerateFromScratch(next);
+  else onRegenerate(next);
+}
 </script>
+
+{#snippet perspectiveRows(close: () => void, run: (next: T) => void)}
+	{#if perspective}
+		<p class="px-2 pt-1.5 pb-1 text-xs font-semibold text-text-secondary">Perspective</p>
+		{#each perspective.options as opt (opt.value)}
+			<button
+				type="button"
+				class="flex w-full cursor-pointer items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-bg-tertiary focus-visible:bg-bg-tertiary focus-visible:outline-none"
+				onclick={() => {
+					close();
+					run(opt.value);
+				}}
+			>
+				<span class="flex min-w-0 flex-1 flex-col gap-0.5">
+					<span class="text-xs font-medium text-text-primary">{opt.label}</span>
+					<span class="text-xs text-text-muted">{opt.description}</span>
+				</span>
+				{#if opt.value === perspective.value}
+					<Check size={12} class="mt-0.5 shrink-0 text-accent" />
+				{/if}
+			</button>
+		{/each}
+	{/if}
+{/snippet}
+
+{#snippet generateMenu(close: () => void)}
+	{@render perspectiveRows(close, generate)}
+{/snippet}
+
+{#snippet fromScratchMenu(close: () => void)}
+	{@render perspectiveRows(close, regenerateFromScratch)}
+{/snippet}
+
+{#snippet fromScratch(title: string)}
+	<GlassSplitPill
+		disabled={destructiveDisabled}
+		title={destructiveTitle ?? title}
+		onclick={() => regenerateFromScratch()}
+		menuLabel="Start from scratch in another perspective"
+		menu={perspective ? fromScratchMenu : undefined}
+	>
+		<ArrowCounterClockwise size={16} />
+		From scratch
+	</GlassSplitPill>
+{/snippet}
+
+<!-- After a stop or an error, Regenerate replaces the draft; its caret starts
+     the replacement in another perspective. -->
+{#snippet replaceDraft()}
+	<GlassSplitPill
+		disabled={destructiveDisabled}
+		title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
+		onclick={() => onRegenerate()}
+		menuLabel="Regenerate in another perspective"
+		menu={perspective ? fromScratchMenu : undefined}
+	>
+		<ArrowsClockwise size={16} />
+		Regenerate
+	</GlassSplitPill>
+{/snippet}
 
 <!--
   Keyed wrapper: when `uiState.kind` flips (e.g. empty → streaming), Svelte
@@ -75,14 +170,16 @@ const destructiveTitle = $derived(
       out:gsapFade={{ duration: tokens.instant }}
     >
     {#if uiState.kind === "empty"}
-      <GlassPill
+      <GlassSplitPill
         disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate walkthrough"}
-        onclick={onGenerate ?? onRegenerate}
+        title={destructiveTitle ?? uiState.label ?? "Generate walkthrough"}
+        onclick={() => generate()}
+        menuLabel="Generate in another perspective"
+        menu={perspective ? generateMenu : undefined}
       >
         <PenNib size={16} />
         {uiState.label ?? "Generate walkthrough"}
-      </GlassPill>
+      </GlassSplitPill>
     {:else if uiState.kind === "streaming"}
       <GlassPill
         variant="danger"
@@ -103,14 +200,7 @@ const destructiveTitle = $derived(
         <Play size={16} fill="currentColor" />
         Resume
       </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
-        onclick={onRegenerate}
-      >
-        <ArrowsClockwise size={16} />
-        Regenerate
-      </GlassPill>
+      {@render replaceDraft()}
     {:else if uiState.kind === "error"}
       <GlassPill
         disabled={destructiveDisabled}
@@ -121,48 +211,27 @@ const destructiveTitle = $derived(
         <ArrowCounterClockwise size={16} />
         Retry
       </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate a fresh version (the current draft will be replaced)"}
-        onclick={onRegenerate}
-      >
-        <ArrowsClockwise size={16} />
-        Regenerate
-      </GlassPill>
+      {@render replaceDraft()}
     {:else if uiState.kind === "complete"}
       <GlassPill
         disabled={destructiveDisabled}
         title={destructiveTitle ?? "Refresh this report using the current review as context"}
-        onclick={onRegenerate}
+        onclick={() => onRegenerate()}
       >
         <ArrowsClockwise size={16} />
         Regenerate
       </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate a fresh review without using the prior report"}
-        onclick={onRegenerateFromScratch ?? onRegenerate}
-      >
-        <ArrowCounterClockwise size={16} />
-        From scratch
-      </GlassPill>
+      {@render fromScratch("Generate a fresh review without using the prior report")}
     {:else if uiState.kind === "stale"}
       <GlassPill
         disabled={destructiveDisabled}
         title={destructiveTitle ?? "Review only what changed since the last reviewed commit"}
-        onclick={onRegenerate}
+        onclick={() => onRegenerate()}
       >
         <ArrowsClockwise size={16} />
         {uiState.label ?? "Review new commits"}
       </GlassPill>
-      <GlassPill
-        disabled={destructiveDisabled}
-        title={destructiveTitle ?? "Generate a fresh review for the latest commit"}
-        onclick={onRegenerateFromScratch ?? onRegenerate}
-      >
-        <ArrowCounterClockwise size={16} />
-        From scratch
-      </GlassPill>
+      {@render fromScratch("Generate a fresh review for the latest commit")}
     {/if}
     </span>
   {/key}

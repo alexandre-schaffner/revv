@@ -1,14 +1,10 @@
 <script lang="ts">
 import type {
   WalkthroughBlock,
-  WalkthroughMode,
   WalkthroughReviewRound,
   WalkthroughSemanticStep,
 } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import CaretDown from "phosphor-svelte/lib/CaretDown";
-import Check from "phosphor-svelte/lib/Check";
-import Clock from "phosphor-svelte/lib/Clock";
 import Warning from "phosphor-svelte/lib/Warning";
 import { onDestroy, onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
@@ -19,7 +15,6 @@ import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
 import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
-import * as Popover from "$lib/components/ui/popover";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
@@ -28,7 +23,6 @@ import {
   clearPendingWalkthroughBlockJump,
   getLoadedHeadSha,
   getPendingWalkthroughBlockJump,
-  getReviewMode,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
@@ -54,6 +48,7 @@ import {
   getRatings,
   getReviewRounds,
   getRiskLevel,
+  getSelectedMode,
   getSelectedReportId,
   getSemanticSteps,
   getSentiment,
@@ -85,7 +80,6 @@ import {
   isAgentAuthRecoveryError,
 } from "$lib/utils/agent-auth-recovery";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { firstPassView } from "$lib/utils/hunk-scan";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
@@ -94,6 +88,7 @@ import {
   partitionBySignal,
   shouldHideLowSignal,
 } from "$lib/utils/walkthrough-issues";
+import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
 import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
 import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
 import FirstPassPreview from "./first-pass/FirstPassPreview.svelte";
@@ -109,8 +104,6 @@ interface Props {
   scrollRoot?: HTMLElement | undefined;
   isActive?: boolean;
 }
-
-type DisplayReportRound = WalkthroughReviewRound & { displayRoundNumber: number };
 
 let { prId, scrollRoot, isActive = true }: Props = $props();
 
@@ -150,7 +143,7 @@ const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
-const selectedMode = $derived(getReviewMode(prId));
+const selectedMode = $derived(getSelectedMode(prId));
 // Merged-PR stamp. `getPrById` spans the open and archived lists, so this
 // keeps answering once the PR moves into the archive.
 const isMerged = $derived(getPrById(prId)?.status === "merged");
@@ -171,95 +164,41 @@ const lastCompletedPhase = $derived(getLastCompletedPhase());
 const generatedBy = $derived(getGeneratedBy());
 const providerConfig = $derived(getProviderConfig());
 const walkthroughSource = $derived(getSource());
-const reviewRounds = $derived(getReviewRounds(prId, selectedMode));
+const reviewRounds = $derived(getReviewRounds(prId));
 const displayedWalkthroughId = $derived(getDisplayedWalkthroughId(prId));
 const selectedReportId = $derived(getSelectedReportId(prId));
 const reportRounds = $derived(reviewRounds?.rounds ?? []);
 const currentReportHeadSha = $derived(reviewRounds?.currentHeadSha ?? null);
-const visibleReportRounds = $derived.by((): DisplayReportRound[] => {
-  const numbered = [...reportRounds]
+// Reports are picked from the commit history in the bottom bar
+// (CommitsDropdown); this component only keeps the one on screen valid.
+const visibleReportRounds = $derived.by((): WalkthroughReviewRound[] =>
+  reportRounds
     .filter((round) => round.visibility !== "hidden")
-    .sort((a, b) => a.roundNumber - b.roundNumber)
-    .map((round, index) => ({ ...round, displayRoundNumber: index + 1 }));
+    .sort((a, b) => {
+      const aCurrent = currentReportHeadSha !== null && a.toSha === currentReportHeadSha;
+      const bCurrent = currentReportHeadSha !== null && b.toSha === currentReportHeadSha;
+      if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
 
-  return numbered.sort((a, b) => {
-    const aCurrent = currentReportHeadSha !== null && a.toSha === currentReportHeadSha;
-    const bCurrent = currentReportHeadSha !== null && b.toSha === currentReportHeadSha;
-    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+      const aTime = Date.parse(a.completedAt ?? a.createdAt);
+      const bTime = Date.parse(b.completedAt ?? b.createdAt);
+      if (aTime !== bTime) return bTime - aTime;
 
-    const aTime = Date.parse(a.completedAt ?? a.createdAt);
-    const bTime = Date.parse(b.completedAt ?? b.createdAt);
-    if (aTime !== bTime) return bTime - aTime;
-
-    return b.roundNumber - a.roundNumber;
-  });
-});
-const activeReportRound = $derived(
-  displayedWalkthroughId
-    ? (visibleReportRounds.find((round) => round.walkthroughId === displayedWalkthroughId) ?? null)
-    : null,
+      return b.roundNumber - a.roundNumber;
+    }),
 );
 const displayedReportIsVisible = $derived(
   displayedWalkthroughId !== null &&
     visibleReportRounds.some((round) => round.walkthroughId === displayedWalkthroughId),
 );
-const reportSelectorVisible = $derived(visibleReportRounds.length > 1 || selectedReportId !== null);
 
-let reportPopoverOpen = $state(false);
 let reportLoadingId = $state<string | null>(null);
 let autoSelectedReportKey: string | null = null;
-
-function reportKindLabel(kind: WalkthroughReviewRound["kind"]): string {
-  return kind === "incremental" ? "New commits" : "Full PR";
-}
-
-function reportStatusLabel(status: WalkthroughReviewRound["status"]): string {
-  if (status === "superseded") return "Previous";
-  if (status === "generating") return "Generating";
-  if (status === "error") return "Stopped";
-  return "Complete";
-}
-
-function reportShortSha(sha: string | null): string {
-  return sha ? sha.slice(0, 7) : "start";
-}
-
-function reportCommitRange(round: WalkthroughReviewRound): string {
-  return `${reportShortSha(round.fromSha)} → ${reportShortSha(round.toSha)}`;
-}
-
-function reportTitle(round: WalkthroughReviewRound & { displayRoundNumber?: number }): string {
-  return `Report ${round.displayRoundNumber ?? round.roundNumber}: ${reportKindLabel(round.kind)}`;
-}
-
-function reportShortName(round: WalkthroughReviewRound): string {
-  if (round.focusTitle) return round.focusTitle;
-  if (currentReportHeadSha !== null && round.toSha === currentReportHeadSha) {
-    return round.kind === "full" ? "Current full review" : "Current changes";
-  }
-  return round.kind === "full" ? "Prior full review" : "Prior changes";
-}
-
-function reportHeadLabel(round: WalkthroughReviewRound): string {
-  return currentReportHeadSha !== null && round.toSha === currentReportHeadSha
-    ? "Current head"
-    : "Older head";
-}
-
-const reportTriggerLabel = $derived.by(() => {
-  if (activeReportRound) {
-    return `${reportTitle(activeReportRound)} · ${reportShortName(activeReportRound)}`;
-  }
-  if (selectedReportId !== null) return "Historical report";
-  return "Walkthrough reports";
-});
 
 async function chooseReport(walkthroughId: string | null): Promise<void> {
   if (reportLoadingId !== null) return;
   reportLoadingId = walkthroughId ?? "latest";
   try {
-    await selectWalkthroughReport(prId, walkthroughId, selectedMode);
-    reportPopoverOpen = false;
+    await selectWalkthroughReport(prId, walkthroughId);
   } finally {
     reportLoadingId = null;
   }
@@ -280,7 +219,7 @@ $effect(() => {
     return;
   }
 
-  const key = `${prId}:${selectedMode}:${candidate.walkthroughId}`;
+  const key = `${prId}:${candidate.walkthroughId}`;
   if (autoSelectedReportKey === key) return;
   autoSelectedReportKey = key;
   void chooseReport(candidate.walkthroughId);
@@ -297,6 +236,7 @@ const footerParts: string[] = $derived.by(() => {
   if (providerConfig?.thinkingEffort) {
     parts.push(`thinking: ${providerConfig.thinkingEffort}`);
   }
+  parts.push(`${WALKTHROUGH_PERSPECTIVES[selectedMode].label.toLowerCase()} perspective`);
   if (walkthroughSource === "remote") {
     parts.push("loaded from team cache");
   }
@@ -308,12 +248,12 @@ let elapsedSeconds = $state(0);
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 let hydrating = $state(true);
-let hydratedForMode: WalkthroughMode | null = $state(null);
+let hydratedForPr: string | null = null;
 let lastStreamErrorToast: string | null = null;
 let lastCloneErrorToast: string | null = null;
 
 $effect(() => {
-  void loadReviewRounds(prId, selectedMode);
+  void loadReviewRounds(prId);
 });
 
 $effect(() => {
@@ -424,7 +364,7 @@ $effect(() => {
     // the activity clock, which would otherwise hammer the endpoint every tick.
     if (now - lastStallReconcileAt <= threshold) return;
     lastStallReconcileAt = now;
-    void hydrateFromCache(watchedPrId, { activate: false, mode: selectedMode });
+    void hydrateFromCache(watchedPrId, { activate: false });
   }, STALL_CHECK_INTERVAL_MS);
   return () => {
     if (stallTimer) {
@@ -1034,29 +974,36 @@ onMount(() => {
   initHighlighter();
 });
 
+// Keyed on the PR only. The server picks the perspective (the newest
+// walkthrough's, else identity), so a perspective switch — which seeds its own
+// entry — never re-runs this and races the start request.
 $effect(() => {
-  const mode = selectedMode;
-  if (hydratedForMode === mode) return;
-  hydratedForMode = mode;
-  hydrating = true;
-  // Seed a loading entry synchronously so the UI renders the skeleton
-  // while we check the cache. Without this, the derived state resolves
-  // to defaults (no summary, not streaming, no error) and the template
-  // briefly shows the "No walkthrough data received" empty state.
-  prepareEntry(prId, mode);
-  // Try to hydrate instantly from the JSON cache endpoint. On a hit the
-  // walkthrough renders immediately with no SSE round-trip. On a miss
-  // we fall back to the debounced SSE stream — the debounce is intentional
-  // for uncached PRs so quickly arrowing through the PR list doesn't
-  // trigger spurious AI generations.
-  hydrateFromCache(prId, { mode }).then(
-    () => {
-      hydrating = false;
-    },
-    () => {
-      hydrating = false;
-    },
-  );
+  const id = prId;
+  if (hydratedForPr === id) return;
+  hydratedForPr = id;
+  // Untracked: the store reads below must not subscribe this effect to
+  // every entry write.
+  untrack(() => {
+    hydrating = true;
+    // Seed a loading entry synchronously so the UI renders the skeleton
+    // while we check the cache. Without this, the derived state resolves
+    // to defaults (no summary, not streaming, no error) and the template
+    // briefly shows the "No walkthrough data received" empty state.
+    prepareEntry(id);
+    // Try to hydrate instantly from the JSON cache endpoint. On a hit the
+    // walkthrough renders immediately with no SSE round-trip. On a miss
+    // we fall back to the debounced SSE stream — the debounce is intentional
+    // for uncached PRs so quickly arrowing through the PR list doesn't
+    // trigger spurious AI generations.
+    hydrateFromCache(id).then(
+      () => {
+        hydrating = false;
+      },
+      () => {
+        hydrating = false;
+      },
+    );
+  });
 });
 
 onDestroy(() => {
@@ -1127,62 +1074,12 @@ function handleResume(): void {
 		<!-- Pressed into the top-right of the content column. Its own grid row
 		     (same 6-col template as the stepper header) so it aligns with the
 		     content column on every sidebar/right-panel toggle, and so it never
-		     overlaps the report selector below it. -->
+		     overlaps the stepper below it. -->
 		<div class="merged-stamp-row">
 			<MergedStamp {prId} {mergedAt} />
 		</div>
 	{/if}
 
-	{#if reportSelectorVisible}
-		<div class="report-selector-row">
-			<Popover.Root bind:open={reportPopoverOpen}>
-				<Popover.Trigger
-					class="report-selector-trigger"
-					aria-label="Choose walkthrough report"
-					title="Choose walkthrough report"
-				>
-					<Clock size={13} aria-hidden="true" />
-					<span>{reportTriggerLabel}</span>
-					<CaretDown size={12} aria-hidden="true" />
-				</Popover.Trigger>
-
-				<Popover.Content align="start" sideOffset={6} class="report-selector-popover">
-					<div class="report-selector-header">
-						<span>Walkthrough reports</span>
-					</div>
-
-					<div class="report-option-list">
-						{#each visibleReportRounds as round (round.id)}
-							{@const active = displayedWalkthroughId === round.walkthroughId}
-							{@const disabled = reportLoadingId !== null || round.status === 'generating'}
-							<button
-								type="button"
-								class="report-option"
-								class:report-option--active={active}
-								disabled={disabled}
-								onclick={() => chooseReport(round.walkthroughId)}
-							>
-								<span class="report-check" aria-hidden="true">
-									{#if active}
-										<Check size={12} />
-									{/if}
-								</span>
-								<span class="report-option-main">
-									<span class="report-option-title">
-										<span>{reportTitle(round)}</span>
-										<span class="report-option-shortname">{reportShortName(round)}</span>
-									</span>
-									<span class="report-option-meta">
-										{reportStatusLabel(round.status)} · {reportHeadLabel(round)} · {reportCommitRange(round)} · {formatRelativeTime(round.completedAt ?? round.createdAt)}
-									</span>
-								</span>
-							</button>
-						{/each}
-					</div>
-				</Popover.Content>
-			</Popover.Root>
-		</div>
-	{/if}
 
 	{#if !streamError && stepperVisible}
 		<!-- Persistent chapters stepper. Replaces the old A→B→C→D dot indicator.
@@ -1704,7 +1601,7 @@ function handleResume(): void {
 	.merged-stamp-row {
 		display: grid;
 		/* Byte-identical 6-col template to `.walkthrough-content` (and the
-		   stepper header / report selector), so the right-aligned stamp lands
+		   stepper header), so the right-aligned stamp lands
 		   on col 3's right edge — the content column's right edge — at every
 		   main-area width. It MUST stay `minmax(0, 820px)` rather than a hard
 		   `820px`: a hard track keeps its full width once the main area drops
@@ -1731,150 +1628,6 @@ function handleResume(): void {
 		   keeps its height and only the ink moves. */
 		margin-top: -22px;
 		margin-bottom: 22px;
-	}
-
-	.report-selector-row {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding: 18px 0 0;
-	}
-
-	.report-selector-row > :global(*) {
-		grid-column: 3;
-		justify-self: start;
-	}
-
-	:global(.report-selector-trigger) {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		max-width: min(100%, 340px);
-		height: 28px;
-		padding: 0 10px;
-		border: 1px solid var(--color-border);
-		border-radius: 999px;
-		background: var(--color-bg-elevated);
-		color: var(--color-text-secondary);
-		font-size: 0.75rem;
-		line-height: 1;
-	}
-
-	:global(.report-selector-trigger:hover),
-	:global(.report-selector-trigger[data-state="open"]) {
-		border-color: var(--color-border-strong);
-		color: var(--color-text-primary);
-	}
-
-	:global(.report-selector-trigger span) {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	:global(.report-selector-popover) {
-		width: min(420px, calc(100vw - 32px));
-		max-height: min(480px, calc(100vh - 120px));
-		overflow: auto;
-	}
-
-	.report-selector-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 2px 4px;
-		font-size: 0.72rem;
-		font-weight: 650;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-
-	.report-option-list {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.report-option {
-		display: grid;
-		grid-template-columns: 18px minmax(0, 1fr);
-		gap: 8px;
-		width: 100%;
-		padding: 8px;
-		border: 1px solid transparent;
-		border-radius: 8px;
-		background: transparent;
-		color: var(--color-text-primary);
-		text-align: left;
-	}
-
-	.report-option:hover:not(:disabled),
-	.report-option--active {
-		border-color: var(--color-border);
-		background: var(--color-bg-elevated);
-	}
-
-	.report-option:disabled {
-		opacity: 0.55;
-		cursor: default;
-	}
-
-	.report-check {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 18px;
-		height: 18px;
-		color: var(--color-accent);
-	}
-
-	.report-option-main {
-		display: flex;
-		min-width: 0;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.report-option-title {
-		display: flex;
-		min-width: 0;
-		align-items: baseline;
-		gap: 6px;
-		overflow: hidden;
-		font-size: 0.82rem;
-		font-weight: 650;
-		color: var(--color-text-primary);
-	}
-
-	.report-option-title > span:first-child,
-	.report-option-shortname,
-	.report-option-meta {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.report-option-title > span:first-child {
-		flex: 0 0 auto;
-	}
-
-	.report-option-shortname {
-		min-width: 0;
-		flex: 1 1 auto;
-		font-weight: 500;
-		color: var(--color-text-muted);
-	}
-
-	.report-option-meta {
-		font-size: 0.72rem;
-		color: var(--color-text-muted);
 	}
 
 	/* ── Persistent chapters stepper header ─────────────────────────────
@@ -2381,7 +2134,6 @@ function handleResume(): void {
 		.block-annotation,
 		.issues-section,
 		.walkthrough-content,
-		.report-selector-row,
 		.walkthrough-stepper-header,
 		.dotmatrix-dot {
 			animation-duration: 0.01ms !important;
@@ -2492,7 +2244,6 @@ function handleResume(): void {
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
 		.merged-stamp-row,
-		.report-selector-row,
 		.walkthrough-stepper-header {
 			display: block;
 			width: 100%;
@@ -2523,7 +2274,6 @@ function handleResume(): void {
 
 		.walkthrough-loading > :global(*),
 		.merged-stamp-row > :global(*),
-		.report-selector-row > :global(*),
 		.walkthrough-stepper-header > :global(*) {
 			grid-column: auto;
 		}

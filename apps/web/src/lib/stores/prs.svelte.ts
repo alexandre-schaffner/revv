@@ -260,9 +260,9 @@ export function getPrById(prId: string): PullRequest | null {
 /**
  * The review lens for a PR, derived purely from identity: `"author"` when the
  * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
- * source of truth — there is no manual override. (The server still stores an
- * author walkthrough and a reviewer walkthrough separately per head SHA; we
- * always request the one that matches the viewer's role.)
+ * source of truth for the review session — there is no manual override. It is
+ * also the default walkthrough perspective, which the user can change per
+ * generation (`getSelectedMode` in the walkthrough store).
  */
 export function getReviewModeForPr(prId: string): ReviewMode {
   const pr = getPrById(prId);

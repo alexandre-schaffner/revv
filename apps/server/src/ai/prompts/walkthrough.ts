@@ -279,9 +279,6 @@ export function buildWalkthroughPrompt(
     "",
     `## Pull Request: ${params.pr.title}`,
     `Branch: ${params.pr.sourceBranch} → ${params.pr.targetBranch}`,
-    mode === REVIEW_MODE.author
-      ? "Review perspective: SELF-REVIEW — the reader is the PR's own author, reviewing their own changes before requesting (or continuing) human review. This is determined automatically by who is viewing; it is not a user-chosen mode."
-      : "Review perspective: REVIEWER — the reader is a reviewer assessing a pull request authored by someone else. This is determined automatically by who is viewing; it is not a user-chosen mode.",
   ];
   if (params.pr.body) {
     lines.push("", "### Description", params.pr.body);
