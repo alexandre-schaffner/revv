@@ -3,11 +3,8 @@
 1. Call `get_review_context` before searching the checkout. Treat its issue
    IDs, thread IDs, and walkthrough targeting keys as authoritative. For
    content edits and feedback writes, pass `walkthrough.reviewedHeadSha` as
-   `expected_head_sha`; `pr.headSha` may advance after you push the fix.
-   To start a first review, push and call `generate_walkthrough` with
-   `head_sha: <git rev-parse HEAD>`. It defaults to a full review in the PR's
-   selected perspective. Call `wait_for_walkthrough` with the returned
-   `walkthroughId`, then `get_review_context` after completion.
+   `expected_head_sha`; `pr.headSha` may advance after you push the fix. If
+   the PR has no review yet, request one first (see below).
 2. State which issue or thread you are addressing. Inspect the referenced code
    and implement the smallest complete fix.
 3. Run the repository's required checks. Do not claim an issue is addressed
@@ -31,14 +28,16 @@ Never mark feedback resolved merely because code was edited. Record the actual
 verification result, and leave the item open if verification failed or was not
 run.
 
-## Request another review
+## Request a review
 
-To have Revv re-review your work (an adversarial review loop):
+To have Revv review the PR for the first time, or re-review your work (an
+adversarial review loop):
 
 1. Commit and push. Pass the pushed commit (`git rev-parse HEAD`) to
-   `request_walkthrough`. Keep the default `incremental` mode for a follow-up
-   round: it reviews the new commits and re-checks the earlier findings.
-   Use `full` only when the PR changed shape.
+   `request_walkthrough` and keep the default `incremental` mode. With no
+   earlier review it runs a full review; on a follow-up round it reviews the
+   new commits and re-checks the earlier findings. Use `full` only when the
+   PR changed shape.
 2. Call `wait_for_walkthrough` with the returned `walkthroughId` until its
    status leaves `generating`. A review takes several minutes; keep calling.
 3. On `complete`, call `get_review_context` and address the new findings as

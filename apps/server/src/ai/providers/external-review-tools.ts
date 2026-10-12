@@ -380,9 +380,11 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
   },
 };
 
+// Optional rather than `.default()`: zod's JSON Schema marks a defaulted field
+// required, which would make every client send a mode it shouldn't have to pick.
 const requestWalkthroughSchema = z.object({
   head_sha: shaSchema,
-  generation_mode: z.enum(["incremental", "full"]).default("incremental"),
+  generation_mode: z.enum(["incremental", "full"]).optional(),
 });
 
 function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: string): string {
@@ -401,7 +403,7 @@ function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: s
 const requestWalkthroughSpec: ExternalReviewToolSpec = {
   name: "request_walkthrough",
   description:
-    "Ask Revv to review the PR at head_sha: the commit you just pushed (`git rev-parse HEAD`). Push first — Revv reviews what GitHub serves. Returns a walkthroughId at once; generation takes minutes, so pass it to wait_for_walkthrough. Idempotent per head: a finished review of that head is returned instead of a new run, and a run in progress is joined. Refuses to restart a run the user stopped, and refuses once a head or PR has used its run budget. generation_mode 'incremental' (default) reviews the commits since the last review and re-checks its findings; 'full' re-reviews the whole PR.",
+    "Ask Revv to review the PR at head_sha: the commit you just pushed (`git rev-parse HEAD`). Push first — Revv reviews what GitHub serves. Returns a walkthroughId at once; generation takes minutes, so pass it to wait_for_walkthrough. Idempotent per head: a finished review of that head is returned instead of a new run, and a run in progress is joined. Refuses to restart a run the user stopped, and refuses once a head or PR has used its run budget. generation_mode 'incremental' (default) reviews the commits since the last review and re-checks its findings; with no earlier review it runs a full review, so the default also starts a first review. 'full' re-reviews the whole PR.",
   inputSchema: requestWalkthroughSchema,
   scope: "walkthrough:generate",
   handler: async (ctx, input) => {
@@ -410,7 +412,7 @@ const requestWalkthroughSpec: ExternalReviewToolSpec = {
     try {
       outcome = await ctx.requestWalkthrough({
         headSha: parsed.head_sha,
-        generationMode: parsed.generation_mode,
+        generationMode: parsed.generation_mode ?? "incremental",
       });
     } catch (error) {
       return fail(
@@ -441,20 +443,6 @@ const requestWalkthroughSpec: ExternalReviewToolSpec = {
       ),
     );
   },
-};
-
-const generateWalkthroughSchema = requestWalkthroughSchema
-  .extend({ generation_mode: z.enum(["incremental", "full"]).default("full") })
-  .strict();
-
-const generateWalkthroughSpec: ExternalReviewToolSpec = {
-  ...requestWalkthroughSpec,
-  name: "generate_walkthrough",
-  description:
-    "Generate a walkthrough of the PR at head_sha: the commit you pushed (`git rev-parse HEAD`). Defaults to a full review; use generation_mode 'incremental' to review new commits. Uses the PR's selected perspective and the same head checks, run budgets, cancellation protection, and idempotency as request_walkthrough. Returns a walkthroughId without waiting for completion; call wait_for_walkthrough, then get_review_context to read the findings.",
-  inputSchema: generateWalkthroughSchema,
-  handler: (ctx, input) =>
-    requestWalkthroughSpec.handler(ctx, generateWalkthroughSchema.parse(input)),
 };
 
 /**
@@ -546,7 +534,6 @@ const waitForWalkthroughSpec: ExternalReviewToolSpec = {
 
 export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> = [
   sharedExternalSpec("get_review_context", "context:read"),
-  generateWalkthroughSpec,
   sharedExternalSpec("get_walkthrough_for_edit", "context:read"),
   sharedExternalSpec("update_overview", "walkthrough:edit"),
   sharedExternalSpec("update_semantic_step", "walkthrough:edit"),

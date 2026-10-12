@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
-  EXTERNAL_AGENT_PROVIDERS,
   type ExternalAgentProvider,
   type ThreadEventMessage,
   type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
-import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
+import { toJsonSchema } from "../../routes/mcp/utils";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,
-  hasExternalToolScope,
   scopeForExternalTool,
 } from "./external-review-tools";
 
@@ -128,98 +126,8 @@ function tool(name: string) {
 
 describe("external review tools", () => {
   it("declares exactly one authorization scope on every exposed tool", () => {
-    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(14);
-    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(14);
     for (const spec of EXTERNAL_REVIEW_TOOL_SPECS) {
       expect(scopeForExternalTool(spec.name)).toBe(spec.scope);
-    }
-  });
-
-  it("requires generation permission instead of content-edit or read-only permission", () => {
-    expect(hasExternalToolScope("generate_walkthrough", ["walkthrough:generate"])).toBe(true);
-    expect(hasExternalToolScope("generate_walkthrough", ["walkthrough:edit"])).toBe(false);
-    expect(hasExternalToolScope("generate_walkthrough", ["context:read"])).toBe(false);
-  });
-
-  it.each(EXTERNAL_AGENT_PROVIDERS.map((provider): [ExternalAgentProvider] => [provider]))(
-    "%s can request a first full walkthrough through the guarded generation path",
-    async (provider) => {
-      const db = seededDb();
-      db.$client.run("DELETE FROM walkthroughs");
-      const requested: Parameters<ExternalReviewToolContext["requestWalkthrough"]>[0][] = [];
-      const ctx = context(db, provider, HEAD_SHA, async (input) => {
-        requested.push(input);
-        return {
-          kind: "started",
-          walkthroughId: "walkthrough-2",
-          headSha: input.headSha,
-          mode: "author",
-        };
-      });
-
-      const result = await tool("generate_walkthrough").handler(ctx.value, {
-        head_sha: HEAD_SHA.toUpperCase(),
-      });
-
-      expect(result.isError).toBeUndefined();
-      expect(JSON.parse(result.content[0]?.text ?? "null")).toMatchObject({
-        outcome: "started",
-        walkthroughId: "walkthrough-2",
-        mode: "author",
-      });
-      expect(requested).toEqual([{ headSha: HEAD_SHA, generationMode: "full" }]);
-      expect(db.$client.query("SELECT id FROM walkthroughs").all()).toEqual([]);
-      expect(ctx.walkthroughEvents).toEqual([]);
-    },
-  );
-
-  it("passes an explicit incremental generation mode through the shared handler", async () => {
-    const ctx = context(seededDb(), "codex", HEAD_SHA, async (input) => {
-      expect(input).toEqual({ headSha: HEAD_SHA, generationMode: "incremental" });
-      return {
-        kind: "joined",
-        walkthroughId: "walkthrough-1",
-        headSha: HEAD_SHA,
-        mode: "reviewer",
-      };
-    });
-
-    const result = await tool("generate_walkthrough").handler(ctx.value, {
-      head_sha: HEAD_SHA,
-      generation_mode: "incremental",
-    });
-
-    expect(JSON.parse(result.content[0]?.text ?? "null")).toMatchObject({ outcome: "joined" });
-  });
-
-  it("requires a valid pushed head and rejects caller-selected PR, user, and perspective", () => {
-    const schema = tool("generate_walkthrough").inputSchema;
-    for (const input of [
-      {},
-      { head_sha: "invalid" },
-      { head_sha: HEAD_SHA, generation_mode: "invalid" },
-      { head_sha: HEAD_SHA, pr_id: "another-account-pr" },
-      { head_sha: HEAD_SHA, user_id: "another-user" },
-      { head_sha: HEAD_SHA, mode: "author" },
-    ]) {
-      expect(schema.safeParse(input).success).toBe(false);
-    }
-  });
-
-  it("preserves cancellation and budget refusals from the shared generation path", async () => {
-    const refused: WalkthroughRequestOutcome[] = [
-      { kind: "stopped_by_user", walkthroughId: "walkthrough-1" },
-      { kind: "budget_exhausted", scope: "head", runs: 3 },
-      { kind: "head_mismatch", githubHeadSha: "b".repeat(40) },
-    ];
-    const db = seededDb();
-    for (const outcome of refused) {
-      const ctx = context(db, "codex", HEAD_SHA, async () => outcome);
-      const input = { head_sha: HEAD_SHA, generation_mode: "full" };
-      const generated = await tool("generate_walkthrough").handler(ctx.value, input);
-      const requested = await tool("request_walkthrough").handler(ctx.value, input);
-      expect(generated.isError).toBe(true);
-      expect(generated).toEqual(requested);
     }
   });
 
@@ -452,6 +360,37 @@ describe("external review tools", () => {
     expect(result.content[0]?.text).toBe(
       "Revv could not start the walkthrough: Revv is still cloning this repository. Retry in a minute.",
     );
+  });
+
+  it("defaults to an incremental request and passes an explicit mode through", async () => {
+    const db = seededDb();
+    const requested: Parameters<ExternalReviewToolContext["requestWalkthrough"]>[0][] = [];
+    const ctx = context(db, "claude-code", HEAD_SHA, async (input) => {
+      requested.push(input);
+      return {
+        kind: "started",
+        walkthroughId: "walkthrough-2",
+        headSha: input.headSha,
+        mode: "reviewer",
+      };
+    });
+
+    await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    await tool("request_walkthrough").handler(ctx.value, {
+      head_sha: HEAD_SHA,
+      generation_mode: "full",
+    });
+
+    expect(requested).toEqual([
+      { headSha: HEAD_SHA, generationMode: "incremental" },
+      { headSha: HEAD_SHA, generationMode: "full" },
+    ]);
+  });
+
+  it("advertises generation_mode as optional", () => {
+    expect(toJsonSchema(tool("request_walkthrough").inputSchema)).toMatchObject({
+      required: ["head_sha"],
+    });
   });
 
   it("accepts an uppercase head SHA and passes it on lowercased", async () => {

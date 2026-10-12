@@ -4,7 +4,10 @@ import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   MAX_WAIT_SECONDS,
 } from "../apps/server/src/ai/providers/external-review-tools";
-import { EXTERNAL_AGENT_SCOPES } from "../apps/server/src/services/ExternalIntegrations";
+import {
+  EXTERNAL_AGENT_SCOPES,
+  type ExternalAgentScope,
+} from "../apps/server/src/services/ExternalIntegrations";
 
 const names = EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name);
 const duplicateNames = names.filter((name, index) => names.indexOf(name) !== index);
@@ -20,9 +23,34 @@ if (unknownScopes.length > 0) {
     `External MCP tools have unknown scopes: ${unknownScopes.map((spec) => spec.name).join(", ")}`,
   );
 }
-if (EXTERNAL_REVIEW_TOOL_SPECS.length !== 14) {
+// The reviewed external surface. A count would pass a swapped tool or a changed
+// scope; this table makes every name and scope change an explicit edit here.
+const REVIEWED_SURFACE: Record<string, ExternalAgentScope> = {
+  get_review_context: "context:read",
+  get_walkthrough_for_edit: "context:read",
+  update_overview: "walkthrough:edit",
+  update_semantic_step: "walkthrough:edit",
+  update_block: "walkthrough:edit",
+  update_sentiment: "walkthrough:edit",
+  update_rating: "walkthrough:edit",
+  update_issue: "walkthrough:edit",
+  record_issue_resolution: "issues:resolve",
+  reply_to_comment: "comments:write",
+  update_comment_status: "comments:write",
+  request_walkthrough: "walkthrough:generate",
+  wait_for_walkthrough: "context:read",
+};
+const surfaceDrift = [
+  ...EXTERNAL_REVIEW_TOOL_SPECS.filter((spec) => REVIEWED_SURFACE[spec.name] !== spec.scope).map(
+    (spec) => `${spec.name} (${spec.scope})`,
+  ),
+  ...Object.keys(REVIEWED_SURFACE)
+    .filter((name) => !names.includes(name))
+    .map((name) => `${name} (missing)`),
+];
+if (surfaceDrift.length > 0) {
   throw new Error(
-    `Expected the reviewed 14-tool external surface, found ${EXTERNAL_REVIEW_TOOL_SPECS.length}. Review authorization before changing this gate.`,
+    `External MCP tools differ from the reviewed surface: ${surfaceDrift.join(", ")}. Review authorization before changing this gate.`,
   );
 }
 
