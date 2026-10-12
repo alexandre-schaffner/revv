@@ -20,9 +20,9 @@ if (unknownScopes.length > 0) {
     `External MCP tools have unknown scopes: ${unknownScopes.map((spec) => spec.name).join(", ")}`,
   );
 }
-if (EXTERNAL_REVIEW_TOOL_SPECS.length !== 13) {
+if (EXTERNAL_REVIEW_TOOL_SPECS.length !== 14) {
   throw new Error(
-    `Expected the reviewed 13-tool external surface, found ${EXTERNAL_REVIEW_TOOL_SPECS.length}. Review authorization before changing this gate.`,
+    `Expected the reviewed 14-tool external surface, found ${EXTERNAL_REVIEW_TOOL_SPECS.length}. Review authorization before changing this gate.`,
   );
 }
 

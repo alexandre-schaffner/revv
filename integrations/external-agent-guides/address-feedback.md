@@ -2,8 +2,12 @@
 
 1. Call `get_review_context` before searching the checkout. Treat its issue
    IDs, thread IDs, and walkthrough targeting keys as authoritative. For
-   write tools, pass `walkthrough.reviewedHeadSha` as `expected_head_sha`;
-   `pr.headSha` may advance after you push the fix.
+   content edits and feedback writes, pass `walkthrough.reviewedHeadSha` as
+   `expected_head_sha`; `pr.headSha` may advance after you push the fix.
+   To start a first review, push and call `generate_walkthrough` with
+   `head_sha: <git rev-parse HEAD>`. It defaults to a full review in the PR's
+   selected perspective. Call `wait_for_walkthrough` with the returned
+   `walkthroughId`, then `get_review_context` after completion.
 2. State which issue or thread you are addressing. Inspect the referenced code
    and implement the smallest complete fix.
 3. Run the repository's required checks. Do not claim an issue is addressed

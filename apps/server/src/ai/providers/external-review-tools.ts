@@ -443,6 +443,20 @@ const requestWalkthroughSpec: ExternalReviewToolSpec = {
   },
 };
 
+const generateWalkthroughSchema = requestWalkthroughSchema
+  .extend({ generation_mode: z.enum(["incremental", "full"]).default("full") })
+  .strict();
+
+const generateWalkthroughSpec: ExternalReviewToolSpec = {
+  ...requestWalkthroughSpec,
+  name: "generate_walkthrough",
+  description:
+    "Generate a walkthrough of the PR at head_sha: the commit you pushed (`git rev-parse HEAD`). Defaults to a full review; use generation_mode 'incremental' to review new commits. Uses the PR's selected perspective and the same head checks, run budgets, cancellation protection, and idempotency as request_walkthrough. Returns a walkthroughId without waiting for completion; call wait_for_walkthrough, then get_review_context to read the findings.",
+  inputSchema: generateWalkthroughSchema,
+  handler: (ctx, input) =>
+    requestWalkthroughSpec.handler(ctx, generateWalkthroughSchema.parse(input)),
+};
+
 /**
  * Under the 60 s tool-call timeout some clients default to (Codex), and so
  * under the bridge's 120 s request budget too — the bridge is single-lane, so
@@ -532,6 +546,7 @@ const waitForWalkthroughSpec: ExternalReviewToolSpec = {
 
 export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> = [
   sharedExternalSpec("get_review_context", "context:read"),
+  generateWalkthroughSpec,
   sharedExternalSpec("get_walkthrough_for_edit", "context:read"),
   sharedExternalSpec("update_overview", "walkthrough:edit"),
   sharedExternalSpec("update_semantic_step", "walkthrough:edit"),
