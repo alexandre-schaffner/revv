@@ -145,6 +145,14 @@ export const blockContentSchema = z
     "REQUIRED. Exactly one of { markdown, code, diff, artifact } — the same shape add_diff_step uses.",
   );
 
+/**
+ * Appended to every `semantic_step_index` that targets an existing chapter.
+ * The user reads "Chapter 2" off the UI; the index behind it is usually 1, or
+ * anything after a delete left a gap.
+ */
+const CHAPTER_INDEX_NOTE =
+  "This is NOT the chapter number the user sees in the UI: map the user's 'chapter N' through `chapterNumber` in get_walkthrough_for_edit (the Overview is chapter 0, the walkthrough summary).";
+
 /** Composite identifier for an existing diff block (matches walkthrough-tool-spec.ts). */
 const blockRefSchema = z.object({
   semantic_step_index: z.coerce.number().int().nonnegative(),
@@ -207,7 +215,7 @@ export const updateSemanticStepSchema = z.object({
     .number()
     .int()
     .nonnegative()
-    .describe("Existing chapter to update — must already exist."),
+    .describe(`Existing chapter to update — must already exist. ${CHAPTER_INDEX_NOTE}`),
   title: z
     .string()
     .min(1)
@@ -229,7 +237,7 @@ export const deleteSemanticStepSchema = z.object({
     .int()
     .nonnegative()
     .describe(
-      "Chapter to remove. Cascades to all blocks inside the chapter. Rejected if any block in the chapter is the only blockId on a warning/critical issue, or if any affected issue has been pushed to GitHub (submittedAt!=null) — delete those issues first.",
+      `Chapter to remove. Cascades to all blocks inside the chapter. Rejected if any block in the chapter is the only blockId on a warning/critical issue, or if any affected issue has been pushed to GitHub (submittedAt!=null) — delete those issues first. ${CHAPTER_INDEX_NOTE}`,
     ),
 });
 
@@ -239,7 +247,7 @@ export const addBlockSchema = z.object({
     .int()
     .nonnegative()
     .describe(
-      "Index of the parent chapter — must already exist. Use update_semantic_step or add_semantic_step first if you need a new chapter.",
+      `Index of the parent chapter — must already exist. Use update_semantic_step or add_semantic_step first if you need a new chapter. ${CHAPTER_INDEX_NOTE}`,
     ),
   step_index: z.coerce
     .number()
@@ -254,7 +262,7 @@ export const addBlockSchema = z.object({
 });
 
 export const updateBlockSchema = z.object({
-  semantic_step_index: z.coerce.number().int().nonnegative(),
+  semantic_step_index: z.coerce.number().int().nonnegative().describe(CHAPTER_INDEX_NOTE),
   step_index: z.coerce
     .number()
     .int()

@@ -35,7 +35,7 @@ describe("routeSizing — model", () => {
 
   it("downgrades only when the user declined to pin a model", () => {
     const routed = routeSizing(input({ depth: "shallow", configuredModel: AUTO_SENTINEL }));
-    expect(routed?.model).toBe("claude-haiku-4-5-20251001");
+    expect(routed?.model).toBe("claude-haiku-5-5");
   });
 
   it("leaves an off-ladder pinned model alone", () => {

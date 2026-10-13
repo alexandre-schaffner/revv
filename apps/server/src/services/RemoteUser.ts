@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { remoteUsers } from "../db/schema/remote-users";
 import { DbService } from "./Db";
@@ -41,6 +41,14 @@ export class RemoteUserService extends Context.Tag("RemoteUserService")<
      * Returns null if user not found or no avatar cached.
      */
     readonly getAvatarContent: (login: string) => Effect.Effect<string | null>;
+
+    /**
+     * {@link getAvatarContent} for many logins in one query. Logins without a
+     * cached avatar are absent from the map.
+     */
+    readonly getAvatarContents: (
+      logins: readonly string[],
+    ) => Effect.Effect<ReadonlyMap<string, string>>;
 
     /**
      * Fetch an image from a URL and return as base64 data URL.
@@ -182,6 +190,23 @@ export const RemoteUserServiceLive = Layer.effect(
             .get();
           return row?.avatarContent ?? null;
         }).pipe(Effect.orElseSucceed(() => null)),
+
+      getAvatarContents: (logins) =>
+        Effect.tryPromise(async () => {
+          if (logins.length === 0) return new Map<string, string>();
+          const rows = await db
+            .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(
+              and(inArray(remoteUsers.login, [...logins]), isNotNull(remoteUsers.avatarContent)),
+            )
+            .all();
+          return new Map(
+            rows.flatMap((row) =>
+              row.avatarContent ? [[row.login, row.avatarContent] as const] : [],
+            ),
+          );
+        }).pipe(Effect.orElseSucceed(() => new Map<string, string>())),
 
       fetchAsDataUrl: (url) =>
         Effect.tryPromise(() => fetchImageAsDataUrl(url)).pipe(Effect.orElseSucceed(() => "")),

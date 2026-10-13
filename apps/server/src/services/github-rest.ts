@@ -438,15 +438,22 @@ export function githubDelete(
   path: string,
   token: string,
   apiBase: string,
+  body?: Record<string, unknown>,
 ): Effect.Effect<unknown, GitHubError> {
   return Effect.tryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
-        {
-          method: "DELETE",
-          headers: githubHeaders(token),
-        },
+        body
+          ? {
+              method: "DELETE",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {
+              method: "DELETE",
+              headers: githubHeaders(token),
+            },
         path,
       );
       assertGitHubOk(res, path);
@@ -457,9 +464,59 @@ export function githubDelete(
   });
 }
 
+/**
+ * GET an endpoint that answers with a redirect to a short-lived download URL
+ * (Actions job logs) and return the target's body as text. The redirect is
+ * followed by hand so the GitHub token never travels to the storage host.
+ */
+export function githubFetchRedirectText(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<string, GitHubError> {
+  return Effect.withSpan("GitHub.fetchRedirectText", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          { headers: githubHeaders(token), redirect: "manual" },
+          path,
+        );
+        const location = res.headers.get("Location");
+        if (res.status >= 300 && res.status < 400 && location) {
+          const target = await githubHttpFetch(location, {}, path);
+          if (!target.ok) {
+            throw new GitHubApiError({
+              status: target.status,
+              cause: `HTTP ${target.status} for ${path} (download)`,
+            });
+          }
+          return target.text();
+        }
+        if (res.status === 410) {
+          throw new GitHubApiError({ status: 410, cause: `HTTP 410 for ${path}` });
+        }
+        assertGitHubOk(res, path);
+        return res.text();
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+/** One entry of a GraphQL response's `errors` array. */
+export interface GraphqlError {
+  readonly message: string;
+  readonly type?: string;
+  /** Where in `data` the failed field sits, e.g. `["repository", "pullRequest"]`. */
+  readonly path?: ReadonlyArray<string | number>;
+}
+
 interface GraphqlPayload<T> {
   readonly data?: T | null;
-  readonly errors?: ReadonlyArray<{ readonly message: string; readonly type?: string }>;
+  readonly errors?: ReadonlyArray<GraphqlError>;
 }
 
 /**
@@ -474,7 +531,7 @@ function postGraphql<T>(
   token: string,
   apiBase: string,
   tolerateErrors: boolean,
-): Effect.Effect<T, GitHubError> {
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
   const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
   return Effect.withSpan("GitHub.graphql", {
     attributes: { operationName },
@@ -516,10 +573,17 @@ function postGraphql<T>(
             cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
           });
         }
+        // A query GraphQL refused outright (an unknown field on an older GitHub
+        // Enterprise) answers with no `data` at all. Keep its messages: callers
+        // read them to tell a schema complaint from any other failure.
         if (!payload.data) {
-          throw new GitHubApiError({ status: res.status, cause: "GraphQL: empty data field" });
+          const messages = payload.errors?.map((e) => e.message).join("; ");
+          throw new GitHubApiError({
+            status: res.status,
+            cause: `GraphQL: ${messages || "empty data field"}`,
+          });
         }
-        return payload.data;
+        return { data: payload.data, errors: payload.errors ?? [] };
       },
       catch: toGitHubError,
     }),
@@ -532,7 +596,7 @@ export function githubGraphql<T = unknown>(
   token: string,
   apiBase: string,
 ): Effect.Effect<T, GitHubError> {
-  return postGraphql<T>(query, variables, token, apiBase, false);
+  return postGraphql<T>(query, variables, token, apiBase, false).pipe(Effect.map((r) => r.data));
 }
 
 /**
@@ -547,7 +611,45 @@ export function githubGraphqlPartial<T = unknown>(
   token: string,
   apiBase: string,
 ): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true).pipe(Effect.map((r) => r.data));
+}
+
+/**
+ * {@link githubGraphqlPartial} that also hands back GitHub's `errors`, for
+ * callers that must tell which fields came back null and why: a GitHub App
+ * installation without `checks: read` gets `FORBIDDEN` on `statusCheckRollup`
+ * and nothing else, and "can't see the checks" must not read as "no checks".
+ */
+export function githubGraphqlWithErrors<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
   return postGraphql<T>(query, variables, token, apiBase, true);
+}
+
+/**
+ * Ask a GraphQL query that names fields an older GitHub Enterprise may lack.
+ * GraphQL rejects the whole query on one unknown field or enum value, so a
+ * refusal naming any of `modernTokens` earns one retry with `ask(false)`, the
+ * query without them. Anything else (auth, rate limit, network) is answered
+ * the same way by both shapes, so it fails as is. Reports which shape
+ * answered, for follow-up queries that must match it.
+ */
+export function withSchemaFallback<A, R>(
+  ask: (modern: boolean) => Effect.Effect<A, GitHubError, R>,
+  modernTokens: readonly string[],
+): Effect.Effect<{ readonly value: A; readonly modern: boolean }, GitHubError, R> {
+  return ask(true).pipe(
+    Effect.map((value) => ({ value, modern: true })),
+    Effect.catchAll((err) =>
+      err instanceof GitHubApiError &&
+      modernTokens.some((token) => String(err.cause).includes(token))
+        ? ask(false).pipe(Effect.map((value) => ({ value, modern: false })))
+        : Effect.fail(err),
+    ),
+  );
 }
 
 /** One page of a GraphQL connection, as selected out of a query's response. */

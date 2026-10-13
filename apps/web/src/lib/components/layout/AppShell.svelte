@@ -37,7 +37,7 @@ import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
 import ProjectRail from "./ProjectRail.svelte";
-import RequestChangesActionBar from "./RequestChangesActionBar.svelte";
+import ReviewActionBar from "./ReviewActionBar.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
@@ -63,8 +63,8 @@ const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
 const showFloatingActions = $derived(
   !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
-const showRcActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes",
+const showReviewBar = $derived(
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "conversation",
 );
 
 // New-commit-available signal: the PR's current headSha differs from the
@@ -278,8 +278,8 @@ function onRightHandleDblClick(): void {
 			<WalkthroughActionBar prId={pr.id} />
 		{/if}
 
-		{#if showRcActions}
-			<RequestChangesActionBar />
+		{#if showReviewBar}
+			<ReviewActionBar />
 		{/if}
 	</main>
 

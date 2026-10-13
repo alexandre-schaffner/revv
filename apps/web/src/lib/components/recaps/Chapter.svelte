@@ -1,12 +1,12 @@
 <script lang="ts">
 import type { RecapPrEntry } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
-import Avatar from "./Avatar.svelte";
 import InlineText from "./InlineText.svelte";
 import PrRow from "./PrRow.svelte";
 import { formatTheme, themeSlug } from "./themes";

@@ -35,6 +35,7 @@ import {
   parseLinkNext,
   retryTransient,
   toGitHubError,
+  withSchemaFallback,
 } from "./github-rest";
 import { SettingsService } from "./Settings";
 
@@ -1605,17 +1606,7 @@ ${fields}
           token,
           apiBase,
         );
-      const data = yield* ask(true).pipe(
-        Effect.catchAll((err) => {
-          // Only a complaint naming one of the three fields earns the retry.
-          // Anything else — auth, rate limit, network — is answered the same
-          // way by both queries, so retrying would just cost a second request.
-          const text = JSON.stringify(err);
-          return MERGE_METHOD_FIELDS.some((field) => text.includes(field))
-            ? ask(false)
-            : Effect.fail(err);
-        }),
-      );
+      const { value: data } = yield* withSchemaFallback(ask, MERGE_METHOD_FIELDS);
       const pr = data.repository?.pullRequest;
       if (!pr) {
         return yield* Effect.fail(

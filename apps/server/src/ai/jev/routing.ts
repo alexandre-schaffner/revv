@@ -44,7 +44,7 @@ export const DEPTH_MARGIN_FLOOR = 0.15;
  */
 const DEPTH_LADDERS: Partial<Record<AcpAgentId, Readonly<Record<ReviewDepth, string>>>> = {
   "claude-code": {
-    shallow: "claude-haiku-4-5-20251001",
+    shallow: "claude-haiku-5-5",
     standard: "claude-sonnet-5-5",
     deep: "claude-opus-5-5",
   },
@@ -70,9 +70,11 @@ const EFFORT_TIERS: Readonly<Record<ReasoningEffort, ThinkingEffort>> = {
 function ladderIndex(agent: AcpAgentId, model: string | null | undefined): number | null {
   const ladder = DEPTH_LADDERS[agent];
   if (!ladder || !model) return null;
-  // The previous Sonnet remains a standard-tier pin after the catalog upgrade.
+  // Previous-generation pins keep their tier after the catalog upgrade.
   if (agent === "claude-code" && model === "claude-sonnet-5")
     return REVIEW_DEPTHS.indexOf("standard");
+  if (agent === "claude-code" && model === "claude-haiku-4-5-20251001")
+    return REVIEW_DEPTHS.indexOf("shallow");
   const found = REVIEW_DEPTHS.findIndex((depth) => ladder[depth] === model);
   return found === -1 ? null : found;
 }

@@ -23,9 +23,13 @@ interface Props {
   blockIssueSeverity: Map<string, Severity>;
   selectedIssueBlockId: string | null;
   selectedIssueSeverity: Severity | null;
-  /** Index of this section (1-based) shown in the chapter eyebrow. */
-  chapterNumber: number;
-  /** Total chapter count for the "Chapter N / M" eyebrow. */
+  /**
+   * Number shown in the "Chapter N / M" eyebrow, or null for the Overview —
+   * chapter 0, which carries no eyebrow so the printed numbers match what
+   * the chat agent reads as `chapterNumber` (see `chapterNumbersByIndex`).
+   */
+  chapterNumber: number | null;
+  /** Total Phase B chapter count for the "Chapter N / M" eyebrow. */
   chapterCount: number;
   /**
    * Optional DOM id placed on the section header so the chapters stepper
@@ -99,10 +103,12 @@ $effect(() => {
 		onclick={toggle}
 	>
 		<div class="section-header-rail">
-			<span class="section-eyebrow">
-				Chapter {String(chapterNumber).padStart(2, '0')}
-				<span class="section-eyebrow-of">/ {String(chapterCount).padStart(2, '0')}</span>
-			</span>
+			{#if chapterNumber !== null}
+				<span class="section-eyebrow">
+					Chapter {String(chapterNumber).padStart(2, '0')}
+					<span class="section-eyebrow-of">/ {String(chapterCount).padStart(2, '0')}</span>
+				</span>
+			{/if}
 			<span class="section-toggle" aria-hidden="true">
 				<CaretDown size={14} />
 			</span>
@@ -242,7 +248,10 @@ $effect(() => {
 		margin-left: 4px;
 	}
 
+	/* `margin-left: auto` keeps the chevron right-aligned on the Overview,
+	   which has no eyebrow to its left. */
 	.section-toggle {
+		margin-left: auto;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;

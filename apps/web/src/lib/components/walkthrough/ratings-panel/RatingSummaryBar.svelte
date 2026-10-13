@@ -309,7 +309,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
         margin: 0;
     }
 
-    /* Narrow-width (RequestChanges sidebar ~320px): hide the elapsed chunk,
+    /* Narrow-width (YourReview panel ~320px): hide the elapsed chunk,
        shorten controls to icons-only. */
     @container ratings (max-width: 420px) {
         .count-elapsed {

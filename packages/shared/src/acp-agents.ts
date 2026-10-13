@@ -110,13 +110,14 @@ export const ACP_AGENTS = [
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
-      // Verified against https://code.claude.com/docs/en/model-config (2026-10-05).
-      // Keep Sonnet 5 selectable for existing installations.
+      // Verified against https://code.claude.com/docs/en/model-config (2026-10-13).
+      // Keep Sonnet 5 and Haiku 4.5 selectable for existing installations.
       models: [
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
         { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
         { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5" },
         { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001", thinkingEfforts: [] },
       ],
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
@@ -166,11 +167,12 @@ export const ACP_AGENTS = [
       defaultModel: "gpt-6.1-sol",
       // This maintained adapter embeds a current Codex App Server, so the
       // selector can expose the current GPT-6 family. GPT-6.1 Sol is Codex's
-      // recommended default; GPT-6 Sol stays listed while it rolls out. Do not
+      // recommended default; GPT-6 Sol has left the docs but stays listed for
+      // existing installations. Do not
       // replace it with the deprecated `@zed-industries/codex-acp`: that
       // adapter embeds an older Codex core which rejects current models.
       models: [
-        // https://learn.chatgpt.com/docs/models (2026-10-05).
+        // https://learn.chatgpt.com/docs/models (2026-10-13).
         { label: "GPT-6 Astra", value: "gpt-6-astra" },
         { label: "GPT-6.1 Sol", value: "gpt-6.1-sol" },
         { label: "GPT-6 Sol", value: "gpt-6-sol" },
@@ -196,7 +198,7 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
-      // https://cursor.com/docs/models-and-pricing (2026-10-05). The
+      // https://cursor.com/docs/models-and-pricing (2026-10-13). The
       // ACP adapter does not yet forward a selected model, so this remains a
       // stored preference until it gains a model passthrough.
       models: [
@@ -204,6 +206,7 @@ export const ACP_AGENTS = [
         { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
         { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
         { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
+        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5" },
         { label: "Composer 2.5", value: "composer-2.5" },
         { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
         { label: "Gemini 3.8 Flash", value: "gemini-3.8-flash" },
@@ -213,6 +216,8 @@ export const ACP_AGENTS = [
         { label: "Grok 4.7", value: "grok-4.7" },
         { label: "Grok 4.6", value: "grok-4.6" },
         { label: "Grok 4.5", value: "grok-4.5" },
+        { label: "Kimi K3", value: "kimi-k3" },
+        { label: "GLM 5.3", value: "glm-5.3" },
         { label: "Muse Spark 1.3", value: "muse-spark-1.3" },
       ],
       thinkingEfforts: [],

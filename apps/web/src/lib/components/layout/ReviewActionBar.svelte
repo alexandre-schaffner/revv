@@ -1,7 +1,6 @@
 <script lang="ts">
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
-import ChatCircle from "phosphor-svelte/lib/ChatCircle";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
@@ -23,21 +22,21 @@ import {
   mergePr,
 } from "$lib/stores/prs.svelte";
 import {
-  getRcApproveBlockerSummary,
-  getRcCanComment,
-  getRcOnApprove,
-  getRcOnComment,
-  getRcOnGenerateChanges,
-  getRcOnSubmitReview,
-  getRcSelectedCount,
-  getRcSubmitting,
-} from "$lib/stores/rcActions.svelte";
+  getReviewBarApproveBlockerSummary,
+  getReviewBarCanComment,
+  getReviewBarOnApprove,
+  getReviewBarOnComment,
+  getReviewBarOnGenerateChanges,
+  getReviewBarOnSubmitReview,
+  getReviewBarSelectedCount,
+  getReviewBarSubmitting,
+} from "$lib/stores/reviewBar.svelte";
 
 const pr = $derived(getSelectedPr());
-const rcSubmitting = $derived(getRcSubmitting());
-const rcSelectedCount = $derived(getRcSelectedCount());
-const rcCanComment = $derived(getRcCanComment());
-const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+const rcSubmitting = $derived(getReviewBarSubmitting());
+const rcSelectedCount = $derived(getReviewBarSelectedCount());
+const rcCanComment = $derived(getReviewBarCanComment());
+const rcApproveBlockerSummary = $derived(getReviewBarApproveBlockerSummary());
 const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
 
 let rcGenerating = $state(false);
@@ -48,6 +47,9 @@ $effect(() => {
 
 const currentUserLogin = $derived(getCurrentUserLogin());
 const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
+// Draft toggle, merge, and close only make sense on an open PR; a closed or
+// merged one keeps just the submit-review pill (GitHub has no reopen path here).
+const isPrOpen = $derived(pr?.status === "open");
 
 type OwnerAction = "convert-to-draft" | "ready-for-review" | "close";
 let ownerSubmitting = $state<OwnerAction | null>(null);
@@ -121,24 +123,6 @@ const mergeOptions = $derived.by(() => {
 const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
 </script>
 
-{#snippet commentPill()}
-  <!-- Plain COMMENT review: pushes line comments + selected walkthrough
-       issues to GitHub without approving or requesting changes. This is the
-       only review event GitHub permits on your own PR, so it's surfaced for
-       authors and reviewers alike. -->
-  <GlassPill
-    variant="muted"
-    disabled={rcSubmitting !== null || !rcCanComment}
-    onclick={() => getRcOnComment()()}
-    title={!rcCanComment
-      ? "Add comments or select walkthrough issues first"
-      : "Post comments to GitHub without approving or requesting changes"}
-  >
-    <ChatCircle size={16} />
-    {rcSubmitting === "comment" ? "Posting…" : "Comment"}
-  </GlassPill>
-{/snippet}
-
 <div
   class="actions-float"
   in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
@@ -148,7 +132,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
     <GlassPill
       variant="muted"
       disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
-      onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
+      onclick={() => { rcGenerating = true; getReviewBarOnGenerateChanges()(); }}
       title={rcSelectedCount === 0
         ? "Select at least one issue to ask the agent to address"
         : rcGenerating
@@ -166,8 +150,22 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
            PR, so instead of that pair we surface the actions a coder actually
            needs here: post review comments (the one review event allowed on
            your own PR), toggle draft state, merge, and close. -->
-      {@render commentPill()}
-      {#if pr.isDraft}
+      <!-- A plain COMMENT review: pushes line comments + selected walkthrough
+           issues without approving or requesting changes. Labelled "Submit
+           review", not "Comment", so it doesn't read as a twin of the
+           Conversation tab's composer, which posts a top-level PR comment. -->
+      <GlassPill
+        variant="muted"
+        disabled={rcSubmitting !== null || !rcCanComment}
+        onclick={() => getReviewBarOnComment()()}
+        title={!rcCanComment
+          ? "Add comments or select walkthrough issues first"
+          : "Post your line comments and selected issues to GitHub as a review"}
+      >
+        <ArrowUp size={16} />
+        {rcSubmitting === "comment" ? "Submitting…" : "Submit review"}
+      </GlassPill>
+      {#if isPrOpen && pr.isDraft}
         <GlassPill
           variant="accent"
           disabled={ownerSubmitting !== null}
@@ -177,7 +175,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
           <PaperPlaneRight size={16} />
           {ownerSubmitting === "ready-for-review" ? "Marking ready…" : "Ready for review"}
         </GlassPill>
-      {:else}
+      {:else if isPrOpen}
         <GlassPill
           disabled={ownerSubmitting !== null}
           onclick={() => runOwnerAction("convert-to-draft")}
@@ -188,7 +186,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
         </GlassPill>
       {/if}
 
-      {#if mergeEligibility?.canMerge && pr.status === "open"}
+      {#if mergeEligibility?.canMerge && isPrOpen}
         <!-- Eligibility resolves asynchronously, so the merge pill lands a
              beat after the rest of the bar. Fade it in instead of popping. -->
         <span
@@ -241,37 +239,39 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
         </span>
       {/if}
 
-      <GlassPill
-        variant="danger"
-        disabled={ownerSubmitting !== null}
-        onclick={() => runOwnerAction("close")}
-        title="Close this pull request without merging"
-      >
-        <XCircle size={16} />
-        {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
-      </GlassPill>
+      {#if isPrOpen}
+        <GlassPill
+          variant="danger"
+          disabled={ownerSubmitting !== null}
+          onclick={() => runOwnerAction("close")}
+          title="Close this pull request without merging"
+        >
+          <XCircle size={16} />
+          {ownerSubmitting === "close" ? "Closing…" : "Close PR"}
+        </GlassPill>
+      {/if}
     {:else}
       <!-- Not the PR owner → a reviewer. Review mode is derived from identity
            (see getReviewModeForPr), so "not owner" is exactly "reviewer". One
-           "Submit Review" posts everything in a single GitHub review: the line
+           "Submit review" posts everything in a single GitHub review: the line
            comments always go up, and it requests changes when walkthrough
            issues are selected (otherwise it's a plain comment review). Approve
            stays a distinct action. -->
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcCanComment}
-        onclick={() => getRcOnSubmitReview()()}
+        onclick={() => getReviewBarOnSubmitReview()()}
         title={!rcCanComment
           ? "Add comments or select walkthrough issues first"
           : "Submit your review — posts your comments, and requests changes if any issues are selected"}
       >
         <ArrowUp size={16} />
-        {rcSubmitting !== null ? "Submitting…" : "Submit Review"}
+        {rcSubmitting !== null ? "Submitting…" : "Submit review"}
       </GlassPill>
       <GlassPill
         variant="success"
         disabled={rcSubmitting !== null}
-        onclick={() => getRcOnApprove()()}
+        onclick={() => getReviewBarOnApprove()()}
         title={rcApproveBlockerSummary
           ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
           : "Approve this pull request on GitHub"}

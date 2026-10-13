@@ -223,6 +223,9 @@ async function handleContinue() {
 									<span><strong>Pull requests</strong><span>Read &amp; write</span></span>
 									<span><strong>Contents</strong><span>Read &amp; write</span></span>
 									<span><strong>Metadata</strong><span>Read-only</span></span>
+									<span><strong>Checks</strong><span>Read-only</span></span>
+									<span><strong>Commit statuses</strong><span>Read-only</span></span>
+									<span><strong>Actions</strong><span>Read &amp; write</span></span>
 								</span>
 								<span class="step-detail">Leave everything else at <em>No access</em>.</span>
 							</span>

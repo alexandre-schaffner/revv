@@ -217,15 +217,19 @@ function hideBrokenImg(e: Event): void {
     padding: 0;
     font-size: 14px;
   }
+  /* Rows are inset from the shell so the selected highlight reads as a
+     rounded pill, not a full-bleed band. Inset (6px) + row radius (6px)
+     stays concentric with the shell's 12px corners, and inset + row
+     padding (6px + 10px) lines text up with the input's 16px gutter. */
   :global(.palette-shell [data-command-list]) {
-    padding: 4px 0;
+    padding: 6px;
   }
   :global(.palette-shell [data-command-group]) {
     padding: 0;
   }
   :global(.palette-shell [data-command-group-heading]) {
-    padding: 6px 16px 2px;
-    margin-top: 4px;
+    padding: 6px 10px 4px;
+    margin-top: 2px;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
@@ -234,8 +238,8 @@ function hideBrokenImg(e: Event): void {
     user-select: none;
   }
   :global(.palette-shell [data-command-item]) {
-    padding: 8px 16px;
-    border-radius: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
     gap: 12px;
     transition: background-color var(--duration-snap);
   }
@@ -245,7 +249,7 @@ function hideBrokenImg(e: Event): void {
     color: var(--color-tree-active-text);
   }
   :global(.palette-shell [data-command-empty]) {
-    padding: 24px 16px;
+    padding: 18px 10px;
     font-size: 12px;
     color: var(--color-text-muted);
   }

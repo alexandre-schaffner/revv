@@ -26,7 +26,7 @@
 import At from "phosphor-svelte/lib/At";
 import Eye from "phosphor-svelte/lib/Eye";
 import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { REASON_LABEL, type TaggedReason, type TaggedRow } from "$lib/prs/tagged-prs";
 import { getVisitState, type VisitState } from "$lib/stores/pr-visits.svelte";
 import { selectPr } from "$lib/stores/prs.svelte";

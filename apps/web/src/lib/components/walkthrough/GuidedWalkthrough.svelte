@@ -711,10 +711,10 @@ $effect(() => {
   if (summary !== null) markBlockAnimated(prId, "overview-block");
 });
 
-// Total chapters shown to the reader = the virtual overview chapter (when
-// summary has arrived) + every visible Phase B chapter. Used by both the
-// Overview chapter and the Phase B chapter loop for the "Ch N / M" eyebrow.
-const totalChapters = $derived((summary !== null ? 1 : 0) + visibleSemanticSteps.length);
+// The Overview is chapter 0 and unnumbered, so the "Ch N / M" eyebrow counts
+// visible Phase B chapters only. Must agree with `chapterNumbersByIndex`,
+// which is what the chat agent reads when the user says "chapter N".
+const totalChapters = $derived(visibleSemanticSteps.length);
 
 // Mirror the block-stagger logic for issue cards. Issue cards have their
 // own CSS entrance animation (`issue-card-enter`), so without tracking they
@@ -830,15 +830,10 @@ function chapterTagFor(blockId: string): string | null {
     const n = stepNumberFor(blockId);
     return n !== null ? `→ Step ${n}` : null;
   }
-  let chapterLabel: number;
-  if (semanticIdx === -1) {
-    // Virtual Overview chapter — always Ch 1
-    chapterLabel = 1;
-  } else {
-    const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
-    // visibleSemanticSteps is 0-based; +1 for 1-based, +1 more to account for the Overview chapter
-    chapterLabel = pos >= 0 ? pos + 2 : semanticIdx + 2;
-  }
+  // Virtual Overview chapter — chapter 0, which the UI leaves unnumbered.
+  if (semanticIdx === -1) return `→ Overview`;
+  const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
+  const chapterLabel = pos >= 0 ? pos + 1 : semanticIdx + 1;
   return `→ Ch ${chapterLabel} · Step ${stepIdx + 1}`;
 }
 
@@ -955,7 +950,7 @@ function jumpToSection(elementId: string): void {
   scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
 }
 
-// Cross-tab jump: when another tab (e.g. Request Changes) calls
+// Cross-tab jump: when another tab (e.g. Conversation) calls
 // jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
 // stashes the blockId. We consume it here once we're active + scrollRoot is
 // bound. One rAF of slack lets the display swap (`display: none` → `display:
@@ -1332,7 +1327,7 @@ function handleResume(): void {
 				{blockIssueSeverity}
 				{selectedIssueBlockId}
 				{selectedIssueSeverity}
-				chapterNumber={1}
+				chapterNumber={null}
 				chapterCount={totalChapters}
 			/>
 			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
@@ -1343,7 +1338,7 @@ function handleResume(): void {
 					{blockIssueSeverity}
 					{selectedIssueBlockId}
 					{selectedIssueSeverity}
-					chapterNumber={sectionIdx + 2}
+					chapterNumber={sectionIdx + 1}
 					chapterCount={totalChapters}
 				/>
 			{/each}
