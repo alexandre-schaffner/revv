@@ -53,19 +53,21 @@ export const PROSE_VOICE_CONTRACT =
 
 /** `set_overview.summary` / `update_overview.summary`. */
 export const SUMMARY_CONTRACT =
-  "FOUR SHORT LINES, each on its own line — never one paragraph. The field is rendered " +
-  "markdown and a single newline breaks the line, so write them as four lines. " +
-  "Line 1 is the takeaway, unlabelled, one sentence, MAX 25 WORDS: what kind of attention this " +
-  "PR needs (the headline risk, the one behavior that changes, or plainly that it is mechanical " +
-  "and safe). Never the PR title restated. Lines 2-4 are labelled, one sentence each, MAX 25 " +
-  "WORDS each, in this order: `**Why** — ` the problem being solved; `**What changed** — ` the " +
-  "approach in terms of behavior; `**Watch** — ` where the reader should look hardest and what " +
-  "could go wrong there, or `nothing — mechanical change`. The overview is read before any " +
-  "chapter, so it defines its own terms: no coined labels ('creator merges', 'the authority " +
-  "flag'), only identifiers, terms from the PR description, or plain descriptions. Hard caps: " +
-  "110 words total, 2 backticked identifiers per line, " +
-  "one clause per sentence. Do NOT inventory files or count lines — the UI already lists every " +
-  "changed file. If a line needs a semicolon or a second dash to fit, it is too long: cut it.";
+  "The briefing a total stranger needs before reading the diff: a competent engineer who has " +
+  "never seen this repo must come away knowing what this code is, what the PR does, why, and " +
+  "how. SIX PARTS, each starting on its own line (rendered markdown; a single newline breaks " +
+  "the line), in this order: (1) the takeaway, unlabelled, one sentence: what the PR does and " +
+  "what attention it needs, never the PR title restated; (2) `**Context** — ` what this part of " +
+  "the system is and does today, in plain words, never skipped; (3) `**Why** — ` the problem " +
+  "being solved, what goes wrong without it and for whom; (4) `**What changed** — ` the new " +
+  "behavior seen from outside the code; (5) `**How**` followed by 2-4 `- ` bullets, one moving " +
+  "part of the implementation and its job each, in the order data or a request flows through " +
+  "them; (6) `**Watch** — ` where to look hardest and what could go wrong there, or " +
+  "`nothing — mechanical change`. The overview is read before any chapter, so it defines its " +
+  "own terms: no coined labels ('creator merges', 'the authority flag'), only identifiers, " +
+  "terms from the PR description, or plain descriptions. Hard caps: 200 words total, 25 words " +
+  "per sentence, 2 backticked identifiers per line, one idea per sentence. Do NOT inventory " +
+  "files or count lines — the UI already lists every changed file.";
 
 /** `set_sentiment.markdown` / `update_sentiment.markdown`. */
 export const SENTIMENT_CONTRACT =

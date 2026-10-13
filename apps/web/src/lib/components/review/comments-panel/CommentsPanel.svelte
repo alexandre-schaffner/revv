@@ -1,7 +1,7 @@
 <script lang="ts">
 /*
  * CommentsPanel — orchestrates the unresolved-comment list in the
- * Request Changes tab. One collapsible row per file; the expanded
+ * Conversation tab's Your review section. One collapsible row per file; the expanded
  * body enumerates all threads on that file with "THREADS" dividers.
  *
  * Keyboard navigation operates over the file rows (keyed by filePath),

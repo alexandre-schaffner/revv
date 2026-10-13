@@ -550,7 +550,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "set_overview",
     description:
-      "Phase A. Call exactly once, before any other write tool. Sets the PR summary (2-3 sentences) and overall risk level (low/medium/high). Advances phase to A.",
+      "Phase A. Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
     inputSchema: setOverviewSchema,
     handler: setOverviewHandler,
   },

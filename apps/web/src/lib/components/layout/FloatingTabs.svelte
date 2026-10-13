@@ -5,7 +5,7 @@ import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
 
-type Tab = "walkthrough" | "diff" | "request-changes";
+type Tab = "walkthrough" | "diff" | "conversation";
 type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
 
 interface Props {
@@ -48,9 +48,9 @@ function handlePullClick(): void {
 const cmdHeld = $derived(getCmdHeld());
 
 const tabs = [
-  { id: "walkthrough" as Tab, label: "Walkthrough", shortcut: "1" },
-  { id: "diff" as Tab, label: "Diff", shortcut: "2" },
-  { id: "request-changes" as Tab, label: "Request Changes", shortcut: "3" },
+  { id: "conversation" as Tab, label: "Conversation", shortcut: "1" },
+  { id: "walkthrough" as Tab, label: "Walkthrough", shortcut: "2" },
+  { id: "diff" as Tab, label: "Diff", shortcut: "3" },
 ];
 
 function handleTabChange(tabId: string) {

@@ -2,7 +2,6 @@
 import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import WalkthroughRatingsPanel from "$lib/components/walkthrough/WalkthroughRatingsPanel.svelte";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
@@ -16,12 +15,7 @@ import {
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
-import {
-  getBlocks,
-  getIssues,
-  getRatings,
-  markIssuesAsSubmitted,
-} from "$lib/stores/walkthrough.svelte";
+import { getBlocks, getIssues, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
 import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
 import { partitionBySignal, shouldHideLowSignal } from "$lib/utils/walkthrough-issues";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
@@ -51,7 +45,6 @@ const threads = $derived(getThreads());
 const unresolvedThreads = $derived(
   threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
 );
-const ratings = $derived(getRatings());
 const blocks = $derived(getBlocks());
 
 // File paths currently part of the PR diff (new path + old path for renames).
@@ -360,33 +353,25 @@ $effect(() => {
 });
 </script>
 
-<div class="request-changes">
-	<div class="rc-sections">
-		<IssuesPanel
-			{issues}
-			{filteredIssues}
-			selectedIds={selectedIssueIds}
-			submittedIds={submittedIssueIds}
-			onToggleSelect={toggleIssue}
-			onToggleSelectAll={toggleAllIssues}
-			onFileClick={jumpToDiffLine}
-			{blocks}
-			onBlockJump={jumpToWalkthroughBlock}
-		/>
+<div class="your-review">
+	<IssuesPanel
+		{issues}
+		{filteredIssues}
+		selectedIds={selectedIssueIds}
+		submittedIds={submittedIssueIds}
+		onToggleSelect={toggleIssue}
+		onToggleSelectAll={toggleAllIssues}
+		onFileClick={jumpToDiffLine}
+		{blocks}
+		onBlockJump={jumpToWalkthroughBlock}
+	/>
 
-		<CommentsPanel
-			threads={unresolvedThreads}
-			{getThreadMessages}
-			onJump={jumpToDiffLine}
-			onDiscard={(threadId) => void deleteThread(threadId)}
-		/>
-
-		{#if ratings.length > 0}
-			<div class="rc-scorecard">
-				<WalkthroughRatingsPanel {ratings} {blocks} onJump={jumpToWalkthroughBlock} />
-			</div>
-		{/if}
-	</div>
+	<CommentsPanel
+		threads={unresolvedThreads}
+		{getThreadMessages}
+		onJump={jumpToDiffLine}
+		onDiscard={(threadId) => void deleteThread(threadId)}
+	/>
 </div>
 
 <ApproveWithIssuesDialog
@@ -400,82 +385,12 @@ $effect(() => {
 />
 
 <style>
-	.request-changes {
+	/* The pending review: walkthrough issues to post and line comments not yet
+	   on GitHub. Both panels set `container-type: inline-size`, so they take
+	   their width from this column rather than from their content. */
+	.your-review {
 		display: flex;
 		flex-direction: column;
-		background: var(--color-bg-primary);
+		gap: 20px;
 	}
-
-	/* Both sections use the SAME main-area-anchored 6-col grid as
-	   `.walkthrough-content` (see GuidedWalkthrough.svelte for the col_1
-	   derivation — it re-centres the content column on every sidebar/right-panel
-	   toggle and aligns with the `.page-title-section--narrow` header above).
-	   Column layout must stay byte-identical to the walkthrough grids so the
-	   title, the Request Changes panels, and the walkthrough content all
-	   land in the same horizontal band.
-
-	   One deliberate deviation: col 3 is a FIXED 820px (not
-	   `minmax(0, 820px)`) because every direct child in col 3 — IssuesPanel,
-	   CommentsPanel, WalkthroughRatingsPanel — sets `container-type:
-	   inline-size` for its own container queries. Inline-size containment
-	   means the element's intrinsic size isn't derived from its descendants,
-	   so when the grid algorithm asks those panels for their max-content to
-	   size a `minmax(0, 820px)` track, they all report ~0 and the track
-	   collapses — leaving the panels squished to min-content inside a 0-wide
-	   column while the two flex tracks absorb the leftover space. Fixing
-	   col 3 at 820px sidesteps the content-sized track entirely. The
-	   narrow-viewport fallback below collapses the whole grid anyway, so we
-	   never overflow at small widths. */
-	.rc-sections {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			820px
-			40px
-			380px
-			minmax(24px, 1fr);
-		/* Extra bottom padding keeps the last panel clear of the floating
-		   action bar (approx 36px button + 40px bottom offset + 12px gap). */
-		padding: 16px 0 100px;
-		row-gap: 20px;
-	}
-
-	/* Inner sections land in col 3 (820 content column). */
-	.rc-sections > :global(*) {
-		grid-column: 3;
-	}
-
-	/* Narrow-viewport fallback — matches the GuidedWalkthrough + page-title
-	   breakpoint so all three containers collapse at the same main-area
-	   width. `@container` (not `@media`) is load-bearing: we're gating on
-	   `.review-content`'s inline-size, which shrinks when the sidebar
-	   expands. An `@media` rule would keep the grid active at wide viewports
-	   even when the main-area has dropped below the 1336 geometric minimum
-	   (wide viewport + wide sidebar), causing overflow. */
-	@container (max-width: 1335px) {
-		.rc-sections {
-			display: block;
-			max-width: 860px;
-			padding-left: 32px;
-			padding-right: 32px;
-			margin-inline: auto;
-			box-sizing: border-box;
-			width: 100%;
-			padding-top: 16px;
-			padding-bottom: 100px;
-			display: flex;
-			flex-direction: column;
-			gap: 20px;
-		}
-
-		.rc-sections > :global(*) {
-			grid-column: auto;
-		}
-	}
-
-	/* .rc-scorecard is a plain wrapper — no section header here. The scorecard
-	   renders its own internal summary bar, so a wrapping section header would
-	   be redundant. Separation from siblings is handled by the 20px gap on
-	   .rc-sections. */
 </style>

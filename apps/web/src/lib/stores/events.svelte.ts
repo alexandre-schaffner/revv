@@ -19,6 +19,7 @@ import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
+import { onPrConversationUpdated } from "./conversation.svelte";
 import { setError } from "./errors.svelte";
 import {
   ensureHunkScan,
@@ -270,6 +271,9 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "pr:archived":
       onPrArchived(msg.data);
+      break;
+    case "pr:conversation-updated":
+      onPrConversationUpdated(msg.data);
       break;
     case "prs:sync-started":
       setPrListSyncing(true);

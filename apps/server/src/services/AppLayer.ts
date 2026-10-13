@@ -23,6 +23,7 @@ import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
+import { PrConversationServiceLive } from "./PrConversation";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
@@ -106,6 +107,12 @@ const BaseLayers = Layer.mergeAll(
 
 // PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
+
+// PrConversation serves the Conversation tab: PrContext for repo + token,
+// plus the kv cache, remote-user avatars, and Broadcaster from BaseLayers.
+const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
 
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
@@ -200,6 +207,7 @@ const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
 export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
+  PrConversationServiceWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,

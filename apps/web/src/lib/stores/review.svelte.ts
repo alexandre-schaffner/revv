@@ -329,8 +329,8 @@ export async function loadSession(
 // `currentPrId`. Scroll positions are write-only persistence — components
 // read them imperatively on mount and write on scroll, no reactivity needed.
 
-type ActiveTab = "walkthrough" | "diff" | "request-changes";
-type ScrollPaneKey = "walkthrough" | "diff" | "requestChanges" | "sidebar";
+type ActiveTab = "walkthrough" | "diff" | "conversation";
+type ScrollPaneKey = "walkthrough" | "diff" | "conversation" | "sidebar";
 
 interface PrViewState {
   activeTab: ActiveTab;
@@ -338,8 +338,46 @@ interface PrViewState {
   scroll: Partial<Record<ScrollPaneKey, number>>;
 }
 
+/** A PR opened for the first time lands here. */
+const FIRST_VISIT_TAB: ActiveTab = "conversation";
+
 function emptyState(): PrViewState {
-  return { activeTab: "walkthrough", activeFilePath: null, scroll: {} };
+  return { activeTab: FIRST_VISIT_TAB, activeFilePath: null, scroll: {} };
+}
+
+// The tab each PR was last left on survives an app restart, so "first
+// visit" means first ever, not first since launch. Capped so the record of
+// long-closed PRs can't grow forever; oldest visits drop first.
+const LAST_TAB_KEY = "revv:pr-last-tab";
+const LAST_TAB_CAP = 300;
+
+function readLastTabs(): Record<string, ActiveTab> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_TAB_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, ActiveTab>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLastTab(prId: string, tab: ActiveTab): void {
+  if (typeof localStorage === "undefined") return;
+  const tabs = readLastTabs();
+  delete tabs[prId];
+  tabs[prId] = tab;
+  const ids = Object.keys(tabs);
+  for (const id of ids.slice(0, Math.max(0, ids.length - LAST_TAB_CAP))) delete tabs[id];
+  try {
+    localStorage.setItem(LAST_TAB_KEY, JSON.stringify(tabs));
+  } catch {
+    // Storage full or unavailable: the in-memory state still holds this session.
+  }
+}
+
+function lastTabFor(prId: string): ActiveTab | null {
+  const tab = readLastTabs()[prId];
+  return tab === "walkthrough" || tab === "diff" || tab === "conversation" ? tab : null;
 }
 
 // Single reactive store for per-PR view state. Follows the walkthrough-store
@@ -361,8 +399,8 @@ function getOrCreate(prId: string): PrViewState {
 }
 
 export function getActiveTab(): ActiveTab {
-  if (store.activePrId === null) return "walkthrough";
-  return store.entries.get(store.activePrId)?.activeTab ?? "walkthrough";
+  if (store.activePrId === null) return FIRST_VISIT_TAB;
+  return store.entries.get(store.activePrId)?.activeTab ?? FIRST_VISIT_TAB;
 }
 
 export function setActiveTab(tab: ActiveTab): void {
@@ -377,6 +415,7 @@ export function setActiveTab(tab: ActiveTab): void {
   if (store.activePrId !== null) {
     getOrCreate(store.activePrId).activeTab = tab;
     store.entries = new Map(store.entries);
+    rememberLastTab(store.activePrId, tab);
   }
 }
 
@@ -405,7 +444,7 @@ export function switchPrViewState(newPrId: string): void {
   store.activePrId = newPrId;
   // Restore saved state, or default for first visit
   const saved = store.entries.get(newPrId);
-  const restoredTab = saved?.activeTab ?? "walkthrough";
+  const restoredTab = saved?.activeTab ?? lastTabFor(newPrId) ?? FIRST_VISIT_TAB;
   const restoredFilePath = saved?.activeFilePath ?? null;
   // Use direct entry mutation to bypass the guard in setActiveTab (no focus reset needed here)
   if (getActiveTab() === "diff" && restoredTab !== "diff") {
@@ -414,6 +453,7 @@ export function switchPrViewState(newPrId: string): void {
   getOrCreate(newPrId).activeTab = restoredTab;
   getOrCreate(newPrId).activeFilePath = restoredFilePath;
   store.entries = new Map(store.entries);
+  rememberLastTab(newPrId, restoredTab);
 }
 
 // --- Diff scroll reset signal -----------------------------------------------
@@ -435,7 +475,7 @@ export function requestDiffScrollReset(): void {
 //
 // Read once on mount (or on the trailing edge of a tab/PR switch); write on
 // every scroll event. Components are responsible for plumbing these into the
-// right scroll container — see +page.svelte (walkthrough/requestChanges),
+// right scroll container — see +page.svelte (walkthrough/conversation),
 // ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
 // (rightPanel).
 

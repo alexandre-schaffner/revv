@@ -64,7 +64,7 @@ const showFloatingActions = $derived(
   !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
 const showRcActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes",
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "conversation",
 );
 
 // New-commit-available signal: the PR's current headSha differs from the

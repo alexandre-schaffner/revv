@@ -50,7 +50,7 @@ export interface PrContextWithDiff extends PrContextBasic {
   readonly commits: readonly PrCommit[];
 }
 
-type PrContextError = NotFoundError | GitHubAuthError | GitHubError;
+export type PrContextError = NotFoundError | GitHubAuthError | GitHubError;
 
 export class PrContextService extends Context.Tag("PrContextService")<
   PrContextService,

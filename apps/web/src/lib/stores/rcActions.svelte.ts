@@ -1,5 +1,5 @@
 /**
- * Shared reactive state for the Request Changes floating action bar.
+ * Shared reactive state for the Conversation tab's floating review action bar.
  * RequestChanges.svelte writes here; AppShell.svelte reads and renders the pill.
  *
  * Using module-level $state so any component can read/write without prop drilling.

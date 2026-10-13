@@ -117,6 +117,16 @@ export interface PrArchivedEnvelope {
   };
 }
 
+/**
+ * Signal: this account changed the PR's GitHub conversation (a comment,
+ * reviewers, assignees, labels, the description, a CI re-run). Views holding
+ * the conversation re-read it via `GET /api/prs/:id/conversation`.
+ */
+export interface PrConversationUpdatedEnvelope {
+  type: "pr:conversation-updated";
+  data: { prId: string };
+}
+
 export interface PrsSyncStartedEnvelope {
   type: "prs:sync-started";
 }
@@ -340,6 +350,7 @@ export type ServerEventMessage =
   | HunkScanEventMessage
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope
+  | PrConversationUpdatedEnvelope
   | PrsSyncStartedEnvelope
   | PrsSyncCompleteEnvelope
   | ReposUpdatedEnvelope

@@ -12,6 +12,7 @@
 // to a single context; the HTTP route in `routes/mcp/chat-context.ts`
 // drives the same TOOL_SPECS with a per-request context.
 
+import { chapterNumbersByIndex } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -251,6 +252,11 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     standaloneMsgsByThread.set(m.threadId, arr);
   }
 
+  const chapterNumbers = chapterNumbersByIndex(
+    semanticRows.map((s) => s.semanticStepIndex),
+    blockRows.map((b) => b.semanticStepIndex),
+  );
+
   // Build the structured payload. We return JSON-stringified text so the
   // agent can reason over it (and callers don't have to JSON-parse a result
   // shape outside of `content`).
@@ -277,6 +283,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
           generatedAt: walkthroughRow.generatedAt,
           chapters: semanticRows.map((semantic) => ({
             semanticStepIndex: semantic.semanticStepIndex,
+            chapterNumber: chapterNumbers.get(semantic.semanticStepIndex) ?? null,
             title: semantic.title,
             summary: semantic.summary,
             blocks: blockRows

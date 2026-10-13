@@ -73,6 +73,13 @@ export {
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
 } from "./chat";
+export type { CodeownersFile, CodeownersRule } from "./codeowners";
+export {
+  CODEOWNERS_PATHS,
+  codeownersFor,
+  codeownersPatternRegex,
+  parseCodeowners,
+} from "./codeowners";
 export {
   type CommentPermissionMessage,
   canUserModifyComment,
@@ -92,6 +99,37 @@ export {
   UPDATE_CHANNELS,
   UPDATE_STABLE_COOLDOWN_MS,
 } from "./constants";
+export type {
+  ActorOption,
+  CheckAnnotation,
+  CheckDetails,
+  CheckLogLine,
+  CiAccess,
+  CiCheck,
+  CiCheckBucket,
+  CiRollup,
+  CiRollupState,
+  ConversationActor,
+  LinkedIssue,
+  PrConversation,
+  PrConversationResponse,
+  PrLabel,
+  PrMilestone,
+  PrStack,
+  PrStackEntry,
+  ReviewDecision,
+  ReviewerEntry,
+  ReviewerOptions,
+  ReviewVerdict,
+  StackEntryStatus,
+  TeamOption,
+  TimelineComment,
+  TimelineCommit,
+  TimelineEvent,
+  TimelineItem,
+  TimelineReview,
+} from "./conversation";
+export { hydrateConversationAvatars } from "./conversation";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
 export * from "./events";
 export type {

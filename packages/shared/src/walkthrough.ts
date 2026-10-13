@@ -130,6 +130,25 @@ export interface WalkthroughSemanticStep {
   summary: string | null;
 }
 
+/**
+ * The number the UI prints in each chapter's "Chapter N / M" eyebrow, keyed
+ * by `semanticStepIndex`. The Overview is chapter 0 and carries no number;
+ * Phase B chapters are numbered 1..M by position, skipping chapters with no
+ * blocks (the UI hides those). Indices may have gaps after chat edits, so the
+ * printed number is not `semanticStepIndex + 1` — agents talking to the user
+ * about "chapter 3" must map through this, not through the index.
+ */
+export function chapterNumbersByIndex(
+  semanticStepIndices: Iterable<number>,
+  blockSemanticStepIndices: Iterable<number>,
+): Map<number, number> {
+  const withBlocks = new Set(blockSemanticStepIndices);
+  const visible = [...new Set(semanticStepIndices)]
+    .filter((index) => withBlocks.has(index))
+    .sort((a, b) => a - b);
+  return new Map(visible.map((index, position) => [index, position + 1]));
+}
+
 // ── Issue (structured concern flagged by the AI agent) ───────────────────────
 
 /**

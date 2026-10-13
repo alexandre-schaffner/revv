@@ -154,27 +154,25 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+1 → Walkthrough tab
+  // Cmd+1/2/3 → the review tabs, in the order the tab bar shows them.
   if (e.key === "1") {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveTab("conversation");
+    return;
+  }
+
+  if (e.key === "2") {
     e.preventDefault();
     e.stopPropagation();
     setActiveTab("walkthrough");
     return;
   }
 
-  // Cmd+2 → Diff tab
-  if (e.key === "2") {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab("diff");
-    return;
-  }
-
-  // Cmd+3 → Request Changes tab
   if (e.key === "3") {
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("request-changes");
+    setActiveTab("diff");
     return;
   }
 
