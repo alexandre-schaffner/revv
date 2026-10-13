@@ -233,9 +233,9 @@ async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } 
   }
 }
 
-/** True once the log behind `details` can't change any more. */
+/** True once a check's output can't change any more. */
 function isFinal(details: RequestState<CheckDetails> | undefined): boolean {
-  return details?.status === "ok" && details.data.logUnavailable !== "running";
+  return details?.status === "ok" && details.data.completed;
 }
 
 export async function loadCheckDetails(prId: string, checkRunId: number): Promise<void> {
@@ -273,11 +273,6 @@ function refreshSettledDetails(prId: string, rollup: CiRollup | null): void {
   }
 }
 
-/** Drop every check's cached details, e.g. after a re-run replaced their logs. */
-function forgetCheckDetails(prId: string): void {
-  updateEntry(prId, (entry) => ({ ...entry, checkDetails: new Map() }));
-}
-
 // ── Pickers ─────────────────────────────────────────────────────────────────
 
 export async function loadReviewerOptions(prId: string, q: string): Promise<ReviewerOptions> {
@@ -311,7 +306,11 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollPrId: string | null = null;
 
 export function hasPendingChecks(rollup: CiRollup | null | undefined): boolean {
-  return rollup?.checks.some((c) => c.bucket === "pending") ?? false;
+  return (
+    rollup?.state === "pending" ||
+    rollup?.state === "expected" ||
+    (rollup?.checks.some((c) => c.bucket === "pending") ?? false)
+  );
 }
 
 /**
@@ -437,7 +436,7 @@ async function applyWrite(
     void loadConversation(prId, { force: true });
   }
   if (capabilityOf(write) === "rerun") {
-    forgetCheckDetails(prId);
+    // Reruns get new check IDs; existing IDs still describe their original runs.
     updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: true }));
   }
   return true;

@@ -44,7 +44,9 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/conversation", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.session.user.id)),
+        Effect.flatMap(PrConversationService, (s) =>
+          s.load(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        ),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -55,7 +57,9 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/conversation/cached", async (ctx) => {
     try {
       const conversation = await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) => s.cached(ctx.params.id, ctx.session.user.id)),
+        Effect.flatMap(PrConversationService, (s) =>
+          s.cached(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        ),
       );
       return { conversation };
     } catch (e) {
@@ -83,7 +87,9 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/checks", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.session.user.id)),
+        Effect.flatMap(PrConversationService, (s) =>
+          s.checks(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        ),
       );
     } catch (e) {
       return handleAppError(e, ctx);
@@ -96,7 +102,12 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
       try {
         return await AppRuntime.runPromise(
           Effect.flatMap(PrConversationService, (s) =>
-            s.checkDetails(ctx.params.id, ctx.session.user.id, ctx.params.checkRunId),
+            s.checkDetails(
+              ctx.params.id,
+              ctx.session.user.id,
+              ctx.account.accountId,
+              ctx.params.checkRunId,
+            ),
           ),
         );
       } catch (e) {
@@ -110,7 +121,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       return await AppRuntime.runPromise(
         Effect.flatMap(PrConversationService, (s) =>
-          s.labelOptions(ctx.params.id, ctx.session.user.id),
+          s.labelOptions(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
         ),
       );
     } catch (e) {
@@ -124,7 +135,12 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
       try {
         return await AppRuntime.runPromise(
           Effect.flatMap(PrConversationService, (s) =>
-            s.assigneeOptions(ctx.params.id, ctx.session.user.id, ctx.query.q ?? ""),
+            s.assigneeOptions(
+              ctx.params.id,
+              ctx.session.user.id,
+              ctx.account.accountId,
+              ctx.query.q ?? "",
+            ),
           ),
         );
       } catch (e) {
@@ -140,7 +156,12 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
       try {
         return await AppRuntime.runPromise(
           Effect.flatMap(PrConversationService, (s) =>
-            s.reviewerOptions(ctx.params.id, ctx.session.user.id, ctx.query.q ?? ""),
+            s.reviewerOptions(
+              ctx.params.id,
+              ctx.session.user.id,
+              ctx.account.accountId,
+              ctx.query.q ?? "",
+            ),
           ),
         );
       } catch (e) {

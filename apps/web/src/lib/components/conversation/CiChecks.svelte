@@ -88,8 +88,13 @@ const counts = $derived(
     .filter(Boolean)
     .join(" · "),
 );
+const aggregateBucket = $derived(bucketOfRollup(rollup?.state ?? null));
 const headBucket = $derived(
-  failing > 0 ? "fail" : pending > 0 ? "pending" : bucketOfRollup(rollup?.state ?? null),
+  failing > 0 || aggregateBucket === "fail"
+    ? "fail"
+    : pending > 0 || aggregateBucket === "pending"
+      ? "pending"
+      : aggregateBucket,
 );
 
 /**
@@ -98,9 +103,9 @@ const headBucket = $derived(
  */
 const headline = $derived.by(() => {
   if (denied) return "Checks unavailable";
+  if (headBucket === "fail") return "Some checks were not successful";
+  if (headBucket === "pending") return "Some checks haven't completed yet";
   if (checks.length === 0) return "No checks";
-  if (failing > 0) return "Some checks were not successful";
-  if (pending > 0) return "Some checks haven't completed yet";
   return passing > 0 ? "All checks have passed" : "All checks were skipped";
 });
 const detail = $derived(

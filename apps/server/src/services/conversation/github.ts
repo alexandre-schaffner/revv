@@ -38,6 +38,7 @@ import {
   mapConversation,
   mapRollup,
   nodesOf,
+  type RawCheckRollup,
   type RawConnection,
   type RawConversation,
   type RawLabel,
@@ -48,6 +49,7 @@ import {
 } from "./map";
 import {
   CODEOWNERS_QUERY,
+  checkContextsPageQuery,
   checksQuery,
   conversationQuery,
   MODERN_TOKENS,
@@ -128,6 +130,53 @@ export interface FetchedConversation {
   readonly avatarUrls: Map<string, string>;
 }
 
+/** Read every CI context before mapping it; an omitted check may block the PR. */
+function completeCheckContexts(
+  ref: RepoRef,
+  number: number,
+  commits: RawRollupCommits,
+  modern: boolean,
+  token: string,
+  apiBase: string,
+): Effect.Effect<RawRollupCommits, GitHubError> {
+  return Effect.gen(function* () {
+    const head = nodesOf(commits)[0]?.commit;
+    const rollup = head?.statusCheckRollup;
+    if (!head || !rollup) return commits;
+    const contexts = nodesOf(rollup.contexts);
+    let pageInfo = rollup.contexts.pageInfo;
+    while (pageInfo?.hasNextPage) {
+      const { data } = yield* askGraphql<{
+        repository: { object: { statusCheckRollup: RawCheckRollup | null } | null } | null;
+      }>(
+        checkContextsPageQuery(modern),
+        {
+          owner: ref.owner,
+          repo: ref.repo,
+          number,
+          sha: head.oid,
+          checkCursor: pageInfo.endCursor,
+        },
+        token,
+        apiBase,
+      );
+      const page = data.repository?.object?.statusCheckRollup?.contexts;
+      if (!page || (page.pageInfo?.hasNextPage && page.pageInfo.endCursor === pageInfo.endCursor)) {
+        return yield* Effect.fail(
+          new GitHubApiError({ status: 200, cause: "GitHub returned an incomplete CI page" }),
+        );
+      }
+      contexts.push(...nodesOf(page));
+      pageInfo = page.pageInfo;
+    }
+    return {
+      nodes: [
+        { commit: { ...head, statusCheckRollup: { ...rollup, contexts: { nodes: contexts } } } },
+      ],
+    };
+  });
+}
+
 export function fetchConversation(
   ref: RepoRef,
   number: number,
@@ -170,8 +219,9 @@ export function fetchConversation(
     }
     const older = olderPages.flat();
 
+    const commits = yield* completeCheckContexts(ref, number, pr.commits, modern, token, apiBase);
     const conversation = mapConversation(
-      data,
+      { ...data, repository: { ...data.repository, pullRequest: { ...pr, commits } } },
       older,
       prId,
       pageInfo.hasPreviousPage,
@@ -199,13 +249,21 @@ export function fetchCiRollup(
   return askWithFallback<{
     repository: { pullRequest: { commits: RawRollupCommits } | null } | null;
   }>(checksQuery, { owner: ref.owner, repo: ref.repo, number }, token, apiBase).pipe(
-    Effect.map(({ data, forbidden }) => {
-      const access = ciAccessOf(forbidden);
-      return {
-        rollup: access === "denied" ? null : mapRollup(data.repository?.pullRequest?.commits),
-        access,
-      };
-    }),
+    Effect.flatMap(({ data, forbidden, modern }) =>
+      Effect.gen(function* () {
+        const access = ciAccessOf(forbidden);
+        const commits = data.repository?.pullRequest?.commits;
+        return {
+          rollup:
+            access === "denied" || !commits
+              ? null
+              : mapRollup(
+                  yield* completeCheckContexts(ref, number, commits, modern, token, apiBase),
+                ),
+          access,
+        };
+      }),
+    ),
     retryTransient,
   );
 }
@@ -336,6 +394,7 @@ export function fetchCheckDetails(
 
     return {
       checkRunId,
+      completed: run.status === "completed",
       title: run.output?.title?.trim() || null,
       summary: run.output?.summary?.trim() || null,
       annotations: annotations.map(toAnnotation),

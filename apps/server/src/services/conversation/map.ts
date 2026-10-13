@@ -196,14 +196,18 @@ interface RawCheckContext {
   readonly createdAt?: string | null;
 }
 
+export interface RawCheckRollup {
+  readonly state: string;
+  readonly contexts: RawConnection<RawCheckContext> & {
+    readonly pageInfo?: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  };
+}
+
 export interface RawRollupCommits {
   readonly nodes?: ReadonlyArray<{
     readonly commit: {
       readonly oid: string;
-      readonly statusCheckRollup: {
-        readonly state: string;
-        readonly contexts: RawConnection<RawCheckContext>;
-      } | null;
+      readonly statusCheckRollup: RawCheckRollup | null;
     };
   } | null> | null;
 }

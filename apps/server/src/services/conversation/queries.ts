@@ -123,8 +123,26 @@ function modernTimelineNodes(modern: boolean): string {
     : "";
 }
 
-function rollupBlock(modern: boolean): string {
+function checkContextsBlock(modern: boolean): string {
   const required = modern ? "isRequired(pullRequestNumber: $number)" : "";
+  return `
+    contexts(first: 100, after: $checkCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        __typename
+        ... on CheckRun {
+          databaseId name status conclusion startedAt completedAt detailsUrl title ${required}
+          checkSuite { app { name slug } workflowRun { databaseId workflow { name } } }
+        }
+        ... on StatusContext {
+          context state description targetUrl createdAt ${required}
+        }
+      }
+    }
+  `;
+}
+
+function rollupBlock(modern: boolean): string {
   return `
     commits(last: 1) {
       nodes {
@@ -132,18 +150,7 @@ function rollupBlock(modern: boolean): string {
           oid
           statusCheckRollup {
             state
-            contexts(first: 100) {
-              nodes {
-                __typename
-                ... on CheckRun {
-                  databaseId name status conclusion startedAt completedAt detailsUrl title ${required}
-                  checkSuite { app { name slug } workflowRun { databaseId workflow { name } } }
-                }
-                ... on StatusContext {
-                  context state description targetUrl createdAt ${required}
-                }
-              }
-            }
+            ${checkContextsBlock(modern)}
           }
         }
       }
@@ -153,7 +160,7 @@ function rollupBlock(modern: boolean): string {
 
 export function conversationQuery(modern: boolean): string {
   return `
-    query PrConversation($owner: String!, $repo: String!, $number: Int!) {
+    query PrConversation($owner: String!, $repo: String!, $number: Int!, $checkCursor: String) {
       viewer { login }
       repository(owner: $owner, name: $repo) {
         viewerPermission
@@ -228,9 +235,23 @@ export function timelinePageQuery(modern: boolean): string {
 
 export function checksQuery(modern: boolean): string {
   return `
-    query PrChecks($owner: String!, $repo: String!, $number: Int!) {
+    query PrChecks($owner: String!, $repo: String!, $number: Int!, $checkCursor: String) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) { ${rollupBlock(modern)} }
+      }
+    }
+  `;
+}
+
+/** Follow-up CI pages stay on the original head even if the PR receives a commit. */
+export function checkContextsPageQuery(modern: boolean): string {
+  // Legacy fields do not reference $number; GraphQL rejects unused variables.
+  return `
+    query PrCheckContexts($owner: String!, $repo: String!, $sha: GitObjectID!, $checkCursor: String${modern ? ", $number: Int!" : ""}) {
+      repository(owner: $owner, name: $repo) {
+        object(oid: $sha) {
+          ... on Commit { statusCheckRollup { state ${checkContextsBlock(modern)} } }
+        }
       }
     }
   `;

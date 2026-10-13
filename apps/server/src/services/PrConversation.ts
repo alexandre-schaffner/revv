@@ -71,6 +71,7 @@ export class PrConversationService extends Context.Tag("PrConversationService")<
     readonly cached: (
       prId: string,
       userId: string,
+      accountId: string,
     ) => Effect.Effect<PrConversation | null, ConversationError, Deps>;
     /**
      * A fresh conversation from GitHub. Falls back to the cached snapshot
@@ -79,11 +80,13 @@ export class PrConversationService extends Context.Tag("PrConversationService")<
     readonly load: (
       prId: string,
       userId: string,
+      accountId: string,
     ) => Effect.Effect<PrConversationResponse, ConversationError, Deps>;
     /** The head commit's CI rollup only; cheap enough to poll. */
     readonly checks: (
       prId: string,
       userId: string,
+      accountId: string,
     ) => Effect.Effect<
       { readonly rollup: CiRollup | null; readonly access: CiAccess },
       ConversationError,
@@ -92,6 +95,7 @@ export class PrConversationService extends Context.Tag("PrConversationService")<
     readonly checkDetails: (
       prId: string,
       userId: string,
+      accountId: string,
       checkRunId: number,
     ) => Effect.Effect<CheckDetails, ConversationError, Deps>;
     /**
@@ -107,15 +111,18 @@ export class PrConversationService extends Context.Tag("PrConversationService")<
     readonly labelOptions: (
       prId: string,
       userId: string,
+      accountId: string,
     ) => Effect.Effect<PrLabel[], ConversationError, Deps>;
     readonly assigneeOptions: (
       prId: string,
       userId: string,
+      accountId: string,
       query: string,
     ) => Effect.Effect<ActorOption[], ConversationError, Deps>;
     readonly reviewerOptions: (
       prId: string,
       userId: string,
+      accountId: string,
       query: string,
     ) => Effect.Effect<ReviewerOptions, ConversationError, Deps>;
   }
@@ -208,15 +215,15 @@ export const PrConversationServiceLive = Layer.effect(
         return (yield* withAvatars(snapshot)).conversation;
       });
 
-    const cached = (prId: string, userId: string) =>
+    const cached = (prId: string, userId: string, accountId: string) =>
       Effect.gen(function* () {
-        yield* prContext.resolveBasic(prId, userId);
+        yield* prContext.resolveBasic(prId, userId, accountId);
         return yield* readCached(prId);
       });
 
-    const load = (prId: string, userId: string) =>
+    const load = (prId: string, userId: string, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         return yield* fetchFresh(ctx, prId).pipe(
           Effect.map((conversation): PrConversationResponse => ({ conversation, stale: false })),
           Effect.catchIf(isUnreachable, (err) =>
@@ -229,9 +236,9 @@ export const PrConversationServiceLive = Layer.effect(
         );
       });
 
-    const checks = (prId: string, userId: string) =>
+    const checks = (prId: string, userId: string, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         const answer = yield* fetchCiRollup(
           yield* repoRef(ctx),
           ctx.pr.externalId,
@@ -251,12 +258,12 @@ export const PrConversationServiceLive = Layer.effect(
         return answer;
       });
 
-    const checkDetails = (prId: string, userId: string, checkRunId: number) =>
+    const checkDetails = (prId: string, userId: string, accountId: string, checkRunId: number) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         const key = `${ctx.repo.fullName}:${checkRunId}`;
         const hit = yield* cache.get<CheckDetails>(DETAILS_NS, key);
-        if (hit) return hit;
+        if (hit?.completed) return hit;
         const details = yield* fetchCheckDetails(
           yield* repoRef(ctx),
           checkRunId,
@@ -264,7 +271,7 @@ export const PrConversationServiceLive = Layer.effect(
           ctx.apiBase,
         );
         // A finished run's output never changes; a running one will.
-        if (details.logUnavailable !== "running") {
+        if (details.completed) {
           yield* cache.set(DETAILS_NS, key, details, { ttlMs: 7 * 24 * 60 * 60 * 1000 });
         }
         return details;
@@ -272,7 +279,7 @@ export const PrConversationServiceLive = Layer.effect(
 
     const write = (prId: string, userId: string, accountId: string, w: ConversationWrite) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         yield* runWrite(yield* repoRef(ctx), ctx.pr.externalId, w, ctx.token, ctx.apiBase);
         // GitHub took the write; failing to re-read it (rate limit, network)
         // must not read as the write failing, or the client rolls back a
@@ -292,9 +299,9 @@ export const PrConversationServiceLive = Layer.effect(
         return { conversation } satisfies ConversationWriteResult;
       });
 
-    const labelOptions = (prId: string, userId: string) =>
+    const labelOptions = (prId: string, userId: string, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         return yield* listRepoLabels(yield* repoRef(ctx), ctx.token, ctx.apiBase);
       });
 
@@ -320,12 +327,14 @@ export const PrConversationServiceLive = Layer.effect(
         );
       });
 
-    const assigneeOptions = (prId: string, userId: string, query: string) =>
-      Effect.flatMap(prContext.resolveBasic(prId, userId), (ctx) => searchUsers(ctx, query));
+    const assigneeOptions = (prId: string, userId: string, accountId: string, query: string) =>
+      Effect.flatMap(prContext.resolveBasic(prId, userId, accountId), (ctx) =>
+        searchUsers(ctx, query),
+      );
 
-    const reviewerOptions = (prId: string, userId: string, query: string) =>
+    const reviewerOptions = (prId: string, userId: string, accountId: string, query: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId);
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
         const ref = yield* repoRef(ctx);
         const [users, teams] = yield* Effect.all(
           [searchUsers(ctx, query), searchOrgTeams(ref, query, ctx.token, ctx.apiBase)],

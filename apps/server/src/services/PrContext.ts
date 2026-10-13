@@ -59,10 +59,12 @@ export class PrContextService extends Context.Tag("PrContextService")<
      * Resolve the PR + repo + GitHub token for a given PR id.
      * `userId` is passed through to {@link TokenProvider}; use `'single-user'`
      * when the caller is a background worker with no session context.
+     * API callers supply `accountId` to verify ownership before resolving a token.
      */
     readonly resolveBasic: (
       prId: string,
       userId: string,
+      accountId?: string,
     ) => Effect.Effect<PrContextBasic, PrContextError, DbService>;
     /**
      * Resolve the basic context, plus fresh PR metadata (head/base shas) and
@@ -157,9 +159,9 @@ export const PrContextServiceLive = Layer.effect(
     const github = yield* GitHubGateway;
     const diffCache = yield* DiffCacheService;
 
-    const resolveBasic = (prId: string, userId: string) =>
+    const resolveBasic = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const pr = yield* prService.getPr(prId);
+        const pr = yield* prService.getPr(prId, accountId);
         const repo = yield* repoService.getRepoById(pr.repositoryId);
         // Look up the repo's owning OAuth account directly. The legacy
         // `getGitHubToken(userId, host)` path falls back to "first user, first

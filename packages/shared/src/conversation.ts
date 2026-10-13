@@ -210,6 +210,8 @@ export interface CheckLogLine {
 
 export interface CheckDetails {
   readonly checkRunId: number;
+  /** Only completed checks have immutable output, regardless of log availability. */
+  readonly completed: boolean;
   readonly title: string | null;
   /** The check's markdown summary, as the reporting app wrote it. */
   readonly summary: string | null;

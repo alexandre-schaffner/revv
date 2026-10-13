@@ -32,6 +32,7 @@ import FilterStateRow from "$lib/components/shared/filter-popover/FilterStateRow
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Popover from "$lib/components/ui/popover";
 import { labelHue } from "$lib/utils/label-colors";
+import { pickerChanges } from "$lib/utils/picker-changes";
 
 // The sidebar's editor for a set (reviewers, assignees, labels), drawn with
 // the same filter-popover parts as the sidebar's creator filter. A gear opens
@@ -74,6 +75,7 @@ let draft = $state(new SvelteSet<string>());
 const collapsed = new SvelteSet<string>();
 /** Options seen this session, so a ticked row stays listed across searches. */
 const known = new Map<string, PickerOption<T>>();
+let openingSelection = new Map<string, T>();
 let requestSeq = 0;
 let lastAsked: string | null = null;
 
@@ -95,17 +97,18 @@ async function fetchOptions(q: string): Promise<void> {
 }
 
 function begin(): void {
-  draft = new SvelteSet(selected.keys());
+  openingSelection = new Map(selected);
+  draft = new SvelteSet(openingSelection.keys());
   query = "";
   void fetchOptions("");
 }
 
 function finish(): void {
-  const added = [...draft].flatMap((key) => {
-    const option = selected.has(key) ? undefined : known.get(key);
+  const { addedKeys, removed } = pickerChanges(openingSelection, draft);
+  const added = addedKeys.flatMap((key) => {
+    const option = known.get(key);
     return option ? [option.item] : [];
   });
-  const removed = [...selected].flatMap(([key, item]) => (draft.has(key) ? [] : [item]));
   if (added.length > 0 || removed.length > 0) onapply(added, removed);
 }
 
