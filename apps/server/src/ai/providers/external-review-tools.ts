@@ -380,9 +380,11 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
   },
 };
 
+// Optional rather than `.default()`: zod's JSON Schema marks a defaulted field
+// required, which would make every client send a mode it shouldn't have to pick.
 const requestWalkthroughSchema = z.object({
   head_sha: shaSchema,
-  generation_mode: z.enum(["incremental", "full"]).default("incremental"),
+  generation_mode: z.enum(["incremental", "full"]).optional(),
 });
 
 function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: string): string {
@@ -401,7 +403,7 @@ function describeRefusal(outcome: WalkthroughRequestRefusal, requestedHeadSha: s
 const requestWalkthroughSpec: ExternalReviewToolSpec = {
   name: "request_walkthrough",
   description:
-    "Ask Revv to review the PR at head_sha: the commit you just pushed (`git rev-parse HEAD`). Push first — Revv reviews what GitHub serves. Returns a walkthroughId at once; generation takes minutes, so pass it to wait_for_walkthrough. Idempotent per head: a finished review of that head is returned instead of a new run, and a run in progress is joined. Refuses to restart a run the user stopped, and refuses once a head or PR has used its run budget. generation_mode 'incremental' (default) reviews the commits since the last review and re-checks its findings; 'full' re-reviews the whole PR.",
+    "Ask Revv to review the PR at head_sha: the commit you just pushed (`git rev-parse HEAD`). Push first — Revv reviews what GitHub serves. Returns a walkthroughId at once; generation takes minutes, so pass it to wait_for_walkthrough. Idempotent per head: a finished review of that head is returned instead of a new run, and a run in progress is joined. Refuses to restart a run the user stopped, and refuses once a head or PR has used its run budget. generation_mode 'incremental' (default) reviews the commits since the last review and re-checks its findings; with no earlier review it runs a full review, so the default also starts a first review. 'full' re-reviews the whole PR.",
   inputSchema: requestWalkthroughSchema,
   scope: "walkthrough:generate",
   handler: async (ctx, input) => {
@@ -410,7 +412,7 @@ const requestWalkthroughSpec: ExternalReviewToolSpec = {
     try {
       outcome = await ctx.requestWalkthrough({
         headSha: parsed.head_sha,
-        generationMode: parsed.generation_mode,
+        generationMode: parsed.generation_mode ?? "incremental",
       });
     } catch (error) {
       return fail(
