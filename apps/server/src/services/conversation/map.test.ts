@@ -5,6 +5,7 @@ import {
   mapConversation,
   mapStack,
   type RawConversation,
+  type RawTimelineNode,
 } from "./map";
 
 const user = (login: string, extra: Record<string, unknown> = {}) => ({
@@ -67,7 +68,7 @@ function rawConversation(overrides: Record<string, unknown> = {}): RawConversati
           ],
         },
         timelineItems: {
-          pageInfo: { hasNextPage: false, endCursor: null },
+          pageInfo: { hasPreviousPage: false, startCursor: null },
           nodes: [
             {
               __typename: "PullRequestCommit",
@@ -269,6 +270,18 @@ describe("mapConversation", () => {
     expect(legacy?.linkedIssues).toEqual([]);
   });
 
+  test("puts older timeline pages before the query's newest page", () => {
+    const older: RawTimelineNode = {
+      __typename: "ClosedEvent",
+      id: "old1",
+      createdAt: "2026-09-01T00:00:00Z",
+      actor: user("zed"),
+    };
+    const paged = mapConversation(rawConversation(), [older], "pr-1", true, "now");
+    expect(paged?.timeline.map((t) => t.id)).toEqual(["old1", "c1", "ic1", "fp1", "l1"]);
+    expect(paged?.timelineTruncated).toBe(true);
+  });
+
   test("answers null when the PR isn't visible", () => {
     const raw = {
       viewer: { login: "me" },
@@ -284,6 +297,24 @@ describe("collectAvatarUrls", () => {
     expect(urls.get("alice")).toBe("https://avatars.example/alice");
     expect(urls.get("ci-bot")).toBe("https://a/bot");
     expect(urls.has("o/core")).toBe(false);
+  });
+
+  test("reads older timeline pages and commit authors too", () => {
+    const older: RawTimelineNode = {
+      __typename: "PullRequestCommit",
+      id: "c0",
+      url: "https://x/c0",
+      commit: {
+        oid: "000",
+        messageHeadline: "init",
+        messageBody: "",
+        committedDate: "2026-09-01T00:00:00Z",
+        author: { name: "Zed", avatarUrl: "https://a/zed", user: { login: "zed", name: null } },
+        signature: null,
+        statusCheckRollup: null,
+      },
+    };
+    expect(collectAvatarUrls(rawConversation(), [older]).get("zed")).toBe("https://a/zed");
   });
 });
 

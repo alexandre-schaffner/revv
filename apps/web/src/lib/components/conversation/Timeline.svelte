@@ -3,13 +3,13 @@ import type { PrConversation, TimelineReview } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import ChatCircleDots from "phosphor-svelte/lib/ChatCircleDots";
 import { SvelteSet } from "svelte/reactivity";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { setActiveTab } from "$lib/stores/review.svelte";
 import { groupTimeline } from "$lib/utils/conversation-timeline";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { interceptExternalLinks, openExternal } from "$lib/utils/open-external";
+import { openExternal } from "$lib/utils/open-external";
 import CommentCard from "./CommentCard.svelte";
+import MarkdownBody from "./MarkdownBody.svelte";
 import TimelineCommits from "./TimelineCommits.svelte";
 import TimelineEventLine from "./TimelineEventLine.svelte";
 import VerdictGlyph from "./VerdictGlyph.svelte";
@@ -95,10 +95,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 				{#if review.body.trim() || review.inlineCommentCount > 0}
 					<div class="review-body">
 						{#if review.body.trim()}
-							<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-							<div class="prose prose-sm prose-dense review-prose" onclick={interceptExternalLinks}>
-								{@html renderMarkdown(review.body)}
-							</div>
+							<MarkdownBody source={review.body} />
 						{/if}
 						{#if review.inlineCommentCount > 0}
 							<button type="button" class="review-inline" onclick={() => setActiveTab('diff')}>
@@ -250,11 +247,6 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-card);
 		background: var(--color-bg-primary);
-	}
-
-	.review-prose {
-		max-width: none;
-		overflow-wrap: anywhere;
 	}
 
 	.review-inline {

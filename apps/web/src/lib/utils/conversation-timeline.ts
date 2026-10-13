@@ -72,6 +72,15 @@ function toLine(event: TimelineEvent): EventLine {
   }
 }
 
+/** `a` then `b`, each key once: add, remove, re-add names a label twice. */
+function union<T>(a: readonly T[], b: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set(a.map(key));
+  return [...a, ...b.filter((item) => !seen.has(key(item)) && seen.add(key(item)))];
+}
+
+const labelName = (label: PrLabel) => label.name;
+const same = (name: string) => name;
+
 /** Fold `next` into `prev` when both are the same kind of burst. */
 function merge(prev: EventLine, next: EventLine): EventLine | null {
   if (prev.kind === "single" || next.kind !== prev.kind) return null;
@@ -81,15 +90,15 @@ function merge(prev: EventLine, next: EventLine): EventLine | null {
   if (prev.kind === "labels" && next.kind === "labels") {
     return {
       ...prev,
-      added: [...prev.added, ...next.added],
-      removed: [...prev.removed, ...next.removed],
+      added: union(prev.added, next.added, labelName),
+      removed: union(prev.removed, next.removed, labelName),
     };
   }
   if (prev.kind === "review_requests" && next.kind === "review_requests") {
     return {
       ...prev,
-      requested: [...prev.requested, ...next.requested],
-      removed: [...prev.removed, ...next.removed],
+      requested: union(prev.requested, next.requested, same),
+      removed: union(prev.removed, next.removed, same),
     };
   }
   return null;

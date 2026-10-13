@@ -334,7 +334,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
         margin: 0;
     }
 
-    /* ── Narrow-width (RequestChanges sidebar ~320px) ────────── */
+    /* ── Narrow-width (YourReview panel ~320px) ────────── */
 
     @container issues (max-width: 420px) {
         .count-label {

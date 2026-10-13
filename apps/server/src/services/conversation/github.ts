@@ -12,7 +12,6 @@ import type {
   CiAccess,
   CiRollup,
   CodeownersFile,
-  PrConversation,
   TeamOption,
 } from "@revv/shared";
 import { CODEOWNERS_PATHS, parseCodeowners } from "@revv/shared";
@@ -30,11 +29,12 @@ import {
   githubGraphql,
   githubGraphqlWithErrors,
   retryTransient,
+  withSchemaFallback,
 } from "../github-rest";
 import { extractLogTail } from "./log-tail";
 import {
-  actorField,
   collectAvatarUrls,
+  type MappedConversation,
   mapConversation,
   mapRollup,
   nodesOf,
@@ -61,12 +61,6 @@ export interface RepoRef {
 }
 
 // ── Fetching ────────────────────────────────────────────────────────────────
-
-function isSchemaComplaint(err: GitHubError): boolean {
-  if (!(err instanceof GitHubApiError)) return false;
-  const text = String(err.cause);
-  return MODERN_TOKENS.some((token) => text.includes(token));
-}
 
 /**
  * One GraphQL ask that survives fields the token may not read. A GitHub App
@@ -123,20 +117,14 @@ function askWithFallback<T>(
   token: string,
   apiBase: string,
 ): Effect.Effect<{ data: T; forbidden: string[]; modern: boolean }, GitHubError> {
-  return askGraphql<T>(build(true), variables, token, apiBase).pipe(
-    Effect.map((answer) => ({ ...answer, modern: true })),
-    Effect.catchAll((err) =>
-      isSchemaComplaint(err)
-        ? askGraphql<T>(build(false), variables, token, apiBase).pipe(
-            Effect.map((answer) => ({ ...answer, modern: false })),
-          )
-        : Effect.fail(err),
-    ),
-  );
+  return withSchemaFallback(
+    (modern) => askGraphql<T>(build(modern), variables, token, apiBase),
+    MODERN_TOKENS,
+  ).pipe(Effect.map(({ value, modern }) => ({ ...value, modern })));
 }
 
 export interface FetchedConversation {
-  readonly conversation: PrConversation;
+  readonly conversation: MappedConversation;
   readonly avatarUrls: Map<string, string>;
 }
 
@@ -165,26 +153,28 @@ export function fetchConversation(
       );
     }
 
-    // Follow the timeline past its first page, up to the cap.
-    const extra: RawTimelineNode[] = [];
-    let pageInfo = pr.timelineItems?.pageInfo ?? { hasNextPage: false, endCursor: null };
+    // The query read the newest page; walk back through older ones, up to
+    // the cap. Each page is oldest-first, so it goes in front of the last.
+    const olderPages: RawTimelineNode[][] = [];
+    let pageInfo = pr.timelineItems?.pageInfo ?? { hasPreviousPage: false, startCursor: null };
     let pages = 1;
-    while (pageInfo.hasNextPage && pages < TIMELINE_MAX_PAGES) {
+    while (pageInfo.hasPreviousPage && pages < TIMELINE_MAX_PAGES) {
       const next = yield* askGraphql<{
         repository: { pullRequest: { timelineItems: RawPage<RawTimelineNode> } | null } | null;
-      }>(timelinePageQuery(modern), { ...variables, cursor: pageInfo.endCursor }, token, apiBase);
+      }>(timelinePageQuery(modern), { ...variables, cursor: pageInfo.startCursor }, token, apiBase);
       const page = next.data.repository?.pullRequest?.timelineItems;
       if (!page) break;
-      extra.push(...nodesOf(page));
+      olderPages.unshift(nodesOf(page));
       pageInfo = page.pageInfo;
       pages++;
     }
+    const older = olderPages.flat();
 
     const conversation = mapConversation(
       data,
-      extra,
+      older,
       prId,
-      pageInfo.hasNextPage,
+      pageInfo.hasPreviousPage,
       new Date().toISOString(),
       ciAccessOf(forbidden),
     );
@@ -196,16 +186,7 @@ export function fetchConversation(
         }),
       );
     }
-    const avatarUrls = collectAvatarUrls(data);
-    for (const node of extra) {
-      for (const field of ["author", "actor"]) {
-        const actor = actorField(node, field);
-        if (actor?.avatarUrl && !avatarUrls.has(actor.login)) {
-          avatarUrls.set(actor.login, actor.avatarUrl);
-        }
-      }
-    }
-    return { conversation, avatarUrls };
+    return { conversation, avatarUrls: collectAvatarUrls(data, older) };
   }).pipe(retryTransient);
 }
 

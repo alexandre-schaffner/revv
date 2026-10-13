@@ -11,6 +11,7 @@ import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { reasonFor } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
@@ -914,29 +915,13 @@ export async function getMergeEligibility(prId: string): Promise<MergeEligibilit
   }
 }
 
-/**
- * GitHub's merge refusals are only legible in the response body — a bare
- * "HTTP 405" hides "Merge commits are not allowed on this repository." Surface
- * the server's message and keep the status as a last resort.
- */
-function mergeErrorMessage(error: { status: number; value?: unknown }): string {
-  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
-  const detail =
-    typeof value?.error === "string"
-      ? value.error
-      : typeof value?.message === "string"
-        ? value.message
-        : null;
-  return detail ?? `Failed to merge pull request (HTTP ${error.status})`;
-}
-
 export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<void> {
   const pr = pullRequests.find((p) => p.id === prId);
   if (!pr) {
     // PR not known locally — fall back to pessimistic. SSE reconciles.
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
     if (error) {
-      const msg = mergeErrorMessage(error);
+      const msg = apiErrorMessage(error, "Failed to merge pull request");
       toast.error(msg);
       throw new Error(msg);
     }
@@ -956,7 +941,7 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
 
   try {
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) throw new Error(mergeErrorMessage(error));
+    if (error) throw new Error(apiErrorMessage(error, "Failed to merge pull request"));
     toast.success("Pull request merged successfully");
   } catch (e) {
     restorePrFromArchive(snapshot);

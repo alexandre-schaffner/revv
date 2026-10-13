@@ -5,8 +5,8 @@
 /**
  * Fields a GitHub Enterprise release may predate. GraphQL rejects the whole
  * query on one unknown field or enum value, so on a schema complaint naming
- * any of these the query is asked again without them (the merge-eligibility
- * pattern in GitHub.ts).
+ * any of these the query is asked again without them (`withSchemaFallback`).
+ * `stack` is too common a word to match bare; GitHub's complaint quotes it.
  */
 export const MODERN_TOKENS = [
   "isRequired",
@@ -17,11 +17,13 @@ export const MODERN_TOKENS = [
   "convertToDraft",
   "asCodeOwner",
   "PullRequestStack",
-  "'stack'",
+  "Field 'stack'",
   "STACK_EVENT",
   "StackEvent",
 ] as const;
 
+// The timeline is read newest first, a page at a time backwards, so a PR past
+// the cap loses its oldest activity, never its latest.
 const TIMELINE_PAGE = 100;
 export const TIMELINE_MAX_PAGES = 5;
 
@@ -198,8 +200,8 @@ export function conversationQuery(modern: boolean): string {
                  }`
               : `reviews(last: 100) { nodes { state submittedAt author { ${ACTOR} } } }`
           }
-          timelineItems(first: ${TIMELINE_PAGE}, itemTypes: [${timelineTypes(modern)}]) {
-            pageInfo { hasNextPage endCursor }
+          timelineItems(last: ${TIMELINE_PAGE}, itemTypes: [${timelineTypes(modern)}]) {
+            pageInfo { hasPreviousPage startCursor }
             nodes { ${TIMELINE_NODE} ${modernTimelineNodes(modern)} }
           }
           ${rollupBlock(modern)}
@@ -214,8 +216,8 @@ export function timelinePageQuery(modern: boolean): string {
     query PrConversationTimeline($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
-          timelineItems(first: ${TIMELINE_PAGE}, after: $cursor, itemTypes: [${timelineTypes(modern)}]) {
-            pageInfo { hasNextPage endCursor }
+          timelineItems(last: ${TIMELINE_PAGE}, before: $cursor, itemTypes: [${timelineTypes(modern)}]) {
+            pageInfo { hasPreviousPage startCursor }
             nodes { ${TIMELINE_NODE} ${modernTimelineNodes(modern)} }
           }
         }

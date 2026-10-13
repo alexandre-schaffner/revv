@@ -4,7 +4,7 @@ import CaretRight from "phosphor-svelte/lib/CaretRight";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import SealCheck from "phosphor-svelte/lib/SealCheck";
 import { SvelteSet } from "svelte/reactivity";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { gsapSlide } from "$lib/motion";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";

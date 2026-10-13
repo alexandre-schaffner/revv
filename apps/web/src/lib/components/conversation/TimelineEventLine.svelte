@@ -13,7 +13,7 @@ import Tag from "phosphor-svelte/lib/Tag";
 import UserMinus from "phosphor-svelte/lib/UserMinus";
 import UserPlus from "phosphor-svelte/lib/UserPlus";
 import XCircle from "phosphor-svelte/lib/XCircle";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import type { EventLine } from "$lib/utils/conversation-timeline";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";

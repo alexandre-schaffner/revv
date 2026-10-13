@@ -3,11 +3,11 @@ import type { ConversationActor } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import Trash from "phosphor-svelte/lib/Trash";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { interceptExternalLinks, openExternal } from "$lib/utils/open-external";
+import { openExternal } from "$lib/utils/open-external";
+import MarkdownBody from "./MarkdownBody.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 
 // A markdown post in the conversation: the PR description (verb "opened")
@@ -44,7 +44,6 @@ let {
 let editing = $state(false);
 let confirmingDelete = $state(false);
 
-const html = $derived(body.trim() ? renderMarkdown(body) : "");
 const absolute = $derived(new Date(createdAt).toLocaleString());
 
 async function save(next: string): Promise<boolean> {
@@ -128,11 +127,8 @@ async function confirmDelete(): Promise<void> {
 				oncancel={() => (editing = false)}
 			/>
 		</div>
-	{:else if html}
-		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-		<div class="card-body prose prose-sm prose-dense" onclick={interceptExternalLinks}>
-			{@html html}
-		</div>
+	{:else if body.trim()}
+		<div class="card-body"><MarkdownBody source={body} /></div>
 	{:else if emptyText}
 		<p class="card-body card-empty">{emptyText}</p>
 	{/if}
@@ -192,9 +188,7 @@ async function confirmDelete(): Promise<void> {
 	}
 
 	.card-body {
-		max-width: none;
 		padding: 12px 16px 14px;
-		overflow-wrap: anywhere;
 	}
 
 	.card-empty {

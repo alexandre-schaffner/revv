@@ -2,8 +2,9 @@
 // writes the sidebar, composer, and checks section make. All of it is
 // GitHub-backed through PrConversationService.
 
+import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia, t } from "elysia";
+import { Elysia, type Static, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { PrConversationService } from "../services/PrConversation";
 import { handleAppError, withAccount } from "./middleware";
@@ -19,15 +20,24 @@ const writeBody = t.Union([
   t.Object({ kind: t.Literal("add_assignees"), logins: names }),
   t.Object({ kind: t.Literal("remove_assignees"), logins: names }),
   t.Object({ kind: t.Literal("add_labels"), names }),
-  t.Object({ kind: t.Literal("remove_label"), name: t.String({ minLength: 1 }) }),
+  t.Object({ kind: t.Literal("remove_labels"), names }),
   t.Object({ kind: t.Literal("post_comment"), body: markdown }),
   t.Object({ kind: t.Literal("edit_comment"), commentId: id, body: markdown }),
   t.Object({ kind: t.Literal("delete_comment"), commentId: id }),
   // An empty description is a legitimate edit.
   t.Object({ kind: t.Literal("edit_body"), body: t.String({ maxLength: 65_536 }) }),
-  t.Object({ kind: t.Literal("rerun_failed"), runId: id }),
+  t.Object({
+    kind: t.Literal("rerun_failed"),
+    runIds: t.Array(id, { minItems: 1, maxItems: 20 }),
+  }),
   t.Object({ kind: t.Literal("rerun_job"), jobId: id }),
 ]);
+
+// The schema validates what the shared `ConversationWrite` type promises;
+// this fails to compile the day the two disagree.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const writeBodyMatchesShared: Same<Static<typeof writeBody>, ConversationWrite> = true;
+void writeBodyMatchesShared;
 
 export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)

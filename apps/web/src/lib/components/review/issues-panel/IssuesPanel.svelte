@@ -26,7 +26,7 @@ interface Props {
   issues: readonly WalkthroughIssue[];
   /** Issues rated low signal. Read-only, behind a disclosure, outside the selection model — select-all must never post something the reader didn't see. */
   filteredIssues?: readonly WalkthroughIssue[];
-  /** Selected-for-submit set — lives in RequestChanges so it survives
+  /** Selected-for-submit set — lives in YourReview so it survives
    *  remounts and persists across PR switches. Passed in so this
    *  panel stays stateless w.r.t. that data. */
   selectedIds: Set<string>;

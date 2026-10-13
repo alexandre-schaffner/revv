@@ -23,21 +23,21 @@ import {
   mergePr,
 } from "$lib/stores/prs.svelte";
 import {
-  getRcApproveBlockerSummary,
-  getRcCanComment,
-  getRcOnApprove,
-  getRcOnComment,
-  getRcOnGenerateChanges,
-  getRcOnSubmitReview,
-  getRcSelectedCount,
-  getRcSubmitting,
-} from "$lib/stores/rcActions.svelte";
+  getReviewBarApproveBlockerSummary,
+  getReviewBarCanComment,
+  getReviewBarOnApprove,
+  getReviewBarOnComment,
+  getReviewBarOnGenerateChanges,
+  getReviewBarOnSubmitReview,
+  getReviewBarSelectedCount,
+  getReviewBarSubmitting,
+} from "$lib/stores/reviewBar.svelte";
 
 const pr = $derived(getSelectedPr());
-const rcSubmitting = $derived(getRcSubmitting());
-const rcSelectedCount = $derived(getRcSelectedCount());
-const rcCanComment = $derived(getRcCanComment());
-const rcApproveBlockerSummary = $derived(getRcApproveBlockerSummary());
+const rcSubmitting = $derived(getReviewBarSubmitting());
+const rcSelectedCount = $derived(getReviewBarSelectedCount());
+const rcCanComment = $derived(getReviewBarCanComment());
+const rcApproveBlockerSummary = $derived(getReviewBarApproveBlockerSummary());
 const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
 
 let rcGenerating = $state(false);
@@ -129,7 +129,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
   <GlassPill
     variant="muted"
     disabled={rcSubmitting !== null || !rcCanComment}
-    onclick={() => getRcOnComment()()}
+    onclick={() => getReviewBarOnComment()()}
     title={!rcCanComment
       ? "Add comments or select walkthrough issues first"
       : "Post comments to GitHub without approving or requesting changes"}
@@ -148,7 +148,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
     <GlassPill
       variant="muted"
       disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
-      onclick={() => { rcGenerating = true; getRcOnGenerateChanges()(); }}
+      onclick={() => { rcGenerating = true; getReviewBarOnGenerateChanges()(); }}
       title={rcSelectedCount === 0
         ? "Select at least one issue to ask the agent to address"
         : rcGenerating
@@ -260,7 +260,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcCanComment}
-        onclick={() => getRcOnSubmitReview()()}
+        onclick={() => getReviewBarOnSubmitReview()()}
         title={!rcCanComment
           ? "Add comments or select walkthrough issues first"
           : "Submit your review — posts your comments, and requests changes if any issues are selected"}
@@ -271,7 +271,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
       <GlassPill
         variant="success"
         disabled={rcSubmitting !== null}
-        onclick={() => getRcOnApprove()()}
+        onclick={() => getReviewBarOnApprove()()}
         title={rcApproveBlockerSummary
           ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
           : "Approve this pull request on GitHub"}

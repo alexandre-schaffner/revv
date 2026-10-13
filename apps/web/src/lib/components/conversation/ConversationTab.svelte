@@ -1,24 +1,26 @@
 <script lang="ts">
-import type {
-  ConversationActor,
-  PrConversation,
-  PrLabel,
-  ReviewerEntry,
-  TimelineComment,
-} from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onMount, untrack } from "svelte";
 import YourReview from "$lib/components/review/YourReview.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import {
-  applyConversationWrite,
+  changeAssignees,
+  changeLabels,
+  changeReviewers,
+  deleteComment,
+  editBody,
+  editComment,
   getConversation,
+  hasPendingChecks,
   loadCheckDetails,
   loadConversation,
+  postComment,
+  rerunFailedRuns,
+  rerunJob,
   watchChecks,
 } from "$lib/stores/conversation.svelte";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
@@ -40,8 +42,8 @@ const conversation = $derived(entry.request.status === "ok" ? entry.request.data
 const canEdit = $derived(!!conversation?.viewerCanUpdate && !entry.denied.has("edit"));
 const canComment = $derived(!entry.denied.has("edit"));
 const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("rerun"));
-const hasPendingChecks = $derived(
-  conversation?.ci?.checks.some((c) => c.bucket === "pending") ?? false,
+const shouldPollChecks = $derived(
+  isActive && (hasPendingChecks(conversation?.ci) || entry.awaitingRerun),
 );
 
 let composer = $state<HTMLTextAreaElement | null>(null);
@@ -58,9 +60,10 @@ $effect(() => {
   untrack(() => void loadConversation(id));
 });
 
-// Poll CI only while something is pending and the tab is on screen.
+// The tab owns CI polling: on while it's on screen and something is pending
+// (or a re-run hasn't shown up yet); the store stops on its own once settled.
 $effect(() => {
-  if (!isActive || !hasPendingChecks) return;
+  if (!shouldPollChecks) return;
   const id = prId;
   return untrack(() => watchChecks(id));
 });
@@ -74,8 +77,10 @@ onMount(() => {
 });
 
 function onKeydown(e: KeyboardEvent): void {
-  if (!isActive || !conversation) return;
+  if (!isActive || !conversation || e.defaultPrevented) return;
   if (e.metaKey || e.ctrlKey || e.altKey || isTextEditingKeyTarget(e)) return;
+  // The sidebar's file tree binds the same letters (`l` opens a file).
+  if (getActivePanel() === "sidebar") return;
   const key = e.key.toLowerCase();
   if (key === "c" && canComment && composer) {
     e.preventDefault();
@@ -88,174 +93,6 @@ function onKeydown(e: KeyboardEvent): void {
     if (key === "l") labelsOpen = true;
   }
 }
-
-// ── Writes, each with its optimistic reading ────────────────────────────────
-
-function viewer(c: PrConversation): ConversationActor {
-  return (
-    c.participants.find((p) => p.login === c.viewerLogin) ?? {
-      login: c.viewerLogin,
-      name: null,
-      avatarContent: null,
-      kind: "user",
-    }
-  );
-}
-
-const bareActor = (login: string): ConversationActor => ({
-  login,
-  name: null,
-  avatarContent: null,
-  kind: "user",
-});
-
-async function postComment(body: string): Promise<boolean> {
-  return applyConversationWrite(prId, { kind: "post_comment", body }, (c) => {
-    const now = new Date().toISOString();
-    const pending: TimelineComment = {
-      kind: "comment",
-      id: `pending-${now}`,
-      createdAt: now,
-      databaseId: 0,
-      author: viewer(c),
-      body,
-      edited: false,
-      url: "",
-      viewerCanUpdate: false,
-      viewerCanDelete: false,
-    };
-    return { ...c, timeline: [...c.timeline, pending] };
-  });
-}
-
-function editComment(commentId: number, body: string): Promise<boolean> {
-  return applyConversationWrite(prId, { kind: "edit_comment", commentId, body }, (c) => ({
-    ...c,
-    timeline: c.timeline.map((t) =>
-      t.kind === "comment" && t.databaseId === commentId ? { ...t, body, edited: true } : t,
-    ),
-  }));
-}
-
-function deleteComment(commentId: number): Promise<boolean> {
-  return applyConversationWrite(prId, { kind: "delete_comment", commentId }, (c) => ({
-    ...c,
-    timeline: c.timeline.filter((t) => !(t.kind === "comment" && t.databaseId === commentId)),
-  }));
-}
-
-function editBody(body: string): Promise<boolean> {
-  return applyConversationWrite(prId, { kind: "edit_body", body }, (c) => ({ ...c, body }));
-}
-
-async function changeReviewers(change: {
-  addUsers: string[];
-  addTeams: string[];
-  removeUsers: string[];
-  removeTeams: string[];
-}): Promise<void> {
-  if (change.addUsers.length > 0 || change.addTeams.length > 0) {
-    await applyConversationWrite(
-      prId,
-      { kind: "request_reviewers", users: change.addUsers, teams: change.addTeams },
-      (c) => {
-        const reviewers: ReviewerEntry[] = c.reviewers.map((r) =>
-          r.kind === "user" && change.addUsers.includes(r.actor.login)
-            ? { ...r, requested: true }
-            : r,
-        );
-        const known = new Set(
-          reviewers.map((r) => (r.kind === "user" ? r.actor.login : r.combinedSlug)),
-        );
-        for (const login of change.addUsers) {
-          if (known.has(login)) continue;
-          reviewers.push({
-            kind: "user",
-            actor: bareActor(login),
-            requested: true,
-            asCodeOwner: false,
-            verdict: null,
-            verdictAt: null,
-          });
-        }
-        for (const slug of change.addTeams) {
-          if (known.has(slug)) continue;
-          const name = slug.split("/").pop() ?? slug;
-          reviewers.push({
-            kind: "team",
-            combinedSlug: slug,
-            slug: name,
-            name,
-            requested: true,
-            asCodeOwner: false,
-          });
-        }
-        return { ...c, reviewers };
-      },
-    );
-  }
-  if (change.removeUsers.length > 0 || change.removeTeams.length > 0) {
-    await applyConversationWrite(
-      prId,
-      { kind: "remove_reviewers", users: change.removeUsers, teams: change.removeTeams },
-      (c) => ({
-        ...c,
-        reviewers: c.reviewers.flatMap((r): ReviewerEntry[] => {
-          if (r.kind === "team") return change.removeTeams.includes(r.combinedSlug) ? [] : [r];
-          if (!change.removeUsers.includes(r.actor.login)) return [r];
-          // Someone who already reviewed stays listed with their verdict.
-          return r.verdict ? [{ ...r, requested: false }] : [];
-        }),
-      }),
-    );
-  }
-}
-
-async function changeAssignees(added: string[], removed: string[]): Promise<void> {
-  if (added.length > 0) {
-    await applyConversationWrite(prId, { kind: "add_assignees", logins: added }, (c) => ({
-      ...c,
-      assignees: [
-        ...c.assignees,
-        ...added.map((login) => (login === c.viewerLogin ? viewer(c) : bareActor(login))),
-      ],
-    }));
-  }
-  if (removed.length > 0) {
-    await applyConversationWrite(prId, { kind: "remove_assignees", logins: removed }, (c) => ({
-      ...c,
-      assignees: c.assignees.filter((a) => !removed.includes(a.login)),
-    }));
-  }
-}
-
-async function changeLabels(added: PrLabel[], removed: string[]): Promise<void> {
-  if (added.length > 0) {
-    await applyConversationWrite(
-      prId,
-      { kind: "add_labels", names: added.map((l) => l.name) },
-      (c) => ({ ...c, labels: [...c.labels, ...added] }),
-    );
-  }
-  for (const name of removed) {
-    await applyConversationWrite(prId, { kind: "remove_label", name }, (c) => ({
-      ...c,
-      labels: c.labels.filter((l) => l.name !== name),
-    }));
-  }
-}
-
-async function rerunRuns(runIds: number[]): Promise<void> {
-  for (const runId of runIds) {
-    await applyConversationWrite(prId, { kind: "rerun_failed", runId });
-  }
-}
-
-async function rerunJob(jobId: number): Promise<void> {
-  await applyConversationWrite(prId, { kind: "rerun_job", jobId });
-}
-
-const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -274,16 +111,13 @@ const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 
 			<div class="slot-description">
 				<CommentCard
-					author={{
-						...conversation.author,
-						avatarContent: conversation.author.avatarContent ?? prAuthorAvatar,
-					}}
+					author={conversation.author}
 					verb="opened"
 					createdAt={conversation.createdAt}
 					body={conversation.body}
 					url={conversation.url}
 					emptyText="No description provided."
-					onsave={canEdit ? editBody : undefined}
+					onsave={canEdit ? (body) => editBody(prId, body) : undefined}
 				/>
 			</div>
 
@@ -292,8 +126,8 @@ const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 				<Timeline
 					{conversation}
 					canEdit={canComment}
-					onEditComment={editComment}
-					onDeleteComment={deleteComment}
+					onEditComment={(id, body) => editComment(prId, id, body)}
+					onDeleteComment={(id) => deleteComment(prId, id)}
 				/>
 			</div>
 
@@ -308,8 +142,8 @@ const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 					details={entry.checkDetails}
 					{canRerun}
 					onExpand={(id) => void loadCheckDetails(prId, id)}
-					onRerunRuns={rerunRuns}
-					onRerunJob={rerunJob}
+					onRerunRuns={(runIds) => rerunFailedRuns(prId, runIds)}
+					onRerunJob={(jobId) => rerunJob(prId, jobId)}
 				/>
 			</div>
 
@@ -318,7 +152,7 @@ const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 					<MarkdownEditor
 						placeholder="Add a comment"
 						submitLabel="Comment"
-						onsubmit={postComment}
+						onsubmit={(body) => postComment(prId, body)}
 						bind:textarea={composer}
 					/>
 				</div>
@@ -357,9 +191,9 @@ const prAuthorAvatar = $derived(getSelectedPr()?.authorAvatarContent ?? null);
 				{prId}
 				{conversation}
 				{canEdit}
-				onReviewers={(change) => void changeReviewers(change)}
-				onAssignees={(added, removed) => void changeAssignees(added, removed)}
-				onLabels={(added, removed) => void changeLabels(added, removed)}
+				onReviewers={(added, removed) => void changeReviewers(prId, added, removed)}
+				onAssignees={(added, removed) => void changeAssignees(prId, added, removed)}
+				onLabels={(added, removed) => void changeLabels(prId, added, removed)}
 				bind:reviewersOpen
 				bind:assigneesOpen
 				bind:labelsOpen

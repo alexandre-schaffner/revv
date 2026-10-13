@@ -25,7 +25,7 @@ export interface IssueGroup {
 
 /**
  * One entry per issue, but tagged with its global render index across every
- * group. Both the GuidedWalkthrough and RequestChanges panels use this to
+ * group. Both the GuidedWalkthrough and YourReview panels use this to
  * keep the entrance animation staggered as one continuous cascade rather
  * than restarting per-group.
  */

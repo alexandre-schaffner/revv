@@ -1,6 +1,6 @@
 import { goto } from "$app/navigation";
 import { copySelectedPrLink } from "./pr-link.svelte";
-import { setActiveTab } from "./review.svelte";
+import { REVIEW_TABS, setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
 import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 
@@ -155,24 +155,11 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 
   // Cmd+1/2/3 → the review tabs, in the order the tab bar shows them.
-  if (e.key === "1") {
+  const tab = /^[1-9]$/.test(e.key) ? REVIEW_TABS[Number(e.key) - 1] : undefined;
+  if (tab) {
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("conversation");
-    return;
-  }
-
-  if (e.key === "2") {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab("walkthrough");
-    return;
-  }
-
-  if (e.key === "3") {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab("diff");
+    setActiveTab(tab);
     return;
   }
 

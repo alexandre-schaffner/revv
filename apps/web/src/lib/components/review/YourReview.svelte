@@ -3,7 +3,6 @@ import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
-import { resetRcActions, setRcHandlers, setRcState } from "$lib/stores/rcActions.svelte";
 import {
   deleteThread,
   getReviewFiles,
@@ -13,6 +12,11 @@ import {
   jumpToWalkthroughBlock,
   loadSession,
 } from "$lib/stores/review.svelte";
+import {
+  resetReviewBar,
+  setReviewBarHandlers,
+  setReviewBarState,
+} from "$lib/stores/reviewBar.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import { getBlocks, getIssues, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
@@ -329,7 +333,7 @@ function toggleAllIssues() {
 // Register reactive state and handlers into the shared RC actions store so
 // AppShell can render the float pill as a direct child of .app-shell.
 $effect(() => {
-  setRcState({
+  setReviewBarState({
     submitting,
     selectedCount,
     canComment,
@@ -338,7 +342,7 @@ $effect(() => {
 });
 
 $effect(() => {
-  setRcHandlers({
+  setReviewBarHandlers({
     onGenerateChanges: generateChanges,
     // One submit posts everything in a single GitHub review. The review event
     // is decided by content: selecting walkthrough issues means "request
@@ -349,7 +353,7 @@ $effect(() => {
     onComment: () => void submit("comment"),
     onApprove: handleApproveClick,
   });
-  return resetRcActions;
+  return resetReviewBar;
 });
 </script>
 

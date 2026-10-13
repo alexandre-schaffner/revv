@@ -1,6 +1,7 @@
 /**
  * Shared reactive state for the Conversation tab's floating review action bar.
- * RequestChanges.svelte writes here; AppShell.svelte reads and renders the pill.
+ * YourReview.svelte writes here; AppShell.svelte shows ReviewActionBar, which
+ * reads it.
  *
  * Using module-level $state so any component can read/write without prop drilling.
  */
@@ -26,41 +27,41 @@ let _onApprove: () => void = () => {};
 
 // ── Getters (read by AppShell) ────────────────────────────────────────────────
 
-export function getRcSubmitting(): Action | null {
+export function getReviewBarSubmitting(): Action | null {
   return _submitting;
 }
 
-export function getRcSelectedCount(): number {
+export function getReviewBarSelectedCount(): number {
   return _selectedCount;
 }
 
-export function getRcCanComment(): boolean {
+export function getReviewBarCanComment(): boolean {
   return _canComment;
 }
 
-export function getRcApproveBlockerSummary(): string {
+export function getReviewBarApproveBlockerSummary(): string {
   return _approveBlockerSummary;
 }
 
-export function getRcOnGenerateChanges(): () => void {
+export function getReviewBarOnGenerateChanges(): () => void {
   return _onGenerateChanges;
 }
 
-export function getRcOnSubmitReview(): () => void {
+export function getReviewBarOnSubmitReview(): () => void {
   return _onSubmitReview;
 }
 
-export function getRcOnComment(): () => void {
+export function getReviewBarOnComment(): () => void {
   return _onComment;
 }
 
-export function getRcOnApprove(): () => void {
+export function getReviewBarOnApprove(): () => void {
   return _onApprove;
 }
 
-// ── Setters (written by RequestChanges) ──────────────────────────────────────
+// ── Setters (written by YourReview) ──────────────────────────────────────
 
-export function setRcState(state: {
+export function setReviewBarState(state: {
   submitting: Action | null;
   selectedCount: number;
   canComment: boolean;
@@ -72,7 +73,7 @@ export function setRcState(state: {
   _approveBlockerSummary = state.approveBlockerSummary;
 }
 
-export function setRcHandlers(handlers: {
+export function setReviewBarHandlers(handlers: {
   onGenerateChanges: () => void;
   onSubmitReview: () => void;
   onComment: () => void;
@@ -84,7 +85,7 @@ export function setRcHandlers(handlers: {
   _onApprove = handlers.onApprove;
 }
 
-export function resetRcActions(): void {
+export function resetReviewBar(): void {
   _submitting = null;
   _selectedCount = 0;
   _canComment = false;

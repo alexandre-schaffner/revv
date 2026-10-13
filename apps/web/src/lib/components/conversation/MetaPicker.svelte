@@ -1,20 +1,26 @@
 <script lang="ts" module>
 import type { PrLabel } from "@revv/shared";
 
-export interface PickerOption {
-  /** Unique across the picker. */
-  readonly value: string;
+/** What a row draws before its title. */
+export type PickerLeading =
+  | { readonly kind: "user"; readonly avatarContent: string | null }
+  | { readonly kind: "team" }
+  | { readonly kind: "label"; readonly label: PrLabel };
+
+export interface PickerOption<T> {
+  /** Identity across searches; unique within the picker. */
+  readonly key: string;
+  /** What the row stands for; handed back by `onapply`. */
+  readonly item: T;
   readonly title: string;
   /** Rows group under their section's header, in first-seen order. */
   readonly section: string;
   readonly hint?: string | null;
-  readonly avatar?: { readonly content: string | null };
-  readonly team?: boolean;
-  readonly label?: PrLabel;
+  readonly leading: PickerLeading;
 }
 </script>
 
-<script lang="ts">
+<script lang="ts" generics="T">
 import GearSix from "phosphor-svelte/lib/GearSix";
 import { untrack } from "svelte";
 import { SvelteSet } from "svelte/reactivity";
@@ -38,13 +44,13 @@ interface Props {
   /** Popover heading, e.g. "Request reviews". */
   title: string;
   placeholder: string;
-  /** Values selected right now. */
-  selected: ReadonlySet<string>;
+  /** What's selected right now, by option key. */
+  selected: ReadonlyMap<string, T>;
   /** Options for a query. Remote pickers re-ask as the search changes. */
-  load: (query: string) => Promise<PickerOption[]>;
+  load: (query: string) => Promise<PickerOption<T>[]>;
   /** Re-ask `load` per query; otherwise filter the first answer locally. */
   remote?: boolean;
-  onapply: (added: string[], removed: string[]) => void;
+  onapply: (added: T[], removed: T[]) => void;
   /** Bindable so a keyboard shortcut can open it. */
   open?: boolean;
 }
@@ -61,13 +67,13 @@ let {
 }: Props = $props();
 
 let query = $state("");
-let options = $state<PickerOption[]>([]);
+let options = $state<PickerOption<T>[]>([]);
 let loading = $state(false);
 let failed = $state(false);
 let draft = $state(new SvelteSet<string>());
 const collapsed = new SvelteSet<string>();
 /** Options seen this session, so a ticked row stays listed across searches. */
-const known = new Map<string, PickerOption>();
+const known = new Map<string, PickerOption<T>>();
 let requestSeq = 0;
 let lastAsked: string | null = null;
 
@@ -80,7 +86,7 @@ async function fetchOptions(q: string): Promise<void> {
     const next = await load(q);
     if (seq !== requestSeq) return;
     options = next;
-    for (const option of next) known.set(option.value, option);
+    for (const option of next) known.set(option.key, option);
   } catch {
     if (seq === requestSeq) failed = true;
   } finally {
@@ -89,14 +95,17 @@ async function fetchOptions(q: string): Promise<void> {
 }
 
 function begin(): void {
-  draft = new SvelteSet(selected);
+  draft = new SvelteSet(selected.keys());
   query = "";
   void fetchOptions("");
 }
 
 function finish(): void {
-  const added = [...draft].filter((v) => !selected.has(v));
-  const removed = [...selected].filter((v) => !draft.has(v));
+  const added = [...draft].flatMap((key) => {
+    const option = selected.has(key) ? undefined : known.get(key);
+    return option ? [option.item] : [];
+  });
+  const removed = [...selected].flatMap(([key, item]) => (draft.has(key) ? [] : [item]));
   if (added.length > 0 || removed.length > 0) onapply(added, removed);
 }
 
@@ -120,12 +129,12 @@ $effect(() => {
   return () => clearTimeout(timer);
 });
 
-function toggle(value: string): void {
-  if (draft.has(value)) draft.delete(value);
-  else draft.add(value);
+function toggle(key: string): void {
+  if (draft.has(key)) draft.delete(key);
+  else draft.add(key);
 }
 
-function matches(option: PickerOption, q: string): boolean {
+function matches(option: PickerOption<T>, q: string): boolean {
   const needle = q.trim().toLowerCase();
   return (
     !needle ||
@@ -139,13 +148,13 @@ function matches(option: PickerOption, q: string): boolean {
  * unticked; then the answer, filtered locally unless GitHub already did.
  */
 const sections = $derived.by(() => {
-  const listed = new Set(options.map((o) => o.value));
+  const listed = new Set(options.map((o) => o.key));
   const pinned = [...draft]
-    .filter((v) => !listed.has(v))
-    .map((v) => known.get(v))
-    .filter((o): o is PickerOption => o !== undefined && matches(o, query));
+    .filter((key) => !listed.has(key))
+    .map((key) => known.get(key))
+    .filter((o): o is PickerOption<T> => o !== undefined && matches(o, query));
   const rows = [...pinned, ...options.filter((o) => remote || matches(o, query))];
-  const grouped = new Map<string, PickerOption[]>();
+  const grouped = new Map<string, PickerOption<T>[]>();
   for (const row of rows) grouped.set(row.section, [...(grouped.get(row.section) ?? []), row]);
   return [...grouped].map(([name, items]) => ({ name, items }));
 });
@@ -193,16 +202,16 @@ function toggleSection(name: string): void {
 			{/if}
 			{#if !collapsed.has(section.name)}
 				<div class="picker-list">
-					{#each section.items as option (option.value)}
+					{#each section.items as option (option.key)}
 						<FilterOption
-							checked={draft.has(option.value)}
+							checked={draft.has(option.key)}
 							label={option.title}
 							title={option.hint ? `${option.title} · ${option.hint}` : option.title}
-							onclick={() => toggle(option.value)}
+							onclick={() => toggle(option.key)}
 						>
 							{#snippet leading()}
-								{#if option.label}
-									{@const hue = labelHue(option.label.color)}
+								{#if option.leading.kind === 'label'}
+									{@const hue = labelHue(option.leading.label.color)}
 									<span
 										class="swatch"
 										style="--label-h: {hue.h}; --label-c: {hue.c}"
@@ -210,8 +219,8 @@ function toggleSection(name: string): void {
 									></span>
 								{:else}
 									<FilterOptionAvatar
-										kind={option.team ? 'team' : 'user'}
-										content={option.avatar?.content ?? null}
+										kind={option.leading.kind}
+										content={option.leading.kind === 'user' ? option.leading.avatarContent : null}
 									/>
 								{/if}
 							{/snippet}

@@ -332,6 +332,34 @@ export interface PrConversationResponse {
   readonly stale: boolean;
 }
 
+/**
+ * A write the Conversation tab asks for: `POST /api/prs/:id/conversation/writes`.
+ * The route validates the same union (and checks at compile time that its
+ * schema still matches this type).
+ */
+export type ConversationWrite =
+  | { kind: "request_reviewers"; users: string[]; teams: string[] }
+  | { kind: "remove_reviewers"; users: string[]; teams: string[] }
+  | { kind: "add_assignees"; logins: string[] }
+  | { kind: "remove_assignees"; logins: string[] }
+  | { kind: "add_labels"; names: string[] }
+  | { kind: "remove_labels"; names: string[] }
+  | { kind: "post_comment"; body: string }
+  | { kind: "edit_comment"; commentId: number; body: string }
+  | { kind: "delete_comment"; commentId: number }
+  | { kind: "edit_body"; body: string }
+  | { kind: "rerun_failed"; runIds: number[] }
+  | { kind: "rerun_job"; jobId: number };
+
+/**
+ * The answer to a write that GitHub accepted. `conversation` is the re-read
+ * after it, or null when that re-read failed: the write still landed, so
+ * the client keeps its optimistic copy and reconciles later.
+ */
+export interface ConversationWriteResult {
+  readonly conversation: PrConversation | null;
+}
+
 /** Picker rows for the sidebar's reviewer / assignee / label editors. */
 export interface ActorOption {
   readonly login: string;

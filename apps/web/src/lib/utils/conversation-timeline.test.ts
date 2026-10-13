@@ -101,4 +101,22 @@ describe("groupTimeline", () => {
     const line = rows[0]?.kind === "events" ? rows[0].lines[0] : null;
     expect(line?.kind === "review_requests" && line.requested).toEqual(["bob", "org/core"]);
   });
+
+  it("names a label once when it was added, removed, and added again", () => {
+    const unlabel = (id: string, minute: number, name: string): TimelineItem => ({
+      kind: "unlabeled",
+      id,
+      createdAt: at(minute),
+      actor: actor("alice"),
+      label: { name, color: "ededed", description: null },
+    });
+    const rows = groupTimeline([
+      label("l1", "alice", 0, "api"),
+      unlabel("l2", 0, "api"),
+      label("l3", "alice", 1, "api"),
+    ]);
+    const line = rows[0]?.kind === "events" ? rows[0].lines[0] : null;
+    expect(line?.kind === "labels" && line.added.map((l) => l.name)).toEqual(["api"]);
+    expect(line?.kind === "labels" && line.removed.map((l) => l.name)).toEqual(["api"]);
+  });
 });

@@ -9,6 +9,7 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
@@ -116,13 +117,6 @@ const pullCommitRequests = new Map<string, Promise<boolean>>();
 
 export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
-}
-
-function apiErrorMessage(error: { status: number; value?: unknown }, fallback: string): string {
-  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
-  if (typeof value?.error === "string") return value.error;
-  if (typeof value?.message === "string") return value.message;
-  return `${fallback} (HTTP ${error.status})`;
 }
 
 /**
@@ -329,7 +323,10 @@ export async function loadSession(
 // `currentPrId`. Scroll positions are write-only persistence — components
 // read them imperatively on mount and write on scroll, no reactivity needed.
 
-type ActiveTab = "walkthrough" | "diff" | "conversation";
+/** The review page's tabs, in the order the tab bar shows them (and ⌘1–3 picks them). */
+export const REVIEW_TABS = ["conversation", "walkthrough", "diff"] as const;
+export type ReviewTab = (typeof REVIEW_TABS)[number];
+type ActiveTab = ReviewTab;
 type ScrollPaneKey = "walkthrough" | "diff" | "conversation" | "sidebar";
 
 interface PrViewState {
@@ -377,7 +374,7 @@ function rememberLastTab(prId: string, tab: ActiveTab): void {
 
 function lastTabFor(prId: string): ActiveTab | null {
   const tab = readLastTabs()[prId];
-  return tab === "walkthrough" || tab === "diff" || tab === "conversation" ? tab : null;
+  return REVIEW_TABS.find((known) => known === tab) ?? null;
 }
 
 // Single reactive store for per-PR view state. Follows the walkthrough-store
@@ -767,7 +764,7 @@ export function openFileInDiff(filePath: string, lineNumber?: number): void {
 }
 
 // --- Pending walkthrough-block jump ---
-// Mirrors the pending-diff-jump pattern: RequestChanges (and potentially other
+// Mirrors the pending-diff-jump pattern: YourReview (and potentially other
 // tabs) can request a scroll to a specific walkthrough block without needing a
 // direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
 // when it becomes active and clears it after scrolling.

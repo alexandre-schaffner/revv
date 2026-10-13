@@ -110,6 +110,8 @@ export type {
   CiRollup,
   CiRollupState,
   ConversationActor,
+  ConversationWrite,
+  ConversationWriteResult,
   LinkedIssue,
   PrConversation,
   PrConversationResponse,

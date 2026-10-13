@@ -119,12 +119,17 @@ export interface PrArchivedEnvelope {
 
 /**
  * Signal: this account changed the PR's GitHub conversation (a comment,
- * reviewers, assignees, labels, the description, a CI re-run). Views holding
- * the conversation re-read it via `GET /api/prs/:id/conversation`.
+ * reviewers, assignees, labels, the description, a CI re-run).
+ *
+ * `fetchedAt` stamps the snapshot the server re-read and cached after the
+ * write. A view already holding a conversation at least that fresh (the one
+ * that made the write) ignores the signal; any other reads the cached
+ * snapshot via `GET /api/prs/:id/conversation/cached`, which costs GitHub
+ * nothing. Null when the re-read failed: re-read from GitHub.
  */
 export interface PrConversationUpdatedEnvelope {
   type: "pr:conversation-updated";
-  data: { prId: string };
+  data: { prId: string; fetchedAt: string | null };
 }
 
 export interface PrsSyncStartedEnvelope {

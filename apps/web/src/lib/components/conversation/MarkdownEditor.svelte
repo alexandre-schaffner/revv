@@ -4,8 +4,7 @@ import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import { onMount } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import SegmentedControl from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { interceptExternalLinks } from "$lib/utils/open-external";
+import MarkdownBody from "./MarkdownBody.svelte";
 
 // The one markdown editing surface on the Conversation tab: the composer,
 // a comment being edited, the PR description being edited. Write / Preview
@@ -45,7 +44,6 @@ let mode = $state<Mode>("write");
 let submitting = $state(false);
 
 const canSubmit = $derived(!submitting && (allowEmpty || body.trim().length > 0));
-const preview = $derived(mode === "preview" ? renderMarkdown(body) : "");
 
 function autosize(): void {
   if (!textarea) return;
@@ -111,10 +109,9 @@ onMount(() => {
 			{onkeydown}
 		></textarea>
 	{:else}
-		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-		<div class="editor-preview prose prose-sm prose-dense" onclick={interceptExternalLinks}>
+		<div class="editor-preview">
 			{#if body.trim()}
-				{@html preview}
+				<MarkdownBody source={body} />
 			{:else}
 				<p class="editor-empty">Nothing to preview.</p>
 			{/if}
@@ -199,11 +196,12 @@ onMount(() => {
 
 	.editor-preview {
 		min-height: 84px;
-		max-width: none;
 		padding: 12px;
 	}
 
 	.editor-empty {
+		margin: 0;
+		font-size: 0.875rem;
 		color: var(--color-text-muted);
 	}
 

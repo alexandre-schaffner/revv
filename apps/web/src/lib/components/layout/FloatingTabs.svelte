@@ -2,10 +2,11 @@
 import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
+import { REVIEW_TABS, type ReviewTab } from "$lib/stores/review.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
 
-type Tab = "walkthrough" | "diff" | "conversation";
+type Tab = ReviewTab;
 type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
 
 interface Props {
@@ -47,14 +48,21 @@ function handlePullClick(): void {
 
 const cmdHeld = $derived(getCmdHeld());
 
-const tabs = [
-  { id: "conversation" as Tab, label: "Conversation", shortcut: "1" },
-  { id: "walkthrough" as Tab, label: "Walkthrough", shortcut: "2" },
-  { id: "diff" as Tab, label: "Diff", shortcut: "3" },
-];
+const TAB_LABEL: Record<Tab, string> = {
+  conversation: "Conversation",
+  walkthrough: "Walkthrough",
+  diff: "Diff",
+};
+
+const tabs = REVIEW_TABS.map((id, index) => ({
+  id,
+  label: TAB_LABEL[id],
+  shortcut: String(index + 1),
+}));
 
 function handleTabChange(tabId: string) {
-  onTabChange(tabId as Tab);
+  const tab = REVIEW_TABS.find((known) => known === tabId);
+  if (tab) onTabChange(tab);
 }
 
 let dotEl: HTMLSpanElement | null = $state(null);

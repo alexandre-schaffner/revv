@@ -6,8 +6,7 @@ import Copy from "phosphor-svelte/lib/Copy";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
 import { getReviewFiles, jumpToDiffLine } from "$lib/stores/review.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { interceptExternalLinks } from "$lib/utils/open-external";
+import MarkdownBody from "./MarkdownBody.svelte";
 
 interface Props {
   request: RequestState<CheckDetails>;
@@ -93,10 +92,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		{/if}
 
 		{#if !details.log && details.summary}
-			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<div class="details-summary prose prose-sm prose-dense" onclick={interceptExternalLinks}>
-				{@html renderMarkdown(details.summary)}
-			</div>
+			<MarkdownBody source={details.summary} />
 		{/if}
 
 		{#if details.annotations.length === 0 && !details.log && !details.summary && !(details.logUnavailable && UNAVAILABLE[details.logUnavailable])}
@@ -257,10 +253,5 @@ async function copyLog(details: CheckDetails): Promise<void> {
 	.log-line--group {
 		font-weight: 600;
 		color: var(--color-text-primary);
-	}
-
-	.details-summary {
-		max-width: none;
-		overflow-wrap: anywhere;
 	}
 </style>

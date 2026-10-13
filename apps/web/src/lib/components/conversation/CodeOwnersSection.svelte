@@ -1,15 +1,10 @@
 <script lang="ts">
-import {
-  type CodeownersFile,
-  type ConversationActor,
-  codeownersFor,
-  type ReviewerEntry,
-} from "@revv/shared";
+import { type CodeownersFile, codeownersFor, type ReviewerEntry } from "@revv/shared";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { gsapSlide } from "$lib/motion";
 import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
 import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
@@ -21,11 +16,16 @@ import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
 interface Props {
   codeowners: CodeownersFile;
   reviewers: readonly ReviewerEntry[];
-  /** For avatars of owners who haven't reviewed. */
-  participants: readonly ConversationActor[];
+  /** The conversation's avatars by login, for owners who aren't reviewers. */
+  avatars: Readonly<Record<string, string>>;
 }
 
-let { codeowners, reviewers, participants }: Props = $props();
+let { codeowners, reviewers, avatars }: Props = $props();
+
+/** CODEOWNERS handles needn't match a login's case. */
+const avatarsByHandle = $derived(
+  new Map(Object.entries(avatars).map(([login, content]) => [login.toLowerCase(), content])),
+);
 
 interface OwnerRow {
   readonly owner: string;
@@ -54,17 +54,16 @@ const rows = $derived.by((): OwnerRow[] => {
             ? team && r.combinedSlug.toLowerCase() === handle.toLowerCase()
             : !team && r.actor.login.toLowerCase() === handle.toLowerCase(),
         ) ?? null;
-      const actor =
-        reviewer?.kind === "user"
-          ? reviewer.actor
-          : participants.find((p) => p.login.toLowerCase() === handle.toLowerCase());
       return {
         owner,
         team,
         name: reviewer?.kind === "team" ? reviewer.name : handle,
         files: owned.sort(),
         reviewer,
-        avatarContent: actor?.avatarContent ?? null,
+        avatarContent:
+          (reviewer?.kind === "user" ? reviewer.actor.avatarContent : null) ??
+          avatarsByHandle.get(handle.toLowerCase()) ??
+          null,
       };
     })
     .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));

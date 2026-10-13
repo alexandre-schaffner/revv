@@ -45,15 +45,131 @@ export interface RawConnection<N> {
   readonly nodes?: ReadonlyArray<N | null> | null;
 }
 
+/** A timeline page, read backwards: `startCursor` leads to older items. */
 export interface RawPage<N> extends RawConnection<N> {
-  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  readonly pageInfo: { readonly hasPreviousPage: boolean; readonly startCursor: string | null };
 }
 
-export interface RawTimelineNode {
-  readonly __typename: string;
-  readonly id?: string;
-  readonly [field: string]: unknown;
+// One shape per timeline fragment in `queries.ts`.
+
+interface RawEventBase {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly actor: RawActor | null;
 }
+
+interface RawIssueComment {
+  readonly __typename: "IssueComment";
+  readonly id: string;
+  readonly databaseId: number;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly lastEditedAt: string | null;
+  readonly url: string;
+  readonly viewerCanUpdate: boolean;
+  readonly viewerCanDelete: boolean;
+  readonly author: RawActor | null;
+}
+
+interface RawReviewNode {
+  readonly __typename: "PullRequestReview";
+  readonly id: string;
+  readonly body: string;
+  readonly state: string;
+  readonly submittedAt: string | null;
+  readonly createdAt: string;
+  readonly url: string;
+  readonly author: RawActor | null;
+  readonly comments: { readonly totalCount: number } | null;
+}
+
+interface RawCommitNode {
+  readonly __typename: "PullRequestCommit";
+  readonly id: string;
+  readonly url: string;
+  readonly commit: {
+    readonly oid: string;
+    readonly messageHeadline: string;
+    readonly messageBody: string;
+    readonly committedDate: string;
+    readonly author: {
+      readonly name: string | null;
+      readonly avatarUrl?: string | null;
+      readonly user: { readonly login: string; readonly name: string | null } | null;
+    } | null;
+    readonly signature: { readonly isValid: boolean } | null;
+    readonly statusCheckRollup: { readonly state: string } | null;
+  } | null;
+}
+
+/** A user, bot, or mannequin names a login; a team its `org/slug`. */
+interface RawNamed {
+  readonly __typename: string;
+  readonly login?: string;
+  readonly combinedSlug?: string;
+}
+
+interface RawCrossReferenceSource {
+  readonly __typename: string;
+  readonly number?: number;
+  readonly title?: string;
+  readonly url?: string;
+  readonly state?: string;
+  readonly repository?: { readonly nameWithOwner: string };
+}
+
+type RawEventNode = RawEventBase &
+  (
+    | {
+        readonly __typename: "ReviewRequestedEvent" | "ReviewRequestRemovedEvent";
+        readonly requestedReviewer: RawNamed | null;
+      }
+    | {
+        readonly __typename: "ReviewDismissedEvent";
+        readonly dismissalMessage: string | null;
+        readonly review: { readonly author: { readonly login: string } | null } | null;
+      }
+    | {
+        readonly __typename: "LabeledEvent" | "UnlabeledEvent";
+        readonly label: RawLabel | null;
+      }
+    | {
+        readonly __typename: "AssignedEvent" | "UnassignedEvent";
+        readonly assignee: RawNamed | null;
+      }
+    | {
+        readonly __typename: "HeadRefForcePushedEvent";
+        readonly beforeCommit: { readonly oid: string } | null;
+        readonly afterCommit: { readonly oid: string } | null;
+      }
+    | {
+        readonly __typename:
+          | "ReadyForReviewEvent"
+          | "ConvertToDraftEvent"
+          | "ClosedEvent"
+          | "ReopenedEvent";
+      }
+    | {
+        readonly __typename: "AddedToStackEvent" | "RemovedFromStackEvent";
+        readonly stackNumber: number;
+      }
+    | {
+        readonly __typename: "MergedEvent";
+        readonly commit: { readonly oid: string } | null;
+        readonly mergeRefName: string;
+      }
+    | {
+        readonly __typename: "RenamedTitleEvent";
+        readonly previousTitle: string;
+        readonly currentTitle: string;
+      }
+    | {
+        readonly __typename: "CrossReferencedEvent";
+        readonly source: RawCrossReferenceSource | null;
+      }
+  );
+
+export type RawTimelineNode = RawIssueComment | RawReviewNode | RawCommitNode | RawEventNode;
 
 interface RawCheckContext {
   readonly __typename: string;
@@ -335,66 +451,38 @@ export function mapRollup(commits: RawRollupCommits | null | undefined): CiRollu
   };
 }
 
-function str(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
-
-export function actorField(node: RawTimelineNode, field: string): RawActor | null {
-  const v = node[field];
-  return v && typeof v === "object" && "login" in v ? (v as RawActor) : null;
-}
-
-/** One raw timeline node → zero or one item. Unknown or partial nodes drop. */
+/** One raw timeline node → zero or one item. Partial nodes drop. */
 function toTimelineItem(node: RawTimelineNode): TimelineItem | null {
-  const id = node.id;
-  if (!id) return null;
-  const createdAt = str(node.createdAt) ?? "";
-  const actor = toActor(actorField(node, "actor"));
-
   switch (node.__typename) {
     case "IssueComment":
       return {
         kind: "comment",
-        id,
-        createdAt,
-        databaseId: Number(node.databaseId),
-        author: toActor(actorField(node, "author")),
-        body: str(node.body) ?? "",
-        edited: node.lastEditedAt !== null && node.lastEditedAt !== undefined,
-        url: str(node.url) ?? "",
-        viewerCanUpdate: node.viewerCanUpdate === true,
-        viewerCanDelete: node.viewerCanDelete === true,
+        id: node.id,
+        createdAt: node.createdAt,
+        databaseId: node.databaseId,
+        author: toActor(node.author),
+        body: node.body,
+        edited: node.lastEditedAt !== null,
+        url: node.url,
+        viewerCanUpdate: node.viewerCanUpdate,
+        viewerCanDelete: node.viewerCanDelete,
       };
     case "PullRequestReview": {
-      const verdict = toVerdict(str(node.state) ?? "");
+      const verdict = toVerdict(node.state);
       if (!verdict) return null;
-      const comments = node.comments as { totalCount?: number } | null | undefined;
       return {
         kind: "review",
-        id,
-        createdAt: str(node.submittedAt) ?? createdAt,
-        author: toActor(actorField(node, "author")),
+        id: node.id,
+        createdAt: node.submittedAt ?? node.createdAt,
+        author: toActor(node.author),
         verdict,
-        body: str(node.body) ?? "",
-        url: str(node.url) ?? "",
-        inlineCommentCount: comments?.totalCount ?? 0,
+        body: node.body,
+        url: node.url,
+        inlineCommentCount: node.comments?.totalCount ?? 0,
       };
     }
     case "PullRequestCommit": {
-      const commit = node.commit as
-        | {
-            oid: string;
-            messageHeadline: string;
-            messageBody: string;
-            committedDate: string;
-            author: {
-              name: string | null;
-              user: { login: string; name: string | null } | null;
-            } | null;
-            signature: { isValid: boolean } | null;
-            statusCheckRollup: { state: string } | null;
-          }
-        | undefined;
+      const { commit } = node;
       if (!commit) return null;
       const user = commit.author?.user;
       const author: ConversationActor = user
@@ -407,140 +495,101 @@ function toTimelineItem(node: RawTimelineNode): TimelineItem | null {
           };
       return {
         kind: "commit",
-        id,
+        id: node.id,
         createdAt: commit.committedDate,
         sha: commit.oid,
         headline: commit.messageHeadline,
         messageBody: commit.messageBody,
         author,
-        url: str(node.url) ?? "",
+        url: node.url,
         verified: commit.signature ? commit.signature.isValid : null,
         ci: toRollupState(commit.statusCheckRollup?.state),
       };
     }
+    default:
+      return toEventItem(node);
+  }
+}
+
+function toEventItem(node: RawEventNode): TimelineItem | null {
+  const base = { id: node.id, createdAt: node.createdAt, actor: toActor(node.actor) };
+  switch (node.__typename) {
     case "ReviewRequestedEvent":
     case "ReviewRequestRemovedEvent": {
-      const reviewer = node.requestedReviewer as
-        | { __typename: string; login?: string; combinedSlug?: string }
-        | null
-        | undefined;
+      const reviewer = node.requestedReviewer;
       const name = reviewer?.combinedSlug ?? reviewer?.login;
       if (!name) return null;
       return {
+        ...base,
         kind:
           node.__typename === "ReviewRequestedEvent"
             ? "review_requested"
             : "review_request_removed",
-        id,
-        createdAt,
-        actor,
         reviewer: name,
         reviewerIsTeam: reviewer?.__typename === "Team",
       };
     }
-    case "ReviewDismissedEvent": {
-      const review = node.review as { author: { login: string } | null } | null | undefined;
+    case "ReviewDismissedEvent":
       return {
+        ...base,
         kind: "review_dismissed",
-        id,
-        createdAt,
-        actor,
-        reviewer: review?.author?.login ?? null,
-        message: str(node.dismissalMessage),
+        reviewer: node.review?.author?.login ?? null,
+        message: node.dismissalMessage,
       };
-    }
     case "LabeledEvent":
-    case "UnlabeledEvent": {
-      const label = node.label as RawLabel | null | undefined;
-      if (!label) return null;
+    case "UnlabeledEvent":
+      if (!node.label) return null;
       return {
+        ...base,
         kind: node.__typename === "LabeledEvent" ? "labeled" : "unlabeled",
-        id,
-        createdAt,
-        actor,
-        label: toLabel(label),
+        label: toLabel(node.label),
       };
-    }
     case "AssignedEvent":
-    case "UnassignedEvent": {
-      const assignee = node.assignee as { login?: string } | null | undefined;
-      if (!assignee?.login) return null;
+    case "UnassignedEvent":
+      if (!node.assignee?.login) return null;
       return {
+        ...base,
         kind: node.__typename === "AssignedEvent" ? "assigned" : "unassigned",
-        id,
-        createdAt,
-        actor,
-        assignee: assignee.login,
+        assignee: node.assignee.login,
       };
-    }
-    case "HeadRefForcePushedEvent": {
-      const before = node.beforeCommit as { oid: string } | null | undefined;
-      const after = node.afterCommit as { oid: string } | null | undefined;
+    case "HeadRefForcePushedEvent":
       return {
+        ...base,
         kind: "force_pushed",
-        id,
-        createdAt,
-        actor,
-        beforeSha: before?.oid ?? null,
-        afterSha: after?.oid ?? null,
+        beforeSha: node.beforeCommit?.oid ?? null,
+        afterSha: node.afterCommit?.oid ?? null,
       };
-    }
     case "ReadyForReviewEvent":
-      return { kind: "ready_for_review", id, createdAt, actor };
+      return { ...base, kind: "ready_for_review" };
     case "ConvertToDraftEvent":
-      return { kind: "converted_to_draft", id, createdAt, actor };
+      return { ...base, kind: "converted_to_draft" };
+    case "ClosedEvent":
+      return { ...base, kind: "closed" };
+    case "ReopenedEvent":
+      return { ...base, kind: "reopened" };
     case "AddedToStackEvent":
     case "RemovedFromStackEvent":
       return {
+        ...base,
         kind: node.__typename === "AddedToStackEvent" ? "added_to_stack" : "removed_from_stack",
-        id,
-        createdAt,
-        actor,
-        stackNumber: Number(node.stackNumber),
+        stackNumber: node.stackNumber,
       };
-    case "ClosedEvent":
-      return { kind: "closed", id, createdAt, actor };
-    case "ReopenedEvent":
-      return { kind: "reopened", id, createdAt, actor };
-    case "MergedEvent": {
-      const commit = node.commit as { oid: string } | null | undefined;
+    case "MergedEvent":
       return {
+        ...base,
         kind: "merged",
-        id,
-        createdAt,
-        actor,
-        commitSha: commit?.oid ?? null,
-        baseRef: str(node.mergeRefName) ?? "",
+        commitSha: node.commit?.oid ?? null,
+        baseRef: node.mergeRefName,
       };
-    }
     case "RenamedTitleEvent":
-      return {
-        kind: "renamed",
-        id,
-        createdAt,
-        actor,
-        from: str(node.previousTitle) ?? "",
-        to: str(node.currentTitle) ?? "",
-      };
+      return { ...base, kind: "renamed", from: node.previousTitle, to: node.currentTitle };
     case "CrossReferencedEvent": {
-      const source = node.source as
-        | {
-            __typename: string;
-            number?: number;
-            title?: string;
-            url?: string;
-            state?: string;
-            repository?: { nameWithOwner: string };
-          }
-        | null
-        | undefined;
+      const { source } = node;
       if (!source?.number || !source.url) return null;
       const state = source.state?.toLowerCase();
       return {
+        ...base,
         kind: "cross_referenced",
-        id,
-        createdAt,
-        actor,
         source: {
           type: source.__typename === "PullRequest" ? "pull_request" : "issue",
           number: source.number,
@@ -552,6 +601,7 @@ function toTimelineItem(node: RawTimelineNode): TimelineItem | null {
       };
     }
     default:
+      // A type GitHub added after this mapper was written.
       return null;
   }
 }
@@ -670,17 +720,27 @@ export function mapStack(raw: RawPullRequest["stack"]): PrStack | null {
 
 const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
 
+/**
+ * What GitHub's conversation query answers. CODEOWNERS comes from its own
+ * query and avatars from the local cache; the service adds both.
+ */
+export type MappedConversation = Omit<PrConversation, "codeowners" | "avatars">;
+
+/**
+ * `olderTimeline` is the pages read before the query's own (newest) page,
+ * oldest first.
+ */
 export function mapConversation(
   raw: RawConversation,
-  extraTimeline: readonly RawTimelineNode[],
+  olderTimeline: readonly RawTimelineNode[],
   prId: string,
   timelineTruncated: boolean,
   fetchedAt: string,
   ciAccess: CiAccess = "granted",
-): PrConversation | null {
+): MappedConversation | null {
   const pr = raw.repository?.pullRequest;
   if (!pr) return null;
-  const timeline = [...nodesOf(pr.timelineItems), ...extraTimeline]
+  const timeline = [...olderTimeline, ...nodesOf(pr.timelineItems)]
     .map(toTimelineItem)
     .filter((item): item is TimelineItem => item !== null);
   const state = pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : "open";
@@ -716,19 +776,37 @@ export function mapConversation(
       : null,
     linkedIssues,
     stack: mapStack(pr.stack),
-    codeowners: null,
     participants: nodesOf(pr.participants).map(toActor),
     timeline,
     timelineTruncated,
     ci: ciAccess === "denied" ? null : mapRollup(pr.commits),
     ciAccess,
-    avatars: {},
     fetchedAt,
   };
 }
 
+/** The accounts a timeline node names, as GitHub sent them. */
+function nodeActors(node: RawTimelineNode): Array<RawActor | null | undefined> {
+  switch (node.__typename) {
+    case "IssueComment":
+    case "PullRequestReview":
+      return [node.author];
+    case "PullRequestCommit": {
+      const author = node.commit?.author;
+      return author?.user
+        ? [{ login: author.user.login, avatarUrl: author.avatarUrl ?? null }]
+        : [];
+    }
+    default:
+      return [node.actor];
+  }
+}
+
 /** Every login the conversation renders, with the avatar URL GitHub sent. */
-export function collectAvatarUrls(raw: RawConversation): Map<string, string> {
+export function collectAvatarUrls(
+  raw: RawConversation,
+  olderTimeline: readonly RawTimelineNode[] = [],
+): Map<string, string> {
   const out = new Map<string, string>();
   const add = (actor: RawActor | null | undefined) => {
     if (actor?.login && actor.avatarUrl && !out.has(actor.login)) {
@@ -751,9 +829,8 @@ export function collectAvatarUrls(raw: RawConversation): Map<string, string> {
   ]) {
     add(r.author);
   }
-  for (const node of nodesOf(pr.timelineItems)) {
-    add(actorField(node, "author"));
-    add(actorField(node, "actor"));
+  for (const node of [...olderTimeline, ...nodesOf(pr.timelineItems)]) {
+    for (const actor of nodeActors(node)) add(actor);
   }
   return out;
 }

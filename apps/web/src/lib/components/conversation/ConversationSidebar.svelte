@@ -6,9 +6,14 @@ import Circle from "phosphor-svelte/lib/Circle";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
-import { api } from "$lib/api/client";
-import Avatar from "$lib/components/recaps/Avatar.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import {
+  loadAssigneeOptions,
+  loadLabelOptions,
+  loadReviewerOptions,
+} from "$lib/stores/conversation.svelte";
+import type { ReviewerChange } from "$lib/utils/conversation-patches";
 import { openExternal } from "$lib/utils/open-external";
 import CodeOwnersSection from "./CodeOwnersSection.svelte";
 import LabelChip from "./LabelChip.svelte";
@@ -20,12 +25,7 @@ interface Props {
   prId: string;
   conversation: PrConversation;
   canEdit: boolean;
-  onReviewers: (change: {
-    addUsers: string[];
-    addTeams: string[];
-    removeUsers: string[];
-    removeTeams: string[];
-  }) => void;
+  onReviewers: (added: ReviewerChange, removed: ReviewerChange) => void;
   onAssignees: (added: string[], removed: string[]) => void;
   onLabels: (added: PrLabel[], removed: string[]) => void;
   reviewersOpen?: boolean;
@@ -45,17 +45,37 @@ let {
   labelsOpen = $bindable(false),
 }: Props = $props();
 
-const userKey = (login: string) => `u:${login}`;
-const teamKey = (slug: string) => `t:${slug}`;
+/** Who a review can be requested from. */
+type ReviewerRef =
+  | { readonly kind: "user"; readonly login: string }
+  | { readonly kind: "team"; readonly combinedSlug: string };
 
-const reviewerKey = (r: ReviewerEntry) =>
-  r.kind === "team" ? teamKey(r.combinedSlug) : userKey(r.actor.login);
+const refOf = (r: ReviewerEntry): ReviewerRef =>
+  r.kind === "team"
+    ? { kind: "team", combinedSlug: r.combinedSlug }
+    : { kind: "user", login: r.actor.login };
+const refKey = (r: ReviewerRef) =>
+  r.kind === "team" ? `team:${r.combinedSlug}` : `user:${r.login}`;
+const reviewerKey = (r: ReviewerEntry) => refKey(refOf(r));
+
+function changeOf(refs: readonly ReviewerRef[]): ReviewerChange {
+  return {
+    users: refs.flatMap((r) => (r.kind === "user" ? [r.login] : [])),
+    teams: refs.flatMap((r) => (r.kind === "team" ? [r.combinedSlug] : [])),
+  };
+}
+
+const NO_CHANGE: ReviewerChange = { users: [], teams: [] };
 
 const requestedReviewers = $derived(
-  new Set(conversation.reviewers.filter((r) => r.requested).map(reviewerKey)),
+  new Map(
+    conversation.reviewers
+      .filter((r) => r.requested)
+      .map((r) => [reviewerKey(r), refOf(r)] as const),
+  ),
 );
-const assigneeLogins = $derived(new Set(conversation.assignees.map((a) => a.login)));
-const labelNames = $derived(new Set(conversation.labels.map((l) => l.name)));
+const assigneeLogins = $derived(new Map(conversation.assignees.map((a) => [a.login, a.login])));
+const appliedLabels = $derived(new Map(conversation.labels.map((l) => [l.name, l])));
 
 const DECISION: Record<NonNullable<PrConversation["reviewDecision"]>, string> = {
   approved: "Approved",
@@ -63,71 +83,54 @@ const DECISION: Record<NonNullable<PrConversation["reviewDecision"]>, string> = 
   review_required: "An approving review is required to merge",
 };
 
-/** Label options seen by the picker, so an added name maps back to its color. */
-let labelCatalog = new Map<string, PrLabel>();
-
-async function loadReviewers(q: string): Promise<PickerOption[]> {
-  const { data, error } = await api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } });
-  if (error || !data || !("users" in data)) throw new Error("reviewer options failed");
+async function reviewerOptions(q: string): Promise<PickerOption<ReviewerRef>[]> {
+  const { users, teams } = await loadReviewerOptions(prId, q);
   return [
-    ...data.teams.map((t) => ({
-      value: teamKey(t.combinedSlug),
-      title: t.name,
-      section: "Teams",
-      hint: t.combinedSlug,
-      team: true,
-    })),
-    ...data.users.map((u) => ({
-      value: userKey(u.login),
-      title: u.login,
-      section: "People",
-      hint: u.name,
-      avatar: { content: u.avatarContent },
-    })),
+    ...teams.map(
+      (t): PickerOption<ReviewerRef> => ({
+        key: refKey({ kind: "team", combinedSlug: t.combinedSlug }),
+        item: { kind: "team", combinedSlug: t.combinedSlug },
+        title: t.name,
+        section: "Teams",
+        hint: t.combinedSlug,
+        leading: { kind: "team" },
+      }),
+    ),
+    ...users.map(
+      (u): PickerOption<ReviewerRef> => ({
+        key: refKey({ kind: "user", login: u.login }),
+        item: { kind: "user", login: u.login },
+        title: u.login,
+        section: "People",
+        hint: u.name,
+        leading: { kind: "user", avatarContent: u.avatarContent },
+      }),
+    ),
   ];
 }
 
-async function loadAssignees(q: string): Promise<PickerOption[]> {
-  const { data, error } = await api.api.prs({ id: prId })["assignee-options"].get({ query: { q } });
-  if (error || !Array.isArray(data)) throw new Error("assignee options failed");
-  return data.map((u) => ({
-    value: u.login,
+async function assigneeOptions(q: string): Promise<PickerOption<string>[]> {
+  const users = await loadAssigneeOptions(prId, q);
+  return users.map((u) => ({
+    key: u.login,
+    item: u.login,
     title: u.login,
     section: "People",
     hint: u.name,
-    avatar: { content: u.avatarContent },
+    leading: { kind: "user", avatarContent: u.avatarContent },
   }));
 }
 
-async function loadLabels(): Promise<PickerOption[]> {
-  const { data, error } = await api.api.prs({ id: prId })["label-options"].get();
-  if (error || !Array.isArray(data)) throw new Error("label options failed");
-  labelCatalog = new Map(data.map((l) => [l.name, l]));
-  return data.map((l) => ({
-    value: l.name,
+async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
+  const labels = await loadLabelOptions(prId);
+  return labels.map((l) => ({
+    key: l.name,
+    item: l,
     title: l.name,
     section: "Labels",
     hint: l.description,
-    label: l,
+    leading: { kind: "label", label: l },
   }));
-}
-
-function applyReviewers(added: string[], removed: string[]): void {
-  const pick = (keys: string[], prefix: string) =>
-    keys.filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
-  onReviewers({
-    addUsers: pick(added, "u:"),
-    addTeams: pick(added, "t:"),
-    removeUsers: pick(removed, "u:"),
-    removeTeams: pick(removed, "t:"),
-  });
-}
-
-function applyLabels(added: string[], removed: string[]): void {
-  onLabels(
-    added.map((name) => labelCatalog.get(name) ?? { name, color: "888888", description: null }),
-    removed,
-  );
 }
 </script>
 
@@ -153,9 +156,9 @@ function applyLabels(added: string[], removed: string[]): void {
 					title="Request reviews"
 					placeholder="Search people and teams"
 					selected={requestedReviewers}
-					load={loadReviewers}
+					load={reviewerOptions}
 					remote
-					onapply={applyReviewers}
+					onapply={(added, removed) => onReviewers(changeOf(added), changeOf(removed))}
 					bind:open={reviewersOpen}
 				/>
 			{/if}
@@ -184,8 +187,7 @@ function applyLabels(added: string[], removed: string[]): void {
 									size="icon-xs"
 									aria-label="Re-request review from {login}"
 									title="Re-request review"
-									onclick={() =>
-										onReviewers({ addUsers: [login], addTeams: [], removeUsers: [], removeTeams: [] })}
+									onclick={() => onReviewers({ users: [login], teams: [] }, NO_CHANGE)}
 								>
 									<ArrowsClockwise />
 								</Button>
@@ -217,7 +219,7 @@ function applyLabels(added: string[], removed: string[]): void {
 			<CodeOwnersSection
 				codeowners={conversation.codeowners}
 				reviewers={conversation.reviewers}
-				participants={conversation.participants}
+				avatars={conversation.avatars}
 			/>
 		</div>
 	{/if}
@@ -231,7 +233,7 @@ function applyLabels(added: string[], removed: string[]): void {
 					title="Assign"
 					placeholder="Search people"
 					selected={assigneeLogins}
-					load={loadAssignees}
+					load={assigneeOptions}
 					remote
 					onapply={onAssignees}
 					bind:open={assigneesOpen}
@@ -272,9 +274,9 @@ function applyLabels(added: string[], removed: string[]): void {
 					label="Edit labels"
 					title="Apply labels"
 					placeholder="Search labels"
-					selected={labelNames}
-					load={loadLabels}
-					onapply={applyLabels}
+					selected={appliedLabels}
+					load={labelOptions}
+					onapply={(added, removed) => onLabels(added, removed.map((l) => l.name))}
 					bind:open={labelsOpen}
 				/>
 			{/if}
