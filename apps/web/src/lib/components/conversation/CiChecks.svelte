@@ -59,6 +59,14 @@ const failedRunIds = $derived([
 ]);
 let rerunning = $state(false);
 
+function canRerunJob(check: CiCheck): boolean {
+  return (
+    canRerun && check.bucket === "fail" && check.workflowRunId !== null && check.checkRunId !== null
+  );
+}
+/** Any row carries a re-run icon: every row reserves its slot so times line up. */
+const rerunColumn = $derived(checks.some(canRerunJob));
+
 const expanded = new SvelteSet<string>();
 // The first failing check opens on its own: its log is why the reader came.
 let autoExpanded: string | null = null;
@@ -84,12 +92,15 @@ const headBucket = $derived(
   failing > 0 ? "fail" : pending > 0 ? "pending" : bucketOfRollup(rollup?.state ?? null),
 );
 
-/** One sentence for where CI stands, the way GitHub's merge box says it. */
+/**
+ * One sentence for where CI stands, the way GitHub's merge box says it. The
+ * numbers live in the line under it, so the headline doesn't repeat them.
+ */
 const headline = $derived.by(() => {
   if (denied) return "Checks unavailable";
   if (checks.length === 0) return "No checks";
-  if (failing > 0) return `${failing} ${failing === 1 ? "check" : "checks"} failing`;
-  if (pending > 0) return `${pending} ${pending === 1 ? "check" : "checks"} running`;
+  if (failing > 0) return "Some checks were not successful";
+  if (pending > 0) return "Some checks haven't completed yet";
   return passing > 0 ? "All checks have passed" : "All checks were skipped";
 });
 const detail = $derived(
@@ -99,6 +110,23 @@ const detail = $derived(
       ? "None reported for the head commit."
       : counts,
 );
+
+/**
+ * Same words as the count line, so the fold names what it hides the same way.
+ * When it hides every check, the count line already says that much.
+ */
+const settledLabel = $derived(
+  needsAttention.length === 0
+    ? `all ${settled.length} ${settled.length === 1 ? "check" : "checks"}`
+    : [passing > 0 ? `${passing} passed` : null, skipped > 0 ? `${skipped} skipped` : null]
+        .filter(Boolean)
+        .join(", "),
+);
+
+/** Actions jobs already name themselves by workflow; the app is noise there. */
+function subtitle(check: CiCheck): string | null {
+  return check.description ?? (check.workflowName ? null : check.appName);
+}
 
 function toggle(check: CiCheck): void {
   if (expanded.has(check.key)) {
@@ -121,44 +149,54 @@ function duration(check: CiCheck): string | null {
 
 async function rerunAll(): Promise<void> {
   rerunning = true;
-  await onRerunRuns(failedRunIds);
-  rerunning = false;
+  try {
+    await onRerunRuns(failedRunIds);
+  } finally {
+    rerunning = false;
+  }
 }
 </script>
 
+{#snippet summary(check: CiCheck, open: boolean)}
+	{@const time = duration(check)}
+	{@const sub = subtitle(check)}
+	<span class="check-caret" class:check-caret--open={open} aria-hidden="true">
+		{#if check.checkRunId !== null}<CaretRight size={10} weight="bold" />{/if}
+	</span>
+	<CiGlyph bucket={check.bucket} />
+	<span class="check-name">
+		<span class="check-title" title={check.workflowName && check.workflowName !== check.name ? `${check.workflowName} / ${check.name}` : check.name}>
+			{#if check.workflowName && check.workflowName !== check.name}<span class="check-workflow">{check.workflowName} /</span>{/if}
+			{check.name}
+		</span>
+		{#if sub}<span class="check-desc">{sub}</span>{/if}
+	</span>
+	{#if check.required}<span class="check-required">Required</span>{/if}
+	{#if time}<span class="check-time">{time}</span>{/if}
+{/snippet}
+
 {#snippet row(check: CiCheck)}
 	{@const open = expanded.has(check.key)}
-	{@const expandable = check.checkRunId !== null}
-	{@const time = duration(check)}
-	<li class="check" class:check--open={open}>
+	{@const detailsId = `check-details-${check.key}`}
+	<li class="check">
 		<div class="check-row">
-			{#if expandable}
+			<!-- The whole row is the disclosure, not just the caret: the name is
+			     what a reader aims at. The action icons sit outside it. -->
+			{#if check.checkRunId !== null}
 				<button
 					type="button"
-					class="check-toggle"
+					class="check-summary"
 					aria-expanded={open}
-					aria-label="{open ? 'Hide' : 'Show'} details for {check.name}"
+					aria-controls={detailsId}
 					onclick={() => toggle(check)}
 				>
-					<span class="check-caret" class:check-caret--open={open}><CaretRight size={10} weight="bold" /></span>
+					{@render summary(check, open)}
 				</button>
 			{:else}
-				<span class="check-toggle"></span>
+				<div class="check-summary">{@render summary(check, false)}</div>
 			{/if}
-			<CiGlyph bucket={check.bucket} />
-			<div class="check-name">
-				<span class="check-title">
-					{#if check.workflowName && check.workflowName !== check.name}<span class="check-workflow">{check.workflowName} /</span>{/if}
-					{check.name}
-				</span>
-				{#if check.description || check.appName}
-					<span class="check-desc">{check.description ?? check.appName}</span>
-				{/if}
-			</div>
-			{#if check.required}<span class="check-required">Required</span>{/if}
-			{#if time}<span class="check-time">{time}</span>{/if}
 			<div class="check-actions">
-				{#if canRerun && check.bucket === 'fail' && check.workflowRunId !== null && check.checkRunId !== null}
+				{#if canRerunJob(check) && check.checkRunId !== null}
 					{@const jobId = check.checkRunId}
 					<Button
 						variant="ghost"
@@ -176,7 +214,7 @@ async function rerunAll(): Promise<void> {
 						variant="ghost"
 						size="icon-xs"
 						aria-label="Open {check.name} on GitHub"
-						title="Open details"
+						title="Open on GitHub"
 						onclick={() => void openExternal(url)}
 					>
 						<ArrowSquareOut />
@@ -186,7 +224,7 @@ async function rerunAll(): Promise<void> {
 		</div>
 		{#if open && check.checkRunId !== null}
 			{@const id = check.checkRunId}
-			<div transition:gsapSlide>
+			<div id={detailsId} transition:gsapSlide>
 				<CheckDetailsPanel
 					request={details.get(id) ?? RequestState.idle()}
 					onretry={() => onExpand(id)}
@@ -196,7 +234,7 @@ async function rerunAll(): Promise<void> {
 	</li>
 {/snippet}
 
-<section class="checks" aria-label="Checks">
+<section class="checks" class:checks--rerun={rerunColumn} aria-label="Checks">
 	<header class="checks-head">
 		<span class="checks-mark" class:checks-mark--muted={!headBucket} aria-hidden="true">
 			{#if headBucket}
@@ -233,19 +271,31 @@ async function rerunAll(): Promise<void> {
 				{@render row(check)}
 			{/each}
 			{#if settled.length > 0}
-				{#if showSettled}
-					{#each settled as check (check.key)}
-						{@render row(check)}
-					{/each}
-				{/if}
+				<!-- The fold sits above what it reveals, so it stays under the
+				     pointer instead of jumping to the bottom of the list. -->
 				<li class="check-fold">
-					<button type="button" aria-expanded={showSettled} onclick={() => (showSettled = !showSettled)}>
-						<span class="check-caret" class:check-caret--open={showSettled}><CaretRight size={10} weight="bold" /></span>
-						{showSettled ? 'Hide' : 'Show'}
-						{needsAttention.length > 0 ? `${settled.length} successful or skipped` : `all ${settled.length}`}
-						{settled.length === 1 ? 'check' : 'checks'}
+					<button
+						type="button"
+						class="check-summary"
+						aria-expanded={showSettled}
+						aria-controls="checks-settled"
+						onclick={() => (showSettled = !showSettled)}
+					>
+						<span class="check-caret" class:check-caret--open={showSettled} aria-hidden="true">
+							<CaretRight size={10} weight="bold" />
+						</span>
+						{showSettled ? 'Hide' : 'Show'} {settledLabel}
 					</button>
 				</li>
+				{#if showSettled}
+					<li class="check-settled" transition:gsapSlide>
+						<ul id="checks-settled">
+							{#each settled as check (check.key)}
+								{@render row(check)}
+							{/each}
+						</ul>
+					</li>
+				{/if}
 			{/if}
 		</ul>
 	{/if}
@@ -310,48 +360,83 @@ async function rerunAll(): Promise<void> {
 		flex-shrink: 0;
 	}
 
-	.check-list {
+	.check-list,
+	.check-settled > ul {
 		margin: 0;
 		padding: 0;
 		list-style: none;
+	}
+
+	.check-list {
 		border-top: 1px solid var(--color-border-subtle);
 	}
 
-	.check + .check,
-	.check-fold {
+	.check-list li + li {
 		border-top: 1px solid var(--color-border-subtle);
+	}
+
+	.check-settled {
+		overflow: hidden;
 	}
 
 	.check-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		min-height: 40px;
-		padding: 4px 8px 4px 6px;
+		padding-right: 8px;
 	}
 
-	.check-toggle {
+	/* The last row's hover fill follows the card's rounded corner. */
+	.check-list > li:last-child .check-row,
+	.check-list > li:last-child > button,
+	.check-settled li:last-child .check-row {
+		border-radius: 0 0 var(--radius-card) var(--radius-card);
+	}
+
+	.check-row:has(> button.check-summary:hover),
+	.check-fold:hover {
+		background: var(--color-tree-hover-bg);
+	}
+
+	/* The disclosure: caret, glyph, name, and meta. Its 6px inset and 20px
+	   caret slot put the glyph on the same column in every row, the fold
+	   included, and CheckDetailsPanel indents its body to that column. */
+	.check-summary {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex: 1;
+		min-width: 0;
+		min-height: 40px;
+		padding: 4px 8px 4px 6px;
+		border: none;
+		border-radius: inherit;
+		background: none;
+		font: inherit;
+		color: inherit;
+		text-align: left;
+	}
+
+	button.check-summary {
+		cursor: pointer;
+	}
+
+	button.check-summary:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: -2px;
+	}
+
+	.check-caret {
 		display: grid;
 		place-items: center;
 		flex-shrink: 0;
 		width: 20px;
 		height: 20px;
-		padding: 0;
-		border: none;
-		border-radius: 4px;
-		background: none;
 		color: var(--color-text-muted);
-		cursor: pointer;
-	}
-
-	button.check-toggle:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-primary);
-	}
-
-	.check-caret {
-		display: inline-flex;
 		transition: rotate var(--duration-snap) var(--ease-soft);
+	}
+
+	button.check-summary:hover .check-caret {
+		color: var(--color-text-primary);
 	}
 
 	.check-caret--open {
@@ -366,9 +451,10 @@ async function rerunAll(): Promise<void> {
 		min-width: 0;
 	}
 
+	/* The subtitle gives way long before the name does. */
 	.check-title {
-		flex-shrink: 0;
-		max-width: 60%;
+		flex: 0 1 auto;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -383,6 +469,7 @@ async function rerunAll(): Promise<void> {
 	}
 
 	.check-desc {
+		flex: 0 100 auto;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -415,24 +502,19 @@ async function rerunAll(): Promise<void> {
 		color: var(--color-text-secondary);
 	}
 
-	.check-fold button {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		width: 100%;
-		min-height: 36px;
-		padding: 4px 12px;
-		border: none;
-		background: none;
-		font: inherit;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
-		text-align: left;
-		cursor: pointer;
+	/* Two icon-xs buttons and their gap. */
+	.checks--rerun .check-actions {
+		justify-content: flex-end;
+		min-width: 50px;
 	}
 
-	.check-fold button:hover {
+	.check-fold .check-summary {
+		min-height: 36px;
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
+	}
+
+	.check-fold .check-summary:hover {
 		color: var(--color-text-primary);
-		background: var(--color-bg-secondary);
 	}
 </style>

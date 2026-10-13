@@ -14,7 +14,7 @@ let _submitting = $state<Action | null>(null);
 let _selectedCount = $state(0);
 // `canComment` is true when there's anything to submit — selected walkthrough
 // issues OR pending line comments. Gates both review-posting actions (Comment,
-// Request changes) behind the single "Submit Review" trigger.
+// Request changes) behind the single "Submit review" trigger.
 let _canComment = $state(false);
 let _approveBlockerSummary = $state("");
 
