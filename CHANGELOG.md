@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/alexandre-schaffner/revv/compare/v0.30.0...v0.31.0) (2026-10-13)
+
+
+### Features
+
+* add GitHub Conversation tab and streamline PR review ([#249](https://github.com/alexandre-schaffner/revv/issues/249)) ([60e3c12](https://github.com/alexandre-schaffner/revv/commit/60e3c127670fc6704e5f1ccde9abc7d3eac7a434))
+
 ## [0.30.0](https://github.com/alexandre-schaffner/revv/compare/v0.29.0...v0.30.0) (2026-10-09)
 
 
