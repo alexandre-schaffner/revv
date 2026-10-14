@@ -66,6 +66,25 @@ export interface PullRequest {
   updatedAt: string;
   fetchedAt: string;
   closedAt: string | null;
+  /**
+   * GitHub's native stack this PR sits in, or null when it isn't stacked (or
+   * the host predates stacks). Not inferred from branch chains: a merged
+   * bottom PR gets retargeted and drops out of any branch walk.
+   */
+  stack: PrStackPlace | null;
+}
+
+/** A PR's place in one of GitHub's native stacks. */
+export interface PrStackPlace {
+  /** The stack's number, unique within the repo. */
+  number: number;
+  /** 1 sits on the base branch. */
+  position: number;
+}
+
+/** Whether two PRs sit at the same place in the same stack (or both in none). */
+export function sameStack(a: PrStackPlace | null, b: PrStackPlace | null): boolean {
+  return a?.number === b?.number && a?.position === b?.position;
 }
 
 /**

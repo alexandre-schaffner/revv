@@ -37,6 +37,10 @@ function rowToPr(
     updatedAt: row.updatedAt,
     fetchedAt: row.fetchedAt,
     closedAt: row.closedAt ?? null,
+    stack:
+      row.stackNumber !== null && row.stackPosition !== null
+        ? { number: row.stackNumber, position: row.stackPosition }
+        : null,
   };
 }
 
@@ -147,8 +151,15 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
      *     zeroes that must not overwrite real numbers from a detail fetch.
      *     Real stats arrive via `DiffCacheService.cacheFiles`, which derives
      *     them from the changed-file list alongside the cached diff.
+     *   - `stack` is only taken from a source that saw stacks
+     *     (`stacksKnown`): the open-PR poll's GraphQL list. Everything else
+     *     holds a REST payload, whose `null` means "unknown", and would erase
+     *     what the list learned. A fresh insert takes it either way.
      */
-    readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
+    readonly upsertPrs: (
+      prs: PullRequest[],
+      options?: { readonly stacksKnown?: boolean },
+    ) => Effect.Effect<void, ValidationError, DbService>;
     readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
     /**
      * Windowed read of archived (closed/merged) PRs. Supports:
@@ -341,7 +352,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       return rowToPr(row.pr, row.avatarContent);
     }),
 
-  upsertPrs: (prs) =>
+  upsertPrs: (prs, { stacksKnown = false } = {}) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (prs.length === 0) return;
@@ -379,6 +390,10 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             if (pr.headSha !== null) base.headSha = pr.headSha;
             if (pr.baseSha !== null) base.baseSha = pr.baseSha;
             if (pr.closedAt !== null) base.closedAt = pr.closedAt;
+            if (pr.stack !== null) {
+              base.stackNumber = pr.stack.number;
+              base.stackPosition = pr.stack.position;
+            }
             return base;
           });
           return Promise.resolve(
@@ -429,6 +444,15 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   // body mentions AND mentions found in review comments (see
                   // `appendMentionedUsers`). Assigning the body-only set here
                   // erased the comment-sourced half on every poll tick.
+                  //
+                  // `stack_number` / `stack_position` likewise, unless the
+                  // source saw stacks: see the interface doc.
+                  ...(stacksKnown
+                    ? {
+                        stackNumber: sql`excluded.stack_number`,
+                        stackPosition: sql`excluded.stack_position`,
+                      }
+                    : {}),
                 },
               })
               .run(),

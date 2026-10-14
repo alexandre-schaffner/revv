@@ -6,7 +6,7 @@ import { account, user } from "../db/schema/auth";
 import { GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
-import type { OpenPrListSignature } from "./github-graphql-prs";
+import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
 import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
 import {
   findUnchangedRepos,
@@ -61,6 +61,7 @@ function pr(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
     updatedAt: "2026-01-01T00:00:00Z",
     fetchedAt: "2026-01-01T00:00:00Z",
     closedAt: null,
+    stack: null,
     ...overrides,
   };
 }
@@ -87,6 +88,10 @@ interface Fakes {
   listOpen: () => Effect.Effect<PullRequest[], GitHubRateLimitError>;
   listOpenRest: () => Effect.Effect<PullRequest[]>;
   probe: () => Effect.Effect<Map<string, OpenPrListSignature>>;
+  /** What the GraphQL list could tell about stacks, when it asked for them. */
+  stacks?: OpenPrList["stacks"];
+  /** Every `upsertPrs` call, with whether it was told the stacks are known. */
+  readonly upserts: Array<{ rows: PullRequest[]; stacksKnown: boolean }>;
 }
 
 function makeDeps(db: Db, fakes: Fakes): PollDeps {
@@ -102,9 +107,22 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
     remoteUserService: { upsert: () => Effect.void },
     github: {
       prs: {
-        listOpen: () => {
-          fakes.log.push("list:graphql");
-          return fakes.listOpen();
+        listOpen: (
+          _repo: string,
+          _repoId: string,
+          _token: string,
+          _apiBase: string,
+          { withStacks = true }: { withStacks?: boolean } = {},
+        ) => {
+          fakes.log.push(withStacks ? "list:graphql" : "list:graphql:no-stacks");
+          return fakes.listOpen().pipe(
+            Effect.map(
+              (prs): OpenPrList => ({
+                prs,
+                stacks: withStacks ? (fakes.stacks ?? "listed") : "unknown",
+              }),
+            ),
+          );
         },
         listOpenRest: () => {
           fakes.log.push("list:rest");
@@ -129,9 +147,10 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
         }),
     },
     prService: {
-      upsertPrs: (rows: PullRequest[]) =>
+      upsertPrs: (rows: PullRequest[], options?: { stacksKnown?: boolean }) =>
         Effect.sync(() => {
           fakes.log.push(`upsert:${rows.map((r) => r.headSha).join(",")}`);
+          fakes.upserts.push({ rows, stacksKnown: options?.stacksKnown ?? false });
         }),
     },
   };
@@ -148,11 +167,12 @@ const provideInfra = <A>(
     Effect.provideService(SettingsService, {} as never),
   );
 
-function setup(fakes: Partial<Omit<Fakes, "log">> = {}) {
+function setup(fakes: Partial<Omit<Fakes, "log" | "upserts">> = {}) {
   const db = createDb(":memory:");
   seedAccount(db);
   const all: Fakes = {
     log: [],
+    upserts: [],
     listOpen: () => Effect.succeed([]),
     listOpenRest: () => Effect.succeed([]),
     probe: () => Effect.succeed(new Map()),
@@ -161,7 +181,7 @@ function setup(fakes: Partial<Omit<Fakes, "log">> = {}) {
   const deps = makeDeps(db, all);
   const pauses = makeAccountPauses();
   const openCycle = () => openSyncCycle(deps, pauses, ["acc-1"], new Map([[REPO.id, "acc-1"]]));
-  return { db, deps, log: all.log, openCycle };
+  return { db, deps, log: all.log, upserts: all.upserts, openCycle };
 }
 
 function context(existing: PullRequest[], overrides: Partial<RepoListingContext> = {}) {
@@ -171,6 +191,7 @@ function context(existing: PullRequest[], overrides: Partial<RepoListingContext>
     diffStatsHeadByPrId: new Map<string, string | null>(),
     unchangedRepoIds: new Set<string>(),
     listedSignatures: new Map<string, ListedSignature>(),
+    stacklessUntil: new Map<string, number>(),
     ...overrides,
   } satisfies RepoListingContext;
 }
@@ -322,6 +343,91 @@ describe("syncRepoOpenPrs", () => {
   });
 });
 
+describe("syncRepoOpenPrs stack membership", () => {
+  const STACKED = { number: 4, position: 2 };
+
+  const sync = (env: ReturnType<typeof setup>, existing: PullRequest[], ctx = context(existing)) =>
+    Effect.runPromise(
+      provideInfra(
+        env.db,
+        Effect.gen(function* () {
+          const cycle = yield* env.openCycle();
+          return yield* syncRepoOpenPrs(env.deps, cycle, ctx, REPO);
+        }),
+      ),
+    );
+
+  it("writes a listed stack as authoritative, joining or leaving", async () => {
+    const env = setup({ listOpen: () => Effect.succeed([pr(1, { stack: STACKED }), pr(2)]) });
+
+    await sync(env, [pr(1), pr(2, { stack: STACKED })]);
+
+    expect(env.upserts).toHaveLength(1);
+    expect(env.upserts[0]?.stacksKnown).toBe(true);
+    expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([STACKED, null]);
+  });
+
+  it("keeps the stored stack when GitHub refused the stack fields", async () => {
+    const stored = pr(1, { stack: STACKED });
+    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unknown" });
+
+    const result = await sync(env, [stored]);
+
+    expect(env.upserts[0]?.stacksKnown).toBe(false);
+    // Downstream (the broadcast) sees what SQLite holds, not the list's nulls.
+    expect(result?.prs[0]?.stack).toEqual(STACKED);
+  });
+
+  it("keeps the stored stack across a REST fallback", async () => {
+    const stored = pr(1, { stack: STACKED });
+    const env = setup({
+      listOpen: () =>
+        Effect.fail(
+          new GitHubRateLimitError({
+            resetAt: new Date(Date.now() + 60 * 60 * 1000),
+            kind: "primary",
+            resource: "graphql",
+          }),
+        ),
+      listOpenRest: () => Effect.succeed([pr(1)]),
+    });
+
+    const result = await sync(env, [stored]);
+
+    expect(env.upserts[0]?.stacksKnown).toBe(false);
+    expect(result?.prs[0]?.stack).toEqual(STACKED);
+  });
+
+  it("stops asking a host that predates stacks, for that account and a while only", async () => {
+    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unsupported" });
+    const ctx = context([]);
+
+    await sync(env, [], ctx);
+    await sync(env, [], ctx);
+    const [key] = ctx.stacklessUntil.keys();
+    if (key === undefined) throw new Error("refusal not remembered");
+    expect(key.startsWith("acc-1")).toBe(true);
+    // Once the recheck window lapses, the list asks again.
+    ctx.stacklessUntil.set(key, Date.now() - 1);
+    await sync(env, [], ctx);
+
+    expect(env.log.filter((l) => l.startsWith("list:"))).toEqual([
+      "list:graphql",
+      "list:graphql:no-stacks",
+      "list:graphql",
+    ]);
+  });
+
+  it("records whether the landed list held a stack", async () => {
+    const env = setup({ listOpen: () => Effect.succeed([pr(1, { stack: STACKED })]) });
+    const ctx = context([]);
+
+    await sync(env, [], ctx);
+
+    expect(ctx.listedSignatures.get(REPO.id)?.hasStacks).toBe(true);
+  });
+});
+
 describe("findUnchangedRepos", () => {
   const signature = { count: 2, latestUpdatedAt: "2026-01-03T00:00:00Z" };
 
@@ -356,8 +462,8 @@ describe("findUnchangedRepos", () => {
             cycle,
             [REPO, other],
             new Map([
-              ["repo-1", { signature, listedAt: Date.now() }],
-              ["repo-2", { signature, listedAt: Date.now() }],
+              ["repo-1", { signature, listedAt: Date.now(), hasStacks: false }],
+              ["repo-2", { signature, listedAt: Date.now(), hasStacks: false }],
             ]),
           );
         }),
@@ -379,7 +485,32 @@ describe("findUnchangedRepos", () => {
             deps,
             yield* openCycle(),
             [REPO],
-            new Map([[REPO.id, { signature, listedAt: Date.now() - 31 * 60 * 1000 }]]),
+            new Map([
+              [REPO.id, { signature, listedAt: Date.now() - 31 * 60 * 1000, hasStacks: false }],
+            ]),
+          );
+        }),
+      ),
+    );
+
+    expect(unchanged.size).toBe(0);
+    expect(log).toEqual([]);
+  });
+
+  it("never skips a repo holding a stack", async () => {
+    const { db, deps, log, openCycle } = setup({
+      probe: () => Effect.succeed(new Map([["octo/repo", signature]])),
+    });
+
+    const unchanged = await Effect.runPromise(
+      provideInfra(
+        db,
+        Effect.gen(function* () {
+          return yield* findUnchangedRepos(
+            deps,
+            yield* openCycle(),
+            [REPO],
+            new Map([[REPO.id, { signature, listedAt: Date.now(), hasStacks: true }]]),
           );
         }),
       ),
@@ -406,6 +537,8 @@ describe("change detection", () => {
     const existing = new Map([["repo-1:1", pr(1)]]);
     expect(openListMoved([pr(1)], existing)).toBe(false);
     expect(openListMoved([pr(1, { isDraft: true })], existing)).toBe(true);
+    // The homepage groups by stack, so joining one must reach the clients.
+    expect(openListMoved([pr(1, { stack: { number: 4, position: 1 } })], existing)).toBe(true);
     expect(openListMoved([pr(1), pr(2)], existing)).toBe(true);
   });
 });

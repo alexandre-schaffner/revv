@@ -223,6 +223,7 @@ export type {
   MergeMethod,
   MessageType,
   Org,
+  PrStackPlace,
   PullRequest,
   PullRequestStatus,
   RecapAgentChoice,
@@ -243,5 +244,5 @@ export type {
   UserRole,
   UserSettings,
 } from "./types";
-export { loginsMatch, REVIEW_MODE, REVIEW_MODES, reviewModeFor } from "./types";
+export { loginsMatch, REVIEW_MODE, REVIEW_MODES, reviewModeFor, sameStack } from "./types";
 export * from "./walkthrough";

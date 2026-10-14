@@ -159,6 +159,9 @@ export const PollSchedulerLive = Layer.effect(
     // reconstructible cache: empty after a restart, so the first cycle lists
     // every repo.
     const listedSignatures = new Map<string, ListedSignature>();
+    // Accounts whose host refused the stack fields, and until when the open-PR
+    // list skips them. Reconstructible the same way.
+    const stacklessUntil = new Map<string, number>();
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -269,6 +272,7 @@ export const PollSchedulerLive = Layer.effect(
           diffStatsHeadByPrId: new Map(diffStatsHeadRows.map((row) => [row.id, row.headSha])),
           unchangedRepoIds,
           listedSignatures,
+          stacklessUntil,
         };
         const results = yield* Effect.forEach(
           allRepos,

@@ -490,6 +490,7 @@ Easings come from:
 
 - `--ease-soft: cubic-bezier(0.4, 0, 0.2, 1)` — exits, bidirectional state
 - `--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1)` — enter / appearance
+- `--ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1)` — enter without the snap, for motion the eye follows end to end (a hover lift, cards being dealt)
 - `--ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1)` — walkthrough chapters
 
 Reference them in CSS as `var(--duration-quick) var(--ease-out-expo)` or via Tailwind

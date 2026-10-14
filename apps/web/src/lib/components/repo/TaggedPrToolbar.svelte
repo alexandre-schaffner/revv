@@ -3,9 +3,9 @@
  * The list's toolbar strip.
  *
  * Anatomy is GitHub's `⑂ 60 Open  ✓ 2,638 Closed … Sort ▾` bar: filters on the
- * left as bare text-with-count, sort on the right as a menu. It sits attached
- * to the top of the frame rather than floating above it, which is what makes
- * the filters read as belonging to the list they narrow.
+ * left as bare text-with-count, sort on the right as a menu. Its hairline is
+ * the list's top edge, which is what makes the filters read as belonging to
+ * the rows they narrow.
  *
  * Deliberately not chips. Chips with a glyph, a bold count and a label are a
  * stats row wearing a control's clothes, and they duplicate the count already
@@ -104,8 +104,9 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 		   would leave a row of bare numbers that mean nothing. */
 		flex-wrap: wrap;
 		gap: 0.25rem 0.5rem;
-		padding: 0.3125rem 0.4375rem;
-		background: var(--color-bg-secondary);
+		/* Inset so the first filter's label starts on the rows' glyph column
+		   (its own 0.5rem padding plus this lands on the 12px row inset). */
+		padding: 0 0.25rem 0.375rem;
 		border-bottom: 1px solid var(--color-border-subtle);
 	}
 

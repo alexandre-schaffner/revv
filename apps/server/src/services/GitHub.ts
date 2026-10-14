@@ -14,6 +14,7 @@ import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
   listOpenPrsViaGraphql,
+  type OpenPrList,
   type OpenPrListSignature,
   probeOpenPrListSignatures,
 } from "./github-graphql-prs";
@@ -102,6 +103,9 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     updatedAt: raw.updated_at as string,
     fetchedAt: new Date().toISOString(),
     closedAt: (raw.closed_at as string | null) ?? null,
+    // REST has no stacks. Callers never write this null over a stored value;
+    // see `upsertPrs`.
+    stack: null,
   };
 }
 
@@ -217,14 +221,16 @@ interface GitHubGatewayFlatService {
    * (~40 KB for the same repo) at 1 GraphQL point per 100 PRs.
    *
    * Diff sizes are left at 0/0/0, as the REST list did; `listPrDiffStats`
-   * fills them in for the PRs whose head moved.
+   * fills them in for the PRs whose head moved. Stack membership comes along
+   * unless `withStacks` is false or GitHub won't give it; `stacks` says which.
    */
   readonly listPrs: (
     repoFullName: string,
     repositoryId: string,
     token: string,
     apiBase?: string,
-  ) => Effect.Effect<PullRequest[], GitHubError, SettingsService>;
+    options?: { readonly withStacks?: boolean },
+  ) => Effect.Effect<OpenPrList, GitHubError, SettingsService>;
   /**
    * {@link listPrs} over REST's `GET /pulls`, for when the GraphQL budget is
    * spent. Heavier per changed page, but conditional: a 304 costs nothing
@@ -683,11 +689,11 @@ export interface GhReviewThread {
 }
 
 const githubGatewayFlat: GitHubGatewayFlatService = {
-  listPrs: (repoFullName, repositoryId, token, explicitApiBase) =>
+  listPrs: (repoFullName, repositoryId, token, explicitApiBase, { withStacks = true } = {}) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      return yield* listOpenPrsViaGraphql(owner, repo, repositoryId, token, apiBase);
+      return yield* listOpenPrsViaGraphql(owner, repo, repositoryId, token, apiBase, withStacks);
     }).pipe(retryTransient),
 
   listPrsRest: (repoFullName, repositoryId, token, explicitApiBase) =>

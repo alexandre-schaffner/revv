@@ -46,6 +46,7 @@ const remotePr: PullRequest = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   fetchedAt: "2026-01-01T00:00:00.000Z",
   closedAt: null,
+  stack: null,
 };
 
 const locator = { githubHost: "github.com", repositoryFullName: "owner/repo", number: 42 };

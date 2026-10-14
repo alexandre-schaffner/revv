@@ -2,6 +2,7 @@
  * Svelte 5 use-directives.
  *
  *   <button use:gsapPress>           — press-down scale feedback
+ *   <li use:gsapHover={{ prop }}>    — eases a 0–1 CSS variable on hover/focus
  *   <div use:bitsAnim={{ inPreset }}> — drives a bits-ui content surface from
  *                                       its data-state attribute
  *   <div use:heroMorph>              — scroll-driven big-hero → sidebar-hero
@@ -12,6 +13,7 @@ import type { Action } from "svelte/action";
 import { gsap } from "./gsap";
 import type { PresetFn } from "./presets";
 import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
 
 /* ───────────────────────── gsapPress ───────────────────────── */
 
@@ -67,6 +69,81 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (node
       node.removeEventListener("pointerup", up);
       node.removeEventListener("pointerleave", up);
       node.removeEventListener("pointercancel", up);
+    },
+  };
+};
+
+/* ───────────────────────── gsapHover ───────────────────────── */
+
+interface GsapHoverParams {
+  /** A custom property the element's CSS reads as a 0–1 amount, e.g. `--lift`. */
+  prop: `--${string}`;
+}
+
+/**
+ * Eases `prop` to 1 while the pointer is over the element or focus is inside
+ * it, and back to 0 after. The CSS decides what the amount means, so one
+ * action serves any hover that is a matter of degree. Keep what it drives
+ * on the compositor (opacity, `translate`): an amount that drives a blur
+ * radius or a border colour repaints every frame and stutters.
+ *
+ * It never writes `transform` itself, so a hover can't fight a layout
+ * animation running on the same element. Settles faster than it rises, the
+ * way an exit should. Under reduced motion the state still changes, just
+ * without the ease.
+ */
+export const gsapHover: Action<HTMLElement, GsapHoverParams> = (node, params) => {
+  let current = params;
+  let tween: gsap.core.Tween | null = null;
+  let pointer = false;
+  let focus = false;
+
+  const sync = () => {
+    const on = pointer || focus;
+    tween?.kill();
+    if (prefersReducedMotion()) {
+      gsap.set(node, { [current.prop]: on ? 1 : 0 });
+      return;
+    }
+    tween = gsap.to(node, {
+      [current.prop]: on ? 1 : 0,
+      duration: on ? tokens.smooth : tokens.quick,
+      ease: on ? tokens.easeOutQuart : tokens.easeSoft,
+    });
+  };
+  const enter = () => {
+    pointer = true;
+    sync();
+  };
+  const leave = () => {
+    pointer = false;
+    sync();
+  };
+  const focusIn = () => {
+    focus = node.matches(":has(:focus-visible)");
+    sync();
+  };
+  const focusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return;
+    focus = false;
+    sync();
+  };
+
+  node.addEventListener("pointerenter", enter);
+  node.addEventListener("pointerleave", leave);
+  node.addEventListener("focusin", focusIn);
+  node.addEventListener("focusout", focusOut);
+
+  return {
+    update(next: GsapHoverParams) {
+      current = next;
+    },
+    destroy() {
+      tween?.kill();
+      node.removeEventListener("pointerenter", enter);
+      node.removeEventListener("pointerleave", leave);
+      node.removeEventListener("focusin", focusIn);
+      node.removeEventListener("focusout", focusOut);
     },
   };
 };

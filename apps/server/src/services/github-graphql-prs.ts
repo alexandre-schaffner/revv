@@ -6,7 +6,7 @@
  */
 import type { PullRequest } from "@revv/shared";
 import { Effect } from "effect";
-import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import { GitHubApiError, type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
 
 /**
@@ -16,17 +16,26 @@ import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
  */
 const OPEN_PRS_MAX_PAGES = 50;
 
+/**
+ * What an older GitHub Enterprise says when it predates stacks. Quoted, since
+ * bare `stack` is too common a word to match on.
+ */
+const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
+
 // Exactly the fields `mapPrNode` reads. `additions`/`deletions`/`changedFiles`
 // are left out on purpose: GitHub computes them per PR, which made this query
 // ~20% slower, and `listPrDiffStats` already fetches them for the PRs that
 // actually need them.
-const OPEN_PRS_QUERY = `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
+const openPrsQuery = (
+  withStacks: boolean,
+) => `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number title body isDraft url createdAt updatedAt closedAt
         headRefName baseRefName headRefOid baseRefOid
+        ${withStacks ? "stack { number } stackEntry { position }" : ""}
         author { __typename login avatarUrl }
         reviewRequests(first: 100) {
           nodes {
@@ -63,6 +72,9 @@ interface GqlOpenPr {
   readonly headRefOid: string;
   readonly baseRefOid: string;
   readonly author: GqlActor | null;
+  /** Absent when asked without stacks; null when the PR isn't stacked. */
+  readonly stack?: { readonly number: number } | null;
+  readonly stackEntry?: { readonly position: number } | null;
   readonly reviewRequests: {
     readonly nodes: ReadonlyArray<{ readonly requestedReviewer: GqlActor | null } | null>;
   };
@@ -88,7 +100,7 @@ function restLogin(actor: GqlActor): string | null {
   return actor.__typename === "Bot" ? `${actor.login}[bot]` : actor.login;
 }
 
-/** Map an `OPEN_PRS_QUERY` node to the same row `mapPr` builds from REST. */
+/** Map an `openPrsQuery` node to the same row `mapPr` builds from REST. */
 function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
   const requestedReviewers = node.reviewRequests.nodes.flatMap((n) => {
     // Team requests have no login; REST lists them separately too.
@@ -123,7 +135,23 @@ function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
     updatedAt: node.updatedAt,
     fetchedAt: new Date().toISOString(),
     closedAt: node.closedAt,
+    stack:
+      node.stack && node.stackEntry
+        ? { number: node.stack.number, position: node.stackEntry.position }
+        : null,
   };
+}
+
+/** A repo's open PRs, and what the list could tell about their stacks. */
+export interface OpenPrList {
+  readonly prs: PullRequest[];
+  /**
+   * `listed`: every PR's `stack` is GitHub's. Otherwise each one is "unknown",
+   * not "unstacked", and must not be written over a stored one: `unsupported`
+   * when the host predates stacks, which is worth remembering; `unknown` when
+   * they weren't asked for, or GitHub refused them this once.
+   */
+  readonly stacks: "listed" | "unsupported" | "unknown";
 }
 
 /** Every open PR of `owner/repo`, most recently updated first. */
@@ -133,16 +161,42 @@ export function listOpenPrsViaGraphql(
   repositoryId: string,
   token: string,
   apiBase: string,
-): Effect.Effect<PullRequest[], GitHubError> {
-  return paginateGraphql<OpenPrsResp, GqlOpenPr>({
-    query: OPEN_PRS_QUERY,
-    variables: { owner, name: repo },
-    selectConnection: (data) => data.repository?.pullRequests,
-    maxPages: OPEN_PRS_MAX_PAGES,
-    token,
-    apiBase,
-    notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
-  }).pipe(Effect.map((nodes) => nodes.map((node) => mapPrNode(node, repositoryId))));
+  withStacks: boolean,
+): Effect.Effect<OpenPrList, GitHubError> {
+  const list = (withStacks: boolean) =>
+    paginateGraphql<OpenPrsResp, GqlOpenPr>({
+      query: openPrsQuery(withStacks),
+      variables: { owner, name: repo },
+      selectConnection: (data) => data.repository?.pullRequests,
+      maxPages: OPEN_PRS_MAX_PAGES,
+      token,
+      apiBase,
+      notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
+    }).pipe(Effect.map((nodes) => nodes.map((node) => mapPrNode(node, repositoryId))));
+
+  const withoutStacks = (stacks: OpenPrList["stacks"]) =>
+    list(false).pipe(Effect.map((prs): OpenPrList => ({ prs, stacks })));
+
+  if (!withStacks) return withoutStacks("unknown");
+  return list(true).pipe(
+    Effect.map((prs): OpenPrList => ({ prs, stacks: "listed" })),
+    // Stacks are garnish on the poll's most important request, so any refusal
+    // GraphQL answers with earns one retry without them: a host that predates
+    // them, but also a FORBIDDEN or timeout on one PR's stack, which would
+    // otherwise stall the repo's whole list for as long as it lasted. HTTP,
+    // auth, rate-limit and network failures hit both shapes alike and fail
+    // as is.
+    Effect.catchIf(
+      (err): err is GitHubApiError =>
+        err instanceof GitHubApiError && String(err.cause).startsWith("GraphQL:"),
+      (err) =>
+        withoutStacks(
+          STACK_TOKENS.some((token) => String(err.cause).includes(token))
+            ? "unsupported"
+            : "unknown",
+        ),
+    ),
+  );
 }
 
 /**

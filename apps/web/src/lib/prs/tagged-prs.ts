@@ -186,3 +186,83 @@ export function compareTaggedRows(
   if (primary === 0) return tiebreak(a, b);
   return dir === "asc" ? primary : -primary;
 }
+
+/** One entry of the rendered queue: a lone PR, or the visible part of a stack. */
+export type TaggedEntry =
+  | { readonly kind: "row"; readonly row: TaggedRow }
+  | {
+      readonly kind: "stack";
+      /** GitHub's stack number, unique within the repo. */
+      readonly number: number;
+      /** Top of the stack first, the way GitHub draws it: read down toward what lands first. */
+      readonly members: readonly [TaggedRow, ...TaggedRow[]];
+      /** The branch the stack lands on: what its lowest visible member targets. */
+      readonly base: string;
+    };
+
+/**
+ * Gather the members of each GitHub stack into one entry.
+ *
+ * Takes rows already filtered and sorted, and keeps that order between
+ * entries: a stack sits where its highest-ranked member would have, so the
+ * active sort still decides what leads. Within a stack, position wins.
+ *
+ * A stack needs two visible members to be drawn as one. A lone member (its
+ * siblings filtered out, merged, or not involving the reader) stays a plain
+ * row, which still names its base branch.
+ */
+export function groupStacks(rows: readonly TaggedRow[]): TaggedEntry[] {
+  const byStack = new Map<number, TaggedRow[]>();
+  for (const row of rows) {
+    const { stack } = row.pr;
+    if (stack === null) continue;
+    const members = byStack.get(stack.number);
+    if (members) members.push(row);
+    else byStack.set(stack.number, [row]);
+  }
+
+  const entries: TaggedEntry[] = [];
+  for (const row of rows) {
+    const { stack } = row.pr;
+    if (stack === null) {
+      entries.push({ kind: "row", row });
+      continue;
+    }
+    const members = byStack.get(stack.number);
+    // Already placed, at a higher-ranked member.
+    if (members === undefined) continue;
+    byStack.delete(stack.number);
+    // The map's own array, so sorting it in place is safe. Stable: members
+    // sharing a position keep the active sort's order.
+    members.sort((a, b) => (b.pr.stack?.position ?? 0) - (a.pr.stack?.position ?? 0));
+    const [top, ...rest] = members;
+    const bottom = rest.at(-1);
+    if (top === undefined || bottom === undefined) {
+      entries.push({ kind: "row", row });
+      continue;
+    }
+    entries.push({
+      kind: "stack",
+      number: stack.number,
+      members: [top, ...rest],
+      base: bottom.pr.targetBranch,
+    });
+  }
+  return entries;
+}
+
+/**
+ * Stacks this tall start folded. Two members cost one extra row; folding them
+ * away would hide as much as it saves.
+ */
+export const STACK_FOLD_AT = 3;
+
+/**
+ * Whether a stack of `size` shows all its members. `chosen` is what the reader
+ * last set for it, if anything: an explicit open or closed, not a flip of the
+ * default, so a stack that shrinks below the fold threshold (or grows past
+ * it) keeps the state the reader left it in rather than inverting.
+ */
+export function isStackOpen(size: number, chosen: boolean | undefined): boolean {
+  return chosen ?? size < STACK_FOLD_AT;
+}

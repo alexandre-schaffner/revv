@@ -358,7 +358,7 @@ describe("GitHubGateway error classification", () => {
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
-    expect(prs).toHaveLength(1);
+    expect(prs.prs).toHaveLength(1);
     expect(calls).toHaveLength(2);
   });
 
@@ -427,7 +427,9 @@ describe("listPrs", () => {
 
     const result = await listOpen(db);
 
-    expect(Either.isRight(result) && result.right.map((pr) => pr.externalId)).toEqual([2, 1, 3]);
+    expect(Either.isRight(result) && result.right.prs.map((pr) => pr.externalId)).toEqual([
+      2, 1, 3,
+    ]);
     expect(bodies).toHaveLength(2);
     expect((bodies[0] as { variables: unknown }).variables).toEqual({
       owner: "octo",
@@ -464,7 +466,7 @@ describe("listPrs", () => {
 
     expect(Either.isRight(result)).toBe(true);
     if (!Either.isRight(result)) return;
-    const [bot, ghost] = result.right;
+    const [bot, ghost] = result.right.prs;
     expect(bot).toMatchObject({
       id: "repo-1:1",
       repositoryId: "repo-1",
@@ -481,6 +483,94 @@ describe("listPrs", () => {
       changedFiles: 0,
     });
     expect(ghost).toMatchObject({ authorLogin: "ghost", body: "Fixes #1", isDraft: true });
+  });
+
+  it("maps native stack membership", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() =>
+      responseJson(
+        gqlPrPage([
+          gqlPr(1, { stack: { number: 12 }, stackEntry: { position: 3 } }),
+          gqlPr(2, { stack: null, stackEntry: null }),
+        ]),
+      ),
+    );
+
+    const result = await listOpen(db);
+
+    expect(Either.isRight(result)).toBe(true);
+    if (!Either.isRight(result)) return;
+    expect(result.right.stacks).toBe("listed");
+    const [stacked, plain] = result.right.prs;
+    expect(stacked?.stack).toEqual({ number: 12, position: 3 });
+    expect(plain?.stack).toBeNull();
+  });
+
+  const listWith = (db: ReturnType<typeof createDb>, withStacks?: boolean) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.listOpen(
+          "octo/repo",
+          "repo-1",
+          "token",
+          "https://ghe.test",
+          withStacks === undefined ? {} : { withStacks },
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+  /** Answers the stack-asking query with `stackError`, any other with one PR. */
+  const stubStackRefusal = (stackError: { message: string; path?: string[] }) => {
+    const queries: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      queries.push(query);
+      return query.includes("stackEntry")
+        ? responseJson({ errors: [stackError] })
+        : responseJson(gqlPrPage([gqlPr(1)]));
+    }) as typeof fetch;
+    return queries;
+  };
+
+  // GraphQL rejects a whole query over one unknown field, so a host that
+  // predates stacks would otherwise list nothing, every cycle.
+  it("asks again without stacks on a host that predates them", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message: "Field 'stack' doesn't exist on type 'PullRequest'",
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.stacks).toBe("unsupported");
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(queries).toHaveLength(2);
+  });
+
+  // A field-level refusal on one PR's stack must not stall the repo's list.
+  it("asks again without stacks when GitHub refuses them for any other reason", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message: "Resource not accessible by integration",
+      path: ["repository", "pullRequests", "nodes", "0", "stack"],
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.stacks).toBe("unknown");
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("skips the stack fields when told to", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({ message: "unreachable" });
+
+    const listing = await listWith(db, false);
+
+    expect(listing.stacks).toBe("unknown");
+    expect(queries).toHaveLength(1);
   });
 
   it("classifies a GraphQL RATE_LIMITED answer as a rate limit", async () => {
