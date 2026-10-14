@@ -17,9 +17,17 @@ export const tokens = {
 
   // Easings (bare cubic-bezier control points; CustomEase consumes these)
   easeOutExpo: "0.16, 1, 0.3, 1",
+  // Gentler than expo: most of the travel early, but no snap. For motion
+  // the eye follows the whole way (a hover lift, cards being dealt).
+  easeOutQuart: "0.25, 1, 0.5, 1",
   easeSoft: "0.4, 0, 0.2, 1",
 
   stagger: {
     tight: 0.025,
+    // Total budgets, not per item: spread across however many cards a stack
+    // has, so a tall one deals as quickly as a short one. Gathering is the
+    // exit, so it's quicker.
+    deal: 0.09,
+    gather: 0.04,
   },
 } as const;

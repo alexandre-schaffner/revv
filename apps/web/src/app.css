@@ -633,10 +633,12 @@
   /* Motion — easings
        --ease-soft     : in/out, used for exits and bidirectional state
        --ease-out-expo : enter, slight overshoot, default for "appearance"
+       --ease-out-quart: enter without the snap, for motion followed end to end
        --ease-standard : Material standard, used by walkthrough chapters
        --ease-anticipate : playful overshoot, reserve for delight moments */
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-anticipate: cubic-bezier(0.68, -0.55, 0.27, 1.55);
 
@@ -644,6 +646,9 @@
   --stagger-tight: 25ms;
   --stagger-default: 40ms;
   --stagger-loose: 80ms;
+  /* …and total budgets, spread across a stack's cards as it folds */
+  --stagger-deal: 90ms;
+  --stagger-gather: 40ms;
 }
 
 /* ──────────────────────────────────────────────────────────

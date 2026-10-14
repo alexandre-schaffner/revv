@@ -190,6 +190,7 @@ function listSourcedPr(overrides: Partial<PullRequest> = {}): PullRequest {
     updatedAt: "2026-02-01T00:00:00Z",
     fetchedAt: "2026-02-01T00:00:00Z",
     closedAt: null,
+    stack: null,
     ...overrides,
   };
 }
@@ -466,5 +467,56 @@ describe("listOpenPrsAsOfWindow", () => {
       .map((r) => r.id)
       .sort();
     expect(ids).toEqual(openNow);
+  });
+});
+
+describe("upsertPrs stack membership", () => {
+  const storedStack = (db: Db) => {
+    const row = readRow(db, "pr-open-alice");
+    return { number: row.stackNumber, position: row.stackPosition };
+  };
+  const seedStacked = (db: Db) =>
+    db
+      .update(pullRequests)
+      .set({ stackNumber: 7, stackPosition: 3 })
+      .where(eq(pullRequests.id, "pr-open-alice"))
+      .run();
+
+  it("records a stack on first insert", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    await runSvc(db, (svc) =>
+      svc.upsertPrs([
+        listSourcedPr({ id: "pr-stacked", externalId: 98, stack: { number: 7, position: 2 } }),
+      ]),
+    );
+    const row = readRow(db, "pr-stacked");
+    expect(row.stackNumber).toBe(7);
+    expect(row.stackPosition).toBe(2);
+  });
+
+  // REST has no stacks, so most callers hand in nulls that mean "unknown".
+  it("never erases a stored stack on conflict from a source that didn't see stacks", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedStacked(db);
+
+    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr()]));
+
+    expect(storedStack(db)).toEqual({ number: 7, position: 3 });
+    expect(readRow(db, "pr-open-alice").title).toBe("updated title");
+  });
+
+  it.each([
+    ["moves", { number: 7, position: 1 }, { number: 7, position: 1 }],
+    ["clears", null, { number: null, position: null }],
+  ] as const)("%s a stored stack on conflict when the stacks are known", async (_, stack, want) => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedStacked(db);
+
+    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr({ stack })], { stacksKnown: true }));
+
+    expect(storedStack(db)).toEqual(want);
   });
 });

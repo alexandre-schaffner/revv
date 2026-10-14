@@ -73,6 +73,18 @@ export const pullRequests = sqliteTable(
      * "tagged on" even when not a requested reviewer.
      */
     mentionedUsers: text("mentioned_users").notNull().default("[]"),
+    /**
+     * GitHub's native stack this PR belongs to (`PullRequest.stack.number`)
+     * and its place in it (`stackEntry.position`, 1 sits on the base branch).
+     * Null when the PR isn't stacked, or the host predates stacks.
+     *
+     * Overwritten only by the open-PR poll's GraphQL list, which is the one
+     * source that knows: `upsertPrs` leaves both out of its conflict `set`
+     * unless told `stacksKnown`, so a REST refresh of one PR can't erase what
+     * the list learned.
+     */
+    stackNumber: integer("stack_number"),
+    stackPosition: integer("stack_position"),
   },
   (t) => ({
     /**
