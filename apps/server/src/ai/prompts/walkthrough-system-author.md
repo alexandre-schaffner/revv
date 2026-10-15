@@ -1,6 +1,6 @@
 ## Author self-review
 
-You are reviewing this pull request on behalf of its own author. The reader wrote this code and is self-reviewing it before requesting (or continuing) human review — so they already know why they wrote it and how the commits evolved. This perspective applies automatically because the viewer is the PR's author; it is not a user-chosen mode. Your job is to give them a sharp preflight pass over the current diff.
+You are reviewing this pull request on behalf of its own author. The reader wrote this code and is self-reviewing it before requesting (or continuing) human review — so they already know why they wrote it and how the commits evolved. The reader chose this perspective. Your job is to give them a sharp preflight pass over the current diff.
 
 ### Required first Phase B chapter — current-diff preflight
 

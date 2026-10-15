@@ -32,6 +32,7 @@ import type {
   WalkthroughBlock,
   WalkthroughGenerationMode,
   WalkthroughIssue,
+  WalkthroughLead,
   WalkthroughMode,
   WalkthroughPipelinePhase,
   WalkthroughRating,
@@ -43,6 +44,7 @@ import type {
 } from "@revv/shared";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../db";
 import { commentThreads } from "../db/schema/comment-threads";
 import { pullRequests } from "../db/schema/pull-requests";
 import { remoteUsers } from "../db/schema/remote-users";
@@ -53,9 +55,11 @@ import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
-import { ReviewError } from "../domain/errors";
+import { DbError, ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
+import { decodeWalkthroughIssue } from "./walkthrough-issue";
+import { loadWalkthroughLeads } from "./walkthrough-leads";
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
 
@@ -98,12 +102,18 @@ function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRa
   };
 }
 
+/** Rows seeded by the retired Jev verdict pass can still lack prose; exclude them so they don't render as a blank scorecard card. */
+function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
+  return row.rationale.trim().length > 0;
+}
+
 function rowToWalkthrough(
   row: typeof walkthroughs.$inferSelect,
   semanticSteps: Array<typeof walkthroughSemanticSteps.$inferSelect>,
   blocks: Array<typeof walkthroughBlocks.$inferSelect>,
   issues: Array<typeof walkthroughIssues.$inferSelect>,
   ratings: Array<typeof walkthroughRatings.$inferSelect>,
+  leads: WalkthroughLead[] | null,
   avatarContent: string | null = null,
 ): Walkthrough {
   const sortedSemanticSteps: WalkthroughSemanticStep[] = [...semanticSteps]
@@ -118,34 +128,12 @@ function rowToWalkthrough(
     .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
     .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-  const sortedIssues = [...issues]
-    .sort((a, b) => a.order - b.order)
-    .map((i): WalkthroughIssue => {
-      let blockIds: string[] = [];
-      try {
-        const parsed: unknown = JSON.parse(i.blockIds);
-        if (Array.isArray(parsed)) {
-          blockIds = parsed.filter((v): v is string => typeof v === "string");
-        }
-      } catch {
-        // Legacy row or corrupt JSON — fall back to empty linkage.
-      }
-      return {
-        id: i.id,
-        severity: i.severity as WalkthroughIssue["severity"],
-        title: i.title,
-        description: i.description,
-        blockIds,
-        ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-        ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-        ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-        ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-      };
-    });
+  const sortedIssues = [...issues].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
 
   // Ratings are ordered by insertion (createdAt) so the grid receives them
   // in arrival order. The UI re-orders by canonical RATING_AXES for display.
-  const sortedRatings = [...ratings]
+  const sortedRatings = ratings
+    .filter(hasRationale)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map(rowToRating);
 
@@ -185,10 +173,12 @@ function rowToWalkthrough(
     blocks: sortedBlocks,
     issues: sortedIssues,
     ratings: sortedRatings,
+    leads,
     mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
     riskLevel: row.riskLevel as RiskLevel,
+    riskConfidence: row.riskConfidence,
     generatedAt: row.generatedAt,
     modelUsed: row.modelUsed,
     tokenUsage: JSON.parse(row.tokenUsage) as WalkthroughTokenUsage,
@@ -199,6 +189,27 @@ function rowToWalkthrough(
     generatedBy,
     providerConfig,
   };
+}
+
+/** A walkthrough row with its child tables loaded, as the DTO. */
+function hydrateWalkthrough(
+  db: Db,
+  row: typeof walkthroughs.$inferSelect,
+  avatarContent: string | null,
+): Walkthrough {
+  return rowToWalkthrough(
+    row,
+    db
+      .select()
+      .from(walkthroughSemanticSteps)
+      .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
+      .all(),
+    db.select().from(walkthroughBlocks).where(eq(walkthroughBlocks.walkthroughId, row.id)).all(),
+    db.select().from(walkthroughIssues).where(eq(walkthroughIssues.walkthroughId, row.id)).all(),
+    db.select().from(walkthroughRatings).where(eq(walkthroughRatings.walkthroughId, row.id)).all(),
+    loadWalkthroughLeads(db, row.id, row.leadsSelectedAt),
+    avatarContent,
+  );
 }
 
 function isPrCommit(v: unknown): v is PrCommit {
@@ -358,6 +369,13 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       parentWalkthroughId?: string | null;
       baseHeadSha?: string | null;
       forceNew?: boolean;
+      /**
+       * Orchestrator-assigned risk tier (invariant 2's carve-out). Passed at
+       * insert, not a follow-up UPDATE, so no kill-9 window leaves the row
+       * without it. Omitted means the risk pass is off/unavailable; row
+       * keeps the `'low'` default and the agent judges the tier itself.
+       */
+      risk?: { readonly level: RiskLevel; readonly confidence: number };
     }) => Effect.Effect<string, ReviewError, DbService>;
 
     /**
@@ -608,24 +626,35 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
     ) => Effect.Effect<Walkthrough | null, never, DbService>;
 
     /**
-     * Return a specific walkthrough for a PR/mode. This is a read-only
-     * historical report view: callers use it to display an older report, not
-     * to resume or mutate the row.
+     * The perspective of the PR's newest walkthrough row, any status, or
+     * `null` when it has none. The walkthrough perspective is the user's
+     * choice; this is the record of their last one, so `/current` reopens on
+     * the walkthrough they actually generated. Superseded rows count: after
+     * a push, the stale walkthrough keeps its perspective.
+     */
+    readonly getLatestMode: (
+      prId: string,
+    ) => Effect.Effect<WalkthroughMode | null, DbError, DbService>;
+
+    /**
+     * Return a specific walkthrough for a PR, whatever its perspective. This
+     * is a read-only historical report view: callers use it to display an
+     * older report, not to resume or mutate the row.
      */
     readonly getReport: (
       prId: string,
       walkthroughId: string,
-      mode?: WalkthroughMode,
     ) => Effect.Effect<
       { readonly walkthrough: Walkthrough; readonly status: WalkthroughStatus } | null,
       never,
       DbService
     >;
 
+    /** The PR's review rounds across both perspectives (one is active at a
+     *  time, so the history is a single timeline). */
     readonly listReviewRounds: (
       prId: string,
       currentHeadSha: string | null,
-      mode?: WalkthroughMode,
     ) => Effect.Effect<WalkthroughReviewRoundsResponse, never, DbService>;
   }
 >() {}
@@ -699,7 +728,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 pullRequestId: params.prId,
                 summary: "",
                 mode,
-                riskLevel: "low",
+                riskLevel: params.risk?.level ?? "low",
+                riskConfidence: params.risk?.confidence ?? null,
                 sentiment: null,
                 status: "generating",
                 lastCompletedPhase: "none",
@@ -898,32 +928,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
-      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
+      return hydrateWalkthrough(db, row, avatarContent);
     }),
 
   getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
@@ -959,33 +964,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
       return {
-        ...rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent),
+        ...hydrateWalkthrough(db, row, avatarContent),
         status: row.status as "generating" | "error",
         opencodeSessionId: row.opencodeSessionId ?? null,
       };
@@ -1160,6 +1140,18 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
   findLatestReviewArtifact: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      // `lastCompletedPhase != 'none'` is the "this row actually reviewed
+      // something" test: Phase A's `set_overview` is the first write of the
+      // pipeline, so a row still at 'none' has no summary, no diff steps —
+      // nothing a follow-up incremental run could build on. Rows die at 'none'
+      // when a supersede sweep cancels them mid-exploration; treating one as
+      // the last reviewed artifact made the next incremental run's base SHA
+      // equal its own head, i.e. a review of an empty commit range.
+      const reviewed = [
+        eq(walkthroughs.mode, mode),
+        inArray(walkthroughs.status, ["complete", "superseded"]),
+        ne(walkthroughs.lastCompletedPhase, "none"),
+      ];
       const roundRows = db
         .select({
           id: walkthroughs.id,
@@ -1171,13 +1163,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         })
         .from(reviewRounds)
         .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(
-          and(
-            eq(reviewRounds.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-            inArray(walkthroughs.status, ["complete", "superseded"]),
-          ),
-        )
+        .where(and(eq(reviewRounds.pullRequestId, prId), ...reviewed))
         .orderBy(desc(reviewRounds.roundNumber))
         .all();
 
@@ -1198,13 +1184,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           prHeadSha: walkthroughs.prHeadSha,
         })
         .from(walkthroughs)
-        .where(
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-            inArray(walkthroughs.status, ["complete", "superseded"]),
-          ),
-        )
+        .where(and(eq(walkthroughs.pullRequestId, prId), ...reviewed))
         .orderBy(desc(walkthroughs.generatedAt))
         .get();
       return row ?? null;
@@ -1237,35 +1217,26 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
-      return rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent);
+      return hydrateWalkthrough(db, row, avatarContent);
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
-  getReport: (prId, walkthroughId, mode = "reviewer") =>
+  getLatestMode: (prId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = yield* Effect.try({
+        try: () =>
+          db
+            .select({ mode: walkthroughs.mode })
+            .from(walkthroughs)
+            .where(eq(walkthroughs.pullRequestId, prId))
+            .orderBy(desc(walkthroughs.generatedAt))
+            .get(),
+        catch: (cause) => new DbError({ message: `getLatestMode(${prId})`, cause }),
+      });
+      return row?.mode ?? null;
+    }),
+
+  getReport: (prId, walkthroughId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const result = db
@@ -1278,51 +1249,20 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
           ),
         )
-        .where(
-          and(
-            eq(walkthroughs.id, walkthroughId),
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.mode, mode),
-          ),
-        )
+        .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)))
         .get();
 
       if (!result) return null;
 
       const { wt: row, avatarContent } = result;
 
-      const semanticSteps = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blocks = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, row.id))
-        .all();
-
-      const issues = db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, row.id))
-        .all();
-
-      const ratings = db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, row.id))
-        .all();
-
       return {
-        walkthrough: rowToWalkthrough(row, semanticSteps, blocks, issues, ratings, avatarContent),
+        walkthrough: hydrateWalkthrough(db, row, avatarContent),
         status: row.status as WalkthroughStatus,
       };
     }).pipe(Effect.catchAll(() => Effect.succeed(null))),
 
-  listReviewRounds: (prId, currentHeadSha, mode = "reviewer") =>
+  listReviewRounds: (prId, currentHeadSha) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const rows = db
@@ -1332,6 +1272,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           previousWalkthroughId: reviewRounds.previousWalkthroughId,
           roundNumber: reviewRounds.roundNumber,
           kind: reviewRounds.kind,
+          mode: walkthroughs.mode,
           visibility: reviewRounds.visibility,
           status: reviewRounds.status,
           fromSha: reviewRounds.fromSha,
@@ -1344,7 +1285,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         })
         .from(reviewRounds)
         .innerJoin(walkthroughs, eq(walkthroughs.id, reviewRounds.walkthroughId))
-        .where(and(eq(reviewRounds.pullRequestId, prId), eq(walkthroughs.mode, mode)))
+        .where(eq(reviewRounds.pullRequestId, prId))
         .orderBy(asc(reviewRounds.roundNumber))
         .all();
 
@@ -1354,6 +1295,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         previousWalkthroughId: row.previousWalkthroughId ?? null,
         roundNumber: row.roundNumber,
         kind: row.kind === "incremental" ? "incremental" : "full",
+        mode: row.mode,
         visibility:
           row.visibility === "hidden" || (row.kind === "incremental" && row.fromSha === row.toSha)
             ? "hidden"
@@ -1380,10 +1322,11 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             prCommits: walkthroughs.prCommits,
             prHeadSha: walkthroughs.prHeadSha,
             generationMode: walkthroughs.generationMode,
+            mode: walkthroughs.mode,
             baseHeadSha: walkthroughs.baseHeadSha,
           })
           .from(walkthroughs)
-          .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.mode, mode)))
+          .where(eq(walkthroughs.pullRequestId, prId))
           .orderBy(asc(walkthroughs.generatedAt))
           .all();
 
@@ -1393,6 +1336,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           previousWalkthroughId: row.previousWalkthroughId ?? null,
           roundNumber: index + 1,
           kind: row.generationMode === "incremental" ? "incremental" : "full",
+          mode: row.mode,
           visibility:
             row.generationMode === "incremental" && row.baseHeadSha === row.prHeadSha
               ? "hidden"
@@ -1502,32 +1446,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
         .map((b) => JSON.parse(b.data) as WalkthroughBlock);
 
-      const issues = [...issueRows]
-        .sort((a, b) => a.order - b.order)
-        .map((i): WalkthroughIssue => {
-          let blockIds: string[] = [];
-          try {
-            const parsed: unknown = JSON.parse(i.blockIds);
-            if (Array.isArray(parsed)) {
-              blockIds = parsed.filter((v): v is string => typeof v === "string");
-            }
-          } catch {
-            // corrupt JSON — fall back to empty
-          }
-          return {
-            id: i.id,
-            severity: i.severity as WalkthroughIssue["severity"],
-            title: i.title,
-            description: i.description,
-            blockIds,
-            ...(i.filePath !== null ? { filePath: i.filePath } : {}),
-            ...(i.startLine !== null ? { startLine: i.startLine } : {}),
-            ...(i.endLine !== null ? { endLine: i.endLine } : {}),
-            ...(i.submittedAt !== null ? { submittedAt: i.submittedAt } : {}),
-          };
-        });
+      const issues = [...issueRows].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
 
-      const ratings = [...ratingRows]
+      const ratings = ratingRows
+        .filter(hasRationale)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .map(rowToRating);
 

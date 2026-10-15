@@ -5,6 +5,7 @@ const repoRoot = import.meta.dir.replace(/\/scripts$/, "");
 
 const featureRoots = [
   /^apps\/server\/src\/services\/WalkthroughJobs\.ts$/,
+  /^apps\/server\/src\/services\/walkthrough-[^/]+\.ts$/,
   /^apps\/server\/src\/routes\/chat(?:-|\.ts)/,
   /^apps\/server\/src\/services\/Chat[A-Za-z].*\.ts$/,
   /^apps\/server\/src\/services\/ProjectRecapJobs\.ts$/,

@@ -2,7 +2,7 @@
 //
 // Read-only handler: get_walkthrough_for_edit.
 
-import type { WalkthroughBlock } from "@revv/shared";
+import { chapterNumbersByIndex, type WalkthroughBlock } from "@revv/shared";
 import { eq, inArray } from "drizzle-orm";
 import { commentThreads } from "../../../db/schema/comment-threads";
 import { threadMessages } from "../../../db/schema/thread-messages";
@@ -88,6 +88,11 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
     stepIndicesBySection.set(b.semanticStepIndex, arr);
   }
 
+  const chapterNumbers = chapterNumbersByIndex(
+    semanticRows.map((s) => s.semanticStepIndex),
+    blockRows.map((b) => b.semanticStepIndex),
+  );
+
   const missingComments = findIssuesMissingInlineComment(ctx.db, row.id);
   const ratedAxes = new Set(ratingRows.map((r) => r.axis));
   const requiredAxes = [
@@ -115,6 +120,7 @@ export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughFor
     sentiment: row.sentiment,
     semanticSteps: semanticRows.map((s) => ({
       semanticStepIndex: s.semanticStepIndex,
+      chapterNumber: chapterNumbers.get(s.semanticStepIndex) ?? null,
       title: s.title,
       summary: s.summary,
       stepIndices: (stepIndicesBySection.get(s.semanticStepIndex) ?? [])

@@ -786,7 +786,7 @@ export const RepoCloneServiceLive = Layer.effect(
       Effect.tryPromise({
         try: async (): Promise<PruneWorktreeOutcome> => {
           const row = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
-          if (!row || row.cloneStatus !== "ready" || !row.clonePath) {
+          if (row?.cloneStatus !== "ready" || !row.clonePath) {
             return { pruned: false, reason: "not-found" };
           }
           const clonePath = row.clonePath;
@@ -997,7 +997,7 @@ export const RepoCloneServiceLive = Layer.effect(
                     .where(eq(repositories.id, repoId))
                     .get();
 
-                  if (!row || row.cloneStatus !== "ready" || !row.clonePath) {
+                  if (row?.cloneStatus !== "ready" || !row.clonePath) {
                     throw new CloneNotReadyError({ repoId });
                   }
 

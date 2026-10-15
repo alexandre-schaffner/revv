@@ -1,8 +1,9 @@
-import { REVIEW_MODE, type WalkthroughMode } from "@revv/shared";
+import { REVIEW_MODE, type WalkthroughMode, type WalkthroughStatus } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
   integer,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -46,8 +47,15 @@ export const walkthroughs = sqliteTable(
      * `author` is a self-review/preflight pass for the PR author.
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
-    /** Phase A output: `'low' | 'medium' | 'high'`. Written by `set_overview` MCP tool. */
+    /**
+     * `'low' | 'medium' | 'high'`. Written by the orchestrator at job start
+     * from the Jev risk pass (invariant 2's carve-out), passed to
+     * `createPartial` so no `kill -9` gap exists before the row has a tier.
+     * Falls back to `'low'` when Jev is off or unreachable.
+     */
     riskLevel: text("risk_level").notNull().default("low"),
+    /** Calibrated confidence [0,1] behind {@link riskLevel}; null when the tier didn't come from Jev. */
+    riskConfidence: real("risk_confidence"),
     /**
      * Phase C output: final "Overall Sentiment" paragraph. Nullable until
      * Phase C completes. Written by `set_sentiment` MCP tool.
@@ -61,7 +69,7 @@ export const walkthroughs = sqliteTable(
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
      *   `superseded` — a newer walkthrough (see `supersededBy`) replaced this
      */
-    status: text("status").notNull().default("generating"),
+    status: text("status").$type<WalkthroughStatus>().notNull().default("generating"),
     /**
      * Last terminal generation failure surfaced to the user. Cleared whenever
      * the row re-enters `generating` or reaches `complete`.
@@ -124,17 +132,24 @@ export const walkthroughs = sqliteTable(
     // row is marked `error` and left alone.
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     /**
-     * ISO 8601 timestamp of the most recent chat-driven edit. Null until
-     * the first chat-edit MCP tool call mutates this row. The generation
+     * ISO 8601 timestamp of the most recent post-completion edit. Null until
+     * the first edit MCP tool call mutates this row. The generation
      * pipeline NEVER writes this column — it is the marker of the post-
      * completion chat-edit carve-out (CLAUDE.md invariant #7).
      */
     lastEditedAt: text("last_edited_at"),
     /**
-     * Actor that performed the most recent chat-driven edit — `'chat:acp'`
-     * for chat edits on the ACP transport. Pairs with `lastEditedAt`.
+     * Actor that performed the most recent post-completion edit — currently
+     * `'chat:acp'` or `'claude-code'`. Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
+    /**
+     * When the orchestrator recorded which first-pass leads this walkthrough's
+     * agent was handed (`walkthrough_leads`, possibly none). Null for rows
+     * that predate lead tracking or arrived from the remote cache, whose
+     * leads can only be inferred from where their issues sit.
+     */
+    leadsSelectedAt: text("leads_selected_at"),
     /**
      * PR commit list (JSON of `PrCommit[]`) captured from GitHub at job
      * start. Surfaced to the agent on demand via the `get_commit_history`

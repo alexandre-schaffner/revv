@@ -12,7 +12,7 @@
 // files share stays inert rather than guessing the wrong target. This keeps the
 // common "symbol in backticks" (`checkAccessBatch`) from masquerading as a file.
 //
-// Follows the `mermaidDiagrams` action pattern: a MutationObserver re-decorates
+// Follows the `prlensDiagrams` action pattern: a MutationObserver re-decorates
 // on content changes (streaming), microtask-scheduled so it runs after Svelte
 // patches the DOM. Attribute writes aren't observed (childList only), so our own
 // decoration never re-triggers the observer.
@@ -92,7 +92,7 @@ function resolveRef(raw: string, lookup: FileLookup): ResolvedRef | null {
   // to `src/foo.ts` — but only when exactly one changed file owns that name.
   const base = basename(candidate);
   const owners = lookup.byBasename.get(base);
-  if (!owners || owners.size !== 1) return null;
+  if (owners?.size !== 1) return null;
   const [only] = owners;
   if (!only) return null;
   // A path-bearing candidate (`a/foo.ts`) must be a suffix of the real path to

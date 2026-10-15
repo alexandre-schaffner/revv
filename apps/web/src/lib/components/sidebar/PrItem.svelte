@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { PullRequest } from "@revv/shared";
-import Pin from "phosphor-svelte/lib/PushPin";
+import PushPin from "phosphor-svelte/lib/PushPin";
 import User from "phosphor-svelte/lib/User";
 import { isPrPinned, pinPr, selectPr, unpinPr } from "$lib/stores/prs.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
@@ -59,7 +59,7 @@ function handleClick() {
 				class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
 				title={pr.authorLogin}
 			>
-				<User size={10} weight="regular" aria-hidden="true" />
+				<User size={10} aria-hidden="true" />
 			</span>
 		{/if}
 
@@ -104,7 +104,7 @@ function handleClick() {
 				aria-label={pinned ? 'Unpin PR' : 'Pin PR'}
 				title={pinned ? 'Unpin' : 'Pin'}
 			>
-				<Pin size={11} aria-hidden="true" class={pinned ? 'fill-current' : ''} />
+				<PushPin size={11} aria-hidden="true" class={pinned ? 'fill-current' : ''} />
 			</span>
 		{/if}
 	</button>

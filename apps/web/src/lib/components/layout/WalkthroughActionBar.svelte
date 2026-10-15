@@ -6,11 +6,12 @@ import GenActionBar, { type GenActionState } from "$lib/components/layout/GenAct
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getReviewMode } from "$lib/stores/review.svelte";
+import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,
   getHasUnreviewedCommits,
+  getSelectedMode,
   getPendingAction as getWalkthroughPendingAction,
   getRatings as getWalkthroughRatings,
   getWalkthroughUiState,
@@ -25,6 +26,10 @@ import {
   scrollToRatings as scrollWalkthroughToRatings,
   scrollToTop as scrollWalkthroughToTop,
 } from "$lib/stores/walkthroughNav.svelte";
+import {
+  WALKTHROUGH_PERSPECTIVE_OPTIONS,
+  WALKTHROUGH_PERSPECTIVES,
+} from "$lib/utils/walkthrough-perspective";
 
 interface Props {
   prId: string;
@@ -37,12 +42,12 @@ const walkthroughPendingAction = $derived(getWalkthroughPendingAction(prId));
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
 const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
-const selectedMode = $derived(getReviewMode(prId));
-const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId, selectedMode));
+const selectedMode = $derived(getSelectedMode(prId));
+const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
 const reviewNewCommitsLabel = "Review new commits";
 
 $effect(() => {
-  void loadReviewRounds(prId, selectedMode);
+  void loadReviewRounds(prId);
 });
 
 /** Map walkthrough-specific state to the normalised GenActionState. */
@@ -53,7 +58,7 @@ const genActionState = $derived.by((): GenActionState | null => {
       if (hasUnreviewedCommits) {
         return { kind: "stale", label: reviewNewCommitsLabel };
       }
-      return { kind: "empty", label: "Generate walkthrough" };
+      return { kind: "empty", label: WALKTHROUGH_PERSPECTIVES[selectedMode].generateLabel };
     case "streaming":
       return { kind: "streaming" };
     case "resumable":
@@ -73,12 +78,42 @@ const genActionState = $derived.by((): GenActionState | null => {
   }
 });
 
+// The walkthrough's perspective is the user's pick; the caret on the pills
+// that start a fresh run offers the other one. Comments and the diff stay on
+// the identity-derived session either way.
+const perspective = $derived({ value: selectedMode, options: WALKTHROUGH_PERSPECTIVE_OPTIONS });
+
 /** When chat is streaming, treat it as an in-flight action so the
- *  destructive buttons are disabled with a contextual tooltip. */
-const combinedPendingAction = $derived(chatStreaming ? "chat" : walkthroughPendingAction);
-const combinedDisabledTitle = $derived(
-  chatStreaming ? "Chat edit in progress. Wait for it to finish before regenerating." : undefined,
+ *  destructive buttons are disabled with a contextual tooltip. Also covers
+ *  the diff refresh in `handleRegenerate`'s stale branch, which runs before
+ *  `regenerate` takes the pending slot. */
+const pullingCommit = $derived(getIsPullingCommit(prId));
+const combinedPendingAction = $derived(
+  chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
 );
+const combinedDisabledTitle = $derived(
+  chatStreaming
+    ? "Chat edit in progress. Wait for it to finish before regenerating."
+    : pullingCommit
+      ? "Fetching the new commits…"
+      : undefined,
+);
+
+/**
+ * The stale pill reviews the commits that made it stale, so it refreshes
+ * the diff first via `reviewLatestCommit` (the same pull-then-review path
+ * as the tab-side Pull button); otherwise the diff tab still shows the old
+ * head and the Pull button stays lit after review.
+ */
+const isStale = $derived(genActionState?.kind === "stale");
+
+function handleRegenerate(): void {
+  if (isStale) {
+    void reviewLatestCommit(prId, selectedMode);
+    return;
+  }
+  void regenerateWalkthrough(prId, selectedMode);
+}
 </script>
 
 {#if genActionState}
@@ -93,7 +128,7 @@ const combinedDisabledTitle = $derived(
         onclick={scrollWalkthroughToTop}
         aria-label="Scroll to top of walkthrough"
       >
-        <ArrowUp size={16} weight="regular" />
+        <ArrowUp size={16} />
       </GlassPill>
 
       <GenActionBar
@@ -102,9 +137,11 @@ const combinedDisabledTitle = $derived(
         disabledTitle={combinedDisabledTitle}
         onStop={() => abortWalkthrough(prId)}
         onResume={() => resumeWalkthrough(prId, selectedMode)}
-        onGenerate={() => generateWalkthrough(prId, selectedMode)}
-        onRegenerate={() => regenerateWalkthrough(prId, selectedMode)}
-        onRegenerateFromScratch={() => regenerateWalkthroughFromScratch(prId)}
+        onGenerate={(next) => generateWalkthrough(prId, next ?? selectedMode)}
+        onRegenerate={handleRegenerate}
+        onRegenerateFromScratch={(next) =>
+          regenerateWalkthroughFromScratch(prId, next ?? selectedMode)}
+        {perspective}
       />
 
       {#if walkthroughUiState.kind === "streaming" && walkthroughHasNewContentBelow}
@@ -120,7 +157,7 @@ const combinedDisabledTitle = $derived(
             onclick={scrollWalkthroughToBottom}
             aria-label="Scroll to newest walkthrough content"
           >
-            <ArrowDown size={16} weight="regular" />
+            <ArrowDown size={16} />
             New content
           </GlassPill>
         </span>

@@ -37,7 +37,7 @@ let unmanaged = $derived(repo?.managed === false);
 				>
 					<div class="confirm-header">
 						<span class="confirm-icon" aria-hidden="true">
-							<Trash size={16} weight="fill" />
+							<Trash size={16} />
 						</span>
 						<AlertDialog.Title>
 							{#snippet child({ props: titleProps })}
@@ -75,10 +75,10 @@ let unmanaged = $derived(repo?.managed === false);
 							onclick={onConfirm}
 						>
 							{#if deleting}
-								<Spinner size={13} weight="bold" class="motion-essential-spin" />
+								<Spinner size={13} class="motion-essential-spin" />
 								Removing…
 							{:else}
-								<Trash size={13} weight="fill" />
+								<Trash size={13} />
 								Remove
 							{/if}
 						</AlertDialog.Action>

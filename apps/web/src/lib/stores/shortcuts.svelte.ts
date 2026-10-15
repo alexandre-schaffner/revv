@@ -1,5 +1,6 @@
 import { goto } from "$app/navigation";
-import { setActiveTab } from "./review.svelte";
+import { copySelectedPrLink } from "./pr-link.svelte";
+import { REVIEW_TABS, setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
 import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 
@@ -64,6 +65,25 @@ function handleKeydown(e: KeyboardEvent): void {
     } else {
       openPalette("search");
     }
+    return;
+  }
+
+  // Cmd+Shift+C → copy the selected PR's `revv://` deep link.
+  //
+  // Match on `e.code`: Shift rewrites the produced character on some layouts,
+  // and `copySelectedPrLink` is a no-op when nothing is selected, so this
+  // needs no page guard.
+  if (e.shiftKey && !e.altKey && e.code === "KeyC") {
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    void copySelectedPrLink();
     return;
   }
 
@@ -134,27 +154,12 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+1 → Walkthrough tab
-  if (e.key === "1") {
+  // Cmd+1/2/3 → the review tabs, in the order the tab bar shows them.
+  const tab = /^[1-9]$/.test(e.key) ? REVIEW_TABS[Number(e.key) - 1] : undefined;
+  if (tab) {
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("walkthrough");
-    return;
-  }
-
-  // Cmd+2 → Diff tab
-  if (e.key === "2") {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab("diff");
-    return;
-  }
-
-  // Cmd+3 → Request Changes tab
-  if (e.key === "3") {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveTab("request-changes");
+    setActiveTab(tab);
     return;
   }
 

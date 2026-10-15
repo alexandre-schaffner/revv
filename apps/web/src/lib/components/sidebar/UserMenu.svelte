@@ -1,9 +1,9 @@
 <script lang="ts">
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
-import Settings from "phosphor-svelte/lib/Gear";
-import LogOut from "phosphor-svelte/lib/SignOut";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Gear from "phosphor-svelte/lib/Gear";
+import SignOut from "phosphor-svelte/lib/SignOut";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import {
   Content as PopoverContent,
@@ -127,12 +127,12 @@ async function handleSignOut(): Promise<void> {
 						: 'user-avatar user-avatar--fallback'}
 					aria-hidden="true"
 				>
-					<User size={collapsed ? 14 : 16} weight="regular" />
+					<User size={collapsed ? 14 : 16} />
 				</span>
 			{/if}
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
-					<Loader2 size={collapsed ? 12 : 14} weight="regular" class="spin-icon motion-essential-spin" />
+					<Spinner size={collapsed ? 12 : 14} class="spin-icon motion-essential-spin" />
 				</span>
 			{/if}
 		</span>
@@ -142,7 +142,7 @@ async function handleSignOut(): Promise<void> {
 				<span class="user-email">{user.email}</span>
 			{/if}
 		</span>
-		<ChevronDown size={12} class="user-caret{collapsed ? ' user-caret--gone' : ''}" />
+		<CaretDown size={12} class="user-caret{collapsed ? ' user-caret--gone' : ''}" />
 	</PopoverTrigger>
 
 	<PopoverContent
@@ -174,7 +174,7 @@ async function handleSignOut(): Promise<void> {
 							onerror={() => { _acctAvatarFailedUrls = new Set([..._acctAvatarFailedUrls, avatar]); }}
 						/>
 					{:else}
-						<User size={13} weight="regular" class="acct-icon" />
+						<User size={13} class="acct-icon" />
 					{/if}
 				</span>
 
@@ -187,9 +187,9 @@ async function handleSignOut(): Promise<void> {
 				<!-- Status indicator -->
 				<span class="acct-status-slot">
 					{#if switching}
-						<Loader2 size={12} weight="regular" class="acct-spinner motion-essential-spin" />
+						<Spinner size={12} class="acct-spinner motion-essential-spin" />
 					{:else if active}
-						<Check size={12} weight="regular" class="acct-check" />
+						<Check size={12} class="acct-check" />
 					{/if}
 				</span>
 			</button>
@@ -199,13 +199,13 @@ async function handleSignOut(): Promise<void> {
 
 		<!-- Settings -->
 		<button class="menu-row" onclick={handleSettings}>
-			<Settings size={13} weight="fill" class="menu-row-icon" />
+			<Gear size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Settings</span>
 		</button>
 
 		<!-- Sign out -->
 		<button class="menu-row menu-row--danger" onclick={handleSignOut}>
-			<LogOut size={13} class="menu-row-icon" />
+			<SignOut size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Sign out</span>
 		</button>
 	</PopoverContent>

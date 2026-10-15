@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -29,35 +29,35 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "complexity": {
-        "recommended": true,
+        "preset": "recommended",
         "noBannedTypes": "warn"
       },
       "correctness": {
-        "recommended": true,
+        "preset": "recommended",
         "noNodejsModules": "off",
         "noUndeclaredDependencies": "off",
         "useImportExtensions": "off",
         "useYield": "warn"
       },
       "performance": {
-        "recommended": true,
+        "preset": "recommended",
         "noBarrelFile": "off",
         "noReExportAll": "off"
       },
       "security": {
-        "recommended": true
+        "preset": "recommended"
       },
       "style": {
-        "recommended": true,
+        "preset": "recommended",
         "noDefaultExport": "off",
         "useFilenamingConvention": "off",
         "useNamingConvention": "off",
         "noNonNullAssertion": "warn"
       },
       "suspicious": {
-        "recommended": true,
+        "preset": "recommended",
         "noReactSpecificProps": "off",
         "noExplicitAny": "warn"
       }
@@ -114,6 +114,16 @@
       "includes": ["apps/desktop/tauri.conf.json"],
       "formatter": {
         "enabled": false
+      }
+    },
+    {
+      "includes": ["**/*.svg"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noSvgWithoutTitle": "off"
+          }
+        }
       }
     }
   ]

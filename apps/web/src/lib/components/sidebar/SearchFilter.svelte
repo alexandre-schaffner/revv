@@ -1,4 +1,6 @@
 <script lang="ts">
+import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
+import X from "phosphor-svelte/lib/X";
 import type { Snippet } from "svelte";
 import { setSearchQuery } from "$lib/stores/prs.svelte";
 import {
@@ -123,17 +125,9 @@ function handleClear() {
 
 <div class="search-container">
 	<div class="relative flex-1">
-		<svg
+		<MagnifyingGlass
 			class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted"
-			xmlns="http://www.w3.org/2000/svg"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="2"
-		>
-			<circle cx="11" cy="11" r="8" />
-			<path d="m21 21-4.35-4.35" />
-		</svg>
+		/>
 		<input
 			bind:this={inputEl}
 			class="h-7 w-full rounded-full border border-border bg-bg-elevated pl-8 pr-7 text-xs text-text-primary placeholder:text-text-muted focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none"
@@ -149,9 +143,7 @@ function handleClear() {
 				onclick={handleClear}
 				aria-label="Clear search"
 			>
-				<svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="M18 6 6 18M6 6l12 12"/>
-				</svg>
+				<X class="h-3 w-3" />
 			</button>
 		{/if}
 	</div>

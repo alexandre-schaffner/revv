@@ -33,7 +33,6 @@ import type { McpServer } from "@agentclientprotocol/sdk";
 import type {
   AcpAgentId,
   RatingAxis,
-  UserSettings,
   WalkthroughBlock,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
@@ -53,6 +52,7 @@ import { debug, logError } from "../../logger";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
+import type { AcpLaunchConfig } from "../acp/presets";
 import {
   buildActivity,
   decodeAcpSessionUpdate,
@@ -64,7 +64,16 @@ import {
   withAgentTurn,
   ZERO_TOKEN_USAGE,
 } from "../agent-stream";
-import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "../prompts/walkthrough";
+import {
+  buildWalkthroughPrompt,
+  buildWalkthroughSystemPrompt,
+  type WalkthroughPromptHints,
+} from "../prompts/walkthrough";
+
+/** Avoid "Internal error.. Nothing had been written" when joining clauses. */
+function trimTrailingPeriod(message: string): string {
+  return message.replace(/\.\s*$/, "");
+}
 
 const WALKTHROUGH_MCP_SERVER = "revv-walkthrough";
 const ACP_CANCEL_GRACE_MS = 1_500;
@@ -116,7 +125,7 @@ export interface AcpWalkthroughDeps {
   unregisterActivityNotifier: (walkthroughId: string) => Promise<void>;
 }
 
-export interface AcpWalkthroughStreamParams {
+export interface AcpWalkthroughStreamParams extends WalkthroughPromptHints {
   walkthroughId: string;
   db: Db;
   pr: {
@@ -151,8 +160,7 @@ export interface AcpWalkthroughStreamParams {
  */
 export function streamWalkthroughViaAcp(
   params: AcpWalkthroughStreamParams,
-  model?: string,
-  settings?: UserSettings,
+  launch: AcpLaunchConfig,
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const events: WalkthroughStreamEvent[] = [];
   let waiter: { resolve: () => void } | null = null;
@@ -177,6 +185,8 @@ export function streamWalkthroughViaAcp(
   // The harness' timeout message, kept so the zero-content path can say WHY the
   // run produced nothing instead of blaming the PR's complexity.
   let timeoutReason: string | null = null;
+  /** Message from a non-abort mid-turn failure; surfaced only when the run committed nothing. */
+  let failureReason: string | null = null;
   // Liveness for the harness' idle deadline. Poked by BOTH signals that can
   // only come from a live agent: its own ACP session updates, and the MCP
   // content writes the route handlers push through the activity notifier. The
@@ -346,11 +356,7 @@ export function streamWalkthroughViaAcp(
     try {
       // Acquire the connection BEFORE `withAgentTurn` so `jobStarted`/`jobEnded`
       // /`abortSession` close over a live handle (the chat-acp ordering).
-      handle = await getAcpConnection(params.worktreePath, params.acpAgentId, {
-        model,
-        thinkingEffort: settings?.aiThinkingEffort,
-        contextWindow: settings?.aiContextWindow,
-      });
+      handle = await getAcpConnection(params.worktreePath, params.acpAgentId, launch);
       const h = handle;
       if (!h.httpMcpSupported) {
         // HTTP MCP is MANDATORY here (all content flows through it), unlike chat
@@ -431,7 +437,7 @@ export function streamWalkthroughViaAcp(
             "walkthrough-acp",
             `prompting session ${sessionId}`,
             "model:",
-            model ?? "(default)",
+            launch.model ?? "(default)",
           );
           const stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
 
@@ -464,6 +470,18 @@ export function streamWalkthroughViaAcp(
         return tokenUsage;
       }
       logError("walkthrough-acp", "queryTask error:", message);
+
+      // Same reasoning as the timeout above: a mid-turn failure here is the
+      // transport's fault, not a verdict on the review, and everything
+      // committed is already durable (invariant #1). Record the reason and
+      // let the tail read the DB — content persisted falls into
+      // auto-continuation, nothing written surfaces this as a terminal
+      // error. Abort is excluded: WalkthroughJobs.handleFailure already
+      // classifies deliberate cancel/supersede.
+      if (params.abortController?.signal.aborted !== true) {
+        failureReason = message;
+        return tokenUsage;
+      }
       if (!errorEmitted) {
         errorEmitted = true;
         push({ type: "error", data: { code: "AiGenerationError", message } });
@@ -524,7 +542,7 @@ export function streamWalkthroughViaAcp(
     // semantics owned by `withAgentTurn`). A timeout still consults the DB —
     // its whole point is to hand the committed partial to auto-continuation.
     let summaryPersisted = anySummaryEmitted;
-    if (!summaryPersisted && (!cancelled || timedOut)) {
+    if (!summaryPersisted && (!cancelled || timedOut || failureReason !== null)) {
       try {
         const row = params.db
           .select({ summary: walkthroughsTable.summary })
@@ -558,11 +576,16 @@ export function streamWalkthroughViaAcp(
               code: "AgentTimeout",
               message: `${timeoutReason}, and nothing had been written yet. Try regenerating.`,
             }
-          : {
-              code: "NoSummaryGenerated",
-              message:
-                "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
-            },
+          : failureReason
+            ? {
+                code: "AiGenerationError",
+                message: `${trimTrailingPeriod(failureReason)}. Nothing had been written yet. Try regenerating.`,
+              }
+            : {
+                code: "NoSummaryGenerated",
+                message:
+                  "The AI finished without producing a walkthrough. This can happen with complex PRs. Try regenerating.",
+              },
       };
     }
   })();

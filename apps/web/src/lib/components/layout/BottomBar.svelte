@@ -1,5 +1,5 @@
 <script lang="ts">
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import {
   Context,
   ContextCacheCreationUsage,
@@ -33,11 +33,11 @@ const syncError = $derived(getSyncError(selectedPrId));
 
 const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
 const usedTokens = $derived(usage.contextTokens);
-const contextWindow = $derived(getSettings()?.aiContextWindow ?? "200k");
 // `contextWindowTokens` is reported by the Claude Agent SDK only; codex and
-// opencode runs leave it unset and fall back to the configured window.
-const fallbackContextWindow = $derived(contextWindow === "1m" ? 1_000_000 : 200_000);
-const maxContext = $derived(usage.contextWindowTokens ?? fallbackContextWindow);
+// opencode runs leave it unset. Revv always runs at the full window, so the
+// fallback is a constant rather than a setting.
+const FALLBACK_CONTEXT_WINDOW = 1_000_000;
+const maxContext = $derived(usage.contextWindowTokens ?? FALLBACK_CONTEXT_WINDOW);
 const showUsage = $derived(selectedPrId !== null);
 
 let tick = $state(0);
@@ -105,16 +105,16 @@ function handleRetrySync() {
 				title="Sync comments for this PR"
 			>
 				{#if syncing}
-					<span class="flex items-center motion-essential-spin"><RefreshCw size={11} weight="fill" /></span>
+					<span class="flex items-center motion-essential-spin"><ArrowsClockwise size={11} /></span>
 					<span class="whitespace-nowrap">Syncing…</span>
 				{:else if syncError}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap text-danger">Sync failed</span>
 				{:else if lastSyncAt}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap">Synced {syncLabel}</span>
 				{:else}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap">Sync now</span>
 				{/if}
 			</button>

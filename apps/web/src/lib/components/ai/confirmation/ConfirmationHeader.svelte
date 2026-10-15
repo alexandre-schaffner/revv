@@ -9,7 +9,7 @@ export type ConfirmationHeaderProps = HTMLAttributes<HTMLDivElement> & {
 
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import ShieldQuestion from "phosphor-svelte/lib/Shield";
+import Shield from "phosphor-svelte/lib/Shield";
 
 	let {
 		title,
@@ -26,7 +26,7 @@ export type ConfirmationHeaderProps = HTMLAttributes<HTMLDivElement> & {
 	{...restProps}
 >
 	<div class="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
-		<ShieldQuestion class="size-4 text-muted-foreground" />
+		<Shield class="size-4 text-muted-foreground" />
 	</div>
 	<div class="min-w-0 flex-1">
 		<p class="text-sm font-medium text-foreground">{title}</p>

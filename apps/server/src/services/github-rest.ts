@@ -481,15 +481,22 @@ export function githubDelete(
   path: string,
   token: string,
   apiBase: string,
+  body?: Record<string, unknown>,
 ): Effect.Effect<unknown, GitHubError> {
   return Effect.tryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
-        {
-          method: "DELETE",
-          headers: githubHeaders(token),
-        },
+        body
+          ? {
+              method: "DELETE",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {
+              method: "DELETE",
+              headers: githubHeaders(token),
+            },
         path,
       );
       assertGitHubOk(res, path);
@@ -500,12 +507,74 @@ export function githubDelete(
   });
 }
 
-export function githubGraphql<T = unknown>(
+/**
+ * GET an endpoint that answers with a redirect to a short-lived download URL
+ * (Actions job logs) and return the target's body as text. The redirect is
+ * followed by hand so the GitHub token never travels to the storage host.
+ */
+export function githubFetchRedirectText(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<string, GitHubError> {
+  return Effect.withSpan("GitHub.fetchRedirectText", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          { headers: githubHeaders(token), redirect: "manual" },
+          path,
+        );
+        const location = res.headers.get("Location");
+        if (res.status >= 300 && res.status < 400 && location) {
+          const target = await githubHttpFetch(location, {}, path);
+          if (!target.ok) {
+            throw new GitHubApiError({
+              status: target.status,
+              cause: `HTTP ${target.status} for ${path} (download)`,
+            });
+          }
+          return target.text();
+        }
+        if (res.status === 410) {
+          throw new GitHubApiError({ status: 410, cause: `HTTP 410 for ${path}` });
+        }
+        assertGitHubOk(res, path);
+        return res.text();
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+/** One entry of a GraphQL response's `errors` array. */
+export interface GraphqlError {
+  readonly message: string;
+  readonly type?: string;
+  /** Where in `data` the failed field sits, e.g. `["repository", "pullRequest"]`. */
+  readonly path?: ReadonlyArray<string | number>;
+}
+
+interface GraphqlPayload<T> {
+  readonly data?: T | null;
+  readonly errors?: ReadonlyArray<GraphqlError>;
+}
+
+/**
+ * POST one GraphQL request and classify the answer. `tolerateErrors` decides
+ * what a 200 carrying `errors` means: a rejected query (the default), or an
+ * aliased query where one unreachable field shouldn't cost the others theirs.
+ * A `RATE_LIMITED` entry is a rate limit either way.
+ */
+function postGraphql<T>(
   query: string,
   variables: Record<string, unknown>,
   token: string,
   apiBase: string,
-): Effect.Effect<T, GitHubError> {
+  tolerateErrors: boolean,
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
   const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
   return Effect.withSpan("GitHub.graphql", {
     attributes: { operationName },
@@ -522,26 +591,153 @@ export function githubGraphql<T = unknown>(
           "/graphql",
         );
         assertGitHubOk(res, "/graphql");
-        const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+        const payload = (await res.json()) as GraphqlPayload<T>;
+        // GraphQL's primary limit answers 200 with a `RATE_LIMITED` error, not
+        // the 403 `assertGitHubOk` recognises. Classify it so callers pause
+        // GraphQL work until the reset instead of retrying into the wall.
+        // `resource: "graphql"` is load-bearing: GraphQL has its own budget,
+        // and callers must not read this as the REST budget running out.
+        if (payload.errors?.some((e) => e.type === "RATE_LIMITED")) {
+          const resetHeader = res.headers.get("X-RateLimit-Reset");
+          throw new GitHubRateLimitError({
+            resetAt: resetHeader ? new Date(Number(resetHeader) * 1000) : new Date(),
+            kind: "primary",
+            resource: "graphql",
+          });
+        }
         // A 200 carrying `errors` means GraphQL parsed and rejected the query
         // (unknown field, missing scope, node not visible). That verdict is
         // stable, so this must NOT be a retryable network error — otherwise
         // every such call costs 4 attempts and ~14s of backoff, which in the
         // sequential thread sweep stalls every PR behind it.
-        if (payload.errors && payload.errors.length > 0) {
+        if (!tolerateErrors && payload.errors && payload.errors.length > 0) {
           throw new GitHubApiError({
             status: res.status,
             cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
           });
         }
+        // A query GraphQL refused outright (an unknown field on an older GitHub
+        // Enterprise) answers with no `data` at all. Keep its messages: callers
+        // read them to tell a schema complaint from any other failure.
         if (!payload.data) {
-          throw new GitHubApiError({ status: res.status, cause: "GraphQL: empty data field" });
+          const messages = payload.errors?.map((e) => e.message).join("; ");
+          throw new GitHubApiError({
+            status: res.status,
+            cause: `GraphQL: ${messages || "empty data field"}`,
+          });
         }
-        return payload.data;
+        return { data: payload.data, errors: payload.errors ?? [] };
       },
       catch: toGitHubError,
     }),
   );
+}
+
+export function githubGraphql<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, false).pipe(Effect.map((r) => r.data));
+}
+
+/**
+ * {@link githubGraphql} for aliased queries: GitHub answers a field it can't
+ * resolve (repo renamed, access revoked) with `null` plus an `errors` entry,
+ * and that one field must not fail the rest. Callers treat a `null` alias as
+ * "unknown".
+ */
+export function githubGraphqlPartial<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true).pipe(Effect.map((r) => r.data));
+}
+
+/**
+ * {@link githubGraphqlPartial} that also hands back GitHub's `errors`, for
+ * callers that must tell which fields came back null and why: a GitHub App
+ * installation without `checks: read` gets `FORBIDDEN` on `statusCheckRollup`
+ * and nothing else, and "can't see the checks" must not read as "no checks".
+ */
+export function githubGraphqlWithErrors<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true);
+}
+
+/**
+ * Ask a GraphQL query that names fields an older GitHub Enterprise may lack.
+ * GraphQL rejects the whole query on one unknown field or enum value, so a
+ * refusal naming any of `modernTokens` earns one retry with `ask(false)`, the
+ * query without them. Anything else (auth, rate limit, network) is answered
+ * the same way by both shapes, so it fails as is. Reports which shape
+ * answered, for follow-up queries that must match it.
+ */
+export function withSchemaFallback<A, R>(
+  ask: (modern: boolean) => Effect.Effect<A, GitHubError, R>,
+  modernTokens: readonly string[],
+): Effect.Effect<{ readonly value: A; readonly modern: boolean }, GitHubError, R> {
+  return ask(true).pipe(
+    Effect.map((value) => ({ value, modern: true })),
+    Effect.catchAll((err) =>
+      err instanceof GitHubApiError &&
+      modernTokens.some((token) => String(err.cause).includes(token))
+        ? ask(false).pipe(Effect.map((value) => ({ value, modern: false })))
+        : Effect.fail(err),
+    ),
+  );
+}
+
+/** One page of a GraphQL connection, as selected out of a query's response. */
+export interface GraphqlConnection<N> {
+  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  readonly nodes: ReadonlyArray<N | null>;
+}
+
+/**
+ * Walk a cursor-paginated GraphQL connection. The query must declare a
+ * `$cursor: String` variable and pass it as the connection's `after`.
+ *
+ * `selectConnection` returning nothing means the parent node isn't there (repo
+ * or PR not visible to the token) and fails with `notFound()`, rather than
+ * passing for an empty list.
+ */
+export function paginateGraphql<T, N>(opts: {
+  readonly query: string;
+  readonly variables: Record<string, unknown>;
+  readonly selectConnection: (data: T) => GraphqlConnection<N> | null | undefined;
+  readonly maxPages: number;
+  readonly token: string;
+  readonly apiBase: string;
+  readonly notFound: () => GitHubError;
+}): Effect.Effect<N[], GitHubError> {
+  return Effect.gen(function* () {
+    const out: N[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < opts.maxPages; page++) {
+      const data: T = yield* githubGraphql<T>(
+        opts.query,
+        { ...opts.variables, cursor },
+        opts.token,
+        opts.apiBase,
+      );
+      const connection = opts.selectConnection(data);
+      if (!connection) return yield* Effect.fail(opts.notFound());
+      for (const node of connection.nodes) {
+        if (node !== null) out.push(node);
+      }
+      if (!connection.pageInfo.hasNextPage) break;
+      cursor = connection.pageInfo.endCursor;
+    }
+    return out;
+  });
 }
 
 export function parseLinkNext(linkHeader: string | null): string | null {

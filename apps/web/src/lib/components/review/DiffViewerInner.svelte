@@ -20,10 +20,16 @@ import {
   isInLineCursorMode,
   setTotalLineCount,
 } from "$lib/stores/focus-mode.svelte";
-import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review.svelte";
+import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
+import {
+  clearPendingDiffJump,
+  getLoadedHeadSha,
+  getPendingDiffJump,
+} from "$lib/stores/review.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
 import { cleanupAllMounted, mountInto, pruneDetachedMounts } from "$lib/utils/annotation-mount";
 import { countPatchLines } from "$lib/utils/count-patch-lines";
+import { phosphorMarkup } from "$lib/utils/phosphor-markup";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import {
@@ -36,9 +42,11 @@ import {
   createDiffsHost,
   createHeaderBadge,
   createPierreVirtualizer,
+  firstPassGutterCss,
   getPierreShadowRoot,
   PIERRE_BASE_CSS,
   populateDiffHeaderSlots,
+  ShadowSheet,
   type ThreadMeta,
 } from "./pierre-diff-adapter";
 
@@ -54,8 +62,12 @@ export interface TokenHoverInfo {
 // ── Props ─────────────────────────────────────────────────────────────────
 
 interface Props {
+  /** The PR the diff belongs to, for its first pass. */
+  prId: string;
   file: ReviewFile;
   mode: "unified" | "split";
+  /** Soft-wrap long lines instead of scrolling. Read once at mount; the parent re-keys on change. */
+  wrap: boolean;
   annotations: DiffLineAnnotation<ThreadMeta>[];
   /** Map from threadId → messages, for expanded thread rendering */
   threadMessages: Record<string, ThreadMessage[]>;
@@ -82,8 +94,10 @@ interface Props {
 }
 
 let {
+  prId,
   file,
   mode,
+  wrap,
   annotations,
   threadMessages,
   threadById,
@@ -109,16 +123,15 @@ let {
 // The library's callbacks must return light-DOM Elements.  These helpers keep
 // the option-object readable by separating construction from composition.
 
-const SVG_UNIFIED = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3.5" y1="4.5" x2="12.5" y2="4.5"/><line x1="3.5" y1="8" x2="12.5" y2="8"/><line x1="3.5" y1="11.5" x2="12.5" y2="11.5"/></svg>`;
-const SVG_SPLIT = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>`;
-
 function buildViewModePill(
   currentMode: "unified" | "split",
   onChange: ((mode: "unified" | "split") => void) | undefined,
 ): HTMLElement {
-  function makeBtn(svg: string, label: string, active: boolean): HTMLElement {
+  // `fill` is the active half of the pair, matching the app-wide rule that
+  // weight carries state (see the IconContext in routes/+layout.svelte).
+  function makeBtn(icon: "Rows" | "Columns", label: string, active: boolean): HTMLElement {
     const btn = document.createElement("div");
-    btn.innerHTML = svg;
+    btn.innerHTML = phosphorMarkup(icon, { weight: active ? "fill" : "regular" });
     btn.title = label;
     btn.setAttribute("role", "button");
     btn.setAttribute("aria-label", label);
@@ -129,8 +142,8 @@ function buildViewModePill(
   const pill = document.createElement("div");
   pill.dataset.viewPill = "";
 
-  const unifiedBtn = makeBtn(SVG_UNIFIED, "Unified view", currentMode === "unified");
-  const splitBtn = makeBtn(SVG_SPLIT, "Split view", currentMode === "split");
+  const unifiedBtn = makeBtn("Rows", "Unified view", currentMode === "unified");
+  const splitBtn = makeBtn("Columns", "Split view", currentMode === "split");
 
   unifiedBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -156,9 +169,9 @@ let wrapperEl: HTMLDivElement | null = null;
 let instance = $state.raw<FileDiff<ThreadMeta> | VirtualizedFileDiff<ThreadMeta> | null>(null);
 let error = $state<string | null>(null);
 /** Reference to the original options object for setOptions() merging. */
-let initialOptions: FileDiffOptions<ThreadMeta> | null = null;
+let initialOptions: FileDiffOptions<ThreadMeta, undefined> | null = null;
 let virtualizer = $state.raw<ReturnType<typeof createPierreVirtualizer> | null>(null);
-let parsedFileDiff: FileDiffMetadata | null = null;
+let parsedFileDiff = $state.raw<FileDiffMetadata | null>(null);
 /**
  * Last annotations reference that has been applied to the FileDiff instance
  * — either by the initial render()/hydrate() in onMount, or by the
@@ -238,9 +251,13 @@ function getElementTopInScrollRoot(element: HTMLElement): number {
 }
 
 function estimateDiffLineOffset(fileDiff: FileDiffMetadata, lineIndex: number): number {
-  const { diffHeaderHeight, fileGap, hunkSeparatorHeight, lineHeight } =
-    DEFAULT_VIRTUAL_FILE_METRICS;
-  const separatorGap = fileGap;
+  const {
+    diffHeaderHeight,
+    spacing,
+    hunkSeparatorHeight = 32,
+    lineHeight,
+  } = DEFAULT_VIRTUAL_FILE_METRICS;
+  const separatorGap = spacing;
   let separatorOffset = 0;
 
   for (const [hunkIndex, hunk] of fileDiff.hunks.entries()) {
@@ -392,6 +409,32 @@ $effect(() => {
   pruneDetachedMounts();
 });
 
+// ── First-pass gutter bars ────────────────────────────────────────────────
+// On their own stylesheet, so a cursor move never re-parses them and a scan
+// event never touches the cursor CSS. A string derived: scan events that leave
+// this file's flags alone compare equal and don't re-apply it. Read for the
+// head this diff was loaded at.
+const firstPassCss = $derived(
+  firstPassGutterCss(parsedFileDiff, getHunkScanForFile(prId, getLoadedHeadSha(prId), file.path)),
+);
+const firstPassSheet = new ShadowSheet();
+
+$effect(() => {
+  if (!instance) return;
+  firstPassSheet.apply(getShadowRoot(), firstPassCss);
+});
+
+/**
+ * `setOptions` only stores the CSS; Pierre injects it on its next render. Inject
+ * now so a highlight doesn't wait for a scroll to appear.
+ */
+function applyUnsafeCss(css: string): void {
+  if (!instance || !initialOptions) return;
+  instance.setOptions({ ...initialOptions, unsafeCSS: css });
+  // @ts-expect-error injectUnsafeCSS is protected
+  instance.injectUnsafeCSS?.();
+}
+
 // ── Line cursor highlight (diff-line mode) ────────────────────────────────
 $effect(() => {
   if (!instance || !initialOptions) return;
@@ -399,12 +442,13 @@ $effect(() => {
   const lineIdx = getCursorLineIndex();
 
   if (panel === "diff-line") {
-    const css = `${PIERRE_BASE_CSS} [data-line-index="${lineIdx}"] { background-color: var(--color-tree-active-bg) !important; outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); outline-offset: -1px; }`;
-    instance.setOptions({ ...initialOptions, unsafeCSS: css });
+    applyUnsafeCss(
+      `${PIERRE_BASE_CSS} [data-line-index="${lineIdx}"] { background-color: var(--color-tree-active-bg) !important; outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); outline-offset: -1px; }`,
+    );
   } else if (panel !== "diff-visual") {
     // Clear highlight when not in line/visual mode
     // (visual mode uses setSelectedLines instead)
-    instance.setOptions({ ...initialOptions, unsafeCSS: PIERRE_BASE_CSS });
+    applyUnsafeCss(PIERRE_BASE_CSS);
   }
 });
 
@@ -454,9 +498,7 @@ $effect(() => {
 
     instance.setSelectedLines(range);
     // Clear unsafeCSS line highlight — selection replaces it
-    if (initialOptions) {
-      instance.setOptions({ ...initialOptions, unsafeCSS: PIERRE_BASE_CSS });
-    }
+    applyUnsafeCss(PIERRE_BASE_CSS);
   } else {
     // Clear selection when leaving visual mode
     instance.setSelectedLines(null);
@@ -469,9 +511,10 @@ onMount(() => {
   if (!wrapperEl) return;
 
   try {
-    const options: FileDiffOptions<ThreadMeta> = {
+    const options: FileDiffOptions<ThreadMeta, undefined> = {
       ...PR_DIFF_RENDER_OPTIONS,
       diffStyle: mode,
+      overflow: wrap ? "wrap" : "scroll",
       theme: PIERRE_THEME,
       enableGutterUtility: true,
       enableLineSelection: true,
@@ -626,7 +669,8 @@ onMount(() => {
     // populate the header slots after hydrate using the exported slot
     // IDs — Pierre's shadow DOM has `<slot name="...">` placeholders
     // that project these light-DOM children.
-    if (file.prerenderedHtml !== undefined && mode === "unified") {
+    // The prerendered HTML is laid out for `overflow: scroll`, so wrap skips it too.
+    if (file.prerenderedHtml !== undefined && mode === "unified" && !wrap) {
       instance = new FileDiff<ThreadMeta>(options, workerManager);
       // Match the render() DOM structure: a <diffs-container> custom element
       // as the shadow host inside wrapperEl. The tag name matters — app.css

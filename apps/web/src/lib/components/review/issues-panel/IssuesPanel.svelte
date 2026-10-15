@@ -15,6 +15,8 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { SvelteMap } from "svelte/reactivity";
+import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
 import IssueSummaryBar from "./IssueSummaryBar.svelte";
@@ -22,7 +24,9 @@ import IssueTestRow from "./IssueTestRow.svelte";
 
 interface Props {
   issues: readonly WalkthroughIssue[];
-  /** Selected-for-submit set — lives in RequestChanges so it survives
+  /** Issues rated low signal. Read-only, behind a disclosure, outside the selection model — select-all must never post something the reader didn't see. */
+  filteredIssues?: readonly WalkthroughIssue[];
+  /** Selected-for-submit set — lives in YourReview so it survives
    *  remounts and persists across PR switches. Passed in so this
    *  panel stays stateless w.r.t. that data. */
   selectedIds: Set<string>;
@@ -37,6 +41,7 @@ interface Props {
 
 let {
   issues,
+  filteredIssues = [],
   selectedIds,
   submittedIds,
   onToggleSelect,
@@ -56,6 +61,10 @@ const sortedIssues = $derived(
   groupIssuesBySeverityWithIndex(issues).flatMap((g) => g.issues.map((gi) => gi.issue)),
 );
 
+function isResolved(issue: WalkthroughIssue): boolean {
+  return issue.resolutionStatus === "addressed" || issue.resolutionStatus === "wont_fix";
+}
+
 const counts = $derived.by(() => {
   let critical = 0;
   let warning = 0;
@@ -66,14 +75,15 @@ const counts = $derived.by(() => {
     if (issue.severity === "critical") critical++;
     else if (issue.severity === "warning") warning++;
     else info++;
-    if (selectedIds.has(issue.id)) selected++;
-    if (!submittedIds.has(issue.id)) submittable++;
+    if (!isResolved(issue) && selectedIds.has(issue.id)) selected++;
+    if (!submittedIds.has(issue.id) && !isResolved(issue)) submittable++;
   }
   return { critical, warning, info, total: issues.length, selected, submittable };
 });
 
 const allSelected = $derived(
-  counts.submittable > 0 && issues.every((i) => submittedIds.has(i.id) || selectedIds.has(i.id)),
+  counts.submittable > 0 &&
+    issues.every((i) => isResolved(i) || submittedIds.has(i.id) || selectedIds.has(i.id)),
 );
 
 // ── Expand / collapse state (tri-state) ──────────────────
@@ -125,7 +135,7 @@ const visibleIssues = $derived.by(() => {
     list = list.filter((i) => i.severity === "critical");
   }
   if (onlyUnselected) {
-    list = list.filter((i) => !selectedIds.has(i.id) && !submittedIds.has(i.id));
+    list = list.filter((i) => !isResolved(i) && !selectedIds.has(i.id) && !submittedIds.has(i.id));
   }
   return list;
 });
@@ -135,7 +145,7 @@ const visibleIssues = $derived.by(() => {
 // Non-reactive ref map — rows push their trigger elements in via a
 // callback prop on mount, null out on unmount. Plain Map because we
 // only read from keyboard handlers (no templating over it).
-const rowRefs = new Map<string, HTMLElement | null>();
+const rowRefs = new SvelteMap<string, HTMLElement | null>();
 
 function setRowRef(id: string, el: HTMLElement | null): void {
   if (el) rowRefs.set(id, el);
@@ -148,7 +158,9 @@ function focusIssue(id: string): void {
 }
 
 function focusableIssues(): WalkthroughIssue[] {
-  return visibleIssues.filter((issue) => !submittedIds.has(issue.id) && rowRefs.get(issue.id));
+  return visibleIssues.filter(
+    (issue) => !isResolved(issue) && !submittedIds.has(issue.id) && rowRefs.get(issue.id),
+  );
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
@@ -182,7 +194,8 @@ function onPanelKeydown(e: KeyboardEvent): void {
     // `x` toggles selection for the focused row — mirrors vim-style
     // mark keys. Space already triggers the Collapsible by default,
     // so we avoid hijacking it.
-    if (!submittedIds.has(focusedId)) {
+    const focusedIssue = visibleIssues.find((issue) => issue.id === focusedId);
+    if (focusedIssue && !isResolved(focusedIssue) && !submittedIds.has(focusedId)) {
       e.preventDefault();
       onToggleSelect(focusedId);
     }
@@ -209,7 +222,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
 }
 </script>
 
-{#if issues.length > 0}
+{#if issues.length > 0 || filteredIssues.length > 0}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section
         class="issues-panel"
@@ -244,7 +257,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
                 {#each visibleIssues as issue, i (issue.id)}
                     <IssueTestRow
                         {issue}
-                        selected={selectedIds.has(issue.id)}
+                        selected={selectedIds.has(issue.id) && !isResolved(issue)}
                         submitted={submittedIds.has(issue.id)}
                         open={isRowOpen(issue.id)}
                         index={i}
@@ -258,6 +271,29 @@ function onPanelKeydown(e: KeyboardEvent): void {
                 {/each}
             </div>
         {/if}
+
+        {#if filteredIssues.length > 0}
+            <div class="low-signal-slot">
+                <LowSignalDisclosure count={filteredIssues.length}>
+                    <div class="issue-rows" role="list">
+                        {#each filteredIssues as issue, i (issue.id)}
+                            <IssueTestRow
+                                {issue}
+                                selected={false}
+                                submitted={true}
+                                open={isRowOpen(issue.id)}
+                                index={i}
+                                onToggleSelect={() => {}}
+                                onToggleOpen={() => toggleRow(issue.id)}
+                                {onFileClick}
+                                {blocks}
+                                {onBlockJump}
+                            />
+                        {/each}
+                    </div>
+                </LowSignalDisclosure>
+            </div>
+        {/if}
     </section>
 {:else}
     <section class="issues-panel issues-panel--empty" aria-label="Walkthrough issues">
@@ -266,6 +302,11 @@ function onPanelKeydown(e: KeyboardEvent): void {
 {/if}
 
 <style>
+    .low-signal-slot {
+        border-top: 1px solid var(--color-border);
+        padding: 4px 6px 6px;
+    }
+
     .issues-panel {
         display: flex;
         flex-direction: column;

@@ -1,6 +1,6 @@
 <script lang="ts">
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
-import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
+import Folder from "phosphor-svelte/lib/Folder";
 import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
@@ -313,7 +313,7 @@ function handleKeydown(e: KeyboardEvent) {
 				in:gsapFade={{ duration: tokens.smooth }}
 				out:gsapFade={{ duration: tokens.snap }}
 			>
-				<ChevronLeft size={14} class="back-chevron" />
+				<CaretLeft size={14} class="back-chevron" />
 				{#if filesViewRepo}
 					<RepoGradientAvatar
 						fullName={filesViewRepo.fullName}
@@ -371,7 +371,7 @@ function handleKeydown(e: KeyboardEvent) {
 					<ProjectArchiveList repoId={displayRepo.id} />
 				{:else if !hasRepos}
 					<div class="empty-state">
-						<GitPullRequestCreateArrow size={28} class="empty-icon" aria-hidden="true" />
+						<Folder size={28} class="empty-icon" aria-hidden="true" />
 						<p class="empty-text">No repositories added yet</p>
 						<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
 							<Plus size={11} aria-hidden="true" />

@@ -43,6 +43,7 @@ import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
 import {
+  chatSessionModel,
   discardAgentCommits,
   fetchWalkthroughContext,
   resolveChatTurnContext,
@@ -377,18 +378,19 @@ export const chatRoute = new Elysia()
               interactionMode: effectiveMode,
             });
 
-            // Mark this PR as streaming so a concurrent push attempt
-            // is refused (the agent might write to the worktree at
-            // any moment, which would race with the push's
-            // `git checkout` / `git merge`).
-            chatPush.markChatStreaming(pr.id, true);
+            // Claim the PR's worktree for this turn so a concurrent push is
+            // refused (the agent might write to the worktree at any moment,
+            // which would race with the push's `git checkout` / `git merge`).
+            // The lease is handed to the stream below, which re-arms it per
+            // frame and drops it on every exit path.
+            const lease = chatPush.beginChatStream(pr.id);
 
             return {
               kind: "ok" as const,
               frameStream,
               chatSessionId: chatSessionRow.id,
               turnId,
-              prId: pr.id,
+              lease,
             };
           }),
         );
@@ -428,20 +430,26 @@ export const chatRoute = new Elysia()
           agent: "acp",
         });
 
-        // Wrap the persisted stream so we clear the streaming flag
-        // when the SSE consumer finishes — success, error, or client
-        // disconnect.
-        const streamingPrId = prepared.prId;
-        const flagClearingStream = new ReadableStream<ChatStreamFrame>({
+        // Wrap the persisted stream so the worktree lease is re-armed by the
+        // turn's own output and dropped when the SSE consumer finishes —
+        // success, error, or client disconnect.
+        //
+        // `release()` is a plain synchronous call on the lease the turn was
+        // handed. It used to re-resolve the service through
+        // `AppRuntime.runPromise` inside a `catch {}`, so the one cleanup that
+        // mattered could fail without a trace; and since the lease now expires
+        // on its own, even a release that never runs stops being permanent.
+        const { lease } = prepared;
+        const reader = persistedStream.getReader();
+        const leasedStream = new ReadableStream<ChatStreamFrame>({
           async start(controller) {
-            const reader = persistedStream.getReader();
             // Span over the turn's token stream, carrying time-to-first-token
             // (first text/reasoning frame). Ai.chat's own span only covers
             // setup and has already ended by the time frames are pulled.
             const span = trace.getTracer("revv-server").startSpan("Chat.stream", {
               // All chat runs on the ACP transport now; the specific registry
               // agent is a launch detail, so the transport is the provider.
-              attributes: { prId: prepared.prId, provider: "acp" },
+              attributes: { prId: ctx.body.prId, provider: "acp" },
             });
             const streamStartMs = Date.now();
             let ttftRecorded = false;
@@ -453,6 +461,7 @@ export const chatRoute = new Elysia()
                   ttftRecorded = true;
                   span.setAttribute("ttft_ms", Date.now() - streamStartMs);
                 }
+                lease.touch();
                 controller.enqueue(value);
               }
               controller.close();
@@ -461,20 +470,19 @@ export const chatRoute = new Elysia()
               controller.error(err);
             } finally {
               span.end();
-              try {
-                await AppRuntime.runPromise(
-                  Effect.flatMap(ChatChangesPushService, (svc) =>
-                    Effect.sync(() => svc.markChatStreaming(streamingPrId, false)),
-                  ),
-                );
-              } catch {
-                /* never throw from streaming-flag cleanup */
-              }
+              lease.release();
             }
+          },
+          async cancel(reason) {
+            // The consumer went away (client disconnect). Tear the turn's
+            // stream down rather than leaving `start`'s loop pulling frames
+            // into a controller nobody reads.
+            lease.release();
+            await reader.cancel(reason).catch(() => {});
           },
         });
 
-        return new Response(chatStreamToSSE<ChatStreamFrame>(flagClearingStream), {
+        return new Response(chatStreamToSSE<ChatStreamFrame>(leasedStream), {
           headers: {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -548,7 +556,12 @@ export const chatRoute = new Elysia()
             // Resolve the chat session for the *current* head SHA
             // only. Older SHAs are dormant — the user has moved on
             // and a fresh PR commit creates a fresh session row.
-            const row = yield* chatSessions.find(pr.id, agent, settings.aiModel, pr.headSha);
+            const row = yield* chatSessions.find(
+              pr.id,
+              agent,
+              chatSessionModel(agent, settings.aiModel),
+              pr.headSha,
+            );
             if (!row) return null;
 
             const timeline = yield* chatSessions.listTimeline(row.id);
@@ -591,11 +604,12 @@ export const chatRoute = new Elysia()
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const agent = yield* settingsService.resolveChatAgentId();
 
-            // Capture the active worktree before dropping rows so we
-            // can rewind it to the PR head SHA below — clearing the
-            // conversation also discards any unpushed agent commits
-            // the user accumulated during this session.
-            const activeRow = yield* chatSessions.findLatestForPr(pr.id, agent);
+            // Capture the active worktree and its resolved baseline before
+            // dropping rows, so we can rewind it below — clearing the
+            // conversation also discards any unpushed agent commits the user
+            // accumulated during this session. Resolving the baseline has to
+            // happen BEFORE `clearAllForPr`, since it reads the row.
+            const active = yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
 
             // Drop every chat-session row for (pr, agent). The
             // per-PR worktree itself stays put — it's shared with
@@ -603,15 +617,20 @@ export const chatRoute = new Elysia()
             // sessions, refreshed in place on the next acquire.
             yield* chatSessions.clearAllForPr(pr.id, agent);
 
-            return activeRow;
+            return active;
           }),
         );
 
-        if (latest && existsSync(latest.worktreePath)) {
+        if (latest && existsSync(latest.row.worktreePath)) {
+          // Rewind to the head the branch is actually built on, not the one
+          // the session was created at — those diverge as soon as the PR head
+          // moves, and resetting to a stale session baseline rewinds the
+          // worktree to a commit the PR left behind. Same baseline the
+          // proposed-changes strip and the push path use.
           await discardAgentCommits({
-            worktreePath: latest.worktreePath,
-            branchName: latest.branchName,
-            prHeadSha: latest.prHeadSha,
+            worktreePath: latest.row.worktreePath,
+            branchName: latest.row.branchName,
+            prHeadSha: latest.baseSha,
           });
         }
 

@@ -7,10 +7,12 @@ import type {
   Team,
   ThreadSummary,
 } from "@revv/shared";
-import { REVIEW_MODE, type ReviewMode } from "@revv/shared";
+import { type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
+import { reasonFor } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin, hasAttemptedIdentityLoad } from "$lib/stores/auth.svelte";
 
 import { setBatchSummaries } from "$lib/stores/sync.svelte";
@@ -56,7 +58,18 @@ let isLoading = $state(false);
 // "this PR isn't in the list yet" from "this PR isn't in the list at all"
 // without waiting forever on a row that will never arrive.
 let prsFetchAttempted = $state(false);
+// Same contract as `prsFetchAttempted`, for the repo list. The `/` feed needs
+// it to tell "no repos synced yet" (show the onboarding hero) from "repos
+// haven't landed yet" (show nothing), which are the same empty array.
+let reposFetchAttempted = $state(false);
 let archivedPrs = $state<PullRequest[]>([]);
+// PRs resolved one at a time by a `revv://` link, kept apart from the list
+// reads so a list replacement can't drop them. A stale `fetchPrs()` (the window
+// focus the link itself triggers fires one alongside `resolve-link`) or a
+// first-page-only archived read would otherwise remove the row the review page
+// is showing, leaving it on "Loading…" for good. The lists stay authoritative:
+// a row there always wins over the copy held here.
+let linkedPrs = $state<Map<string, PullRequest>>(new Map());
 // Cursor for the next page of archived PRs. Null = exhausted or never
 // fetched. Updated by `fetchArchivedPrs` (replaces the list, sets cursor
 // from the first page) and `fetchMoreArchived` (appends, advances cursor).
@@ -64,10 +77,6 @@ let archivedNextCursor = $state<string | null>(null);
 // True while a `fetchMoreArchived` request is in flight, so the sidebar
 // can disable the "show more" affordance and show a spinner.
 let archivedLoadingMore = $state(false);
-// Tagged PRs per repo (requested reviewer, @-mentioned, or authored by the
-// current user). Populated by `fetchTaggedPrs` — used by the repo homepage.
-let taggedPrsByRepo = $state<Map<string, PullRequest[]>>(new Map());
-let taggedPrsLoadingByRepo = $state<Map<string, boolean>>(new Map());
 // Set of PR ids pinned by the current user. Fetched once at login and
 // kept in sync via local optimistic updates.
 let pinnedPrIds = $state<Set<string>>(new Set());
@@ -76,7 +85,6 @@ interface RepoDeleteSnapshot {
   readonly repositories: Repository[];
   readonly pullRequests: PullRequest[];
   readonly archivedPrs: PullRequest[];
-  readonly taggedPrsByRepo: Map<string, PullRequest[]>;
   readonly pinnedPrIds: Set<string>;
 }
 
@@ -131,11 +139,7 @@ const needsYourReviewByRepo = $derived(Map.groupBy(needsYourReview, (pr) => pr.r
 
 const archivedByRepo = $derived(Map.groupBy(archivedPrs, (pr) => pr.repositoryId));
 
-const selectedPr = $derived(
-  pullRequests.find((pr) => pr.id === selectedPrId) ??
-    archivedPrs.find((pr) => pr.id === selectedPrId) ??
-    null,
-);
+const selectedPr = $derived(selectedPrId ? getPrById(selectedPrId) : null);
 
 const selectedRepo = $derived(
   selectedRepoId ? (repositories.find((r) => r.id === selectedRepoId) ?? null) : null,
@@ -239,19 +243,34 @@ export function getSelectedPr(): PullRequest | null {
 }
 
 /**
+ * Look a PR up by id across *both* lists. Open PRs live in `pullRequests`
+ * and closed/merged ones move to `archivedPrs`, so any caller that searches
+ * only the open list silently stops finding a PR the moment it merges —
+ * which is how the review page ended up unable to restamp the pulled head
+ * SHA for a merged PR.
+ */
+export function getPrById(prId: string): PullRequest | null {
+  return (
+    pullRequests.find((p) => p.id === prId) ??
+    archivedPrs.find((p) => p.id === prId) ??
+    linkedPrs.get(prId) ??
+    null
+  );
+}
+
+/**
  * The review lens for a PR, derived purely from identity: `"author"` when the
  * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
- * source of truth — there is no manual override. (The server still stores an
- * author walkthrough and a reviewer walkthrough separately per head SHA; we
- * always request the one that matches the viewer's role.)
+ * source of truth for the review session — there is no manual override. It is
+ * also the default walkthrough perspective, which the user can change per
+ * generation (`getSelectedMode` in the walkthrough store).
  */
 export function getReviewModeForPr(prId: string): ReviewMode {
-  const pr =
-    pullRequests.find((p) => p.id === prId) ?? archivedPrs.find((p) => p.id === prId) ?? null;
-  const login = getCurrentUserLogin();
-  return pr?.authorLogin && login && pr.authorLogin === login
-    ? REVIEW_MODE.author
-    : REVIEW_MODE.reviewer;
+  const pr = getPrById(prId);
+  // Shared with the server's `resolveReviewModeForPr` — see `reviewModeFor`.
+  // Sessions are keyed on `(pullRequestId, mode)`, so the two must never
+  // disagree, including on login casing.
+  return reviewModeFor(pr?.authorLogin, getCurrentUserLogin());
 }
 
 /**
@@ -270,36 +289,43 @@ export function getReviewModeForPr(prId: string): ReviewMode {
  */
 export function isReviewModeResolved(prId: string): boolean {
   if (!hasAttemptedIdentityLoad()) return false;
-  if (pullRequests.some((p) => p.id === prId) || archivedPrs.some((p) => p.id === prId)) {
-    return true;
-  }
+  if (getPrById(prId)) return true;
   // The row may never arrive — a deep link can point at a PR outside the
   // synced set. Once the list fetch has settled, "reviewer" is the real
   // answer rather than a placeholder, so callers must not keep waiting.
   return prsFetchAttempted;
 }
 
+/**
+ * PRs the current user is involved in, grouped by repo — the repo homepage's
+ * "needs your attention" table.
+ *
+ * Derived from the raw open-PR list rather than fetched, so it rides the same
+ * `prs:updated` SSE reconcile as everything else and can never go stale. It
+ * reads `pullRequests`, *not* `filteredPrs`: the sidebar's search box and
+ * creator chips must not silently prune the homepage table.
+ */
+const taggedByRepo = $derived.by((): Map<string, PullRequest[]> => {
+  const login = getCurrentUserLogin();
+  if (!login) return new Map();
+  const tagged = pullRequests.filter((pr) => reasonFor(pr, login) !== null);
+  return Map.groupBy(tagged, (pr) => pr.repositoryId);
+});
+
 export function getTaggedPrs(repoId: string): PullRequest[] {
-  return taggedPrsByRepo.get(repoId) ?? [];
+  return taggedByRepo.get(repoId) ?? [];
 }
 
-export function getTaggedPrsLoading(repoId: string): boolean {
-  return taggedPrsLoadingByRepo.get(repoId) ?? false;
-}
-
-export async function fetchTaggedPrs(repoId: string): Promise<void> {
-  if (taggedPrsLoadingByRepo.get(repoId)) return;
-  taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, true);
-  try {
-    const { data } = await api.api.prs.tagged.get({ query: { repo: repoId } });
-    if (data) {
-      taggedPrsByRepo = new Map(taggedPrsByRepo).set(repoId, data as PullRequest[]);
-    }
-  } catch {
-    // best-effort
-  } finally {
-    taggedPrsLoadingByRepo = new Map(taggedPrsLoadingByRepo).set(repoId, false);
-  }
+/**
+ * Whether {@link getTaggedPrs} is answering from real data yet.
+ *
+ * The tagged set needs both the PR list *and* the viewer's GitHub login, so
+ * an empty result before either lands is "unknown", not "nothing to do".
+ * Callers must gate their empty state on this or they flash a false
+ * "nothing needs your attention" on every cold start.
+ */
+export function getTaggedPrsResolved(): boolean {
+  return hasAttemptedIdentityLoad() && prsFetchAttempted;
 }
 
 /**
@@ -315,6 +341,22 @@ export function replacePullRequests(incoming: PullRequest[]): void {
   archivedPrs = archivedPrs.filter((pr) => !openIds.has(pr.id));
 }
 
+/** Merge a targeted deep-link result before navigation mounts the review page. */
+export function upsertPullRequest(pullRequest: PullRequest): void {
+  const nextLinked = new Map(linkedPrs);
+  nextLinked.set(pullRequest.id, pullRequest);
+  linkedPrs = nextLinked;
+  const nextOpen = pullRequests.filter((item) => item.id !== pullRequest.id);
+  const nextArchived = archivedPrs.filter((item) => item.id !== pullRequest.id);
+  if (pullRequest.status === "open") {
+    pullRequests = [pullRequest, ...nextOpen];
+    archivedPrs = nextArchived;
+  } else {
+    pullRequests = nextOpen;
+    archivedPrs = [pullRequest, ...nextArchived];
+  }
+}
+
 let repositoryLoadSeq = 0;
 
 export async function setRepositories(repos: Repository[]): Promise<void> {
@@ -328,7 +370,6 @@ function snapshotRepoState(): RepoDeleteSnapshot {
     repositories,
     pullRequests,
     archivedPrs,
-    taggedPrsByRepo,
     pinnedPrIds,
   };
 }
@@ -338,7 +379,6 @@ function restoreRepoState(snapshot: RepoDeleteSnapshot): void {
   void preloadOwnerHues(repositories);
   pullRequests = snapshot.pullRequests;
   archivedPrs = snapshot.archivedPrs;
-  taggedPrsByRepo = snapshot.taggedPrsByRepo;
   pinnedPrIds = snapshot.pinnedPrIds;
 }
 
@@ -350,10 +390,6 @@ function removeRepoLocally(repoId: string): void {
   repositories = repositories.filter((repo) => repo.id !== repoId);
   pullRequests = pullRequests.filter((pr) => pr.repositoryId !== repoId);
   archivedPrs = archivedPrs.filter((pr) => pr.repositoryId !== repoId);
-
-  const nextTagged = new Map(taggedPrsByRepo);
-  nextTagged.delete(repoId);
-  taggedPrsByRepo = nextTagged;
 
   if (removedPrIds.size > 0) {
     pinnedPrIds = new Set([...pinnedPrIds].filter((prId) => !removedPrIds.has(prId)));
@@ -581,6 +617,8 @@ export async function fetchRepos(): Promise<void> {
     if (data) await setRepositories(data as Repository[]);
   } catch {
     // error handled by caller
+  } finally {
+    reposFetchAttempted = true;
   }
 }
 
@@ -701,12 +739,34 @@ function toAddRepoBody(input: AddRepoInput): AddRepoBody {
   return input;
 }
 
+/**
+ * A rejected add, carrying the server's diagnosis: why GitHub couldn't see
+ * the repo and, when known, the page that grants access.
+ */
+export class AddRepoError extends Error {
+  constructor(
+    message: string,
+    readonly detail: string | null,
+    readonly action: { readonly label: string; readonly url: string } | null,
+  ) {
+    super(message);
+    this.name = "AddRepoError";
+  }
+}
+
 export async function addRepo(input: AddRepoInput): Promise<void> {
   const { error } = await api.api.repos.post(toAddRepoBody(input));
   if (error) {
-    const value = error.value as { error?: string; message?: string } | undefined;
+    const value = error.value as
+      | {
+          error?: string;
+          message?: string;
+          detail?: string;
+          action?: { label: string; url: string };
+        }
+      | undefined;
     const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
-    throw new Error(msg);
+    throw new AddRepoError(msg, value?.detail ?? null, value?.action ?? null);
   }
   await fetchRepos();
   // Trigger a sync so PRs for the new repo are fetched immediately.
@@ -861,8 +921,9 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
     // PR not known locally — fall back to pessimistic. SSE reconciles.
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
     if (error) {
-      toast.error(`Failed to merge pull request (HTTP ${error.status})`);
-      throw new Error(`HTTP ${error.status}`);
+      const msg = apiErrorMessage(error, "Failed to merge pull request");
+      toast.error(msg);
+      throw new Error(msg);
     }
     toast.success("Pull request merged successfully");
     return;
@@ -880,7 +941,7 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
 
   try {
     const { error } = await api.api.prs({ id: prId }).merge.post({ mergeMethod });
-    if (error) throw new Error(`HTTP ${error.status}`);
+    if (error) throw new Error(apiErrorMessage(error, "Failed to merge pull request"));
     toast.success("Pull request merged successfully");
   } catch (e) {
     restorePrFromArchive(snapshot);
@@ -912,6 +973,11 @@ export function getPullRequests(): PullRequest[] {
 
 export function getRepositories(): Repository[] {
   return repositories;
+}
+
+/** Whether {@link getRepositories} is answering from real data yet. */
+export function getReposFetchAttempted(): boolean {
+  return reposFetchAttempted;
 }
 
 export function getRepoOwner(repoId: string): string | null {
@@ -1042,7 +1108,9 @@ export function reset(): void {
   teamsLoadingByOrg = new Map();
   teamsFailedByOrg = new Map();
   isLoading = false;
+  reposFetchAttempted = false;
   archivedPrs = [];
+  linkedPrs = new Map();
   archivedNextCursor = null;
   archivedLoadingMore = false;
   pinnedPrIds = new Set();

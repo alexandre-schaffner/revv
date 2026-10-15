@@ -4,20 +4,21 @@
 // single source of truth in `@revv/shared` (`ACP_AGENTS`) so the web provider
 // list / selectors and the server launch stay in sync — adding an agent is one
 // entry there. This module holds the server-only concerns: the `REVV_ACP_AGENT`
-// / `REVV_ACP_COMMAND` overrides, availability checks, and — since ACP has no
-// model protocol — per-adapter injection of the selected model / thinking-effort
-// / context-window at launch time (env for Codex/Claude Code/opencode).
+// / `REVV_ACP_COMMAND` overrides, availability checks, and per-adapter routing
+// of the selected model / thinking-effort: at launch (env for Codex/Claude
+// Code), or per session over ACP (`AcpLaunch.sessionModel`, for opencode).
 
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
+  ACP_AGENTS,
   type AcpAgentId,
-  type ContextWindow,
   clampThinkingEffort,
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
   isAcpAgentId,
+  isAutoSentinel,
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
@@ -28,24 +29,30 @@ export interface AcpLaunch {
   readonly args: readonly string[];
   /** Extra env vars merged over `process.env` when spawning. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * A model the connection layer applies to every session it opens or loads,
+   * through the session's `model` config option (`session/set_config_option`),
+   * for agents that don't honor a launch-time model.
+   */
+  readonly sessionModel?: string;
 }
 
 export interface AcpProcessLaunch {
   readonly command: string;
   readonly args: readonly string[];
   readonly env: Readonly<Record<string, string>>;
+  readonly sessionModel?: string;
 }
 
 /**
- * The Revv-side selections we try to push into the agent at launch. ACP exposes
- * none of these over the wire, so each adapter gets them however it accepts them
- * (or not at all — see `cursor`). Everything is optional; an absent field leaves
- * the agent on its own default.
+ * The Revv-side selections we try to push into the agent. Each adapter gets them
+ * however it accepts them — launch env, a per-session config option, or not at
+ * all (see `cursor`). Everything is optional; an absent field leaves the agent
+ * on its own default.
  */
 export interface AcpLaunchConfig {
   readonly model?: string | undefined;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
 }
 
 export interface AcpProcessEnvOptions {
@@ -66,6 +73,8 @@ export interface AcpProcessEnvOptions {
 // Revv thinking-effort tier → Codex `model_reasoning_effort`. The maintained
 // Codex ACP adapter merges this into the session config through CODEX_CONFIG.
 const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
+  ultra: "ultra",
+  max: "max",
   "extra-high": "xhigh",
   high: "high",
   medium: "medium",
@@ -79,6 +88,7 @@ const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
 // it here was a no-op. `ultrathink` is not an effort level — it's a prompt
 // keyword — so a stale persisted value lands on the deepest real tier.
 const CLAUDE_EFFORT_LEVEL: Record<ThinkingEffort, string> = {
+  ultra: "max",
   low: "low",
   medium: "medium",
   high: "high",
@@ -143,10 +153,9 @@ export function applyAcpAgentOverride(agent: AcpAgentId): AcpAgentId {
 }
 
 /**
- * Resolve the launch command + args + env for a registry agent, injecting the
- * selected model / thinking-effort / context-window the way each adapter accepts
- * them. ACP has no model protocol, so this is the only place a Revv selection
- * reaches the agent.
+ * Resolve the launch command + args + env for a registry agent, routing the
+ * selected model / thinking-effort the way each adapter accepts them. This is
+ * the only place that decides how a Revv selection reaches the agent.
  */
 export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {}): AcpLaunch {
   if (serverEnv.acpCommand) {
@@ -156,13 +165,14 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
   const def = getAcpAgent(id);
   const args = [...def.args];
   const env: Record<string, string> = {};
-  const { model, thinkingEffort, contextWindow } = config;
+  let sessionModel: string | undefined;
+  const { model, thinkingEffort } = config;
 
   switch (id) {
     case "codex": {
       // Clamp rather than trust the persisted tier: effort and agent are stored
       // independently, so a tier picked on Claude Code outlives a switch here.
-      const tier = clampThinkingEffort(id, thinkingEffort);
+      const tier = clampThinkingEffort(id, thinkingEffort, model);
       const effort = tier ? CODEX_REASONING_EFFORT[tier] : undefined;
       // `@agentclientprotocol/codex-acp` starts Codex's App Server and reads
       // CODEX_CONFIG, rather than forwarding the legacy adapter's `-c` flags.
@@ -176,27 +186,29 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     }
     case "claude-code": {
       if (model) env.ANTHROPIC_MODEL = model;
-      // 1M context is on by default in Claude Code; disable it for the 200K tier.
-      if (contextWindow) {
-        env.CLAUDE_CODE_DISABLE_1M_CONTEXT = contextWindow === "1m" ? "false" : "true";
-      }
-      if (thinkingEffort) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[thinkingEffort];
+      // Revv always runs at Claude Code's own default 1M context, so the
+      // disable flag is never set.
+      const tier = clampThinkingEffort(id, thinkingEffort, model);
+      if (tier) env.CLAUDE_CODE_EFFORT_LEVEL = CLAUDE_EFFORT_LEVEL[tier];
       break;
     }
     case "opencode": {
-      // `opencode acp` does NOT accept a `--model` flag (unlike `opencode run` /
-      // the TUI) — passing one makes yargs print help and exit 1, which surfaces
-      // as "ACP connection closed". Inject the model the way the ACP subcommand
-      // honors it: an inline config override via OPENCODE_CONFIG_CONTENT, whose
-      // `model` field takes the same `provider/model` format as the config file.
-      if (model) env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model });
+      // `opencode acp` rejects a `--model` flag (yargs prints help and exits 1,
+      // surfacing as "ACP connection closed"). opencode 1 honors the model from
+      // an inline OPENCODE_CONFIG_CONTENT override; opencode 2 ignores it and
+      // seeds sessions from its own default, so the model is also applied per
+      // session through the `model` config option both versions advertise.
+      if (model) {
+        env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model });
+        sessionModel = model;
+      }
       break;
     }
     case "cursor": {
-      // The `cursor-agent-acp` adapter does not forward a model flag and ACP has
-      // no `set_model`, so the selected model is saved as a preference but cannot
-      // be propagated yet — Cursor uses its own configured model. Revisit if the
-      // adapter gains a model passthrough.
+      // The `cursor-agent-acp` adapter does not forward a model flag or
+      // advertise a `model` config option, so the selected model is saved as a
+      // preference but cannot be propagated yet — Cursor uses its own configured
+      // model. Revisit if the adapter gains a model passthrough.
       break;
     }
   }
@@ -205,6 +217,7 @@ export function resolveAcpLaunchById(id: AcpAgentId, config: AcpLaunchConfig = {
     command: def.command,
     args,
     ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(sessionModel ? { sessionModel } : {}),
   };
 }
 
@@ -264,7 +277,14 @@ export function resolveAcpProcessLaunchById(
     command: runner.command,
     args: runner.args,
     env: buildAcpProcessEnv(id, inheritedEnv, launch.env, path, options),
+    ...(launch.sessionModel ? { sessionModel: launch.sessionModel } : {}),
   };
+}
+
+function isStaticCatalogModel(model: string): boolean {
+  return ACP_AGENTS.some(
+    ({ capabilities: { models } }) => models !== "dynamic" && models.some((m) => m.value === model),
+  );
 }
 
 /**
@@ -273,16 +293,27 @@ export function resolveAcpProcessLaunchById(
  * `aiModel` (written against the global agent's catalog) may not belong to the
  * resolved agent. Guard against that: if the configured id isn't in the agent's
  * catalog, fall back to that agent's default model. opencode's catalog is
- * dynamic, so configured opencode models are taken on trust.
+ * dynamic, so configured opencode models are taken on trust — except an id from
+ * another agent's static catalog, which can only be a leftover of that agent.
+ *
+ * Also the arbiter for {@link AUTO_SENTINEL}, collapsed to `undefined` before
+ * the dynamic-catalog branch (which would otherwise forward it verbatim).
+ * `sized` carries a pre-sized model; other callers land on the agent's
+ * default. Route every model-to-agent path through here — never pass raw
+ * `settings.aiModel`.
  */
 export function resolveGenerationModel(
   agent: AcpAgentId,
   configuredModel: string | null | undefined,
+  sized?: string | null,
 ): string | undefined {
   const caps = getAgentCapabilities(agent);
-  if (caps.models === "dynamic") return configuredModel ?? getAcpAgentDefaultModel(agent);
-  if (configuredModel && caps.models.some((m) => m.value === configuredModel)) {
-    return configuredModel;
+  const pinned = isAutoSentinel(configuredModel) ? (sized ?? null) : configuredModel;
+  if (caps.models === "dynamic") {
+    return pinned && !isStaticCatalogModel(pinned) ? pinned : getAcpAgentDefaultModel(agent);
+  }
+  if (pinned && caps.models.some((m) => m.value === pinned)) {
+    return pinned;
   }
   const defaultModel = getAcpAgentDefaultModel(agent);
   if (caps.models.some((m) => m.value === defaultModel)) return defaultModel;

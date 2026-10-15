@@ -1,17 +1,19 @@
 import type {
   AcpAgentId,
-  ContextWindow,
   DiffViewMode,
   RecapAgentChoice,
+  SettingsUpdate,
   ThemePreference,
-  ThinkingEffort,
+  ThinkingEffortSetting,
   UpdateChannel,
   UserSettings,
 } from "@revv/shared";
 import {
   AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_JEV_SETTINGS,
   DEFAULT_UPDATE_CHANNEL,
   isAcpAgentId,
+  mergeSettingsUpdate,
   UPDATE_CHANNELS,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
@@ -34,7 +36,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   aiModel: "opencode/big-pickle",
   aiThinkingEffort: "medium",
   aiAgent: "opencode",
-  aiContextWindow: "200k",
   aiSuggestionsModel: "opencode/big-pickle",
   aiMaxTurns: 60,
   theme: "dark",
@@ -59,6 +60,7 @@ const DEFAULT_SETTINGS: UserSettings = {
       trustedSignerHosts: [],
     },
   },
+  jev: DEFAULT_JEV_SETTINGS,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
 
@@ -126,13 +128,9 @@ function normalize(raw: unknown): UserSettings {
     aiModel: typeof r.aiModel === "string" ? (r.aiModel as string) : DEFAULT_SETTINGS.aiModel,
     aiThinkingEffort:
       typeof r.aiThinkingEffort === "string"
-        ? (r.aiThinkingEffort as ThinkingEffort)
+        ? (r.aiThinkingEffort as ThinkingEffortSetting)
         : DEFAULT_SETTINGS.aiThinkingEffort,
     aiAgent: coerceAgentId(r),
-    aiContextWindow:
-      typeof r.aiContextWindow === "string"
-        ? (r.aiContextWindow as ContextWindow)
-        : DEFAULT_SETTINGS.aiContextWindow,
     aiSuggestionsModel:
       typeof r.aiSuggestionsModel === "string"
         ? (r.aiSuggestionsModel as string)
@@ -157,6 +155,7 @@ function normalize(raw: unknown): UserSettings {
         : DEFAULT_SETTINGS.githubClientId,
     recap: coerceRecap(r.recap),
     cache: coerceCache(r.cache),
+    jev: coerceJev(r.jev),
     updateChannel: coerceUpdateChannel(r.updateChannel),
   };
 }
@@ -208,6 +207,16 @@ function coerceRecap(value: unknown): UserSettings["recap"] {
   };
 }
 
+/** `hasApiKey` is always forced `false` here; it's derived from the keyring at the edge (`withJevKeyState`), never from client input. */
+function coerceJev(value: unknown): UserSettings["jev"] {
+  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
+  const r = value as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_SETTINGS.jev.enabled,
+    hasApiKey: false,
+  };
+}
+
 function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AcpAgentId {
   const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
   if (isAcpAgentId(agent)) return applyAcpAgentOverride(agent);
@@ -236,9 +245,8 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     id: row.id,
     aiProvider: row.aiProvider,
     aiModel: row.aiModel,
-    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
+    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffortSetting,
     aiAgent: row.aiAgent as AcpAgentId,
-    aiContextWindow: row.aiContextWindow as ContextWindow,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
     theme: row.theme as ThemePreference,
@@ -271,6 +279,11 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
         })(),
       ),
     },
+    jev: {
+      enabled: row.jevEnabled,
+      // Derived from SecretStore, not this table.
+      hasApiKey: false,
+    },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
 }
@@ -282,7 +295,6 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     aiModel: s.aiModel,
     aiThinkingEffort: s.aiThinkingEffort,
     aiAgent: s.aiAgent,
-    aiContextWindow: s.aiContextWindow,
     aiSuggestionsModel: s.aiSuggestionsModel,
     aiMaxTurns: s.aiMaxTurns,
     theme: s.theme,
@@ -304,6 +316,7 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheSigningMode: s.cache.signing.mode,
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
+    jevEnabled: s.jev.enabled,
     updatedAt: new Date(),
   };
 }
@@ -357,21 +370,6 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
-/**
- * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional (standard `Partial`), but `recap` and `cache` are recursively
- * partial so callers can patch a single nested field (e.g.
- * `{ recap: { agent: 'opencode' } }`) without spreading the whole
- * sub-object. {@link Settings.ts}'s `updateSettings` deep-merges them
- * against the current value to honour this contract.
- */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
-  recap?: Partial<UserSettings["recap"]>;
-  cache?: Partial<Omit<UserSettings["cache"], "signing">> & {
-    signing?: Partial<UserSettings["cache"]["signing"]>;
-  };
-};
-
 export class SettingsService extends Context.Tag("SettingsService")<
   SettingsService,
   {
@@ -413,28 +411,11 @@ export const SettingsServiceLive = Layer.effect(
       updateSettings: (partial) =>
         Effect.gen(function* () {
           const current = yield* settingsRef.get;
-          const mergedRecap =
-            partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
-          const mergedCache =
-            partial.cache !== undefined
-              ? {
-                  ...current.cache,
-                  ...partial.cache,
-                  signing:
-                    partial.cache.signing !== undefined
-                      ? { ...current.cache.signing, ...partial.cache.signing }
-                      : current.cache.signing,
-                }
-              : current.cache;
-          const merged: UserSettings = {
-            ...current,
-            ...partial,
-            recap: mergedRecap,
-            cache: mergedCache,
-            id: "default",
-          };
+          const merged = mergeSettingsUpdate(current, partial);
           const next: UserSettings = {
             ...merged,
+            id: "default",
+            jev: { ...merged.jev, hasApiKey: false },
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
             updateChannel: coerceUpdateChannel(merged.updateChannel),
           };

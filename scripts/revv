@@ -500,6 +500,17 @@ cmd_update() {
   fi
 
   if [[ "$used_prebuilt" -eq 0 ]]; then
+    if declare -F detect_platform >/dev/null 2>&1 \
+      && declare -F ensure_xcode_clt >/dev/null 2>&1 \
+      && declare -F ensure_rust >/dev/null 2>&1; then
+      step "Checking local build toolchain"
+      detect_platform
+      ensure_xcode_clt
+      ensure_rust
+    elif ! command -v cargo >/dev/null 2>&1; then
+      fail "Rust/Cargo is required for the local Tauri build fallback. Install it with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    fi
+
     step "Build"
     (cd "$INSTALL_DIR" && make dist)
 

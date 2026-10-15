@@ -15,6 +15,7 @@ import {
 import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
 import { closePalette, getPaletteMode, getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
+  getChatStacked,
   getRightPanelOpen,
   getRightPanelWidth,
   getSidebarCollapsed,
@@ -31,12 +32,12 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import { getPrWalkthroughStatus, markWalkthroughStale } from "$lib/stores/walkthrough.svelte";
+import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import FloatingTabs from "./FloatingTabs.svelte";
 import ProjectRail from "./ProjectRail.svelte";
-import RequestChangesActionBar from "./RequestChangesActionBar.svelte";
+import ReviewActionBar from "./ReviewActionBar.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import TopBar from "./TopBar.svelte";
@@ -50,6 +51,10 @@ const paletteOpen = $derived(getPaletteOpen());
 const paletteMode = $derived(getPaletteMode());
 const sidebarWidth = $derived(getSidebarWidth());
 const rightPanelWidth = $derived(getRightPanelWidth());
+// Slack-thread behaviour: wide enough → chat sits beside the main pane;
+// too narrow → it takes the main pane over, with a back button in its header.
+const chatStacked = $derived(getChatStacked());
+const chatOverlay = $derived(rightPanelOpen && chatStacked);
 const pr = $derived(getSelectedPr());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 const activeTab = $derived(getActiveTab());
@@ -58,23 +63,30 @@ const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
 const showFloatingActions = $derived(
   !!pr && isReviewRoute && !isSettingsRoute && activeTab === "walkthrough",
 );
-const showRcActions = $derived(
-  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "request-changes",
+const showReviewBar = $derived(
+  !!pr && isReviewRoute && !isSettingsRoute && activeTab === "conversation",
 );
 
 // New-commit-available signal: the PR's current headSha differs from the
 // SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
 // first successful fetch, suppressing the signal on fresh visits.
+//
+// Scoped to the diff and the Pull button only — says nothing about whether
+// the walkthrough is outdated. Conflating the two marked freshly-generated
+// walkthroughs stale once new commits landed but the diff hadn't refetched.
+// Walkthrough staleness comes from the server (`/current`'s `stale`,
+// `lifecycle:superseded`, review-rounds `hasNewCommits`).
+//
+// Closed and merged PRs are excluded: their head is final, so there is
+// nothing to pull. Without this a merged PR whose archived row carries a
+// newer SHA than the loaded diff shows a Pull button that can never be
+// satisfied — the walkthrough stamps "Merged" instead.
 const hasNewCommit = $derived.by(() => {
-  if (!pr?.headSha) return false;
+  if (!pr?.headSha || pr.status !== "open") return false;
   const loaded = getLoadedHeadSha(pr.id);
   return loaded !== null && loaded !== pr.headSha;
 });
 const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
-
-$effect(() => {
-  if (pr && hasNewCommit) markWalkthroughStale(pr.id);
-});
 
 function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
@@ -111,6 +123,7 @@ let mainEl = $state<HTMLElement | null>(null);
 $effect(() => {
   const open = rightPanelOpen;
   const width = rightPanelWidth;
+  const stacked = chatStacked;
   if (!panelEl || !mainEl) return;
   // gsap.set (not panelEl.style.transform): it writes the same
   // `transform: translate3d(...)` format as the CSS fallback on
@@ -118,7 +131,9 @@ $effect(() => {
   // units and there's no first-paint flash. Don't "simplify" to a plain
   // style write — that risks format drift against the CSS fallback.
   gsap.set(panelEl, { x: open ? 0 : width });
-  mainEl.style.setProperty("--vignette-opacity", open ? "0.65" : "0");
+  // No vignette when stacked — the panel covers the main pane outright, so
+  // there's no clipped edge to soften.
+  mainEl.style.setProperty("--vignette-opacity", open && !stacked ? "0.65" : "0");
 });
 
 // `--right-panel-width` is set on the panel element (see the `style:` directive
@@ -128,8 +143,11 @@ $effect(() => {
 // every drag frame invalidated style recalc for the whole descendant tree
 // (~100ms/frame). Scoped to the panel, only the panel subtree recalcs (~3x
 // faster overall) with no change to behaviour.
+// A stacked chat claims no grid track — it overlays the main pane, which keeps
+// its full width (and, more to the point, its layout: the resize-observing
+// @pierre diff underneath never reflows on toggle).
 const gridStyle = $derived(
-  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px`,
+  `grid-template-columns: ${RAIL_WIDTH}px ${sidebarCollapsed ? 0 : sidebarWidth}px 1fr ${rightPanelOpen && !chatStacked ? rightPanelWidth : 0}px; --sidebar-width: ${sidebarWidth}px`,
 );
 
 function onHandlePointerDown(event: PointerEvent): void {
@@ -226,7 +244,9 @@ function onRightHandleDblClick(): void {
 		/>
 	</header>
 
-	<main class="main-area" bind:this={mainEl}>
+	<!-- `inert` while the chat is stacked over it: the main pane is covered, so
+		 it shouldn't answer clicks, focus, or Tab. -->
+	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
 		{#if pr && isReviewRoute && !isSettingsRoute}
 			<div class="tabs-float">
 				<FloatingTabs
@@ -258,8 +278,8 @@ function onRightHandleDblClick(): void {
 			<WalkthroughActionBar prId={pr.id} />
 		{/if}
 
-		{#if showRcActions}
-			<RequestChangesActionBar />
+		{#if showReviewBar}
+			<ReviewActionBar />
 		{/if}
 	</main>
 
@@ -276,10 +296,12 @@ function onRightHandleDblClick(): void {
 			bind:this={panelEl}
 			class="rightpanel-area"
 			class:rightpanel-area--open={rightPanelOpen}
+			class:rightpanel-area--overlay={chatOverlay}
 			style:--right-panel-width="{rightPanelWidth}px"
+			style:--overlay-left="{RAIL_WIDTH + (sidebarCollapsed ? 0 : sidebarWidth)}px"
 			aria-hidden={!rightPanelOpen}
 		>
-			{#if rightPanelOpen}
+			{#if rightPanelOpen && !chatStacked}
 				<div
 					class="right-resize-handle"
 					role="separator"
@@ -292,7 +314,11 @@ function onRightHandleDblClick(): void {
 					ondblclick={onRightHandleDblClick}
 				></div>
 			{/if}
-			<RightPanel onClose={toggleRightPanel} prId={page.params['prId'] ?? ''} />
+			<RightPanel
+				onClose={toggleRightPanel}
+				stacked={chatStacked}
+				prId={page.params['prId'] ?? ''}
+			/>
 		</aside>
 	</div>
 </div>
@@ -309,7 +335,12 @@ function onRightHandleDblClick(): void {
 <style>
 	.app-shell {
 		display: grid;
-		grid-template-rows: auto 1fr calc(var(--bottombar-height) + var(--spacing-island));
+		/* Both chrome rows are named so the stacked chat panel — which is
+		   viewport-positioned, outside the grid — can derive the main pane's
+		   box from the same numbers the grid uses. */
+		--topbar-row-height: var(--topbar-height);
+		--bottom-row-height: calc(var(--bottombar-height) + var(--spacing-island));
+		grid-template-rows: var(--topbar-row-height) 1fr var(--bottom-row-height);
 		grid-template-areas:
 			'topbar  topbar  topbar    topbar'
 			'rail    sidebar main      rightpanel'
@@ -385,13 +416,16 @@ function onRightHandleDblClick(): void {
 		grid-area: topbar;
 		position: relative;
 		z-index: 10;
-		height: var(--topbar-height);
+		height: var(--topbar-row-height);
 		background: var(--color-bg-secondary);
 	}
 
 	/* Tauri overlay title bar — traffic light clearance */
+	:global(html.tauri) .app-shell {
+		--topbar-row-height: calc(22px + var(--spacing-island));
+	}
+
 	:global(html.tauri) .topbar-area {
-		height: calc(22px + var(--spacing-island));
 		padding-top: 22px;
 	}
 
@@ -519,6 +553,25 @@ function onRightHandleDblClick(): void {
 
 	.rightpanel-area.rightpanel-area--open {
 		transform: translateX(0);
+	}
+
+	/* ── Stacked presentation ──
+	   Too narrow for two panes, so the chat takes the main pane's place
+	   instead of stealing width from it. Viewport-positioned onto exactly
+	   `.main-area`'s box (same row heights, same chrome offsets, same island
+	   margin) so the swap reads as the pane being replaced, not as a floating
+	   overlay. Only ever applied while open — a closed panel stays absolute
+	   inside its zero-width grid slot, where `.app-shell`'s `overflow: hidden`
+	   clips its off-screen resting position. z-index clears the main pane's
+	   floating chrome (tabs / action bars, z-index 10). */
+	.rightpanel-area.rightpanel-area--overlay {
+		position: fixed;
+		top: calc(var(--topbar-row-height) + var(--spacing-island));
+		bottom: calc(var(--bottom-row-height) + var(--spacing-island));
+		left: calc(var(--overlay-left) + var(--spacing-island));
+		right: var(--spacing-island);
+		width: auto;
+		z-index: 11;
 	}
 
 	:global(:root.dark) .rightpanel-area {

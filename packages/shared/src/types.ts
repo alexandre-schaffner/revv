@@ -1,5 +1,6 @@
-import type { AcpAgentId } from "./acp-agents";
+import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
 import type { UpdateChannel } from "./constants";
+import type { JevSettings } from "./jev-settings";
 
 export type PullRequestStatus = "open" | "closed" | "merged";
 
@@ -40,6 +41,15 @@ export interface PullRequest {
   /** Raw avatar URL from the provider — used internally during sync to populate remote_users. */
   authorAvatarUrl: string | null;
   requestedReviewers: string[];
+  /**
+   * Logins @-mentioned in the PR body or in any of its review comments.
+   *
+   * Populated on the DB read path only (`rowToPr`); always `[]` when a PR is
+   * mapped straight from a GitHub API payload, since GitHub has no such field
+   * — mentions are parsed out of the body and merged with comment-sourced
+   * mentions during sync.
+   */
+  mentionedUsers: string[];
   status: PullRequestStatus;
   reviewStatus: ReviewStatus;
   /** GitHub draft state — `true` while the PR is in draft. */
@@ -65,9 +75,14 @@ export interface PullRequest {
  * before the tier was retired still parse — no agent offers it, and both the
  * selector and `applyAgentDefaults` coerce it away on next render.
  */
-export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
-
-export type ContextWindow = "200k" | "1m";
+export type ThinkingEffort =
+  | "ultra"
+  | "ultrathink"
+  | "max"
+  | "extra-high"
+  | "high"
+  | "medium"
+  | "low";
 
 /**
  * Per-feature override for which agent generates project recaps.
@@ -111,20 +126,26 @@ export interface MergeEligibility {
   canMerge: boolean;
   mergeable: boolean;
   mergeStateStatus: string;
+  /**
+   * The merge methods this repository's settings actually permit. GitHub
+   * answers `PUT /pulls/:n/merge` with a 405 ("Merge commits are not allowed
+   * on this repository.") when the requested method is disabled, so the UI
+   * must offer only these — never the full {@link MergeMethod} set.
+   */
+  allowedMethods: MergeMethod[];
 }
 
 export interface UserSettings {
   id: string;
   aiProvider: string;
   aiModel: string;
-  aiThinkingEffort: ThinkingEffort;
+  aiThinkingEffort: ThinkingEffortSetting;
   /**
    * Selected ACP agent id (one of `ACP_AGENTS`, e.g. `claude-code`, `opencode`,
    * `codex`, `cursor`). The single agent that drives chat, walkthrough, and
    * recap generation.
    */
   aiAgent: AcpAgentId;
-  aiContextWindow: ContextWindow;
   /**
    * Low-cost model used for one-shot, no-tools PR-aware suggestion
    * generation (right-panel empty-state prompts). Follows the global
@@ -203,6 +224,14 @@ export interface UserSettings {
     };
   };
   /**
+   * TypeSafe System One (Jev) — calibrated decisions for closed-set judgments
+   * the pipeline would otherwise spend an agent turn on. Every hook degrades
+   * to today's behaviour when Jev is off, unconfigured, or unreachable.
+   * Per-feature switches, not one master flag, since each hook is
+   * independently reversible.
+   */
+  jev: JevSettings;
+  /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
    * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by
    * release-please. `'nightly'` tracks the moving `nightly` tag — built from
@@ -217,9 +246,12 @@ export interface UserSettings {
 export type SessionStatus = "active" | "completed" | "abandoned";
 
 /**
- * Review perspective for a PR. Not a user choice — derived from identity:
- * `author` when the signed-in user is the PR's creator (self-review),
- * otherwise `reviewer`. Const-object "enum" (mirrors `PIERRE_THEME`) so the
+ * Review perspective for a PR. Two things carry one:
+ *   - a review session (comments, threads, GitHub sync) — always derived from
+ *     identity: `author` when the signed-in user is the PR's creator
+ *     (self-review), otherwise `reviewer`;
+ *   - a walkthrough — the user's pick, defaulting to that same identity answer.
+ * Const-object "enum" (mirrors `PIERRE_THEME`) so the
  * values are referenced as `REVIEW_MODE.author` rather than bare strings,
  * while the persisted/wire value stays a plain string.
  */
@@ -231,6 +263,40 @@ export const REVIEW_MODE = {
 export type ReviewMode = (typeof REVIEW_MODE)[keyof typeof REVIEW_MODE];
 
 export const REVIEW_MODES: readonly ReviewMode[] = [REVIEW_MODE.reviewer, REVIEW_MODE.author];
+
+/**
+ * Compare two provider logins. GitHub logins are case-insensitive, so `"Alex"`
+ * and `"alex"` are the same account; either being absent is never a match.
+ */
+export function loginsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The review mode for a PR, given its author and the signed-in viewer.
+ *
+ * **This is the only implementation.** Review sessions are keyed on
+ * `(pullRequestId, mode)`, so the web (which requests `?mode=`) and the
+ * background workers (which write into a session) must derive the identical
+ * answer from the identical inputs. A second copy of this rule that disagreed
+ * on casing or on which login column it read is what sent synced GitHub
+ * comments into a session the UI never loads — unrecoverably, since comments
+ * dedupe globally by external id.
+ *
+ * `viewerLogin` is nullable because identity resolves asynchronously on both
+ * sides. Unknown answers `reviewer`: the historical default and the right
+ * answer for every PR the viewer did not write. Callers that would *act*
+ * destructively on the result must distinguish "unknown" themselves rather
+ * than reading a `reviewer` verdict as confirmation — see
+ * `resolveReviewModeForPr` on the server.
+ */
+export function reviewModeFor(
+  authorLogin: string | null | undefined,
+  viewerLogin: string | null | undefined,
+): ReviewMode {
+  return loginsMatch(authorLogin, viewerLogin) ? REVIEW_MODE.author : REVIEW_MODE.reviewer;
+}
 
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 

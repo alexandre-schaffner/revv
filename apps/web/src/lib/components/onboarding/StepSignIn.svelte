@@ -1,5 +1,5 @@
 <script lang="ts">
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
@@ -12,6 +12,7 @@ import {
   getIsLoading,
   signIn,
 } from "$lib/stores/auth.svelte";
+import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
   onBack?: () => void;
@@ -49,7 +50,7 @@ async function copyCode() {
 <div class="signin">
 	{#if onBack}
 		<button class="back" onclick={onBack}>
-			<ChevronLeft size={14} />
+			<CaretLeft size={14} />
 			<span>Back</span>
 		</button>
 	{/if}
@@ -68,10 +69,10 @@ async function copyCode() {
 				</div>
 				<button class="copy-btn" onclick={copyCode} aria-label="Copy code">
 					{#if copied}
-						<Check size={13} weight="regular" />
+						<Check size={13} />
 						<span>Copied</span>
 					{:else}
-						<Copy size={13} weight="fill" />
+						<Copy size={13} />
 						<span>Copy</span>
 					{/if}
 				</button>
@@ -111,22 +112,7 @@ async function copyCode() {
 				>
 					<span>{isLoading ? `Opening ${hostLabel}…` : `Sign in with ${hostLabel}`}</span>
 					{#if !isLoading}
-						<svg
-							width="18"
-							height="10"
-							viewBox="0 0 18 10"
-							fill="none"
-							xmlns="http://www.w3.org/2000/svg"
-							aria-hidden="true"
-						>
-							<path
-								d="M0 5h16M12 1l4 4-4 4"
-								stroke="currentColor"
-								stroke-width="1"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							/>
-						</svg>
+						<ContinueArrow />
 					{/if}
 				</button>
 			</div>
@@ -227,7 +213,7 @@ async function copyCode() {
 			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	.primary svg {
+	.primary :global(svg) {
 		transition: transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
@@ -236,7 +222,7 @@ async function copyCode() {
 		color: var(--ob-text-heading-bright);
 	}
 
-	.primary:hover:not(:disabled) svg {
+	.primary:hover:not(:disabled) :global(svg) {
 		transform: translateX(4px);
 	}
 

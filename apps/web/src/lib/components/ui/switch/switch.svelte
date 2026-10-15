@@ -23,7 +23,12 @@ let {
 	<SwitchPrimitive.Thumb
 		data-slot="switch-thumb"
 		class={cn(
-			"revv-switch-thumb pointer-events-none block size-[18px] rounded-full bg-white ring-0 transition-transform duration-quick data-[state=checked]:translate-x-[19px] data-[state=unchecked]:translate-x-0.5",
+			// The checked thumb sits on the accent fill, which inverts with the
+			// theme: white reads 6.3:1 on the light teal but 1.9:1 on dark's
+			// luminous one, under the 3:1 a non-text control needs. Checked uses
+			// the on-accent foreground (white in light, ink in dark); unchecked
+			// stays white, where the track is a neutral surface in both themes.
+			"revv-switch-thumb pointer-events-none block size-[18px] rounded-full ring-0 transition-transform duration-quick data-[state=checked]:bg-primary-foreground data-[state=unchecked]:bg-white data-[state=checked]:translate-x-[19px] data-[state=unchecked]:translate-x-0.5",
 		)}
 	/>
 </SwitchPrimitive.Root>

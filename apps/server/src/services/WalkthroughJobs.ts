@@ -27,29 +27,32 @@
 // setStatus('error'). No `addBlock` / `addIssue` / `addRating` calls exist
 // here anymore (doctrine invariant #2).
 
-import type {
-  GenerationProviderConfig,
-  Walkthrough,
-  WalkthroughGenerationMode,
-  WalkthroughMode,
-  WalkthroughStatus,
-  WalkthroughStreamEvent,
-  WalkthroughTokenUsage,
+import {
+  REVIEW_MODE,
+  type RiskLevel,
+  type Walkthrough,
+  type WalkthroughGenerationMode,
+  type WalkthroughMode,
+  type WalkthroughStatus,
+  type WalkthroughStreamEvent,
+  type WalkthroughTokenUsage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Cause, Context, Effect, Fiber, Layer, Option, Ref, type Scope } from "effect";
-import { resolveGenerationModel } from "../ai/acp/presets";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect";
 import {
   accumulateTokenUsage,
   addThroughput,
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
 } from "../ai/agent-stream/token-usage";
+import { adjudicateContinuation } from "../ai/jev/continuation";
+import { resolveJobStart } from "../ai/jev/job-start-resolution";
+import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
+import { forgetProse } from "../ai/jev/prose-voice";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
-import { account } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
-import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import {
@@ -60,6 +63,7 @@ import {
   CloneNotReadyError,
   DbError,
   type GitHubError,
+  HeadShaMismatchError,
   type NotFoundError,
   type ReviewError,
   type ValidationError,
@@ -68,22 +72,11 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
+import { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
-import {
-  commitExists,
-  diffNameStatusZ,
-  diffNumstat,
-  diffPatchForPath,
-  fetchCommit,
-} from "./GitOps";
-import {
-  capPatch,
-  normalizeGitStatus,
-  parseNameStatusZ,
-  parseNumstat,
-  resolveCounts,
-} from "./incremental-diff";
+import { HunkScanService } from "./HunkScan";
+import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
@@ -95,6 +88,15 @@ import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
+import { tryImportCachedWalkthrough } from "./walkthrough-cache-import";
+import {
+  buildContinuationAdjudicationState,
+  continuationCounts,
+  finishWalkthroughAtBudgetEnd,
+} from "./walkthrough-job-budget";
+import { resolveWalkthroughLaunch, resolveWalkthroughOwner } from "./walkthrough-job-context";
+import { leadsRecorded, prepareFirstPassLeads } from "./walkthrough-leads";
+import { type PromptFile, resolveIncrementalPromptFiles } from "./walkthrough-prompt-files";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -158,13 +160,63 @@ interface ActiveJob {
   fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
   cancelledByUser: boolean;
   /**
+   * Why the job was cancelled, or null if it ended on its own.
+   *
+   * Both reasons are deliberate — neither may be left for resume-on-boot —
+   * but they differ on the wire: a `'user'` cancel is the terminal state the
+   * reviewer sees and broadcasts `lifecycle:error`/'Cancelled', whereas a
+   * `'superseded'` cancel is immediately followed by the sweep's own
+   * `lifecycle:superseded`, so announcing an error first would flash a
+   * spurious failure in the UI on every head move.
+   */
+  cancelReason: "user" | "superseded" | null;
+  /**
    * Number of block-prerender attempts that fell back (threw or returned null).
    * Observability only — answers "is the SSR cache earning its keep?" (S10).
    */
   prerenderFailures: number;
 }
 
-export type StartJobTrigger = "user" | "resume" | "review_requested";
+/**
+ * Who asked for the run. `external_agent` is a coding agent outside Revv
+ * (`request_walkthrough`) acting on the user's behalf, so it gets the same
+ * do-over semantics as `user`; it is its own value so spans and
+ * `lifecycle:started` can tell the two apart.
+ */
+export type StartJobTrigger = "user" | "external_agent" | "resume" | "review_requested";
+
+/** `errorMessage` of a row whose run was cancelled (the user's Stop, or a supersede). */
+export const WALKTHROUGH_CANCELLED_MESSAGE = "Walkthrough cancelled";
+
+const isUserInitiated = (trigger: StartJobTrigger): boolean =>
+  trigger === "user" || trigger === "external_agent";
+
+export interface StartJobParams {
+  readonly prId: string;
+  readonly userId: string;
+  readonly trigger: StartJobTrigger;
+  readonly walkthroughId?: string;
+  readonly mode?: WalkthroughMode;
+  readonly generationMode?: WalkthroughGenerationMode;
+  /**
+   * Review exactly this head or nothing. Checked under the per-PR lock
+   * against the head GitHub serves — a mismatch fails with
+   * `HeadShaMismatchError` before anything is cancelled — and, once it
+   * matches, every other head's review in this mode is retired, as
+   * PollScheduler would on its next tick: the PR is at this head, so they
+   * are stale.
+   */
+  readonly expectedHeadSha?: string;
+}
+
+export interface StartJobResult {
+  readonly walkthroughId: string;
+  /** An in-flight job (or the row being resumed) was returned; nothing new launched. */
+  readonly reused: boolean;
+}
+
+const otherWalkthroughMode = (mode: WalkthroughMode): WalkthroughMode =>
+  mode === REVIEW_MODE.author ? REVIEW_MODE.reviewer : REVIEW_MODE.author;
 
 /** Error union surfaced by `startJob`. Inherited from its transitive calls. */
 export type StartJobError =
@@ -173,6 +225,7 @@ export type StartJobError =
   | CloneInProgressError
   | CloneNotReadyError
   | GitHubError
+  | HeadShaMismatchError
   | NotFoundError
   | ReviewError
   | ValidationError;
@@ -189,14 +242,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
      * concurrent duplicate start upserts onto the same row. The fast path
      * here also short-circuits when an in-memory job already exists.
      */
-    readonly startJob: (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }) => Effect.Effect<{ readonly walkthroughId: string }, StartJobError>;
+    readonly startJob: (params: StartJobParams) => Effect.Effect<StartJobResult, StartJobError>;
 
     /**
      * Probe the remote team cache for `(prId, headSha)` and, on a hit,
@@ -342,6 +388,9 @@ export const WalkthroughJobsLive = Layer.effect(
     const settingsService = yield* SettingsService;
     const walkthroughService = yield* WalkthroughService;
     const remoteCache = yield* RemoteWalkthroughCache;
+    const jevService = yield* JevService;
+    const hunkScanService = yield* HunkScanService;
+    const cacheService = yield* CacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const broadcaster = yield* Broadcaster;
 
@@ -458,6 +507,12 @@ export const WalkthroughJobsLive = Layer.effect(
             return next;
           }),
           unregisterActivityNotifier(walkthroughId),
+          // Per-run ephemeral bookkeeping (see `ai/jev/pending.ts`); dropped here
+          // so a long-lived server doesn't accumulate a set per walkthrough.
+          Effect.sync(() => {
+            forgetPendingJudgments(walkthroughId);
+            forgetProse(walkthroughId);
+          }),
         ],
         { discard: true },
       );
@@ -484,14 +539,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly prHeadSha: string;
       readonly repoFullName: string;
       readonly githubHost: string;
-      readonly files: ReadonlyArray<{
-        readonly filename: string;
-        readonly previousFilename: string | null;
-        readonly status: string;
-        readonly additions: number;
-        readonly deletions: number;
-        readonly patch: string | null;
-      }>;
+      readonly files: ReadonlyArray<PromptFile>;
       readonly partial: PartialSnapshot | null;
       readonly reviewSessionId: string;
       readonly modelUsed: string;
@@ -499,83 +547,28 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly generationMode: WalkthroughGenerationMode;
       readonly parentWalkthroughId: string | null;
       readonly baseHeadSha: string | null;
-    };
-
-    type PromptFile = ResolvedContext["files"][number];
-    type PromptFilesResult = {
-      readonly files: ReadonlyArray<PromptFile>;
-      readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
-    };
-
-    const buildAuthedRepoUrl = (ctx: ResolvedContext): string =>
-      `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
-
-    const redactGitAuth = (message: string): string =>
-      message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:<redacted>@");
-
-    const resolveIncrementalPromptFiles = (
-      ctx: ResolvedContext,
-      worktreePath: string,
-    ): Effect.Effect<PromptFilesResult> => {
-      if (ctx.generationMode !== "incremental" || !ctx.baseHeadSha) {
-        return Effect.succeed({ files: ctx.files, diffSource: "full_pr" });
-      }
-      const baseHeadSha = ctx.baseHeadSha;
-
-      return Effect.tryPromise({
-        try: async () => {
-          if (!(await commitExists(worktreePath, baseHeadSha))) {
-            await fetchCommit(worktreePath, buildAuthedRepoUrl(ctx), baseHeadSha);
-          }
-          if (!(await commitExists(worktreePath, baseHeadSha))) {
-            throw new Error(`base commit ${baseHeadSha} is not available locally`);
-          }
-
-          const nameStatus = parseNameStatusZ(
-            await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
-          );
-          // Counts come from git (`--numstat`) in one call, not from scanning
-          // each file's patch body — the latter forces a synchronous multi-MB
-          // split on the event loop for large/generated files.
-          const numstat = parseNumstat(await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha));
-          const files: PromptFile[] = [];
-          for (const file of nameStatus) {
-            let patch: string | null = null;
-            try {
-              const rawPatch = await diffPatchForPath(
-                worktreePath,
-                baseHeadSha,
-                ctx.prHeadSha,
-                file.filename,
-              );
-              patch = capPatch(rawPatch);
-            } catch {
-              patch = null;
-            }
-            const counts = resolveCounts(numstat, file.filename, patch);
-            files.push({
-              filename: file.filename,
-              previousFilename: file.previousFilename,
-              status: normalizeGitStatus(file.status),
-              additions: counts.additions,
-              deletions: counts.deletions,
-              patch,
-            });
-          }
-          return { files, diffSource: "incremental_range" as const };
-        },
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catchAll((cause) => {
-          logError(
-            "walkthrough-jobs",
-            `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${redactGitAuth(
-              cause instanceof Error ? cause.message : String(cause),
-            )}`,
-          );
-          return Effect.succeed({ files: ctx.files, diffSource: "full_pr_fallback" as const });
-        }),
-      );
+      /**
+       * Model/effort override from the TypeSafe depth answer, resolved once at
+       * job start (not per-stream: `buildStreamParams` is reused by
+       * `buildContinuationEffect`, and a per-stream derivation would hand a
+       * continuation a different ACP pool key, orphaning the first connection).
+       */
+      readonly launchOverride: GenerationLaunchOverride | null;
+      /** Orchestrator-assigned risk tier; `null` means the agent judges the tier itself. */
+      readonly assignedRisk: RiskLevel | null;
+      /**
+       * Changed files in orchestrator-scored attention order, or `null` when
+       * unavailable. Threaded through the prompt, not the tool surface, since it
+       * shapes the agent's plan before its first tool call.
+       */
+      readonly filePriorities: ReadonlyArray<{
+        readonly filename: string;
+        readonly tier: number | null;
+      }> | null;
+      /** Present when the PR was judged to carry several independent concerns. */
+      readonly splitRecommendation: { readonly pieces: number } | null;
+      /** Snapshotted at job start so a settings change mid-run can't flip behaviour halfway through a retry budget. */
+      readonly adjudicateContinuations: boolean;
     };
 
     interface LoopState {
@@ -590,6 +583,13 @@ export const WalkthroughJobsLive = Layer.effect(
       /** Content events seen this job — each maps 1:1 to an MCP tool write.
        *  Annotated onto the generation span as a KPI (`tool_call_count`). */
       toolCallCount: number;
+      /** Wall-clock start, for the adjudication state. */
+      readonly startedAt: number;
+      /** Phase/counts as of the previous auto-continuation; without them "progress since" is undefined, so the first continuation is never adjudicated. */
+      phaseAtLastContinuation: string | null;
+      countsAtLastContinuation: Record<string, number> | null;
+      /** Why the last generator stopped, for the failure classification. */
+      terminalReason: string;
     }
 
     type ProcessResult =
@@ -616,7 +616,25 @@ export const WalkthroughJobsLive = Layer.effect(
           }),
         );
 
-        const { worktreePath } = yield* repoCloneService
+        // The first pass runs alongside the worktree checkout, which hides most of
+        // its latency. Usually the review page already started it for this head,
+        // and this joins that run (or reads its result) — for at most
+        // HUNK_SCAN_JOIN_BUDGET_MS, so a large or slow scan never holds Phase A.
+        // A resume is prompted with the leads its first run recorded, so it
+        // doesn't wait on the scan at all.
+        const resumedLeads = yield* Effect.try({
+          try: () => leadsRecorded(db, job.walkthroughId),
+          catch: (cause) => new DbError({ message: "leadsRecorded failed", cause }),
+        }).pipe(Effect.orElseSucceed(() => false));
+        const hunkScan = resumedLeads
+          ? Effect.succeed([])
+          : hunkScanService.run({
+              prId: ctx.pr.id,
+              headSha: ctx.prHeadSha,
+              files: ctx.files,
+              filePriorities: ctx.filePriorities,
+            });
+        const worktree = repoCloneService
           .acquirePrWorktree({
             repoId: ctx.repoId,
             prNumber: ctx.pr.externalId,
@@ -635,6 +653,9 @@ export const WalkthroughJobsLive = Layer.effect(
               return new AiGenerationError({ cause: e, message });
             }),
           );
+        const [{ worktreePath }, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
+          concurrency: 2,
+        });
 
         // Generator construction — resume vs fresh. Note: content
         // writes now happen INSIDE the MCP tool handlers, so the
@@ -645,6 +666,16 @@ export const WalkthroughJobsLive = Layer.effect(
         let generator: AsyncGenerator<WalkthroughStreamEvent>;
         let capturedOpencodeSessionId: string | undefined;
         const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath);
+        const hunkLeads = yield* prepareFirstPassLeads(
+          db,
+          job.walkthroughId,
+          hunkScanRows,
+          promptInput,
+        );
+        yield* emitEvent(job.walkthroughId, {
+          type: "leads",
+          data: { leads: hunkLeads },
+        }).pipe(Effect.catchAll(() => Effect.void));
 
         const buildStreamParams = (overrideContinuation?: ContinuationContext) => ({
           pr: {
@@ -667,6 +698,11 @@ export const WalkthroughJobsLive = Layer.effect(
             diffSource: promptInput.diffSource,
           },
           ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
+          ...(ctx.launchOverride ? { launchOverride: ctx.launchOverride } : {}),
+          ...(ctx.assignedRisk ? { assignedRisk: ctx.assignedRisk } : {}),
+          ...(ctx.filePriorities ? { filePriorities: ctx.filePriorities } : {}),
+          ...(ctx.splitRecommendation ? { splitRecommendation: ctx.splitRecommendation } : {}),
+          ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
           },
@@ -770,6 +806,9 @@ export const WalkthroughJobsLive = Layer.effect(
                 data: { tokenUsage: currentTokenUsage },
               }).pipe(Effect.catchAll(() => Effect.void));
 
+              // Orchestrator is the lifecycle owner; validates a stable issue set independently before writing `complete`.
+              yield* Effect.promise(() => awaitJudgments(job.walkthroughId));
+
               const dbState = yield* provideDb(
                 walkthroughService.getPartial(
                   ctx.pr.id,
@@ -805,7 +844,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 }
                 debug(
                   "walkthrough-jobs",
-                  `phase=D but ${missingComments.length} warning/critical issue(s) missing inline comment(s) — falling through to auto-continuation:`,
+                  `phase=D but ${missingComments.length} line-anchored concern(s) are missing inline comment(s) — falling through to auto-continuation:`,
                   missingComments
                     .map((i) => `${i.id}[${i.severity}]@${i.filePath}:${i.startLine}`)
                     .join(", "),
@@ -929,6 +968,16 @@ export const WalkthroughJobsLive = Layer.effect(
             } as const;
           });
 
+        const missingInlineCommentCount = () =>
+          findIssuesMissingInlineComment(db, job.walkthroughId).length;
+        const adjudicationState = (state: LoopState, partial: PartialSnapshot | null) =>
+          buildContinuationAdjudicationState({
+            state,
+            partial,
+            maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+            missingInlineCommentCount: missingInlineCommentCount(),
+          });
+
         const consumeGenerator = (state: LoopState): Effect.Effect<ProcessResult, AiError> =>
           Effect.gen(function* () {
             const next = yield* Effect.tryPromise({
@@ -946,6 +995,25 @@ export const WalkthroughJobsLive = Layer.effect(
             return result;
           });
 
+        const finishAtBudgetEnd = (
+          state: LoopState,
+          opts: { readonly stoppedEarlyBecause: string | null },
+        ): Effect.Effect<void, AiError> =>
+          finishWalkthroughAtBudgetEnd({
+            state,
+            stoppedEarlyBecause: opts.stoppedEarlyBecause,
+            adjudicationEnabled: ctx.adjudicateContinuations,
+            maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+            walkthroughId: job.walkthroughId,
+            awaitPendingJudgments: Effect.promise(() => awaitJudgments(job.walkthroughId)),
+            loadFinalState: provideDb(
+              walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
+            ).pipe(Effect.catchAll(() => Effect.succeed(null))),
+            countMissingInlineComments: missingInlineCommentCount,
+            setStatus: (status, options) => setStatus(job.walkthroughId, status, options),
+            emitEvent: (event) => emitEvent(job.walkthroughId, event),
+          }).pipe(Effect.provideService(JevService, jevService));
+
         const runWithAutoContinuation = (state: LoopState): Effect.Effect<void, AiError> =>
           Effect.gen(function* () {
             const result = yield* consumeGenerator(state);
@@ -953,6 +1021,7 @@ export const WalkthroughJobsLive = Layer.effect(
               return;
             }
             if (result._tag === "returnError") {
+              state.terminalReason = `error:${result.code}`;
               return;
             }
 
@@ -968,7 +1037,14 @@ export const WalkthroughJobsLive = Layer.effect(
                   ? "max continuations reached"
                   : "aborted",
               );
-              const finalState = yield* provideDb(
+              yield* finishAtBudgetEnd(state, { stoppedEarlyBecause: null });
+              return;
+            }
+
+            // Skip on the first pass: "progress since last continuation" is undefined, and
+            // the first continuation is the one that most often succeeds anyway.
+            if (state.autoContinuations >= 1) {
+              const partialNow = yield* provideDb(
                 walkthroughService.getPartial(
                   ctx.pr.id,
                   ctx.prHeadSha,
@@ -976,54 +1052,15 @@ export const WalkthroughJobsLive = Layer.effect(
                   ctx.generationMode,
                 ),
               ).pipe(Effect.catchAll(() => Effect.succeed(null)));
-              const phaseD = finalState?.lastCompletedPhase === "D";
-              const missingCommentsAtExhaustion = phaseD
-                ? findIssuesMissingInlineComment(db, job.walkthroughId)
-                : [];
-              if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-                if (phaseD && missingCommentsAtExhaustion.length > 0) {
-                  debug(
-                    "walkthrough-jobs",
-                    `exhausted auto-continuations with ${missingCommentsAtExhaustion.length} warning/critical issue(s) still missing inline comment(s) — marking error`,
-                  );
-                }
+              const verdict = yield* adjudicateContinuation({
+                enabled: ctx.adjudicateContinuations,
+                ...adjudicationState(state, partialNow),
+              }).pipe(Effect.provideService(JevService, jevService));
+              if (verdict.kind === "stop-doomed") {
+                debug("walkthrough-jobs", `stopping early: ${verdict.reason}`);
+                yield* finishAtBudgetEnd(state, { stoppedEarlyBecause: verdict.reason });
+                return;
               }
-              // Exhausted: legacy SSE clients still expect `done`; new
-              // clients get `lifecycle:complete` only if the row actually
-              // reached phase D with no missing comments. When the
-              // exhaustion forced an error, emit `lifecycle:error` instead
-              // so new clients see a terminal failure rather than a fake
-              // success.
-              const currentTokenUsage = state.accumulatedTokenUsage;
-              if (!phaseD || missingCommentsAtExhaustion.length > 0) {
-                const message = phaseD
-                  ? "Generation finished but warning/critical issues lack inline comments."
-                  : "Generation exhausted auto-continuation budget before reaching phase D.";
-                yield* setStatus(job.walkthroughId, "error", { errorMessage: message });
-                yield* emitEvent(job.walkthroughId, {
-                  type: "lifecycle:error",
-                  data: {
-                    code: "AutoContinuationExhausted",
-                    message,
-                  },
-                }).pipe(Effect.catchAll(() => Effect.void));
-              } else {
-                yield* emitEvent(job.walkthroughId, {
-                  type: "lifecycle:complete",
-                  data: {
-                    walkthroughId: job.walkthroughId,
-                    tokenUsage: currentTokenUsage,
-                  },
-                }).pipe(Effect.catchAll(() => Effect.void));
-              }
-              yield* emitEvent(job.walkthroughId, {
-                type: "done",
-                data: {
-                  walkthroughId: job.walkthroughId,
-                  tokenUsage: currentTokenUsage,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              return;
             }
 
             const continuation = yield* buildContinuationEffect();
@@ -1040,6 +1077,12 @@ export const WalkthroughJobsLive = Layer.effect(
             }
 
             state.autoContinuations++;
+            // Snapshot for the next adjudication to compare against.
+            state.phaseAtLastContinuation = continuation.partial.lastCompletedPhase;
+            state.countsAtLastContinuation = continuationCounts(
+              continuation.partial,
+              missingInlineCommentCount(),
+            );
             debug(
               "walkthrough-jobs",
               `auto-continuation ${state.autoContinuations}/${MAX_AUTO_CONTINUATIONS}: lastCompletedPhase=${continuation.partial.lastCompletedPhase}`,
@@ -1063,6 +1106,10 @@ export const WalkthroughJobsLive = Layer.effect(
           currentGenerator: generator,
           capturedOpencodeSessionId: undefined,
           toolCallCount: 0,
+          startedAt: Date.now(),
+          phaseAtLastContinuation: null,
+          countsAtLastContinuation: null,
+          terminalReason: "generator-ended",
         };
 
         streamStartMs = Date.now();
@@ -1121,6 +1168,9 @@ export const WalkthroughJobsLive = Layer.effect(
               prHeadSha: job.prHeadSha,
               mode: job.mode,
               trigger,
+              // Already on the row; send it now rather than making the UI wait for Phase A's `summary` event.
+              ...(ctx.assignedRisk !== null ? { riskLevel: ctx.assignedRisk } : {}),
+              modelUsed: ctx.modelUsed,
             },
           }).pipe(Effect.catchAll(() => Effect.void));
 
@@ -1177,7 +1227,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
               const failureOpt = Cause.failureOption(cause);
               const message = cancelledByUser
-                ? "Walkthrough cancelled"
+                ? WALKTHROUGH_CANCELLED_MESSAGE
                 : failureOpt._tag === "Some"
                   ? (failureOpt.value as { cause?: unknown }).cause instanceof Error
                     ? (
@@ -1199,6 +1249,12 @@ export const WalkthroughJobsLive = Layer.effect(
                 Effect.catchAll(() => Effect.void),
               );
 
+              // A superseding cancel has its own announcement coming
+              // (`lifecycle:superseded`, emitted by the sweep right after this
+              // finalizer returns). Emitting an error first would flash a
+              // failure in the UI on every head move and every Regenerate.
+              if (job.cancelReason === "superseded") return;
+
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
                 data: { code, message },
@@ -1212,7 +1268,24 @@ export const WalkthroughJobsLive = Layer.effect(
               prId: job.prId,
             }),
             semaphore.withPermits(1),
-            Effect.catchAllCause(handleFailure),
+            // `onExit`, NOT `catchAllCause`: an interrupted fiber unwinds
+            // straight to its finalizers and never enters an error-channel
+            // handler, so a `catchAllCause` here silently skipped the whole
+            // terminal transition on every user Stop — the row stayed
+            // 'generating' forever, `lifecycle:error`/'Cancelled' never
+            // broadcast, and resume-on-boot kept re-launching the abandoned
+            // job until it burned `WALKTHROUGH_MAX_RESUME_ATTEMPTS`.
+            // Finalizers run uninterruptibly, so the DB write lands.
+            // Registered inside `removeJob` so the job is still in the
+            // registry when `handleFailure` broadcasts.
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) ? handleFailure(exit.cause) : Effect.void,
+            ),
+            // The cause is handled above; swallow it so a genuine failure
+            // doesn't surface as an unhandled daemon-fiber defect. Skipped on
+            // interrupt, which is what leaves the fiber's exit interrupted —
+            // exactly the shape it had when this was the only handler.
+            Effect.catchAllCause(() => Effect.void),
             Effect.ensuring(removeJob(job.walkthroughId)),
             Effect.ensuring(
               // Clear any session tokens issued for this job.
@@ -1258,14 +1331,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return null;
       });
 
-    const startJob = (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
+    const startJob = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         // Resume fast-path: if the caller passed a specific walkthroughId
@@ -1277,7 +1343,7 @@ export const WalkthroughJobsLive = Layer.effect(
         if (params.walkthroughId !== undefined) {
           const cached = yield* findActiveByPr(params.prId, mode);
           if (cached !== null && cached.walkthroughId === params.walkthroughId) {
-            return { walkthroughId: cached.walkthroughId };
+            return { walkthroughId: cached.walkthroughId, reused: true };
           }
         }
 
@@ -1290,14 +1356,7 @@ export const WalkthroughJobsLive = Layer.effect(
         return yield* mutex.withPermits(1)(startJobBody(params));
       });
 
-    const startJobBody = (params: {
-      readonly prId: string;
-      readonly userId: string;
-      readonly trigger: StartJobTrigger;
-      readonly walkthroughId?: string;
-      readonly mode?: WalkthroughMode;
-      readonly generationMode?: WalkthroughGenerationMode;
-    }): Effect.Effect<{ readonly walkthroughId: string }, StartJobError> =>
+    const startJobBody = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
         const mode = params.mode ?? "reviewer";
         // Re-check the registry now that we hold the mutex — a concurrent
@@ -1308,13 +1367,19 @@ export const WalkthroughJobsLive = Layer.effect(
           existing !== null &&
           existing.walkthroughId === params.walkthroughId
         ) {
-          return { walkthroughId: existing.walkthroughId };
+          return { walkthroughId: existing.walkthroughId, reused: true };
         }
 
         const resolved = yield* provideInfra(
           prContextService.resolveWithDiff(params.prId, params.userId),
         );
         const { pr, repo, token, meta, files, commits } = resolved;
+        const pinnedHead = params.expectedHeadSha?.toLowerCase();
+        if (pinnedHead !== undefined && meta.headSha.toLowerCase() !== pinnedHead) {
+          return yield* Effect.fail(
+            new HeadShaMismatchError({ expectedHeadSha: pinnedHead, githubHeadSha: meta.headSha }),
+          );
+        }
 
         // SHA-aware dedup against the in-flight job (if any). The original
         // fast-path here returned the existing walkthroughId regardless of
@@ -1332,12 +1397,10 @@ export const WalkthroughJobsLive = Layer.effect(
               params.walkthroughId === undefined ||
               params.walkthroughId === existing.walkthroughId
             ) {
-              return {
-                walkthroughId: existing.walkthroughId,
-              };
+              return { walkthroughId: existing.walkthroughId, reused: true };
             }
           } else {
-            yield* cancel(existing.walkthroughId);
+            yield* cancel(existing.walkthroughId, "superseded");
           }
         }
 
@@ -1358,6 +1421,21 @@ export const WalkthroughJobsLive = Layer.effect(
           );
         }
 
+        // See `expectedHeadSha`. After the clone check, so a run that can't
+        // start leaves the previous review standing.
+        if (pinnedHead !== undefined) {
+          yield* supersedeForPr(pr.id, meta.headSha, mode);
+        }
+
+        // One perspective at a time. Both perspectives write their AI threads
+        // into the same identity session, so a fresh user start retires the
+        // other perspective's rows (and their unsubmitted threads) the same
+        // way Regenerate retires this one's. Otherwise Submit would post both
+        // walkthroughs' comments.
+        if (isUserInitiated(params.trigger)) {
+          yield* supersedeForPr(pr.id, undefined, otherWalkthroughMode(mode));
+        }
+
         const requestedGenerationMode = params.generationMode ?? "full";
         let partial = yield* provideDb(
           walkthroughService.getPartial(pr.id, meta.headSha, mode, requestedGenerationMode),
@@ -1369,85 +1447,48 @@ export const WalkthroughJobsLive = Layer.effect(
         ) {
           partial = null;
         }
-        if (params.trigger === "user" && partial?.status === "error") {
+        if (isUserInitiated(params.trigger) && partial?.status === "error") {
           partial = null;
         }
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(pr.id, mode));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(pr.id));
         const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
-        // Guard the shared `aiModel` against the generation agent: the chat
-        // bottom bar may have left a model id for a chat-only agent (e.g. cursor)
-        // that this agent can't use — fall back to its default if so.
-        const freshModelUsed =
-          resolveGenerationModel(agent, settings.aiModel) ??
-          (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
-        const modelUsed =
-          params.trigger === "resume"
-            ? freshModelUsed
-            : partial?.modelUsed && partial.modelUsed !== "unknown"
-              ? partial.modelUsed
-              : freshModelUsed;
 
-        // Snapshot the AI provider config at job start. We persist this
-        // alongside `modelUsed` so a mid-job settings change cannot
-        // corrupt the recorded config — the row reflects what was
-        // actually running, and the same JSON gets exported to the
-        // remote cache as `providerConfig`.
-        const providerConfigForJob: GenerationProviderConfig = {
-          provider:
-            agent === "opencode" ? "opencode" : agent === "codex" ? "codex" : "claude-agent-sdk",
-          model: modelUsed,
-          thinkingEffort: settings.aiThinkingEffort ?? null,
-          contextWindow: settings.aiContextWindow ?? null,
+        const startPlan = yield* resolveJobStart({
+          prId: pr.id,
+          headSha: meta.headSha,
+          state: { pr, files, commits },
+          settings,
+          agent,
+          trigger: params.trigger,
+          cacheProbe:
+            mode === "reviewer" &&
+            settings.cache.enabled &&
+            settings.cache.downloadsEnabled &&
+            partial === null
+              ? remoteCache.probe(repo.fullName, meta.headSha)
+              : Effect.succeed(false),
+        }).pipe(
+          Effect.provideService(JevService, jevService),
+          Effect.provideService(CacheService, cacheService),
+          Effect.provideService(DbService, { db }),
+        );
+        const { answers, assignedRisk, filePriorities, launchOverride } = startPlan;
+
+        const { modelUsed, providerConfig: providerConfigForJob } = resolveWalkthroughLaunch({
+          agent,
+          trigger: params.trigger,
+          configuredModel: settings.aiModel,
+          routedModel: launchOverride?.model,
+          priorModel: partial?.modelUsed,
+          configuredEffort: settings.aiThinkingEffort,
+          routedEffort: launchOverride?.thinkingEffort,
           maxTurns: settings.aiMaxTurns,
-        };
+        });
 
-        // Resolve `GeneratedBy` + owning account id from the OAuth account
-        // that owns the repo. Best-effort — if rows are missing we skip
-        // attribution rather than fail the job. The `accountId` flows into
-        // `ActiveJob` so `emitEvent` can target `Broadcaster.broadcastToAccount`
-        // without re-querying the DB on every event.
-        const accountResolution = (() => {
-          const repoRow = db
-            .select({ accountId: repositories.accountId })
-            .from(repositories)
-            .where(eq(repositories.id, repo.id))
-            .get();
-          if (!repoRow) return { accountId: "", generatedBy: undefined };
-          const acc = db
-            .select({
-              accountId: account.accountId,
-              githubLogin: account.githubLogin,
-              avatarUrl: account.avatarUrl,
-            })
-            .from(account)
-            .where(eq(account.id, repoRow.accountId))
-            .get();
-          if (!acc?.githubLogin) {
-            return { accountId: repoRow.accountId, generatedBy: undefined };
-          }
-          const githubUserId = Number(acc.accountId);
-
-          // Resolve avatar content from remote_users.
-          const avatarContent =
-            db
-              .select({ avatarContent: remoteUsers.avatarContent })
-              .from(remoteUsers)
-              .where(eq(remoteUsers.login, acc.githubLogin))
-              .get()?.avatarContent ?? null;
-
-          return {
-            accountId: repoRow.accountId,
-            generatedBy: {
-              githubUserId: Number.isFinite(githubUserId) ? githubUserId : 0,
-              githubLogin: acc.githubLogin,
-              displayName: null,
-              avatarContent,
-            },
-          };
-        })();
+        const accountResolution = resolveWalkthroughOwner(db, repo.id);
         const { generatedBy, accountId: ownerAccountId } = accountResolution;
 
         // Idempotent row creation (upsert on the new unique index).
@@ -1464,8 +1505,17 @@ export const WalkthroughJobsLive = Layer.effect(
             : null;
         const parentWalkthroughId = partial?.parentWalkthroughId ?? priorArtifact?.id ?? null;
         const baseHeadSha = partial?.baseHeadSha ?? priorArtifact?.prHeadSha ?? null;
+        // An incremental run whose base SHA is its own head has an empty commit
+        // range — there is nothing to review, so fall back to the full PR diff.
+        // Only the fresh-row path is guarded: on a resume (`partial !== null`)
+        // the row's generationMode is already committed, and flipping it here
+        // would change `createPartial`'s dedup key and collide on the row's id.
+        const emptyIncrementalRange = partial === null && baseHeadSha === meta.headSha;
         const generationMode: WalkthroughGenerationMode =
-          requestedGenerationMode === "incremental" && parentWalkthroughId && baseHeadSha
+          requestedGenerationMode === "incremental" &&
+          parentWalkthroughId &&
+          baseHeadSha &&
+          !emptyIncrementalRange
             ? "incremental"
             : "full";
 
@@ -1481,9 +1531,13 @@ export const WalkthroughJobsLive = Layer.effect(
             generationMode,
             parentWalkthroughId,
             baseHeadSha,
-            forceNew: params.trigger === "user" && generationMode === "full",
+            forceNew: isUserInitiated(params.trigger) && generationMode === "full",
             prCommits: commits,
             ...(generatedBy ? { generatedBy } : {}),
+            // At insert, not a follow-up UPDATE: no kill-9 window without the tier.
+            ...(assignedRisk !== null && answers !== null
+              ? { risk: { level: assignedRisk, confidence: answers.riskConfidence } }
+              : {}),
             providerConfig: providerConfigForJob,
           }),
         ).pipe(
@@ -1496,59 +1550,23 @@ export const WalkthroughJobsLive = Layer.effect(
           ),
         );
 
-        // ── Remote cache probe ────────────────────────────────────────
-        // After the row exists (so subscribers see a consistent target)
-        // we ask the team cache whether a snapshot for this `(repo,
-        // headSha)` is available. On hit, we import + flip status to
-        // 'complete' and skip the agent fiber entirely. On miss / any
-        // failure, fall through to the usual generation path. This is
-        // safe for `partial !== null` paths too — the importer wipes
-        // any leftover partial children inside its transaction.
-        if (
-          mode === "reviewer" &&
-          settings.cache.enabled &&
-          settings.cache.downloadsEnabled &&
-          partial === null
-        ) {
-          const snapshotOpt = yield* remoteCache.fetch(repo.fullName, meta.headSha);
-          if (Option.isSome(snapshotOpt)) {
-            const importResult = yield* provideDb(
-              snapshotImporter.import({
-                walkthroughId,
-                snapshot: snapshotOpt.value,
-              }),
-            ).pipe(Effect.either);
-            if (importResult._tag === "Right") {
-              yield* setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE });
-              // New clients see the cache-hit marker + lifecycle:complete on
-              // the global SSE bus and re-hydrate via REST `/current` to get
-              // the imported content. (A future iteration can replay the
-              // imported rows as content events through emitEvent — see the
-              // plan's §4.10 — so clients render inline without a follow-up
-              // fetch.)
-              yield* emitEvent(walkthroughId, {
-                type: "lifecycle:cache-hit",
-                data: { walkthroughId, source: "remote" },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              yield* emitEvent(walkthroughId, {
-                type: "lifecycle:complete",
-                data: {
-                  walkthroughId,
-                  tokenUsage: ZERO_TOKEN_USAGE,
-                },
-              }).pipe(Effect.catchAll(() => Effect.void));
-              debug(
-                "walkthrough-jobs",
-                `cache hit wt=${walkthroughId} pr=${pr.id} sha=${meta.headSha} — skipping agent`,
-              );
-              return { walkthroughId };
-            }
-            logError(
-              "walkthrough-jobs",
-              `cache import failed wt=${walkthroughId} — falling through to agent: ${importResult.left.reason}`,
-            );
-          }
-        }
+        const importedFromCache = yield* tryImportCachedWalkthrough({
+          enabled:
+            mode === "reviewer" &&
+            settings.cache.enabled &&
+            settings.cache.downloadsEnabled &&
+            partial === null,
+          walkthroughId,
+          prId: pr.id,
+          repoFullName: repo.fullName,
+          headSha: meta.headSha,
+          fetchSnapshot: remoteCache.fetch(repo.fullName, meta.headSha),
+          importSnapshot: (snapshot) =>
+            provideDb(snapshotImporter.import({ walkthroughId, snapshot })),
+          markComplete: setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE }),
+          emitEvent: (event) => emitEvent(walkthroughId, event),
+        });
+        if (importedFromCache) return { walkthroughId, reused: false };
 
         // On user-triggered resume, sync the stored modelUsed to current settings
         // so the DB reflects which agent is actually running this continuation.
@@ -1569,6 +1587,7 @@ export const WalkthroughJobsLive = Layer.effect(
           nextSeq: 0,
           fiber: null,
           cancelledByUser: false,
+          cancelReason: null,
           prerenderFailures: 0,
         };
 
@@ -1597,11 +1616,16 @@ export const WalkthroughJobsLive = Layer.effect(
             generationMode,
             parentWalkthroughId,
             baseHeadSha,
+            launchOverride,
+            assignedRisk,
+            filePriorities,
+            splitRecommendation: startPlan.splitRecommendation,
+            adjudicateContinuations: settings.jev.enabled,
           },
           params.trigger,
         );
 
-        return { walkthroughId };
+        return { walkthroughId, reused: false };
       });
 
     const subscribe = (
@@ -1620,14 +1644,18 @@ export const WalkthroughJobsLive = Layer.effect(
         return { found: true, unsubscribe, flush };
       });
 
-    const cancel = (walkthroughId: string): Effect.Effect<void> =>
+    const cancel = (
+      walkthroughId: string,
+      reason: "user" | "superseded" = "user",
+    ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const map = yield* Ref.get(registry);
         const job = map.get(walkthroughId);
         if (!job) return;
 
-        debug("walkthrough-jobs", "cancel:", walkthroughId);
+        debug("walkthrough-jobs", "cancel:", walkthroughId, reason);
         job.cancelledByUser = true;
+        job.cancelReason = reason;
         if (!job.abortController.signal.aborted) {
           try {
             job.abortController.abort(new Error("Walkthrough cancelled"));
@@ -1752,7 +1780,7 @@ export const WalkthroughJobsLive = Layer.effect(
             continue;
           }
           supersededIds.push(job.walkthroughId);
-          yield* cancel(job.walkthroughId);
+          yield* cancel(job.walkthroughId, "superseded");
         }
         yield* provideDb(walkthroughService.supersedeAllForPr(prId, exceptHeadSha, mode));
         for (const id of supersededIds) {
@@ -1929,7 +1957,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const snapshot = snapshotOpt.value;
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateActiveSession(prId, mode));
+        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(prId));
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
             reviewSessionId: reviewSession.id,

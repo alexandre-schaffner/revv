@@ -7,11 +7,12 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChatSessionContext } from "@revv/shared";
+import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
+import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
-import { applyAcpAgentOverride } from "../ai/acp/presets";
+import { applyAcpAgentOverride, resolveGenerationModel } from "../ai/acp/presets";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
@@ -27,6 +28,18 @@ import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * The model half of a chat session's identity key `(prId, agent, model, headSha)`.
+ *
+ * Goes through {@link resolveGenerationModel}, never raw `settings.aiModel`:
+ * that may hold {@link AUTO_SENTINEL}, which chat can't size (no PR sizing
+ * pass), so it resolves to the agent's default instead. Every chat-session
+ * lookup must use this or it misses its own session and starts a fresh one.
+ */
+export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
+  return resolveGenerationModel(agent, aiModel) ?? getAcpAgentDefaultModel(agent);
+}
 
 /**
  * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
@@ -68,7 +81,7 @@ export const resolveChatReadContext = (
 
     const settings = yield* settingsService.getSettings();
     const agent = yield* settingsService.resolveChatAgentId();
-    const model = settings.aiModel;
+    const model = chatSessionModel(agent, settings.aiModel);
 
     // No head SHA → no session can match (rows are keyed on it), so skip the
     // lookup. Otherwise a null row means a fresh start (e.g. the user just
@@ -191,9 +204,8 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
 
     // Capabilities + slash commands from the agent connection.
     const config = {
-      model: settings.aiModel ?? undefined,
-      thinkingEffort: settings.aiThinkingEffort ?? undefined,
-      contextWindow: settings.aiContextWindow ?? undefined,
+      model: resolveGenerationModel(acpAgent, settings.aiModel),
+      thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
     };
     const handle = yield* Effect.promise(() =>
       warm
@@ -494,10 +506,20 @@ export interface ProposedCommit {
  * it passes through, then re-emitted to the SSE encoder unchanged.
  *
  * Persistence rules:
- *   - text frames: lazily begin the assistant message on the FIRST chunk
- *     (so the assistant row's sequence lands AFTER any preceding activities,
- *     matching the "user → activities → assistant" timeline shape). Each
- *     subsequent chunk appends content via SQL `||`.
+ *   - text frames: lazily begin an assistant message on the first chunk of
+ *     each prose run, so its sequence lands after whatever preceded it.
+ *     Subsequent chunks of the same run append content via SQL `||`.
+ *   - any frame that occupies its own slot in the rendered timeline
+ *     (activity, plan, sub-agent start, question) first SEALS the open
+ *     assistant row, so the next prose run opens a fresh one. That's what
+ *     makes the persisted sequence interleave narration and tool calls in
+ *     true chronological order — a single row per turn would force every
+ *     activity to sort either wholly before or wholly after the agent's
+ *     entire narration. Frames that only patch an existing row
+ *     (activity-result / activity-input / subagent-end / question-resolved)
+ *     don't seal: they can land mid-sentence and must not split a paragraph.
+ *     Neither does task-list — it renders in the Queue dock, not in the
+ *     timeline, and its snapshots are frequent enough to shred the prose.
  *   - activity frames: insert a chat_activities row immediately, sequence
  *     allocated atomically against chat_sessions.next_sequence.
  *   - stream end (no error): finalize the assistant message if one exists;
@@ -558,6 +580,26 @@ export function wrapStreamWithPersistence(
         return assistantMessageId;
       };
 
+      /**
+       * Close the open assistant row so the next prose run opens a fresh
+       * one at a later sequence. Called before persisting any frame that
+       * takes its own slot in the timeline.
+       */
+      const sealAssistantMessage = async (): Promise<void> => {
+        const messageId = assistantMessageId;
+        assistantMessageId = null;
+        if (!messageId) return;
+        try {
+          await AppRuntime.runPromise(
+            Effect.flatMap(ChatSessionService, (svc) =>
+              svc.finalizeAssistantMessage({ messageId, error: null }),
+            ),
+          );
+        } catch (err) {
+          logPersistError("finalizeAssistantMessage", err);
+        }
+      };
+
       const finalize = async (errorMessage: string | null): Promise<void> => {
         try {
           if (!assistantMessageId && errorMessage) {
@@ -602,7 +644,22 @@ export function wrapStreamWithPersistence(
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Frames that occupy their own timeline slot close the open prose
+          // run first, so text and tool calls interleave by sequence.
+          if (
+            value.kind === "activity" ||
+            value.kind === "plan-presented" ||
+            value.kind === "subagent-start" ||
+            value.kind === "user-question"
+          ) {
+            await sealAssistantMessage();
+          }
+
           if (value.kind === "text") {
+            if (value.data.length === 0) {
+              controller.enqueue(value);
+              continue;
+            }
             textStreamed = true;
             const id = await ensureAssistantMessage();
             if (id) {

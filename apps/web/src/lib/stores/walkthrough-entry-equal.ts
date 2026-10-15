@@ -3,9 +3,8 @@
 // Extracted from the `.svelte.ts` store so it can be unit-tested without the
 // Svelte runtime. Used by `updateEntry` to skip the reactive `store.entries`
 // write on a genuine no-op — which is what prevents an `$effect` that calls
-// `updateEntry` (e.g. AppShell's new-commit watcher via `markWalkthroughStale`)
-// from re-invalidating on its own output → `effect_update_depth_exceeded`
-// (a hard UI freeze).
+// `updateEntry` from re-invalidating on its own output →
+// `effect_update_depth_exceeded` (a hard UI freeze).
 //
 // A SHALLOW comparison is sound here specifically because `updateEntryInMap`
 // freezes the existing entry's direct mutable field references before handing

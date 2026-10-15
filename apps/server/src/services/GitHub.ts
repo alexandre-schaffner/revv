@@ -13,10 +13,16 @@ import { logError } from "../logger";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
+  listOpenPrsViaGraphql,
+  type OpenPrListSignature,
+  probeOpenPrListSignatures,
+} from "./github-graphql-prs";
+import {
   apiBaseForHost,
   assertGitHubOk,
   conditionalFetch,
   conditionalFetchPaginated,
+  type GraphqlConnection,
   githubDelete,
   githubFetch,
   githubFetchPaginated,
@@ -25,9 +31,11 @@ import {
   githubPatch,
   githubPost,
   githubPut,
+  paginateGraphql,
   parseLinkNext,
   retryTransient,
   toGitHubError,
+  withSchemaFallback,
 } from "./github-rest";
 import { SettingsService } from "./Settings";
 
@@ -75,6 +83,10 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     authorAvatarContent: null,
     authorAvatarUrl: (user.avatar_url as string | null) ?? null,
     requestedReviewers,
+    // GitHub's PR payload has no mentions field; they're parsed out of the
+    // body and unioned with comment-sourced mentions during sync, then read
+    // back off the DB row. Always empty on this path.
+    mentionedUsers: [],
     status: raw.state === "closed" ? (raw.merged_at ? "merged" : "closed") : "open",
     reviewStatus: "pending",
     isDraft: (raw.draft as boolean | undefined) ?? false,
@@ -173,19 +185,93 @@ export interface PrCommit {
   readonly date: string | null;
 }
 
+/** Per-PR diff size, as returned by {@link GitHubGatewayFlatService.listPrDiffStats}. */
+export interface PrDiffStats {
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
+/**
+ * One installation of the GitHub App the user signed in through, as returned
+ * by {@link GitHubGatewayFlatService.listUserAppInstallations}.
+ */
+export interface AppInstallation {
+  /** Login of the org or user the app is installed on. */
+  readonly accountLogin: string;
+  readonly repositorySelection: "all" | "selected";
+  /** The installation's settings page, where its repository access is edited. */
+  readonly htmlUrl: string;
+  readonly appSlug: string;
+}
+
 interface GitHubGatewayFlatService {
+  /**
+   * Every open PR of one repo, most recently updated first.
+   *
+   * GraphQL, not `GET /pulls`: the REST list embeds two full repository
+   * objects per PR (~20 KB each), so a 65-PR repo came back as 1.3 MB, and on
+   * GitHub Enterprise its ETag never matched — every author's `avatar_url`
+   * carries a per-request signed token, so the body differs on every read and
+   * the conditional cache never saw a 304. This asks for the list fields only
+   * (~40 KB for the same repo) at 1 GraphQL point per 100 PRs.
+   *
+   * Diff sizes are left at 0/0/0, as the REST list did; `listPrDiffStats`
+   * fills them in for the PRs whose head moved.
+   */
   readonly listPrs: (
     repoFullName: string,
     repositoryId: string,
     token: string,
     apiBase?: string,
+  ) => Effect.Effect<PullRequest[], GitHubError, SettingsService>;
+  /**
+   * {@link listPrs} over REST's `GET /pulls`, for when the GraphQL budget is
+   * spent. Heavier per changed page, but conditional: a 304 costs nothing
+   * against the REST limit, so a quiet repo stays free (except on GitHub
+   * Enterprise, whose signed avatar URLs defeat the ETag).
+   */
+  readonly listPrsRest: (
+    repoFullName: string,
+    repositoryId: string,
+    token: string,
+    apiBase?: string,
   ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * The open-PR list signature of many repos (same host, same token) in one
+   * GraphQL point per 80 repos — what lets the poll skip {@link listPrs} for
+   * repos where nothing moved. See `probeOpenPrListSignatures`.
+   */
+  readonly probeOpenPrLists: (
+    repoFullNames: readonly string[],
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Map<string, OpenPrListSignature>, GitHubError, SettingsService>;
   readonly getPr: (
     repoFullName: string,
     prNumber: number,
     token: string,
     apiBase?: string,
   ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+  /**
+   * Diff size for many PRs of one repo, keyed by PR number.
+   *
+   * {@link listPrs} leaves these out: GitHub computes them per PR, so asking
+   * for every open PR on every poll would slow the list down to size PRs whose
+   * head hasn't moved. One aliased GraphQL request per 100 PRs, for just the
+   * PRs that need it, instead of one REST detail fetch per PR.
+   *
+   * Best-effort: GitHub returns partial data plus per-alias errors, so a
+   * deleted/inaccessible PR is simply absent from the map. Treat absence as
+   * "unknown", never zero — see the `changed_files > 0` guard in
+   * `PullRequestService.upsertPrs`.
+   */
+  readonly listPrDiffStats: (
+    repoFullName: string,
+    prNumbers: readonly number[],
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Map<number, PrDiffStats>, GitHubError, SettingsService>;
   /**
    * Find PR numbers closed (or merged) in a time window via GitHub's
    * issue-search API. Used by the recap pipeline to discover PRs that
@@ -244,6 +330,17 @@ interface GitHubGatewayFlatService {
     token: string,
   ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
   readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
+  /**
+   * Installations of the GitHub App behind a user access token
+   * (`GET /user/installations`). Only meaningful for a token minted by a
+   * GitHub App: such a token sees a repository only where the app is
+   * installed, so this is how a 404 on a repo the user can reach in the
+   * browser gets explained.
+   */
+  readonly listUserAppInstallations: (
+    token: string,
+    apiBase: string,
+  ) => Effect.Effect<AppInstallation[], GitHubError>;
   /**
    * Teams (and their members) for a single org. Requires the token to carry
    * the `read:org` scope and the user to be an org member; otherwise GitHub
@@ -590,22 +687,31 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      // A few active repos can exceed 1,000 open PRs. Keep the sync
-      // bounded for rate-limit safety, but do not drop rows at GitHub's
-      // first 10 pages when the user needs to filter down to their team.
+      return yield* listOpenPrsViaGraphql(owner, repo, repositoryId, token, apiBase);
+    }).pipe(retryTransient),
+
+  listPrsRest: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
         token,
         50,
         apiBase,
-        // This endpoint is sorted by updated_at desc, so any new or recently
-        // changed PR changes page 1's ETag. Replaying a 304 is therefore safe
-        // even for large repos with 100+ open PRs; forcing a full refetch on
-        // every poll burns rate limit and leaves those repos stuck on stale DB
-        // state once GitHub starts returning 403 rate-limit responses.
+        // Sorted by updated_at desc, so any new or recently changed PR changes
+        // page 1's ETag. Replaying a 304 is therefore safe even for repos with
+        // 100+ open PRs, and forcing a full refetch would spend the very
+        // budget this path exists to save.
         { canReplayCached: () => true },
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
+    }).pipe(retryTransient),
+
+  probeOpenPrLists: (repoFullNames, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      return yield* probeOpenPrListSignatures(repoFullNames, token, apiBase);
     }).pipe(retryTransient),
 
   getPr: (repoFullName, prNumber, token, explicitApiBase) =>
@@ -618,6 +724,69 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         apiBase,
       );
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
+    }).pipe(retryTransient),
+
+  listPrDiffStats: (repoFullName, prNumbers, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const result = new Map<number, PrDiffStats>();
+      if (prNumbers.length === 0) return result;
+
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+
+      // Each aliased node is 3 scalar fields, well below GitHub's node budget;
+      // 100 also keeps the request body comfortable on GHE.
+      const CHUNK_SIZE = 100;
+      for (let start = 0; start < prNumbers.length; start += CHUNK_SIZE) {
+        const chunk = prNumbers.slice(start, start + CHUNK_SIZE);
+        const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
+        const fields = chunk
+          .map((_, i) => `p${i}: pullRequest(number: $n${i}) { additions deletions changedFiles }`)
+          .join("\n");
+        const variables: Record<string, string | number> = { owner, name: repo };
+        chunk.forEach((n, i) => {
+          variables[`n${i}`] = n;
+        });
+
+        const query = `query PrDiffStats($owner: String!, $name: String!, ${argDefs}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`;
+
+        // Direct fetch, not the shared GraphQL helper (same reason as
+        // `getOpenPrCounts`): the helper rejects on any error entry, but one
+        // unreachable PR shouldn't cost the other 99 their stats.
+        const response = yield* Effect.tryPromise({
+          try: async () => {
+            const res = await fetch(`${apiBase}/graphql`, {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify({ query, variables }),
+            });
+            assertGitHubOk(res, "/graphql");
+            return (await res.json()) as {
+              data?: { repository?: Record<string, PrDiffStats | null> | null };
+            };
+          },
+          catch: toGitHubError,
+        });
+
+        const repository = response.data?.repository;
+        if (!repository) continue;
+        chunk.forEach((n, i) => {
+          const node = repository[`p${i}`];
+          if (node) {
+            result.set(n, {
+              additions: node.additions,
+              deletions: node.deletions,
+              changedFiles: node.changedFiles,
+            });
+          }
+        });
+      }
+
+      return result;
     }).pipe(retryTransient),
 
   searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token, explicitApiBase) =>
@@ -773,6 +942,21 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
         login: raw.login as string,
         avatarUrl: (raw.avatar_url as string | null) ?? null,
       }));
+    }).pipe(retryTransient),
+
+  listUserAppInstallations: (token, apiBase) =>
+    Effect.gen(function* () {
+      const data = (yield* githubFetch("/user/installations?per_page=100", token, apiBase)) as {
+        installations?: Record<string, unknown>[];
+      };
+      return (data.installations ?? []).map(
+        (raw): AppInstallation => ({
+          accountLogin: (raw.account as Record<string, unknown>).login as string,
+          repositorySelection: raw.repository_selection === "all" ? "all" : "selected",
+          htmlUrl: raw.html_url as string,
+          appSlug: raw.app_slug as string,
+        }),
+      );
     }).pipe(retryTransient),
 
   listTeamsForOrg: (org, token, explicitApiBase) =>
@@ -1262,43 +1446,33 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
 					}
 				}
 			`;
+      interface ReviewThreadNode {
+        id: string;
+        isResolved: boolean;
+        comments: { nodes: Array<{ databaseId: number }> };
+      }
       interface ReviewThreadsResp {
         repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: boolean; endCursor: string | null };
-              nodes: Array<{
-                id: string;
-                isResolved: boolean;
-                comments: { nodes: Array<{ databaseId: number }> };
-              }>;
-            };
-          };
-        };
+          pullRequest: { reviewThreads: GraphqlConnection<ReviewThreadNode> } | null;
+        } | null;
       }
-      const out: GhReviewThread[] = [];
-      let cursor: string | null = null;
-      for (let p = 0; p < 5; p++) {
-        const data: ReviewThreadsResp = yield* githubGraphql<ReviewThreadsResp>(
-          query,
-          { owner, repo, number: prNumber, cursor },
-          token,
-          apiBase,
-        );
-        const page = data.repository.pullRequest.reviewThreads;
-        for (const node of page.nodes) {
-          out.push({
-            nodeId: node.id,
-            isResolved: node.isResolved,
-            commentDatabaseIds: node.comments.nodes.map(
-              (n: { databaseId: number }) => n.databaseId,
-            ),
-          });
-        }
-        if (!page.pageInfo.hasNextPage) break;
-        cursor = page.pageInfo.endCursor;
-      }
-      return out;
+      const nodes = yield* paginateGraphql<ReviewThreadsResp, ReviewThreadNode>({
+        query,
+        variables: { owner, repo, number: prNumber },
+        selectConnection: (data) => data.repository?.pullRequest?.reviewThreads,
+        maxPages: 5,
+        token,
+        apiBase,
+        notFound: () =>
+          new GitHubNotFoundError({ resource: "pull_request", id: `${repoFullName}#${prNumber}` }),
+      });
+      return nodes.map(
+        (node): GhReviewThread => ({
+          nodeId: node.id,
+          isResolved: node.isResolved,
+          commentDatabaseIds: node.comments.nodes.map((n) => n.databaseId),
+        }),
+      );
     }).pipe(retryTransient),
 
   resolveReviewThread: (threadNodeId, token, explicitApiBase) =>
@@ -1389,7 +1563,19 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const query = `
+      // `mergeCommitAllowed` / `squashMergeAllowed` / `rebaseMergeAllowed` are
+      // recent additions to `Repository`, and GraphQL rejects the *whole* query
+      // on an unknown field — so on a GitHub Enterprise release that predates
+      // them, asking for them would cost the caller `canMerge` too and the merge
+      // pill would vanish rather than degrade. Ask once with them; on a schema
+      // complaint, ask again without and let `allowedMethods` come back empty,
+      // which the UI already reads as "offer all three".
+      const MERGE_METHOD_FIELDS = [
+        "mergeCommitAllowed",
+        "squashMergeAllowed",
+        "rebaseMergeAllowed",
+      ];
+      const buildQuery = (withMergeMethods: boolean): string => `
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
@@ -1397,6 +1583,7 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
               mergeStateStatus
             }
             viewerPermission
+            ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
           }
         }
       `;
@@ -1407,14 +1594,19 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
             mergeStateStatus: string | null;
           } | null;
           viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
+          mergeCommitAllowed: boolean | null;
+          squashMergeAllowed: boolean | null;
+          rebaseMergeAllowed: boolean | null;
         } | null;
       }
-      const data = yield* githubGraphql<Resp>(
-        query,
-        { owner, repo, number: prNumber },
-        token,
-        apiBase,
-      );
+      const ask = (withMergeMethods: boolean) =>
+        githubGraphql<Resp>(
+          buildQuery(withMergeMethods),
+          { owner, repo, number: prNumber },
+          token,
+          apiBase,
+        );
+      const { value: data } = yield* withSchemaFallback(ask, MERGE_METHOD_FIELDS);
       const pr = data.repository?.pullRequest;
       if (!pr) {
         return yield* Effect.fail(
@@ -1426,10 +1618,18 @@ const githubGatewayFlat: GitHubGatewayFlatService = {
       }
       const perm = data.repository?.viewerPermission;
       const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // Repos routinely disable merge strategies (squash-only is the common
+      // house style). Offering a disabled one earns a 405 from the merge
+      // endpoint, so the allowed set travels with the eligibility answer.
+      const allowedMethods: MergeMethod[] = [];
+      if (data.repository?.mergeCommitAllowed !== false) allowedMethods.push("merge");
+      if (data.repository?.squashMergeAllowed !== false) allowedMethods.push("squash");
+      if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
       return {
         canMerge,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
+        allowedMethods,
       };
     }),
 
@@ -1526,7 +1726,10 @@ type GitHubGatewayFlat = typeof githubGatewayFlat;
 export interface GitHubGatewayService {
   readonly prs: {
     readonly listOpen: GitHubGatewayFlat["listPrs"];
+    readonly listOpenRest: GitHubGatewayFlat["listPrsRest"];
+    readonly probeOpenLists: GitHubGatewayFlat["probeOpenPrLists"];
     readonly get: GitHubGatewayFlat["getPr"];
+    readonly diffStats: GitHubGatewayFlat["listPrDiffStats"];
     readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
     readonly meta: GitHubGatewayFlat["getPrMeta"];
     readonly files: GitHubGatewayFlat["getPrFiles"];
@@ -1558,6 +1761,7 @@ export interface GitHubGatewayService {
     readonly listForUser: GitHubGatewayFlat["listUserRepos"];
     readonly openPrCounts: GitHubGatewayFlat["getOpenPrCounts"];
     readonly orgsForUser: GitHubGatewayFlat["listUserOrgs"];
+    readonly appInstallationsForUser: GitHubGatewayFlat["listUserAppInstallations"];
     readonly teamsForOrg: GitHubGatewayFlat["listTeamsForOrg"];
     readonly collaboratorPermission: GitHubGatewayFlat["getCollaboratorPermission"];
   };
@@ -1579,7 +1783,10 @@ export class GitHubGateway extends Context.Tag("GitHubGateway")<
 export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   prs: {
     listOpen: githubGatewayFlat.listPrs,
+    listOpenRest: githubGatewayFlat.listPrsRest,
+    probeOpenLists: githubGatewayFlat.probeOpenPrLists,
     get: githubGatewayFlat.getPr,
+    diffStats: githubGatewayFlat.listPrDiffStats,
     searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,
     meta: githubGatewayFlat.getPrMeta,
     files: githubGatewayFlat.getPrFiles,
@@ -1611,6 +1818,7 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     listForUser: githubGatewayFlat.listUserRepos,
     openPrCounts: githubGatewayFlat.getOpenPrCounts,
     orgsForUser: githubGatewayFlat.listUserOrgs,
+    appInstallationsForUser: githubGatewayFlat.listUserAppInstallations,
     teamsForOrg: githubGatewayFlat.listTeamsForOrg,
     collaboratorPermission: githubGatewayFlat.getCollaboratorPermission,
   },

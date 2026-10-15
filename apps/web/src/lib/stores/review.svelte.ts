@@ -5,20 +5,18 @@ import type {
   ReviewMode,
   ThreadMessage,
   ThreadStatus,
+  WalkthroughMode,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPullRequests, getReviewModeForPr } from "$lib/stores/prs.svelte";
-import {
-  getReportIdForSha,
-  invalidateForPull,
-  regenerate,
-  selectWalkthroughReport,
-} from "$lib/stores/walkthrough.svelte";
+import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -60,9 +58,6 @@ export function clearReviewFiles(): void {
   // runs. Wiping it would lose that restore.
   clearRepoFile();
   clearSession();
-  // An explicit clear means the caller wants a fresh diff on the next load,
-  // same contract as `clearSession`'s reset of its own short-circuit window.
-  invalidateFilesLoaded();
 }
 
 // --- Unchanged-file content viewer ------------------------------------------
@@ -114,114 +109,6 @@ export function getLoadedHeadSha(prId: string): string | null {
   return loadedHeadShas.get(prId) ?? null;
 }
 
-// --- Commit-scoped review ----------------------------------------------------
-//
-// A PR can be reviewed "as of" one of its commits: the file tree, the diffs
-// and the walkthrough all re-scope to `base...C` instead of the full PR. The
-// commits dropdown is the only selector.
-//
-// This lives in its own map rather than on `PrViewState` on purpose. That
-// state sits inside the single `store = $state({ entries, activePrId })`
-// object whose `entries` map is reassigned on every scroll tick by
-// `setPrScrollPosition`, and the `/files` effect has to read the selection
-// *reactively* — reading it off `store` would subscribe that effect to scroll
-// traffic and fire a request per frame. A dedicated map has exactly one
-// writer and cannot self-retrigger. Keying by `prId` gives it the same
-// survive-a-PR-switch lifetime as `loadedHeadShas`, so `switchPrViewState`
-// needs no change.
-let selectedCommitShas = $state(new Map<string, string>());
-
-/** The commit the review is scoped to, or null for "the whole PR". */
-export function getSelectedCommitSha(prId: string): string | null {
-  return selectedCommitShas.get(prId) ?? null;
-}
-
-export function isCommitScoped(prId: string): boolean {
-  return selectedCommitShas.has(prId);
-}
-
-export function clearSelectedCommitSha(prId: string): void {
-  if (!selectedCommitShas.has(prId)) return;
-  selectedCommitShas.delete(prId);
-  selectedCommitShas = new Map(selectedCommitShas);
-}
-
-/**
- * Scope the review to `sha`, or back to the whole PR with `null`.
- *
- * The only public writer of the selection, and the orchestrator for the
- * walkthrough side of the switch. Selecting the head commit normalises to
- * `null` so "head" has exactly one spelling and no reader has to compare
- * against `headSha`.
- *
- * Deliberately does not fetch: the `/files` refetch is reactive off this
- * state in `+page.svelte`, which stays the single owner of request-id
- * cancellation, session loading and error state.
- */
-export async function selectCommit(prId: string, sha: string | null): Promise<void> {
-  const pr = getPullRequests().find((p) => p.id === prId);
-  const next = sha !== null && sha === pr?.headSha ? null : sha;
-  const current = getSelectedCommitSha(prId);
-  // Early-return on no-op: without it, a repeat click on the selected commit
-  // reassigns the map and re-triggers the files effect for the same range.
-  if (current === next) return;
-
-  if (next === null) {
-    clearSelectedCommitSha(prId);
-  } else {
-    selectedCommitShas.set(prId, next);
-    selectedCommitShas = new Map(selectedCommitShas);
-  }
-  requestDiffScrollReset();
-
-  const mode = getReviewMode(prId);
-  if (next === null) {
-    // Back to following the latest report.
-    await selectWalkthroughReport(prId, null, mode);
-    return;
-  }
-  const reportId = getReportIdForSha(prId, next, mode);
-  if (reportId !== null) {
-    await selectWalkthroughReport(prId, reportId, mode);
-  }
-  // No report at this commit: leave the walkthrough store untouched. The
-  // "commit-scoped, no report" state is derived in GuidedWalkthrough from
-  // the selection plus the rounds list, so there is nothing to store.
-}
-
-// --- Diff-files short-circuit window -----------------------------------------
-//
-// Shared by the `/files` effect in `+page.svelte` and `pullLatestCommit`, so
-// the two cannot both decide a fetch is needed for the same key. Without a
-// shared window, `pullLatestCommit` clearing the commit scope invalidates the
-// effect's tracked read and produces a second concurrent full `/files` fetch —
-// two ~12 MB responses on a large PR.
-const FILES_REFETCH_WINDOW_MS = 60_000;
-let lastFilesKey: string | null = null;
-let lastFilesAt = 0;
-
-function filesKey(prId: string, mode: ReviewMode, atSha: string | null): string {
-  return `${prId}:${mode}:${atSha ?? "head"}`;
-}
-
-export function shouldSkipFilesLoad(prId: string, mode: ReviewMode, atSha: string | null): boolean {
-  return (
-    filesKey(prId, mode, atSha) === lastFilesKey &&
-    Date.now() - lastFilesAt < FILES_REFETCH_WINDOW_MS &&
-    getReviewFiles().length > 0
-  );
-}
-
-export function markFilesLoaded(prId: string, mode: ReviewMode, atSha: string | null): void {
-  lastFilesKey = filesKey(prId, mode, atSha);
-  lastFilesAt = Date.now();
-}
-
-export function invalidateFilesLoaded(): void {
-  lastFilesKey = null;
-  lastFilesAt = 0;
-}
-
 // Per-PR in-flight flag so the pull button can show a spinner without
 // racing a second click. Set-reassignment for reactivity, matching the
 // loadedHeadShas pattern above.
@@ -230,13 +117,6 @@ const pullCommitRequests = new Map<string, Promise<boolean>>();
 
 export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
-}
-
-function apiErrorMessage(error: { status: number; value?: unknown }, fallback: string): string {
-  const value = error.value as { error?: unknown; message?: unknown } | null | undefined;
-  if (typeof value?.error === "string") return value.error;
-  if (typeof value?.message === "string") return value.message;
-  return `${fallback} (HTTP ${error.status})`;
 }
 
 /**
@@ -266,10 +146,6 @@ export function pullLatestCommit(prId: string): Promise<boolean> {
 
 async function runPullLatestCommit(prId: string): Promise<boolean> {
   try {
-    // Pulling head is the one flow that swaps the whole diff, so it also
-    // drops any commit scope — the fresh diff we install below is the full
-    // PR at the new head.
-    clearSelectedCommitSha(prId);
     setIsLoadingFiles(true);
     setFilesError(null);
 
@@ -296,10 +172,6 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
     }));
 
     setReviewFiles(mapped);
-    // Claim the short-circuit window for the full-PR key we just installed,
-    // so the reactive `/files` effect doesn't fetch the same thing again
-    // after `clearSelectedCommitSha` above invalidated its tracked read.
-    markFilesLoaded(prId, mode, null);
     // If the user has an active file that's gone in the new diff, fall back
     // to the first file. If the active file still exists, leave it alone so
     // the user's scroll position in the diff tab isn't reset.
@@ -309,10 +181,13 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
       setActiveFilePath(mapped[0]!.path);
     }
 
-    // Stamp the current PR head SHA. Read from the live PR list so we pick
+    // Stamp the current PR head SHA. Read from the live PR lists so we pick
     // up whatever `prs:updated` has already merged — even if another
     // `prs:updated` has landed since the UI signalled "new commit available."
-    const pr = getPullRequests().find((p) => p.id === prId);
+    // `getPrById` spans open *and* archived rows: a PR that merged while the
+    // page was open has moved to the archive, and missing it here would leave
+    // the loaded SHA stamped at the old commit forever (pull button stuck on).
+    const pr = getPrById(prId);
     if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
 
     // Invalidate the walkthrough so the user sees the "Generate walkthrough"
@@ -331,7 +206,7 @@ async function runPullLatestCommit(prId: string): Promise<boolean> {
  * Pull the current head through the same path as the tab-side Pull button,
  * then start the incremental walkthrough requested by the superseded toast.
  */
-export async function reviewLatestCommit(prId: string, mode: ReviewMode): Promise<void> {
+export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): Promise<void> {
   await reviewNewCommits({
     pull: () => pullLatestCommit(prId),
     regenerate: () => regenerate(prId, mode, "incremental"),
@@ -342,10 +217,11 @@ export async function reviewLatestCommit(prId: string, mode: ReviewMode): Promis
 let sessionId = $state<string | null>(null);
 let _sessionLoading = $state(false);
 /**
- * The active review lens for a PR. Derived purely from identity (PR author
+ * The review-session lens for a PR. Derived purely from identity (PR author
  * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
- * override. The server still keeps an author and a reviewer walkthrough per
- * head SHA; we always resolve to the one matching the viewer's role.
+ * override: comments, threads and the diff are keyed on it. The walkthrough's
+ * perspective is separate and user-picked; see `getSelectedMode` in the
+ * walkthrough store.
  */
 export function getReviewMode(prId: string): ReviewMode {
   return getReviewModeForPr(prId);
@@ -447,8 +323,11 @@ export async function loadSession(
 // `currentPrId`. Scroll positions are write-only persistence — components
 // read them imperatively on mount and write on scroll, no reactivity needed.
 
-type ActiveTab = "walkthrough" | "diff" | "request-changes";
-type ScrollPaneKey = "walkthrough" | "diff" | "requestChanges" | "sidebar";
+/** The review page's tabs, in the order the tab bar shows them (and ⌘1–3 picks them). */
+export const REVIEW_TABS = ["conversation", "walkthrough", "diff"] as const;
+export type ReviewTab = (typeof REVIEW_TABS)[number];
+type ActiveTab = ReviewTab;
+type ScrollPaneKey = "walkthrough" | "diff" | "conversation" | "sidebar";
 
 interface PrViewState {
   activeTab: ActiveTab;
@@ -456,8 +335,46 @@ interface PrViewState {
   scroll: Partial<Record<ScrollPaneKey, number>>;
 }
 
+/** A PR opened for the first time lands here. */
+const FIRST_VISIT_TAB: ActiveTab = "conversation";
+
 function emptyState(): PrViewState {
-  return { activeTab: "walkthrough", activeFilePath: null, scroll: {} };
+  return { activeTab: FIRST_VISIT_TAB, activeFilePath: null, scroll: {} };
+}
+
+// The tab each PR was last left on survives an app restart, so "first
+// visit" means first ever, not first since launch. Capped so the record of
+// long-closed PRs can't grow forever; oldest visits drop first.
+const LAST_TAB_KEY = "revv:pr-last-tab";
+const LAST_TAB_CAP = 300;
+
+function readLastTabs(): Record<string, ActiveTab> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_TAB_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, ActiveTab>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLastTab(prId: string, tab: ActiveTab): void {
+  if (typeof localStorage === "undefined") return;
+  const tabs = readLastTabs();
+  delete tabs[prId];
+  tabs[prId] = tab;
+  const ids = Object.keys(tabs);
+  for (const id of ids.slice(0, Math.max(0, ids.length - LAST_TAB_CAP))) delete tabs[id];
+  try {
+    localStorage.setItem(LAST_TAB_KEY, JSON.stringify(tabs));
+  } catch {
+    // Storage full or unavailable: the in-memory state still holds this session.
+  }
+}
+
+function lastTabFor(prId: string): ActiveTab | null {
+  const tab = readLastTabs()[prId];
+  return REVIEW_TABS.find((known) => known === tab) ?? null;
 }
 
 // Single reactive store for per-PR view state. Follows the walkthrough-store
@@ -479,8 +396,8 @@ function getOrCreate(prId: string): PrViewState {
 }
 
 export function getActiveTab(): ActiveTab {
-  if (store.activePrId === null) return "walkthrough";
-  return store.entries.get(store.activePrId)?.activeTab ?? "walkthrough";
+  if (store.activePrId === null) return FIRST_VISIT_TAB;
+  return store.entries.get(store.activePrId)?.activeTab ?? FIRST_VISIT_TAB;
 }
 
 export function setActiveTab(tab: ActiveTab): void {
@@ -495,6 +412,7 @@ export function setActiveTab(tab: ActiveTab): void {
   if (store.activePrId !== null) {
     getOrCreate(store.activePrId).activeTab = tab;
     store.entries = new Map(store.entries);
+    rememberLastTab(store.activePrId, tab);
   }
 }
 
@@ -523,7 +441,7 @@ export function switchPrViewState(newPrId: string): void {
   store.activePrId = newPrId;
   // Restore saved state, or default for first visit
   const saved = store.entries.get(newPrId);
-  const restoredTab = saved?.activeTab ?? "walkthrough";
+  const restoredTab = saved?.activeTab ?? lastTabFor(newPrId) ?? FIRST_VISIT_TAB;
   const restoredFilePath = saved?.activeFilePath ?? null;
   // Use direct entry mutation to bypass the guard in setActiveTab (no focus reset needed here)
   if (getActiveTab() === "diff" && restoredTab !== "diff") {
@@ -532,6 +450,7 @@ export function switchPrViewState(newPrId: string): void {
   getOrCreate(newPrId).activeTab = restoredTab;
   getOrCreate(newPrId).activeFilePath = restoredFilePath;
   store.entries = new Map(store.entries);
+  rememberLastTab(newPrId, restoredTab);
 }
 
 // --- Diff scroll reset signal -----------------------------------------------
@@ -553,7 +472,7 @@ export function requestDiffScrollReset(): void {
 //
 // Read once on mount (or on the trailing edge of a tab/PR switch); write on
 // every scroll event. Components are responsible for plumbing these into the
-// right scroll container — see +page.svelte (walkthrough/requestChanges),
+// right scroll container — see +page.svelte (walkthrough/conversation),
 // ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
 // (rightPanel).
 
@@ -788,15 +707,19 @@ export function getThreadsForFile(filePath: string): CommentThread[] {
 }
 
 // --- Diff view mode ---
+// Persisted as `settings.diffViewMode`, so the review toggle and the Settings
+// default are one value. The override only covers the window before settings
+// load, when there is nothing to merge the optimistic write into yet.
 type DiffMode = "unified" | "split";
-let diffMode = $state<DiffMode>("unified");
+let diffModeOverride = $state<DiffMode | null>(null);
 
 export function getDiffMode(): DiffMode {
-  return diffMode;
+  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
 }
 
 export function setDiffMode(mode: DiffMode): void {
-  diffMode = mode;
+  diffModeOverride = getSettings() ? null : mode;
+  void updateSettings({ diffViewMode: mode });
 }
 
 // --- Pending diff jump ---
@@ -841,7 +764,7 @@ export function openFileInDiff(filePath: string, lineNumber?: number): void {
 }
 
 // --- Pending walkthrough-block jump ---
-// Mirrors the pending-diff-jump pattern: RequestChanges (and potentially other
+// Mirrors the pending-diff-jump pattern: YourReview (and potentially other
 // tabs) can request a scroll to a specific walkthrough block without needing a
 // direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
 // when it becomes active and clears it after scrolling.

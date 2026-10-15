@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
+    // `@revv/shared` resolves to its sources (see `paths`), so they join this
+    // program. TS 6 defaults rootDir to this folder instead of inferring the
+    // common root, which rejects them.
+    "rootDir": "../..",
     "types": ["bun-types"],
     "plugins": [
       {

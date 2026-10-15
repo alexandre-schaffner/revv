@@ -11,6 +11,7 @@ export type QuestionOptionProps = {
 </script>
 
 <script lang="ts">
+	import Check from "phosphor-svelte/lib/Check";
 	import { getContext } from "svelte";
 	import { cn } from "$lib/utils.js";
 	import { renderMarkdown } from "$lib/utils/markdown";
@@ -82,26 +83,15 @@ export type QuestionOptionProps = {
 				multiSelect
 					? "size-4 rounded-sm"
 					: "size-4 rounded-full",
-				checked && "border-accent bg-accent text-white",
+				checked && "border-accent bg-accent text-primary-foreground",
 			)}
 			aria-hidden="true"
 		>
 			{#if checked}
 				{#if multiSelect}
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="3"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						class="size-3"
-					>
-						<polyline points="20 6 9 17 4 12" />
-					</svg>
+					<Check class="size-3" />
 				{:else}
-					<span class="size-1.5 rounded-full bg-white"></span>
+					<span class="size-1.5 rounded-full bg-primary-foreground"></span>
 				{/if}
 			{/if}
 		</span>

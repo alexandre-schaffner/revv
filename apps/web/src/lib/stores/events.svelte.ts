@@ -19,7 +19,14 @@ import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
+import { onPrConversationUpdated } from "./conversation.svelte";
 import { setError } from "./errors.svelte";
+import {
+  ensureHunkScan,
+  onHunkScanComplete,
+  onHunkScanHunk,
+  onHunkScanStarted,
+} from "./hunk-scan.svelte";
 import {
   fetchPinnedPrs,
   fetchPrs,
@@ -32,6 +39,7 @@ import {
 } from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
 import {
+  getLoadedHeadSha,
   loadSession,
   onThreadCreated,
   onThreadDeleted,
@@ -41,7 +49,14 @@ import {
   onThreadUpdated,
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
-import { applySynced, requestThreadSync, setPrListSyncing, setSyncError } from "./sync.svelte";
+import {
+  applySynced,
+  freshenPrList,
+  refreshPrHead,
+  requestThreadSync,
+  setPrListSyncing,
+  setSyncError,
+} from "./sync.svelte";
 import {
   hydrateActiveWalkthroughs,
   hydrateFromCache,
@@ -112,8 +127,13 @@ function reconcileOnReconnect(): void {
   const selectedPrId = getSelectedPrId();
   if (selectedPrId) {
     void hydrateFromCache(selectedPrId, { activate: false });
+    const loadedHeadSha = getLoadedHeadSha(selectedPrId);
+    if (loadedHeadSha) void ensureHunkScan(selectedPrId, loadedHeadSha);
     requestThreadSync(selectedPrId);
     void loadSession(selectedPrId);
+    // A dropped connection means we may also have missed a head-SHA move; the
+    // reads above are DB-only, so ask GitHub about this one PR.
+    refreshPrHead(selectedPrId);
   }
 }
 
@@ -123,13 +143,28 @@ function reconcileOnReconnect(): void {
  * The server's poll fiber sleeps between cycles, so after the machine suspends
  * — or the app simply sits in the background — the first thing the user sees on
  * return is up to a full interval stale, with no event inbound to correct it.
- * These are DB-only REST reads (no GitHub traffic), so running them on every
+ * The list reads are DB-only REST (no GitHub traffic), so running them on every
  * focus is cheap; the same debounce as the reconnect path keeps a rapid
  * alt-tab from firing repeatedly.
+ *
+ * The selected PR gets one step more: a GitHub-backed head-SHA refresh. Coming
+ * back to the window is exactly the moment the user pushed from a terminal, and
+ * a DB read can't see a commit the poll fiber hasn't fetched yet — which is what
+ * left the "Pull" affordance dark for up to a full poll interval. `refreshPrHead`
+ * carries its own longer debounce because it costs a GitHub request.
+ *
+ * The list gets the same treatment through `freshenPrList`: the DB reads can
+ * only show what the poll fiber already fetched, so the server is also asked
+ * to check GitHub, and patches the list over SSE if anything moved.
  */
 function reconcileOnForeground(): void {
   if (document.visibilityState !== "visible") return;
   if (!source || source.readyState === EventSource.CLOSED) return;
+  // CONNECTING defers to the `open` handler, which asks once the stream that
+  // carries the answer is registered.
+  if (source.readyState === EventSource.OPEN) freshenPrList();
+  const selectedPrId = getSelectedPrId();
+  if (selectedPrId) refreshPrHead(selectedPrId);
   const now = Date.now();
   if (now - lastReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
   lastReconcileAt = now;
@@ -178,6 +213,11 @@ export function connect(token: string, hostOverride?: string): void {
     // failures here mean the sidebar spinner shows up late, not data loss.
     void hydrateActiveWalkthroughs();
 
+    // The list just painted from SQLite can be a poll interval behind GitHub.
+    // Asked here rather than at hydration because the answer comes back over
+    // this stream, which is only guaranteed to be registered once it's open.
+    freshenPrList();
+
     // On RECONNECT only, refetch the active PR's snapshot. Events broadcast
     // during the disconnect gap hit zero writers and are gone from this
     // client; hydrateFromCache merges the DB snapshot back into the entry.
@@ -216,12 +256,24 @@ function dispatch(msg: ServerEventMessage): void {
     case "walkthrough:event":
       onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
       break;
+    case "hunk-scan:started":
+      onHunkScanStarted(msg.data);
+      break;
+    case "hunk-scan:hunk":
+      onHunkScanHunk(msg.data);
+      break;
+    case "hunk-scan:complete":
+      onHunkScanComplete(msg.data);
+      break;
     case "prs:updated":
       replacePullRequests(msg.data);
       refreshReviewRoundsForPrs(msg.data.map((pr) => pr.id));
       break;
     case "pr:archived":
       onPrArchived(msg.data);
+      break;
+    case "pr:conversation-updated":
+      onPrConversationUpdated(msg.data);
       break;
     case "prs:sync-started":
       setPrListSyncing(true);
@@ -277,7 +329,13 @@ function dispatch(msg: ServerEventMessage): void {
     case "threads:synced":
       applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
       if (msg.data.prId === getSelectedPrId()) {
-        void loadSession(msg.data.prId);
+        // Forced: the server only emits this envelope when the pull actually
+        // moved something (or the user asked for the sync), which is precisely
+        // the case `loadSession`'s 60 s short-circuit must not swallow. Opening
+        // a PR hydrates the session and immediately force-syncs its threads, so
+        // without this the comments that sync brought in stay invisible until
+        // the window lapses.
+        void loadSession(msg.data.prId, undefined, true);
       }
       break;
     case "threads:sync-error":

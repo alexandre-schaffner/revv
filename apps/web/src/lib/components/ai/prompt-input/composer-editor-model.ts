@@ -143,6 +143,47 @@ export function render(
   editorEl.replaceChildren(frag);
 }
 
+/** Every text node in the editor that is NOT inside a pill (pill text is a label). */
+function plainTextNodes(root: HTMLElement): Text[] {
+  const out: Text[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.parentElement?.closest(`.${PILL_CLASS}`)) continue;
+    out.push(n as Text);
+  }
+  return out;
+}
+
+/**
+ * Pillify hand-typed mentions *in place*, touching only the text nodes that
+ * actually contain one. Returns whether anything changed.
+ *
+ * Deliberately not `render()`: that rebuilds the whole editor even when the
+ * result is identical, which drops the nodes WebKit's saved selection points
+ * at. Blur fires on every app switch and on every click elsewhere in the UI, so
+ * rebuilding there resets the caret to offset 0 — the next focus that doesn't
+ * come from a click (returning to the app, Cmd+L) lands at the start of the
+ * message and the following keystrokes are typed in front of it. Surgical
+ * replacement leaves every other node — including the one holding the caret —
+ * untouched.
+ *
+ * A mention split across two adjacent text nodes stays plain text; the pill is
+ * cosmetic and the serialized value is identical either way.
+ */
+export function pillifyInPlace(root: HTMLElement, mentionPathSet: ReadonlySet<string>): boolean {
+  let changed = false;
+  for (const text of plainTextNodes(root)) {
+    const value = text.nodeValue ?? "";
+    if (!value.includes("@")) continue;
+    const frag = document.createDocumentFragment();
+    appendPillifiedInlineText(frag, value, mentionPathSet);
+    if (!frag.querySelector(`.${PILL_CLASS}`)) continue;
+    text.replaceWith(frag);
+    changed = true;
+  }
+  return changed;
+}
+
 export function insertLineBreak(editorEl: HTMLElement): boolean {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return false;

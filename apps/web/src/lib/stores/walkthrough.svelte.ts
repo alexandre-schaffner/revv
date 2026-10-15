@@ -25,6 +25,7 @@ import type {
   RiskLevel,
   WalkthroughBlock,
   WalkthroughIssue,
+  WalkthroughLead,
   WalkthroughLifecyclePhase,
   WalkthroughMode,
   WalkthroughPipelinePhase,
@@ -40,6 +41,7 @@ import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
 import { updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
+import { addressesActiveWalkthrough } from "$lib/stores/walkthrough-event-target";
 import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
 
@@ -62,6 +64,8 @@ export interface WalkthroughEntry {
   blocks: WalkthroughBlock[];
   summary: string | null;
   riskLevel: RiskLevel | null;
+  /** Model the run actually launched with; null until a walkthrough has started. Lets the selector name what "Auto" resolved to. */
+  modelUsed: string | null;
   sentiment: string | null;
   lastCompletedPhase: WalkthroughPipelinePhase;
   isStreaming: boolean;
@@ -92,6 +96,12 @@ export interface WalkthroughEntry {
   timeline: WalkthroughTimelineEntry[];
   issues: WalkthroughIssue[];
   ratings: WalkthroughRating[];
+  /**
+   * The first-pass leads this walkthrough's agent was handed, with its
+   * verdicts. Null when nothing recorded them (an older or imported row):
+   * the UI then infers outcomes from where the issues sit.
+   */
+  leads: WalkthroughLead[] | null;
   phase: WalkthroughLifecyclePhase;
   phaseMessage: string;
   streamStartedAt: number | null;
@@ -167,6 +177,7 @@ export function freshEntry(): WalkthroughEntry {
     blocks: [],
     summary: null,
     riskLevel: null,
+    modelUsed: null,
     sentiment: null,
     lastCompletedPhase: "none",
     isStreaming: true,
@@ -181,6 +192,7 @@ export function freshEntry(): WalkthroughEntry {
     timeline: [],
     issues: [],
     ratings: [],
+    leads: null,
     phase: "connecting",
     phaseMessage: "Connecting...",
     streamStartedAt: Date.now(),
@@ -192,6 +204,29 @@ export function freshEntry(): WalkthroughEntry {
     generatedBy: null,
     providerConfig: null,
   };
+}
+
+/** Drop everything a walkthrough authored, keeping the entry's lifecycle fields. */
+function clearWalkthroughContent(entry: WalkthroughEntry): void {
+  const fresh = freshEntry();
+  entry.semanticSteps = fresh.semanticSteps;
+  entry.blocks = fresh.blocks;
+  entry.summary = fresh.summary;
+  entry.riskLevel = fresh.riskLevel;
+  entry.sentiment = fresh.sentiment;
+  entry.lastCompletedPhase = fresh.lastCompletedPhase;
+  entry.explorationSteps = fresh.explorationSteps;
+  entry.explorationResults = fresh.explorationResults;
+  entry.explorationInputs = fresh.explorationInputs;
+  entry.timeline = fresh.timeline;
+  entry.issues = fresh.issues;
+  entry.ratings = fresh.ratings;
+  entry.tokenUsage = fresh.tokenUsage;
+  entry.modelUsed = fresh.modelUsed;
+  entry.source = fresh.source;
+  entry.generatedBy = fresh.generatedBy;
+  entry.providerConfig = fresh.providerConfig;
+  entry.streamStartedAt = null;
 }
 
 // ── Reactive state ──────────────────────────────────────────────────────────
@@ -301,6 +336,10 @@ export function getSummary(): string | null {
 export function getRiskLevel(): RiskLevel | null {
   return _active?.riskLevel ?? null;
 }
+/** Model the active PR's latest walkthrough launched with, if any has. */
+export function getWalkthroughModelUsed(): string | null {
+  return _active?.modelUsed ?? null;
+}
 export function getIsStreaming(): boolean {
   return _active?.isStreaming ?? false;
 }
@@ -329,6 +368,9 @@ export function getIssuesForFile(filePath: string): WalkthroughIssue[] {
 export function getRatings(): WalkthroughRating[] {
   return _active?.ratings ?? [];
 }
+export function getLeads(): WalkthroughLead[] | null {
+  return _active?.leads ?? null;
+}
 export function getPhase(): WalkthroughLifecyclePhase {
   return _active?.phase ?? "connecting";
 }
@@ -349,23 +391,6 @@ export function getSentiment(): string | null {
 }
 export function getLastCompletedPhase(): WalkthroughPipelinePhase {
   return _active?.lastCompletedPhase ?? "none";
-}
-export function getIsSuperseded(): boolean {
-  return _active?.superseded ?? false;
-}
-
-export function markWalkthroughStale(prId: string): void {
-  // Called from a `$effect` (AppShell's new-commit watcher). The early return
-  // leaves the cloned entry untouched, so `updateEntry`'s no-op dirty-check
-  // skips the `store.entries` write — that is what stops the effect from
-  // re-invalidating on its own output (`effect_update_depth_exceeded`).
-  updateEntry(prId, (entry) => {
-    if (!entry.doneReceived || entry.superseded) return;
-    entry.superseded = true;
-    entry.isStreaming = false;
-    entry.liveGeneration = false;
-    entry.streamError = null;
-  });
 }
 export function getSource(): "local" | "remote" {
   return _active?.source ?? "local";
@@ -441,6 +466,17 @@ export function getWalkthroughUiState(): WalkthroughUiState {
   return _uiState;
 }
 
+/**
+ * A review of the loaded head is on screen, past its empty start: its issues
+ * and lead verdicts can say what became of a first-pass lead.
+ */
+export function getReviewsLoadedHead(): boolean {
+  const { kind } = _uiState;
+  return (
+    kind === "streaming" || kind === "complete" || kind === "resumable" || kind === "error-partial"
+  );
+}
+
 // ── Pending action tracker ──────────────────────────────────────────────────
 //
 // Drives the `disabled` state on Regenerate / Resume floating buttons so a
@@ -464,114 +500,53 @@ const reviewRounds = $state({
 
 const pendingReviewRoundLoads = new Map<string, Promise<WalkthroughReviewRoundsResponse | null>>();
 
-function reviewRoundsKey(prId: string, mode: WalkthroughMode): string {
-  return `${prId}:${mode}`;
-}
-
-export function getReviewRounds(
-  prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): WalkthroughReviewRoundsResponse | null {
-  const entry = reviewRounds.entries.get(reviewRoundsKey(prId, mode));
+/** A PR's review rounds, both perspectives in one timeline (each round
+ *  carries its `mode`): only one perspective is active per PR at a time. */
+export function getReviewRounds(prId: string): WalkthroughReviewRoundsResponse | null {
+  const entry = reviewRounds.entries.get(prId);
   return entry?.status === "ready" ? entry.data : null;
 }
 
-export function getHasUnreviewedCommits(
-  prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): boolean {
-  return getReviewRounds(prId, mode)?.hasNewCommits ?? false;
-}
-
-/**
- * True when `a` and `b` name the same commit, tolerating either side being an
- * abbreviation of the other.
- *
- * The commits list hands the client whatever SHA length GitHub returned, so a
- * selection can be shorter than the 40-char `toSha` the rounds carry.
- */
-function shaMatches(a: string, b: string): boolean {
-  return a.length <= b.length ? b.startsWith(a) : a.startsWith(b);
-}
-
-/**
- * The walkthrough report that reviewed the PR as of `sha`, or `null` when no
- * round ends at that commit.
- *
- * A round's `toSha` is the head it reviewed up to, so "the report for this
- * commit" is the round that ends there. Hidden rounds are skipped and ties are
- * broken the same way the report selector in `GuidedWalkthrough` orders them —
- * a finished report ahead of one still generating, then most recent first — so
- * picking a commit and picking its report off the dropdown land on the same row.
- */
-export function getReportIdForSha(
-  prId: string,
-  sha: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): string | null {
-  const candidates = (getReviewRounds(prId, mode)?.rounds ?? [])
-    .filter((round) => round.visibility !== "hidden" && shaMatches(sha, round.toSha))
-    .sort((a, b) => {
-      const aPending = a.status === "generating";
-      const bPending = b.status === "generating";
-      if (aPending !== bPending) return aPending ? 1 : -1;
-
-      const aTime = Date.parse(a.completedAt ?? a.createdAt);
-      const bTime = Date.parse(b.completedAt ?? b.createdAt);
-      if (aTime !== bTime) return bTime - aTime;
-
-      return b.roundNumber - a.roundNumber;
-    });
-
-  return candidates[0]?.walkthroughId ?? null;
+export function getHasUnreviewedCommits(prId: string): boolean {
+  return getReviewRounds(prId)?.hasNewCommits ?? false;
 }
 
 export async function loadReviewRounds(
   prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
 ): Promise<WalkthroughReviewRoundsResponse | null> {
-  const key = reviewRoundsKey(prId, mode);
-  const inflight = pendingReviewRoundLoads.get(key);
+  const inflight = pendingReviewRoundLoads.get(prId);
   if (inflight) return inflight;
 
   const promise = (async () => {
-    reviewRounds.entries.set(key, { status: "loading" });
+    reviewRounds.entries.set(prId, { status: "loading" });
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds?mode=${mode}`,
-        {
-          headers: authHeaders(),
-          credentials: "include",
-        },
-      );
+      const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds`, {
+        headers: authHeaders(),
+        credentials: "include",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as WalkthroughReviewRoundsResponse;
-      reviewRounds.entries.set(key, { status: "ready", data });
+      reviewRounds.entries.set(prId, { status: "ready", data });
       return data;
     } catch (e) {
-      reviewRounds.entries.set(key, {
+      reviewRounds.entries.set(prId, {
         status: "error",
         error: e instanceof Error ? e.message : String(e),
       });
       return null;
     } finally {
-      pendingReviewRoundLoads.delete(key);
+      pendingReviewRoundLoads.delete(prId);
     }
   })();
 
-  pendingReviewRoundLoads.set(key, promise);
+  pendingReviewRoundLoads.set(prId, promise);
   return promise;
 }
 
 export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
   for (const prId of prIds) {
-    const mode = getSelectedMode(prId);
-    if (
-      reviewRounds.entries.has(reviewRoundsKey(prId, mode)) ||
-      store.entries.has(prId) ||
-      store.activePrId === prId
-    ) {
-      void loadReviewRounds(prId, mode);
+    if (reviewRounds.entries.has(prId) || store.entries.has(prId) || store.activePrId === prId) {
+      void loadReviewRounds(prId);
     }
   }
 }
@@ -579,13 +554,11 @@ export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
 export async function selectWalkthroughReport(
   prId: string,
   walkthroughId: string | null,
-  mode: WalkthroughMode = getSelectedMode(prId),
 ): Promise<void> {
   store.selectedReportIds.set(prId, walkthroughId);
   store.activePrId = prId;
   clearAnimationTrackers(prId);
   const ok = await hydrateFromCache(prId, {
-    mode,
     reportId: walkthroughId,
     replace: true,
   });
@@ -725,6 +698,17 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           }
           break;
         }
+        case "leads":
+          entry.leads = event.data.leads;
+          break;
+        case "lead": {
+          const lead = event.data;
+          const leads = entry.leads ?? [];
+          entry.leads = leads.some((l) => l.id === lead.id)
+            ? leads.map((l) => (l.id === lead.id ? lead : l))
+            : [...leads, lead];
+          break;
+        }
         case "rating": {
           const idx = entry.ratings.findIndex((r) => r.axis === event.data.axis);
           if (idx >= 0) {
@@ -790,8 +774,24 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
         //    streaming/completion/error/superseded state without touching
         //    content. Each one was previously a standalone lifecycle envelope.
         case "lifecycle:started":
+          if (entry.walkthroughId !== event.data.walkthroughId) {
+            // Another walkthrough's verdicts don't describe this one; its own
+            // selection arrives as a `leads` event once the job records it.
+            entry.leads = null;
+            // A run this page didn't start — "Review new commits" clears the
+            // entry itself, an external agent's `request_walkthrough` doesn't.
+            // Drop the previous review rather than merging the new run into it.
+            if (entry.walkthroughId !== null) {
+              clearWalkthroughContent(entry);
+              newBlocks = null;
+              clearAnimationTrackers(prId);
+            }
+          }
           entry.walkthroughId = event.data.walkthroughId;
           entry.mode = event.data.mode ?? entry.mode;
+          // Present only when the orchestrator assigned the tier at job start.
+          if (event.data.riskLevel) entry.riskLevel = event.data.riskLevel;
+          if (event.data.modelUsed) entry.modelUsed = event.data.modelUsed;
           entry.isStreaming = true;
           entry.doneReceived = false;
           entry.streamError = null;
@@ -867,9 +867,21 @@ export function onWalkthroughEvent(
   event: WalkthroughStreamEvent,
 ): void {
   const selectedReportId = store.selectedReportIds.get(prId) ?? null;
-  if (selectedReportId !== null && selectedReportId !== walkthroughId) {
+  const entry = store.entries.get(prId);
+  const foreign =
+    (selectedReportId !== null && selectedReportId !== walkthroughId) ||
+    // `lifecycle:started` is how an entry learns which walkthrough to follow,
+    // so it is never foreign.
+    (event.type !== "lifecycle:started" &&
+      entry !== undefined &&
+      !addressesActiveWalkthrough(entry, walkthroughId, event.type));
+  if (foreign) {
+    wtTrace(
+      "apply",
+      `onWalkthroughEvent-foreign wt=${walkthroughId} active=${entry?.walkthroughId ?? "none"} type=${event.type}`,
+    );
     if (event.type === "lifecycle:complete") {
-      void loadReviewRounds(prId, getSelectedMode(prId));
+      void loadReviewRounds(prId);
       if (store.activePrId !== prId) {
         toast.success("Walkthrough ready", {
           description: "Switch to that PR to review.",
@@ -914,14 +926,14 @@ export function onWalkthroughEvent(
   lastEventAtByPr.set(prId, Date.now());
 
   if (event.type === "lifecycle:complete") {
-    const entry = store.entries.get(prId);
+    const applied = store.entries.get(prId);
     if (
-      entry &&
-      (entry.summary === null || entry.blocks.length === 0 || entry.ratings.length < 9)
+      applied &&
+      (applied.summary === null || applied.blocks.length === 0 || applied.ratings.length < 9)
     ) {
       void hydrateFromCache(prId, { activate: store.activePrId === prId });
     }
-    void loadReviewRounds(prId, getSelectedMode(prId));
+    void loadReviewRounds(prId);
   }
 
   // Background-completion toast: only if the completion event landed on a
@@ -976,7 +988,6 @@ export async function hydrateActiveWalkthroughs(): Promise<void> {
       }
       const hydrated = await hydrateFromCache(row.prId, {
         activate: store.activePrId === row.prId,
-        mode,
       });
       if (hydrated) {
         const existingSeq = store.lastSeenSeq.get(row.walkthroughId) ?? -1;
@@ -1053,14 +1064,22 @@ export function deactivate(): void {
 
 const pendingHydration = new Map<string, Promise<boolean>>();
 
+// ── Walkthrough perspective ─────────────────────────────────────────────────
+//
+// The perspective a walkthrough is written from is the user's pick (the caret
+// on Generate / From scratch / Regenerate). It lives on the walkthrough itself
+// (`walkthroughs.mode`), and only one perspective is active per PR, so the
+// entry on screen is the record: `/current` hands back the newest row's
+// perspective and a seed carries the one the user just picked. The review
+// session (comments, threads, the diff) is NOT keyed on this; it stays on the
+// identity-derived `getReviewModeForPr`.
+
 /**
- * The walkthrough mode for a PR. Derived purely from identity (author vs.
- * signed-in user) via the PR store — no manual selection. Both an author and
- * a reviewer walkthrough may exist server-side per head SHA; the viewer's
- * role decides which one this client hydrates and generates.
+ * The walkthrough perspective for a PR: the one on the entry (hydrated from
+ * the server, or seeded by a fresh run), else the identity-derived default.
  */
 export function getSelectedMode(prId: string): WalkthroughMode {
-  return getReviewModeForPr(prId);
+  return store.entries.get(prId)?.mode ?? getReviewModeForPr(prId);
 }
 
 /**
@@ -1074,21 +1093,19 @@ export async function hydrateFromCache(
   prId: string,
   options?: {
     activate?: boolean;
-    mode?: WalkthroughMode;
     replace?: boolean;
     reportId?: string | null;
   },
 ): Promise<boolean> {
-  const mode = options?.mode ?? getSelectedMode(prId);
   const reportId = options?.reportId ?? null;
-  const key = `${prId}:${mode}:${reportId ?? "current"}`;
+  const key = `${prId}:${reportId ?? "current"}`;
   const inflight = pendingHydration.get(key);
   if (inflight) {
     wtTrace("lifecycle", `hydrateFromCache deduped prId=${prId}`);
     return inflight;
   }
 
-  const promise = doHydrateFromCache(prId, { ...options, mode });
+  const promise = doHydrateFromCache(prId, options);
   pendingHydration.set(key, promise);
   try {
     return await promise;
@@ -1101,20 +1118,25 @@ async function doHydrateFromCache(
   prId: string,
   options?: {
     activate?: boolean;
-    mode?: WalkthroughMode;
     replace?: boolean;
     reportId?: string | null;
   },
 ): Promise<boolean> {
-  const mode = options?.mode ?? getSelectedMode(prId);
   const reportId = options?.reportId ?? null;
   wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
+  // A fresh run is starting: `/current` would still answer with the row it
+  // is about to retire (possibly the other perspective's) and merge that into
+  // the seed. The start path does its own `replace` hydrate by id, and
+  // `lifecycle:started` adopts the new row.
+  if (!options?.replace && reportId === null && pendingActions.map.has(prId)) {
+    wtTrace("lifecycle", `hydrateFromCache skip prId=${prId} reason=start-pending`);
+    return false;
+  }
   const existing = store.entries.get(prId);
   if (
     !options?.replace &&
     reportId === null &&
     existing &&
-    existing.mode === mode &&
     existing.summary !== null &&
     existing.blocks.length > 0 &&
     existing.doneReceived &&
@@ -1130,8 +1152,8 @@ async function doHydrateFromCache(
   try {
     const endpoint =
       reportId === null
-        ? `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current?mode=${mode}`
-        : `${API_BASE_URL}/api/reviews/${prId}/walkthrough/report/${reportId}?mode=${mode}`;
+        ? `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current`
+        : `${API_BASE_URL}/api/reviews/${prId}/walkthrough/report/${reportId}`;
     const res = await fetch(endpoint, {
       headers: authHeaders(),
       credentials: "include",
@@ -1146,6 +1168,8 @@ async function doHydrateFromCache(
       mode?: WalkthroughMode;
       summary: string;
       riskLevel: RiskLevel;
+      riskConfidence?: number | null;
+      modelUsed?: string;
       sentiment?: string | null;
       lastCompletedPhase?: WalkthroughPipelinePhase;
       errorMessage?: string | null;
@@ -1153,6 +1177,7 @@ async function doHydrateFromCache(
       blocks: WalkthroughBlock[];
       issues: WalkthroughIssue[];
       ratings: WalkthroughRating[];
+      leads?: WalkthroughLead[] | null;
       tokenUsage: unknown;
       reviewSessionId: string;
       generatedBy?: {
@@ -1171,7 +1196,7 @@ async function doHydrateFromCache(
     };
 
     const body = (await res.json()) as
-      | { status: "not_found" }
+      | { status: "not_found"; mode?: WalkthroughMode }
       | {
           status: "complete" | "generating" | "error" | "superseded";
           walkthrough: WalkthroughPayload;
@@ -1183,6 +1208,14 @@ async function doHydrateFromCache(
 
     if (body.status === "not_found") {
       wtTrace("lifecycle", `hydrateFromCache prId=${prId} status=not_found → false`);
+      // The server names the perspective Generate defaults to. Only an entry
+      // that isn't following a walkthrough takes it.
+      const defaultMode = body.mode;
+      if (defaultMode !== undefined) {
+        updateEntry(prId, (e) => {
+          if (e.walkthroughId === null) e.mode = defaultMode;
+        });
+      }
       return false;
     }
 
@@ -1205,7 +1238,7 @@ async function doHydrateFromCache(
     // entry fresh (the "reload shows nothing, but switching PRs and back fixes
     // it" bug). A fresh object guarantees the write is observed.
     const entry: WalkthroughEntry = previous ? { ...previous } : freshEntry();
-    entry.mode = wt.mode ?? mode;
+    entry.mode = wt.mode ?? entry.mode;
     const hasRealSummary = wt.summary !== "";
 
     // Entry-wins merge: SSE events applied to `entry` during the REST fetch
@@ -1214,7 +1247,11 @@ async function doHydrateFromCache(
     // collections. Without this, the snapshot's stale view would clobber
     // chapters the SSE had already delivered.
     entry.summary = entry.summary ?? (hasRealSummary ? wt.summary : null);
-    entry.riskLevel = entry.riskLevel ?? (hasRealSummary ? wt.riskLevel : null);
+    // A generating row with no summary still carries schema default `'low'`;
+    // trust the tier only once the overview or the risk pass has landed.
+    const hasRealRisk = hasRealSummary || wt.riskConfidence != null;
+    entry.riskLevel = entry.riskLevel ?? (hasRealRisk ? wt.riskLevel : null);
+    entry.modelUsed = entry.modelUsed ?? wt.modelUsed ?? null;
     entry.sentiment = entry.sentiment ?? wt.sentiment ?? null;
 
     const snapshotPhase = wt.lastCompletedPhase ?? (isGenerating ? "none" : "D");
@@ -1244,6 +1281,19 @@ async function doHydrateFromCache(
     for (const r of entry.ratings) ratingMap.set(r.axis, r);
     entry.ratings = Array.from(ratingMap.values());
 
+    // A verdict the SSE delivered during the fetch is newer than the snapshot's,
+    // but only for the same walkthrough: lead ids (`L1`…) repeat across runs.
+    if (wt.leads != null) {
+      const leadMap = new Map<string, WalkthroughLead>();
+      for (const l of wt.leads) leadMap.set(l.id, l);
+      if (entry.walkthroughId === wt.id) {
+        for (const l of entry.leads ?? []) leadMap.set(l.id, l);
+      }
+      entry.leads = Array.from(leadMap.values());
+    } else if (entry.walkthroughId !== wt.id) {
+      entry.leads = null;
+    }
+
     entry.walkthroughId = wt.id;
     entry.doneReceived = !isGenerating && !isError;
     entry.isStreaming = isGenerating;
@@ -1253,7 +1303,13 @@ async function doHydrateFromCache(
         ? null
         : (wt.errorMessage ?? "Walkthrough generation failed. Resume or regenerate to retry.")
       : null;
-    entry.superseded = body.stale === true;
+    // A row that is still generating is never presented as outdated: the
+    // snapshot's `stale` flag compares the row's head SHA against the PR row's,
+    // which can disagree transiently while a sync is in flight, and firing the
+    // outdated-walkthrough toast over a live generation reads as "my review
+    // just got thrown away". If the row really is stale the server supersedes
+    // it and emits `lifecycle:superseded` for this exact walkthrough id.
+    entry.superseded = !isGenerating && body.stale === true;
     entry.historical = isHistorical;
     entry.phase = isGenerating ? "writing" : "finishing";
     entry.phaseMessage = isGenerating ? "Resuming walkthrough…" : "Complete";
@@ -1485,8 +1541,11 @@ export async function regenerate(
   }
 }
 
-export function regenerateFromScratch(prId: string): Promise<void> {
-  return regenerate(prId, getSelectedMode(prId), "full");
+export function regenerateFromScratch(
+  prId: string,
+  mode: WalkthroughMode = getSelectedMode(prId),
+): Promise<void> {
+  return regenerate(prId, mode, "full");
 }
 
 async function runRegenerate(
@@ -1540,7 +1599,6 @@ async function runRegenerate(
   const started = (await res.json().catch(() => null)) as { walkthroughId?: string } | null;
   if (started?.walkthroughId) {
     await hydrateFromCache(prId, {
-      mode,
       reportId: started.walkthroughId,
       replace: true,
     });

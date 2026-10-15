@@ -1,14 +1,15 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Folder from "phosphor-svelte/lib/Folder";
 import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import Trash2 from "phosphor-svelte/lib/Trash";
+import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import OwnerAvatar from "$lib/components/shared/OwnerAvatar.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
@@ -170,7 +171,7 @@ async function handleAdd(repoFullName: string) {
     await addRepo(addBody(repoFullName));
     rememberCloneBase();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     const next = new Set(addingRepos);
     next.delete(repoFullName);
@@ -210,7 +211,7 @@ async function handleManualImport() {
     search = "";
     onClose?.();
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to add repository");
+    toastAddRepoError(e, "Failed to add repository");
   } finally {
     isManualLoading = false;
   }
@@ -290,7 +291,7 @@ function prCountFor(
 			aria-label="Refresh repositories"
 			title="Refresh repositories"
 		>
-			<RefreshCw class={getAvailableReposLoading() ? 'motion-essential-spin' : ''} />
+			<ArrowsClockwise class={getAvailableReposLoading() ? 'motion-essential-spin' : ''} />
 		</Button>
 	</div>
 
@@ -314,13 +315,13 @@ function prCountFor(
 				disabled={browsing}
 				title="Browse for folder"
 			>
-				<Folder size={13} weight="fill" />
+				<Folder size={13} />
 				<span>Browse</span>
 			</Button>
 		</div>
 		{#if resolvedClonePath}
 			<div class="resolved-path">
-				<ArrowRight size={11} weight="bold" />
+				<ArrowRight size={11} />
 				<span>{resolvedClonePath}</span>
 			</div>
 		{/if}
@@ -342,7 +343,7 @@ function prCountFor(
 				<div class="state-block">
 					<span>Couldn't load your repositories. Your GitHub session may have expired.</span>
 					<Button variant="outline" size="sm" onclick={retryFetch}>
-						<RefreshCw size={13} weight="fill" />
+						<ArrowsClockwise size={13} />
 						<span>Retry</span>
 					</Button>
 				</div>
@@ -352,7 +353,7 @@ function prCountFor(
 				<div class="state-block">
 					<span>No repositories available yet.</span>
 					<Button variant="outline" size="sm" onclick={retryFetch}>
-						<RefreshCw size={13} weight="fill" />
+						<ArrowsClockwise size={13} />
 						<span>Refresh</span>
 					</Button>
 				</div>
@@ -370,9 +371,9 @@ function prCountFor(
 				>
 					<span class="import-icon" aria-hidden="true">
 						{#if isManualLoading}
-							<Spinner size={12} weight="bold" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 						{:else}
-							<Plus size={12} weight="bold" />
+							<Plus size={12} />
 						{/if}
 					</span>
 					<div class="import-body">
@@ -438,7 +439,7 @@ function prCountFor(
 
 							<div class="repo-meta">
 								{#if isAdding}
-									<Spinner size={13} weight="bold" class="motion-essential-spin text-accent" />
+									<Spinner size={13} class="motion-essential-spin text-accent" />
 								{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
 									<CloneStatusIndicator
 										status={trackedRepo.cloneStatus}
@@ -449,14 +450,14 @@ function prCountFor(
 									/>
 								{:else if isTracked && !trackedRepo.managed}
 									<Badge variant="secondary" class="meta-badge meta-badge--linked" title="Linked clone">
-										<LinkSimple size={10} weight="bold" />
+										<LinkSimple size={10} />
 										Linked
 									</Badge>
 								{:else if isTracked}
 									<Badge variant="secondary" class="meta-badge">Tracked</Badge>
 								{:else if prCount !== undefined && prCount > 0}
 									<span class="pr-count" title="{prCount} open pull request{prCount === 1 ? '' : 's'}">
-										<GitPullRequest size={11} weight="bold" />
+										<GitPullRequest size={11} />
 										{prCount}
 									</span>
 								{/if}
@@ -474,9 +475,9 @@ function prCountFor(
 										title="Remove {repo.fullName}"
 									>
 										{#if isRemoving}
-											<Spinner size={11} weight="bold" class="motion-essential-spin" />
+											<Spinner size={11} class="motion-essential-spin" />
 										{:else}
-											<Trash2 size={11} weight="fill" />
+											<Trash size={11} />
 										{/if}
 									</button>
 								{/if}

@@ -46,12 +46,53 @@ export function formatLines(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/**
+ * Acronyms the agent emits lowercase, where sentence-casing produces a word
+ * that reads as a typo in a developer tool — "Api", "Ci", "Sdk". Matched on
+ * the whole theme only; a theme like `api gateway` is not worth a tokenizer.
+ */
+const THEME_ACRONYMS = new Set([
+  "a11y",
+  "api",
+  "aws",
+  "cd",
+  "ci",
+  "cli",
+  "cms",
+  "cors",
+  "cron",
+  "css",
+  "db",
+  "dns",
+  "dx",
+  "e2e",
+  "gpu",
+  "grpc",
+  "html",
+  "http",
+  "i18n",
+  "ios",
+  "js",
+  "json",
+  "orm",
+  "rpc",
+  "sdk",
+  "seo",
+  "sql",
+  "ssr",
+  "svg",
+  "ts",
+  "ui",
+  "ux",
+]);
+
 /** Themes arrive lowercase from the agent (`auth`, `payments`, `open source`).
  *  Render-time sentence-case keeps reading-room voice without breaking the
  *  stored value used for slugs, palette lookup, and equality joins. */
 export function formatTheme(theme: string): string {
   const head = theme.charAt(0);
   if (head === "") return theme;
+  if (THEME_ACRONYMS.has(theme)) return theme.toUpperCase();
   return head.toUpperCase() + theme.slice(1);
 }
 

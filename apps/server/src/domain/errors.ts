@@ -46,6 +46,18 @@ export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")
   readonly id: string;
 }> {}
 
+/**
+ * An add-repo lookup 404'd. GitHub answers 404 both for a repo that doesn't
+ * exist and for one the token can't see — and a GitHub App token can't see
+ * any repo the app isn't installed on — so this carries the diagnosis the
+ * user needs: what's missing and, when known, the page that fixes it.
+ */
+export class RepoNotAccessibleError extends Data.TaggedError("RepoNotAccessibleError")<{
+  readonly message: string;
+  readonly detail: string;
+  readonly action: { readonly label: string; readonly url: string } | null;
+}> {}
+
 export type GitHubError =
   | GitHubRateLimitError
   | GitHubAuthError
@@ -65,6 +77,34 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
   readonly field?: string;
 }> {}
 
+export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrationError")<{
+  readonly message: string;
+  readonly code:
+    | "INVALID_CREDENTIAL"
+    | "INVALID_PROJECT"
+    | "PR_NOT_FOUND"
+    | "INSTALL_FAILED"
+    | "NOT_CONNECTED"
+    | "INTERNAL";
+  readonly cause?: unknown;
+}> {}
+
+export function externalIntegrationHttpStatus(error: ExternalIntegrationError): number {
+  switch (error.code) {
+    case "INVALID_CREDENTIAL":
+      return 403;
+    case "INVALID_PROJECT":
+    case "PR_NOT_FOUND":
+      return 404;
+    case "NOT_CONNECTED":
+      return 409;
+    case "INSTALL_FAILED":
+      return 400;
+    case "INTERNAL":
+      return 500;
+  }
+}
+
 // AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;
@@ -80,6 +120,35 @@ export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelec
 
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
+
+/**
+ * Why a TypeSafe System One (Jev) call produced no answer.
+ *
+ *   'unconfigured' — no API key in the keyring or `REVV_JEV_API_KEY`
+ *   'disabled'     — the master switch or this hook's toggle is off
+ *   'timeout'      — the call exceeded the caller's budget
+ *   'rate_limited' — a 429 (the SDK doesn't retry those; see `JevServiceLive`)
+ *   'transport'    — any other HTTP/connection failure, auth included
+ *   'malformed'    — a 2xx whose body didn't match the expected answer shape
+ *
+ * `'unconfigured'`/`'disabled'` short-circuit with zero latency. Every call
+ * site collapses all six to `null` and degrades to pre-Jev behaviour.
+ */
+export type JevUnavailableReason =
+  | "unconfigured"
+  | "disabled"
+  | "timeout"
+  | "rate_limited"
+  | "transport"
+  | "malformed";
+
+export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
+  readonly reason: JevUnavailableReason;
+  readonly message?: string;
+  /** Server's `Retry-After`, on `rate_limited` only, when it sent one. */
+  readonly retryAfterMs?: number;
+  readonly cause?: unknown;
+}> {}
 
 export type AiError =
   | AiGenerationError
@@ -110,6 +179,16 @@ export class CloneNotReadyError extends Data.TaggedError("CloneNotReadyError")<{
 
 export class CloneInProgressError extends Data.TaggedError("CloneInProgressError")<{
   readonly repoId: string;
+}> {}
+
+/**
+ * A caller pinned the head it wants reviewed (`startJob`'s `expectedHeadSha`)
+ * and GitHub serves a different one — typically a push GitHub hasn't caught
+ * up with yet. Nothing was cancelled or started.
+ */
+export class HeadShaMismatchError extends Data.TaggedError("HeadShaMismatchError")<{
+  readonly expectedHeadSha: string;
+  readonly githubHeadSha: string;
 }> {}
 
 /**

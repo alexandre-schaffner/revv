@@ -90,12 +90,20 @@ feature set and the permission set are the same decision.
   to install Revv here" UX, and the onboarding org-picker degrades (fine-grained
   tokens don't enumerate all of a user's orgs).
 
-## Deferred
+## CI on the Conversation tab (2026-10-12)
 
-- **CI/CD monitoring** (future): adds **read-only** permissions (Checks: Read,
-  Commit statuses: Read, and Actions: Read only if monitoring Actions runs).
-  Not requested now — pre-requesting unused permissions hardens the *first*
-  approval for no benefit. Adding them later triggers a per-installation
-  admin re-approval (email-driven), with the app continuing on old permissions
-  until accepted, so the feature must degrade gracefully while approval is
-  pending.
+The Conversation tab shows the head commit's checks, the failing step's log,
+and re-runs failed Actions jobs. This decision originally deferred CI/CD
+monitoring (and its read-only Checks / Commit statuses / Actions grants) until a
+feature needed them; this is that feature, so the permission set adds:
+
+- **Checks: Read** and **Commit statuses: Read** — GitHub's combined
+  `statusCheckRollup` needs both; without either the tab shows no CI at all.
+- **Actions: Read & write** — read for job logs, write only for "Re-run
+  failed jobs". Read-only is a valid narrower grant: the logs work and the
+  re-run controls fall back to "Open on GitHub" after the first refusal.
+
+As predicted, existing installations keep their old permissions until an org
+admin accepts the update, so the tab degrades instead of failing: CI that
+can't be read reads as "Checks unavailable" (naming the missing grants), and
+every other part of the page still loads.

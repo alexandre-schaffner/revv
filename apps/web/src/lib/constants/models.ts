@@ -8,6 +8,7 @@ import {
 export type ModelOption = { label: string; value: string };
 
 const THINKING_EFFORT_LABELS: Record<ThinkingEffort, string> = {
+  ultra: "Ultra",
   ultrathink: "Ultrathink",
   max: "Max",
   "extra-high": "Extra High",
@@ -33,7 +34,7 @@ export function getDefaultModel(agent: AcpAgentId): string {
 const DEFAULT_SUGGESTIONS_MODEL_BY_AGENT: Record<AcpAgentId, string> = {
   opencode: "opencode/big-pickle",
   "claude-code": "claude-haiku-4-5-20251001",
-  codex: "gpt-5.6-luna",
+  codex: "gpt-6-luna",
   cursor: "auto",
 };
 

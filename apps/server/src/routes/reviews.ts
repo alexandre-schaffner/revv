@@ -14,6 +14,7 @@ import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
 import { activeSessionHandler, coerceReviewMode } from "./reviews/handlers/active-session";
 import { submitGithubReviewHandler } from "./reviews/handlers/github-submit";
+import { ensureHunkScanHandler } from "./reviews/handlers/hunk-scan";
 import {
   coerceWalkthroughMode,
   getCachedWalkthroughHandler,
@@ -21,6 +22,7 @@ import {
   resumeWalkthroughHandler,
 } from "./reviews/handlers/walkthrough-cache";
 import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
+import { getWalkthroughSizingHandler } from "./reviews/handlers/walkthrough-sizing";
 
 /**
  * Review routes — thin Elysia router. Handler bodies live in
@@ -243,9 +245,9 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
-          const reviewService = yield* ReviewService;
+          // `mode` is the walkthrough's perspective, which the user picks. The
+          // review session is the identity-derived one; `startJob` owns it.
           const mode = coerceWalkthroughMode((ctx.body as { mode?: unknown } | undefined)?.mode);
-          yield* reviewService.getOrCreateActiveSession(ctx.params.id, mode);
           const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
           if (existing !== null) {
             return { walkthroughId: existing.walkthroughId };
@@ -267,11 +269,32 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .get("/:id/walkthrough/current", async (ctx) => {
     try {
+      // No `mode` → the server picks the perspective (see the handler).
       return await getCurrentWalkthroughHandler(
         ctx.params.id,
         ctx.session.user.id,
-        coerceWalkthroughMode(ctx.query.mode),
+        ctx.query.mode === undefined ? undefined : coerceWalkthroughMode(ctx.query.mode),
       );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // Sizes the PR ahead of generation (risk tier, "Auto" model pick). Shares
+  // its cached answer with the generation path — same TypeSafe call, moved earlier.
+  .get("/:id/walkthrough/sizing", async (ctx) => {
+    try {
+      return await getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id);
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // The first pass for the PR's current head, started on first ask. Owned by
+  // the PR head, not a walkthrough, so the Diff tab has it before Generate.
+  .post("/:id/hunk-scan", async (ctx) => {
+    try {
+      return await ensureHunkScanHandler(ctx.params.id, ctx.session.user.id);
     } catch (e) {
       return handleAppError(e, ctx);
     }
@@ -283,7 +306,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const { db } = yield* DbService;
           const walkthroughService = yield* WalkthroughService;
-          const mode = coerceWalkthroughMode(ctx.query.mode);
           const pr = db
             .select({ id: pullRequests.id, headSha: pullRequests.headSha })
             .from(pullRequests)
@@ -305,7 +327,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           // (`walkthroughs.prCommits`), so this high-frequency endpoint stays
           // DB-only. The client refreshes it for every active PR on each
           // `prs:updated`, so GitHub calls here add avoidable rate-limit pressure.
-          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha, mode);
+          return yield* walkthroughService.listReviewRounds(pr.id, pr.headSha);
         }),
       );
     } catch (e) {
@@ -319,9 +341,8 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
           const walkthroughService = yield* WalkthroughService;
-          const mode = coerceWalkthroughMode(ctx.query.mode);
           const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
-          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId, mode);
+          const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
           if (!report) return { status: "not_found" as const };
           const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);
           return {
@@ -355,15 +376,10 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post("/:id/walkthrough/regenerate", async (ctx) => {
     try {
-      const body = ctx.body as
-        | { mode?: unknown; generationMode?: "full" | "incremental" }
-        | undefined;
-      await regenerateWalkthroughHandler(
-        ctx.params.id,
-        ctx.session.user.id,
-        body?.mode === undefined ? undefined : coerceWalkthroughMode(body.mode),
-        body?.generationMode ?? "incremental",
-      );
+      // `mode` / `generationMode` still ride along in the body — it is the
+      // *start* call that consumes them. Regenerate itself sweeps every
+      // perspective: only one is active per PR (see `startJobBody`).
+      await regenerateWalkthroughHandler(ctx.params.id);
       return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
@@ -389,8 +405,11 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // orchestrator's failure handler picks up the `cancelledByUser` flag and
   // transitions the row to `status='error'` with code `'Cancelled'`, then
   // broadcasts `lifecycle:error` — that's what the UI consumes to flip out
-  // of the streaming state. We do NOT supersede the row: a partial
-  // walkthrough should remain resumable via the Resume button.
+  // of the streaming state. (That handler hangs off `Effect.onExit`, not
+  // `catchAllCause`; an interrupted fiber skips the error channel entirely,
+  // so the older wiring left every stopped row stuck at 'generating'.)
+  // We do NOT supersede the row: a partial walkthrough should remain
+  // resumable via the Resume button, which revives the 'error' row.
   .post("/:id/walkthrough/abort", async (ctx) => {
     try {
       await AppRuntime.runPromise(

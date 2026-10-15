@@ -1,3 +1,4 @@
+import { isPrLensFenceLang } from "@revv/shared";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import remend from "remend";
@@ -25,8 +26,8 @@ marked.use({
   },
   renderer: {
     code({ text, lang }) {
-      if (isMermaidLang(lang)) {
-        return `<div class="mermaid-diagram not-prose" data-mermaid-src="${encodeBase64(text)}"><span class="mermaid-loading">Rendering diagram...</span></div>`;
+      if (isPrLensFenceLang(lang)) {
+        return `<div class="prlens-diagram not-prose" data-prlens-src="${encodeBase64(text)}"><span class="prlens-loading">Rendering diagram...</span></div>`;
       }
       if (lang) {
         const highlighted = highlightCode(text, lang);
@@ -39,13 +40,9 @@ marked.use({
   },
 });
 
-function isMermaidLang(lang: string | undefined): boolean {
-  const normalized = lang?.trim().toLowerCase();
-  return normalized === "mermaid" || normalized === "mmd";
-}
-
-// UTF-8 → base64. Inverse of the decode in mermaid.svelte.ts (atob → bytes →
-// TextDecoder), so multi-byte source survives the data-attribute round-trip.
+// UTF-8 → base64. Inverse of the decode in actions/prlens.svelte.ts (atob →
+// bytes → TextDecoder), so multi-byte source survives the data-attribute
+// round-trip.
 function encodeBase64(source: string): string {
   const bytes = new TextEncoder().encode(source);
   let binary = "";
@@ -61,6 +58,45 @@ export function renderMarkdown(source: string): string {
   return DOMPurify.sanitize(raw, {
     ADD_ATTR: ["style", "class", "tabindex"],
   });
+}
+
+/** Declarations Shiki's highlighting writes: colors, nothing that can move or cover. */
+const SAFE_STYLE_PROPERTY = /^(?:color|background-color|--shiki[\w-]*)$/;
+/** The renderer's and Shiki's own class names; no app utility class gets through. */
+const SAFE_CLASS = /^(?:shiki[\w-]*|line|language-[\w+#.-]+|prose-table|not-prose)$/;
+
+let untrustedPurify: ReturnType<typeof DOMPurify> | null = null;
+
+function untrustedSanitizer(): ReturnType<typeof DOMPurify> {
+  if (untrustedPurify) return untrustedPurify;
+  const purify = DOMPurify(window);
+  purify.addHook("uponSanitizeAttribute", (_node, data) => {
+    if (data.attrName === "style") {
+      data.keepAttr = data.attrValue.split(";").every((declaration) => {
+        const property = declaration.split(":")[0]?.trim().toLowerCase() ?? "";
+        return property === "" || SAFE_STYLE_PROPERTY.test(property);
+      });
+    } else if (data.attrName === "class") {
+      const kept = data.attrValue.split(/\s+/).filter((name) => SAFE_CLASS.test(name));
+      data.attrValue = kept.join(" ");
+      data.keepAttr = kept.length > 0;
+    }
+  });
+  untrustedPurify = purify;
+  return purify;
+}
+
+/**
+ * {@link renderMarkdown} for markdown someone else wrote: GitHub PR bodies,
+ * comments, reviews, and the summaries CI integrations post. Its raw HTML
+ * may not restyle the app: `style` keeps only colors and `class` only the
+ * renderer's own names, so no fixed-position overlay can pass for an app
+ * dialog. No AI-output newline normalisation either: a literal `\n` here
+ * is what the author typed.
+ */
+export function renderUntrustedMarkdown(source: string): string {
+  const raw = marked.parse(source, { async: false }) as string;
+  return untrustedSanitizer().sanitize(raw, { ADD_ATTR: ["style", "tabindex"] });
 }
 
 export interface MarkdownBlock {

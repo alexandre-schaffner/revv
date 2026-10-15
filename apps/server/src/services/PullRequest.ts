@@ -1,5 +1,5 @@
 import type { PullRequest } from "@revv/shared";
-import { and, desc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
@@ -21,6 +21,7 @@ function rowToPr(
     authorAvatarContent: avatarContent,
     authorAvatarUrl: null,
     requestedReviewers: JSON.parse(row.requestedReviewers ?? "[]") as string[],
+    mentionedUsers: JSON.parse(row.mentionedUsers ?? "[]") as string[],
     status: row.status as PullRequest["status"],
     reviewStatus: row.reviewStatus as PullRequest["reviewStatus"],
     isDraft: row.isDraft,
@@ -175,13 +176,24 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     /**
-     * Currently open PRs for a repo, joined to their latest non-superseded
+     * PRs in flight *as of* `until`: created before the window closed and not
+     * yet closed at that instant. Joined to their latest non-superseded
      * complete walkthrough (if any). Used by the recap agent to surface
      * "who is working on what" context. Sorted by walkthrough presence then
      * updatedAt DESC. Capped at 20 rows to keep the context window bounded.
+     *
+     * For a live window (`until` ≈ now) this is exactly "currently open".
+     * For a historical window it reconstructs the set as it stood then, so a
+     * recap dated three weeks ago doesn't describe today's open PRs.
+     *
+     * Residual imprecision, deliberate: the joined walkthrough and the
+     * `updatedAt` sort still reflect *current* state. Reconstructing those
+     * would need walkthrough version history we don't keep, and "which PRs
+     * were in flight" is what the recap prose actually needs.
      */
-    readonly listOpenPrsWithWalkthroughs: (
+    readonly listOpenPrsAsOfWindow: (
       repoId: string,
+      until: string,
       accountId?: string,
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     readonly markPrsClosed: (
@@ -223,16 +235,6 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       prId: string,
       logins: string[],
     ) => Effect.Effect<void, ValidationError, DbService>;
-    /**
-     * Open PRs for one repo where the given user is the author, a requested
-     * reviewer, or mentioned in the body/comments. Used by the repo homepage
-     * "PRs tagged on" section.
-     */
-    readonly listTaggedPrs: (
-      repoId: string,
-      userLogin: string,
-      accountId?: string,
-    ) => Effect.Effect<PullRequest[], ValidationError, DbService>;
   }
 >() {}
 
@@ -645,7 +647,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       });
     }),
 
-  listOpenPrsWithWalkthroughs: (repoId, accountId) =>
+  listOpenPrsAsOfWindow: (repoId, until, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (accountId) {
@@ -669,7 +671,15 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                 eq(remoteUsers.login, pullRequests.authorLogin),
               ),
             )
-            .where(and(eq(pullRequests.repositoryId, repoId), eq(pullRequests.status, "open")))
+            .where(
+              and(
+                eq(pullRequests.repositoryId, repoId),
+                // "Open at `until`" reconstructed from timestamps rather than
+                // the mutable `status` column, which only ever describes now.
+                lt(pullRequests.createdAt, until),
+                or(isNull(pullRequests.closedAt), gte(pullRequests.closedAt, until)),
+              ),
+            )
             .orderBy(desc(pullRequests.updatedAt))
             .limit(20)
             .all();
@@ -856,71 +866,5 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         try: () => mergeMentionedUsers(db, prId, logins),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
-    }),
-
-  listTaggedPrs: (repoId, userLogin, accountId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const repoIds = accountId
-        ? db
-            .select({ id: repositories.id })
-            .from(repositories)
-            .where(eq(repositories.accountId, accountId))
-            .all()
-            .map((r) => r.id)
-        : null;
-
-      if (accountId && repoIds !== null && repoIds.length === 0) return [];
-
-      const rows = yield* Effect.try({
-        try: () => {
-          const conditions: (ReturnType<typeof eq> | ReturnType<typeof inArray>)[] = [
-            eq(pullRequests.status, "open"),
-            eq(pullRequests.repositoryId, repoId),
-          ];
-          if (repoIds && repoIds.length > 0) {
-            conditions.push(inArray(pullRequests.repositoryId, repoIds));
-          }
-          // Query all open PRs for the repo, then filter in JS for the
-          // JSON-array membership checks (requestedReviewers, mentionedUsers).
-          // SQLite JSON containment would work but is clunkier in Drizzle.
-          return db
-            .select({
-              pr: pullRequests,
-              avatarContent: remoteUsers.avatarContent,
-            })
-            .from(pullRequests)
-            .leftJoin(
-              remoteUsers,
-              and(
-                eq(remoteUsers.provider, "github"),
-                eq(remoteUsers.login, pullRequests.authorLogin),
-              ),
-            )
-            .where(and(...conditions))
-            .all();
-        },
-        catch: (e) => new ValidationError({ message: String(e) }),
-      }).pipe(
-        Effect.orElseSucceed(
-          () =>
-            [] as {
-              pr: typeof pullRequests.$inferSelect;
-              avatarContent: string | null;
-            }[],
-        ),
-      );
-
-      const tagged = rows.filter((r) => {
-        const row = r.pr;
-        if (row.authorLogin === userLogin) return true;
-        const reviewers = JSON.parse(row.requestedReviewers ?? "[]") as string[];
-        if (reviewers.includes(userLogin)) return true;
-        const mentioned = JSON.parse(row.mentionedUsers ?? "[]") as string[];
-        if (mentioned.includes(userLogin)) return true;
-        return false;
-      });
-      return tagged.map((r) => rowToPr(r.pr, r.avatarContent));
     }),
 });

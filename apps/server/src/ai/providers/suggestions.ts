@@ -23,7 +23,7 @@
 // historically hardcoded — keeping it server-side means the client doesn't
 // need to know about the fallback policy.
 
-import type { AcpAgentId, ContextWindow, ThinkingEffort } from "@revv/shared";
+import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { getAcpConnection } from "../acp/acp-connection";
 import { decodeAcpSessionUpdate, makeAcpDecodeState, withAgentTurn } from "../agent-stream";
@@ -70,7 +70,6 @@ export interface GenerateSuggestionsInput {
   readonly cwd: string;
   readonly model: string;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
 }
 
 const SYSTEM_PROMPT = `You are helping a code reviewer skim a pull request. \
@@ -226,7 +225,6 @@ async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]
   const h = await getAcpConnection(input.cwd, input.acpAgentId, {
     model: input.model,
     thinkingEffort: input.thinkingEffort,
-    contextWindow: input.contextWindow,
   });
 
   let sessionId: string | null = null;

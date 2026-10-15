@@ -4,6 +4,7 @@ import {
   type CommentThread,
   guessImageContentType,
   PR_DIFF_RENDER_OPTIONS,
+  resolveThinkingEffort,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -25,6 +26,7 @@ import {
   toCachedDiffFiles,
 } from "../services/DiffCache";
 import { GitHubGateway } from "../services/GitHub";
+import { apiBaseForHost } from "../services/github-rest";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
 import {
@@ -34,6 +36,7 @@ import {
   type SsrDiffOptions,
 } from "../services/PrerenderCache";
 import { PullRequestService } from "../services/PullRequest";
+import { resolvePullRequestLink } from "../services/pr-deep-link";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
@@ -143,6 +146,61 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     },
     { query: t.Object({ repo: t.Optional(t.String()) }) },
   )
+  .post(
+    "/resolve-link",
+    async (ctx) => {
+      const expectedHost = ctx.body.githubHost.toLowerCase();
+      const activeHost = (ctx.account.host ?? "github.com").toLowerCase();
+
+      // This branch must stay before AppRuntime/service access. A mismatched
+      // account is a recovery state, not permission to probe another
+      // account's database rows or GitHub token.
+      if (activeHost !== expectedHost) {
+        return { status: "account_mismatch" as const, activeHost, expectedHost };
+      }
+
+      try {
+        return await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const repositoryService = yield* RepositoryService;
+            const pullRequestService = yield* PullRequestService;
+            const github = yield* GitHubGateway;
+            const { accountId, accessToken } = ctx.account;
+
+            return yield* resolvePullRequestLink(
+              {
+                findRepository: (fullName) =>
+                  repositoryService.getRepoByFullName(fullName, accountId),
+                findCachedPullRequest: (id) =>
+                  pullRequestService.getPr(id, accountId).pipe(Effect.option),
+                fetchPullRequest: (repository, number) =>
+                  github.prs.get(
+                    repository.fullName,
+                    number,
+                    accessToken,
+                    apiBaseForHost(repository.githubHost),
+                  ),
+                upsertPullRequest: (pullRequest) => pullRequestService.upsertPrs([pullRequest]),
+              },
+              ctx.body,
+            );
+          }),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      body: t.Object({
+        githubHost: t.String({ minLength: 1, pattern: "^[A-Za-z0-9.-]+$" }),
+        repositoryFullName: t.String({
+          minLength: 3,
+          pattern: "^[^/\\s]+/[^/\\s]+$",
+        }),
+        number: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      }),
+    },
+  )
   .get(
     "/archived",
     async (ctx) => {
@@ -205,37 +263,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       return handleAppError(e, ctx);
     }
   })
-  .get(
-    "/tagged",
-    async (ctx) => {
-      try {
-        const repoId = ctx.query.repo;
-        if (!repoId) {
-          ctx.set.status = 400;
-          return { error: "repo query parameter is required" };
-        }
-        // Look up the current user's GitHub login.
-        const rows = await db
-          .select({ githubLogin: user.githubLogin })
-          .from(user)
-          .where(eq(user.id, ctx.session.user.id));
-        const login = rows[0]?.githubLogin;
-        if (!login) {
-          return [];
-        }
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const prService = yield* PullRequestService;
-            const { accountId } = ctx.account;
-            return yield* prService.listTaggedPrs(repoId, login, accountId);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { query: t.Object({ repo: t.String() }) },
-  )
   .get(
     "/:id/files",
     async (ctx) => {
@@ -466,6 +493,22 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     try {
       await AppRuntime.runPromise(
         Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.syncNow())),
+      );
+      return { success: true };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+
+  // Background freshness check, sent by the client when the window opens or
+  // comes back to the foreground: the DB list it just painted can be a full
+  // poll interval old. Same cycle as `/sync`, forked for the same reason, but
+  // throttled server-side and never forcing a broadcast. An unchanged account
+  // costs one GraphQL probe (about a point per 80 repos) and nothing on the wire.
+  .post("/freshen", async (ctx) => {
+    try {
+      await AppRuntime.runPromise(
+        Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.freshen())),
       );
       return { success: true };
     } catch (e) {
@@ -819,8 +862,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
           acpAgentId,
           cwd: process.cwd(),
           model,
-          thinkingEffort: settings.aiThinkingEffort,
-          contextWindow: settings.aiContextWindow,
+          thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
         }),
       // Provider has its own internal fallback; this catch is
       // belt-and-suspenders for the rare case where the Promise

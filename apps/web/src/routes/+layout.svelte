@@ -1,8 +1,11 @@
 <script lang="ts">
 import "../app.css";
+import IconContext from "phosphor-svelte/lib/IconContext";
+import { onMount } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel } from "$lib/api/runtime";
+import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
 import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
@@ -11,6 +14,7 @@ import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
+import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import {
   fetchPinnedPrs,
   fetchPrs,
@@ -40,9 +44,13 @@ let cacheInspectorOpen = $state(false);
 // navigating back. Deriving from the URL here makes the URL the
 // single source of truth for every entry/exit path (Cmd+W, sidebar
 // settings link, logout, mouse back, deep link, SSE-driven nav, …).
+//
+// Read the decoded route param, not `page.url.pathname`: PR ids are
+// `<repoId>:<number>`, and a URL carrying the colon as `%3A` left the raw
+// pathname segment matching no PR — the review page loaded the diff (it
+// reads the decoded param) but sat on "Loading…" with no PR row.
 $effect(() => {
-  const match = page.url.pathname.match(/^\/review\/([^/]+)/);
-  setSelectedPrId(match?.[1] ?? null);
+  setSelectedPrId(page.route.id === "/review/[prId]" ? (page.params.prId ?? null) : null);
 });
 
 // URL → selectedRepoId. The rail's active highlight and the project
@@ -108,10 +116,29 @@ $effect(() => {
   }
 });
 
-$effect(() => {
+// Runs once, on mount. Deliberately `onMount` and not `$effect`: several of
+// these helpers read reactive state synchronously (`loadUser()` and
+// `fetchAllModels()` both touch the auth token before their first `await`), so
+// an effect would subscribe to it. A token change — better-auth handing back a
+// refreshed `set-auth-token` on sign-in — then tore the whole thing down and
+// re-ran it: polling restarted and, worse, the updater re-armed and fired a
+// second immediate check, producing a duplicate "Update available" toast.
+onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
   const cleanupShortcuts = initShortcuts();
+  let cleanupDeepLinks: (() => void) | undefined;
+
+  if ("__TAURI_INTERNALS__" in window) {
+    void import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
+      const receive = (urls: string[]): void => {
+        for (const url of urls) void openPrDeepLink(url);
+      };
+      cleanupDeepLinks = await onOpenUrl(receive);
+      const current = await getCurrent().catch(() => null);
+      if (current) receive(current);
+    });
+  }
 
   void assertRuntimeChannel().catch((error: unknown) => {
     toast.error("Runtime channel unavailable", {
@@ -140,6 +167,7 @@ $effect(() => {
   return () => {
     cleanupTheme();
     cleanupShortcuts();
+    cleanupDeepLinks?.();
     stopPolling();
     stopUpdater();
   };
@@ -159,14 +187,37 @@ async function hydrate() {
 }
 </script>
 
+<!-- Iconography defaults (phosphor-svelte). One place decides how every icon
+	 in the app renders, so call sites only state what differs.
+
+	   weight "regular" — the outlined default. `weight="fill"` is reserved for
+	     *state*: the on/active/selected half of a toggle, and severity markers
+	     where solidity itself is the signal. Fill as decoration is what let the
+	     same glyph read solid in one row and hairline in the next.
+	   aria-hidden — phosphor stamps `role="img"` on every <svg>, and a role=img
+	     with no accessible name is an unlabelled image (WCAG 1.1.1). Icons here
+	     are decorative; the adjacent label or the button's own aria-label
+	     carries the meaning. An icon that IS the only signal opts back in with
+	     aria-hidden="false" plus an aria-label.
+
+	 Props always beat context (phosphor resolves `props.x ?? ctx.x`), so both
+	 defaults stay overridable per call site.
+
+	 Imported from `lib/IconContext` rather than the package root on purpose:
+	 `sveltePhosphorOptimize` rewrites every *named* import from
+	 "phosphor-svelte" into `phosphor-svelte/lib/<name>`, which would turn
+	 `{ setIconContext }` into a deep import of a module that does not exist. -->
+<IconContext values={{ weight: "regular", "aria-hidden": "true" }}>
 <TooltipProvider>
 	<OnboardingGate>
 		<AppShell>
 			{@render children()}
 		</AppShell>
 	</OnboardingGate>
+	<PrDeepLinkCoordinator />
 	<Toaster />
 	{#if import.meta.env.DEV && cacheInspectorOpen}
 		<CacheInspector onclose={() => { cacheInspectorOpen = false; }} />
 	{/if}
 </TooltipProvider>
+</IconContext>

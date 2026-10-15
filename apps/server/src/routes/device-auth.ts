@@ -55,7 +55,10 @@ function deviceFlowScopeFor(clientId: string): string | null {
  * `api.github.com` is the public github API hostname; GHE uses `api.<host>`.
  * Mirrors the derivation in {@link serverEnv}.
  */
-async function resolveGithubUrls(hostOverride?: string): Promise<{
+async function resolveGithubUrls(
+  hostOverride?: string,
+  clientIdOverride?: string,
+): Promise<{
   host: string;
   clientId: string;
   deviceCodeUrl: string;
@@ -72,7 +75,9 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
   // The BYO client ID applies only to the host it was saved with. github.com
   // ignores it regardless (see `clientIdForHost`), so no github.com-specific
   // guard is needed here.
-  const customClientId = settings?.githubHost?.trim() === host ? settings?.githubClientId : null;
+  const customClientId =
+    clientIdOverride?.trim() ||
+    (settings?.githubHost?.trim() === host ? settings?.githubClientId : null);
   return {
     host,
     clientId: clientIdForHost(host, customClientId),
@@ -103,6 +108,7 @@ function githubClientIdErrorBody(e: MissingGitHubClientIdError | InvalidGitHubCl
 
 async function resolveGithubUrlsForDeviceAuth(
   hostOverride: string | undefined,
+  clientIdOverride: string | undefined,
   status: (
     code: 400,
     body: { error: string; code: GitHubClientIdErrorCode; host: string },
@@ -112,7 +118,7 @@ async function resolveGithubUrlsForDeviceAuth(
   | { ok: false; response: unknown }
 > {
   try {
-    return { ok: true, urls: await resolveGithubUrls(hostOverride) };
+    return { ok: true, urls: await resolveGithubUrls(hostOverride, clientIdOverride) };
   } catch (e) {
     if (isGitHubClientIdError(e)) {
       return { ok: false, response: status(400, githubClientIdErrorBody(e)) };
@@ -564,7 +570,7 @@ const publicAuthRoutes = new Elysia()
   .post(
     "/api/auth/device/init",
     async ({ body, status }) => {
-      const resolved = await resolveGithubUrlsForDeviceAuth(body?.host, status);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body?.host, body?.client_id, status);
       if (!resolved.ok) return resolved.response;
       const { urls } = resolved;
       const res = await fetch(urls.deviceCodeUrl, {
@@ -600,7 +606,11 @@ const publicAuthRoutes = new Elysia()
         interval: data.interval,
       };
     },
-    { body: t.Optional(t.Object({ host: t.Optional(t.String()) })) },
+    {
+      body: t.Optional(
+        t.Object({ host: t.Optional(t.String()), client_id: t.Optional(t.String()) }),
+      ),
+    },
   )
   .post(
     "/api/auth/device/poll",
@@ -619,7 +629,7 @@ const publicAuthRoutes = new Elysia()
         }
       }
 
-      const resolved = await resolveGithubUrlsForDeviceAuth(body.host, status);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body.host, body.client_id, status);
       if (!resolved.ok) return resolved.response;
       const { urls } = resolved;
       // Per GitHub's docs, device-flow token exchange does not take a
@@ -675,6 +685,7 @@ const publicAuthRoutes = new Elysia()
       body: t.Object({
         device_code: t.String(),
         host: t.Optional(t.String()),
+        client_id: t.Optional(t.String()),
         session_token: t.Optional(t.String()),
       }),
     },

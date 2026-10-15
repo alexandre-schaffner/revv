@@ -95,7 +95,7 @@ const header = $derived(buildRecapHeader(recap, period));
   display: flex;
   flex-direction: column;
   gap: 1.75rem;
-  width: 280px;
+  width: var(--recap-rail);
   flex-shrink: 0;
   opacity: var(--shrink, 0);
   transition: opacity var(--duration-smooth) var(--ease-out-expo);

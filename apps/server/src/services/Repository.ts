@@ -1,5 +1,5 @@
 import type { Repository } from "@revv/shared";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
@@ -174,8 +174,15 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   getRepoByFullName: (fullName, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = db.select().from(repositories).where(eq(repositories.fullName, fullName)).get();
-      if (!row || row.accountId !== accountId) return null;
+      // Scope on both columns: `(full_name, account_id)` is the unique index,
+      // so the same repo can legitimately be tracked by several accounts.
+      // Filtering on `full_name` alone returns an arbitrary account's row.
+      const row = db
+        .select()
+        .from(repositories)
+        .where(and(eq(repositories.fullName, fullName), eq(repositories.accountId, accountId)))
+        .get();
+      if (!row) return null;
       return rowToRepo(row);
     }),
 

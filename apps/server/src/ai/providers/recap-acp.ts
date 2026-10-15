@@ -24,7 +24,7 @@
 //     accepted regression vs. the pre-migration drivers).
 
 import type { McpServer } from "@agentclientprotocol/sdk";
-import type { AcpAgentId, ContextWindow, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
+import type { AcpAgentId, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { AGENT_IDLE_TIMEOUT_MS, CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
@@ -57,7 +57,6 @@ export interface RunRecapAgentAcpParams {
   readonly acpAgentId: AcpAgentId;
   readonly modelUsed: string;
   readonly thinkingEffort?: ThinkingEffort | undefined;
-  readonly contextWindow?: ContextWindow | undefined;
   /** Working dir the ACP connection is pooled under (repo clone path / server cwd). */
   readonly workingDir: string;
   readonly abortController: AbortController;
@@ -111,7 +110,6 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
     handle = await getAcpConnection(params.workingDir, params.acpAgentId, {
       model: params.modelUsed,
       thinkingEffort: params.thinkingEffort,
-      contextWindow: params.contextWindow,
     });
     const h = handle;
     if (!h.httpMcpSupported) {

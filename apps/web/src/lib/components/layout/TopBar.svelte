@@ -1,12 +1,21 @@
 <script lang="ts">
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import Monitor from "phosphor-svelte/lib/Desktop";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import Check from "phosphor-svelte/lib/Check";
+import Desktop from "phosphor-svelte/lib/Desktop";
+import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import Moon from "phosphor-svelte/lib/Moon";
-import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
-import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
+import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
+import * as Tooltip from "$lib/components/ui/tooltip";
+import { gsapPop, gsapPress, tokens } from "$lib/motion";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
-import { getIsLoading, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
+import {
+  getIsLoading,
+  getRepositories,
+  getSelectedPr,
+  getSelectedPrId,
+} from "$lib/stores/prs.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
 import {
   getThemePreference,
@@ -25,9 +34,13 @@ interface Props {
 let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
 
 const pr = $derived(getSelectedPr());
+const repository = $derived(
+  pr ? (getRepositories().find((candidate) => candidate.id === pr.repositoryId) ?? null) : null,
+);
 const selectedPrId = $derived(getSelectedPrId());
 const theme = $derived(getThemePreference());
 const topbarSubtitle = $derived(getTopbarSubtitle());
+const linkCopied = $derived(getPrLinkCopied());
 
 // Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
 // PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
@@ -74,19 +87,52 @@ function cycleTheme() {
 		aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
-		{#if sidebarCollapsed}
-			<PanelLeftOpen size={14} weight="fill" />
-		{:else}
-			<PanelLeftClose size={14} weight="fill" />
-		{/if}
+		<!-- One glyph; `fill` is the "panel is showing" state. Previously this
+			 was an {#if} whose two branches imported the same icon under
+			 different names, so the button never changed appearance. -->
+		<SidebarSimple size={14} weight={sidebarCollapsed ? 'regular' : 'fill'} />
 	</button>
 
 	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block">
 		{#if pr}
-			<span class="inline-title">
-				<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
-			</span>
+			<div class="title-row">
+				<span class="inline-title">
+					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
+				</span>
+				{#if repository}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<button
+									{...props}
+									class="copy-link-btn"
+									onclick={() => void copySelectedPrLink()}
+									aria-label={linkCopied ? 'Link copied' : 'Copy PR link (\u21e7\u2318C)'}
+									use:gsapPress
+								>
+									{#key linkCopied}
+										<span
+											class="copy-link-icon"
+											class:copied={linkCopied}
+											in:gsapPop={{ duration: tokens.quick }}
+											out:gsapPop={{ duration: tokens.instant }}
+										>
+											{#if linkCopied}<Check size={13} />{:else}<LinkSimple size={13} />{/if}
+										</span>
+									{/key}
+								</button>
+							{/snippet}
+						</Tooltip.Trigger>
+						<!-- Deliberately static: the tooltip is open under the cursor when
+						     the click lands, so swapping its text mid-hover resizes and
+						     re-centers the surface. The icon carries the confirmation. -->
+						<Tooltip.Content side="bottom" sideOffset={6}>
+							Copy PR link (&#x21e7;&#x2318;C)
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			</div>
 		{:else}
 			<span class="app-name">Revv</span>
 		{/if}
@@ -101,7 +147,7 @@ function cycleTheme() {
 			aria-label="Sync pull requests"
 			title="Sync pull requests"
 		>
-			<RefreshCw size={14} weight="fill" class={isSyncing ? 'motion-essential-spin' : ''} />
+			<ArrowsClockwise size={14} class={isSyncing ? 'motion-essential-spin' : ''} />
 		</button>
 		<button
 			class="theme-btn"
@@ -110,11 +156,11 @@ function cycleTheme() {
 			title={labels[theme]}
 		>
 			{#if theme === 'light'}
-				<Sun size={14} weight="fill" />
+				<Sun size={14} />
 			{:else if theme === 'dark'}
-				<Moon size={14} weight="fill" />
+				<Moon size={14} />
 			{:else}
-				<Monitor size={14} weight="fill" />
+				<Desktop size={14} />
 			{/if}
 		</button>
 
@@ -126,20 +172,7 @@ function cycleTheme() {
 			title={pr ? 'Toggle context panel (⌘⌥B)' : 'Chat panel is only available when reviewing a PR'}
 			disabled={!pr}
 		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				width="14"
-				height="14"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<rect width="18" height="18" x="3" y="3" rx="2" />
-				<path d="M15 3v18" />
-			</svg>
+			<SidebarSimple size={14} mirrored weight={rightPanelOpen ? 'fill' : 'regular'} />
 		</button>
 	</div>
 </div>
@@ -182,6 +215,57 @@ function cycleTheme() {
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		min-width: 0;
+	}
+
+	.title-row {
+		align-items: center;
+		display: flex;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.copy-link-btn {
+		align-items: center;
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		color: var(--color-text-muted);
+		cursor: pointer;
+		display: inline-flex;
+		flex: 0 0 22px;
+		height: 22px;
+		justify-content: center;
+		padding: 0;
+		position: relative;
+		width: 22px;
+		z-index: 2;
+	}
+
+	.copy-link-btn:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
+	}
+
+	.copy-link-btn:focus-visible {
+		box-shadow: 0 0 0 3px var(--color-input-focus-ring);
+		outline: none;
+	}
+
+	/* Stacked so the outgoing and incoming glyph crossfade in place rather
+	   than competing for the button's 22px of layout — see `gsapPop`. */
+	.copy-link-icon {
+		align-items: center;
+		display: inline-flex;
+		inset: 0;
+		justify-content: center;
+		position: absolute;
+	}
+
+	/* On the glyph, not the button: the success color then crossfades with
+	   the icon instead of snapping both frames green at once. */
+	.copy-link-icon.copied {
+		color: var(--color-success);
 	}
 
 	.pr-number {

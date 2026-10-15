@@ -146,7 +146,7 @@ let open = $state(false);
 	>
 		<Collapsible bind:open>
 			<CollapsibleTrigger class="tcc-trigger" aria-label={`${label} ${detail}`.trim()}>
-				<Icon class="tcc-icon" style={`color: ${iconColor}`} weight="regular" aria-hidden="true" />
+				<Icon class="tcc-icon" style={`color: ${iconColor}`} aria-hidden="true" />
 				<span class="tcc-name" class:tcc-name--active={active}>{label}</span>
 				{@render detailPill()}
 				{#if isError}
@@ -179,7 +179,7 @@ let open = $state(false);
 	</div>
 {:else}
 	<div class={cn("tcc tcc--static", className)} data-component="tool-call-card">
-		<Icon class="tcc-icon" style={`color: ${iconColor}`} weight="regular" aria-hidden="true" />
+		<Icon class="tcc-icon" style={`color: ${iconColor}`} aria-hidden="true" />
 		<span class="tcc-name" class:tcc-name--active={active}>{label}</span>
 		{@render detailPill()}
 	</div>

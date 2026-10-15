@@ -5,9 +5,11 @@ import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-policy";
 import { GitHubGateway } from "../services/GitHub";
+import { apiBaseForHost } from "../services/github-rest";
 import { PollScheduler } from "../services/PollScheduler";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
+import { diagnoseRepoNotFound } from "../services/repo-access";
 import { handleAppError, withAccount } from "./middleware";
 
 export const repoRoutes = new Elysia({ prefix: "/api/repos" })
@@ -55,7 +57,18 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
 
             const { accountId, accessToken: token } = ctx.account;
             const githubHost = ctx.account.host ?? "github.com";
-            const repoData = yield* github.repos.get(body.fullName, token);
+            // Query the account's own host: the settings-derived fallback base
+            // can point at a different host than the token was minted for.
+            const repoData = yield* github.repos
+              .get(body.fullName, token, apiBaseForHost(githubHost))
+              .pipe(
+                Effect.catchTag("GitHubNotFoundError", () =>
+                  Effect.flatMap(
+                    diagnoseRepoNotFound(body.fullName, githubHost, token),
+                    Effect.fail,
+                  ),
+                ),
+              );
             const saved = yield* repoSvc.addRepo(
               {
                 ...repoData,

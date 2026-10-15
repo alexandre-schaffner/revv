@@ -4,12 +4,14 @@ import type {
   WalkthroughMode,
   WalkthroughStreamEvent,
 } from "@revv/shared";
+import { resolveThinkingEffort } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   applyAcpAgentOverride,
   isAcpAgentAvailable,
   resolveGenerationModel,
 } from "../ai/acp/presets";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -19,6 +21,7 @@ import {
   type ChatPrContext,
   type ChatWalkthroughContext,
 } from "../ai/prompts/chat";
+import type { WalkthroughPromptHints } from "../ai/prompts/walkthrough";
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
@@ -88,65 +91,73 @@ export interface ChatParams {
 export class AiService extends Context.Tag("AiService")<
   AiService,
   {
-    readonly streamWalkthrough: (params: {
-      /**
-       * The deterministic walkthrough id the MCP tool handlers will scope
-       * all writes to. Issued by {@link WalkthroughJobs.startJob} via
-       * `walkthroughService.createPartial` BEFORE the provider is spawned.
-       * The providers inject this into the shared tool-handler context
-       * (doctrine invariant #11 — identity is orchestrator-provided).
-       */
-      walkthroughId: string;
-      /**
-       * Account that owns the PR. Passed through to the Claude MCP provider
-       * so it can scope SSE broadcasts without re-deriving accountId via a
-       * DB join on every tool call.
-       */
-      accountId: string;
-      pr: {
-        title: string;
-        body: string | null;
-        sourceBranch: string;
-        targetBranch: string;
-        url: string;
-      };
-      mode: WalkthroughMode;
-      files: PrFileMeta[];
-      worktreePath: string;
-      reviewMode?: {
-        readonly mode: "full" | "incremental";
-        readonly parentWalkthroughId: string | null;
-        readonly baseHeadSha: string | null;
-        readonly headSha: string;
-        readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
-      };
-      continuation?: ContinuationContext;
-      onSessionId?: (sessionId: string) => void;
-      /**
-       * Optional caller-owned abort controller. When provided, it is
-       * forwarded to the underlying provider so external cancellation
-       * (regenerate, scope close, shutdown) propagates straight into the
-       * Claude Agent SDK turn or the opencode HTTP session.
-       */
-      abortController?: AbortController;
-      /**
-       * Optional caller-provided callbacks for minting + clearing the
-       * HTTP-MCP session token. Only consulted when the resolved agent uses
-       * the HTTP MCP transport; the Claude SDK path ignores them.
-       * WalkthroughJobs supplies these because it owns the session-token
-       * map (in-process, ephemeral per invariant #1). Kept as plain
-       * callbacks so AiService doesn't need a layer dependency on
-       * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
-       * AiService already).
-       */
-      issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
-      clearHttpMcpSessionToken?: (token: string) => Promise<void>;
-      registerHttpMcpActivityNotifier?: (
-        walkthroughId: string,
-        callback: (event: WalkthroughStreamEvent) => void,
-      ) => Promise<void>;
-      unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
-    }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
+    readonly streamWalkthrough: (
+      params: {
+        /**
+         * The deterministic walkthrough id the MCP tool handlers will scope
+         * all writes to. Issued by {@link WalkthroughJobs.startJob} via
+         * `walkthroughService.createPartial` BEFORE the provider is spawned.
+         * The providers inject this into the shared tool-handler context
+         * (doctrine invariant #11 — identity is orchestrator-provided).
+         */
+        walkthroughId: string;
+        /**
+         * Account that owns the PR. Passed through to the Claude MCP provider
+         * so it can scope SSE broadcasts without re-deriving accountId via a
+         * DB join on every tool call.
+         */
+        accountId: string;
+        pr: {
+          title: string;
+          body: string | null;
+          sourceBranch: string;
+          targetBranch: string;
+          url: string;
+        };
+        mode: WalkthroughMode;
+        files: PrFileMeta[];
+        worktreePath: string;
+        reviewMode?: {
+          readonly mode: "full" | "incremental";
+          readonly parentWalkthroughId: string | null;
+          readonly baseHeadSha: string | null;
+          readonly headSha: string;
+          readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
+        };
+        continuation?: ContinuationContext;
+        onSessionId?: (sessionId: string) => void;
+        /**
+         * Optional caller-owned abort controller. When provided, it is
+         * forwarded to the underlying provider so external cancellation
+         * (regenerate, scope close, shutdown) propagates straight into the
+         * Claude Agent SDK turn or the opencode HTTP session.
+         */
+        abortController?: AbortController;
+        /**
+         * Optional caller-provided callbacks for minting + clearing the
+         * HTTP-MCP session token. Only consulted when the resolved agent uses
+         * the HTTP MCP transport; the Claude SDK path ignores them.
+         * WalkthroughJobs supplies these because it owns the session-token
+         * map (in-process, ephemeral per invariant #1). Kept as plain
+         * callbacks so AiService doesn't need a layer dependency on
+         * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
+         * AiService already).
+         */
+        issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
+        clearHttpMcpSessionToken?: (token: string) => Promise<void>;
+        registerHttpMcpActivityNotifier?: (
+          walkthroughId: string,
+          callback: (event: WalkthroughStreamEvent) => void,
+        ) => Promise<void>;
+        unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
+        /**
+         * Per-job model/effort override, resolved once at job start. Absent
+         * uses configured settings. Goes through `resolveGenerationModel` so
+         * an override naming a model this agent can't run falls back safely.
+         */
+        launchOverride?: GenerationLaunchOverride;
+      } & WalkthroughPromptHints,
+    ) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
      * configured agent, builds the system prompt + user message, and hands
@@ -269,6 +280,9 @@ export const AiServiceLive = Layer.effect(
             const clearToken = params.clearHttpMcpSessionToken;
             const registerNotifier = params.registerHttpMcpActivityNotifier;
             const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+            // Guard against a chat-only agent id left over from the bottom bar (e.g. cursor).
+            const override = params.launchOverride;
+            const model = resolveGenerationModel(agent, override?.model ?? settings.aiModel);
             const raw = streamWalkthroughViaAcp(
               {
                 ...params,
@@ -282,10 +296,14 @@ export const AiServiceLive = Layer.effect(
                   unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
                 },
               },
-              // Guard the shared model against this agent (the chat bottom bar
-              // may have left a chat-only agent's model id, e.g. cursor).
-              resolveGenerationModel(agent, settings.aiModel),
-              settings,
+              {
+                model,
+                // Sized effort for Auto, the user's pin otherwise.
+                thinkingEffort: resolveThinkingEffort(
+                  settings.aiThinkingEffort,
+                  override?.thinkingEffort ?? null,
+                ),
+              },
             );
             return guardWalkthroughStream(raw, {
               label: "walkthrough-acp",
@@ -334,9 +352,8 @@ export const AiServiceLive = Layer.effect(
               cwd: params.cwd,
               onSessionId: params.onSessionId,
               abortController: params.abortController,
-              model: settings.aiModel ?? undefined,
-              thinkingEffort: settings.aiThinkingEffort ?? undefined,
-              contextWindow: settings.aiContextWindow ?? undefined,
+              model: resolveGenerationModel(acpAgentId, settings.aiModel),
+              thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
               acpAgentId,
               deps: {
                 issueChatMcpToken: (args: {
@@ -380,9 +397,8 @@ export const AiServiceLive = Layer.effect(
             cwd: params.cwd,
             onSessionId: undefined,
             abortController: params.abortController,
-            model: settings.aiModel ?? undefined,
-            thinkingEffort: settings.aiThinkingEffort ?? undefined,
-            contextWindow: settings.aiContextWindow ?? undefined,
+            model: resolveGenerationModel(acpAgentId, settings.aiModel),
+            thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
             acpAgentId,
             deps: {
               issueChatMcpToken: (args: {

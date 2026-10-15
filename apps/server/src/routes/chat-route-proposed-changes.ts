@@ -53,31 +53,31 @@ export const chatProposedChangesRoutes = new Elysia()
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const agent = yield* settingsService.resolveChatAgentId();
 
-            const row = yield* chatSessions.findLatestForPr(pr.id, agent);
-            if (!row) return null;
-            return row;
+            return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
         );
 
         if (!result) {
-          return jsonResponse({ branchName: null, prHeadSha: null, commits: [] }, 200);
+          return jsonResponse({ branchName: null, baseSha: null, commits: [] }, 200);
         }
 
-        const commits = await listProposedCommits(result.worktreePath, result.prHeadSha).catch(
-          (err) => {
-            logError(
-              "chat",
-              "listProposedCommits failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-            return [] as ProposedCommit[];
-          },
-        );
+        // One resolved baseline, shared with the push/rebuild/discard paths —
+        // the commits listed here are exactly the ones those paths act on.
+        const { row, baseSha } = result;
+
+        const commits = await listProposedCommits(row.worktreePath, baseSha).catch((err) => {
+          logError(
+            "chat",
+            "listProposedCommits failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+          return [] as ProposedCommit[];
+        });
 
         return jsonResponse(
           {
-            branchName: result.branchName,
-            prHeadSha: result.prHeadSha,
+            branchName: row.branchName,
+            baseSha,
             commits,
           },
           200,
@@ -610,23 +610,28 @@ export const chatProposedChangesRoutes = new Elysia()
       }
 
       try {
-        const row = await AppRuntime.runPromise(
+        const resolved = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const agent = yield* settingsService.resolveChatAgentId();
-            return yield* chatSessions.findLatestForPr(pr.id, agent);
+            return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
         );
 
-        if (!row) {
+        if (!resolved) {
           ctx.set.status = 404;
           return { error: "No chat session found for this PR" };
         }
 
-        const { worktreePath, branchName, prHeadSha } = row;
+        // Rebuild onto the same baseline the display and push enumerations use.
+        // A stale session baseline here is destructive: the rebuild detaches at
+        // it and force-moves the branch, rewinding the agent branch to a PR head
+        // the PR left behind. See `resolveProposedBaseSha`.
+        const { worktreePath, branchName } = resolved.row;
+        const baseSha = resolved.baseSha;
 
         // Resolve full SHAs and build the drop set.
         const dropSet = new Set<string>();
@@ -645,7 +650,7 @@ export const chatProposedChangesRoutes = new Elysia()
         // entire base history into the rebuild (cherry-picking hundreds of
         // unrelated commits onto the detached PR head).
         const listOut = await gitStdout(
-          ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, `${prHeadSha}..${branchName}`],
+          ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, `${baseSha}..${branchName}`],
           worktreePath,
           10_000,
         ).catch(() => null);
@@ -674,7 +679,7 @@ export const chatProposedChangesRoutes = new Elysia()
         }
         const savedAgentTip = oldAgentTip.trim();
 
-        // Rebuild the agent branch by checking out the prHeadSha as a detached
+        // Rebuild the agent branch by checking out the resolved baseline as a detached
         // HEAD then cherry-picking each keep commit in order. On any failure
         // we abort and restore the branch ref to its prior tip.
         const restoreOnFailure = async (): Promise<void> => {
@@ -684,7 +689,7 @@ export const chatProposedChangesRoutes = new Elysia()
         };
 
         try {
-          await gitStdout(["checkout", "--detach", prHeadSha], worktreePath, 15_000);
+          await gitStdout(["checkout", "--detach", baseSha], worktreePath, 15_000);
         } catch (err) {
           await restoreOnFailure();
           ctx.set.status = 500;

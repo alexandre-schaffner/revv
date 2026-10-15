@@ -47,6 +47,56 @@ export const gsapFadeY = (node: Element, params: FadeParams = {}) =>
   fadeTransform(node, { ...params, y: params.y ?? 4 });
 
 /**
+ * Fade + scale, for swapping one glyph for another inside a fixed-size slot
+ * (icon buttons, status dots).
+ *
+ * The caller must stack the keyed element — `position: absolute` centered in
+ * a `position: relative` parent — so the outgoing and incoming glyphs
+ * crossfade in place. Left in normal flow they both claim layout for the
+ * duration of the swap, and the icons visibly squeeze apart and snap back.
+ */
+export function gsapPop(
+  node: Element,
+  params: { duration?: number; delay?: number; from?: number } = {},
+): TransitionConfig {
+  const durationSec = prefersReducedMotion() ? 0 : (params.duration ?? tokens.quick);
+  const el = node as HTMLElement;
+  const from = params.from ?? 0.7;
+  return {
+    duration: durationSec * 1000,
+    delay: (params.delay ?? 0) * 1000,
+    easing: easeOutExpo,
+    tick: (t) => {
+      el.style.opacity = String(t);
+      el.style.transform = `scale(${from + (1 - from) * t})`;
+    },
+  };
+}
+
+/**
+ * Grow up from the element's bottom edge, for bars that rise out of a
+ * baseline (the first-pass scan ribbon). Transform-only, so a row of them
+ * animating at once never touches layout.
+ */
+export function gsapRise(
+  node: Element,
+  params: { duration?: number; delay?: number } = {},
+): TransitionConfig {
+  const durationSec = prefersReducedMotion() ? 0 : (params.duration ?? tokens.smooth);
+  const el = node as HTMLElement;
+  return {
+    duration: durationSec * 1000,
+    delay: (params.delay ?? 0) * 1000,
+    easing: easeOutExpo,
+    tick: (t) => {
+      el.style.opacity = String(Math.min(1, t * 2));
+      el.style.transformOrigin = "bottom";
+      el.style.transform = t >= 1 ? "" : `scaleY(${t})`;
+    },
+  };
+}
+
+/**
  * Height/width-collapsing slide (drop-in for svelte/transition's `slide`).
  * Lives apart from `transform` because it measures and animates layout
  * dimensions, not just opacity + transform.

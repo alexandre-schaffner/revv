@@ -2,6 +2,7 @@ import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
 import { PrContextService } from "../../../services/PrContext";
+import { resolveReviewModeForPr } from "../../../services/review-mode";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
@@ -21,6 +22,13 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *   • `status: 'not_found'`  → no local row; client probes the Generate button.
  *                              (Team cache is probed internally before returning
  *                              not_found, so a cache hit returns `complete`.)
+ *                              Carries the perspective Generate should default to.
+ *
+ * `mode` is optional. Without it the server picks the perspective: the one the
+ * PR's newest walkthrough was written in (the user's last pick, superseded rows
+ * included, so a stale walkthrough keeps its perspective), else the
+ * identity-derived default. Only one perspective is active per PR at a time
+ * (see `WalkthroughJobs.startJobBody`), so this is the walkthrough on screen.
  *
  * The `snapshotAt` field is a cursor anchor: when the client opens the SSE
  * stream with `?snapshotAt=<value>`, the server replays only rows created
@@ -43,7 +51,7 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 export function getCurrentWalkthroughHandler(
   prId: string,
   userId: string,
-  mode: WalkthroughMode = "reviewer",
+  requestedMode?: WalkthroughMode,
 ) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
@@ -52,11 +60,15 @@ export function getCurrentWalkthroughHandler(
       const jobs = yield* WalkthroughJobs;
 
       const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
+      const mode =
+        requestedMode ??
+        (yield* walkthroughService.getLatestMode(pr.id)) ??
+        (yield* resolveReviewModeForPr(pr.id)).mode;
       const headSha = pr.headSha;
       // No synced head SHA → nothing to match a walkthrough against. The PR
       // row hasn't fully synced yet; the client shows the Generate button and
       // a later `prs:updated` + component-mount re-hydration recovers.
-      if (!headSha) return { status: "not_found" as const };
+      if (!headSha) return { status: "not_found" as const, mode };
 
       // 1. Complete walkthrough — best case, no SSE needed.
       const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
@@ -115,7 +127,7 @@ export function getCurrentWalkthroughHandler(
         };
       }
 
-      return { status: "not_found" as const };
+      return { status: "not_found" as const, mode };
     }),
   );
 }

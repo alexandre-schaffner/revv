@@ -14,12 +14,11 @@
 // invariant #13: agent-path parity). This file re-exports them for callers
 // that already import from `./chat-types` so the import sites don't churn.
 
-import type { Activity, ActivityKind, ChatTask, NormalizedQuestion } from "@revv/shared";
+import type { Activity, ChatTask, NormalizedQuestion } from "@revv/shared";
 
 // Re-export the canonical wire frame from shared.
 export type { ChatStreamFrame } from "@revv/shared";
-export { classifyTool, normalizeToolName } from "@revv/shared";
-export type { Activity, ActivityKind, NormalizedQuestion };
+export type { Activity, NormalizedQuestion };
 
 /**
  * Internal driver-side frame. Drivers emit these with provider-keyed ids

@@ -39,6 +39,11 @@ import {
   unwrapJsonWrappedString,
 } from "./helpers";
 import {
+  findUnresolvedLeads,
+  renderUnresolvedLeadsError,
+  resolveLeadHandler,
+} from "./lead-handler";
+import {
   addDiffStepHandler,
   addIssueCommentHandler,
   addSemanticStepHandler,
@@ -62,6 +67,7 @@ import {
   RATING_AXES as RATING_AXES_SPEC,
   type RateAxisInput,
   rateAxisSchema,
+  resolveLeadSchema,
   type SetOverviewInput,
   type SetSentimentInput,
   setOverviewSchema,
@@ -74,36 +80,26 @@ import {
 
 // ── Re-exports (preserve public API) ────────────────────────────────────────
 
-export type { MissingInlineComment } from "./helpers";
 export {
   blockIdFor,
   findIssuesMissingInlineComment,
-  renderMissingInlineCommentError,
   unwrapJsonWrappedString,
 } from "./helpers";
-export {
-  addDiffStepHandler,
-  addIssueCommentHandler,
-  addSemanticStepHandler,
-  flagIssueHandler,
-} from "./phase-b-handlers";
-export {
-  getCommitHistoryHandler,
-  getRepoContextHandler,
-  getWalkthroughStateHandler,
-} from "./read-handler";
+export type { WalkthroughToolJudgments } from "./spec";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase === 'none'.
-// Writes: walkthroughs.summary, walkthroughs.risk_level.
+// Writes: walkthroughs.summary, and risk_level only if not already assigned
+//   by the orchestrator (risk_confidence null).
 // Advances: last_completed_phase → 'A'.
 
 export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = async (ctx, input) => {
   const summary = unwrapJsonWrappedString(input.summary, "summary");
 
   let result: WalkthroughToolResult | null = null;
+  let riskLevel: RiskLevel = "low";
   ctx.db.transaction(() => {
     const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
     if (!row) {
@@ -117,11 +113,18 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
       );
       return;
     }
+    // Non-null riskConfidence marks the tier as orchestrator-assigned; its
+    // value wins over the agent's argument, since the agent's issue budget
+    // was already sized to it.
+    const orchestratorAssigned = row.riskConfidence !== null;
+    riskLevel = orchestratorAssigned
+      ? (row.riskLevel as RiskLevel)
+      : ((input.risk_level ?? row.riskLevel) as RiskLevel);
     ctx.db
       .update(walkthroughs)
       .set({
         summary,
-        riskLevel: input.risk_level,
+        riskLevel,
         lastCompletedPhase: "A",
       })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
@@ -133,7 +136,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
     type: "summary",
     data: {
       summary,
-      riskLevel: input.risk_level as RiskLevel,
+      riskLevel,
     },
   });
   ctx.emit({
@@ -194,7 +197,10 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
 
     ctx.db
       .update(walkthroughs)
-      .set({ sentiment: markdown, lastCompletedPhase: "C" })
+      .set({
+        sentiment: markdown,
+        lastCompletedPhase: "C",
+      })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
       .run();
   });
@@ -205,22 +211,22 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
     type: "phase:advanced",
     data: { lastCompletedPhase: "C" },
   });
-  return okResult("Sentiment set. Phase C complete — now rate each of the 9 axes with rate_axis.");
+  return okResult(
+    "Sentiment set. Phase C complete — now rate all 9 axes with rate_axis, as nine parallel calls in one turn.",
+  );
 };
 
 // ── Handler: rate_axis (Phase D) ─────────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase ∈ {'C', 'D'}.
 // Writes: one walkthrough_ratings row (upsert on (walkthroughId, axis)).
-// Advances: last_completed_phase → 'D' on the 9th distinct axis.
+// Advances: last_completed_phase → 'D' once all 9 axes carry a rationale.
+//
+// The agent emits all nine calls in one turn, so they can land in any order.
+// Safe because the whole body is one synchronous transaction: the rated-axis
+// count below sees every prior call's commit, and exactly one call advances.
 
 export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx, input) => {
-  if (input.verdict !== "pass" && input.citations.length === 0) {
-    return errorResult(
-      `Error: verdict='${input.verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
-    );
-  }
-
   let result: WalkthroughToolResult | null = null;
   let ratingEvent: WalkthroughRating | null = null;
   let advanced = false;
@@ -234,6 +240,14 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
     if (phase !== "C" && phase !== "D") {
       result = errorResult(
         `Error: rate_axis requires Phase C complete (sentiment set). Current phase: '${phase}'. Call set_sentiment first.`,
+      );
+      return;
+    }
+
+    const { verdict, confidence } = input;
+    if (verdict !== "pass" && input.citations.length === 0) {
+      result = errorResult(
+        `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
       );
       return;
     }
@@ -289,8 +303,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
         id: crypto.randomUUID(),
         walkthroughId: ctx.walkthroughId,
         axis: input.axis,
-        verdict: input.verdict,
-        confidence: input.confidence,
+        verdict,
+        confidence,
         rationale: input.rationale,
         details: input.details,
         citations: JSON.stringify(citations),
@@ -300,8 +314,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       .onConflictDoUpdate({
         target: [walkthroughRatings.walkthroughId, walkthroughRatings.axis],
         set: {
-          verdict: input.verdict,
-          confidence: input.confidence,
+          verdict,
+          confidence,
           rationale: input.rationale,
           details: input.details,
           citations: JSON.stringify(citations),
@@ -310,13 +324,16 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       })
       .run();
 
-    // Count distinct axes rated; advance phase to 'D' if all 9 present.
+    // Advance to 'D' once every axis has a rationale, not just a row — rows
+    // seeded by the retired Jev verdict pass carry empty prose.
     const ratedRows = ctx.db
-      .select({ axis: walkthroughRatings.axis })
+      .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
       .from(walkthroughRatings)
       .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
       .all();
-    const ratedSet = new Set(ratedRows.map((r) => r.axis));
+    const ratedSet = new Set(
+      ratedRows.filter((r) => r.rationale.trim().length > 0).map((r) => r.axis),
+    );
     if (ratedSet.size === RATING_AXES_SPEC.length && row.lastCompletedPhase !== "D") {
       ctx.db
         .update(walkthroughs)
@@ -328,8 +345,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
     const rating: WalkthroughRating = {
       axis: input.axis,
-      verdict: input.verdict,
-      confidence: input.confidence,
+      verdict,
+      confidence,
       rationale: input.rationale,
       details: input.details,
       citations,
@@ -357,7 +374,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 // ── Handler: complete_walkthrough (validation gate) ──────────────────────────
 //
 // Phase precondition: last_completed_phase === 'D' AND all 9 axes rated AND
-// sentiment non-empty AND ≥1 diff step. The actual `status='complete'`
+// sentiment non-empty AND ≥1 diff step AND every first-pass lead resolved. The actual `status='complete'`
 // transition is performed by WalkthroughJobs in response to the `done` event —
 // this handler only validates, then emits `done`. Doctrine invariant #11:
 // status transitions are orchestrator-only.
@@ -365,6 +382,9 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthroughInput> = async (
   ctx,
 ) => {
+  // Drain every scheduled relevance judgment before validating, so the gate
+  // never checks an issue set that's about to change. Bounded; see ai/jev/pending.ts.
+  await ctx.jev.awaitIssueJudgments();
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
     return errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
@@ -467,12 +487,9 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     );
   }
 
-  // Every line-anchored WARNING or CRITICAL issue must have at least one
-  // inline comment. The agent's job is `flag_issue` (sidebar card) +
-  // `add_issue_comment` (inline review comment); a warning/critical with no
-  // inline comment is invisible to the coder at the place that matters.
-  // Exempt: severity='info' (nitpicks — no inline noise expected) and
-  // PR-wide issues (file_path / start_line NULL — no anchor possible).
+  // Every line-anchored concern needs an inline comment: flag_issue writes
+  // the sidebar card, add_issue_comment writes the inline note; without it
+  // the concern is invisible to the coder. Exempt: PR-wide issues (no anchor).
   //
   // Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
   // above. Both gates MUST agree, otherwise the orchestrator can mark
@@ -480,6 +497,15 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   const uncommented = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
   if (uncommented.length > 0) {
     return errorResult(renderMissingInlineCommentError(uncommented));
+  }
+
+  // Every first-pass lead owes a verdict. This gate is the tool's alone: the
+  // orchestrator completes a run without one, because a lead is a hint and an
+  // unread hint shouldn't cost the whole review. Refusing here is what makes
+  // the agent finish the job while it still has the context to do it.
+  const unresolved = findUnresolvedLeads(ctx.db, ctx.walkthroughId);
+  if (unresolved.length > 0) {
+    return errorResult(renderUnresolvedLeadsError(unresolved));
   }
 
   // Deliberately NO stream emit here. The AI provider's generator end
@@ -524,7 +550,7 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "set_overview",
     description:
-      "Phase A. Call exactly once, before any other write tool. Sets the PR summary (2-3 sentences) and overall risk level (low/medium/high). Advances phase to A.",
+      "Phase A. Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
     inputSchema: setOverviewSchema,
     handler: setOverviewHandler,
   },
@@ -557,6 +583,13 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
     handler: addIssueCommentHandler,
   },
   {
+    name: "resolve_lead",
+    description:
+      "Phase B onward. Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
+    inputSchema: resolveLeadSchema,
+    handler: resolveLeadHandler,
+  },
+  {
     name: "set_sentiment",
     description:
       "Phase C. Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
@@ -566,14 +599,14 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "rate_axis",
     description:
-      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description). Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
+      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description), sending all nine as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
     inputSchema: rateAxisSchema,
     handler: rateAxisHandler,
   },
   {
     name: "complete_walkthrough",
     description:
-      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, and ≥1 diff step. The orchestrator observes the emitted `done` event and performs the final status transition.",
+      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator observes the emitted `done` event and performs the final status transition.",
     inputSchema: completeWalkthroughSchema,
     handler: completeWalkthroughHandler,
   },

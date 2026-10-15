@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Cause, Effect, FiberId } from "effect";
+import { Cause, Effect, Exit, Fiber, FiberId } from "effect";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import {
@@ -28,6 +28,60 @@ describe("analyzeJobFailure", () => {
   it("errors on genuine failures regardless of cancel flag", () => {
     expect(analyzeJobFailure(failure, { cancelledByUser: false })).toBe("error");
     expect(analyzeJobFailure(failure, { cancelledByUser: true })).toBe("error");
+  });
+});
+
+// ── Job teardown wiring ──────────────────────────────────────────────────────
+// `analyzeJobFailure` only matters if the handler that consults it actually
+// runs. It used to hang off `Effect.catchAllCause`, which an interrupted fiber
+// skips outright — so every user Stop left its row at 'generating', never
+// broadcast `lifecycle:error`, and got re-launched by resume-on-boot until the
+// retry budget ran out. `WalkthroughJobs` therefore attaches the handler with
+// `Effect.onExit`; `ProjectRecapJobs` compensates differently, with an explicit
+// force-transition in its own `cancel`. These two pin the difference.
+
+describe("terminal handler placement under interruption", () => {
+  const interruptAfterStart = async (body: Effect.Effect<void>): Promise<void> => {
+    const fiber = await Effect.runPromise(Effect.forkDaemon(body));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await Effect.runPromise(Fiber.interrupt(fiber));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+
+  it("skips a catchAllCause handler when the fiber is interrupted", async () => {
+    const ran: string[] = [];
+    await interruptAfterStart(
+      Effect.never.pipe(
+        Effect.catchAllCause(() =>
+          Effect.sync(() => {
+            ran.push("handled");
+          }),
+        ),
+      ),
+    );
+
+    expect(ran).toEqual([]);
+  });
+
+  it("runs an onExit handler to completion when the fiber is interrupted", async () => {
+    const ran: string[] = [];
+    await interruptAfterStart(
+      Effect.never.pipe(
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit)
+            ? Effect.gen(function* () {
+                ran.push("entered");
+                // A DB write is async: the handler has to survive past a yield
+                // point, not just reach its first line.
+                yield* Effect.sleep("1 millis");
+                ran.push("committed");
+              })
+            : Effect.void,
+        ),
+      ),
+    );
+
+    expect(ran).toEqual(["entered", "committed"]);
   });
 });
 

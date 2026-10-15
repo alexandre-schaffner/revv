@@ -1,4 +1,6 @@
 import { fuzzyScore } from "$lib/utils/fuzzy";
+import { copySelectedPrLink } from "./pr-link.svelte";
+import { openSettings } from "./settingsModal.svelte";
 import {
   collapseAllRepoGroups,
   openAddRepoDialog,
@@ -86,11 +88,41 @@ const commands = $state<Command[]>([
     action: () => toggleRightPanel(),
   },
   {
+    id: "pr:copy-link",
+    label: "Copy PR Link",
+    category: "Pull Request",
+    shortcut: "\u21e7\u2318C",
+    keywords: ["share", "deep link", "url", "clipboard"],
+    action: () => void copySelectedPrLink(),
+  },
+  {
     id: "repo:add",
     label: "Add Repository",
     category: "Repository",
     keywords: ["repo", "new", "track", "github", "import"],
     action: () => openAddRepoDialog(),
+  },
+  {
+    id: "settings:open",
+    label: "Open Settings",
+    category: "Settings",
+    shortcut: "\u2318,",
+    keywords: ["preferences", "configure", "options"],
+    action: () => openSettings(),
+  },
+  {
+    id: "settings:ai",
+    label: "Settings: AI agent",
+    category: "Settings",
+    keywords: ["agent", "provider", "model", "claude", "codex", "opencode", "cursor"],
+    action: () => openSettings("ai"),
+  },
+  {
+    id: "settings:repositories",
+    label: "Settings: Repositories",
+    category: "Settings",
+    keywords: ["repos", "tracked", "remove"],
+    action: () => openSettings("repositories"),
   },
 ]);
 

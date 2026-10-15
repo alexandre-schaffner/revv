@@ -6,6 +6,7 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { monthGridRange } from "$lib/components/recaps/period-window";
 import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -14,9 +15,37 @@ import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
  * Recap summaries per repository, keyed by `repositoryId`. Each entry is
  * ordered newest → oldest by `generatedAt`. The detail row (`overview` etc.)
  * isn't carried here — it's fetched on demand via `loadRecap`.
+ *
+ * Semantics: this is **every summary we've loaded**, not "the first page".
+ * The calendar fetches arbitrary historical grids by month, so both fetch
+ * paths merge into this one map rather than replacing it. A parallel
+ * by-month slice would force both SSE reducers to patch two structures
+ * consistently, for no benefit.
+ *
+ * Consequence: a row the server later excludes (it became `superseded`)
+ * lingers here until reload. Mostly handled already — `onRecapStatusChanged`
+ * patches the status on broadcast and every consumer filters
+ * `status !== "superseded"` — and any new consumer must do the same.
+ * Tombstone tracking isn't worth it for a local desktop app.
  */
 let recapsByRepo = $state<Map<string, ProjectRecapSummary[]>>(new Map());
 let loadingByRepo = $state<Map<string, boolean>>(new Map());
+
+/**
+ * Which `(repo, month)` grids have been fetched, and which are in flight.
+ * Deliberately plain `Set`s, not `$state`: they're read inside an async
+ * function, and a reactive read there would subscribe whatever effect
+ * happened to kick off the fetch to every subsequent month load.
+ * {@link monthLoading} is the reactive mirror, and it exists only to drive the
+ * calendar's grid skeleton.
+ */
+const monthsLoaded = new Set<string>();
+const monthsInFlight = new Set<string>();
+let monthLoading = $state<Map<string, boolean>>(new Map());
+
+function monthCacheKey(repoId: string, monthKey: string): string {
+  return `${repoId}:${monthKey}`;
+}
 
 /** Full recap (markdown + provenance + stats), keyed by `recapId`. */
 let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
@@ -63,6 +92,11 @@ export function getRecapLoading(repoId: string): boolean {
   return loadingByRepo.get(repoId) ?? false;
 }
 
+/** True while the calendar grid for this month is being fetched. */
+export function getMonthRecapsLoading(repoId: string, monthKey: string): boolean {
+  return monthLoading.get(monthCacheKey(repoId, monthKey)) ?? false;
+}
+
 export function getRecapDetail(recapId: string): ProjectRecap | null {
   return recapDetailById.get(recapId) ?? null;
 }
@@ -90,7 +124,27 @@ function updateEntry<K, V>(
   return next;
 }
 
+function deleteEntry<K, V>(map: Map<K, V>, key: K): Map<K, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
+
 // ── List fetches ─────────────────────────────────────────────────────────────
+
+/**
+ * Upsert `incoming` into `current` by `id` (incoming wins), then re-sort
+ * `generatedAt` DESC to preserve the list invariant every consumer relies on.
+ */
+function mergeSummaries(
+  current: readonly ProjectRecapSummary[],
+  incoming: readonly ProjectRecapSummary[],
+): ProjectRecapSummary[] {
+  const byId = new Map(current.map((r) => [r.id, r]));
+  for (const r of incoming) byId.set(r.id, r);
+  return [...byId.values()].sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1));
+}
 
 export async function fetchRecapsForRepo(repoId: string): Promise<void> {
   if (loadingByRepo.get(repoId)) return;
@@ -102,12 +156,61 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
         recaps: ProjectRecapSummary[];
         nextCursor: string | null;
       };
-      recapsByRepo = setEntry(recapsByRepo, repoId, page.recaps);
+      // Merge, don't replace. `generateRecap` calls this on every trigger,
+      // and a replace would wipe every historical month the calendar has
+      // loaded the instant the user generates anything.
+      recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
+        mergeSummaries(cur ?? [], page.recaps),
+      );
     }
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to load recaps");
   } finally {
     loadingByRepo = setEntry(loadingByRepo, repoId, false);
+  }
+}
+
+/**
+ * Fetch every recap whose window falls inside a calendar month's 6×7 grid and
+ * merge it into {@link recapsByRepo}. Idempotent: a month already loaded or in
+ * flight is a no-op, so the calendar's prefetch effects can fire freely.
+ *
+ * `limit: "100"` (`MAX_RECAP_PAGE_LIMIT` on the server) is load-bearing, not
+ * defensive. The default page limit is 30, but a 42-day grid can hold 42 daily
+ * + 6 weekly = 48 rows. At the default the server would silently truncate and
+ * hand back a `nextCursor` this caller has nowhere to put — so the calendar
+ * would show phantom gaps. One page always suffices at 100.
+ *
+ * Unlike {@link fetchRecapsForRepo} this never raises a toast: it runs as a
+ * background prefetch of adjacent months, and a failed warm-up must not throw
+ * an error at a user who didn't ask for anything. The month is left unmarked
+ * so a later navigation retries it.
+ */
+export async function fetchRecapsForMonth(repoId: string, monthKey: string): Promise<void> {
+  const key = monthCacheKey(repoId, monthKey);
+  if (monthsLoaded.has(key) || monthsInFlight.has(key)) return;
+  monthsInFlight.add(key);
+  monthLoading = setEntry(monthLoading, key, true);
+  try {
+    const { from, to } = monthGridRange(monthKey);
+    const { data } = await api.api
+      .repos({ id: repoId })
+      .recaps.get({ query: { from, to, limit: "100" } });
+    if (data) {
+      const page = data as {
+        recaps: ProjectRecapSummary[];
+        nextCursor: string | null;
+      };
+      recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
+        mergeSummaries(cur ?? [], page.recaps),
+      );
+      monthsLoaded.add(key);
+    }
+  } catch (e) {
+    console.warn(`[recaps] failed to load ${monthKey} for repo ${repoId}`, e);
+  } finally {
+    monthsInFlight.delete(key);
+    monthLoading = deleteEntry(monthLoading, key);
   }
 }
 

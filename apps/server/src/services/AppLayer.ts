@@ -13,13 +13,17 @@ import { SshSignerLive } from "./cache-signing/index";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
+import { ExternalIntegrationsLive } from "./ExternalIntegrations";
 import { FileContentServiceLive } from "./FileContent";
 import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { HunkScanServiceLive } from "./HunkScan";
 import { IdentityLive } from "./Identity";
+import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
+import { PrConversationServiceLive } from "./PrConversation";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
@@ -60,7 +64,14 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
 // at the same boundary other DB-dependent services do.
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
+
 const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
+
+// JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
+const JevServiceWithDeps = JevServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
+);
 
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
@@ -76,6 +87,7 @@ const BaseLayers = Layer.mergeAll(
   ReviewServiceLive,
   RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,
+  JevServiceWithDeps,
   WalkthroughServiceLive,
   ProjectRecapServiceLive,
   DiffCacheServiceLive,
@@ -85,6 +97,7 @@ const BaseLayers = Layer.mergeAll(
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
+  ExternalIntegrationsWithDeps,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
   // publishers yet; CacheStats is ready for per-namespace registrations as
   // existing services migrate to adapters in M2.
@@ -94,6 +107,12 @@ const BaseLayers = Layer.mergeAll(
 
 // PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
+
+// PrConversation serves the Conversation tab: PrContext for repo + token,
+// plus the kv cache, remote-user avatars, and Broadcaster from BaseLayers.
+const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
 
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
@@ -127,6 +146,10 @@ const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
 );
 const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
 
+// The first pass, per PR head. One instance: the review page and
+// WalkthroughJobs must share its in-flight map so a head is scanned once.
+const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
+
 // WalkthroughJobs is the central orchestrator for walkthrough generation —
 // it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
 // worktrees), Ai (to run the actual generator), Review (for session ids),
@@ -142,6 +165,7 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RepoCloneServiceWithDeps,
       RemoteWalkthroughCacheWithDeps,
       WalkthroughSnapshotImporterWithDeps,
+      HunkScanServiceWithDeps,
     ),
   ),
 );
@@ -183,11 +207,13 @@ const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
 export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
+  PrConversationServiceWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,
   RepoCloneServiceWithDeps,
   WalkthroughJobsWithDeps,
+  HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,
   RecapSchedulerWithDeps,
   DbMaintenanceWithDeps,

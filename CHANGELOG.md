@@ -1,5 +1,129 @@
 # Changelog
 
+## [0.31.0](https://github.com/alexandre-schaffner/revv/compare/v0.30.0...v0.31.0) (2026-10-13)
+
+
+### Features
+
+* add GitHub Conversation tab and streamline PR review ([#249](https://github.com/alexandre-schaffner/revv/issues/249)) ([60e3c12](https://github.com/alexandre-schaffner/revv/commit/60e3c127670fc6704e5f1ccde9abc7d3eac7a434))
+
+## [0.30.0](https://github.com/alexandre-schaffner/revv/compare/v0.29.0...v0.30.0) (2026-10-09)
+
+
+### Features
+
+* **server:** let external coding agents request and await a walkthrough ([#246](https://github.com/alexandre-schaffner/revv/issues/246)) ([af4bd2b](https://github.com/alexandre-schaffner/revv/commit/af4bd2b550c3165f595c0f32f2c171420aba7115))
+* user-picked walkthrough perspective + walkthrough history in the commits menu ([#245](https://github.com/alexandre-schaffner/revv/issues/245)) ([b4d7861](https://github.com/alexandre-schaffner/revv/commit/b4d7861a8755cd9bd1a077c8718c6e5d839b452b))
+
+## [0.29.0](https://github.com/alexandre-schaffner/revv/compare/v0.28.0...v0.29.0) (2026-10-06)
+
+
+### Features
+
+* Jev first pass (per-hunk smell leads) + poll split, model efforts, deps ([#243](https://github.com/alexandre-schaffner/revv/issues/243)) ([717d3c7](https://github.com/alexandre-schaffner/revv/commit/717d3c7e990140af8b82fec2d49874a48acd0ea5))
+
+## [0.28.0](https://github.com/alexandre-schaffner/revv/compare/v0.27.0...v0.28.0) (2026-09-29)
+
+
+### Features
+
+* **server:** migrate the opencode integration to opencode 2 ([#238](https://github.com/alexandre-schaffner/revv/issues/238)) ([8a5ec85](https://github.com/alexandre-schaffner/revv/commit/8a5ec8558c3b4c46b16253c570ffeae6b3c0f121))
+* **web:** redesign the settings modal as one pane at a time ([#240](https://github.com/alexandre-schaffner/revv/issues/240)) ([92b44d6](https://github.com/alexandre-schaffner/revv/commit/92b44d6aca66950ac1ca46944e5ab4dcba886696))
+
+
+### Bug Fixes
+
+* **server:** stop a failed Jev call from 500ing walkthrough start ([#237](https://github.com/alexandre-schaffner/revv/issues/237)) ([7e452e6](https://github.com/alexandre-schaffner/revv/commit/7e452e6327985301251a05ba4d4884c292f147cc))
+* **web:** stop revv:// deep links hanging the review page on "Loading…" ([#241](https://github.com/alexandre-schaffner/revv/issues/241)) ([a8ca213](https://github.com/alexandre-schaffner/revv/commit/a8ca213122262a380f780b58b43308d0372513cf))
+
+## [0.27.0](https://github.com/alexandre-schaffner/revv/compare/v0.26.1...v0.27.0) (2026-09-25)
+
+
+### Features
+
+* explain add-repo 404s from GitHub App access, and fix stuck deep links ([#235](https://github.com/alexandre-schaffner/revv/issues/235)) ([3247488](https://github.com/alexandre-schaffner/revv/commit/3247488aa11138c6fbd9f268e48c28858099c895))
+
+
+### Bug Fixes
+
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([2b5708b](https://github.com/alexandre-schaffner/revv/commit/2b5708b01ec312839bbeaab1759fdc1b5c4a3651))
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([50f11f4](https://github.com/alexandre-schaffner/revv/commit/50f11f4ad0409de2c7a15bbf2d484727f7c37b41))
+
+## [0.26.1](https://github.com/alexandre-schaffner/revv/compare/v0.26.0...v0.26.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **ci:** give the migration-upgrade replay test a 60s budget ([#232](https://github.com/alexandre-schaffner/revv/issues/232)) ([4e1d089](https://github.com/alexandre-schaffner/revv/commit/4e1d08940aea0f330678f59baa4f2c577be61b32))
+
+## [0.26.0](https://github.com/alexandre-schaffner/revv/compare/v0.25.1...v0.26.0) (2026-09-23)
+
+
+### Features
+
+* **jev:** add TypeSafe-guided review judgments ([#228](https://github.com/alexandre-schaffner/revv/issues/228)) ([4dc0747](https://github.com/alexandre-schaffner/revv/commit/4dc0747b9eaebd8266383b34b7b35a9c37b33bf1))
+
+
+### Bug Fixes
+
+* **walkthrough:** merged stamp tracks the content column; quieter ink grain ([#229](https://github.com/alexandre-schaffner/revv/issues/229)) ([055e3b7](https://github.com/alexandre-schaffner/revv/commit/055e3b75aee767b352e0e4242d6ddfbcb22fbd18))
+
+## [0.25.1](https://github.com/alexandre-schaffner/revv/compare/v0.25.0...v0.25.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* interleave chat tool calls with prose; keep issue-card header on one line ([#225](https://github.com/alexandre-schaffner/revv/issues/225)) ([9576eb0](https://github.com/alexandre-schaffner/revv/commit/9576eb0f23e471e25803a3da5751b0319e7a1645))
+
+## [0.25.0](https://github.com/alexandre-schaffner/revv/compare/v0.24.0...v0.25.0) (2026-09-18)
+
+
+### Features
+
+* **recaps, review:** calendar/window recap views, merged stamp, diff-anchor fitting ([960834a](https://github.com/alexandre-schaffner/revv/commit/960834a4cbdad0870c763634ad46663183655a8d))
+* **recaps:** fetch recap grids by month and merge into one cache ([e2af0a7](https://github.com/alexandre-schaffner/revv/commit/e2af0a76c2901e58304bb793c49a5015330785ff))
+* **recaps:** promote the UTC period-window math into a tested module ([608e6bf](https://github.com/alexandre-schaffner/revv/commit/608e6bf16c94b87cec4260738c1cd28736f2dd07))
+* **recaps:** range-filter the recap list by period window ([cbb5ed9](https://github.com/alexandre-schaffner/revv/commit/cbb5ed9d59fdf39c06194200d8c58ec06d73d03c))
+* **recaps:** replace the recap archive list with a month calendar ([5d78e50](https://github.com/alexandre-schaffner/revv/commit/5d78e5073e7877ebe9836cf7969cc8099ac51f9b))
+* **ui:** give the chat pane a Slack-style responsive layout ([#223](https://github.com/alexandre-schaffner/revv/issues/223)) ([05cad9f](https://github.com/alexandre-schaffner/revv/commit/05cad9f9ee59fae2c6a0cc9627040f53432a8980))
+
+
+### Bug Fixes
+
+* **agent:** let the isolated Claude config reach the user's own toolbox ([91c0226](https://github.com/alexandre-schaffner/revv/commit/91c022687b2a49cf1b78b43a7342b4e49f384194))
+* **chat-push:** stop a stale claim wedging the push, and say why CI pushes fail ([a46ad94](https://github.com/alexandre-schaffner/revv/commit/a46ad94f7a779ba137cc6c573ecd8858c5ab7ed9))
+* **chat:** open the command menu for a slash anywhere in the message ([e9a04c1](https://github.com/alexandre-schaffner/revv/commit/e9a04c1ac30d5d85f5548aabb2f2eb0641c71238))
+* **recaps:** make historical recap windows actually historical ([8dadc5a](https://github.com/alexandre-schaffner/revv/commit/8dadc5aae7e1051eb55c436e28e2c8e23b4b4a10))
+* **updater:** make dismissing an update stick ([5c53fd3](https://github.com/alexandre-schaffner/revv/commit/5c53fd3bb7a1f511725e6ae792619dffc4b8ef91))
+* **walkthrough:** make Stop terminal and Regenerate actually regenerate ([cd39880](https://github.com/alexandre-schaffner/revv/commit/cd39880dbe12bcc5fb9cf7d5b4ef284ac6bc30df))
+
+## [0.24.0](https://github.com/alexandre-schaffner/revv/compare/v0.23.3...v0.24.0) (2026-09-17)
+
+
+### Features
+
+* **home:** derive the PR queue client-side and stack repos into a feed ([548b4f0](https://github.com/alexandre-schaffner/revv/commit/548b4f0e66a06aefe0db1967bb78c10e3038940f))
+* PR Lens diagram renderer, plus chat-push, sync and homepage work ([4c6981c](https://github.com/alexandre-schaffner/revv/commit/4c6981c3d3cd17e60f34aa7e9d784f849d232bd2))
+* **ui:** put every icon on one phosphor system ([d9c53d6](https://github.com/alexandre-schaffner/revv/commit/d9c53d6af26d18de1b625f033fba793a57ab30bb))
+* **walkthrough:** put review copy, artifacts and triage under stated contracts ([403f887](https://github.com/alexandre-schaffner/revv/commit/403f887537f2082fe3cd25861dc62ee1b9c7a2f7))
+* **walkthrough:** replace Mermaid with the PR Lens diagram renderer ([c09ca67](https://github.com/alexandre-schaffner/revv/commit/c09ca67f6fe4badf7903b96c86102bc8ac07ad2f))
+
+
+### Bug Fixes
+
+* **chat:** make the push path safe in a repo the user also works in ([ace5e02](https://github.com/alexandre-schaffner/revv/commit/ace5e0291f4a892d95953c4bbb298b510a0df77b))
+* **review:** close the gaps two review passes found ([2d512ba](https://github.com/alexandre-schaffner/revv/commit/2d512ba8f15dcc2d6f875796e2c03a0ee4e2df2d))
+* **sync:** keep baseSha with headSha in the stale-read mask ([1e329f6](https://github.com/alexandre-schaffner/revv/commit/1e329f6a63357669c7ee545f8cda98611a2ad482))
+* **sync:** stop stale GitHub reads rewinding heads and losing comments ([4b45946](https://github.com/alexandre-schaffner/revv/commit/4b45946f936b811e97d9dd7e607eb551deb0880c))
+* **ui:** cut the theme swap, the caret loss and the double update toast ([9d72431](https://github.com/alexandre-schaffner/revv/commit/9d724310b95268e130758bea035c7de1af4d79f5))
+
+## [0.23.3](https://github.com/alexandre-schaffner/revv/compare/v0.23.2...v0.23.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* update fallback Rust toolchain handling ([#218](https://github.com/alexandre-schaffner/revv/issues/218)) ([8cc54f4](https://github.com/alexandre-schaffner/revv/commit/8cc54f4ecde5b0706686d6470e934d6f6571f07b))
+
 ## [0.23.2](https://github.com/alexandre-schaffner/revv/compare/v0.23.1...v0.23.2) (2026-09-02)
 
 

@@ -48,6 +48,7 @@ let deviceFlow = $state<{
   interval: number;
   expiresAt: number;
   host?: string;
+  clientId?: string;
 } | null>(null);
 let _isPolling = $state(false);
 
@@ -284,7 +285,7 @@ export function retryAuthRestore(): void {
   void loadUser();
 }
 
-export async function signIn(host?: string): Promise<boolean> {
+export async function signIn(host?: string, clientId?: string): Promise<boolean> {
   error = null;
   signInErrorCode = null;
   isLoading = true;
@@ -292,7 +293,10 @@ export async function signIn(host?: string): Promise<boolean> {
     const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
       method: "POST",
       ...(host
-        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host }) }
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ host, ...(clientId ? { client_id: clientId } : {}) }),
+          }
         : {}),
     });
     if (!res.ok) throw await signInHttpError(res);
@@ -310,6 +314,7 @@ export async function signIn(host?: string): Promise<boolean> {
       interval: data.interval ?? 5,
       expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
       ...(host ? { host } : {}),
+      ...(clientId ? { clientId } : {}),
     };
     try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -356,6 +361,7 @@ async function poll(): Promise<void> {
           const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
           if (token) body.session_token = token;
           if (deviceFlow.host) body.host = deviceFlow.host;
+          if (deviceFlow.clientId) body.client_id = deviceFlow.clientId;
           return body;
         })(),
       ),

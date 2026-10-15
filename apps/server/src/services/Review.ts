@@ -10,7 +10,7 @@ import type {
   ThreadStatus,
 } from "@revv/shared";
 import { canUserModifyComment } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { hunkDecisions } from "../db/schema/hunk-decisions";
@@ -20,6 +20,7 @@ import { threadMessages } from "../db/schema/thread-messages";
 import { ReviewError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
 import type { DbService } from "./Db";
+import { resolveReviewModeForPr } from "./review-mode";
 
 // ── Row-to-domain converters ─────────────────────────────────────────────────
 
@@ -115,6 +116,17 @@ export class ReviewService extends Context.Tag("ReviewService")<
       prId: string,
       mode?: ReviewMode,
     ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    /**
+     * The session the UI reads for this PR: keyed on the identity-derived
+     * mode (see `resolveReviewModeForPr`), never on a walkthrough's
+     * perspective. An author who generates a reviewer-perspective walkthrough
+     * still reads their PR through the author session, so its issues and
+     * threads must land there. An unresolved identity falls back to
+     * `reviewer`, the same answer the web gives before it knows the viewer.
+     */
+    readonly getOrCreateIdentitySession: (
+      prId: string,
+    ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
     readonly getActiveSession: (
       prId: string,
       mode?: ReviewMode,
@@ -141,6 +153,26 @@ export class ReviewService extends Context.Tag("ReviewService")<
       sessionId: string,
       externalCommentId: string,
     ) => Effect.Effect<CommentThread | null, ReviewError, DbService>;
+    /**
+     * Re-parent this PR's GitHub-sourced threads (`externalCommentId != null`)
+     * that landed in one of its *other* review sessions into `sessionId`.
+     * Returns how many moved.
+     *
+     * A PR has exactly one conversation on GitHub, but review sessions are
+     * keyed on `(pullRequestId, mode)`. The comment sync used to write into
+     * whichever session `getOrCreateActiveSession` defaulted to (`reviewer`),
+     * so on a PR the user authored — where the UI only ever loads the `author`
+     * session — every incoming reviewer comment landed in a session nothing
+     * displays. Re-pulling can't repair that: comments are deduped globally by
+     * external id, so an already-ingested comment is never re-created.
+     *
+     * Only externally-sourced threads move. Drafts the user has not submitted
+     * (no external id) stay in the session they were written in.
+     */
+    readonly adoptExternalThreads: (
+      prId: string,
+      sessionId: string,
+    ) => Effect.Effect<number, ReviewError, DbService>;
     readonly updateThreadStatus: (
       threadId: string,
       status: ThreadStatus,
@@ -227,46 +259,56 @@ export class ReviewService extends Context.Tag("ReviewService")<
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
+const getOrCreateActiveSession = (
+  prId: string,
+  mode: ReviewMode = "reviewer",
+): Effect.Effect<ReviewSession, ReviewError, DbService> =>
+  Effect.gen(function* () {
+    const existing = yield* tryDb("find active session", (db) =>
+      db
+        .select()
+        .from(reviewSessions)
+        .where(
+          and(
+            eq(reviewSessions.pullRequestId, prId),
+            eq(reviewSessions.mode, mode),
+            eq(reviewSessions.status, "active"),
+          ),
+        )
+        .get(),
+    );
+
+    if (existing) return rowToSession(existing);
+
+    const id = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+
+    yield* tryDb("create session", (db) =>
+      db
+        .insert(reviewSessions)
+        .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
+        .run(),
+    );
+
+    return {
+      id,
+      pullRequestId: prId,
+      mode,
+      startedAt,
+      completedAt: null,
+      status: "active" as const,
+    };
+  });
+
 export const ReviewServiceLive = Layer.succeed(ReviewService, {
   // ── Sessions ──────────────────────────────────────────────────────────────
 
-  getOrCreateActiveSession: (prId, mode = "reviewer") =>
-    Effect.gen(function* () {
-      const existing = yield* tryDb("find active session", (db) =>
-        db
-          .select()
-          .from(reviewSessions)
-          .where(
-            and(
-              eq(reviewSessions.pullRequestId, prId),
-              eq(reviewSessions.mode, mode),
-              eq(reviewSessions.status, "active"),
-            ),
-          )
-          .get(),
-      );
+  getOrCreateActiveSession,
 
-      if (existing) return rowToSession(existing);
-
-      const id = crypto.randomUUID();
-      const startedAt = new Date().toISOString();
-
-      yield* tryDb("create session", (db) =>
-        db
-          .insert(reviewSessions)
-          .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
-          .run(),
-      );
-
-      return {
-        id,
-        pullRequestId: prId,
-        mode,
-        startedAt,
-        completedAt: null,
-        status: "active" as const,
-      };
-    }),
+  getOrCreateIdentitySession: (prId) =>
+    resolveReviewModeForPr(prId).pipe(
+      Effect.flatMap(({ mode }) => getOrCreateActiveSession(prId, mode)),
+    ),
 
   getActiveSession: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
@@ -374,6 +416,39 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
           .get(),
       );
       return row ? rowToThread(row) : null;
+    }),
+
+  adoptExternalThreads: (prId, sessionId) =>
+    Effect.gen(function* () {
+      const strays = yield* tryDb("find strayed external threads", (db) =>
+        db
+          .select({ id: commentThreads.id })
+          .from(commentThreads)
+          .innerJoin(reviewSessions, eq(reviewSessions.id, commentThreads.reviewSessionId))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              ne(commentThreads.reviewSessionId, sessionId),
+              isNotNull(commentThreads.externalCommentId),
+            ),
+          )
+          .all(),
+      );
+      if (strays.length === 0) return 0;
+
+      yield* tryDb("adopt strayed external threads", (db) =>
+        db
+          .update(commentThreads)
+          .set({ reviewSessionId: sessionId })
+          .where(
+            inArray(
+              commentThreads.id,
+              strays.map((t) => t.id),
+            ),
+          )
+          .run(),
+      );
+      return strays.length;
     }),
 
   setThreadExternalIds: (threadId, ids) =>

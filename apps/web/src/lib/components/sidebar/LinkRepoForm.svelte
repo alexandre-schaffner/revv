@@ -7,6 +7,7 @@ import Plus from "phosphor-svelte/lib/Plus";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import CloneStatusIndicator from "$lib/components/shared/CloneStatusIndicator.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -87,7 +88,7 @@ async function submit(): Promise<void> {
     await addRepo({ fullName, mode: "link", clonePath: clonePath.trim() });
     linkedFullName = fullName;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to link repository");
+    toastAddRepoError(e, "Failed to link repository");
   } finally {
     adding = false;
   }
@@ -138,7 +139,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 						/>
 					{:else}
 						<span class="linked-pill" title="Linked clone">
-							<LinkSimple size={10} weight="bold" />
+							<LinkSimple size={10} />
 							Linked
 						</span>
 					{/if}
@@ -174,9 +175,9 @@ function onPathKeydown(e: KeyboardEvent): void {
 				disabled={inspecting}
 			>
 				{#if inspecting}
-					<Spinner size={13} weight="bold" class="motion-essential-spin" />
+					<Spinner size={13} class="motion-essential-spin" />
 				{:else}
-					<FolderOpen size={13} weight="fill" />
+					<FolderOpen size={13} />
 				{/if}
 				<span>Browse</span>
 			</Button>
@@ -188,7 +189,7 @@ function onPathKeydown(e: KeyboardEvent): void {
 			<p class="hint hint--danger">This repository is already tracked.</p>
 		{:else if isGitRepo === true && fullName !== null}
 			<p class="hint hint--ok">
-				<CheckCircle size={12} weight="fill" />
+				<CheckCircle size={12} />
 				<span>Recognized as <code>{fullName}</code>.</span>
 			</p>
 		{:else if isGitRepo === true}
@@ -211,9 +212,9 @@ function onPathKeydown(e: KeyboardEvent): void {
 		<div class="footer">
 			<Button variant="default" size="sm" class="link-btn" onclick={() => void submit()} disabled={!canSubmit}>
 				{#if adding}
-					<Spinner size={12} weight="bold" class="motion-essential-spin" />
+					<Spinner size={12} class="motion-essential-spin" />
 				{:else}
-					<Plus size={12} weight="bold" />
+					<Plus size={12} />
 				{/if}
 				<span>Link Repository</span>
 			</Button>

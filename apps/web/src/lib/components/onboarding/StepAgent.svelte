@@ -5,7 +5,7 @@ import {
   type AgentStatusReport,
   type InstallEvent,
 } from "@revv/shared";
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
@@ -25,6 +25,7 @@ import {
   runAgentInstall,
 } from "$lib/utils/agent-install";
 import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
+import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
   onContinue: () => void;
@@ -206,7 +207,7 @@ function handleSkip(): void {
 <div class="agent">
 	{#if onBack}
 		<button class="back" onclick={onBack}>
-			<ChevronLeft size={14} />
+			<CaretLeft size={14} />
 			<span>Back</span>
 		</button>
 	{/if}
@@ -302,16 +303,7 @@ function handleSkip(): void {
 			<div class="actions">
 				<button class="primary" onclick={handleContinue} disabled={isSaving}>
 					<span>Continue</span>
-					<svg
-						width="18"
-						height="10"
-						viewBox="0 0 18 10"
-						fill="none"
-						xmlns="http://www.w3.org/2000/svg"
-						aria-hidden="true"
-					>
-						<path d="M0 5h16M12 1l4 4-4 4" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-					</svg>
+					<ContinueArrow />
 				</button>
 			</div>
 		{:else if cta.kind === 'needs-login-manual'}
@@ -586,7 +578,7 @@ function handleSkip(): void {
 			transform var(--duration-smooth) var(--ease-out-expo);
 	}
 
-	.primary svg {
+	.primary :global(svg) {
 		transition: transform var(--duration-slow) var(--ease-out-expo);
 	}
 
@@ -595,7 +587,7 @@ function handleSkip(): void {
 		color: var(--ob-text-heading-bright);
 	}
 
-	.primary:hover:not(:disabled) svg {
+	.primary:hover:not(:disabled) :global(svg) {
 		transform: translateX(4px);
 	}
 

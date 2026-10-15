@@ -1,11 +1,12 @@
 <script lang="ts">
-import DownloadCloud from "phosphor-svelte/lib/CloudArrowDown";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
+import { REVIEW_TABS, type ReviewTab } from "$lib/stores/review.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import PillTabs from "./PillTabs.svelte";
 
-type Tab = "walkthrough" | "diff" | "request-changes";
+type Tab = ReviewTab;
 type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
 
 interface Props {
@@ -47,14 +48,21 @@ function handlePullClick(): void {
 
 const cmdHeld = $derived(getCmdHeld());
 
-const tabs = [
-  { id: "walkthrough" as Tab, label: "Walkthrough", shortcut: "1" },
-  { id: "diff" as Tab, label: "Diff", shortcut: "2" },
-  { id: "request-changes" as Tab, label: "Request Changes", shortcut: "3" },
-];
+const TAB_LABEL: Record<Tab, string> = {
+  conversation: "Conversation",
+  walkthrough: "Walkthrough",
+  diff: "Diff",
+};
+
+const tabs = REVIEW_TABS.map((id, index) => ({
+  id,
+  label: TAB_LABEL[id],
+  shortcut: String(index + 1),
+}));
 
 function handleTabChange(tabId: string) {
-  onTabChange(tabId as Tab);
+  const tab = REVIEW_TABS.find((known) => known === tabId);
+  if (tab) onTabChange(tab);
 }
 
 let dotEl: HTMLSpanElement | null = $state(null);
@@ -166,9 +174,9 @@ $effect(() => {
 				: 'New commit available. Click to pull the latest changes.'}
 		>
 			{#if isPulling}
-				<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+				<Spinner size={12} class="motion-essential-spin" />
 			{:else}
-				<DownloadCloud size={12} weight="fill" />
+				<CloudArrowDown size={12} />
 			{/if}
 			<span class="pull-btn-label">Pull</span>
 		</button>

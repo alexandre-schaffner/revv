@@ -317,7 +317,7 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
     cd "$PROJECT_ROOT" && bun run build
   )
   (
-    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app
+    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
   )
 
   bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"

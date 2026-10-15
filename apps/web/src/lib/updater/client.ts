@@ -21,9 +21,14 @@ export type UpdateInfo = {
    */
   publishedAt: string | undefined;
   /**
-   * Downloads the update package, applies it, and relaunches the app.
-   * Throws if any step fails — callers should `try/catch` to surface the
-   * error in a toast.
+   * Downloads the update package and applies it. Throws if either step
+   * fails — callers should `try/catch` to surface the error in a toast.
+   *
+   * Restarting is deliberately *not* part of this: on macOS the installer
+   * leaves the running process alone, so the relaunch is a separate,
+   * separately-failable step the caller owns. Folding it in here made a
+   * failed relaunch look like a failed install and told the user the update
+   * hadn't landed when it had.
    */
   install: () => Promise<void>;
 };
@@ -55,11 +60,6 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
     publishedAt: update.date,
     install: async () => {
       await update.downloadAndInstall();
-      // On macOS the installer doesn't restart the app for us, so we must
-      // explicitly relaunch to land the user back in the new version
-      // immediately. `relaunch()` is a no-op if the process is already exiting.
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
     },
   };
 }

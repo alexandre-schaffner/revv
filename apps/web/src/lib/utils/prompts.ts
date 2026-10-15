@@ -29,7 +29,7 @@ function locationOf(issue: WalkthroughIssue): string {
 
 /**
  * Build the auto-prompt sent when the user clicks "Generate changes" in the
- * Request Changes tab. Bundles each selected walkthrough issue and asks the
+ * Conversation tab's Your review section. Bundles each selected walkthrough issue and asks the
  * agent to address them as separate commits using its Edit/Write/Bash tools.
  */
 export function buildAddressIssuesPrompt(issues: ReadonlyArray<WalkthroughIssue>): string {

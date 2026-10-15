@@ -4,11 +4,12 @@
 // entire walkthrough pipeline on its first `add_semantic_step` call (the agent
 // burned its retries and the run failed). Every numeric field on the agent tool
 // surfaces must coerce string→number at the wire boundary while still enforcing
-// int/range constraints. This locks that in for all three agent MCP surfaces.
+// int/range constraints. This locks that in for every agent MCP surface.
 
 import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
+import { EXTERNAL_REVIEW_TOOL_SPECS } from "./external-review-tools";
 import { RECAP_TOOL_BUNDLE } from "./recap-tools";
 import { WALKTHROUGH_TOOL_BUNDLE } from "./walkthrough-tools";
 
@@ -21,6 +22,7 @@ const SURFACES: ReadonlyArray<{ label: string; specs: readonly SchemaSpec[] }> =
   { label: "walkthrough", specs: WALKTHROUGH_TOOL_BUNDLE.specs },
   { label: "recap", specs: RECAP_TOOL_BUNDLE.specs },
   { label: "chat-edit", specs: EDIT_TOOL_SPECS as unknown as readonly SchemaSpec[] },
+  { label: "external", specs: EXTERNAL_REVIEW_TOOL_SPECS },
 ];
 
 // Walk the zod tree, returning the path tokens to every leaf whose

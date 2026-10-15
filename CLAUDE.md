@@ -73,6 +73,8 @@ The project uses **Drizzle's code-first migration workflow**.
 
 **Do not** run `drizzle-kit push` against the local SQLite file — the app relies on the migration-file workflow for reproducible schema evolution.
 
+**Shipped migrations are append-only.** Nightly builds ship every push to `main`, so a migration on `main` has already run on users' databases. Drizzle only applies journal entries whose `when` is newer than the last one a database recorded, so a reordered, renumbered, or edited migration is silently skipped on every existing install. When rebasing onto a `main` that gained migrations, renumber *your* migration after theirs with a larger `when`; never touch theirs. Adding a `NOT NULL` column needs a `DEFAULT`. `bun run check:migrations` (part of `bun run lint`) enforces all of this, and replays an upgrade from every earlier migration against a populated database. Never boot the server against a real database to "try" a migration: without the `make dev` env it opens the prod DB.
+
 ### Web (`apps/web`)
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) — not Svelte 4 stores/writables.
@@ -162,21 +164,91 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 2. **Agent content writes go through MCP, only.** Orchestrator lifecycle writes stay in
    Elysia and must not be routed through MCP. The MCP *transport* may vary; the *handlers*
    are shared.
+
+   **Carve-out: orchestrator-computed judgments.** A closed, enumerated set of fields is
+   computed by the orchestrator (today: from TypeSafe System One / Jev) and written by Elysia
+   directly into content tables: `walkthroughs.risk_level` / `.risk_confidence`,
+   `hunk_scan_rows.signals` (the first pass, below), and the `walkthrough_leads` selection
+   (which flagged hunks a run's agent is handed, recorded once at job start; its verdict
+   columns are written only by `resolve_lead`). These are judgments over a
+   closed set, not prose. **All prose, citations, blocks, issues, steps, and
+   sentiment remain MCP-only.** Growing this list means editing this rule — it is not a
+   general licence for Elysia to write content.
+
+   `walkthrough_issues.advisory_score` / `.advisory_scored_at` are the same kind of judgment
+   but need no carve-out: they are written by the `flag_issue` handler itself, in the same
+   transaction as the row they describe. A judgment a tool handler can make inline belongs
+   in the tool handler — the carve-out is only for judgments the orchestrator has to make
+   outside any tool call.
 3. **Each MCP tool call is one atomic idempotent write** keyed on a deterministic identity.
    Replays are no-ops.
 4. **Content generation is a strict 4-phase pipeline: A → B → C → D.** Phases complete in
    order. Schema enforces it; tool surface enforces it; orchestrator enforces it.
-   - **Phase A — Overview + Risk.** One atomic write: `set_overview(summary, risk_level)`.
-     `last_completed_phase` becomes `'A'`.
+   Before Phase A, the agent gets the **first pass**: one Jev call per substantive hunk
+   (long hunks in windows, no cap) scores nine smells into `hunk_scan_rows`, and the flagged
+   hunks reach the agent as prompt leads to verify — never as findings, and never through a
+   tool. The leads a run is handed (capped, with a few slots reserved per smell) are recorded
+   in `walkthrough_leads` under ids `L1…Ln` before the prompt goes out, so a resume sees the
+   same set; the agent answers each with `resolve_lead` — `confirmed` with the issue it raised,
+   or `rejected` with a one-line reason. The scan belongs to the PR head, not the walkthrough: `HunkScanService`
+   (`services/HunkScan.ts`) starts it when the review page loads the diff, and a walkthrough
+   job for the same head joins that run or reads its result — waiting at most
+   `HUNK_SCAN_JOIN_BUDGET_MS`, then starting with the leads answered so far (one run per PR,
+   at most two PRs scanning at once; the scan lives in a daemon fiber, so a walkthrough Stop
+   doesn't cut it short, and a newer head interrupts it). Its lifecycle is
+   `hunk_scans.status`, keyed on `(pr_id, head_sha)`: `running` → `complete` | `partial` (a
+   circuit breaker stopped it after Jev stopped answering) | `failed` (nothing answered; rows
+   deleted, as if it never ran). A walkthrough never reruns a finished scan; reopening the
+   review page retries a `failed` or `partial` one. A scan whose rows no longer match the
+   diff it's handed (it was seeded from a stale diff) is re-seeded, keeping the answers that
+   still match. A scan cut off while `running` resumes from the journal on the next ask.
+   - **Phase A — Overview.** One atomic write: `set_overview(summary)`.
+     `last_completed_phase` becomes `'A'`. The risk tier is **not** the agent's to set — it
+     is written by the orchestrator at job start (invariant 2's carve-out) and handed to the
+     agent as a given that governs its issue budget and depth.
    - **Phase B — Diff Analysis.** Multi-step. Each step is exactly one atomic write:
      `add_diff_step(step_index, markdown, code_snippet?, annotations?)`. Deterministically
      keyed on `(walkthrough_id, step_index)`. Agent calls one step per call; batching is
      forbidden at the tool-surface level.
+
+     Two Phase-B tools defer to a Jev judgment, in opposite directions:
+
+     `flag_issue` writes its row and returns, then a **background** judgment retracts the
+     concern if it doesn't clear the relevance floor and relabels its severity against a
+     fixed rubric. Non-blocking on purpose — a round trip per concern sat on Phase B's
+     critical path. That makes the issue set eventually consistent during Phase B, which is
+     fine everywhere except two places, both closed in `ai/jev/pending.ts`:
+     `complete_walkthrough` drains every scheduled judgment before it validates anything,
+     and `add_issue_comment` answers a retracted id with an explanatory non-error rather
+     than "unknown issue". A retraction deletes linked `comment_threads` by FK cascade and
+     broadcasts `issue:deleted`; a concern already pushed to GitHub (`submittedAt`) is never
+     touched. Anything the agent marked `critical`, or that the rubric reads as must-fix, is
+     pinned above the floor and can never be retracted. Because severity isn't final when
+     `flag_issue` returns, **every line-anchored concern owes an inline comment**, whatever
+     severity the agent sent.
+
+     `add_diff_step` / `add_semantic_step` hold an `artifact` block to its craft bar
+     **synchronously**, and refuse a block that fails two of the three clauses. A gate that
+     rejects has to answer before the write — a block that appeared and then vanished would
+     leave a hole in the chapter's `step_index` sequence — and artifacts are rare enough
+     that the round trip doesn't matter.
+
+     Both degrade to the pre-Jev behaviour when the judgment is unavailable: an unjudged
+     concern stands as written, an unjudged artifact is accepted. Judgments are cached on
+     content, so a replay stays a no-op (invariant 3).
+     A third hook is purely advisory and gates nothing: a voice check samples the first
+     few markdown blocks in the background and hands its verdict back on a *later*
+     `add_diff_step` result, so the agent can course-correct without any block paying a
+     round trip. Nothing downstream reads it.
+
    - **Phase C — Overall Sentiment.** One atomic write: `set_sentiment(markdown)`.
      Implicitly closes Phase B (requires ≥1 diff step).
    - **Phase D — 9-Axis Rating.** Nine atomic writes via `rate_axis(axis, ...)`. Keyed on
      `(walkthrough_id, axis)` with `onConflictDoUpdate`. `last_completed_phase` becomes
-     `'D'` only when all 9 axes are rated.
+     `'D'` only when all 9 axes carry a non-empty `rationale`. The agent owns every verdict.
+     It sends all nine calls as parallel tool calls in one turn: each is still its own
+     atomic write, and because the handler is one synchronous transaction, they may land
+     in any order and exactly one of them advances the phase.
 5. **Phase preconditions are tool-level.** Out-of-order calls fail fast with a structured
    error the agent can recover from.
 6. **Resumption reads state via an MCP read tool**, not env vars. On every run start,
@@ -198,6 +270,18 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    not the per-generation stream, which dies on `done`. GitHub-submitted issues
    (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
    pipeline still never mutates a completed row.
+
+   The external coding-agent integrations (Claude Code, Codex, OpenCode,
+   Cursor) are additional scoped callers of the same chat-edit handlers. Their
+   `record_issue_resolution` tool may update only the local resolution
+   metadata of an unsubmitted issue; GitHub-submitted issues remain immutable
+   and must be addressed through their comment thread. Their
+   `request_walkthrough` tool asks the orchestrator to generate a review of a
+   pushed head; it goes through `WalkthroughJobs.startJob` (pinned to that
+   head, `trigger: 'external_agent'`) and never writes lifecycle fields
+   itself. All four share one
+   credential model, one stdio bridge, and one MCP route — see
+   `docs/architecture/external-agent-integrations.md`.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
    re-reading the DB.
@@ -212,7 +296,9 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     set by `WalkthroughJobs`.
 12. **`complete_walkthrough` is a validation gate.** Asserts `last_completed_phase = 'D'`
     AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step. Only then does
-    the orchestrator transition `status` to `complete`.
+    the orchestrator transition `status` to `complete`. It also refuses while a first-pass
+    lead has no verdict, but that check is the tool's alone: the orchestrator completes a run
+    with unresolved leads, so a skipped hint never costs the review.
 13. **Agent-path parity.** Both agent paths (Claude Agent SDK, opencode) must exhibit
     byte-for-byte identical externally-observable behavior during a review. Divergence in
     the model's reasoning style is allowed; divergence in events, lifecycle, phase

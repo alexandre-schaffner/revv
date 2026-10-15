@@ -8,7 +8,7 @@ export type PlanTriggerProps = CollapsiblePrimitive.TriggerProps;
 	import { cn } from "$lib/utils.js";
 	import { CollapsibleTrigger } from "$lib/components/ui/collapsible/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
 
 	let {
 		children,
@@ -23,7 +23,7 @@ export type PlanTriggerProps = CollapsiblePrimitive.TriggerProps;
 	{...restProps}
 >
 	<Button variant="ghost" size="icon" class="size-8">
-		<ChevronsUpDown class="size-4" />
+		<ArrowsOutLineVertical class="size-4" />
 		<span class="sr-only">Toggle plan details</span>
 	</Button>
 </CollapsibleTrigger>

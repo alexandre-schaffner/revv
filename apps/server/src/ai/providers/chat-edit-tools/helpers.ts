@@ -2,19 +2,14 @@
 //
 // Shared helper functions and types used by chat-edit tool handlers.
 
-import type {
-  RatingAxis,
-  RatingCitation,
-  WalkthroughBlock,
-  WalkthroughIssue,
-  WalkthroughRating,
-} from "@revv/shared";
+import type { RatingAxis, RatingCitation, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodeWalkthroughIssue } from "../../../services/walkthrough-issue";
 import type { ChatEditToolResult } from "./spec";
 
 // ── Result helpers ──────────────────────────────────────────────────────────
@@ -80,10 +75,12 @@ export function stampLastEdited(db: Db, walkthroughId: string, actor: string): v
 
 // ── Block construction ──────────────────────────────────────────────────────
 //
-// The variant-count, empty/size validation, and typed-block construction are
-// shared with the generation pipeline in `../walkthrough-blocks` so the two
-// MCP write paths can never drift (CLAUDE.md #2, #13). Handlers import
-// `blockVariantCount`, `emptyBlockError`, and `buildBlock` from there directly.
+// The variant-count, content validation (empty payloads, artifact size, and
+// unrenderable `prlens` diagrams), and typed-block construction are shared
+// with the generation pipeline in `../walkthrough-blocks` so the two MCP write
+// paths can never drift (CLAUDE.md #2, #13). Handlers import
+// `blockVariantCount`, `blockContentError`, and `buildBlock` from there
+// directly.
 
 // ── Issue-blockIds JSON helpers ─────────────────────────────────────────────
 
@@ -183,17 +180,4 @@ export function decodeBlock(row: typeof walkthroughBlocks.$inferSelect): Walkthr
   }
 }
 
-export function decodeIssue(row: typeof walkthroughIssues.$inferSelect): WalkthroughIssue {
-  const blockIds = parseBlockIds(row.blockIds);
-  return {
-    id: row.id,
-    severity: row.severity as WalkthroughIssue["severity"],
-    title: row.title,
-    description: row.description,
-    blockIds,
-    ...(row.filePath !== null ? { filePath: row.filePath } : {}),
-    ...(row.startLine !== null ? { startLine: row.startLine } : {}),
-    ...(row.endLine !== null ? { endLine: row.endLine } : {}),
-    ...(row.submittedAt !== null ? { submittedAt: row.submittedAt } : {}),
-  };
-}
+export const decodeIssue = decodeWalkthroughIssue;

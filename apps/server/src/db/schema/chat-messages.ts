@@ -2,7 +2,8 @@ import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqli
 import { chatSessions } from "./chat-sessions";
 
 /**
- * Right-pane chat transcript — one row per user or assistant turn-body.
+ * Right-pane chat transcript — one row per user message, one row per
+ * contiguous run of assistant prose.
  *
  * Persists what used to live only in Svelte runes + the agent's own session
  * storage (Claude SDK JSONL, opencode daemon). With this table the transcript
@@ -12,11 +13,14 @@ import { chatSessions } from "./chat-sessions";
  * Lifecycle:
  *   - User message: inserted at turn start with role='user', is_streaming=0,
  *                   content=<the user's text>, finalized_at=created_at.
- *   - Assistant message: inserted lazily at first text chunk OR at turn
- *                   finalize. is_streaming=1 while the agent is mid-stream;
- *                   content is appended to in-place via SQL `||`.
+ *   - Assistant message: inserted lazily at the first text chunk of a run OR
+ *                   at turn finalize. is_streaming=1 while the agent is
+ *                   mid-run; content is appended to in-place via SQL `||`.
  *                   On finalize: is_streaming=0, finalized_at set. On error:
  *                   `error` populated with the inline-error chip text.
+ *                   A narrate→tool→narrate turn yields two assistant rows
+ *                   split by the activity; see `sealAssistantMessage` in
+ *                   routes/chat-helpers.ts.
  *
  * Sequence is per-session monotonic, allocated against
  * `chat_sessions.next_sequence` so it shares one ordering space with

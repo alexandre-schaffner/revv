@@ -73,6 +73,8 @@ The project uses **Drizzle's code-first migration workflow**.
 
 **Do not** run `drizzle-kit push` against the local SQLite file — the app relies on the migration-file workflow for reproducible schema evolution.
 
+**Shipped migrations are append-only.** Nightly builds ship every push to `main`, so a migration on `main` has already run on users' databases. Drizzle only applies journal entries whose `when` is newer than the last one a database recorded, so a reordered, renumbered, or edited migration is silently skipped on every existing install. When rebasing onto a `main` that gained migrations, renumber *your* migration after theirs with a larger `when`; never touch theirs. Adding a `NOT NULL` column needs a `DEFAULT`. `bun run check:migrations` (part of `bun run lint`) enforces all of this, and replays an upgrade from every earlier migration against a populated database. Never boot the server against a real database to "try" a migration: without the `make dev` env it opens the prod DB.
+
 ### Web (`apps/web`)
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) — not Svelte 4 stores/writables.
@@ -198,6 +200,14 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    not the per-generation stream, which dies on `done`. GitHub-submitted issues
    (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
    pipeline still never mutates a completed row.
+
+   The external coding-agent integrations (Claude Code, Codex, OpenCode,
+   Cursor) are additional scoped callers of the same chat-edit handlers. Their
+   `record_issue_resolution` tool may update only the local resolution
+   metadata of an unsubmitted issue; GitHub-submitted issues remain immutable
+   and must be addressed through their comment thread. All four share one
+   credential model, one stdio bridge, and one MCP route — see
+   `docs/architecture/external-agent-integrations.md`.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
    re-reading the DB.
@@ -243,3 +253,14 @@ bun run typecheck && bun run lint && bun run knip && bun run build
 ```
 
 Do not consider a task complete while any of these steps fail. Fix lint errors, unused exports, type errors, and build failures before committing or pushing.
+
+<!-- BEGIN:turborepo-agent-rules -->
+
+# This is NOT the Turborepo you know
+
+Turborepo configuration, task behavior, and CLI commands can vary between installed versions and may differ from your training data. Resolve the `turbo` package from this file's directory or relevant workspace; in monorepos, it may not be visible from the repository root. For example, run `node -p "require.resolve('turbo/package.json')"` from a workspace that depends on `turbo`.
+
+Read `docs/README.md` inside that installed package first, then read the relevant pages from its `docs/` directory before changing Turborepo configuration or commands. Heed deprecation notices. These bundled docs match the installed package version and are available without network access.
+
+This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
+<!-- END:turborepo-agent-rules -->

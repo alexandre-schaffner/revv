@@ -1,114 +1,200 @@
-# Revv
+<p align="center">
+  <img src="docs/assets/revv.png" width="96" height="96" alt="Revv app icon" />
+</p>
 
-**AI-powered code review on your desktop.**
+<h1 align="center">Revv</h1>
 
-Revv pulls in your GitHub pull requests and turns reviewing them into a fast, conversational experience. Get an AI-generated walkthrough of every change, chat with an agent that understands the diff, leave comments that sync back to GitHub, and even propose and push fixes — all without leaving the app.
+<p align="center">
+  <strong>Know what you're merging.</strong><br />
+  AI code review for your desktop. Understand the change, challenge the agent, ship the fix.
+</p>
 
-Available for macOS.
+<p align="center">
+  <a href="https://github.com/alexandre-schaffner/revv/actions/workflows/ci.yml"><img src="https://github.com/alexandre-schaffner/revv/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/alexandre-schaffner/revv/releases"><img src="https://img.shields.io/badge/macOS-Alpha-0b7375?style=flat-square" alt="macOS alpha" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6d28d9?style=flat-square" alt="MIT license" /></a>
+</p>
 
----
+<p align="center">
+  <a href="#install"><strong>Install Revv</strong></a> ·
+  <a href="#the-review-workflow">Explore the features</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="https://github.com/alexandre-schaffner/revv/issues">Report a bug</a>
+</p>
 
-## Why Revv
+![Revv reviewing its own pull request: guided walkthrough, risk assessment, flagged issues, and an agent-proposed fix ready to push](docs/assets/screenshots/review.png)
 
-Reviewing a large PR usually means scrolling a wall of diffs in a browser tab, losing track of what matters, and context-switching between code, comments, and conversations. Revv does the heavy lifting for you:
+<p align="center"><sub>A real review of Revv itself. The agent found an issue, wrote a fix, added a regression test, and proposed a commit.</sub></p>
 
-- It **explains the change** before you read a single line of diff.
-- It **answers your questions** about the code in context.
-- It **drafts fixes** you can cherry-pick and push back.
-- It **keeps everything in sync** with GitHub, so nothing lives in a silo.
+Revv brings your GitHub pull requests, AI walkthroughs, diffs, and review conversations into one desktop app. Start with the reasoning behind a change, inspect the code, then ask your agent to explain it or fix it. Review the proposed commits and push them back to GitHub when you're ready.
 
-## Features
-
-- **Synced GitHub PRs** — Your pull requests are fetched and kept up to date automatically across all your repos, in real time.
-- **AI Guided Walkthrough** — Every PR gets a structured, AI-generated walkthrough: a plain-language overview, a risk assessment, a step-by-step tour of the diff, an overall verdict, and a 9-axis quality rating.
-- **Chat Agent** — An always-on assistant that understands the PR. Ask it anything about the change, have it plan a fix, and watch its work stream live.
-- **Propose & Push Changes** — Turn the agent's suggestions into real commits. Cherry-pick what you want, discard the rest, resolve merge conflicts with AI help, and push straight back to the branch.
-- **Comment Threads** — Persistent review threads that sync bidirectionally with GitHub, plus inline code suggestions you can apply in one click.
-- **Command Palette** — `Cmd+P` to jump to any PR, `Cmd+Shift+P` for commands. Fuzzy search throughout.
-- **Multi-Account** — Sign in with multiple GitHub accounts; works with both `github.com` and GitHub Enterprise.
-- **Themes** — Light, dark, or system, with a separate theme just for diffs.
+**Bring your agent:** Claude Code, Codex, OpenCode, or Cursor. Choose the agent, model, and supported thinking effort in the app.
 
 ## Install
 
-### macOS
+Available for **macOS**, currently in **alpha**.
 
 ```bash
 curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 ```
 
-Requires macOS 10.15 (Catalina) or later. The installer drops in `Revv.app`, sets up the local background server, and adds a `revv` CLI for managing the install.
-
-> macOS Gatekeeper may show an "unidentified developer" warning until code-signing is finalized. To open the first time: right-click `Revv.app` → **Open**, then **Open** again in the dialog.
+The installer sets up the desktop app, local background server, and `revv` CLI. The release installer verifies its Sigstore attestation before continuing.
 
 <details>
-<summary>Verify the installer before running it</summary>
+<summary>Download and inspect the installer first</summary>
 
 ```bash
 curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh -o install.sh
+less install.sh
 gh attestation verify install.sh --repo alexandre-schaffner/revv
 bash install.sh
 ```
 
 </details>
 
-## Quickstart
+1. **Connect GitHub.** Sign in with the device code shown by Revv.
+2. **Pick your repositories.** Your pull requests start syncing into the app.
+3. **Set up your agent.** Onboarding walks you through provider installation and sign-in.
+4. **Open a PR.** Press <kbd>⌘</kbd> + <kbd>P</kbd>, find the change, and start reviewing.
 
-1. **Launch Revv** and click **Sign in with GitHub**. Revv uses GitHub's device-code flow — you'll get a short code to enter at `github.com/login/device`. Approve it and you're in.
-2. **Pick your repositories.** Revv lists the repos you have access to; choose the ones you want to review and it starts syncing their open PRs.
-3. **Open a pull request.** Hit `Cmd+P`, search for the PR, and open it.
-4. **Read the walkthrough.** Revv generates an AI walkthrough for the PR — start with the overview and risk level, then step through the diff.
-5. **Chat about the change.** Use the right-hand panel to ask the agent questions, request a fix, or have it explain anything you don't understand.
-6. **Comment and push back.** Leave review comments (they sync to GitHub), apply code suggestions, or accept an agent-proposed commit and push it to the branch.
+## The review workflow
 
-That's it — your review happens entirely inside Revv, and everything you do flows back to GitHub.
+### Understand the whole change
 
-## Managing your install
+Every walkthrough gives you a plain-language **overview**, a **risk assessment**, a guided **diff analysis**, an **overall verdict**, and judgments across **nine review axes**. Flagged issues link back to the relevant walkthrough steps so you can follow the evidence.
 
-The `revv` CLI handles the lifecycle:
+Walkthroughs track the PR's commit: new commits get a new review, and interrupted generation can resume from saved progress.
 
-```bash
-revv status      # install paths, versions, server state, available updates
-revv update      # update to the latest release
-revv restart     # restart the background server
-revv logs        # tail server logs
-revv open        # launch the app
-revv uninstall   # remove everything
-```
+<details>
+<summary>See the nine-axis review</summary>
 
-## Troubleshooting
+![Revv's nine-axis review: correctness, scope, test coverage, clarity, safety, consistency, API changes, performance, and description, with seven passes and two concerns](docs/assets/screenshots/ratings.png)
 
-**"Failed to start sign-in: Load failed"** — The app can't reach its local server. Check it's running:
+</details>
 
-```bash
-curl http://localhost:45678/    # any response (even 404) means it's up
-revv restart                    # restart it if not
-```
+### Turn feedback into a fix
 
-**"Failed to initiate sign-in"** — The server reached GitHub but got an error. The usual cause is that **Device Flow isn't enabled** on your GitHub OAuth app — enable it under `github.com/settings/developers` → your app → check **Enable Device Flow** → Update application.
+The chat agent works inside the PR's own git worktree. Ask about the code, explore a plan, or request a fix with tests. Tool calls and responses stream into the panel as it works.
+
+Changes arrive as **proposed commits**. Inspect them, cherry-pick the ones you want, discard others, and push from Revv. The agent can also help resolve merge conflicts.
+
+> “Fix the warning. Add a regression test, run it, and commit.”
+
+### Get down to the lines
+
+Switch between **unified and split diffs**, navigate the file tree, and review syntax-highlighted changes with virtualized scrolling for large PRs. Persisted hunk decisions keep your place; inline threads and code suggestions keep the discussion beside the code.
+
+Review comments sync with GitHub in both directions. Your work stays attached to the pull request.
+
+<details>
+<summary>See the diff view and first-pass leads</summary>
+
+![Revv's unified diff with syntax highlighting, line numbers, and a first-pass lead marking a potential silent failure](docs/assets/screenshots/diff.png)
+
+</details>
+
+### Bring the review to your coding agent
+
+Connect **Claude Code, Codex, OpenCode, or Cursor** from **Settings → Integrations**. Through MCP, your external agent can read the current PR's walkthrough, issues, and comment threads, record verified fixes, and respond to review conversations.
+
+After pushing a fix, it can request a fresh walkthrough and wait for the results. One agent fixes the code; Revv reviews the next commit.
+
+<details>
+<summary>See the coding-agent integrations</summary>
+
+![Revv's Integrations settings with connections for Claude Code, Codex, OpenCode, and Cursor](docs/assets/screenshots/integrations.png)
+
+</details>
+
+### Catch up on what shipped
+
+**Daily and weekly recaps** turn repository activity into a readable account of what changed, who contributed, and what's still in flight. Browse the archive when you need to catch up on an earlier period.
+
+![Revv's weekly recap, grouping shipped and in-progress work by theme and contributor](docs/assets/screenshots/recap.png)
+
+### Built for the daily review queue
+
+| Feature | What you get |
+| --- | --- |
+| GitHub sync | Automatically refreshed PRs across your selected repositories. |
+| Multiple accounts | Personal, work, and GitHub Enterprise accounts in one app. |
+| Fast navigation | Fuzzy PR search with <kbd>⌘</kbd> + <kbd>P</kbd>; commands with <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>P</kbd>. |
+| Your reading setup | Light, dark, or system appearance, plus an independent diff theme. |
+| Local persistence | Review sessions, conversations, and generation progress saved in SQLite on your machine. |
+| Team cache | Reuse teammates' generated walkthroughs through a configured shared cache. |
+
+The app and its database run locally. GitHub sync talks to your GitHub host, and AI requests use your configured agent and provider.
 
 ## Build from source
 
-Revv is a Bun + TypeScript monorepo with a SvelteKit frontend, an Elysia API server, and a Tauri v2 desktop shell.
-
-**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [Rust](https://rustup.rs), plus the macOS Xcode Command Line Tools (`xcode-select --install`).
+You'll need **macOS**, **Bun 1.3+**, **Rust**, and the **Xcode Command Line Tools**. The development installer can help set up the toolchain:
 
 ```bash
 git clone https://github.com/alexandre-schaffner/revv.git
 cd revv
-bun install
-cp .env.example .env   # fill in GITHUB_CLIENT_ID and BETTER_AUTH_SECRET
-make dev               # runs web, server, and desktop together
+./install.sh --dev
+make dev
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for the full architecture, conventions, and contributor workflow.
+Already have the toolchain? Run `bun install` followed by `make dev`. No `.env` setup is required for the default flow: the GitHub OAuth app is bundled, and the local auth secret is generated on first launch.
 
-## Contributing
+`make dev` uses a separate development database and API port (`45679`), alongside the frontend at `5173`, so it can run beside an installed Revv instance.
 
-1. Branch off `main`
-2. Make your change and test with `make dev`
-3. Run `make typecheck` and `make lint`
-4. Open a PR against `main`
+<details>
+<summary>Architecture and contributor commands</summary>
 
-## License
+| Layer | Stack | Location |
+| --- | --- | --- |
+| Desktop | Tauri v2 / Rust | [`apps/desktop`](apps/desktop) |
+| Interface | SvelteKit / Svelte 5 / Tailwind CSS v4 | [`apps/web`](apps/web) |
+| Local API | Bun / Elysia / Effect | [`apps/server`](apps/server) |
+| Persistence | SQLite / Drizzle | [`apps/server/src/db`](apps/server/src/db) |
+| Shared contracts | TypeScript / SSE event schemas | [`packages/shared`](packages/shared) |
 
-MIT
+```bash
+make dev-server       # API only, using the isolated dev environment
+make build            # build workspace packages
+make dist             # build the macOS app bundle
+
+# Full local CI, required before submitting code changes
+bun run typecheck && bun run lint && bun run knip && bun run build
+```
+
+Read the [agent and contributor guide](AGENTS.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
+
+</details>
+
+## Manage your install
+
+```bash
+revv status      # versions, install paths, and server state
+revv update      # update to the latest release
+revv restart     # restart the background server
+revv logs        # tail server logs
+revv open        # launch the app
+revv uninstall   # remove the install
+```
+
+<details>
+<summary>Troubleshooting sign-in</summary>
+
+**“Failed to start sign-in: Load failed”** usually means the app cannot reach its local server:
+
+```bash
+revv status
+revv restart
+revv logs
+```
+
+**Using a custom GitHub OAuth app?** Enable **Device Flow** in that app's GitHub settings. The default bundled app already handles this setup.
+
+For other problems, [open an issue](https://github.com/alexandre-schaffner/revv/issues) with your Revv version and relevant logs.
+
+</details>
+
+---
+
+<p align="center">
+  Built for people who read the diff.<br />
+  <a href="LICENSE">MIT licensed</a> · <a href="https://github.com/alexandre-schaffner/revv/releases">Releases</a> · <a href="https://github.com/alexandre-schaffner/revv/issues">Issues</a>
+</p>

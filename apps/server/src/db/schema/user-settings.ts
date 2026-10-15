@@ -10,7 +10,6 @@ export const userSettings = sqliteTable("user_settings", {
   aiModel: text("ai_model").notNull(),
   aiThinkingEffort: text("ai_thinking_effort").notNull(),
   aiAgent: text("ai_agent").notNull(),
-  aiContextWindow: text("ai_context_window").notNull(),
   aiSuggestionsModel: text("ai_suggestions_model").notNull(),
   aiMaxTurns: integer("ai_max_turns").notNull(),
   theme: text("theme").notNull(),
@@ -70,5 +69,9 @@ export const userSettings = sqliteTable("user_settings", {
   cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
   /** JSON-encoded `string[]` of trusted GitHub hosts. */
   cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
+  // ── TypeSafe System One (Jev) ────────────────────────────────────────────
+  // One switch, default-off. API key lives in the keyring
+  // (`secret:jev-api-key`), not here — this row feeds the unauthenticated `GET /api/settings` DTO.
+  jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

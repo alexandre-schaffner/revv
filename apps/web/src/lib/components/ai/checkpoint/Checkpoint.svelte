@@ -14,7 +14,7 @@ export type CheckpointProps = HTMLAttributes<HTMLDivElement> & {
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import RotateCcw from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
 import Flag from "phosphor-svelte/lib/Flag";
 
 	let {
@@ -50,7 +50,7 @@ import Flag from "phosphor-svelte/lib/Flag";
 				onclick={() => onRestore(checkpointId)}
 				aria-label="Restore to this checkpoint"
 			>
-				<RotateCcw class="size-3" />
+				<ArrowCounterClockwise class="size-3" />
 			</Button>
 		{/if}
 	</div>

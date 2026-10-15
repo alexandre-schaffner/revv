@@ -6,6 +6,8 @@ import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
+import { DiffCacheService } from "./DiffCache";
+import { fitAnchorToPatch } from "./diff-anchors";
 import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
@@ -13,6 +15,7 @@ import { PullRequestService } from "./PullRequest";
 import { RemoteUserService } from "./RemoteUser";
 import { RepositoryService } from "./Repository";
 import { ReviewService } from "./Review";
+import { resolveReviewModeForPr } from "./review-mode";
 import type { SettingsService } from "./Settings";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import { latestUpdatedAt } from "./sync-engine/watermark";
@@ -106,6 +109,7 @@ export const SyncServiceLive = Layer.effect(
     const remoteUserService = yield* RemoteUserService;
     const repoService = yield* RepositoryService;
     const broadcaster = yield* Broadcaster;
+    const diffCache = yield* DiffCacheService;
 
     // Background-worker PR context — always uses the 'single-user' token.
     const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
@@ -153,6 +157,31 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
+        // Fit the anchor onto the diff. A thread can point outside it — the
+        // walkthrough agent flags ranges it read in the full file, and the
+        // file viewer lets a reviewer comment on any line — and GitHub answers
+        // such a comment with an opaque 422. See `diff-anchors`.
+        const side = thread.diffSide === "old" ? ("LEFT" as const) : ("RIGHT" as const);
+        // Only ever a judgement on a patch we hold — a file the cache doesn't
+        // cover is sent as-is, for the reasons the submit handler spells out.
+        const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
+        const cachedFile = cachedFiles?.find(
+          (f) => f.path === thread.filePath || f.oldPath === thread.filePath,
+        );
+        const fit = fitAnchorToPatch(cachedFile?.patch ?? null, {
+          startLine: thread.startLine,
+          endLine: thread.endLine,
+          side,
+        });
+        if (!fit.ok) {
+          return yield* Effect.fail(
+            new SyncError({
+              message: `Cannot post comment on ${thread.filePath}: ${fit.reason}`,
+              threadId,
+            }),
+          );
+        }
+
         const commentPayload: {
           path: string;
           body: string;
@@ -164,13 +193,13 @@ export const SyncServiceLive = Layer.effect(
         } = {
           path: thread.filePath,
           body: first.body,
-          line: thread.endLine,
-          side: thread.diffSide === "old" ? "LEFT" : "RIGHT",
+          line: fit.endLine,
+          side,
           commitSha: pr.headSha,
         };
-        if (thread.startLine !== thread.endLine) {
-          commentPayload.startLine = thread.startLine;
-          commentPayload.startSide = commentPayload.side;
+        if (fit.startLine !== fit.endLine) {
+          commentPayload.startLine = fit.startLine;
+          commentPayload.startSide = side;
         }
 
         const posted = yield* github.reviews.createComment(
@@ -262,7 +291,7 @@ export const SyncServiceLive = Layer.effect(
       userLogin: string | null,
     ): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
-        const session = yield* reviewService.getOrCreateActiveSession(prId);
+        const session = yield* reviewService.getOrCreateIdentitySession(prId);
         const threads = yield* reviewService.getThreadsForSession(session.id);
 
         let role: UserRole = "unknown";
@@ -293,7 +322,29 @@ export const SyncServiceLive = Layer.effect(
       Effect.gen(function* () {
         const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
         const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-        const session = yield* reviewService.getOrCreateActiveSession(pr.id);
+
+        // Pull into the session the user's UI actually reads. Review sessions
+        // are keyed on `(pullRequestId, mode)` and the mode is derived from
+        // identity, so on a self-authored PR the default (`reviewer`) session
+        // is one nothing ever displays — reviewer comments would sync into it
+        // forever and stay invisible. See `resolveReviewModeForPr`.
+        const verdict = yield* resolveReviewModeForPr(pr.id);
+        const session = yield* reviewService.getOrCreateActiveSession(pr.id, verdict.mode);
+
+        // Repair PRs that were synced into the wrong mode's session before the
+        // line above existed: their GitHub threads are deduped by external id,
+        // so re-pulling would never re-create them here.
+        //
+        // Gated on `resolved`, because this moves rows. An unresolved verdict
+        // is "we don't know", and it reports `reviewer` — so running the repair
+        // on it would yank a self-authored PR's threads OUT of the author
+        // session the UI reads, which is the very failure being repaired, in
+        // reverse. When identity is unknown, sync into the default session and
+        // leave existing threads where they are; the next pull with a resolved
+        // identity does the move.
+        const adopted = verdict.resolved
+          ? yield* reviewService.adoptExternalThreads(pr.id, session.id)
+          : 0;
 
         // Incremental poll: ask GitHub only for comments newer than our
         // last successful sync. Null on cold-start pulls everything.
@@ -503,7 +554,10 @@ export const SyncServiceLive = Layer.effect(
         // thread appearing or vanishing) without re-deriving it from the DB.
         // When the GraphQL call was skipped there was nothing to fingerprint,
         // so the row writes are the whole answer.
-        let changed = newThreads + newMessages + edits + statusChanges > 0;
+        // `adopted` counts threads that moved into this session from another
+        // mode's session — no new content, but the session the UI reads just
+        // gained threads, so it must be told to re-hydrate.
+        let changed = newThreads + newMessages + edits + statusChanges + adopted > 0;
         if (needsGhThreads) {
           const fingerprint = fingerprintThreads(ghThreads);
           const previous = yield* prService.getThreadsFingerprint(pr.id);

@@ -67,6 +67,29 @@ export function startOfUtcIsoWeek(d: Date): Date {
 }
 
 /**
+ * True when `periodStart` names the window that is still open right now —
+ * today for daily, the current ISO week for weekly. The one definition of
+ * "current period" on the server; callers branch on it wherever a live
+ * window and a closed one must behave differently (rolling end boundary,
+ * empty-window handling).
+ *
+ * The web mirror is `isCurrentPeriod` in
+ * `apps/web/src/lib/components/recaps/period-window.ts` — same semantics on
+ * the other side of the wire. Keep the two in step.
+ */
+export function windowIsCurrent(
+  period: RecapPeriod,
+  periodStart: string,
+  now: Date = new Date(),
+): boolean {
+  const start = new Date(periodStart);
+  if (period === "daily") {
+    return startOfUtcDay(start).getTime() === startOfUtcDay(now).getTime();
+  }
+  return startOfUtcIsoWeek(start).getTime() === startOfUtcIsoWeek(now).getTime();
+}
+
+/**
  * Compute the correct period boundaries when regenerating a recap.
  * If the recap's periodStart matches the current rolling window (today /
  * this week), return a rolling window ending at `now`. Otherwise return
@@ -78,21 +101,12 @@ export function canonicalRecapBoundaries(
   now: Date = new Date(),
 ): { periodStart: string; periodEnd: string } {
   const start = new Date(periodStart);
-  if (period === "daily") {
-    const canonicalStart = startOfUtcDay(start);
-    const todayStart = startOfUtcDay(now);
-    if (canonicalStart.getTime() === todayStart.getTime()) {
-      return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
-    }
-    const end = new Date(canonicalStart.getTime() + ONE_DAY_MS);
-    return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
-  }
-  const canonicalStart = startOfUtcIsoWeek(start);
-  const thisWeekStart = startOfUtcIsoWeek(now);
-  if (canonicalStart.getTime() === thisWeekStart.getTime()) {
+  const canonicalStart = period === "daily" ? startOfUtcDay(start) : startOfUtcIsoWeek(start);
+  if (windowIsCurrent(period, periodStart, now)) {
     return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
   }
-  const end = new Date(canonicalStart.getTime() + ONE_WEEK_MS);
+  const span = period === "daily" ? ONE_DAY_MS : ONE_WEEK_MS;
+  const end = new Date(canonicalStart.getTime() + span);
   return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
 }
 
@@ -258,9 +272,11 @@ export const RecapSchedulerLive = Layer.effect(
               prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
             ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
             if (windowed.length === 0) {
-              const openPrs = yield* provideDb(prService.listOpenPrsWithWalkthroughs(repo.id)).pipe(
-                Effect.catchAll(() => Effect.succeed([] as never[])),
-              );
+              // Same window boundary the job will use, so this pre-check and
+              // `buildJobBody`'s empty-window guard agree on "non-empty".
+              const openPrs = yield* provideDb(
+                prService.listOpenPrsAsOfWindow(repo.id, window.periodEnd),
+              ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
               if (openPrs.length === 0) continue;
             }
 

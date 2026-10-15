@@ -21,6 +21,8 @@ export type AcpAgentIconKey = "anthropic" | "openai" | "opencode" | "cursor" | "
 export interface AcpAgentModel {
   readonly label: string;
   readonly value: string;
+  /** Model-specific effort limits; omitted models inherit the agent ladder. */
+  readonly thinkingEfforts?: readonly ThinkingEffort[];
 }
 
 /**
@@ -33,17 +35,15 @@ export interface AcpAgentCapabilities {
   readonly defaultModel: string;
   /**
    * Static model catalog (label + id), or the literal `"dynamic"` when the list
-   * must be fetched live from the server (opencode runs `opencode models`). ACP
-   * itself has no model protocol, so static catalogs are curated per agent.
+   * must be fetched live from the server (opencode's `GET /api/model`). The
+   * other adapters publish no catalog over ACP, so theirs are curated here.
    */
   readonly models: readonly AcpAgentModel[] | "dynamic";
-  /** Whether the 200K / 1M context-window control applies (Claude Code only). */
-  readonly contextWindow: boolean;
   /** Thinking-effort tiers offered; empty = no thinking-effort control. */
   readonly thinkingEfforts: readonly ThinkingEffort[];
   /**
    * Whether the agent supports a read-only plan turn — i.e. it advertises a
-   * plan/ask/architect mode (`findPlanModeId` in chat-acp) the transport can
+   * plan/ask/architect mode (`findPlanModeId` in `ai/acp/session-config.ts`) the transport can
    * select. Drives the composer's Plan-mode toggle; when `false`, requesting
    * plan mode would 422, so the toggle stays disabled.
    */
@@ -90,6 +90,7 @@ export interface AcpAgentDescriptor {
 
 /** Every thinking-effort tier, strongest first — the order the web renders. */
 export const THINKING_EFFORT_ORDER = [
+  "ultra",
   "ultrathink",
   "max",
   "extra-high",
@@ -108,20 +109,20 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     capabilities: {
-      defaultModel: "claude-sonnet-5",
-      // Current-generation Anthropic models only. Opus 4.8 was dropped when
-      // Opus 5 superseded it; a user still on a delisted id keeps working (the
-      // value is passed through to the agent), they just can't reselect it.
+      defaultModel: "claude-sonnet-5-5",
+      // Verified against https://code.claude.com/docs/en/model-config (2026-10-13).
+      // Keep Sonnet 5 and Haiku 4.5 selectable for existing installations.
       models: [
-        { label: "Claude Fable 5", value: "claude-fable-5" },
-        { label: "Claude Opus 5", value: "claude-opus-5" },
+        { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
+        { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
+        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
         { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
-        { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001" },
+        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5" },
+        { label: "Claude Haiku 4.5", value: "claude-haiku-4-5-20251001", thinkingEfforts: [] },
       ],
-      contextWindow: true,
       // Claude Code's named effort ladder tops out at `max`. `ultrathink` is
-      // retained for existing settings and is mapped to `max` at launch.
-      thinkingEfforts: ["ultrathink", "max", "extra-high", "high", "medium", "low"],
+      // retained in the persisted type and mapped to `max` at launch.
+      thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
       // claude-agent-acp advertises a read-only plan mode.
       planMode: true,
     },
@@ -145,13 +146,13 @@ export const ACP_AGENTS = [
     args: ["acp"],
     capabilities: {
       defaultModel: "opencode/big-pickle",
-      // opencode exposes 75+ models across providers; fetched live via the
-      // server's `opencode models` parse rather than curated here.
+      // opencode exposes 75+ models across providers; fetched live from its
+      // server API rather than curated here, and applied per session through
+      // the ACP `model` config option.
       models: "dynamic",
-      contextWindow: false,
       thinkingEfforts: [],
-      // opencode ships a read-only `plan` agent, selected via the session's
-      // advertised modes.
+      // opencode ships a read-only `plan` agent, advertised as the session's
+      // `mode` config option.
       planMode: true,
     },
   },
@@ -163,21 +164,26 @@ export const ACP_AGENTS = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
-      defaultModel: "gpt-5.6-sol",
+      defaultModel: "gpt-6.1-sol",
       // This maintained adapter embeds a current Codex App Server, so the
-      // selector can expose the current GPT-5.6 family. Do not replace it with
-      // the deprecated `@zed-industries/codex-acp`: that adapter embeds an
-      // older Codex core which rejects GPT-5.6 models.
+      // selector can expose the current GPT-6 family. GPT-6.1 Sol is Codex's
+      // recommended default; GPT-6 Sol has left the docs but stays listed for
+      // existing installations. Do not
+      // replace it with the deprecated `@zed-industries/codex-acp`: that
+      // adapter embeds an older Codex core which rejects current models.
       models: [
-        { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
-        { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
-        { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        // https://learn.chatgpt.com/docs/models (2026-10-13).
+        { label: "GPT-6 Astra", value: "gpt-6-astra" },
+        { label: "GPT-6.1 Sol", value: "gpt-6.1-sol" },
+        { label: "GPT-6 Sol", value: "gpt-6-sol" },
+        {
+          label: "GPT-6 Luna",
+          value: "gpt-6-luna",
+          thinkingEfforts: ["max", "extra-high", "high", "medium", "low"],
+        },
       ],
-      contextWindow: false,
-      // The GPT-5.6 family supports the existing selector's xhigh-or-below
-      // ladder. The adapter also supports newer tiers; keep those out of this
-      // shared setting until the UI can model each model's distinct limits.
-      thinkingEfforts: ["extra-high", "high", "medium", "low"],
+      // Ultra is a Codex control; Luna tops out at Max.
+      thinkingEfforts: ["ultra", "max", "extra-high", "high", "medium", "low"],
       // Codex requires danger-full-access for MCP tool execution, so there is
       // no enforceable read-only plan turn yet.
       planMode: false,
@@ -192,24 +198,28 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
-      // Cursor documents these exact IDs in its Models & Pricing catalog. The
+      // https://cursor.com/docs/models-and-pricing (2026-10-13). The
       // ACP adapter does not yet forward a selected model, so this remains a
       // stored preference until it gains a model passthrough.
       models: [
         { label: "Auto", value: "auto" },
-        { label: "Claude Fable 5", value: "claude-fable-5" },
-        { label: "Claude Opus 5", value: "claude-opus-5" },
-        { label: "Claude Sonnet 5", value: "claude-sonnet-5" },
+        { label: "Claude Fable 5.1", value: "claude-fable-5-1" },
+        { label: "Claude Opus 5.5", value: "claude-opus-5-5" },
+        { label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5" },
+        { label: "Claude Haiku 5.5", value: "claude-haiku-5-5" },
         { label: "Composer 2.5", value: "composer-2.5" },
         { label: "Gemini 3.1 Pro", value: "gemini-3.1-pro" },
-        { label: "Gemini 3.7 Flash", value: "gemini-3.7-flash" },
+        { label: "Gemini 3.8 Flash", value: "gemini-3.8-flash" },
         { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
         { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
         { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+        { label: "Grok 4.7", value: "grok-4.7" },
         { label: "Grok 4.6", value: "grok-4.6" },
         { label: "Grok 4.5", value: "grok-4.5" },
+        { label: "Kimi K3", value: "kimi-k3" },
+        { label: "GLM 5.3", value: "glm-5.3" },
+        { label: "Muse Spark 1.3", value: "muse-spark-1.3" },
       ],
-      contextWindow: false,
       thinkingEfforts: [],
       // Cursor degrades generically over ACP (no resume, no MCP tools) and
       // advertises no read-only/plan mode.
@@ -238,9 +248,60 @@ export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
 }
 
+/** Effort choices for the selected model, or the agent default when unpinned. */
+export function getModelThinkingEfforts(id: AcpAgentId, model?: string): readonly ThinkingEffort[] {
+  const caps = getAgentCapabilities(id);
+  const selected = model && !isAutoSentinel(model) ? model : caps.defaultModel;
+  return (
+    (caps.models === "dynamic"
+      ? undefined
+      : caps.models.find((m) => m.value === selected)?.thinkingEfforts) ?? caps.thinkingEfforts
+  );
+}
+
 /** Revv's persisted-model default for an ACP agent. */
 export function getAcpAgentDefaultModel(id: AcpAgentId): string {
   return getAcpAgent(id).capabilities.defaultModel;
+}
+
+/**
+ * Stored in `aiModel` or `aiThinkingEffort` to mean "don't pin one — size the
+ * PR and pick". Only consulted when the TypeSafe auto-model toggle is on.
+ *
+ * Namespaced because plain `"auto"` is already taken by `cursor`'s own model.
+ * One constant for both fields since the two are independent opt-ins but a
+ * shared value is one fewer thing to get wrong.
+ *
+ * Absent from every agent's `capabilities.models` / `.thinkingEfforts`.
+ * {@link resolveGenerationModel} and {@link resolveThinkingEffort} are the
+ * arbiters that collapse it to "unpinned" — every launch path must go
+ * through one of them, or a raw `settings.aiModel` reaches the agent adapter
+ * as `"revv:auto"` and the launch fails.
+ */
+export const AUTO_SENTINEL = "revv:auto";
+
+export type AutoSentinel = typeof AUTO_SENTINEL;
+
+/** Type predicate, not a plain `boolean`, so a false branch narrows {@link ThinkingEffortSetting} to {@link ThinkingEffort} without a cast. */
+export function isAutoSentinel(value: string | null | undefined): value is AutoSentinel {
+  return value === AUTO_SENTINEL;
+}
+
+export type ThinkingEffortSetting = ThinkingEffort | AutoSentinel;
+
+/**
+ * Resolve the stored effort setting into a concrete tier for a launch.
+ * `undefined` means "let the agent use its own default" — what Auto resolves
+ * to wherever there's no sizing answer (chat, recap, suggestions). Only
+ * walkthrough generation sizes the PR, so only it passes a `sized` value.
+ */
+export function resolveThinkingEffort(
+  setting: ThinkingEffortSetting | null | undefined,
+  sized?: ThinkingEffort | null,
+): ThinkingEffort | undefined {
+  if (setting === null || setting === undefined) return undefined;
+  if (isAutoSentinel(setting)) return sized ?? undefined;
+  return setting;
 }
 
 /**
@@ -256,9 +317,10 @@ export function getAcpAgentDefaultModel(id: AcpAgentId): string {
 export function clampThinkingEffort(
   id: AcpAgentId,
   effort: ThinkingEffort | undefined,
+  model?: string,
 ): ThinkingEffort | undefined {
   if (!effort) return undefined;
-  const allowed = getAgentCapabilities(id).thinkingEfforts;
+  const allowed = getModelThinkingEfforts(id, model);
   if (allowed.length === 0) return undefined;
   if (allowed.includes(effort)) return effort;
   // THINKING_EFFORT_ORDER is strongest-first, so the first allowed tier at or
