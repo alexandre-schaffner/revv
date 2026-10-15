@@ -22,7 +22,7 @@ function hostFromProviderId(providerId: string): string | null {
   return providerId.split(":")[1] ?? null;
 }
 
-export class Identity extends Context.Tag("Identity")<
+export class Identity extends Context.Service<
   Identity,
   {
     readonly sessionFromHeaders: (headers: Headers) => Promise<AuthSession | null>;
@@ -43,7 +43,7 @@ export class Identity extends Context.Tag("Identity")<
     readonly deleteAccountTokens: (accountId: string) => Effect.Effect<void>;
     readonly migrateLegacyTokenSecrets: Effect.Effect<number, never, SecretStore | DbService>;
   }
->() {}
+>()("Identity") {}
 
 export const IdentityLive = Layer.effect(
   Identity,

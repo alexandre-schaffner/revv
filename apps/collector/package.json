@@ -7,10 +7,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.ts",
-    "dev:web": "vite --config web/vite.config.ts",
-    "build": "vite build --config web/vite.config.ts",
-    "typecheck": "tsc --noEmit && svelte-check --tsconfig ./web/tsconfig.json",
+    "dev": "bun ../../scripts/dev-collector.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun --external @duckdb/node-api",
+    "typecheck": "tsc --noEmit",
     "start": "bun run src/index.ts"
   },
   "dependencies": {
@@ -20,14 +19,7 @@
     "elysia": "^1"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5",
-    "@tailwindcss/vite": "^4",
     "bun-types": "^1.3.14",
-    "phosphor-svelte": "^3.1.0",
-    "svelte": "^5",
-    "svelte-check": "^4",
-    "svelteplot": "^0.14.2",
-    "typescript": "^5.7.0",
-    "vite": "^6"
+    "typescript": "^5.7.0"
   }
 }

@@ -27,7 +27,7 @@ export interface SshSignResult {
 
 // ── Context tag ───────────────────────────────────────────────────────────────
 
-export class SshSigner extends Context.Tag("SshSigner")<
+export class SshSigner extends Context.Service<
   SshSigner,
   {
     /**
@@ -48,7 +48,7 @@ export class SshSigner extends Context.Tag("SshSigner")<
       signerLogin: string,
     ) => Effect.Effect<void, SshSignatureInvalid | SshKeysFetchFailed>;
   }
->() {}
+>()("SshSigner") {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ export const SshSignerLive = Layer.effect(
     const pubkeyCache = new PubkeyCache();
 
     // Invalidate pubkey cache whenever settings change (host set may change).
-    yield* Effect.fork(
+    yield* Effect.forkChild(
       settingsSvc
         .settingsChanges()
         .pipe(Stream.runForEach(() => Effect.sync(() => pubkeyCache.invalidate()))),

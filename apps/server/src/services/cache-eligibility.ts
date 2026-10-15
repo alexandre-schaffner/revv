@@ -38,7 +38,7 @@ function isEligible(perm: PermLevel): boolean {
 
 // ── Context tag ───────────────────────────────────────────────────────────────
 
-export class CacheEligibility extends Context.Tag("CacheEligibility")<
+export class CacheEligibility extends Context.Service<
   CacheEligibility,
   {
     /**
@@ -64,7 +64,7 @@ export class CacheEligibility extends Context.Tag("CacheEligibility")<
       signerLogin: string,
     ) => Effect.Effect<boolean>;
   }
->() {}
+>()("CacheEligibility") {}
 
 // ── Layer ─────────────────────────────────────────────────────────────────────
 
@@ -137,10 +137,10 @@ export const CacheEligibilityLive = Layer.effect(
     ): Effect.Effect<PermLevel> =>
       githubSvc.repos
         .collaboratorPermission(token, host, owner, repo, login)
-        .pipe(Effect.catchAll(() => Effect.succeed("none" as PermLevel)));
+        .pipe(Effect.catch(() => Effect.succeed("none" as PermLevel)));
 
     // Invalidate on settings changes (host set may change).
-    yield* Effect.fork(
+    yield* Effect.forkChild(
       settingsSvc
         .settingsChanges()
         .pipe(Stream.runForEach(() => Effect.sync(() => permCache.clear()))),
@@ -177,23 +177,23 @@ export const CacheEligibilityLive = Layer.effect(
           // Use settings host as the authority for "which account do I use?"
           const settings = yield* settingsSvc
             .getSettings()
-            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+            .pipe(Effect.catch(() => Effect.succeed(null)));
           const host = settings?.githubHost ?? "github.com";
 
           const localAcct = yield* Effect.try({
             try: () => getLocalAccountForHost(host),
             catch: () => null,
-          }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+          }).pipe(Effect.catch(() => Effect.succeed(null)));
 
           if (!localAcct) return false;
           const token = yield* tokenProvider
             .getTokenByAccountId(localAcct.accountId)
-            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+            .pipe(Effect.catch(() => Effect.succeed(null)));
           if (!token) return false;
 
           const perm = yield* resolvePermission(host, owner, repo, localAcct.login, token);
           return isEligible(perm);
-        }).pipe(Effect.catchAll(() => Effect.succeed(false))),
+        }).pipe(Effect.catch(() => Effect.succeed(false))),
 
       isSignerEligible: (repoFullName, signerHost, signerLogin) =>
         Effect.gen(function* () {
@@ -205,7 +205,7 @@ export const CacheEligibilityLive = Layer.effect(
           const localHosts = yield* Effect.try({
             try: () => getAllLocalHosts(),
             catch: () => new Set<string>(),
-          }).pipe(Effect.catchAll(() => Effect.succeed(new Set<string>())));
+          }).pipe(Effect.catch(() => Effect.succeed(new Set<string>())));
 
           if (!localHosts.has(signerHost)) return false;
 
@@ -213,17 +213,17 @@ export const CacheEligibilityLive = Layer.effect(
           const localAcct = yield* Effect.try({
             try: () => getLocalAccountForHost(signerHost),
             catch: () => null,
-          }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+          }).pipe(Effect.catch(() => Effect.succeed(null)));
 
           if (!localAcct) return false;
           const token = yield* tokenProvider
             .getTokenByAccountId(localAcct.accountId)
-            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+            .pipe(Effect.catch(() => Effect.succeed(null)));
           if (!token) return false;
 
           const perm = yield* resolvePermission(signerHost, owner, repo, signerLogin, token);
           return isEligible(perm);
-        }).pipe(Effect.catchAll(() => Effect.succeed(false))),
+        }).pipe(Effect.catch(() => Effect.succeed(false))),
     });
   }),
 );

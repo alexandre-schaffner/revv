@@ -82,7 +82,7 @@ export const resolveReviewModeForPr = (
 
     return { mode: reviewModeFor(row.authorLogin, row.viewerLogin), resolved: true };
   }).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.sync(() => {
         // Never silent. A swallowed failure here routes synced comments into an
         // invisible session, which is the exact bug `adoptExternalThreads`

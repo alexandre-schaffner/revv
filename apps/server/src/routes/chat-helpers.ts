@@ -107,7 +107,7 @@ export const resolveChatTurnContext = (prId: string, userId: string) =>
       // Unreachable: the turn path leaves `fetchHeadShaFromGithub` at its
       // default, so `prMeta` either yields a SHA or fails the Effect above.
       // The guard narrows the type for the worktree acquire.
-      return yield* Effect.dieMessage("resolveChatTurnContext: head SHA unresolved");
+      return yield* Effect.die(new Error("resolveChatTurnContext: head SHA unresolved"));
     }
     const repoClone = yield* RepoCloneService;
 

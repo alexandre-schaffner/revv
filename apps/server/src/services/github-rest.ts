@@ -12,7 +12,7 @@ import {
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
-const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
+const retrySchedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(3)]);
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 const isTransientGitHubError = (e: GitHubError): boolean => e instanceof GitHubNetworkError;
@@ -686,7 +686,7 @@ export function withSchemaFallback<A, R>(
 ): Effect.Effect<{ readonly value: A; readonly modern: boolean }, GitHubError, R> {
   return ask(true).pipe(
     Effect.map((value) => ({ value, modern: true })),
-    Effect.catchAll((err) =>
+    Effect.catch((err) =>
       err instanceof GitHubApiError &&
       modernTokens.some((token) => String(err.cause).includes(token))
         ? ask(false).pipe(Effect.map((value) => ({ value, modern: false })))

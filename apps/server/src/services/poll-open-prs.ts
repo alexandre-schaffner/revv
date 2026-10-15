@@ -296,7 +296,7 @@ export const syncRepoOpenPrs = (
     if (movedIds.length > 0) {
       const invalidated = yield* withDb(db, diffCache.invalidateFilesForPrs(movedIds)).pipe(
         Effect.as(true),
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
             logError("PollScheduler", `diff invalidation failed for ${repo.fullName}:`, cause);
             return false;
@@ -439,13 +439,13 @@ export const archiveClosedPrs = (
     // VSCode). `pruneWorktree` self-guards against in-flight generations and
     // un-pushed review commits, so this is safe to fire-and-forget; it must not
     // block the sync loop.
-    yield* Effect.forkDaemon(
+    yield* Effect.forkDetach(
       Effect.forEach(
         closedPrs,
         (pr) =>
           repoClone
             .pruneWorktree({ repoId: pr.repositoryId, prNumber: pr.externalId })
-            .pipe(Effect.catchAll(() => Effect.void)),
+            .pipe(Effect.catch(() => Effect.void)),
         { concurrency: 3, discard: true },
       ),
     );

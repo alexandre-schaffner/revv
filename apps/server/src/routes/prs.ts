@@ -492,7 +492,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .post("/sync", async (ctx) => {
     try {
       await AppRuntime.runPromise(
-        Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.syncNow())),
+        Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.syncNow())),
       );
       return { success: true };
     } catch (e) {
@@ -508,7 +508,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .post("/freshen", async (ctx) => {
     try {
       await AppRuntime.runPromise(
-        Effect.flatMap(PollScheduler, (s) => Effect.forkDaemon(s.freshen())),
+        Effect.flatMap(PollScheduler, (s) => Effect.forkDetach(s.freshen())),
       );
       return { success: true };
     } catch (e) {
@@ -869,7 +869,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
       // rejects despite the provider's try/catch.
       catch: () => null as null,
     }).pipe(
-      Effect.catchAll(() => Effect.succeed([...FALLBACK_PROMPTS] as string[])),
+      Effect.catch(() => Effect.succeed([...FALLBACK_PROMPTS] as string[])),
       Effect.map((v) => (v === null ? [...FALLBACK_PROMPTS] : v)),
     );
 

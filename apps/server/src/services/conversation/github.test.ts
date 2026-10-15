@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { fetchCheckDetails, fetchCiRollup, fetchConversation } from "./github";
 
 const realFetch = globalThis.fetch;
@@ -46,13 +46,13 @@ describe("legacy GitHub Enterprise fallback", () => {
 
     const result = await Effect.runPromise(
       fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api").pipe(
-        Effect.either,
+        Effect.result,
       ),
     );
 
     expect(queries).toHaveLength(2);
     expect(queries[1]).not.toContain("isRequired");
-    expect(Either.isRight(result) && result.right.rollup?.headSha).toBe("abc");
+    expect(Result.isSuccess(result) && result.success.rollup?.headSha).toBe("abc");
   });
 
   it("doesn't retry a rejection that names no modern field", async () => {
@@ -62,12 +62,12 @@ describe("legacy GitHub Enterprise fallback", () => {
 
     const result = await Effect.runPromise(
       fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api").pipe(
-        Effect.either,
+        Effect.result,
       ),
     );
 
     expect(queries).toHaveLength(1);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 });
 

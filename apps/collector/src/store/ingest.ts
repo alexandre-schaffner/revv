@@ -38,34 +38,39 @@ export interface SpanInsert {
 
 // ── OTLP anyValue decoding ───────────────────────────────────────────────────
 
-type AnyValue = {
-  stringValue?: string;
-  intValue?: string | number;
-  doubleValue?: number;
-  boolValue?: boolean;
-  arrayValue?: { values?: AnyValue[] };
-  kvlistValue?: { values?: KeyValue[] };
-};
-type KeyValue = { key?: string; value?: AnyValue };
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-function decodeAnyValue(v: AnyValue | undefined): unknown {
+function object(value: unknown): Record<string, unknown> | undefined {
+  return isObject(value) ? value : undefined;
+}
+
+function decodeAnyValue(value: unknown): unknown {
+  const v = object(value);
   if (!v) return null;
-  if (v.stringValue !== undefined) return v.stringValue;
-  if (v.boolValue !== undefined) return v.boolValue;
-  if (v.doubleValue !== undefined) return v.doubleValue;
-  if (v.intValue !== undefined)
-    return typeof v.intValue === "string" ? Number(v.intValue) : v.intValue;
-  if (v.arrayValue) return (v.arrayValue.values ?? []).map(decodeAnyValue);
-  if (v.kvlistValue) return decodeAttributes(v.kvlistValue.values);
+  if (typeof v.stringValue === "string") return v.stringValue;
+  if (typeof v.boolValue === "boolean") return v.boolValue;
+  if (typeof v.doubleValue === "number" && Number.isFinite(v.doubleValue)) return v.doubleValue;
+  if (v.intValue !== undefined) return num(v.intValue);
+  const array = object(v.arrayValue);
+  if (array && Array.isArray(array.values)) return array.values.map(decodeAnyValue);
+  const kvlist = object(v.kvlistValue);
+  if (kvlist) return decodeAttributes(kvlist.values);
   return null;
 }
 
-function decodeAttributes(kvs: KeyValue[] | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const kv of kvs ?? []) {
-    if (kv.key) out[kv.key] = decodeAnyValue(kv.value);
+function decodeAttributes(value: unknown): Record<string, unknown> {
+  const entries: [string, unknown][] = [];
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      const kv = object(raw);
+      if (kv && typeof kv.key === "string" && kv.key) {
+        entries.push([kv.key, decodeAnyValue(kv.value)]);
+      }
+    }
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 // ── attribute → hot-column extraction ────────────────────────────────────────
@@ -108,34 +113,51 @@ function nanoToMs(nano: unknown): number {
   return 0;
 }
 
-/**
- * Parse an OTLP/HTTP JSON export body into flat span rows. Never throws on a
- * malformed span — it's skipped. Returns [] for unparseable input.
- */
-export function parseOtlp(body: unknown): SpanInsert[] {
-  const root = body as { resourceSpans?: unknown[] } | null;
-  if (!root || !Array.isArray(root.resourceSpans)) return [];
+export class OtlpPayloadError extends Error {
+  constructor() {
+    super("Expected OTLP JSON resourceSpans, scopeSpans and spans arrays");
+  }
+}
 
+/** Validate containers before accepting any writes. Individual malformed spans
+ * are rejected without dropping their valid siblings. */
+export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSpans: number } {
+  const root = object(body);
+  if (!root || !Array.isArray(root.resourceSpans)) throw new OtlpPayloadError();
   const rows: SpanInsert[] = [];
-  for (const rs of root.resourceSpans) {
-    const resource = (rs as { resource?: { attributes?: KeyValue[] } }).resource;
-    const resourceAttrs = decodeAttributes(resource?.attributes);
+  let rejectedSpans = 0;
+  for (const rawResource of root.resourceSpans) {
+    const rs = object(rawResource);
+    if (!rs || (rs.scopeSpans !== undefined && !Array.isArray(rs.scopeSpans)))
+      throw new OtlpPayloadError();
+    const resourceAttrs = decodeAttributes(object(rs.resource)?.attributes);
     const serviceName = str(resourceAttrs["service.name"]) ?? "unknown";
-
-    const scopeSpans = (rs as { scopeSpans?: unknown[] }).scopeSpans ?? [];
-    for (const ss of scopeSpans) {
-      const spans = (ss as { spans?: unknown[] }).spans ?? [];
+    const scopeSpans = Array.isArray(rs.scopeSpans) ? rs.scopeSpans : [];
+    for (const rawScope of scopeSpans) {
+      const ss = object(rawScope);
+      if (!ss || (ss.spans !== undefined && !Array.isArray(ss.spans))) throw new OtlpPayloadError();
+      const spans = Array.isArray(ss.spans) ? ss.spans : [];
       for (const raw of spans) {
-        const s = raw as Record<string, unknown>;
-        const traceId = str(s.traceId);
-        const spanId = str(s.spanId);
-        if (!traceId || !spanId) continue; // unkeyable — drop
-
+        const s = object(raw);
+        const traceId = str(s?.traceId);
+        const spanId = str(s?.spanId);
+        if (!s || !traceId || !spanId) {
+          rejectedSpans++;
+          continue;
+        }
         const startMs = nanoToMs(s.startTimeUnixNano);
         const endMs = nanoToMs(s.endTimeUnixNano);
-        const attrs = decodeAttributes(s.attributes as KeyValue[] | undefined);
-        const status = (s.status ?? {}) as { code?: unknown; message?: string };
-
+        if (
+          !Number.isSafeInteger(Math.round(startMs)) ||
+          startMs <= 0 ||
+          !Number.isFinite(endMs) ||
+          endMs < startMs
+        ) {
+          rejectedSpans++;
+          continue;
+        }
+        const attrs = { ...resourceAttrs, ...decodeAttributes(s.attributes) };
+        const status = object(s.status);
         rows.push({
           traceId,
           spanId,
@@ -144,8 +166,8 @@ export function parseOtlp(body: unknown): SpanInsert[] {
           serviceName,
           startMs,
           durationMs: Math.max(0, endMs - startMs),
-          statusCode: decodeStatusCode(status.code),
-          statusMessage: str(status.message),
+          statusCode: decodeStatusCode(status?.code),
+          statusMessage: str(status?.message),
           attributes: attrs,
           // Revv's Effect spans annotate camelCase keys; OTel semconv and our
           // new KPI annotations use snake_case. Accept both.
@@ -154,7 +176,9 @@ export function parseOtlp(body: unknown): SpanInsert[] {
           model: str(
             pick(attrs, "model", "ai.model", "gen_ai.request.model", "gen_ai.response.model"),
           ),
-          provider: str(pick(attrs, "provider", "ai.provider", "gen_ai.system")),
+          provider: str(
+            pick(attrs, "provider", "ai.provider", "gen_ai.provider.name", "gen_ai.system"),
+          ),
           toolCallCount: num(pick(attrs, "tool_call_count", "toolCallCount")),
           inputTokens: num(
             pick(
@@ -181,7 +205,17 @@ export function parseOtlp(body: unknown): SpanInsert[] {
       }
     }
   }
-  return rows;
+  return { spans: rows, rejectedSpans };
+}
+
+/** Benchmark/parser convenience: malformed containers have no usable rows. */
+export function parseOtlp(body: unknown): SpanInsert[] {
+  try {
+    return parseOtlpBatch(body).spans;
+  } catch (error) {
+    if (error instanceof OtlpPayloadError) return [];
+    throw error;
+  }
 }
 
 // ── Writer ───────────────────────────────────────────────────────────────────

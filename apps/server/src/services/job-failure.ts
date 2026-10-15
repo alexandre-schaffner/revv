@@ -29,4 +29,4 @@ export const analyzeJobFailure = <E>(
   cause: Cause.Cause<E>,
   opts: { readonly cancelledByUser: boolean },
 ): JobFailureVerdict =>
-  Cause.isInterruptedOnly(cause) && !opts.cancelledByUser ? "leave-for-resume" : "error";
+  Cause.hasInterruptsOnly(cause) && !opts.cancelledByUser ? "leave-for-resume" : "error";

@@ -252,7 +252,7 @@ export type ResolvePushFrame =
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
-export class ChatChangesPushService extends Context.Tag("ChatChangesPushService")<
+export class ChatChangesPushService extends Context.Service<
   ChatChangesPushService,
   {
     readonly attemptMergeAndPush: (params: {
@@ -303,7 +303,7 @@ export class ChatChangesPushService extends Context.Tag("ChatChangesPushService"
      */
     readonly beginChatStream: (prId: string) => ChatStreamLease;
   }
->() {}
+>()("ChatChangesPushService") {}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 //
@@ -719,7 +719,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
                 fetchedAt: now,
               },
             ])
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
         }
 
         yield* chatSessions.updatePrHeadSha({
@@ -1225,7 +1225,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
         const queue = yield* Queue.unbounded<ResolvePushFrame>();
 
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           Effect.gen(function* () {
             yield* Queue.offer(queue, {
               kind: "status",
@@ -1344,7 +1344,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
               });
             }
           }).pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.gen(function* () {
                 yield* Effect.promise(() =>
                   abortMerge(ctx.session.worktreePath).then(() => undefined),
@@ -1362,7 +1362,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             ),
             Effect.ensuring(
               Effect.gen(function* () {
-                yield* Queue.shutdown(queue).pipe(Effect.catchAll(() => Effect.void));
+                yield* Queue.shutdown(queue).pipe(Effect.catch(() => Effect.void));
                 yield* releasePush(params.prId);
               }),
             ),

@@ -18,7 +18,7 @@ export interface NamespaceRegistration {
   readonly counters: CacheCounters;
 }
 
-export class CacheStats extends Context.Tag("CacheStats")<
+export class CacheStats extends Context.Service<
   CacheStats,
   {
     readonly register: (reg: NamespaceRegistration) => Effect.Effect<void>;
@@ -39,7 +39,7 @@ export class CacheStats extends Context.Tag("CacheStats")<
     /** Reset all counters — for tests. */
     readonly reset: () => Effect.Effect<void>;
   }
->() {}
+>()("CacheStats") {}
 
 export const CacheStatsLive = Layer.effect(
   CacheStats,

@@ -98,7 +98,7 @@ export function resolveIncrementalPromptFiles(
     },
     catch: (cause) => cause,
   }).pipe(
-    Effect.catchAll((cause) => {
+    Effect.catch((cause) => {
       logError(
         "walkthrough-jobs",
         `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${redactGitAuth(

@@ -305,7 +305,7 @@ export function resolveJobStartAnswers(
       )
       .pipe(
         // Failures aren't cached; getOrFetch propagates so the next caller retries. Both preview and run degrade to null.
-        Effect.catchAll((e) =>
+        Effect.catch((e) =>
           Effect.sync(() => {
             debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);
             return null;

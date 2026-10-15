@@ -121,16 +121,16 @@ export function runHunkScan(
     if (!(yield* jev.isAvailable())) {
       if (existing?.status === "running") {
         return yield* finish(existing.id, "Jev became unavailable").pipe(
-          Effect.catchAll((e) => fail(existing.id, String(e))),
+          Effect.catch((e) => fail(existing.id, String(e))),
         );
       }
       return fresh ? rows.map(toHunkScanRow) : [];
     }
 
     const id = yield* seedHunkScan(key, input.selection.seeds);
-    return yield* scan(id).pipe(Effect.catchAll((e) => fail(id, String(e))));
+    return yield* scan(id).pipe(Effect.catch((e) => fail(id, String(e))));
   }).pipe(
-    Effect.catchAll((e) =>
+    Effect.catch((e) =>
       Effect.sync(() => {
         debug("jev", `hunk-scan ${label} could not start: ${String(e)}`);
         return [];
@@ -156,7 +156,7 @@ export function runHunkScan(
                 ? Effect.void
                 : input.emit({ type: "hunk-scan:hunk", data: { ...key, row } }),
             ),
-            Effect.catchAll((e) =>
+            Effect.catch((e) =>
               Effect.sync(() => debug("jev", `hunk-scan record failed: ${String(e)}`)),
             ),
           ),
@@ -203,7 +203,7 @@ export function runHunkScan(
       debug("jev", `hunk-scan ${label} failed: ${reason}`);
       const discarded = yield* discardHunkScan(id).pipe(
         Effect.as(true),
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catch(() => Effect.succeed(false)),
       );
       if (!discarded) return [];
       yield* input.emit({

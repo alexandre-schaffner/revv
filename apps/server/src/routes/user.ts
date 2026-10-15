@@ -90,7 +90,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
               const remoteUserService = yield* RemoteUserService;
               // Fire-and-forget: run in a daemon fiber so it outlives this
               // request scope but doesn't block the response.
-              yield* Effect.forkDaemon(
+              yield* Effect.forkDetach(
                 remoteUserService.upsert({
                   provider: "github",
                   providerUserId: "", // Numeric ID not available here; CASE guard in upsert keeps existing value

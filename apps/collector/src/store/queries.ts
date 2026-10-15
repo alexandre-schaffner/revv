@@ -7,6 +7,7 @@
 
 import type { DuckDBConnection } from "@duckdb/node-api";
 import type {
+  GenerationRun,
   Kpis,
   OperationSummary,
   ServiceFacet,
@@ -29,7 +30,13 @@ type Row = Record<string, unknown>;
 const CATEGORY_SQL = `CASE
   WHEN service_name = 'revv-web' THEN 'rum'
   WHEN name LIKE 'GitHub.%' THEN 'github'
+  -- The agent's own tool calls (Read/Grep/Bash in our worktree) are broken out
+  -- from 'agent' on purpose: they are OUR latency, not the model's, and lumping
+  -- them together is what made "the agent is slow" unactionable.
+  WHEN name LIKE 'Agent.%' OR name LIKE 'claude_code.tool%' THEN 'agent-tools'
+  WHEN name LIKE 'Mcp.%' THEN 'mcp'
   WHEN name = 'WalkthroughJobs.generate' OR name LIKE 'Ai.%' OR name LIKE 'Chat.%'
+       OR name LIKE 'Acp.%' OR name LIKE 'Walkthrough.%' OR name LIKE 'claude_code.%'
        OR name LIKE 'ProjectRecapJobs.%' OR service_name = 'revv-opencode' THEN 'agent'
   WHEN name LIKE 'RepoClone.%' THEN 'git'
   WHEN name LIKE '%Scheduler.%' OR name LIKE 'PollScheduler%' THEN 'sync'
@@ -117,12 +124,17 @@ function toSpanRecord(r: Row): SpanRecord {
 
 export async function operationSummary(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; service?: string | undefined; includeNoise?: boolean },
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    service?: string | undefined;
+    includeNoise?: boolean;
+  },
 ): Promise<OperationSummary[]> {
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   const noiseClause = opts.includeNoise ? "" : ` AND NOT (${NOISE_SQL})`;
   const sql = `
-    SELECT name, any_value(service_name) AS service_name,
+    SELECT name, service_name,
            any_value(${CATEGORY_SQL}) AS category,
            count(*) AS count,
            quantile_cont(duration_ms, 0.5) AS p50,
@@ -131,8 +143,8 @@ export async function operationSummary(
            avg(duration_ms) AS avg_ms,
            count(*) FILTER (WHERE status_code = 2) AS error_count
     FROM spans
-    WHERE start_ms >= $1${svcClause(opts.service, params)}${noiseClause}
-    GROUP BY name
+    WHERE start_ms >= $1 AND start_ms <= $2${svcClause(opts.service, params)}${noiseClause}
+    GROUP BY name, service_name
     ORDER BY count DESC, p95 DESC`;
   const rows = await read(conn, sql, params);
   return rows.map((r) => {
@@ -155,20 +167,25 @@ export async function operationSummary(
 
 export async function categories(
   conn: DuckDBConnection,
-  opts: { sinceMs: number },
+  opts: { sinceMs: number; untilMs?: number | undefined },
 ): Promise<{ category: string; count: number }[]> {
   const sql = `SELECT ${CATEGORY_SQL} AS category, count(*) AS count
-    FROM spans WHERE start_ms >= $1 GROUP BY category ORDER BY count DESC`;
-  const rows = await read(conn, sql, [opts.sinceMs]);
+    FROM spans WHERE start_ms >= $1 AND start_ms <= $2 GROUP BY category ORDER BY count DESC`;
+  const rows = await read(conn, sql, [opts.sinceMs, opts.untilMs ?? Date.now()]);
   return rows.map((r) => ({ category: String(r.category), count: n(r.count) }));
 }
 
 export async function timeseries(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; bucketMs: number; service?: string | undefined },
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    bucketMs: number;
+    service?: string | undefined;
+  },
 ): Promise<TimeseriesPoint[]> {
   const bucket = Math.max(1000, Math.round(opts.bucketMs));
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   const sql = `
     SELECT (start_ms // ${bucket}) * ${bucket} AS bucket_ms,
            count(*) AS count,
@@ -176,7 +193,7 @@ export async function timeseries(
            quantile_cont(duration_ms, 0.5) AS p50,
            quantile_cont(duration_ms, 0.95) AS p95
     FROM spans
-    WHERE start_ms >= $1${svcClause(opts.service, params)}
+    WHERE start_ms >= $1 AND start_ms <= $2${svcClause(opts.service, params)}
     GROUP BY bucket_ms
     ORDER BY bucket_ms`;
   const rows = await read(conn, sql, params);
@@ -191,7 +208,7 @@ export async function timeseries(
 
 export async function serviceTimeseries(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; bucketMs: number },
+  opts: { sinceMs: number; untilMs?: number | undefined; bucketMs: number },
 ): Promise<ServiceTimeseriesPoint[]> {
   const bucket = Math.max(1000, Math.round(opts.bucketMs));
   // Deliberately unfiltered by service — this query *is* the per-service split.
@@ -200,10 +217,10 @@ export async function serviceTimeseries(
            service_name,
            count(*) AS count
     FROM spans
-    WHERE start_ms >= $1
+    WHERE start_ms >= $1 AND start_ms <= $2
     GROUP BY bucket_ms, service_name
     ORDER BY bucket_ms`;
-  const rows = await read(conn, sql, [opts.sinceMs]);
+  const rows = await read(conn, sql, [opts.sinceMs, opts.untilMs ?? Date.now()]);
   return rows.map((r) => ({
     bucketMs: n(r.bucket_ms),
     serviceName: String(r.service_name),
@@ -213,36 +230,87 @@ export async function serviceTimeseries(
 
 export async function slowestSpans(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; limit: number; service?: string | undefined },
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    limit: number;
+    service?: string | undefined;
+  },
 ): Promise<SpanRecord[]> {
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   const sql = `SELECT ${SPAN_SELECT} FROM spans
-    WHERE start_ms >= $1 AND NOT (${NOISE_SQL})${svcClause(opts.service, params)}
+    WHERE start_ms >= $1 AND start_ms <= $2 AND NOT (${NOISE_SQL})${svcClause(opts.service, params)}
     ORDER BY duration_ms DESC LIMIT ${Math.max(1, Math.round(opts.limit))}`;
   return (await read(conn, sql, params)).map(toSpanRecord);
 }
 
 export async function errorSpans(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; limit: number; service?: string | undefined },
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    limit: number;
+    service?: string | undefined;
+  },
 ): Promise<SpanRecord[]> {
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   const sql = `SELECT ${SPAN_SELECT} FROM spans
-    WHERE start_ms >= $1 AND status_code = 2${svcClause(opts.service, params)}
+    WHERE start_ms >= $1 AND start_ms <= $2 AND status_code = 2${svcClause(opts.service, params)}
     ORDER BY start_ms DESC LIMIT ${Math.max(1, Math.round(opts.limit))}`;
   return (await read(conn, sql, params)).map(toSpanRecord);
 }
 
 export async function traceSpans(conn: DuckDBConnection, traceId: string): Promise<SpanRecord[]> {
   const sql = `SELECT ${SPAN_SELECT} FROM spans WHERE trace_id = $1 ORDER BY start_ms ASC`;
-  return (await read(conn, sql, [traceId])).map(toSpanRecord);
+  const spans = (await read(conn, sql, [traceId])).map(toSpanRecord);
+  const seen = new Set(spans.map((span) => `${span.traceId}/${span.spanId}`));
+  // ACP pools subprocesses across turns, so a process-wide TRACEPARENT would
+  // eventually point at an ended turn. Correlate native spans by session AND
+  // turn window instead. This is a display edge, never a rewrite of stored IDs.
+  for (const prompt of [...spans]) {
+    const session = prompt.attributes["gen_ai.conversation.id"];
+    if (prompt.name !== "Acp.prompt" || typeof session !== "string") continue;
+    const native = (
+      await read(
+        conn,
+        `SELECT ${SPAN_SELECT} FROM spans
+         WHERE name LIKE 'claude_code.%' AND start_ms >= $1 AND start_ms < $2
+           AND coalesce(json_extract_string(attributes, '$."session.id"'),
+                        json_extract_string(attributes, '$."gen_ai.conversation.id"')) = $3
+         ORDER BY start_ms ASC`,
+        [prompt.startMs, prompt.startMs + prompt.durationMs, session],
+      )
+    ).map(toSpanRecord);
+    const nativeIds = new Set(native.map((span) => span.spanId));
+    for (const span of native) {
+      const key = `${span.traceId}/${span.spanId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      spans.push({
+        ...span,
+        parentSpanId:
+          span.parentSpanId && nativeIds.has(span.parentSpanId) ? span.parentSpanId : prompt.spanId,
+        attributes: {
+          ...span.attributes,
+          "revv.correlation": "session-and-turn-window",
+          "revv.original_parent_span_id": span.parentSpanId,
+        },
+      });
+    }
+  }
+  return spans.sort((a, b) => a.startMs - b.startMs);
 }
 
 export async function recentTraces(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; limit: number; service?: string | undefined },
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    limit: number;
+    service?: string | undefined;
+  },
 ): Promise<TraceSummary[]> {
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   // Per trace: span count, error count, window span, and the name of the span
   // with the smallest start (the de-facto root for display).
   const sql = `
@@ -255,7 +323,7 @@ export async function recentTraces(
              arg_min(name, start_ms) AS root_name,
              arg_min(service_name, start_ms) AS service_name
       FROM spans
-      WHERE start_ms >= $1${svcClause(opts.service, params)}
+      WHERE start_ms >= $1 AND start_ms <= $2${svcClause(opts.service, params)}
       GROUP BY trace_id
     )
     SELECT * FROM t ORDER BY start_ms DESC LIMIT ${Math.max(1, Math.round(opts.limit))}`;
@@ -271,21 +339,75 @@ export async function recentTraces(
   }));
 }
 
+/**
+ * Recent agent generation runs, newest first.
+ *
+ * `span_count` is the size of the whole trace, not of the generate subtree.
+ * That is the more useful number here: it says how much of the run we managed
+ * to instrument, and a run that shows 3 spans instead of 40 is itself the
+ * finding (a blind spot, not a fast run).
+ */
+export async function generations(
+  conn: DuckDBConnection,
+  opts: {
+    sinceMs: number;
+    untilMs?: number | undefined;
+    limit: number;
+    service?: string | undefined;
+  },
+): Promise<GenerationRun[]> {
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
+  const service = svcClause(opts.service, params);
+  const sql = `
+    WITH counts AS (
+      SELECT trace_id, count(*) AS span_count FROM spans GROUP BY trace_id
+    )
+    SELECT g.trace_id, g.span_id, g.name, g.start_ms, g.duration_ms, g.status_code,
+           g.walkthrough_id, g.pr_id, g.model,
+           g.input_tokens, g.output_tokens, g.tool_call_count,
+           g.attributes->>'trigger' AS trigger,
+           g.attributes->>'recapId' AS recap_id,
+           COALESCE(c.span_count, 1) AS span_count
+    FROM spans g
+    LEFT JOIN counts c ON c.trace_id = g.trace_id
+    WHERE g.start_ms >= $1 AND g.start_ms <= $2
+      AND g.name IN ('WalkthroughJobs.generate', 'ProjectRecapJobs.generate')${service}
+    ORDER BY g.start_ms DESC
+    LIMIT ${Math.max(1, Math.round(opts.limit))}`;
+  const rows = await read(conn, sql, params);
+  return rows.map((r) => ({
+    traceId: String(r.trace_id),
+    spanId: String(r.span_id),
+    kind: String(r.name).startsWith("ProjectRecap") ? ("recap" as const) : ("walkthrough" as const),
+    startMs: n(r.start_ms),
+    durationMs: n(r.duration_ms),
+    statusCode: n(r.status_code) as SpanStatusCode,
+    walkthroughId: s(r.walkthrough_id) ?? s(r.recap_id),
+    prId: s(r.pr_id),
+    model: s(r.model),
+    trigger: s(r.trigger),
+    inputTokens: numOrNull(r.input_tokens),
+    outputTokens: numOrNull(r.output_tokens),
+    toolCallCount: numOrNull(r.tool_call_count),
+    spanCount: n(r.span_count),
+  }));
+}
+
 export async function services(
   conn: DuckDBConnection,
-  opts: { sinceMs: number },
+  opts: { sinceMs: number; untilMs?: number | undefined },
 ): Promise<ServiceFacet[]> {
   const sql = `SELECT service_name, count(*) AS count FROM spans
-    WHERE start_ms >= $1 GROUP BY service_name ORDER BY count DESC`;
-  const rows = await read(conn, sql, [opts.sinceMs]);
+    WHERE start_ms >= $1 AND start_ms <= $2 GROUP BY service_name ORDER BY count DESC`;
+  const rows = await read(conn, sql, [opts.sinceMs, opts.untilMs ?? Date.now()]);
   return rows.map((r) => ({ serviceName: String(r.service_name), count: n(r.count) }));
 }
 
 export async function kpis(
   conn: DuckDBConnection,
-  opts: { sinceMs: number; service?: string | undefined },
+  opts: { sinceMs: number; untilMs?: number | undefined; service?: string | undefined },
 ): Promise<Kpis> {
-  const params: (string | number)[] = [opts.sinceMs];
+  const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
   const svc = svcClause(opts.service, params);
   const sql = `
     SELECT
@@ -310,7 +432,7 @@ export async function kpis(
         WHERE attributes->>'ttft_ms' IS NOT NULL
       ) AS ttft_median
     FROM spans
-    WHERE start_ms >= $1${svc}`;
+    WHERE start_ms >= $1 AND start_ms <= $2${svc}`;
   const [r] = await read(conn, sql, params);
   const spanCount = n(r?.span_count);
   const errorCount = n(r?.error_count);
@@ -323,6 +445,6 @@ export async function kpis(
     errorRate: spanCount > 0 ? errorCount / spanCount : null,
     spanCount,
     traceCount: n(r?.trace_count),
-    windowMs: Date.now() - opts.sinceMs,
+    windowMs: (opts.untilMs ?? Date.now()) - opts.sinceMs,
   };
 }

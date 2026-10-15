@@ -54,7 +54,7 @@ function resolveRepoFullName(db: Db, prId: string): string | null {
   return repo?.fullName ?? null;
 }
 
-export class RemoteWalkthroughCache extends Context.Tag("RemoteWalkthroughCache")<
+export class RemoteWalkthroughCache extends Context.Service<
   RemoteWalkthroughCache,
   {
     /**
@@ -91,7 +91,7 @@ export class RemoteWalkthroughCache extends Context.Tag("RemoteWalkthroughCache"
       walkthroughId: string,
     ) => Effect.Effect<void, CacheUnavailable | CacheSerialization>;
   }
->() {}
+>()("RemoteWalkthroughCache") {}
 
 export const RemoteWalkthroughCacheLive = Layer.effect(
   RemoteWalkthroughCache,
@@ -105,13 +105,13 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const isDownloadEnabled = (): Effect.Effect<boolean> =>
       settings.getSettings().pipe(
         Effect.map((s) => s.cache.enabled && s.cache.downloadsEnabled),
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catch(() => Effect.succeed(false)),
       );
 
     const isUploadEnabled = (): Effect.Effect<boolean> =>
       settings.getSettings().pipe(
         Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled),
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catch(() => Effect.succeed(false)),
       );
 
     return RemoteWalkthroughCache.of({
@@ -121,7 +121,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           if (!ok) return false;
           const key = cacheObjectKey(repoFullName, headSha);
           return yield* blob.exists(key).pipe(
-            Effect.catchAll((e) => {
+            Effect.catch((e) => {
               debug("remote-cache", `probe failed key=${key}: ${e.message}`);
               return Effect.succeed(false);
             }),
@@ -133,15 +133,13 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           const ok = yield* isDownloadEnabled();
           if (!ok) return Option.none<WalkthroughSnapshotV2>();
 
-          const live = yield* settings
-            .getSettings()
-            .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          const live = yield* settings.getSettings().pipe(Effect.catch(() => Effect.succeed(null)));
           const signingMode = live?.cache.signing.mode ?? "strict";
           const trustedHosts = new Set(live?.cache.signing.trustedSignerHosts ?? []);
 
           const key = cacheObjectKey(repoFullName, headSha);
           const record = yield* blob.get(key).pipe(
-            Effect.catchAll((e) => {
+            Effect.catch((e) => {
               if (e._tag === "BlobCorrupt") {
                 logError("remote-cache", `blob corrupt key=${key}: ${e.reason}`);
               } else {
@@ -213,7 +211,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 .verify(sigMsg, signature, signerHost, signerLogin)
                 .pipe(
                   Effect.map(() => "ok" as const),
-                  Effect.catchAll((e) => {
+                  Effect.catch((e) => {
                     const tag = (e as { _tag?: string })._tag ?? "unknown";
                     const msg = (e as { message?: string }).message ?? String(e);
                     return Effect.succeed(`fail:${tag}:${msg}` as const);
@@ -237,7 +235,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 // Signature valid — now check signer eligibility.
                 const eligible = yield* eligibility
                   .isSignerEligible(repoFullName, signerHost, signerLogin)
-                  .pipe(Effect.catchAll(() => Effect.succeed(false)));
+                  .pipe(Effect.catch(() => Effect.succeed(false)));
 
                 if (!eligible) {
                   if (signingMode === "strict") {
@@ -322,7 +320,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           // ── Eligibility gate ────────────────────────────────────────────
           const canPush = yield* eligibility
             .canPush(repoFullName)
-            .pipe(Effect.catchAll(() => Effect.succeed(false)));
+            .pipe(Effect.catch(() => Effect.succeed(false)));
           if (!canPush) {
             debug(
               "remote-cache",

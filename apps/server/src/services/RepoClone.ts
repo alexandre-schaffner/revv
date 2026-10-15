@@ -85,7 +85,7 @@ export type PruneWorktreeOutcome =
       readonly reason: "unpushed-commits" | "generating" | "not-found";
     };
 
-export class RepoCloneService extends Context.Tag("RepoCloneService")<
+export class RepoCloneService extends Context.Service<
   RepoCloneService,
   {
     /** Start a shallow clone for a repo. Updates DB status. Fire-and-forget via Effect.fork. */
@@ -228,7 +228,7 @@ export class RepoCloneService extends Context.Tag("RepoCloneService")<
       CloneError
     >;
   }
->() {}
+>()("RepoCloneService") {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 //
@@ -659,7 +659,7 @@ export const RepoCloneServiceLive = Layer.effect(
                       yield* Effect.tryPromise({
                         try: () => rm(cloneDir, { recursive: true, force: true }),
                         catch: () => undefined,
-                      }).pipe(Effect.orElse(() => Effect.void));
+                      }).pipe(Effect.catch(() => Effect.void));
                     }
 
                     // Record the failure in DB then broadcast error
@@ -914,7 +914,7 @@ export const RepoCloneServiceLive = Layer.effect(
             if (!terminal) continue;
 
             const outcome = yield* pruneWorktree({ repoId: repo.id, prNumber }).pipe(
-              Effect.catchAll(() =>
+              Effect.catch(() =>
                 Effect.succeed<PruneWorktreeOutcome>({ pruned: false, reason: "not-found" }),
               ),
             );
@@ -1425,9 +1425,9 @@ export const RepoCloneServiceLive = Layer.effect(
             };
 
             const token = tokenOption.value;
-            yield* Effect.forkDaemon(
+            yield* Effect.forkDetach(
               cloneRepo(repoRecord, token, repo.accountId).pipe(
-                Effect.catchAll((err) => {
+                Effect.catch((err) => {
                   debug("repo-clone", `clone failed for ${repo.fullName}: ${err.message}`);
                   return Effect.void;
                 }),

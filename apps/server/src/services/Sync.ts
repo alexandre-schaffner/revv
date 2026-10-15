@@ -38,7 +38,7 @@ export interface SyncResult {
   readonly summary: ThreadSummary;
 }
 
-export class SyncService extends Context.Tag("SyncService")<
+export class SyncService extends Context.Service<
   SyncService,
   {
     readonly pushThread: (
@@ -71,7 +71,7 @@ export class SyncService extends Context.Tag("SyncService")<
       userLogin: string | null,
     ) => Effect.Effect<ThreadSummary, SyncError, DbService>;
   }
->() {}
+>()("SyncService") {}
 
 /** Wrap any non-SyncError into a SyncError. Used as a uniform error funnel. */
 function toSyncError(threadId?: string): (e: unknown) => SyncError {
@@ -502,7 +502,7 @@ export const SyncServiceLive = Layer.effect(
         if (commentMentions.length > 0) {
           yield* prService
             .appendMentionedUsers(pr.id, commentMentions)
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
         }
 
         for (const ght of ghThreads) {

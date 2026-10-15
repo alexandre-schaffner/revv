@@ -124,7 +124,7 @@ export const DEFAULT_ARCHIVE_PAGE_LIMIT = 50;
 /** Upper bound on `listArchivedPrs` page size — defends against pathologically large pulls. */
 export const MAX_ARCHIVE_PAGE_LIMIT = 500;
 
-export class PullRequestService extends Context.Tag("PullRequestService")<
+export class PullRequestService extends Context.Service<
   PullRequestService,
   {
     readonly listPrs: (
@@ -236,7 +236,7 @@ export class PullRequestService extends Context.Tag("PullRequestService")<
       logins: string[],
     ) => Effect.Effect<void, ValidationError, DbService>;
   }
->() {}
+>()("PullRequestService") {}
 
 export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
   listPrs: (accountId, repoId) =>
@@ -315,7 +315,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             .get(),
         catch: (e) => new ValidationError({ message: String(e) }),
       }).pipe(
-        Effect.catchAll(() =>
+        Effect.catch(() =>
           Effect.succeed(
             null as {
               pr: typeof pullRequests.$inferSelect;
@@ -785,7 +785,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         catch: (e) => new ValidationError({ message: String(e) }),
       });
       return row?.ts ?? null;
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
 
   setCommentsSyncedAt: (prId, timestamp) =>
     Effect.gen(function* () {
@@ -799,7 +799,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             .run(),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   getThreadsFingerprint: (prId) =>
     Effect.gen(function* () {
@@ -814,7 +814,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         catch: (e) => new ValidationError({ message: String(e) }),
       });
       return row?.fp ?? null;
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
 
   setThreadsFingerprint: (prId, fingerprint) =>
     Effect.gen(function* () {
@@ -828,7 +828,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             .run(),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   getSyncWatermark: (prId) =>
     Effect.gen(function* () {
@@ -850,7 +850,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         threadsFingerprint: row?.threadsFingerprint ?? null,
       };
     }).pipe(
-      Effect.catchAll(() =>
+      Effect.catch(() =>
         Effect.succeed({
           commentsSyncedAt: null,
           threadsFingerprint: null,

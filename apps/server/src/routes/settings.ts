@@ -162,7 +162,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
             signatureNamespace: signed.signatureNamespace,
           };
         }).pipe(
-          Effect.catchAll((e) =>
+          Effect.catch((e) =>
             Effect.succeed({
               ok: false as const,
               error: (e as { message?: string }).message ?? String(e),

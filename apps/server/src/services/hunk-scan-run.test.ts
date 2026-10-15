@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { HunkScanEventMessage } from "@revv/shared";
-import { Deferred, Effect, Fiber, Layer, TestClock, TestContext } from "effect";
+import { Deferred, Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import type { FileLike } from "../ai/jev/state";
 import { createDb, type Db } from "../db/index";
 import { JevUnavailable } from "../domain/errors";
@@ -444,10 +445,10 @@ describe("HunkScanService", () => {
     const rows = await Effect.runPromise(
       Effect.gen(function* () {
         const hunkScan = yield* HunkScanService;
-        const joined = yield* Effect.fork(hunkScan.run(input));
+        const joined = yield* Effect.forkChild(hunkScan.run(input));
         yield* TestClock.adjust(HUNK_SCAN_JOIN_BUDGET_MS);
         return yield* Fiber.join(joined);
-      }).pipe(Effect.provide(service), Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(service), Effect.provide(TestClock.layer())),
     );
     // Seeded, none answered yet: the agent gets no leads rather than waiting.
     expect(rows).toHaveLength(3);

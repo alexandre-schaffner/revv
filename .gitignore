@@ -44,4 +44,3 @@ apps/desktop/target/
 apps/collector/*.duckdb
 apps/collector/*.duckdb.wal
 apps/collector/*.collector.pid
-apps/collector/web/dist/

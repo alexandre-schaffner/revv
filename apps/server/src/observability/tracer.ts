@@ -10,11 +10,21 @@
 // receives every span that Effect.withSpan creates, plus any manual OTel
 // spans from non-Effect code (e.g. chat-opencode.ts).
 
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
+import * as OtelTracer from "@effect/opentelemetry/OtelTracer";
+import * as OtelResource from "@effect/opentelemetry/Resource";
+import { type Attributes, SpanStatusCode, trace } from "@opentelemetry/api";
 import { ExportResultCode, hrTimeToMilliseconds } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
-import { BatchSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
+import {
+  BatchSpanProcessor,
+  ConsoleSpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { Effect, Layer } from "effect";
 import { serverEnv } from "../config";
 
 // ── Ring-buffer types ───────────────────────────────────────────────────────
@@ -49,6 +59,8 @@ export interface SpanSummary {
 
 // ── Ring buffer implementation ──────────────────────────────────────────────
 
+const manualTracer = trace.getTracer("revv-server");
+
 const RING_CAPACITY = 500;
 const ring: CompletedSpan[] = [];
 let ringIdx = 0;
@@ -63,8 +75,19 @@ function push(span: CompletedSpan): void {
   }
 }
 
-/** Push one manually-constructed span into the ring. Used by non-Effect
- *  instrumentation (e.g. Elysia HTTP hooks) that can't use Effect.withSpan. */
+/** Keep only what OTel accepts as an attribute value; drop the rest. */
+function toOtelAttributes(attrs: Readonly<Record<string, unknown>>): Attributes {
+  const out: Attributes = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/** Record a span through OTel; the exporter writes it to the debug ring once.
+ * `startMs` uses performance.now(), shifted to epoch time for every exporter. */
 export function recordSpan(
   name: string,
   startMs: number,
@@ -72,17 +95,16 @@ export function recordSpan(
   attrs: Readonly<Record<string, unknown>>,
   error?: { name: string; message: string } | null,
 ): void {
-  push({
-    id: nextSpanId++,
-    name,
-    traceId: "manual",
-    spanId: `manual-${nextSpanId}`,
-    parentSpanId: null,
-    startMs,
-    durationMs,
-    attrs,
-    error: error ?? null,
+  const startEpochMs = performance.timeOrigin + startMs;
+  const span = manualTracer.startSpan(name, {
+    startTime: startEpochMs,
+    attributes: toOtelAttributes(attrs),
   });
+  if (error) {
+    span.recordException({ name: error.name, message: error.message });
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+  }
+  span.end(startEpochMs + durationMs);
 }
 
 /** Read the ring in chronological order. Snapshot — safe to iterate. */
@@ -197,7 +219,15 @@ class RevSpanExporter implements SpanExporter {
 
 // ── Effect TracingLive layer ────────────────────────────────────────────────
 
-const processors = [new BatchSpanProcessor(new RevSpanExporter())];
+const SERVICE_NAME = "revv-server";
+
+// The ring buffer is an in-memory array write, so batching it buys nothing and
+// costs visibility: batched, a span takes up to the processor's delay to appear
+// in the in-app debug panel, and a flush has to be forced before any read.
+// Simple = synchronous = the ring always reflects reality.
+const processors: (SimpleSpanProcessor | BatchSpanProcessor)[] = [
+  new SimpleSpanProcessor(new RevSpanExporter()),
+];
 
 if (serverEnv.revDebug) {
   processors.push(new BatchSpanProcessor(new ConsoleSpanExporter()));
@@ -209,7 +239,76 @@ if (serverEnv.otlpEndpoint) {
   );
 }
 
-export const TracingLive = NodeSdk.layer(() => ({
-  resource: { serviceName: "revv-server" },
-  spanProcessor: processors,
-}));
+/**
+ * We build the provider ourselves instead of letting `NodeSdk.layer` do it,
+ * for one reason: `NodeSdk.layer` hands its provider to Effect through the
+ * Effect context and never registers it on the OpenTelemetry global API. Under
+ * that setup `trace.getTracer(...)` returns a *no-op* tracer — verified: the
+ * span it hands back reports `isRecording() === false` and a zeroed span
+ * context, and nothing reaches an exporter.
+ *
+ * That silently discards every span created outside an Effect fiber, which is
+ * most of the interesting instrumentation: the MCP tool handlers (separate
+ * inbound HTTP requests), the ACP session-update listeners (plain callbacks on
+ * the connection read loop), the Elysia HTTP hook, and the chat turn's token
+ * stream. Registering the provider globally makes one provider serve both, so
+ * `Effect.withSpan` and `trace.getTracer` land in the same trace.
+ *
+ * `setGlobalTracerProvider` rather than `provider.register()`: we only need the
+ * tracer to resolve. `register()` would additionally install a global context
+ * manager and propagator, and nothing here relies on ambient context — every
+ * out-of-band span passes its parent explicitly (see span-graft.ts).
+ */
+const provider = new NodeTracerProvider({
+  resource: resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: SERVICE_NAME,
+    "deployment.environment.name": serverEnv.channel,
+  }),
+  spanProcessors: processors,
+});
+trace.setGlobalTracerProvider(provider);
+
+/**
+ * Flush when the layer's scope closes. Spans sit in a `BatchSpanProcessor` for
+ * up to its delay, so without this the tail of a run — including the terminal
+ * spans that say how it ended — is lost exactly when you most want it.
+ *
+ * Deliberately flush-only, no `provider.shutdown()`. The provider is a
+ * module-level singleton registered on the global OTel API, so shutting it down
+ * on scope close would permanently disable tracing for the whole process the
+ * first time any scope holding this layer closes — fine for the one runtime the
+ * server disposes at exit, silently fatal for a second build (tests, scripts,
+ * anything that provides the layer per-run). Flushing is all we need: at process
+ * exit the process is going away regardless.
+ *
+ * The deadline is enforced on the PROMISE, not with `Effect.timeoutOption`,
+ * because `Effect.promise` is uninterruptible — a timeout wrapper around it
+ * still waits for the underlying promise to settle. That matters here: the
+ * common case is an OTLP endpoint configured but not running (the collector is
+ * dev-only, and `.env.example` ships an endpoint), and `forceFlush` then sits
+ * through the exporter's whole connect-and-retry schedule. Wrapped in an Effect
+ * timeout that stall lands squarely on `AppRuntime.dispose()`; raced at the
+ * promise level it cannot.
+ */
+const FLUSH_DEADLINE_MS = 1_000;
+
+function flushWithDeadline(): Promise<void> {
+  const flushed = provider.forceFlush().catch(() => {
+    /* a dead exporter must not surface as an unhandled rejection */
+  });
+  return Promise.race([
+    flushed,
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, FLUSH_DEADLINE_MS).unref?.();
+    }),
+  ]);
+}
+
+const FlushSpansOnClose = Layer.effectDiscard(
+  Effect.addFinalizer(() => Effect.promise(flushWithDeadline).pipe(Effect.ignore)),
+);
+
+export const TracingLive = OtelTracer.layerGlobal.pipe(
+  Layer.provide(OtelResource.layer({ serviceName: SERVICE_NAME })),
+  Layer.merge(FlushSpansOnClose),
+);

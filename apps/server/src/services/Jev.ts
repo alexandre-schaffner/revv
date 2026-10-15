@@ -18,7 +18,8 @@ import {
   RateLimitError,
   TypeSafeClient,
 } from "@typesafe-ai/sdk";
-import { Context, Duration, Effect, Layer, RateLimiter } from "effect";
+import { Context, Duration, Effect, Layer } from "effect";
+import { RateLimiter } from "effect/persistence";
 import { resolveJevApiKey } from "../ai/jev/api-key";
 import { JevUnavailable } from "../domain/errors";
 import { debug } from "../logger";
@@ -61,7 +62,7 @@ export interface JevRequest<Q extends Questions> {
   readonly timeoutMs: number;
 }
 
-export class JevService extends Context.Tag("JevService")<
+export class JevService extends Context.Service<
   JevService,
   {
     /**
@@ -91,7 +92,7 @@ export class JevService extends Context.Tag("JevService")<
       JevUnavailable
     >;
   }
->() {}
+>()("JevService") {}
 
 /**
  * The SDK's default retry set minus 429. Waiting out a `Retry-After` (up to
@@ -126,14 +127,18 @@ function classify(cause: unknown): JevUnavailable {
 }
 
 export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | SecretStore> =
-  Layer.scoped(
+  Layer.effect(
     JevService,
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
       const store = yield* SecretStore;
-      const paced = yield* RateLimiter.make({
+      const withLimiter = yield* RateLimiter.makeWithRateLimiter;
+      const paced = withLimiter({
+        key: "jev",
+        onExceeded: "delay",
+        algorithm: "token-bucket",
         limit: JEV_REQUESTS_PER_SECOND,
-        interval: "1 seconds",
+        window: "1 seconds",
       });
 
       /** Cached on the key so a key change in Settings takes effect on the very next call. */
@@ -189,15 +194,21 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
                   ),
                 catch: classify,
               }).pipe(
-                Effect.timeoutFail({
+                Effect.timeoutOrElse({
                   duration: Duration.millis(req.timeoutMs),
-                  onTimeout: () =>
-                    new JevUnavailable({
-                      reason: "timeout",
-                      message: `Jev ${req.label} exceeded ${req.timeoutMs}ms`,
-                    }),
+                  orElse: () =>
+                    Effect.fail(
+                      new JevUnavailable({
+                        reason: "timeout",
+                        message: `Jev ${req.label} exceeded ${req.timeoutMs}ms`,
+                      }),
+                    ),
                 }),
                 Effect.timed,
+              ),
+            ).pipe(
+              Effect.mapError((error) =>
+                error instanceof JevUnavailable ? error : classify(error),
               ),
             );
 
@@ -239,14 +250,16 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
                 ),
               catch: classify,
             }).pipe(
-              Effect.timeoutFail({
+              Effect.timeoutOrElse({
                 duration: Duration.seconds(15),
-                onTimeout: () =>
-                  new JevUnavailable({ reason: "timeout", message: "Connection test timed out" }),
+                orElse: () =>
+                  Effect.fail(
+                    new JevUnavailable({ reason: "timeout", message: "Connection test timed out" }),
+                  ),
               }),
             );
             return { model: result.model, latencyMs: Date.now() - startedAt };
           }),
       };
     }),
-  );
+  ).pipe(Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))));

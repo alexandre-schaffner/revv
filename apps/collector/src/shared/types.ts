@@ -1,9 +1,8 @@
 // ── Shared contract types ────────────────────────────────────────────────────
 //
 // The single source of truth for the shapes that cross the collector → dashboard
-// boundary. Imported by both the Elysia service (src/**) and the dashboard SPA
-// (web/src/**). Kept local to apps/collector; nothing here belongs in
-// @revv/shared, which is for cross-app (server ↔ web ↔ desktop) contracts.
+// boundary. Served to Grafana and weekly analysis clients. Kept local to
+// apps/collector; @revv/shared is for server ↔ web ↔ desktop contracts.
 
 /** OTel status: 0 = unset, 1 = ok, 2 = error. */
 export type SpanStatusCode = 0 | 1 | 2;
@@ -88,6 +87,33 @@ export interface TraceSummary {
   readonly errorCount: number;
 }
 
+/**
+ * One agent generation run — the unit the generation timeline analyses.
+ *
+ * Sourced from the `*Jobs.generate` spans, which by construction wrap the
+ * forked job body and therefore measure real end-to-end generation time (the
+ * sibling `*Jobs.job` span forks and returns in ~0 ms).
+ */
+export interface GenerationRun {
+  readonly traceId: string;
+  /** The generate span itself — the subtree root the timeline analyses. */
+  readonly spanId: string;
+  readonly kind: "walkthrough" | "recap";
+  readonly startMs: number;
+  readonly durationMs: number;
+  readonly statusCode: SpanStatusCode;
+  readonly walkthroughId: string | null;
+  readonly prId: string | null;
+  readonly model: string | null;
+  /** `manual` / `regenerate` / … from the job's `trigger` attribute. */
+  readonly trigger: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly toolCallCount: number | null;
+  /** Spans in the whole trace — a rough "how much did we see" indicator. */
+  readonly spanCount: number;
+}
+
 /** A service that has reported spans in the window, with its span count. */
 export interface ServiceFacet {
   readonly serviceName: string;
@@ -98,15 +124,4 @@ export interface ServiceFacet {
 export interface CategoryFacet {
   readonly category: string;
   readonly count: number;
-}
-
-/** SSE envelope pushed on the /events stream. Signal only; reconnect re-reads. */
-export interface PerfUpdatedEvent {
-  readonly type: "perf:updated";
-  readonly data: {
-    /** Spans accepted in the batch that triggered this push. */
-    readonly ingested: number;
-    /** Wall-clock ms of the newest span in the batch. */
-    readonly latestMs: number;
-  };
 }

@@ -38,7 +38,7 @@ export interface TokenPair {
  * fall back to a persisted `0600` key file, matching the trust model the
  * better-auth signing secret already uses (`auth.ts`).
  */
-export class SecretStore extends Context.Tag("SecretStore")<
+export class SecretStore extends Context.Service<
   SecretStore,
   {
     readonly setTokens: (accountId: string, tokens: TokenPair) => Effect.Effect<void>;
@@ -49,7 +49,7 @@ export class SecretStore extends Context.Tag("SecretStore")<
     readonly getSecret: (key: string) => Effect.Effect<string | null>;
     readonly deleteSecret: (key: string) => Effect.Effect<void>;
   }
->() {}
+>()("SecretStore") {}
 
 /** Logical name of the TypeSafe System One API key in {@link SecretStore}. */
 export const JEV_API_KEY_SECRET = "jev-api-key";

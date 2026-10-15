@@ -77,14 +77,13 @@ export interface RecentEvent {
   readonly at: string;
 }
 
-export class InvalidationBus extends Context.Tag("InvalidationBus")<
-  InvalidationBus,
-  InvalidationBusService
->() {}
+export class InvalidationBus extends Context.Service<InvalidationBus, InvalidationBusService>()(
+  "InvalidationBus",
+) {}
 
 const HOUR_MS = 60 * 60 * 1000;
 
-export const InvalidationBusLive = Layer.scoped(
+export const InvalidationBusLive = Layer.effect(
   InvalidationBus,
   Effect.gen(function* () {
     const pubsub = yield* PubSub.unbounded<InvalidationEvent>();
@@ -101,7 +100,7 @@ export const InvalidationBusLive = Layer.scoped(
         while (recentBuf.length > 0 && now - Date.parse(recentBuf[0]!.at) > HOUR_MS) {
           recentBuf.shift();
         }
-        yield* pubsub.publish(event);
+        yield* PubSub.publish(pubsub, event);
       });
 
     const stream = () => Stream.fromPubSub(pubsub);

@@ -32,16 +32,16 @@ import type { WalkthroughJobs } from "./WalkthroughJobs";
 /** The services the poll phases use, captured once at layer construction. */
 export interface PollDeps {
   readonly db: Db;
-  readonly broadcaster: Context.Tag.Service<typeof Broadcaster>;
-  readonly github: Context.Tag.Service<typeof GitHubGateway>;
-  readonly prService: Context.Tag.Service<typeof PullRequestService>;
-  readonly remoteUserService: Context.Tag.Service<typeof RemoteUserService>;
-  readonly diffCache: Context.Tag.Service<typeof DiffCacheService>;
-  readonly repoService: Context.Tag.Service<typeof RepositoryService>;
-  readonly walkthroughJobs: Context.Tag.Service<typeof WalkthroughJobs>;
-  readonly walkthroughService: Context.Tag.Service<typeof WalkthroughService>;
-  readonly repoClone: Context.Tag.Service<typeof RepoCloneService>;
-  readonly tokenProvider: Context.Tag.Service<typeof TokenProvider>;
+  readonly broadcaster: Context.Service.Shape<typeof Broadcaster>;
+  readonly github: Context.Service.Shape<typeof GitHubGateway>;
+  readonly prService: Context.Service.Shape<typeof PullRequestService>;
+  readonly remoteUserService: Context.Service.Shape<typeof RemoteUserService>;
+  readonly diffCache: Context.Service.Shape<typeof DiffCacheService>;
+  readonly repoService: Context.Service.Shape<typeof RepositoryService>;
+  readonly walkthroughJobs: Context.Service.Shape<typeof WalkthroughJobs>;
+  readonly walkthroughService: Context.Service.Shape<typeof WalkthroughService>;
+  readonly repoClone: Context.Service.Shape<typeof RepoCloneService>;
+  readonly tokenProvider: Context.Service.Shape<typeof TokenProvider>;
 }
 
 /** Best-effort account-scoped broadcast; a failed emit never fails the cycle. */
@@ -366,7 +366,7 @@ export const openSyncCycle = (
             }
           });
         }),
-        Effect.catchAll(() => Effect.succeed(null)),
+        Effect.catch(() => Effect.succeed(null)),
       );
 
     return {

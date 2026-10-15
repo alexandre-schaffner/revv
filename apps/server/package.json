@@ -14,8 +14,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.1",
     "@coldtea/pr-lens-schema": "^0.6.0",
-    "@effect/opentelemetry": "^0.64.1",
-    "@effect/platform": "^0.97.2",
+    "@effect/opentelemetry": "4.0.3",
     "@elysiajs/cors": "^1.4.2",
     "@google-cloud/storage": "^8.2.0",
     "@napi-rs/keyring": "^2.1.0",
@@ -34,7 +33,7 @@
     "@typesafe-ai/sdk": "^0.6.0",
     "better-auth": "^1.7.6",
     "drizzle-orm": "^0.45.3",
-    "effect": "^3.22.2",
+    "effect": "4.0.3",
     "elysia": "^1.4.30",
     "zod": "^4.6.5",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0"

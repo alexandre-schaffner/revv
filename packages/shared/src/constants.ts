@@ -11,8 +11,8 @@ export const API_PORT = 45678;
 export const DEV_API_PORT = 45679;
 export const API_BASE_URL = `http://localhost:${API_PORT}`;
 
-// Dev-only telemetry collector (apps/collector): single port serves OTLP
-// ingest, the query API, the SSE stream, and the static dashboard SPA.
+// Local telemetry collector (apps/collector): single port serves OTLP
+// ingest and the archive query API used by the Grafana frontend.
 export const COLLECTOR_PORT = 45680;
 export const COLLECTOR_BASE_URL = `http://localhost:${COLLECTOR_PORT}`;
 

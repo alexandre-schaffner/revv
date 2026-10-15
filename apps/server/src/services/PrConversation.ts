@@ -64,7 +64,7 @@ const CODEOWNERS_TTL_MS = 10 * 60 * 1000;
 type ConversationError = GitHubError | PrContextError | DbError;
 type Deps = DbService | GitHubEtagCache;
 
-export class PrConversationService extends Context.Tag("PrConversationService")<
+export class PrConversationService extends Context.Service<
   PrConversationService,
   {
     /** The last cached conversation, or null. Never touches GitHub. */
@@ -126,7 +126,7 @@ export class PrConversationService extends Context.Tag("PrConversationService")<
       query: string,
     ) => Effect.Effect<ReviewerOptions, ConversationError, Deps>;
   }
->() {}
+>()("PrConversationService") {}
 
 function repoRef(ctx: PrContextBasic): Effect.Effect<RepoRef, GitHubNotFoundError> {
   const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
@@ -172,7 +172,7 @@ export const PrConversationServiceLive = Layer.effect(
         ([login, avatarUrl]) =>
           remoteUsers.upsert({ provider: "github", providerUserId: "", login, avatarUrl }),
         { concurrency: 4, discard: true },
-      ).pipe(Effect.forkDaemon, Effect.asVoid);
+      ).pipe(Effect.forkDetach, Effect.asVoid);
 
     const codeownersFor = (ctx: PrContextBasic, ref: RepoRef) =>
       cache.getOrFetch(
@@ -285,7 +285,7 @@ export const PrConversationServiceLive = Layer.effect(
         // must not read as the write failing, or the client rolls back a
         // change that landed and a retry duplicates it.
         const conversation = yield* fetchFresh(ctx, prId).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.sync(() => {
               logError("conversation", `re-read of ${prId} after a write failed`, err);
               return null;

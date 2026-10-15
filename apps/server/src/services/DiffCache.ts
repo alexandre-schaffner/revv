@@ -18,7 +18,7 @@ export interface CachedDiffFile {
   readonly fetchedAt: string;
 }
 
-export class DiffCacheService extends Context.Tag("DiffCacheService")<
+export class DiffCacheService extends Context.Service<
   DiffCacheService,
   {
     /** Returns cached files, or null on cache miss (no rows for this PR). */
@@ -52,7 +52,7 @@ export class DiffCacheService extends Context.Tag("DiffCacheService")<
     /** Return the set of PR IDs that have at least one cached diff row. */
     readonly getPrIdsWithCachedDiffs: () => Effect.Effect<string[], never, DbService>;
   }
->() {}
+>()("DiffCacheService") {}
 
 export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
   getCachedFiles: (prId) =>
@@ -272,7 +272,7 @@ export const getOrFetchDiffFiles = (
 
     const fetched = yield* github.prs.files(repoFullName, prExternalId, token).pipe(
       Effect.map((fileList) => ({ source: "github" as const, fileList })),
-      Effect.catchAll((err) => {
+      Effect.catch((err) => {
         if (shouldServeCachedFilesOnFetchError(cached, err)) {
           return Effect.succeed({ source: "cache" as const, files: cached });
         }

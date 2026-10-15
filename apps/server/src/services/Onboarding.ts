@@ -80,7 +80,7 @@ function augmentPathForInstall(binDirs: readonly string[]): void {
   }
 }
 
-export class OnboardingService extends Context.Tag("OnboardingService")<
+export class OnboardingService extends Context.Service<
   OnboardingService,
   {
     /**
@@ -108,7 +108,7 @@ export class OnboardingService extends Context.Tag("OnboardingService")<
       onEvent: (event: InstallEvent) => void,
     ) => Effect.Effect<JobSubscription>;
   }
->() {}
+>()("OnboardingService") {}
 
 export const OnboardingServiceLive = Layer.effect(
   OnboardingService,

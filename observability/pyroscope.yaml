@@ -1,0 +1,15 @@
+target: all
+server:
+  http_listen_port: 4040
+analytics:
+  reporting_enabled: false
+storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/blocks
+pyroscopedb:
+  data_path: /data/db
+limits:
+  max_query_length: 336h
+  retention_period: 14d
+  compactor_blocks_retention_period: 336h

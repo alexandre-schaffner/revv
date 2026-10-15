@@ -145,7 +145,7 @@ function asIntegrationError(
       : externalIntegrationError(code, message, cause);
 }
 
-export class ExternalIntegrations extends Context.Tag("ExternalIntegrations")<
+export class ExternalIntegrations extends Context.Service<
   ExternalIntegrations,
   {
     readonly status: (
@@ -168,7 +168,7 @@ export class ExternalIntegrations extends Context.Tag("ExternalIntegrations")<
       project: ExternalProjectIdentity,
     ) => Effect.Effect<ExternalResolvedContext, ExternalIntegrationError>;
   }
->() {}
+>()("ExternalIntegrations") {}
 
 export const ExternalIntegrationsLive = Layer.effect(
   ExternalIntegrations,

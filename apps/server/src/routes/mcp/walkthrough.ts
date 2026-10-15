@@ -183,6 +183,9 @@ export const mcpWalkthroughRoute = bindHttp({
   bundle: WALKTHROUGH_TOOL_BUNDLE,
   resolveContext,
   logInbound: true,
+  // File each content write inside the generation's trace — the agent calls us
+  // from its own subprocess, so without this every write is an orphan trace.
+  traceAnchorKey: (meta) => meta.walkthroughId,
   beforeToolCall: ({ toolName, ctx }) => {
     const phaseMeta = PHASE_TOOL_META[toolName];
     if (!phaseMeta) return;

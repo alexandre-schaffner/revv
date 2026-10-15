@@ -19,7 +19,7 @@
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
-import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
+import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
 import type {
   RecapSourcePrDiff,
@@ -32,6 +32,7 @@ import { recapPrDigests } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withTraceAnchor } from "../observability/span-graft";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -81,7 +82,7 @@ interface ActiveRecapJob {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly abortController: AbortController;
-  fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
+  fiber: Fiber.Fiber<unknown, unknown> | null;
   cancelledByUser: boolean;
   /** Set to true the moment the agent calls `complete_recap` and validation passes. */
   validatedComplete: boolean;
@@ -119,7 +120,7 @@ export type SubscribeResult =
 
 // ── Service tag ──────────────────────────────────────────────────────────────
 
-export class ProjectRecapJobs extends Context.Tag("ProjectRecapJobs")<
+export class ProjectRecapJobs extends Context.Service<
   ProjectRecapJobs,
   {
     /**
@@ -176,7 +177,7 @@ export class ProjectRecapJobs extends Context.Tag("ProjectRecapJobs")<
     /** Invalidate a session token early (job end / cancel). */
     readonly clearSessionToken: (token: string) => Effect.Effect<void>;
   }
->() {}
+>()("ProjectRecapJobs") {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -193,7 +194,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     const etagCache = yield* GitHubEtagCache;
 
     const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
-    const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_RECAP_JOBS);
+    const semaphore = yield* Semaphore.make(MAX_CONCURRENT_RECAP_JOBS);
     const startJobMutex = yield* makeStartJobMutex();
 
     // Per-job SSE subscriber subscribe/unsubscribe handling. Fan-out stays
@@ -227,7 +228,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         yield* broadcaster.broadcastToAccount(accountId, msg);
       }).pipe(
         Effect.timeout("5 seconds"),
-        Effect.catchAll(() => Effect.void),
+        Effect.catch(() => Effect.void),
       );
 
     /**
@@ -255,7 +256,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         yield* provideDb(recapService.setStatus(recap.id, status, options));
         // Reload completedAt so the broadcast payload is accurate.
         const fresh = yield* provideDb(recapService.getById(recap.id)).pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         );
         const data: {
           recapId: string;
@@ -324,7 +325,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     const resolveRepoToken = (repoId: string): Effect.Effect<string | null> =>
       prCtx.resolveRepoToken(repoId).pipe(
         Effect.provideService(DbService, { db }),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.sync(() => {
             debug(
               "recap-jobs",
@@ -413,7 +414,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const fetched = yield* provideGithubDeps(
           prCtx.prFiles(repoFullName, pr.externalId, token),
         ).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.sync(() => {
               debug(
                 "recap-jobs",
@@ -449,7 +450,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               fetchedAt: new Date().toISOString(),
             })),
           ),
-        ).pipe(Effect.catchAll(() => Effect.void));
+        ).pipe(Effect.catch(() => Effect.void));
 
         return buildFromFiles(
           fetched.map((f) => ({
@@ -499,7 +500,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const searched = yield* provideGithubDeps(
           prCtx.searchClosedPrs(repoFullName, periodStart, periodEnd, token),
         ).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.sync(() => {
               debug(
                 "recap-jobs",
@@ -536,7 +537,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           missing,
           (m) =>
             provideGithubDeps(prCtx.fetchPr(repoFullName, m.number, token)).pipe(
-              Effect.catchAll((err) =>
+              Effect.catch((err) =>
                 Effect.sync(() => {
                   debug(
                     "recap-jobs",
@@ -564,7 +565,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         if (upsertable.length === 0) return { addedCount: 0 };
 
         yield* provideDb(prService.upsertPrs(upsertable)).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.sync(() => {
               logError(
                 "recap-jobs",
@@ -587,19 +588,27 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Synchronous emitter wired into the job's subscriber set.
         // Same pattern as WalkthroughJobs: MCP tool handlers call this
         // synchronously so content events don't lag behind lifecycle events.
-        // Time-to-first-token: from the agent run starting to its first emitted
-        // event. `agentStartMs` is set just before runRecapAgent, so the earlier
+        // Time to the first nonempty streamed reasoning token. Synthetic phase
+        // and activity events do not establish that the model has responded.
+        // `agentStartMs` is set just before runRecapAgent, so the earlier
         // orchestrator "analyzing" phase emit doesn't count against it.
         let agentStartMs: number | null = null;
         let ttftMs: number | null = null;
         const emit = (event: RecapStreamEvent): void => {
-          if (agentStartMs !== null && ttftMs === null) ttftMs = Date.now() - agentStartMs;
+          if (
+            agentStartMs !== null &&
+            ttftMs === null &&
+            event.type === "thought" &&
+            event.data.text.length > 0
+          ) {
+            ttftMs = Date.now() - agentStartMs;
+          }
           fanOut(job, event);
         };
 
         // Repo metadata for the prompt.
         const repo = yield* provideDb(prCtx.getRepo(job.repoId)).pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         );
         if (!repo) {
           const msg = "Repository not found — cannot build source bundle";
@@ -622,7 +631,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // query we make.
         let windowed = yield* provideDb(
           prService.listArchivedPrsForWindow(job.repoId, job.periodStart, job.periodEnd),
-        ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+        ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
 
         // Backfill any PRs that closed in this window but haven't yet
         // landed in the local mirror (poll cycle hadn't run, repo was
@@ -643,7 +652,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           );
           windowed = yield* provideDb(
             prService.listArchivedPrsForWindow(job.repoId, job.periodStart, job.periodEnd),
-          ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+          ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
         }
 
         // PRs in flight for "who is working on what" context, reconstructed
@@ -652,7 +661,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // with only open PRs can still produce an "active work" recap.
         const openPrs = yield* provideDb(
           prService.listOpenPrsAsOfWindow(job.repoId, job.periodEnd),
-        ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+        ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
 
         if (windowed.length === 0 && openPrs.length === 0) {
           // A window with nothing in it means two different things depending
@@ -687,7 +696,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             `empty historical window for recap ${job.recapId} — completing without the agent`,
           );
           yield* provideDb(recapService.markEmptyWindow(job.recapId)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           );
           yield* setStatus(
             {
@@ -732,7 +741,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 cachedToken = yield* resolveRepoToken(job.repoId);
               }
               const diff = yield* loadDiffForPr(row.pr, repo.fullName, cachedToken).pipe(
-                Effect.catchAll(() => Effect.succeed(null)),
+                Effect.catch(() => Effect.succeed(null)),
               );
               const digest = buildDigestForRecapPr(row.pr, diff);
               yield* Effect.try({
@@ -762,7 +771,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 },
                 catch: (e) => new ValidationError({ message: String(e) }),
               }).pipe(
-                Effect.catchAll((err) =>
+                Effect.catch((err) =>
                   Effect.sync(() => {
                     logError(
                       "recap-jobs",
@@ -786,10 +795,10 @@ export const ProjectRecapJobsLive = Layer.effect(
         // Prior recaps for rolling context. Cheap query — at most a handful.
         const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
           recapService.getLatestForRepo(job.repoId, { limit: 5 }),
-        ).pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
+        ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
 
         const settings = yield* provideDb(settingsService.getSettings()).pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         );
 
         // Resolve the effective agent. Per-feature `recap.agent` setting
@@ -797,7 +806,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // and opencode for background recaps, or vice versa). Defaults to
         // `'auto'` which inherits the global `aiAgent`.
         const effectiveAgent = yield* provideDb(settingsService.resolveRecapAgent()).pipe(
-          Effect.catchAll((e) =>
+          Effect.catch((e) =>
             Effect.sync(() => {
               logError(
                 "recap-jobs",
@@ -863,7 +872,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           },
           catch: (e) => new ValidationError({ message: String(e) }),
         }).pipe(
-          Effect.catchAll((err) =>
+          Effect.catch((err) =>
             Effect.sync(() => {
               logError("recap-jobs", `runRecapAgent failed for ${job.recapId}:`, err);
               return null;
@@ -934,9 +943,11 @@ export const ProjectRecapJobsLive = Layer.effect(
           });
 
           const scopedBody = buildJobBody(job).pipe(
+            // See WalkthroughJobs.launchJob — same reason, same ordering rule.
+            withTraceAnchor(job.recapId),
             Effect.annotateLogs({ recapId: job.recapId, repoId: job.repoId }),
             semaphore.withPermits(1),
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 if (
                   analyzeJobFailure(cause, { cancelledByUser: job.cancelledByUser }) ===
@@ -951,7 +962,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 // may interrupt during DB read / bundle prep, before the
                 // agent's AbortController could catch — this catch-all still
                 // flips the row.)
-                const interruptedOnly = Cause.isInterruptedOnly(cause);
+                const interruptedOnly = Cause.hasInterruptsOnly(cause);
                 const msg = interruptedOnly
                   ? "Cancelled by user"
                   : `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
@@ -983,8 +994,8 @@ export const ProjectRecapJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* Effect.forkDaemon(scopedBody);
-          job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
+          const fiber = yield* Effect.forkDetach(scopedBody);
+          job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );
 
@@ -1009,8 +1020,9 @@ export const ProjectRecapJobsLive = Layer.effect(
           // shutdown can hang, and Fiber.interrupt would block the HTTP
           // stop request indefinitely. Fire-and-forget; the safety net
           // below transitions the row immediately.
-          if (job.fiber) {
-            yield* Fiber.interruptFork(job.fiber);
+          const fiber = job.fiber;
+          if (fiber) {
+            yield* Effect.sync(() => fiber.interruptUnsafe());
           }
           yield* clearTokensForRecap(recapId);
         }
@@ -1031,7 +1043,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // is what guarantees the UI's SSE reducer flips the floating bar
         // out of the Stop state after the user clicks Stop.
         const row = yield* provideDb(recapService.getById(recapId)).pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         );
         if (row && row.status === "generating") {
           yield* setStatus(
@@ -1141,7 +1153,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // instead of creating a new one + superseding the old.
         const existing = yield* provideDb(
           recapService.findActiveForPeriod(params.repoId, params.period, params.periodStart),
-        ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+        ).pipe(Effect.catch(() => Effect.succeed(null)));
 
         if (existing) {
           // Cancel any in-flight fiber for this recap before resetting
@@ -1162,7 +1174,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           // get cleared, `generatedAt` advances. We re-read the row so
           // the payload reflects the post-reset state.
           const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(
-            Effect.catchAll(() => Effect.succeed(null)),
+            Effect.catch(() => Effect.succeed(null)),
           );
           if (refreshed) {
             yield* broadcastRecapToRepoAccount(params.repoId, {
@@ -1235,7 +1247,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               periodEnd: row.periodEnd,
               trigger: "resume",
             }).pipe(
-              Effect.catchAllCause((cause) =>
+              Effect.catchCause((cause) =>
                 Effect.sync(() => {
                   logError(
                     "recap-jobs",

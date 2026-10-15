@@ -36,7 +36,7 @@ ceremony with no payoff.
 <a id="effect-service-naming"></a>
 ### 2.1 Service tag + Layer naming
 
-**Rule.** A service named `XService` is declared as `class XService extends Context.Tag(...)`
+**Rule.** A service named `XService` is declared as `class XService extends Context.Service<Self, Shape>()("ServiceName")`
 and its concrete implementation is exported as `XServiceLive: Layer<...>`. No exceptions, no
 default exports, no `Live`-less Layers.
 
@@ -45,7 +45,7 @@ mechanical naming rule eliminates the entire class. The `Live` suffix mirrors Ef
 convention.
 
 **Canonical example.** `apps/server/src/services/Cache.ts:51` declares
-`class CacheService extends Context.Tag("CacheService")<...>` and exports its implementation as
+`class CacheService extends Context.Service<CacheService, Shape>()("CacheService")` and exports its implementation as
 `CacheServiceLive = Layer.sync(CacheService, () => {...})` at `apps/server/src/services/Cache.ts:72`.
 `Broadcaster` / `BroadcasterLive` at `apps/server/src/services/Broadcaster.ts:50` and `:70`
 follows the same shape.
@@ -59,9 +59,9 @@ tell from the import whether they're getting the tag or the Layer).
 ### 2.2 Stay inside Effect
 
 **Rule.** Inside a function that returns `Effect.Effect<...>`, do not call `Effect.runPromise`,
-`Effect.runSync`, or `Runtime.runPromise`. Schedule callbacks with `Effect.fork`, time-delays
+`Effect.runSync`, or `Effect.runPromiseWith`. Schedule callbacks with `Effect.forkChild`, time-delays
 with `Effect.sleep` + `Effect.schedule`, and bridge external callback-based APIs with
-`Effect.async` / `Effect.tryPromise`.
+`Effect.callback` / `Effect.tryPromise`.
 
 **Why.** `runPromise` synchronously starts a fresh fiber that the surrounding Effect cannot
 observe, supervise, interrupt, or join. Errors in the inner Effect bypass the outer error
@@ -77,7 +77,7 @@ loop entirely inside `Effect.gen`, using `Effect.forEach`, `Effect.tapError`, an
 timer with `Effect.sync(() => { void Effect.runPromise(...) })` and inside the `setTimeout`
 callback recursively calls `void Effect.runPromise(stopIfIdle())`. The same file uses the
 pattern again at `:525` for a `proc.exited.then(...)` handler. These should be replaced with
-`Effect.fork(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked `proc.exited`
+`Effect.forkChild(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked `proc.exited`
 observer that yields back into the supervisor's fiber.
 
 **Allowed boundary.** Bridging Effect into a plain-JS callback contract (e.g. SDK options that
