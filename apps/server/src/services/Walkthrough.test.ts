@@ -363,7 +363,7 @@ describe("regenerate after a stopped generation", () => {
 
 const runWalkthrough = <A, E>(
   db: Db,
-  f: (service: Context.Tag.Service<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
+  f: (service: Context.Service.Shape<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {

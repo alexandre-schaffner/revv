@@ -133,7 +133,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
             // Auto-transition based on author role.
             const transitioned = yield* reviewService
               .transitionStatus(thread.id, ctx.body.message.authorRole)
-              .pipe(Effect.catchAll(() => Effect.succeed(null)));
+              .pipe(Effect.catch(() => Effect.succeed(null)));
 
             yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:created",

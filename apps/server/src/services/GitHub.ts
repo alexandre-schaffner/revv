@@ -6,7 +6,7 @@ import type {
   Repository,
   Team,
 } from "@revv/shared";
-import { Context, Effect, Either, Layer } from "effect";
+import { Context, Effect, Layer, Result } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { logError } from "../logger";
@@ -1042,11 +1042,11 @@ ${fields}
         );
       });
 
-      const graphqlResult = yield* Effect.either(fromGraphql);
-      if (Either.isRight(graphqlResult)) {
-        const graphqlTeams = graphqlResult.right;
+      const graphqlResult = yield* Effect.result(fromGraphql);
+      if (Result.isSuccess(graphqlResult)) {
+        const graphqlTeams = graphqlResult.success;
         if (graphqlTeams.some((team) => team.memberLogins.length > 0)) return graphqlTeams;
-        return yield* fromRest.pipe(Effect.catchAll(() => Effect.succeed(graphqlTeams)));
+        return yield* fromRest.pipe(Effect.catch(() => Effect.succeed(graphqlTeams)));
       }
 
       return yield* fromRest;
@@ -1775,10 +1775,9 @@ export interface GitHubGatewayService {
   };
 }
 
-export class GitHubGateway extends Context.Tag("GitHubGateway")<
-  GitHubGateway,
-  GitHubGatewayService
->() {}
+export class GitHubGateway extends Context.Service<GitHubGateway, GitHubGatewayService>()(
+  "GitHubGateway",
+) {}
 
 export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   prs: {

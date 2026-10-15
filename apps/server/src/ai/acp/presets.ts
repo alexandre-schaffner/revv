@@ -23,6 +23,7 @@ import {
 } from "@revv/shared";
 import { serverEnv } from "../../config";
 import { detectClaudeSubscriptionAuth, isCommandOnPath } from "../providers/cli-agent";
+import { agentTelemetryEnv } from "./telemetry";
 
 export interface AcpLaunch {
   readonly command: string;
@@ -253,6 +254,7 @@ function buildAcpProcessEnv(
 
   return {
     ...env,
+    ...agentTelemetryEnv(id, env),
     ...(launchEnv ?? {}),
     PATH: path,
   };

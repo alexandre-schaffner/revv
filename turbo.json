@@ -10,7 +10,8 @@
         "REVV_DB_PATH",
         "REVV_CLONE_DIR",
         "VITE_REVV_CHANNEL",
-        "VITE_API_PORT"
+        "VITE_API_PORT",
+        "REVV_PYROSCOPE_ENDPOINT"
       ]
     },
     "build": {

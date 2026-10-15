@@ -88,7 +88,7 @@ export interface ChatParams {
 
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class AiService extends Context.Tag("AiService")<
+export class AiService extends Context.Service<
   AiService,
   {
     readonly streamWalkthrough: (
@@ -201,7 +201,7 @@ export class AiService extends Context.Tag("AiService")<
     }) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
     readonly isConfigured: () => Effect.Effect<boolean>;
   }
->() {}
+>()("AiService") {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -236,7 +236,7 @@ export const AiServiceLive = Layer.effect(
       Effect.gen(function* () {
         const agent = yield* getAgent();
         return isAcpAgentAvailable(agent);
-      }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+      }).pipe(Effect.catch(() => Effect.succeed(false)));
 
     return {
       streamWalkthrough: (params) =>
@@ -246,6 +246,10 @@ export const AiServiceLive = Layer.effect(
           Effect.gen(function* () {
             const settings = yield* getSettings();
             const agent = yield* getAgent();
+
+            // KPI telemetry: label the span with the resolved provider + model.
+            yield* Effect.annotateCurrentSpan("provider", agent);
+            if (settings.aiModel) yield* Effect.annotateCurrentSpan("model", settings.aiModel);
 
             // Walkthrough generation runs exclusively on the ACP transport now.
             // The shared MCP tool handlers behind `/mcp/walkthrough` are the same

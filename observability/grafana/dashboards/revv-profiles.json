@@ -1,0 +1,79 @@
+{
+  "links": [
+    {
+      "title": "Sessions",
+      "type": "link",
+      "url": "/d/revv-overview?${__url_time_range}"
+    },
+    {
+      "title": "Profiles",
+      "type": "link",
+      "url": "/d/revv-profiles?${__url_time_range}"
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": ["revv", "observability"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "uid": "revv-profiles",
+  "title": "Revv CPU profiles",
+  "description": "Bun JavaScript stacks sampled at 100 Hz. Time-window association with traces, not per-span CPU attribution. Agent subprocesses, native Rust and WebView are separate processes.",
+  "templating": {
+    "list": [
+      {
+        "name": "channel",
+        "label": "Channel",
+        "type": "custom",
+        "query": "dev,installed",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 901,
+      "title": "Sampled JavaScript stacks",
+      "type": "flamegraph",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 22
+      },
+      "datasource": {
+        "type": "grafana-pyroscope-datasource",
+        "uid": "revv-profiles"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-pyroscope-datasource",
+            "uid": "revv-profiles"
+          },
+          "queryType": "profile",
+          "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+          "labelSelector": "{service_name=\"revv-server\",channel=~\"${channel:regex}\",runtime=\"bun\"}",
+          "groupBy": [],
+          "maxNodes": 1000
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

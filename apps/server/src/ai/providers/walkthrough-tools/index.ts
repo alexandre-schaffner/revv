@@ -27,6 +27,7 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { withContentWriteMetrics } from "../../../observability/walkthrough-metrics";
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   blockIdFor,
@@ -552,56 +553,56 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
     description:
       "Phase A. Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
     inputSchema: setOverviewSchema,
-    handler: setOverviewHandler,
+    handler: withContentWriteMetrics(setOverviewHandler),
   },
   {
     name: "add_semantic_step",
     description:
       "Phase B. Open a chapter AND write its first atomic block in one atomic transaction. Provide a monotonic zero-based semantic_step_index, a short title, an optional summary, and a REQUIRED initial_block (exactly one of markdown/code/diff — same shape as add_diff_step). The first call advances the pipeline from Phase A to Phase B. Subsequent blocks in the same chapter use add_diff_step with step_index starting at 1. Idempotent upsert on (walkthroughId, semantic_step_index) for both the chapter row and its step_index=0 block — retries replace, never duplicate.",
     inputSchema: addSemanticStepSchema,
-    handler: addSemanticStepHandler,
+    handler: withContentWriteMetrics(addSemanticStepHandler),
   },
   {
     name: "add_diff_step",
     description:
       "Phase B. Append one atomic block (markdown, code excerpt, or diff hunk — exactly one of the three) to an already-opened chapter. Required: semantic_step_index (the parent chapter, opened by add_semantic_step), step_index (monotonic zero-based within the chapter — typically 1, 2, 3, ... since step_index=0 is already written by add_semantic_step's initial_block). Retries with the same composite key are idempotent upserts. Each chapter typically holds 2–5 atomic blocks total (1 from add_semantic_step + 1–4 from add_diff_step).",
     inputSchema: addDiffStepSchema,
-    handler: addDiffStepHandler,
+    handler: withContentWriteMetrics(addDiffStepHandler),
   },
   {
     name: "flag_issue",
     description:
       "Phase B. Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_refs = [{ semantic_step_index, step_index }, ...].",
     inputSchema: flagIssueSchema,
-    handler: flagIssueHandler,
+    handler: withContentWriteMetrics(flagIssueHandler),
   },
   {
     name: "add_issue_comment",
     description:
       "Phase B. Attach a line-anchored comment to a previously flagged issue — appears inline in the diff view like a human review comment. Call AFTER flag_issue, passing its returned issue id. You may call this multiple times per issue to annotate multiple lines (one tool call per anchor). Idempotent per (issue_id, file_path, start_line, end_line, diff_side): a retry replaces the comment body, never duplicates the thread.",
     inputSchema: addIssueCommentSchema,
-    handler: addIssueCommentHandler,
+    handler: withContentWriteMetrics(addIssueCommentHandler),
   },
   {
     name: "resolve_lead",
     description:
       "Phase B onward. Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
     inputSchema: resolveLeadSchema,
-    handler: resolveLeadHandler,
+    handler: withContentWriteMetrics(resolveLeadHandler),
   },
   {
     name: "set_sentiment",
     description:
       "Phase C. Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
     inputSchema: setSentimentSchema,
-    handler: setSentimentHandler,
+    handler: withContentWriteMetrics(setSentimentHandler),
   },
   {
     name: "rate_axis",
     description:
       "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description), sending all nine as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
     inputSchema: rateAxisSchema,
-    handler: rateAxisHandler,
+    handler: withContentWriteMetrics(rateAxisHandler),
   },
   {
     name: "complete_walkthrough",

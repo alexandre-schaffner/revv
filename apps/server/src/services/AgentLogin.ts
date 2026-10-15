@@ -69,7 +69,7 @@ export function buildLoginEnv(
   };
 }
 
-export class AgentLoginService extends Context.Tag("AgentLoginService")<
+export class AgentLoginService extends Context.Service<
   AgentLoginService,
   {
     /**
@@ -98,7 +98,7 @@ export class AgentLoginService extends Context.Tag("AgentLoginService")<
       onEvent: (event: LoginEvent) => void,
     ) => Effect.Effect<JobSubscription>;
   }
->() {}
+>()("AgentLoginService") {}
 
 export const AgentLoginServiceLive = Layer.effect(
   AgentLoginService,

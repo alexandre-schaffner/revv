@@ -80,15 +80,15 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             );
 
             // Trigger a sync in the background
-            yield* Effect.forkDaemon(scheduler.syncNow());
+            yield* Effect.forkDetach(scheduler.syncNow());
 
             if (isLink) {
               yield* cloneSvc
                 .linkExisting(saved, body.clonePath, accountId)
-                .pipe(Effect.catchAll(() => Effect.void));
+                .pipe(Effect.catch(() => Effect.void));
             } else {
               // Trigger shallow clone in background — fire and forget
-              yield* Effect.forkDaemon(
+              yield* Effect.forkDetach(
                 cloneSvc
                   .cloneRepo(
                     saved,
@@ -97,7 +97,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
                     body.basePath === undefined ? undefined : { basePath: body.basePath },
                   )
                   .pipe(
-                    Effect.catchAll(() => Effect.void), // errors tracked in DB, don't fail the add
+                    Effect.catch(() => Effect.void), // errors tracked in DB, don't fail the add
                   ),
               );
             }
@@ -165,8 +165,8 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const repo = yield* repoSvc.getRepoById(ctx.params.id, accountId);
 
           if (repo.managed) {
-            yield* Effect.forkDaemon(
-              cloneSvc.cloneRepo(repo, token, accountId).pipe(Effect.catchAll(() => Effect.void)),
+            yield* Effect.forkDetach(
+              cloneSvc.cloneRepo(repo, token, accountId).pipe(Effect.catch(() => Effect.void)),
             );
           } else if (repo.clonePath) {
             // Linked repo: never route through `cloneRepo`. A missing path
@@ -175,7 +175,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             // user owns. Revalidate / re-link the existing checkout instead.
             yield* cloneSvc
               .linkExisting(repo, repo.clonePath, accountId)
-              .pipe(Effect.catchAll(() => Effect.void));
+              .pipe(Effect.catch(() => Effect.void));
           }
 
           return { success: true };
@@ -194,7 +194,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const { accountId } = ctx.account;
 
           // Clean up clone dir first (best effort)
-          yield* cloneSvc.deleteClone(ctx.params.id).pipe(Effect.catchAll(() => Effect.void));
+          yield* cloneSvc.deleteClone(ctx.params.id).pipe(Effect.catch(() => Effect.void));
 
           // Then delete DB record (scoped to account)
           yield* repoSvc.deleteRepo(ctx.params.id, accountId);

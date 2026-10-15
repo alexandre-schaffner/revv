@@ -33,7 +33,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
 
             // Push resolve/unresolve to GitHub if the thread has been synced.
             // Best-effort — don't fail the local update if GitHub push fails.
-            yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catchAll(() => Effect.void));
+            yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catch(() => Effect.void));
 
             return thread;
           }),
@@ -71,7 +71,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             type: "thread:updated",
             data: { threadId: ctx.params.id, status: thread.status },
           });
-          yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catchAll(() => Effect.void));
+          yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catch(() => Effect.void));
           return thread;
         }),
       );
@@ -246,7 +246,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             // Auto-transition thread status based on author role.
             const transitioned = yield* reviewService
               .transitionStatus(ctx.params.id, ctx.body.authorRole)
-              .pipe(Effect.catchAll(() => Effect.succeed(null)));
+              .pipe(Effect.catch(() => Effect.succeed(null)));
 
             yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:message",

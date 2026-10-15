@@ -5,7 +5,7 @@ import { DbService } from "./Db";
 
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class RemoteUserService extends Context.Tag("RemoteUserService")<
+export class RemoteUserService extends Context.Service<
   RemoteUserService,
   {
     /**
@@ -56,7 +56,7 @@ export class RemoteUserService extends Context.Tag("RemoteUserService")<
      */
     readonly fetchAsDataUrl: (url: string) => Effect.Effect<string>;
   }
->() {}
+>()("RemoteUserService") {}
 
 const AVATAR_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 

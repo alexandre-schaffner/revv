@@ -126,7 +126,7 @@ export const announceSyncChanges = (
       if (!pr || pr.headSha === null) continue;
       const cached = yield* withDb(deps.db, deps.walkthroughService.getCached(pr.id, pr.headSha));
       if (cached !== null) continue;
-      yield* Effect.forkDaemon(
+      yield* Effect.forkDetach(
         deps.walkthroughJobs
           .startJob({
             prId: pr.id,
@@ -134,7 +134,7 @@ export const announceSyncChanges = (
             trigger: "review_requested",
           })
           .pipe(
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() => {
                 logError(
                   "PollScheduler",

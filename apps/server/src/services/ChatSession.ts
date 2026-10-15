@@ -194,7 +194,7 @@ export type ChatTimelineEntry =
   | (ChatSubagentInvocationRow & { readonly entryKind: "subagent" })
   | (ChatQuestionRow & { readonly entryKind: "question" });
 
-export class ChatSessionService extends Context.Tag("ChatSessionService")<
+export class ChatSessionService extends Context.Service<
   ChatSessionService,
   {
     readonly find: (
@@ -461,7 +461,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      */
     readonly supersedePendingQuestionsOnBoot: () => Effect.Effect<number>;
   }
->() {}
+>()("ChatSessionService") {}
 
 const nowIso = (): string => new Date().toISOString();
 

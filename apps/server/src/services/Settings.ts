@@ -370,7 +370,7 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
-export class SettingsService extends Context.Tag("SettingsService")<
+export class SettingsService extends Context.Service<
   SettingsService,
   {
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
@@ -387,7 +387,7 @@ export class SettingsService extends Context.Tag("SettingsService")<
      */
     resolveChatAgentId: () => Effect.Effect<AcpAgentId>;
   }
->() {}
+>()("SettingsService") {}
 
 export const SettingsServiceLive = Layer.effect(
   SettingsService,
@@ -406,11 +406,13 @@ export const SettingsServiceLive = Layer.effect(
 
     return {
       getSettings: () =>
-        settingsRef.get.pipe(Effect.mapError((e) => new ValidationError({ message: String(e) }))),
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+        ),
 
       updateSettings: (partial) =>
         Effect.gen(function* () {
-          const current = yield* settingsRef.get;
+          const current = yield* SubscriptionRef.get(settingsRef);
           const merged = mergeSettingsUpdate(current, partial);
           const next: UserSettings = {
             ...merged,
@@ -439,16 +441,16 @@ export const SettingsServiceLive = Layer.effect(
           return next;
         }),
 
-      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)),
+      settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
 
       resolveAgent: () =>
-        settingsRef.get.pipe(
+        SubscriptionRef.get(settingsRef).pipe(
           Effect.mapError((e) => new ValidationError({ message: String(e) })),
           Effect.map(resolveAgentFromSettings),
         ),
 
       resolveChatAgentId: () =>
-        settingsRef.get.pipe(
+        SubscriptionRef.get(settingsRef).pipe(
           Effect.map(resolveAgentFromSettings),
           Effect.tapError((e) =>
             Effect.sync(() => {
@@ -459,7 +461,7 @@ export const SettingsServiceLive = Layer.effect(
         ),
 
       resolveRecapAgent: () =>
-        settingsRef.get.pipe(
+        SubscriptionRef.get(settingsRef).pipe(
           Effect.mapError((e) => new ValidationError({ message: String(e) })),
           Effect.map(resolveRecapAgentFromSettings),
         ),

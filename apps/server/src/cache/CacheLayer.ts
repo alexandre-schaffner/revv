@@ -1,4 +1,4 @@
-import { Effect, Runtime } from "effect";
+import { Effect } from "effect";
 import type { DbService } from "../services/Db";
 import type { Keyer } from "./Key";
 import type { Policy } from "./policies/index";
@@ -71,7 +71,7 @@ export interface MakeCacheLayerOptions<K, V> {
   readonly policy: Policy;
   readonly keyer: Keyer<K>;
   /** Stats service instance to register counters with. */
-  readonly stats: Effect.Effect.Success<typeof CacheStats>;
+  readonly stats: Effect.Success<typeof CacheStats>;
   /**
    * Parse a raw JSON string back into `V`. Defaults to `JSON.parse`.
    * Namespaces with strongly-typed shapes can swap in a validator here.
@@ -280,15 +280,15 @@ export function makeCacheLayer<K, V>(
             return parsed;
           });
 
-        const runtime = yield* Effect.runtime<R | DbService>();
-        const runPromise = Runtime.runPromise(runtime);
+        const runtime = yield* Effect.context<R | DbService>();
+        const runPromise = Effect.runPromiseWith(runtime);
         // Materialize Effect failures as typed Promise rejections via
         // `Effect.either` — without this, `runPromise` wraps failures in
         // a `FiberFailure` and the error's original shape is lost.
-        const materialized = fetcher(hint).pipe(Effect.flatMap(writeResult), Effect.either);
+        const materialized = fetcher(hint).pipe(Effect.flatMap(writeResult), Effect.result);
         const promise: Promise<V> = runPromise(materialized).then((either) => {
-          if (either._tag === "Right") return either.right;
-          return Promise.reject(either.left);
+          if (either._tag === "Success") return either.success;
+          return Promise.reject(either.failure);
         });
 
         inflight.set(dedupKey, promise);

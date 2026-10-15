@@ -22,11 +22,11 @@ export function tryImportCachedWalkthrough(input: {
     const snapshot = yield* input.fetchSnapshot;
     if (Option.isNone(snapshot)) return false;
 
-    const imported = yield* input.importSnapshot(snapshot.value).pipe(Effect.either);
-    if (imported._tag === "Left") {
+    const imported = yield* input.importSnapshot(snapshot.value).pipe(Effect.result);
+    if (imported._tag === "Failure") {
       logError(
         "walkthrough-jobs",
-        `cache import failed wt=${input.walkthroughId} — falling through to agent: ${imported.left.reason}`,
+        `cache import failed wt=${input.walkthroughId} — falling through to agent: ${imported.failure.reason}`,
       );
       return false;
     }
@@ -37,13 +37,13 @@ export function tryImportCachedWalkthrough(input: {
         type: "lifecycle:cache-hit",
         data: { walkthroughId: input.walkthroughId, source: "remote" },
       })
-      .pipe(Effect.catchAll(() => Effect.void));
+      .pipe(Effect.catch(() => Effect.void));
     yield* input
       .emitEvent({
         type: "lifecycle:complete",
         data: { walkthroughId: input.walkthroughId, tokenUsage: ZERO_TOKEN_USAGE },
       })
-      .pipe(Effect.catchAll(() => Effect.void));
+      .pipe(Effect.catch(() => Effect.void));
     debug(
       "walkthrough-jobs",
       `cache hit wt=${input.walkthroughId} pr=${input.prId} sha=${input.headSha} — skipping agent`,

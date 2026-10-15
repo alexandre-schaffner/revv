@@ -213,7 +213,7 @@ export function prepareFirstPassLeads(
       ),
     catch: (cause) => new DbError({ message: "recordWalkthroughLeads failed", cause }),
   }).pipe(
-    Effect.catchAll((e) =>
+    Effect.catch((e) =>
       Effect.sync(() => {
         logError("walkthrough-jobs", "recording first-pass leads failed", e);
         return [];

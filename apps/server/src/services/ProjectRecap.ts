@@ -190,7 +190,7 @@ export interface ListForRepoResult {
 export const DEFAULT_RECAP_PAGE_LIMIT = 30;
 export const MAX_RECAP_PAGE_LIMIT = 100;
 
-export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
+export class ProjectRecapService extends Context.Service<
   ProjectRecapService,
   {
     /**
@@ -288,7 +288,7 @@ export class ProjectRecapService extends Context.Tag("ProjectRecapService")<
 
     readonly incrementResumeAttempts: (recapId: string) => Effect.Effect<number, never, DbService>;
   }
->() {}
+>()("ProjectRecapService") {}
 
 export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   createPartial: (params) =>
@@ -509,7 +509,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             .run(),
         catch: (e) => new ValidationError({ message: `setStatus: ${String(e)}` }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   supersede: (oldId, newId) =>
     Effect.gen(function* () {
@@ -523,7 +523,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
             .run(),
         catch: (e) => new ValidationError({ message: `supersede: ${String(e)}` }),
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   markEmptyWindow: (recapId) =>
     Effect.gen(function* () {
@@ -620,7 +620,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         periodEnd: r.periodEnd,
         resumeAttempts: r.resumeAttempts,
       }));
-    }).pipe(Effect.catchAll(() => Effect.succeed([] as never[]))),
+    }).pipe(Effect.catch(() => Effect.succeed([] as never[]))),
 
   incrementResumeAttempts: (recapId) =>
     Effect.gen(function* () {
@@ -642,5 +642,5 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         catch: (e) => new ValidationError({ message: `incrementResumeAttempts: ${String(e)}` }),
       });
       return next;
-    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+    }).pipe(Effect.catch(() => Effect.succeed(0))),
 });

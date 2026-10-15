@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Cause, Effect, Exit, Fiber, FiberId } from "effect";
+import { Cause, Effect, Exit, Fiber } from "effect";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import {
@@ -14,7 +14,7 @@ import { makeSessionTokenStore } from "./session-token-store";
 // interrupt is resume-worthy; a user-cancel or a genuine failure is terminal.
 
 describe("analyzeJobFailure", () => {
-  const interrupt = Cause.interrupt(FiberId.none);
+  const interrupt = Cause.interrupt();
   const failure = Cause.fail(new Error("boom"));
 
   it("leaves shutdown interrupts for resume", () => {
@@ -42,7 +42,7 @@ describe("analyzeJobFailure", () => {
 
 describe("terminal handler placement under interruption", () => {
   const interruptAfterStart = async (body: Effect.Effect<void>): Promise<void> => {
-    const fiber = await Effect.runPromise(Effect.forkDaemon(body));
+    const fiber = await Effect.runPromise(Effect.forkDetach(body));
     await new Promise((resolve) => setTimeout(resolve, 5));
     await Effect.runPromise(Fiber.interrupt(fiber));
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -52,7 +52,7 @@ describe("terminal handler placement under interruption", () => {
     const ran: string[] = [];
     await interruptAfterStart(
       Effect.never.pipe(
-        Effect.catchAllCause(() =>
+        Effect.catchCause(() =>
           Effect.sync(() => {
             ran.push("handled");
           }),

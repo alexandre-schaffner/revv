@@ -166,10 +166,9 @@ type RecapSchedulerService = {
   readonly checkNow: (period: RecapPeriod) => Effect.Effect<void>;
 };
 
-export class RecapScheduler extends Context.Tag("RecapScheduler")<
-  RecapScheduler,
-  RecapSchedulerService
->() {}
+export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedulerService>()(
+  "RecapScheduler",
+) {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -186,8 +185,8 @@ export const RecapSchedulerLive = Layer.effect(
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    const dailyFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
-    const weeklyFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    const dailyFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
+    const weeklyFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
 
     // True until the first tick after boot completes. Cold-start backfills
     // use the wider lookback; subsequent ticks only look at the current
@@ -221,7 +220,7 @@ export const RecapSchedulerLive = Layer.effect(
           for (const window of candidates) {
             const existing = yield* provideDb(
               recapService.findActiveForPeriod(repo.id, period, window.periodStart),
-            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+            ).pipe(Effect.catch(() => Effect.succeed(null)));
 
             // ── Daily stale-check ────────────────────────────────────────
             // If a daily recap for this window was generated today, it's
@@ -249,7 +248,7 @@ export const RecapSchedulerLive = Layer.effect(
                   periodEnd: window.periodEnd,
                 })
                 .pipe(
-                  Effect.catchAllCause((cause) =>
+                  Effect.catchCause((cause) =>
                     Effect.sync(() => {
                       logError(
                         "recap-scheduler",
@@ -270,13 +269,13 @@ export const RecapSchedulerLive = Layer.effect(
             // work" recap; only a completely silent repo earns the gap.
             const windowed = yield* provideDb(
               prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
-            ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+            ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
             if (windowed.length === 0) {
               // Same window boundary the job will use, so this pre-check and
               // `buildJobBody`'s empty-window guard agree on "non-empty".
               const openPrs = yield* provideDb(
                 prService.listOpenPrsAsOfWindow(repo.id, window.periodEnd),
-              ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+              ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
               if (openPrs.length === 0) continue;
             }
 
@@ -293,7 +292,7 @@ export const RecapSchedulerLive = Layer.effect(
                 trigger: "scheduler",
               })
               .pipe(
-                Effect.catchAllCause((cause) =>
+                Effect.catchCause((cause) =>
                   Effect.sync(() => {
                     logError(
                       "recap-scheduler",
@@ -308,7 +307,7 @@ export const RecapSchedulerLive = Layer.effect(
 
         yield* Ref.set(backfilledRef, true);
       }).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
             logError("recap-scheduler", `sweep ${period} failed:`, Cause.pretty(cause));
           }),
@@ -320,7 +319,7 @@ export const RecapSchedulerLive = Layer.effect(
         const existing = yield* Ref.get(ref);
         if (existing !== null) return;
         const schedule = Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES));
-        const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
+        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
           sweepPeriod(period).pipe(Effect.repeat(schedule)),
         );
         yield* Ref.set(ref, fiber);

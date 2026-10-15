@@ -306,7 +306,7 @@ function deriveRoundFocusTitle(
 
 // ── Service definition ──────────────────────────────────────────────────────
 
-export class WalkthroughService extends Context.Tag("WalkthroughService")<
+export class WalkthroughService extends Context.Service<
   WalkthroughService,
   {
     /**
@@ -657,7 +657,7 @@ export class WalkthroughService extends Context.Tag("WalkthroughService")<
       currentHeadSha: string | null,
     ) => Effect.Effect<WalkthroughReviewRoundsResponse, never, DbService>;
   }
->() {}
+>()("WalkthroughService") {}
 
 // ── Live implementation ─────────────────────────────────────────────────────
 
@@ -819,7 +819,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           .where(eq(reviewRounds.walkthroughId, walkthroughId))
           .run();
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   supersede: (oldId, newId) =>
     Effect.gen(function* () {
@@ -849,7 +849,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           .where(eq(reviewRounds.walkthroughId, oldId))
           .run();
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   supersedeAllForPr: (prId, exceptHeadSha, mode) =>
     Effect.gen(function* () {
@@ -898,7 +898,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           .where(inArray(reviewRounds.walkthroughId, activeIds))
           .run();
       });
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   getCached: (prId, headSha, mode = "reviewer") =>
     Effect.gen(function* () {
@@ -978,7 +978,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .set({ opencodeSessionId: sessionId })
         .where(eq(walkthroughs.id, walkthroughId))
         .run();
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   listGenerating: () =>
     Effect.gen(function* () {
@@ -1054,7 +1054,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(eq(walkthroughs.id, walkthroughId))
         .run();
       return next;
-    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+    }).pipe(Effect.catch(() => Effect.succeed(0))),
 
   resetResumeAttempts: (walkthroughId) =>
     Effect.gen(function* () {
@@ -1063,13 +1063,13 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .set({ resumeAttempts: 0 })
         .where(eq(walkthroughs.id, walkthroughId))
         .run();
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   updateModelUsed: (walkthroughId, modelUsed) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       db.update(walkthroughs).set({ modelUsed }).where(eq(walkthroughs.id, walkthroughId)).run();
-    }).pipe(Effect.catchAll(() => Effect.void)),
+    }).pipe(Effect.catch(() => Effect.void)),
 
   markIssuesSubmitted: (issueIds) =>
     Effect.gen(function* () {
@@ -1081,7 +1081,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(inArray(walkthroughIssues.id, [...issueIds]))
         .run();
       return submittedAt;
-    }).pipe(Effect.catchAll(() => Effect.succeed(new Date().toISOString()))),
+    }).pipe(Effect.catch(() => Effect.succeed(new Date().toISOString()))),
 
   bumpSeq: (walkthroughId) =>
     Effect.gen(function* () {
@@ -1099,7 +1099,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           .run();
         return seq;
       });
-    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+    }).pipe(Effect.catch(() => Effect.succeed(0))),
 
   listActiveForAccount: (accountId) =>
     Effect.gen(function* () {
@@ -1124,7 +1124,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         mode: r.mode,
         seqAt: Math.max(0, r.nextSeq - 1),
       }));
-    }).pipe(Effect.catchAll(() => Effect.succeed([]))),
+    }).pipe(Effect.catch(() => Effect.succeed([]))),
 
   getSeqAt: (walkthroughId) =>
     Effect.gen(function* () {
@@ -1135,7 +1135,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(eq(walkthroughs.id, walkthroughId))
         .get();
       return Math.max(0, (row?.nextSeq ?? 1) - 1);
-    }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+    }).pipe(Effect.catch(() => Effect.succeed(0))),
 
   findLatestReviewArtifact: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
@@ -1188,7 +1188,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .orderBy(desc(walkthroughs.generatedAt))
         .get();
       return row ?? null;
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
 
   getLatestDisplayable: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
@@ -1218,7 +1218,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const { wt: row, avatarContent } = result;
 
       return hydrateWalkthrough(db, row, avatarContent);
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
 
   getLatestMode: (prId) =>
     Effect.gen(function* () {
@@ -1260,7 +1260,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         walkthrough: hydrateWalkthrough(db, row, avatarContent),
         status: row.status as WalkthroughStatus,
       };
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
 
   listReviewRounds: (prId, currentHeadSha) =>
     Effect.gen(function* () {
@@ -1375,7 +1375,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         rounds,
       };
     }).pipe(
-      Effect.catchAll(() =>
+      Effect.catch(() =>
         Effect.succeed({
           prId,
           currentHeadSha,
@@ -1455,7 +1455,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
       return { semanticSteps, blocks, issues, ratings };
     }).pipe(
-      Effect.catchAll(() =>
+      Effect.catch(() =>
         Effect.succeed({ semanticSteps: [], blocks: [], issues: [], ratings: [] }),
       ),
     ),

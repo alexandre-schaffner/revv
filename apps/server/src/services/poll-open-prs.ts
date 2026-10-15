@@ -296,7 +296,7 @@ export const syncRepoOpenPrs = (
     if (movedIds.length > 0) {
       const invalidated = yield* withDb(db, diffCache.invalidateFilesForPrs(movedIds)).pipe(
         Effect.as(true),
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
             logError("PollScheduler", `diff invalidation failed for ${repo.fullName}:`, cause);
             return false;
@@ -361,8 +361,12 @@ export const syncRepoOpenPrs = (
     // The masked rows, not the raw payload: everything downstream (the
     // supersede gate, the change detection, the broadcast) must see the same
     // view that landed in SQLite.
+    yield* Effect.annotateCurrentSpan("prs_open", rows.length);
     return { prs: rows, listed: true };
   }).pipe(
+    Effect.withSpan("PollScheduler.syncRepo", {
+      attributes: { repo: repo.fullName, repoId: repo.id },
+    }),
     Effect.tapError((err) =>
       Effect.sync(() => {
         logError("PollScheduler", `outer per-repo sync error for ${repo.fullName}:`, err);
@@ -435,13 +439,13 @@ export const archiveClosedPrs = (
     // VSCode). `pruneWorktree` self-guards against in-flight generations and
     // un-pushed review commits, so this is safe to fire-and-forget; it must not
     // block the sync loop.
-    yield* Effect.forkDaemon(
+    yield* Effect.forkDetach(
       Effect.forEach(
         closedPrs,
         (pr) =>
           repoClone
             .pruneWorktree({ repoId: pr.repositoryId, prNumber: pr.externalId })
-            .pipe(Effect.catchAll(() => Effect.void)),
+            .pipe(Effect.catch(() => Effect.void)),
         { concurrency: 3, discard: true },
       ),
     );

@@ -25,13 +25,13 @@ describe("CacheService.getOrFetch", () => {
         const release = yield* Deferred.make<void>();
         const fetcher = () =>
           Deferred.await(release).pipe(
-            Effect.zipRight(Effect.fail(new FetchFailed({ reason: "402" }))),
+            Effect.andThen(Effect.fail(new FetchFailed({ reason: "402" }))),
           );
 
-        const a = yield* Effect.fork(Effect.exit(cache.getOrFetch("ns", "k", fetcher)));
-        yield* Effect.yieldNow();
-        const b = yield* Effect.fork(Effect.exit(cache.getOrFetch("ns", "k", fetcher)));
-        yield* Effect.yieldNow();
+        const a = yield* Effect.forkChild(Effect.exit(cache.getOrFetch("ns", "k", fetcher)));
+        yield* Effect.yieldNow;
+        const b = yield* Effect.forkChild(Effect.exit(cache.getOrFetch("ns", "k", fetcher)));
+        yield* Effect.yieldNow;
         yield* Deferred.succeed(release, undefined);
         return [yield* Fiber.join(a), yield* Fiber.join(b)] as const;
       }),
@@ -40,8 +40,8 @@ describe("CacheService.getOrFetch", () => {
     for (const exit of [first, second]) {
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
-        expect(exit.cause._tag).toBe("Fail");
-        expect(Cause.failureOption(exit.cause)).toEqual(
+        expect(exit.cause.reasons.every(Cause.isFailReason)).toBe(true);
+        expect(Cause.findErrorOption(exit.cause)).toEqual(
           Option.some(new FetchFailed({ reason: "402" })),
         );
       }
@@ -58,14 +58,14 @@ describe("CacheService.getOrFetch", () => {
     const result = await run(
       Effect.gen(function* () {
         const cache = yield* CacheService;
-        const first = yield* Effect.either(
+        const first = yield* Effect.result(
           cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
         );
         const second = yield* cache.getOrFetch("ns", "k", fetcher, { immutable: true });
         return { first: first._tag, second };
       }),
     );
-    expect(result).toEqual({ first: "Left", second: "ok" });
+    expect(result).toEqual({ first: "Failure", second: "ok" });
     expect(calls).toBe(2);
   });
 
@@ -79,16 +79,18 @@ describe("CacheService.getOrFetch", () => {
         const release = yield* Deferred.make<void>();
         const fetcher = () =>
           Effect.sync(() => calls++).pipe(
-            Effect.zipRight(Deferred.await(release)),
+            Effect.andThen(Deferred.await(release)),
             Effect.as("value"),
           );
-        const owner = yield* Effect.fork(cache.getOrFetch("ns", "k", fetcher, { immutable: true }));
-        yield* Effect.yieldNow();
-        yield* Fiber.interrupt(owner);
-        const joiner = yield* Effect.fork(
+        const owner = yield* Effect.forkChild(
           cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(owner);
+        const joiner = yield* Effect.forkChild(
+          cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
+        );
+        yield* Effect.yieldNow;
         yield* Deferred.succeed(release, undefined);
         return yield* Fiber.join(joiner);
       }),
@@ -105,15 +107,17 @@ describe("CacheService.getOrFetch", () => {
         const release = yield* Deferred.make<void>();
         const fetcher = () =>
           Effect.sync(() => calls++).pipe(
-            Effect.zipRight(Deferred.await(release)),
+            Effect.andThen(Deferred.await(release)),
             Effect.as("value"),
           );
-        const first = yield* Effect.fork(cache.getOrFetch("ns", "k", fetcher, { immutable: true }));
-        yield* Effect.yieldNow();
-        const second = yield* Effect.fork(
+        const first = yield* Effect.forkChild(
           cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
+        const second = yield* Effect.forkChild(
+          cache.getOrFetch("ns", "k", fetcher, { immutable: true }),
+        );
+        yield* Effect.yieldNow;
         yield* Deferred.succeed(release, undefined);
         return [yield* Fiber.join(first), yield* Fiber.join(second)] as const;
       }),

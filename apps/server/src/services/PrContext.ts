@@ -52,7 +52,7 @@ export interface PrContextWithDiff extends PrContextBasic {
 
 export type PrContextError = NotFoundError | GitHubAuthError | GitHubError;
 
-export class PrContextService extends Context.Tag("PrContextService")<
+export class PrContextService extends Context.Service<
   PrContextService,
   {
     /**
@@ -148,7 +148,7 @@ export class PrContextService extends Context.Tag("PrContextService")<
       repoId: string,
     ) => Effect.Effect<string, NotFoundError, DbService>;
   }
->() {}
+>()("PrContextService") {}
 
 export const PrContextServiceLive = Layer.effect(
   PrContextService,
@@ -176,7 +176,7 @@ export const PrContextServiceLive = Layer.effect(
         const token = repoRow
           ? yield* tokenProvider.getTokenByAccountId(repoRow.accountId)
           : yield* tokenProvider.getGitHubToken(userId, repo.githubHost).pipe(
-              Effect.catchAll(() =>
+              Effect.catch(() =>
                 Effect.fail(
                   new GitHubAuthError({
                     message: `No account_id on repo ${repo.id} and no fallback token available`,

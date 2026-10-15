@@ -33,7 +33,7 @@ interface RefreshResponse {
  * exposes `refreshAccountToken` / `markReauthRequired` for the reactive 401
  * recovery path driven by `PollScheduler`.
  */
-export class TokenProvider extends Context.Tag("TokenProvider")<
+export class TokenProvider extends Context.Service<
   TokenProvider,
   {
     readonly getGitHubToken: (
@@ -92,7 +92,7 @@ export class TokenProvider extends Context.Tag("TokenProvider")<
      */
     readonly markReauthRequired: (accountId: string) => Effect.Effect<void>;
   }
->() {}
+>()("TokenProvider") {}
 
 export const TokenProviderLive = Layer.effect(
   TokenProvider,

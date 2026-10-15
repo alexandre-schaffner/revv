@@ -12,7 +12,7 @@ import {
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
-const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
+const retrySchedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(3)]);
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 const isTransientGitHubError = (e: GitHubError): boolean => e instanceof GitHubNetworkError;
@@ -154,6 +154,23 @@ function parseRetryAfter(header: string | null): number | null {
   return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
 }
 
+/**
+ * Annotate the current span with the GitHub response status and remaining
+ * rate-limit budget. These are the two signals the telemetry dashboard cares
+ * about most for GitHub health: status drives the per-operation error rate, and
+ * `github.rate_limit_remaining` makes rate-limit pressure visible *before* it
+ * trips a 403 (the failure mode behind several known sync stalls).
+ */
+function annotateGitHubResponse(res: Response): Effect.Effect<void> {
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  return Effect.gen(function* () {
+    yield* Effect.annotateCurrentSpan("http.response.status_code", res.status);
+    if (remaining != null && remaining !== "") {
+      yield* Effect.annotateCurrentSpan("github.rate_limit_remaining", Number(remaining));
+    }
+  });
+}
+
 export function githubFetch(
   path: string,
   token: string,
@@ -162,19 +179,14 @@ export function githubFetch(
   return Effect.withSpan("GitHub.fetch", {
     attributes: { path, method: "GET" },
   })(
-    Effect.tryPromise({
-      try: async () => {
-        const res = await githubHttpFetch(
-          `${apiBase}${path}`,
-          {
-            headers: githubHeaders(token),
-          },
-          path,
-        );
-        assertGitHubOk(res, path);
-        return res.json();
-      },
-      catch: toGitHubError,
+    Effect.gen(function* () {
+      const res = yield* Effect.tryPromise({
+        try: () => githubHttpFetch(`${apiBase}${path}`, { headers: githubHeaders(token) }, path),
+        catch: toGitHubError,
+      });
+      yield* annotateGitHubResponse(res);
+      yield* Effect.try({ try: () => assertGitHubOk(res, path), catch: toGitHubError });
+      return yield* Effect.tryPromise({ try: () => res.json(), catch: toGitHubError });
     }),
   );
 }
@@ -184,51 +196,73 @@ export function conditionalFetch(
   token: string,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError, DbService | GitHubEtagCache> {
-  return Effect.gen(function* () {
-    const cache = yield* GitHubEtagCache;
-    const cacheKey = cacheKeyForRequest(apiBase, path, token);
-    const cached = yield* cache.get(cacheKey);
+  // This is the highest-volume GET path during sync. The span's `cache`
+  // attribute (hit/miss) makes conditional-request efficiency — and the
+  // rate-limit budget it preserves — visible in the telemetry dashboard.
+  return Effect.withSpan("GitHub.conditionalFetch", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.gen(function* () {
+      const cache = yield* GitHubEtagCache;
+      const cacheKey = cacheKeyForRequest(apiBase, path, token);
+      const cached = yield* cache.get(cacheKey);
 
-    const result = yield* Effect.tryPromise({
-      try: async () => {
-        const headers: Record<string, string> = githubHeaders(token);
-        if (cached) {
-          headers["If-None-Match"] = cached.etag;
-        }
-        const res = await githubHttpFetch(`${apiBase}${path}`, { headers }, path);
+      const result = yield* Effect.tryPromise({
+        try: async () => {
+          const headers: Record<string, string> = githubHeaders(token);
+          if (cached) {
+            headers["If-None-Match"] = cached.etag;
+          }
+          const res = await githubHttpFetch(`${apiBase}${path}`, { headers }, path);
+          const remaining = res.headers.get("x-ratelimit-remaining");
 
-        if (res.status === 304 && cached) {
-          return { kind: "hit" as const, body: cached.body, bytes: 0 };
-        }
+          if (res.status === 304 && cached) {
+            return {
+              kind: "hit" as const,
+              body: cached.body,
+              bytes: 0,
+              status: res.status,
+              remaining,
+            };
+          }
 
-        assertGitHubOk(res, path);
+          assertGitHubOk(res, path);
 
-        const bodyText = await res.text();
-        const body = bodyText ? JSON.parse(bodyText) : null;
-        const etag = res.headers.get("ETag");
-        const lastModified = res.headers.get("Last-Modified");
-        return {
-          kind: "miss" as const,
-          body,
-          bytes: bodyText.length,
-          etag,
-          lastModified,
-        };
-      },
-      catch: toGitHubError,
-    });
+          const bodyText = await res.text();
+          const body = bodyText ? JSON.parse(bodyText) : null;
+          const etag = res.headers.get("ETag");
+          const lastModified = res.headers.get("Last-Modified");
+          return {
+            kind: "miss" as const,
+            body,
+            bytes: bodyText.length,
+            etag,
+            lastModified,
+            status: res.status,
+            remaining,
+          };
+        },
+        catch: toGitHubError,
+      });
 
-    if (result.kind === "hit") {
-      recordCacheHit(cache, result.body);
+      yield* Effect.annotateCurrentSpan("cache", result.kind);
+      yield* Effect.annotateCurrentSpan("http.response.status_code", result.status);
+      if (result.remaining != null && result.remaining !== "") {
+        yield* Effect.annotateCurrentSpan("github.rate_limit_remaining", Number(result.remaining));
+      }
+
+      if (result.kind === "hit") {
+        recordCacheHit(cache, result.body);
+        return result.body;
+      }
+
+      cache.recordMiss();
+      if (result.etag) {
+        yield* cache.put(cacheKey, result.etag, result.lastModified ?? null, result.body);
+      }
       return result.body;
-    }
-
-    cache.recordMiss();
-    if (result.etag) {
-      yield* cache.put(cacheKey, result.etag, result.lastModified ?? null, result.body);
-    }
-    return result.body;
-  });
+    }),
+  );
 }
 
 export function conditionalFetchPaginated(
@@ -312,6 +346,8 @@ export function conditionalFetchPaginated(
         catch: toGitHubError,
       });
 
+      yield* Effect.annotateCurrentSpan("cache", result.kind);
+
       if (result.kind === "hit") {
         recordCacheHit(cache, result.body);
         return [...result.body];
@@ -348,25 +384,32 @@ export function githubPost(
   return Effect.withSpan("GitHub.post", {
     attributes: { path, method: "POST" },
   })(
-    Effect.tryPromise({
-      try: async () => {
-        const res = await githubHttpFetch(
-          `${apiBase}${path}`,
-          {
-            method: "POST",
-            headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-          path,
-        );
-        if (res.status === 422) {
-          const text = await res.text().catch(() => "");
-          throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
-        }
-        assertGitHubOk(res, path);
-        return res.json();
-      },
-      catch: toGitHubError,
+    Effect.gen(function* () {
+      const res = yield* Effect.tryPromise({
+        try: () =>
+          githubHttpFetch(
+            `${apiBase}${path}`,
+            {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            },
+            path,
+          ),
+        catch: toGitHubError,
+      });
+      yield* annotateGitHubResponse(res);
+      return yield* Effect.tryPromise({
+        try: async () => {
+          if (res.status === 422) {
+            const text = await res.text().catch(() => "");
+            throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
+          }
+          assertGitHubOk(res, path);
+          return res.json();
+        },
+        catch: toGitHubError,
+      });
     }),
   );
 }
@@ -643,7 +686,7 @@ export function withSchemaFallback<A, R>(
 ): Effect.Effect<{ readonly value: A; readonly modern: boolean }, GitHubError, R> {
   return ask(true).pipe(
     Effect.map((value) => ({ value, modern: true })),
-    Effect.catchAll((err) =>
+    Effect.catch((err) =>
       err instanceof GitHubApiError &&
       modernTokens.some((token) => String(err.cause).includes(token))
         ? ask(false).pipe(Effect.map((value) => ({ value, modern: false })))
@@ -712,32 +755,36 @@ export function githubFetchPaginated(
   return Effect.withSpan("GitHub.fetchPaginated", {
     attributes: { path, maxPages },
   })(
-    Effect.tryPromise({
-      try: async () => {
-        const results: unknown[] = [];
-        let url: string | null = `${apiBase}${path}`;
+    Effect.gen(function* () {
+      const results: unknown[] = [];
+      let url: string | null = `${apiBase}${path}`;
+      let page = 0;
 
-        for (let page = 0; page < maxPages && url; page++) {
-          const res = await githubHttpFetch(
-            url,
-            {
-              headers: githubHeaders(token),
+      // One child span per page so the waterfall shows how many round-trips a
+      // paginated list actually cost (and which page was slow).
+      while (url && page < maxPages) {
+        const pageUrl: string = url;
+        const next = yield* Effect.withSpan("GitHub.page", {
+          attributes: { path, page },
+        })(
+          Effect.tryPromise({
+            try: async () => {
+              const res = await githubHttpFetch(pageUrl, { headers: githubHeaders(token) }, path);
+              assertGitHubOk(res, path);
+              const data = await res.json();
+              return { data, nextUrl: parseLinkNext(res.headers.get("Link")) };
             },
-            path,
-          );
-          assertGitHubOk(res, path);
+            catch: toGitHubError,
+          }),
+        );
+        if (Array.isArray(next.data)) results.push(...next.data);
+        url = next.nextUrl;
+        page++;
+      }
 
-          const data = await res.json();
-          if (Array.isArray(data)) {
-            results.push(...data);
-          }
-
-          url = parseLinkNext(res.headers.get("Link"));
-        }
-
-        return results;
-      },
-      catch: toGitHubError,
+      yield* Effect.annotateCurrentSpan("pages", page);
+      yield* Effect.annotateCurrentSpan("count", results.length);
+      return results;
     }),
   );
 }

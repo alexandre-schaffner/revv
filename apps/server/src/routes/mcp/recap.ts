@@ -62,6 +62,7 @@ export const mcpRecapRoute = bindHttp({
   bundle: RECAP_TOOL_BUNDLE,
   resolveContext,
   logInbound: true,
+  traceAnchorKey: (meta) => meta.recapId,
   beforeToolCall: ({ toolName, ctx }) => {
     ctx.toolCalls?.add(toolName);
   },

@@ -1,5 +1,9 @@
 import { Data } from "effect";
 
+export class ProfilingError extends Data.TaggedError("ProfilingError")<{
+  readonly cause: unknown;
+}> {}
+
 // GitHub API errors
 export class GitHubRateLimitError extends Data.TaggedError("GitHubRateLimitError")<{
   readonly resetAt: Date;

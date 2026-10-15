@@ -67,12 +67,12 @@ describe("JevService", () => {
       Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask(probe)).pipe(
           Effect.provide(layerFor({ enabled: false }, { "jev-api-key": "apikey_test" })),
-          Effect.either,
+          Effect.result,
         ),
       ),
     );
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") expect(result.left.reason).toBe("disabled");
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("disabled");
   });
 
   it("fails with 'unconfigured' — without touching the network — when no key is stored", async () => {
@@ -80,12 +80,12 @@ describe("JevService", () => {
       Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask(probe)).pipe(
           Effect.provide(layerFor({ enabled: true })),
-          Effect.either,
+          Effect.result,
         ),
       ),
     );
-    expect(result._tag).toBe("Left");
-    if (result._tag === "Left") expect(result.left.reason).toBe("unconfigured");
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.reason).toBe("unconfigured");
   });
 
   it("reports unavailable when enabled without a key, and available with one", async () => {
@@ -116,12 +116,12 @@ describe("JevService", () => {
       const result = await Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 3_000 })).pipe(
           Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
-          Effect.either,
+          Effect.result,
         ),
       );
-      expect(result._tag).toBe("Left");
-      if (result._tag === "Left") {
-        expect(["transport", "timeout"]).toContain(result.left.reason);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(["transport", "timeout"]).toContain(result.failure.reason);
       }
     } finally {
       if (previousBase === undefined) delete process.env.TYPESAFE_BASE_URL;
@@ -138,10 +138,10 @@ describe("JevService", () => {
       const result = await Effect.runPromise(
         Effect.flatMap(JevService, (jev) => jev.ask({ ...probe, timeoutMs: 300 })).pipe(
           Effect.provide(layerFor({ enabled: true }, { "jev-api-key": "apikey_test" })),
-          Effect.either,
+          Effect.result,
         ),
       );
-      expect(result._tag).toBe("Left");
+      expect(result._tag).toBe("Failure");
       expect(Date.now() - startedAt).toBeLessThan(5_000);
     } finally {
       if (previousBase === undefined) delete process.env.TYPESAFE_BASE_URL;
