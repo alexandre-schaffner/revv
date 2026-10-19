@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -141,6 +142,60 @@ describe("ensureClaudeConfigDir", () => {
       for (const entry of ["agents", "plugins", "CLAUDE.md"]) {
         expect(existsSync(join(dir, entry))).toBe(false);
       }
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  // The regression this guards: `plugins/` was linked but no plugin was
+  // enabled, because Claude Code reads `enabledPlugins` from `settings.json`
+  // and the isolated dir had none. Every plugin skill was missing from Revv.
+  it("copies enabledPlugins into the isolated settings.json and keeps its other keys", async () => {
+    const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
+    const globalDir = join(base, "global");
+    const dir = join(base, "claude");
+    try {
+      mkdirSync(globalDir, { recursive: true });
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(globalDir, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "pstack@cursor-plugins": true }, hooks: { Stop: [] } }),
+      );
+      writeFileSync(
+        join(dir, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "old@market": true }, model: "opus" }),
+      );
+
+      ensureClaudeConfigDir(dir, globalDir);
+
+      expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))).toEqual({
+        enabledPlugins: { "pstack@cursor-plugins": true },
+        model: "opus",
+      });
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it("never writes through a settings.json the user linked by hand", async () => {
+    const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
+    const globalDir = join(base, "global");
+    const dir = join(base, "claude");
+    try {
+      mkdirSync(globalDir, { recursive: true });
+      mkdirSync(dir, { recursive: true });
+      const shared = join(base, "shared-settings.json");
+      writeFileSync(shared, JSON.stringify({ theme: "dark" }));
+      symlinkSync(shared, join(dir, "settings.json"));
+      writeFileSync(
+        join(globalDir, "settings.json"),
+        JSON.stringify({ enabledPlugins: { "pstack@cursor-plugins": true } }),
+      );
+
+      ensureClaudeConfigDir(dir, globalDir);
+
+      expect(lstatSync(join(dir, "settings.json")).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(readFileSync(shared, "utf8"))).toEqual({ theme: "dark" });
     } finally {
       await rm(base, { recursive: true, force: true });
     }

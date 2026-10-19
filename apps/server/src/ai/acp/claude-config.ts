@@ -40,7 +40,15 @@
 // probe, the login PTY, and the agent spawn all pointed at the same dir, so
 // that one-time login lands where the spawn will actually look for it).
 
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AcpAgentId } from "@revv/shared";
@@ -61,7 +69,7 @@ const GLOBAL_CLAUDE_DIR = join(homedir(), ".claude");
  * Control view with every PR worktree. `settings.json` also stays out: it
  * carries hooks, permissions and MCP servers, which change how the agent
  * behaves rather than what the user can ask it to do, and Revv drives those
- * itself.
+ * itself. The one exception is `enabledPlugins`: see {@link mirrorEnabledPlugins}.
  */
 const LINKED_ENTRIES = [
   // File-based auth — see the module header on why this is a link.
@@ -153,5 +161,44 @@ export function ensureClaudeConfigDir(dir: string, globalDir: string = GLOBAL_CL
         err instanceof Error ? err.message : String(err),
       );
     }
+  }
+
+  mirrorEnabledPlugins(dir, globalDir);
+}
+
+/**
+ * Copy the user's `enabledPlugins` from `~/.claude/settings.json` into the
+ * isolated dir's own `settings.json`, keeping every other key in that file.
+ *
+ * Linking `plugins/` only makes the installed plugins reachable: Claude Code
+ * turns a plugin on only when `enabledPlugins` in `settings.json` lists it, so
+ * without this every plugin skill was missing from Revv's `/` menu. Copied on
+ * every spawn so a plugin enabled in a terminal shows up on the next one.
+ *
+ * Skipped when the isolated `settings.json` is a symlink: the user linked the
+ * whole file on purpose, and writing would land in their real settings.
+ */
+function mirrorEnabledPlugins(dir: string, globalDir: string): void {
+  const target = join(dir, "settings.json");
+  try {
+    if (existsSync(target) && lstatSync(target).isSymbolicLink()) return;
+
+    const source = join(globalDir, "settings.json");
+    if (!existsSync(source)) return;
+    const enabledPlugins = JSON.parse(readFileSync(source, "utf8")).enabledPlugins;
+    if (enabledPlugins === undefined) return;
+
+    const current = existsSync(target) ? JSON.parse(readFileSync(target, "utf8")) : {};
+    if (JSON.stringify(current.enabledPlugins) === JSON.stringify(enabledPlugins)) return;
+
+    const tmp = `${target}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ ...current, enabledPlugins }, null, 2)}\n`);
+    renameSync(tmp, target);
+  } catch (err) {
+    logError(
+      "claude-config",
+      "failed to mirror enabledPlugins:",
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
