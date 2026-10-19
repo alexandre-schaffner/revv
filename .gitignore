@@ -45,3 +45,7 @@ github-ledger.*.jsonl*
 apps/collector/*.duckdb
 apps/collector/*.duckdb.wal
 apps/collector/*.collector.pid
+
+# Nix / direnv
+.direnv/
+result
