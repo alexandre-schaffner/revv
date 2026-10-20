@@ -25,7 +25,10 @@ const PEEK_WIDTH = 340;
 /** Clear of the note's own hairline, so the rule still reads. */
 const PEEK_GAP = 10;
 
+/** Where the preview last hung. Kept after it closes: the card reads it on
+ * its way out, so clearing it would throw mid-outro and strand the card. */
 let peek = $state<{ x: number; y: number; from: "top" | "bottom" } | null>(null);
+let peeking = $state(false);
 
 const here = $derived(layer.number === place.here.number);
 const label = $derived(
@@ -57,11 +60,12 @@ function show(event: Event): void {
   const below = floor - h.bottom;
   const from = above >= PEEK_ROOM + PEEK_GAP || above >= below ? "bottom" : "top";
   peek = { x, y: h.height + PEEK_GAP, from };
+  peeking = true;
 }
 
 function hide(): void {
   setHoveredLayer(null);
-  peek = null;
+  peeking = false;
 }
 </script>
 
@@ -83,7 +87,7 @@ function hide(): void {
 >
 	<StackLayerGlyph status={layer.status} size={11} />
 	<span class="num">#{layer.number}</span>
-</button>{#if peek}<LayerPeek {layer} {place} x={peek.x} y={peek.y} from={peek.from} />{/if}
+</button>{#if peeking && peek}<LayerPeek {layer} {place} x={peek.x} y={peek.y} from={peek.from} />{/if}
 
 <style>
 	.chip {

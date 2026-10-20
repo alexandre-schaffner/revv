@@ -80,8 +80,8 @@ export const pullRequests = sqliteTable(
      *
      * Overwritten only by the open-PR poll's GraphQL list, which is the one
      * source that knows: `upsertPrs` leaves both out of its conflict `set`
-     * unless told `stacksKnown`, so a REST refresh of one PR can't erase what
-     * the list learned.
+     * for a row without `stack` (`ObservedPr`), so a REST refresh of one PR
+     * can't erase what the list learned.
      */
     stackNumber: integer("stack_number"),
     stackPosition: integer("stack_position"),

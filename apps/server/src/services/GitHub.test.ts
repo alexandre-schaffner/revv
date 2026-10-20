@@ -500,7 +500,7 @@ describe("listPrs", () => {
 
     expect(Result.isSuccess(result)).toBe(true);
     if (!Result.isSuccess(result)) return;
-    expect(result.success.stacks).toBe("listed");
+    expect(result.success.hostPredatesStacks).toBe(false);
     const [stacked, plain] = result.success.prs;
     expect(stacked?.stack).toEqual({ number: 12, position: 3 });
     expect(plain?.stack).toBeNull();
@@ -543,8 +543,9 @@ describe("listPrs", () => {
 
     const listing = await listWith(db);
 
-    expect(listing.stacks).toBe("unsupported");
+    expect(listing.hostPredatesStacks).toBe(true);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(listing.prs[0]).not.toHaveProperty("stack");
     expect(queries).toHaveLength(2);
   });
 
@@ -558,8 +559,10 @@ describe("listPrs", () => {
 
     const listing = await listWith(db);
 
-    expect(listing.stacks).toBe("unknown");
+    expect(listing.hostPredatesStacks).toBe(false);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    // Not seen, so not "unstacked".
+    expect(listing.prs[0]).not.toHaveProperty("stack");
     expect(queries).toHaveLength(2);
   });
 
@@ -574,8 +577,10 @@ describe("listPrs", () => {
 
     const listing = await listWith(db);
 
-    expect(listing.stacks).toBe("unknown");
+    expect(listing.hostPredatesStacks).toBe(false);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    // Not seen, so not "unstacked".
+    expect(listing.prs[0]).not.toHaveProperty("stack");
     expect(queries).toHaveLength(2);
   });
 
@@ -585,7 +590,8 @@ describe("listPrs", () => {
 
     const listing = await listWith(db, false);
 
-    expect(listing.stacks).toBe("unknown");
+    expect(listing.hostPredatesStacks).toBe(false);
+    expect(listing.prs[0]).not.toHaveProperty("stack");
     expect(queries).toHaveLength(1);
   });
 
@@ -867,5 +873,86 @@ describe("listPrDiffStats", () => {
 
     expect(calls).toHaveLength(0);
     expect(stats.size).toBe(0);
+  });
+});
+
+describe("mergeEligibility", () => {
+  const mergeFields = ["mergeCommitAllowed", "squashMergeAllowed", "rebaseMergeAllowed"];
+
+  /** Answers like a host whose schema lacks `missing`, recording each query. */
+  const stubHost = (opts: {
+    missing: readonly string[];
+    viewerPermission: string;
+    viewerCanMergeAsAdmin?: boolean;
+  }) => {
+    const queries: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      queries.push(query);
+      const unknown = opts.missing.filter((field) => query.includes(field));
+      if (unknown.length > 0) {
+        return responseJson({
+          errors: unknown.map((field) => ({ message: `Field '${field}' doesn't exist` })),
+        });
+      }
+      return responseJson({
+        data: {
+          repository: {
+            pullRequest: {
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "BLOCKED",
+              ...(query.includes("viewerCanMergeAsAdmin")
+                ? { viewerCanMergeAsAdmin: opts.viewerCanMergeAsAdmin ?? false }
+                : {}),
+            },
+            viewerPermission: opts.viewerPermission,
+            ...(query.includes("squashMergeAllowed")
+              ? { mergeCommitAllowed: false, squashMergeAllowed: true, rebaseMergeAllowed: false }
+              : {}),
+          },
+        },
+      });
+    }) as typeof fetch;
+    return queries;
+  };
+
+  const eligibility = (db: Db) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.mergeEligibility("octo/repo", 7, "token");
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+  it("takes GitHub's own answer on bypassing protections", async () => {
+    const db = createDb(":memory:");
+    stubHost({ missing: [], viewerPermission: "WRITE", viewerCanMergeAsAdmin: true });
+    const result = await eligibility(db);
+    expect(result.canBypassProtections).toBe(true);
+    expect(result.allowedMethods).toEqual(["squash"]);
+  });
+
+  it("doesn't infer a bypass from ADMIN when GitHub says no", async () => {
+    const db = createDb(":memory:");
+    stubHost({ missing: [], viewerPermission: "ADMIN", viewerCanMergeAsAdmin: false });
+    expect((await eligibility(db)).canBypassProtections).toBe(false);
+  });
+
+  it("falls back to ADMIN on a host without viewerCanMergeAsAdmin, keeping merge methods", async () => {
+    const db = createDb(":memory:");
+    const queries = stubHost({ missing: ["viewerCanMergeAsAdmin"], viewerPermission: "ADMIN" });
+    const result = await eligibility(db);
+    expect(result.canBypassProtections).toBe(true);
+    expect(result.allowedMethods).toEqual(["squash"]);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("degrades both fields on a host that predates them", async () => {
+    const db = createDb(":memory:");
+    stubHost({ missing: ["viewerCanMergeAsAdmin", ...mergeFields], viewerPermission: "MAINTAIN" });
+    const result = await eligibility(db);
+    expect(result.canMerge).toBe(true);
+    expect(result.canBypassProtections).toBe(false);
+    expect(result.allowedMethods).toEqual(["merge", "squash", "rebase"]);
   });
 });

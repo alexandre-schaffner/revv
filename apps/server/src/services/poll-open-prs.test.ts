@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema/auth";
 import { GitHubRateLimitError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
@@ -92,11 +93,17 @@ interface Fakes {
   listClosedSince: () => Effect.Effect<number[] | null>;
   listOpenRest: () => Effect.Effect<PullRequest[]>;
   probe: () => Effect.Effect<Map<string, OpenPrListSignature>>;
-  /** What the GraphQL list could tell about stacks, when it asked for them. */
-  stacks?: OpenPrList["stacks"];
-  /** Every `upsertPrs` call, with whether it was told the stacks are known. */
-  readonly upserts: Array<{ rows: PullRequest[]; stacksKnown: boolean }>;
+  /**
+   * What the GraphQL list got when it asked for stacks: `listed` (the
+   * default) keeps each PR's `stack`; `refused` and `unsupported` drop it.
+   */
+  stacks?: "listed" | "refused" | "unsupported";
+  /** Every `upsertPrs` call. */
+  readonly upserts: Array<{ rows: readonly ObservedPr[] }>;
 }
+
+/** A PR as a read that couldn't see stacks has it. */
+const unseenStack = ({ stack: _stack, ...rest }: PullRequest): ObservedPr => rest;
 
 function makeDeps(db: Db, fakes: Fakes): PollDeps {
   const deps = {
@@ -132,17 +139,18 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
               (updatedSince ? `:since=${updatedSince}` : ""),
           );
           return fakes.listOpen(updatedSince).pipe(
-            Effect.map(
-              (prs): OpenPrList => ({
-                prs,
-                stacks: withStacks ? (fakes.stacks ?? "listed") : "unknown",
-              }),
-            ),
+            Effect.map((prs): OpenPrList => {
+              const stacks = withStacks ? (fakes.stacks ?? "listed") : "refused";
+              return {
+                prs: stacks === "listed" ? prs : prs.map(unseenStack),
+                hostPredatesStacks: stacks === "unsupported",
+              };
+            }),
           );
         },
         listOpenRest: () => {
           fakes.log.push("list:rest");
-          return fakes.listOpenRest();
+          return fakes.listOpenRest().pipe(Effect.map((prs) => prs.map(unseenStack)));
         },
         listClosedSince: () => {
           fakes.log.push("closed-since");
@@ -168,10 +176,10 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
         }),
     },
     prService: {
-      upsertPrs: (rows: PullRequest[], options?: { stacksKnown?: boolean }) =>
+      upsertPrs: (rows: readonly ObservedPr[]) =>
         Effect.sync(() => {
           fakes.log.push(`upsert:${rows.map((r) => r.headSha).join(",")}`);
-          fakes.upserts.push({ rows, stacksKnown: options?.stacksKnown ?? false });
+          fakes.upserts.push({ rows });
         }),
       markPrsClosed: () => Effect.void,
     },
@@ -388,7 +396,6 @@ describe("syncRepoOpenPrs stack membership", () => {
     await sync(env, [pr(1), pr(2, { stack: STACKED })]);
 
     expect(env.upserts).toHaveLength(1);
-    expect(env.upserts[0]?.stacksKnown).toBe(true);
     expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([STACKED, null]);
   });
 
@@ -406,13 +413,26 @@ describe("syncRepoOpenPrs stack membership", () => {
 
   it("keeps the stored stack when GitHub refused the stack fields", async () => {
     const stored = pr(1, { stack: STACKED });
-    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unknown" });
+    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "refused" });
 
     const result = await sync(env, [stored]);
 
-    expect(env.upserts[0]?.stacksKnown).toBe(false);
-    // Downstream (the broadcast) sees what SQLite holds, not the list's nulls.
+    // Written without a stack, so `upsertPrs` leaves the stored one be.
+    expect(env.upserts[0]?.rows[0]).not.toHaveProperty("stack");
+    // Downstream (the broadcast) sees what SQLite holds.
     expect(result?.prs[0]?.stack).toEqual(STACKED);
+  });
+
+  // Regression: a list that couldn't see stacks must not read as every stack
+  // dissolving.
+  it("announces no stack when the list couldn't see them", async () => {
+    const stored = [pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })];
+    const env = setup({ listOpen: () => Effect.succeed([pr(1), pr(2)]), stacks: "refused" });
+
+    const result = await sync(env, stored);
+
+    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([]);
+    expect(result?.prs.map((p) => p.stack)).toEqual([STACKED, { number: 9, position: 1 }]);
   });
 
   it("keeps the stored stack across a REST fallback", async () => {
@@ -431,7 +451,7 @@ describe("syncRepoOpenPrs stack membership", () => {
 
     const result = await sync(env, [stored]);
 
-    expect(env.upserts[0]?.stacksKnown).toBe(false);
+    expect(env.upserts[0]?.rows[0]).not.toHaveProperty("stack");
     expect(result?.prs[0]?.stack).toEqual(STACKED);
   });
 

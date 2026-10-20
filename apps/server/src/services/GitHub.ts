@@ -1,14 +1,8 @@
-import type {
-  MergeEligibility,
-  MergeMethod,
-  Org,
-  PullRequest,
-  Repository,
-  Team,
-} from "@revv/shared";
-import { Context, Effect, Layer, Result } from "effect";
+import type { MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
+import { Context, Effect, Result, Layer } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { logError } from "../logger";
 import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
@@ -76,7 +70,8 @@ function parseRepoFullName(
   return Effect.succeed({ owner, repo });
 }
 
-function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest {
+/** REST has no stacks, so the row leaves `stack` out: see {@link ObservedPr}. */
+function mapPr(raw: Record<string, unknown>, repositoryId: string): ObservedPr {
   const user = raw.user as Record<string, unknown>;
   const head = raw.head as Record<string, unknown>;
   const base = raw.base as Record<string, unknown>;
@@ -111,9 +106,6 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     updatedAt: raw.updated_at as string,
     fetchedAt: new Date().toISOString(),
     closedAt: (raw.closed_at as string | null) ?? null,
-    // REST has no stacks. Callers never write this null over a stored value;
-    // see `upsertPrs`.
-    stack: null,
   };
 }
 
@@ -226,7 +218,8 @@ export interface GitHubGatewayService {
      *
      * Diff sizes are left at 0/0/0, as the REST list did; `prs.diffStats`
      * fills them in for the PRs whose head moved. Stack membership comes along
-     * unless `withStacks` is false or GitHub won't give it; `stacks` says which.
+     * unless `withStacks` is false or GitHub won't give it, when each PR's
+     * `stack` is left out (see `ObservedPr`).
      * `updatedSince` narrows it to the PRs updated at or after that time.
      */
     readonly listOpen: (
@@ -257,7 +250,7 @@ export interface GitHubGatewayService {
       repositoryId: string,
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<ObservedPr[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
     /**
      * The open-PR list signature of many repos (same host, same token) in one
      * GraphQL point per 80 repos — what lets the poll skip `prs.listOpen` for
@@ -273,7 +266,7 @@ export interface GitHubGatewayService {
       prNumber: number,
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<ObservedPr, GitHubError, DbService | GitHubEtagCache | SettingsService>;
     /**
      * Many PRs of one repo by number, any state, in one GraphQL request per 50
      * (see `getPrsViaGraphql`). Absent from the map when GitHub couldn't say.
@@ -284,7 +277,7 @@ export interface GitHubGatewayService {
       prNumbers: readonly number[],
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<Map<number, PullRequest>, GitHubError, SettingsService>;
+    ) => Effect.Effect<Map<number, ObservedPr>, GitHubError, SettingsService>;
     /**
      * Diff size for many PRs of one repo, keyed by PR number.
      *
@@ -1090,17 +1083,22 @@ const prsGateway: GitHubGatewayService["prs"] = {
       // pill would vanish rather than degrade. Ask once with them; on a schema
       // complaint, ask again without and let `allowedMethods` come back empty,
       // which the UI already reads as "offer all three".
+      // `viewerCanMergeAsAdmin` is newer still and gets the same treatment on
+      // its own, so a host that knows the merge methods but not it keeps
+      // them; without it, an ADMIN permission stands in for the answer.
       const MERGE_METHOD_FIELDS = [
         "mergeCommitAllowed",
         "squashMergeAllowed",
         "rebaseMergeAllowed",
       ];
-      const buildQuery = (withMergeMethods: boolean): string => `
+      const ADMIN_MERGE_FIELDS = ["viewerCanMergeAsAdmin"];
+      const buildQuery = (withAdminMerge: boolean, withMergeMethods: boolean): string => `
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
               mergeable
               mergeStateStatus
+              ${withAdminMerge ? ADMIN_MERGE_FIELDS.join("\n              ") : ""}
             }
             viewerPermission
             ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
@@ -1112,6 +1110,7 @@ const prsGateway: GitHubGatewayService["prs"] = {
           pullRequest: {
             mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
             mergeStateStatus: string | null;
+            viewerCanMergeAsAdmin?: boolean | null;
           } | null;
           viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
           mergeCommitAllowed: boolean | null;
@@ -1119,14 +1118,21 @@ const prsGateway: GitHubGatewayService["prs"] = {
           rebaseMergeAllowed: boolean | null;
         } | null;
       }
-      const ask = (withMergeMethods: boolean) =>
-        githubGraphql<Resp>(
-          buildQuery(withMergeMethods),
-          { owner, repo, number: prNumber },
-          token,
-          apiBase,
-        );
-      const { value: data } = yield* withSchemaFallback(ask, MERGE_METHOD_FIELDS);
+      const ask = (withAdminMerge: boolean) =>
+        withSchemaFallback(
+          (withMergeMethods: boolean) =>
+            githubGraphql<Resp>(
+              buildQuery(withAdminMerge, withMergeMethods),
+              { owner, repo, number: prNumber },
+              token,
+              apiBase,
+            ),
+          MERGE_METHOD_FIELDS,
+        ).pipe(Effect.map(({ value }) => value));
+      const { value: data, modern: adminMergeAsked } = yield* withSchemaFallback(
+        ask,
+        ADMIN_MERGE_FIELDS,
+      );
       const pr = data.repository?.pullRequest;
       if (!pr) {
         return yield* Effect.fail(
@@ -1138,6 +1144,12 @@ const prsGateway: GitHubGatewayService["prs"] = {
       }
       const perm = data.repository?.viewerPermission;
       const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // GitHub's own answer covers bypass lists and rulesets that a
+      // permission level can't see; the ADMIN guess is only for hosts that
+      // can't give it.
+      const canBypassProtections = adminMergeAsked
+        ? pr.viewerCanMergeAsAdmin === true
+        : perm === "ADMIN";
       // Repos routinely disable merge strategies (squash-only is the common
       // house style). Offering a disabled one earns a 405 from the merge
       // endpoint, so the allowed set travels with the eligibility answer.
@@ -1147,6 +1159,7 @@ const prsGateway: GitHubGatewayService["prs"] = {
       if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
       return {
         canMerge,
+        canBypassProtections,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
         allowedMethods,

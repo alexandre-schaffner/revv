@@ -6,34 +6,55 @@ export function isMergeStateSettling(mergeStateStatus: string): boolean {
 }
 
 /**
- * Why GitHub would refuse to merge this PR right now, or null when it would
- * take it. `BLOCKED` alone doesn't say which rule holds it, so the review
- * decision and CI rollup from the conversation narrow it down.
+ * What a merge press would meet right now.
+ *
+ * - `open`    — GitHub would take it.
+ * - `bypass`  — branch protection holds it (`BLOCKED`, for `rule`), but the
+ *               viewer may merge past it; the UI says so and always confirms.
+ * - `blocked` — GitHub would refuse it, for `reason`.
  */
-export function mergeBlocker(input: {
+export type MergeGate =
+  | { readonly kind: "open" }
+  | { readonly kind: "bypass"; readonly rule: string }
+  | { readonly kind: "blocked"; readonly reason: string };
+
+/**
+ * `BLOCKED` alone doesn't say which rule holds the PR, so the review decision
+ * and CI rollup from the conversation narrow it down. Only `BLOCKED` is
+ * bypassable: conflicts, a draft, or a state GitHub is still computing stop
+ * everyone.
+ */
+export function mergeGate(input: {
   mergeStateStatus: string;
   reviewDecision: ReviewDecision | null;
   ciState: CiRollupState | null;
-}): string | null {
+  canBypassProtections: boolean;
+}): MergeGate {
   const state = input.mergeStateStatus.toUpperCase();
-  if (MERGEABLE_STATES.has(state)) return null;
+  if (MERGEABLE_STATES.has(state)) return { kind: "open" };
   switch (state) {
     case "DIRTY":
-      return "This branch has conflicts that must be resolved";
+      return { kind: "blocked", reason: "This branch has conflicts that must be resolved" };
     case "BEHIND":
-      return "This branch is out of date with the base branch";
+      return { kind: "blocked", reason: "This branch is out of date with the base branch" };
     case "DRAFT":
-      return "Draft pull requests can't be merged";
+      return { kind: "blocked", reason: "Draft pull requests can't be merged" };
     case "UNKNOWN":
-      return "GitHub is still checking whether this can be merged";
+      return { kind: "blocked", reason: "GitHub is still checking whether this can be merged" };
   }
-  if (input.reviewDecision === "review_required") return "An approving review is required";
-  if (input.reviewDecision === "changes_requested") return "Changes were requested";
-  if (input.ciState === "failure" || input.ciState === "error") {
-    return "Required checks are failing";
-  }
-  if (input.ciState === "pending" || input.ciState === "expected") {
-    return "Required checks haven't finished";
-  }
+  const rule = protectionRule(input.reviewDecision, input.ciState);
+  return state === "BLOCKED" && input.canBypassProtections
+    ? { kind: "bypass", rule }
+    : { kind: "blocked", reason: rule };
+}
+
+function protectionRule(
+  reviewDecision: ReviewDecision | null,
+  ciState: CiRollupState | null,
+): string {
+  if (reviewDecision === "review_required") return "An approving review is required";
+  if (reviewDecision === "changes_requested") return "Changes were requested";
+  if (ciState === "failure" || ciState === "error") return "Required checks are failing";
+  if (ciState === "pending" || ciState === "expected") return "Required checks haven't finished";
   return "Merging is blocked by branch protection";
 }

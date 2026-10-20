@@ -143,6 +143,13 @@ export type MergeMethod = "merge" | "squash" | "rebase";
 
 export interface MergeEligibility {
   canMerge: boolean;
+  /**
+   * The viewer may merge past branch protections (GitHub's
+   * `viewerCanMergeAsAdmin`; on a host too old to answer, an ADMIN
+   * permission). Such a viewer can still merge a `BLOCKED` PR, never a
+   * conflicting or draft one.
+   */
+  canBypassProtections: boolean;
   mergeable: boolean;
   mergeStateStatus: string;
   /**

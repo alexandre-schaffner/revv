@@ -7,6 +7,7 @@
 import type { PullRequest } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import {
   type GraphqlConnection,
   githubGraphqlPartial,
@@ -116,8 +117,11 @@ function restLogin(actor: GqlActor): string | null {
   return actor.__typename === "Bot" ? `${actor.login}[bot]` : actor.login;
 }
 
-/** Map an `openPrsQuery` node to the same row `mapPr` builds from REST. */
-function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
+/**
+ * Map an `openPrsQuery` node to the same row `mapPr` builds from REST. `stack`
+ * is set only when the node was asked for it.
+ */
+function mapPrNode(node: GqlOpenPr, repositoryId: string): ObservedPr {
   const requestedReviewers = node.reviewRequests.nodes.flatMap((n) => {
     // Team requests have no login; REST lists them separately too.
     const login = n?.requestedReviewer ? restLogin(n.requestedReviewer) : null;
@@ -151,23 +155,25 @@ function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
     updatedAt: node.updatedAt,
     fetchedAt: new Date().toISOString(),
     closedAt: node.closedAt,
-    stack:
-      node.stack && node.stackEntry
-        ? { number: node.stack.number, position: node.stackEntry.position }
-        : null,
+    ...(node.stack === undefined
+      ? {}
+      : {
+          stack:
+            node.stack && node.stackEntry
+              ? { number: node.stack.number, position: node.stackEntry.position }
+              : null,
+        }),
   };
 }
 
-/** A repo's open PRs, and what the list could tell about their stacks. */
+/**
+ * A repo's open PRs. Each one's `stack` is set when the list saw stacks, and
+ * absent when they weren't asked for or GitHub refused them.
+ */
 export interface OpenPrList {
-  readonly prs: PullRequest[];
-  /**
-   * `listed`: every PR's `stack` is GitHub's. Otherwise each one is "unknown",
-   * not "unstacked", and must not be written over a stored one: `unsupported`
-   * when the host predates stacks, which is worth remembering; `unknown` when
-   * they weren't asked for, or GitHub refused them this once.
-   */
-  readonly stacks: "listed" | "unsupported" | "unknown";
+  readonly prs: ObservedPr[];
+  /** GitHub refused the stack fields as unknown: the host predates stacks. */
+  readonly hostPredatesStacks: boolean;
 }
 
 /**
@@ -204,7 +210,7 @@ export function listOpenPrsViaGraphql(
   if (!withStacks) {
     return list(false).pipe(
       retryTransient,
-      Effect.map((prs): OpenPrList => ({ prs, stacks: "unknown" })),
+      Effect.map((prs): OpenPrList => ({ prs, hostPredatesStacks: false })),
     );
   }
   // Stacks are garnish on the poll's most important request, so any failure
@@ -219,12 +225,7 @@ export function listOpenPrsViaGraphql(
     STACK_TOKENS,
     { anyGraphqlFailure: true },
   ).pipe(
-    Effect.map(
-      ({ value, modern, outdated }): OpenPrList => ({
-        prs: value,
-        stacks: modern ? "listed" : outdated ? "unsupported" : "unknown",
-      }),
-    ),
+    Effect.map(({ value, outdated }): OpenPrList => ({ prs: value, hostPredatesStacks: outdated })),
   );
 }
 
@@ -407,7 +408,7 @@ export function getPrsViaGraphql(
   numbers: readonly number[],
   token: string,
   apiBase: string,
-): Effect.Effect<Map<number, PullRequest>, GitHubError> {
+): Effect.Effect<Map<number, ObservedPr>, GitHubError> {
   return prsByNumber<GqlPrDetail>(
     "PrDetails",
     owner,
@@ -421,7 +422,7 @@ export function getPrsViaGraphql(
     Effect.map(
       (nodes) =>
         new Map(
-          [...nodes].map(([n, node]): [number, PullRequest] => [
+          [...nodes].map(([n, node]): [number, ObservedPr] => [
             n,
             {
               ...mapPrNode(node, repositoryId),
@@ -430,8 +431,6 @@ export function getPrsViaGraphql(
               additions: node.additions,
               deletions: node.deletions,
               changedFiles: node.changedFiles,
-              // The REST detail this replaces carried no stacks either.
-              stack: null,
             },
           ]),
         ),

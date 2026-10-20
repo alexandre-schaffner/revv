@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-or
 import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import type { SyncWatermark } from "./sync-engine/watermark";
@@ -151,14 +152,12 @@ export class PullRequestService extends Context.Service<
      *     zeroes that must not overwrite real numbers from a detail fetch.
      *     Real stats arrive via `DiffCacheService.cacheFiles`, which derives
      *     them from the changed-file list alongside the cached diff.
-     *   - `stack` is only taken from a source that saw stacks
-     *     (`stacksKnown`): the open-PR poll's GraphQL list. Everything else
-     *     holds a REST payload, whose `null` means "unknown", and would erase
-     *     what the list learned. A fresh insert takes it either way.
+     *   - `stack_number` / `stack_position` are only taken from a row that
+     *     carries `stack` (see {@link ObservedPr}): a source that couldn't see
+     *     stacks leaves the stored ones be. A fresh insert takes `stack ?? null`.
      */
     readonly upsertPrs: (
-      prs: PullRequest[],
-      options?: { readonly stacksKnown?: boolean },
+      prs: readonly ObservedPr[],
     ) => Effect.Effect<void, ValidationError, DbService>;
     readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
     /**
@@ -352,14 +351,18 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       return rowToPr(row.pr, row.avatarContent);
     }),
 
-  upsertPrs: (prs, { stacksKnown = false } = {}) =>
+  upsertPrs: (prs) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
       if (prs.length === 0) return;
       const bodyMentionsByPrId = new Map<string, string[]>();
-      yield* Effect.tryPromise({
+      yield* Effect.try({
         try: () => {
-          const values = prs.map((pr) => {
+          // Rows that saw their stack and rows that didn't take different
+          // conflict `set`s, so one statement each.
+          const withStack: (typeof pullRequests.$inferInsert)[] = [];
+          const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
+          for (const pr of prs) {
             // Extract @-mentions from the PR body. Used verbatim for a fresh
             // insert; merged (not assigned) into an existing row afterwards.
             const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
@@ -390,13 +393,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             if (pr.headSha !== null) base.headSha = pr.headSha;
             if (pr.baseSha !== null) base.baseSha = pr.baseSha;
             if (pr.closedAt !== null) base.closedAt = pr.closedAt;
-            if (pr.stack !== null) {
+            if (pr.stack) {
               base.stackNumber = pr.stack.number;
               base.stackPosition = pr.stack.position;
             }
-            return base;
-          });
-          return Promise.resolve(
+            (pr.stack === undefined ? withoutStack : withStack).push(base);
+          }
+          const upsert = (values: (typeof pullRequests.$inferInsert)[], stackSeen: boolean) =>
             db
               .insert(pullRequests)
               .values(values)
@@ -446,8 +449,8 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   // erased the comment-sourced half on every poll tick.
                   //
                   // `stack_number` / `stack_position` likewise, unless the
-                  // source saw stacks: see the interface doc.
-                  ...(stacksKnown
+                  // row saw its stack: see the interface doc.
+                  ...(stackSeen
                     ? {
                         stackNumber: sql`excluded.stack_number`,
                         stackPosition: sql`excluded.stack_position`,
@@ -455,8 +458,11 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                     : {}),
                 },
               })
-              .run(),
-          );
+              .run();
+          db.transaction(() => {
+            if (withStack.length > 0) upsert(withStack, true);
+            if (withoutStack.length > 0) upsert(withoutStack, false);
+          });
         },
         catch: (e) => new ValidationError({ message: String(e) }),
       });

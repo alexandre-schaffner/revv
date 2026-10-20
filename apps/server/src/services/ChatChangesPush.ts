@@ -710,10 +710,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // head lands, or the review page pairs the new head with the old
           // files until the next poll notices.
           if (headSha !== fresh.headSha) yield* diffCache.invalidateFiles(params.pr.id);
+          // Without `stack`: this push says nothing about it, and the list
+          // poll may have written a newer one since `fresh` was read.
+          const { stack: _stack, ...stored } = fresh;
           yield* prService
             .upsertPrs([
               {
-                ...fresh,
+                ...stored,
                 headSha,
                 updatedAt,
                 fetchedAt: now,

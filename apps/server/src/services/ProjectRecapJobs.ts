@@ -16,7 +16,7 @@
 // service is the sole writer. Content writes go through the recap MCP tool
 // handlers in `ai/providers/recap-tools/`.
 
-import type { ProjectRecap, PullRequest, RecapPeriod, RecapStreamEvent } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
@@ -30,6 +30,7 @@ import type {
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
 import { type RecapError, ValidationError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withTraceAnchor } from "../observability/span-graft";
@@ -547,7 +548,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 `PR read failed during backfill for ${repoFullName}:`,
                 err instanceof Error ? err.message : String(err),
               );
-              return new Map<number, PullRequest>();
+              return new Map<number, ObservedPr>();
             }),
           ),
         );

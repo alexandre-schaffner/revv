@@ -1,11 +1,13 @@
 <script lang="ts">
 /*
- * The second step before a reviewer merges someone else's pull request. The
- * merge pill sits beside Approve, so it never fires on one click: this names
- * the PR, its author, and where it lands, and the merge happens from here.
+ * The second step before a reviewer merges someone else's pull request, or
+ * before anyone merges past branch protections. The merge pill sits beside
+ * Approve, so it never fires on one click: this names the PR, its author,
+ * where it lands, and any rule it bypasses, and the merge happens from here.
  */
 import { AlertDialog } from "bits-ui";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
+import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
 import { buttonVariants } from "$lib/components/ui/button/index.js";
 import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
 import { cn } from "$lib/utils.js";
@@ -13,16 +15,29 @@ import { cn } from "$lib/utils.js";
 interface Props {
   open: boolean;
   prNumber: number;
-  authorLogin: string;
+  /** Null when the viewer is merging their own pull request. */
+  authorLogin: string | null;
   targetBranch: string;
   /** The strategy's menu label, e.g. "Squash and merge". */
   methodLabel: string;
+  /** The branch-protection rule this merge bypasses, or null for a plain merge. */
+  bypassRule: string | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }
 
-let { open, prNumber, authorLogin, targetBranch, methodLabel, onOpenChange, onConfirm }: Props =
-  $props();
+let {
+  open,
+  prNumber,
+  authorLogin,
+  targetBranch,
+  methodLabel,
+  bypassRule,
+  onOpenChange,
+  onConfirm,
+}: Props = $props();
+
+const whose = $derived(authorLogin === null ? "your" : `${authorLogin}'s`);
 </script>
 
 <AlertDialog.Root {open} {onOpenChange}>
@@ -36,12 +51,18 @@ let { open, prNumber, authorLogin, targetBranch, methodLabel, onOpenChange, onCo
 					use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}
 				>
 					<div class="confirm-header">
-						<span class="confirm-icon" aria-hidden="true">
-							<GitMerge size={16} />
+						<span class="confirm-icon" class:is-bypass={bypassRule !== null} aria-hidden="true">
+							{#if bypassRule !== null}
+								<ShieldWarning size={16} />
+							{:else}
+								<GitMerge size={16} />
+							{/if}
 						</span>
 						<AlertDialog.Title>
 							{#snippet child({ props: titleProps })}
-								<h2 {...titleProps} class="confirm-title">Merge #{prNumber}?</h2>
+								<h2 {...titleProps} class="confirm-title">
+									{bypassRule !== null ? `Bypass rules and merge #${prNumber}?` : `Merge #${prNumber}?`}
+								</h2>
 							{/snippet}
 						</AlertDialog.Title>
 					</div>
@@ -49,8 +70,14 @@ let { open, prNumber, authorLogin, targetBranch, methodLabel, onOpenChange, onCo
 					<AlertDialog.Description>
 						{#snippet child({ props: descProps })}
 							<p {...descProps} class="confirm-description">
-								This merges {authorLogin}'s pull request into <code>{targetBranch}</code>
-								({methodLabel.toLowerCase()}). It can't be undone from Revv.
+								{#if bypassRule !== null}
+									{bypassRule}. This bypasses branch protections and merges {whose} pull request into
+									<code>{targetBranch}</code> anyway ({methodLabel.toLowerCase()}). It can't be
+									undone from Revv.
+								{:else}
+									This merges {whose} pull request into <code>{targetBranch}</code>
+									({methodLabel.toLowerCase()}). It can't be undone from Revv.
+								{/if}
 							</p>
 						{/snippet}
 					</AlertDialog.Description>
@@ -63,8 +90,13 @@ let { open, prNumber, authorLogin, targetBranch, methodLabel, onOpenChange, onCo
 							class={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'confirm-merge')}
 							onclick={onConfirm}
 						>
-							<GitMerge size={13} />
-							{methodLabel}
+							{#if bypassRule !== null}
+								<ShieldWarning size={13} />
+								Bypass rules and merge
+							{:else}
+								<GitMerge size={13} />
+								{methodLabel}
+							{/if}
 						</AlertDialog.Action>
 					</div>
 				</div>
@@ -124,6 +156,12 @@ let { open, prNumber, authorLogin, targetBranch, methodLabel, onOpenChange, onCo
 		background: color-mix(in srgb, var(--color-success) 12%, transparent);
 		color: var(--color-success);
 		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-success) 22%, transparent);
+	}
+
+	.confirm-icon.is-bypass {
+		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+		color: var(--color-warning);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 22%, transparent);
 	}
 
 	.confirm-title {

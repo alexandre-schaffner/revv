@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { pullRequests } from "../db/schema/pull-requests";
 import { DbError } from "../domain/errors";
+import { withStoredStack } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import {
@@ -117,7 +118,7 @@ const STACKLESS_RECHECK_MS = FULL_LIST_MAX_AGE_MS;
  * ones whose cached diff is now wrong. A PR new to the mirror has none.
  */
 export function movedRangePrIds(
-  prs: readonly PullRequest[],
+  prs: readonly Pick<PullRequest, "id" | "headSha" | "baseSha">[],
   existingMap: ReadonlyMap<string, PullRequest>,
 ): string[] {
   return prs
@@ -279,8 +280,7 @@ const listOpenPrs = (
       deps.github.prs.listOpenRest(repo.fullName, repo.id, live.token, apiBase),
       { errorLabel: `listPrs (REST) error for ${repo.fullName}` },
     );
-    // REST has no stacks.
-    return prs === null ? null : { prs, stacks: "unknown" };
+    return prs === null ? null : { prs, hostPredatesStacks: false };
   });
 
 /**
@@ -300,6 +300,7 @@ const listOpenPrsGraphql = (
   Effect.gen(function* () {
     const stacklessKey = accountHostKey(live.acc.id, repo.githubHost);
     const stacklessUntil = ctx.stacklessUntil.get(stacklessKey);
+    const withStacks = stacklessUntil === undefined || Date.now() >= stacklessUntil;
     const listing = yield* cycle.tryGuarded(
       live.acc,
       deps.github.prs.listOpen(
@@ -307,16 +308,13 @@ const listOpenPrsGraphql = (
         repo.id,
         live.token,
         apiBaseForHost(repo.githubHost),
-        {
-          withStacks: stacklessUntil === undefined || Date.now() >= stacklessUntil,
-          updatedSince,
-        },
+        { withStacks, updatedSince },
       ),
       { errorLabel: `listPrs error for ${repo.fullName}` },
     );
-    if (listing?.stacks === "unsupported") {
+    if (listing?.hostPredatesStacks) {
       ctx.stacklessUntil.set(stacklessKey, Date.now() + STACKLESS_RECHECK_MS);
-    } else if (listing?.stacks === "listed") {
+    } else if (listing && withStacks) {
       ctx.stacklessUntil.delete(stacklessKey);
     }
     return listing;
@@ -471,7 +469,6 @@ export const syncRepoOpenPrs = (
     // From here on, `prs` is what GitHub sent: everything, or just what moved.
     const { prs } = listing;
     const kept = delta?.kept ?? [];
-    const stacksKnown = listing.stacks === "listed";
 
     // Upsert PR authors into remote_users so their avatars are cached. Deduped
     // by login: a prolific author appears on many of a repo's open PRs, and
@@ -500,15 +497,7 @@ export const syncRepoOpenPrs = (
     // a newer stored row, and the supersede gate reads the stored row, so a
     // regressed `updated_at` would pass on the next cycle. See
     // `preserveHeadOnStaleRead`.
-    //
-    // A list that couldn't see stacks keeps the stored ones: its nulls mean
-    // "unknown", and passing them downstream would announce every stack
-    // dissolved until the next list that sees them.
-    const maskedPrs = prs.map((pr) => {
-      const existing = ctx.existingMap.get(pr.id);
-      const masked = preserveHeadOnStaleRead(existing, pr);
-      return stacksKnown ? masked : { ...masked, stack: existing?.stack ?? null };
-    });
+    const maskedPrs = prs.map((pr) => preserveHeadOnStaleRead(ctx.existingMap.get(pr.id), pr));
     const needsStats = maskedPrs.filter((pr) =>
       needsDiffStats(ctx.existingMap.get(pr.id), ctx.diffStatsHeadByPrId.get(pr.id), pr.headSha),
     );
@@ -557,7 +546,7 @@ export const syncRepoOpenPrs = (
       if (!invalidated) return null;
     }
 
-    const upserted = yield* withDb(db, prService.upsertPrs(rows, { stacksKnown })).pipe(
+    const upserted = yield* withDb(db, prService.upsertPrs(rows)).pipe(
       Effect.as(true),
       Effect.tapError((err) =>
         Effect.sync(() => {
@@ -567,9 +556,15 @@ export const syncRepoOpenPrs = (
       Effect.orElseSucceed(() => false),
     );
 
+    // The rows as they now stand in SQLite: a list that couldn't see stacks
+    // left the stored ones be, and everything downstream (the stack
+    // announcements, the broadcast) must read those, or it would announce
+    // every stack dissolved until the next list that sees them.
+    const landed = rows.map((pr) => withStoredStack(pr, ctx.existingMap.get(pr.id)));
+
     if (upserted) {
       const accountId = cycle.repoToAccountId.get(repo.id);
-      const stacks = movedStackNumbers(rows, ctx.existingMap);
+      const stacks = movedStackNumbers(landed, ctx.existingMap);
       if (accountId && stacks.size > 0) yield* announceStacks(deps, accountId, repo.id, stacks);
     }
 
@@ -604,10 +599,10 @@ export const syncRepoOpenPrs = (
       );
     }
 
-    // The repo's whole open list as it now stands in SQLite: the masked rows,
+    // The repo's whole open list as it now stands in SQLite: the landed rows,
     // not the raw payload, since everything downstream (the supersede gate,
     // the change detection, the broadcast) must see the view that landed.
-    const current = [...rows, ...kept];
+    const current = [...landed, ...kept];
 
     // Only a list that fully landed may stand in for the next ones: rows
     // still missing their diff stats must come back round to get them.

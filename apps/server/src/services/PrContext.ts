@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema";
 import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { DiffCacheService, hasCompleteCachedFiles, toCachedDiffFiles } from "./DiffCache";
@@ -111,7 +112,7 @@ export class PrContextService extends Context.Service<
       externalIds: readonly number[],
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<Map<number, PullRequest>, GitHubError, SettingsService>;
+    ) => Effect.Effect<Map<number, ObservedPr>, GitHubError, SettingsService>;
     /**
      * Search for PRs closed (or merged) in a time window. Thin forward to the
      * GitHub gateway's issue-search path — note the narrower requirement

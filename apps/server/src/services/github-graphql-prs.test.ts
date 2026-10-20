@@ -172,5 +172,7 @@ describe("getPrsViaGraphql", () => {
       additions: 3,
       changedFiles: 2,
     });
+    // The batch doesn't ask for stacks, so it can't say a PR isn't stacked.
+    expect(prs.get(7)).not.toHaveProperty("stack");
   });
 });

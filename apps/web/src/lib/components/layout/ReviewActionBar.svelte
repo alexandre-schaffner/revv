@@ -7,6 +7,7 @@ import GitMerge from "phosphor-svelte/lib/GitMerge";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import PenNib from "phosphor-svelte/lib/PenNib";
+import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
 import Stack from "phosphor-svelte/lib/Stack";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
@@ -40,7 +41,7 @@ import {
 } from "$lib/stores/reviewBar.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
-import { mergeBlocker } from "$lib/utils/merge-blocker";
+import { type MergeGate, mergeGate } from "$lib/utils/merge-blocker";
 import MergeConfirmDialog from "./MergeConfirmDialog.svelte";
 
 const pr = $derived(getSelectedPr());
@@ -192,27 +193,31 @@ const stackUnknownReason = $derived.by(() => {
     : "Reading the stack this PR sits in…";
 });
 
-const mergeBlockedReason = $derived(
-  stackUnknownReason ??
-    (mergeEligibility
-      ? mergeBlocker({
-          mergeStateStatus: mergeEligibility.mergeStateStatus,
-          reviewDecision: conversationReviewDecision,
-          ciState: conversationCiState,
-        })
-      : null),
-);
+const mergeGateNow = $derived.by((): MergeGate => {
+  if (stackUnknownReason) return { kind: "blocked", reason: stackUnknownReason };
+  if (!mergeEligibility) return { kind: "open" };
+  return mergeGate({
+    mergeStateStatus: mergeEligibility.mergeStateStatus,
+    reviewDecision: conversationReviewDecision,
+    ciState: conversationCiState,
+    canBypassProtections: mergeEligibility.canBypassProtections,
+  });
+});
+const mergeBlockedReason = $derived(mergeGateNow.kind === "blocked" ? mergeGateNow.reason : null);
+/** The branch-protection rule this merge would bypass, or null. */
+const bypassRule = $derived(mergeGateNow.kind === "bypass" ? mergeGateNow.rule : null);
 const mergeDisabled = $derived(
   ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null,
 );
 
 /**
  * The author merges their own PR straight away. Anyone else confirms first:
- * merging someone else's work is never a single press.
+ * merging someone else's work is never a single press. Neither is merging past
+ * branch protections, the author's own PR included.
  */
 function requestMerge(option: MergeOption): void {
   mergeMenuOpen = false;
-  if (isPrOwner) {
+  if (isPrOwner && bypassRule === null) {
     void runMerge(option.method);
     return;
   }
@@ -266,10 +271,17 @@ async function runMerge(method: MergeMethod): Promise<void> {
         class="merge-pill-main"
         disabled={mergeDisabled}
         onclick={() => requestMerge(primaryMerge)}
-        title={mergeBlockedReason ?? primaryMerge.menuLabel}
+        title={mergeBlockedReason ??
+          (bypassRule
+            ? `${bypassRule}. You can bypass branch protections and merge anyway.`
+            : primaryMerge.menuLabel)}
       >
-        <GitMerge size={16} />
-        {mergeSubmitting === primaryMerge.method ? "Merging…" : primaryMerge.label}
+        {#if bypassRule}<ShieldWarning size={16} />{:else}<GitMerge size={16} />{/if}
+        {#if mergeSubmitting === primaryMerge.method}
+          Merging…
+        {:else}
+          {primaryMerge.label}{bypassRule ? " (bypass rules)" : ""}
+        {/if}
       </button>
       {#if mergeOptions.length > 1 || openAbove}
         <Popover bind:open={mergeMenuOpen}>
@@ -442,9 +454,10 @@ async function runMerge(method: MergeMethod): Promise<void> {
   <MergeConfirmDialog
     open={mergeConfirmOpen}
     prNumber={pr.externalId}
-    authorLogin={pr.authorLogin}
+    authorLogin={isPrOwner ? null : pr.authorLogin}
     targetBranch={pr.targetBranch}
     methodLabel={(mergeToConfirm ?? primaryMerge).menuLabel}
+    {bypassRule}
     onOpenChange={(open) => (mergeConfirmOpen = open)}
     onConfirm={() => {
       mergeConfirmOpen = false;
