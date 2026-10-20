@@ -1,4 +1,4 @@
-import type { WalkthroughGenerationMode } from "@revv/shared";
+import type { WalkthroughGenerationMode, WalkthroughStackSnapshot } from "@revv/shared";
 import { Effect } from "effect";
 import { logError } from "../logger";
 import {
@@ -16,6 +16,7 @@ import {
   parseNumstat,
   resolveCounts,
 } from "./incremental-diff";
+import { changedFiles, type DiffFingerprint, fingerprintFiles } from "./stacks/fingerprint";
 
 export interface PromptFile {
   readonly filename: string;
@@ -35,11 +36,35 @@ interface PromptFilesContext {
   readonly files: ReadonlyArray<PromptFile>;
   readonly generationMode: WalkthroughGenerationMode;
   readonly baseHeadSha: string | null;
+  /** The GitHub stack the PR is a layer of, captured at job start. */
+  readonly stack?: WalkthroughStackSnapshot | null;
+  /** The parent review's fingerprint of the layer's own changes, if recorded. */
+  readonly parentFingerprint?: DiffFingerprint | null;
 }
+
+export type PromptDiffSource =
+  | "full_pr"
+  | "incremental_range"
+  | "full_pr_fallback"
+  | "stack_layer_delta";
 
 export interface PromptFilesResult {
   readonly files: ReadonlyArray<PromptFile>;
-  readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
+  readonly diffSource: PromptDiffSource;
+}
+
+/**
+ * A stacked layer's current patches, kept to the files whose own changes
+ * differ from what the parent review read. After a rebase onto a moved
+ * layer, `git diff oldHead newHead` is mostly the lower layer's churn; the
+ * layer's three-dot file list, filtered by fingerprint, is only its own.
+ */
+export function stackLayerDeltaFiles(
+  files: ReadonlyArray<PromptFile>,
+  parentFingerprint: DiffFingerprint,
+): PromptFile[] {
+  const changed = new Set(changedFiles(parentFingerprint, fingerprintFiles(files)));
+  return files.filter((f) => changed.has(f.filename));
 }
 
 function authedRepoUrl(ctx: PromptFilesContext): string {
@@ -52,6 +77,12 @@ export function resolveIncrementalPromptFiles(
 ): Effect.Effect<PromptFilesResult> {
   if (ctx.generationMode !== "incremental" || !ctx.baseHeadSha) {
     return Effect.succeed({ files: ctx.files, diffSource: "full_pr" });
+  }
+  if (ctx.stack && ctx.parentFingerprint) {
+    return Effect.succeed({
+      files: stackLayerDeltaFiles(ctx.files, ctx.parentFingerprint),
+      diffSource: "stack_layer_delta",
+    });
   }
   const baseHeadSha = ctx.baseHeadSha;
 

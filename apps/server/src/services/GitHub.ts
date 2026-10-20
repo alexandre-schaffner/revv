@@ -10,9 +10,12 @@ import { Context, Effect, Layer, Result } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { logError } from "../logger";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
+  getPrsViaGraphql,
+  listClosedPrNumbersSince,
   listOpenPrsViaGraphql,
   type OpenPrList,
   type OpenPrListSignature,
@@ -223,20 +226,42 @@ interface GitHubGatewayFlatService {
    * Diff sizes are left at 0/0/0, as the REST list did; `listPrDiffStats`
    * fills them in for the PRs whose head moved. Stack membership comes along
    * unless `withStacks` is false or GitHub won't give it; `stacks` says which.
+   * `updatedSince` narrows it to the PRs updated at or after that time.
    */
   readonly listPrs: (
     repoFullName: string,
     repositoryId: string,
     token: string,
     apiBase?: string,
-    options?: { readonly withStacks?: boolean },
+    options?: { readonly withStacks?: boolean; readonly updatedSince?: string | null },
   ) => Effect.Effect<OpenPrList, GitHubError, SettingsService>;
+  /**
+   * Numbers of the PRs that closed or merged at or after `since` — what a
+   * {@link listPrs} read with `updatedSince` can't see. Null when unknown.
+   */
+  readonly listClosedPrsSince: (
+    repoFullName: string,
+    since: string,
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<number[] | null, GitHubError, SettingsService>;
   /**
    * {@link listPrs} over REST's `GET /pulls`, for when the GraphQL budget is
    * spent. Heavier per changed page, but conditional: a 304 costs nothing
    * against the REST limit, so a quiet repo stays free (except on GitHub
    * Enterprise, whose signed avatar URLs defeat the ETag).
    */
+  /**
+   * Many PRs of one repo by number, any state, in one GraphQL request per 50
+   * (see `getPrsViaGraphql`). Absent from the map when GitHub couldn't say.
+   */
+  readonly getPrs: (
+    repoFullName: string,
+    repositoryId: string,
+    prNumbers: readonly number[],
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<Map<number, PullRequest>, GitHubError, SettingsService>;
   readonly listPrsRest: (
     repoFullName: string,
     repositoryId: string,
@@ -563,11 +588,36 @@ interface GitHubGatewayFlatService {
    * Merge a pull request via the REST API. GitHub returns 405 when the PR
    * is not mergeable (conflicts, failing checks, or not approved); 422 when
    * the merge method is not enabled for the repo.
+   *
+   * `options.sha` pins the merge to the head the caller saw: GitHub answers
+   * 409 (`GitHubApiError` with `status: 409`) when the head moved since.
    */
   readonly mergePullRequest: (
     repoFullName: string,
     prNumber: number,
     mergeMethod: MergeMethod,
+    token: string,
+    apiBase?: string,
+    options?: { readonly sha?: string },
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /** Point a PR at a different base branch (`PATCH /pulls/:n {base}`). */
+  readonly updatePullRequestBase: (
+    repoFullName: string,
+    prNumber: number,
+    base: string,
+    token: string,
+    apiBase?: string,
+  ) => Effect.Effect<void, GitHubError, SettingsService>;
+  /**
+   * Hand a PR to GitHub's auto-merge, which merges it once its requirements
+   * pass, whether or not Revv is running. `expectedHeadOid` pins it: GitHub
+   * refuses to enable it, and drops it later, when the head moved. Takes the
+   * GraphQL node id, the only handle the mutation accepts.
+   */
+  readonly enablePullRequestAutoMerge: (
+    nodeId: string,
+    mergeMethod: MergeMethod,
+    expectedHeadOid: string,
     token: string,
     apiBase?: string,
   ) => Effect.Effect<void, GitHubError, SettingsService>;
@@ -689,11 +739,39 @@ export interface GhReviewThread {
 }
 
 const githubGatewayFlat: GitHubGatewayFlatService = {
-  listPrs: (repoFullName, repositoryId, token, explicitApiBase, { withStacks = true } = {}) =>
+  listPrs: (
+    repoFullName,
+    repositoryId,
+    token,
+    explicitApiBase,
+    { withStacks = true, updatedSince = null } = {},
+  ) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      return yield* listOpenPrsViaGraphql(owner, repo, repositoryId, token, apiBase, withStacks);
+      return yield* listOpenPrsViaGraphql(
+        owner,
+        repo,
+        repositoryId,
+        token,
+        apiBase,
+        withStacks,
+        updatedSince,
+      );
+    }).pipe(retryTransient),
+
+  getPrs: (repoFullName, repositoryId, prNumbers, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      return yield* getPrsViaGraphql(owner, repo, repositoryId, prNumbers, token, apiBase);
+    }).pipe(retryTransient),
+
+  listClosedPrsSince: (repoFullName, since, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      return yield* listClosedPrNumbersSince(owner, repo, token, apiBase, since);
     }).pipe(retryTransient),
 
   listPrsRest: (repoFullName, repositoryId, token, explicitApiBase) =>
@@ -763,7 +841,7 @@ ${fields}
         // Direct fetch, not the shared GraphQL helper (same reason as
         // `getOpenPrCounts`): the helper rejects on any error entry, but one
         // unreachable PR shouldn't cost the other 99 their stats.
-        const response = yield* Effect.tryPromise({
+        const response = yield* githubTryPromise({
           try: async () => {
             const res = await fetch(`${apiBase}/graphql`, {
               method: "POST",
@@ -812,7 +890,7 @@ ${fields}
       const params = new URLSearchParams({ q, per_page: "100", sort: "updated", order: "desc" });
       const firstPath = `/search/issues?${params.toString()}`;
 
-      const items = yield* Effect.tryPromise({
+      const items = yield* githubTryPromise({
         try: async () => {
           const collected: Array<{ number: number; closedAt: string; merged: boolean }> = [];
           let url: string | null = `${apiBase}${firstPath}`;
@@ -915,7 +993,7 @@ ${fields}
         // GitHub returns partial data on per-field errors (e.g. repo
         // renamed or revoked) — fetch directly so we can tolerate the
         // partial-success case the shared `githubGraphql` helper rejects.
-        const response = yield* Effect.tryPromise({
+        const response = yield* githubTryPromise({
           try: async () => {
             const res = await fetch(`${apiBase}/graphql`, {
               method: "POST",
@@ -986,7 +1064,7 @@ ${fields}
         // non-membership) GitHub answers 200 with `organization: null` and a
         // top-level `errors` array. The helper rejects on any `errors`; here
         // we tolerate the partial response and let the REST fallback decide.
-        const response = yield* Effect.tryPromise({
+        const response = yield* githubTryPromise({
           try: async () => {
             const res = await fetch(`${apiBase}/graphql`, {
               method: "POST",
@@ -1235,7 +1313,7 @@ ${fields}
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
-      return yield* Effect.tryPromise({
+      return yield* githubTryPromise({
         try: async () => {
           // `application/vnd.github.raw` flips the response from a base64
           // JSON envelope to the literal blob. The other GitHub headers
@@ -1639,14 +1717,36 @@ ${fields}
       };
     }),
 
-  mergePullRequest: (repoFullName, prNumber, mergeMethod, token, explicitApiBase) =>
+  mergePullRequest: (repoFullName, prNumber, mergeMethod, token, explicitApiBase, options) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       yield* githubPut(
         `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
         token,
-        { merge_method: mergeMethod },
+        { merge_method: mergeMethod, ...(options?.sha ? { sha: options.sha } : {}) },
+        apiBase,
+      );
+    }),
+
+  updatePullRequestBase: (repoFullName, prNumber, base, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubPatch(`/repos/${owner}/${repo}/pulls/${prNumber}`, token, { base }, apiBase);
+    }),
+
+  enablePullRequestAutoMerge: (nodeId, mergeMethod, expectedHeadOid, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      yield* githubGraphql(
+        `mutation($id: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID!) {
+          enablePullRequestAutoMerge(
+            input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head }
+          ) { clientMutationId }
+        }`,
+        { id: nodeId, method: mergeMethod.toUpperCase(), head: expectedHeadOid },
+        token,
         apiBase,
       );
     }),
@@ -1702,7 +1802,7 @@ ${fields}
     }),
 
   getCollaboratorPermission: (token, host, owner, repo, username) =>
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const apiBase = apiBaseForHost(host);
         const path = `/repos/${owner}/${repo}/collaborators/${username}/permission`;
@@ -1732,9 +1832,11 @@ type GitHubGatewayFlat = typeof githubGatewayFlat;
 export interface GitHubGatewayService {
   readonly prs: {
     readonly listOpen: GitHubGatewayFlat["listPrs"];
+    readonly listClosedSince: GitHubGatewayFlat["listClosedPrsSince"];
     readonly listOpenRest: GitHubGatewayFlat["listPrsRest"];
     readonly probeOpenLists: GitHubGatewayFlat["probeOpenPrLists"];
     readonly get: GitHubGatewayFlat["getPr"];
+    readonly getMany: GitHubGatewayFlat["getPrs"];
     readonly diffStats: GitHubGatewayFlat["listPrDiffStats"];
     readonly searchClosedInWindow: GitHubGatewayFlat["searchClosedPrsInWindow"];
     readonly meta: GitHubGatewayFlat["getPrMeta"];
@@ -1746,6 +1848,8 @@ export interface GitHubGatewayService {
     readonly close: GitHubGatewayFlat["closePullRequest"];
     readonly mergeEligibility: GitHubGatewayFlat["getMergeEligibility"];
     readonly merge: GitHubGatewayFlat["mergePullRequest"];
+    readonly updateBase: GitHubGatewayFlat["updatePullRequestBase"];
+    readonly enableAutoMerge: GitHubGatewayFlat["enablePullRequestAutoMerge"];
     readonly create: GitHubGatewayFlat["createPullRequest"];
     readonly findByHead: GitHubGatewayFlat["findPrByHead"];
   };
@@ -1788,9 +1892,11 @@ export class GitHubGateway extends Context.Service<GitHubGateway, GitHubGatewayS
 export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
   prs: {
     listOpen: githubGatewayFlat.listPrs,
+    listClosedSince: githubGatewayFlat.listClosedPrsSince,
     listOpenRest: githubGatewayFlat.listPrsRest,
     probeOpenLists: githubGatewayFlat.probeOpenPrLists,
     get: githubGatewayFlat.getPr,
+    getMany: githubGatewayFlat.getPrs,
     diffStats: githubGatewayFlat.listPrDiffStats,
     searchClosedInWindow: githubGatewayFlat.searchClosedPrsInWindow,
     meta: githubGatewayFlat.getPrMeta,
@@ -1802,6 +1908,8 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     close: githubGatewayFlat.closePullRequest,
     mergeEligibility: githubGatewayFlat.getMergeEligibility,
     merge: githubGatewayFlat.mergePullRequest,
+    updateBase: githubGatewayFlat.updatePullRequestBase,
+    enableAutoMerge: githubGatewayFlat.enablePullRequestAutoMerge,
     create: githubGatewayFlat.createPullRequest,
     findByHead: githubGatewayFlat.findPrByHead,
   },

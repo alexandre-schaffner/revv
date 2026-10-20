@@ -1,23 +1,18 @@
 <script lang="ts">
-import {
-  buildPullRequestDeepLink,
-  type PrStack,
-  type PrStackEntry,
-  type StackEntryStatus,
-} from "@revv/shared";
-import CheckCircle from "phosphor-svelte/lib/CheckCircle";
-import FileDashed from "phosphor-svelte/lib/FileDashed";
-import GitMerge from "phosphor-svelte/lib/GitMerge";
-import MinusCircle from "phosphor-svelte/lib/MinusCircle";
-import XCircle from "phosphor-svelte/lib/XCircle";
-import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
-import { getPullRequests, getRepositories, getSelectedPr, selectPr } from "$lib/stores/prs.svelte";
+import type { PrStackDetail, StackEntryStatus, StackLayer } from "@revv/shared";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import { openStackLayer } from "$lib/components/stack/open-layer";
+import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
+import { Button } from "$lib/components/ui/button";
+import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 
 // The stack this PR belongs to, top of the stack first and the base branch
 // last, the way GitHub draws it: you read down toward what lands first.
 
 interface Props {
-  stack: PrStack;
+  /** The stack store's read, which every layer of a stack shares. */
+  stack: PrStackDetail;
   /** The PR on screen. */
   number: number;
 }
@@ -32,41 +27,65 @@ const STATUS_LABEL: Record<StackEntryStatus, string> = {
   not_ready: "Not ready",
 };
 
-const topFirst = $derived([...stack.entries].reverse());
+const selectedId = $derived(getSelectedPr()?.id ?? null);
+const entries = $derived(stack.layers);
+const baseRefName = $derived(stack.baseRefName);
+const topFirst = $derived([...entries].reverse());
 
-/**
- * Open a stacked PR in Revv. One Revv already holds opens directly; any other
- * (a merged base, a PR the poll hasn't reached) goes through the deep-link
- * resolver, which fetches it from GitHub and opens it here. Never leaves the
- * app.
- */
-function open(entry: PrStackEntry): void {
-  const current = getSelectedPr();
-  if (!current) return;
-  const tracked = getPullRequests().find(
-    (p) => p.repositoryId === current.repositoryId && p.externalId === entry.number,
-  );
-  if (tracked) {
-    void selectPr(tracked.id);
-    return;
+// GitHub's merge box offers "Rebase stack" once the stack lost its linear
+// history; so does this list, with the layer that lost it.
+const need = $derived(rebaseNeed(stack));
+const rebase = $derived(getStackRebase(stack));
+const rebasing = $derived(rebase.status === "loading");
+
+const needText = $derived.by(() => {
+  if (!need) return "";
+  const n = `#${need.layer.number}`;
+  switch (need.kind) {
+    case "behind":
+      return need.by === null
+        ? `${n} is behind ${need.layer.baseRef}`
+        : `${n} is ${need.by} ${need.by === 1 ? "commit" : "commits"} behind ${need.layer.baseRef}`;
+    case "conflicts":
+      return `${n} conflicts with ${need.layer.baseRef}`;
+    case "merged-below":
+      return `${n} still sits on a merged layer`;
   }
-  const repository = getRepositories().find((r) => r.id === current.repositoryId);
-  if (!repository) return;
-  void openPrDeepLink(
-    buildPullRequestDeepLink({
-      githubHost: repository.githubHost,
-      repositoryFullName: repository.fullName,
-      number: entry.number,
-    }),
-  );
+});
+
+/** Open a stacked PR in Revv; one it doesn't hold yet comes through the deep-link resolver. */
+function open(entry: StackLayer): void {
+  if (!selectedId) return;
+  openStackLayer(selectedId, entry);
 }
 </script>
 
 <section class="stack" aria-labelledby="side-stack">
 	<header class="stack-head">
 		<h3 id="side-stack">Stack #{stack.number}</h3>
-		<span class="stack-count">{stack.entries.length} pull requests</span>
+		<span class="stack-count">{entries.length} pull requests</span>
 	</header>
+	{#if need}
+		<div class="stack-rebase" role="status">
+			<span class="stack-rebase-text">{needText}</span>
+			{#if stack.viewerCanPush && selectedId}
+				{@const prId = selectedId}
+				<Button
+					variant="outline"
+					size="xs"
+					disabled={rebasing}
+					onclick={() => void rebaseStack(prId, stack)}
+					title="Replay every open layer onto the one below it, the bottom onto {baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile."
+				>
+					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
+					{rebasing ? 'Rebasing…' : 'Rebase stack'}
+				</Button>
+			{/if}
+		</div>
+		{#if rebase.status === 'error'}
+			<p class="stack-rebase-error">{rebase.error}</p>
+		{/if}
+	{/if}
 	<ol class="stack-list">
 		{#each topFirst as entry (entry.number)}
 			{@const current = entry.number === number}
@@ -79,18 +98,8 @@ function open(entry: PrStackEntry): void {
 					disabled={current}
 					onclick={() => open(entry)}
 				>
-					<span class="stack-glyph stack-glyph--{entry.status}" aria-hidden="true">
-						{#if entry.status === 'merged'}
-							<GitMerge size={14} weight="bold" />
-						{:else if entry.status === 'closed'}
-							<XCircle size={14} />
-						{:else if entry.status === 'draft'}
-							<FileDashed size={14} />
-						{:else if entry.status === 'ready'}
-							<CheckCircle size={14} weight="fill" />
-						{:else}
-							<MinusCircle size={14} weight="fill" />
-						{/if}
+					<span class="stack-glyph" aria-hidden="true">
+						<StackLayerGlyph status={entry.status} />
 					</span>
 					<span class="stack-text">
 						<span class="stack-title">{entry.title}</span>
@@ -102,7 +111,7 @@ function open(entry: PrStackEntry): void {
 		{/each}
 		<li class="stack-item stack-base">
 			<span class="stack-glyph stack-glyph--base" aria-hidden="true"></span>
-			<code>{stack.baseRefName}</code>
+			<code>{baseRefName}</code>
 		</li>
 	</ol>
 </section>
@@ -127,6 +136,31 @@ function open(entry: PrStackEntry): void {
 	.stack-count {
 		font-size: 0.75rem;
 		color: var(--color-text-muted);
+	}
+
+	.stack-rebase {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 6px;
+		padding: 6px 8px;
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+	}
+
+	.stack-rebase-text {
+		min-width: 0;
+		font-size: 0.75rem;
+		color: var(--color-warning);
+	}
+
+	.stack-rebase-error {
+		margin: 0 0 6px;
+		padding: 0 8px;
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: var(--color-danger);
 	}
 
 	.stack-list {
@@ -192,25 +226,10 @@ function open(entry: PrStackEntry): void {
 		background: transparent;
 	}
 
-	.stack-glyph--merged {
-		color: var(--color-merged);
-	}
 
-	.stack-glyph--closed {
-		color: var(--color-danger);
-	}
 
-	.stack-glyph--draft {
-		color: var(--color-text-muted);
-	}
 
-	.stack-glyph--ready {
-		color: var(--color-success);
-	}
 
-	.stack-glyph--not_ready {
-		color: var(--color-warning);
-	}
 
 	.stack-text {
 		display: flex;

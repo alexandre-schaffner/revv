@@ -8,6 +8,9 @@ import { resolveDbPath } from "./db/index";
 import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
 import { isLoopbackAddress } from "./net";
+import { githubLedgerPath } from "./observability/github-ledger/config";
+import { newOrigin, originStore } from "./observability/github-ledger/origin";
+import { installGitHubLedger } from "./observability/github-ledger/record";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
@@ -18,6 +21,7 @@ import { externalIntegrationRoutes } from "./routes/integrations";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
 import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
 import { mcpRecapRoute } from "./routes/mcp/recap";
+import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
@@ -27,6 +31,10 @@ import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
+import { stackMergeRoutes } from "./routes/stack-merge";
+import { stackRebaseRoutes } from "./routes/stack-rebase";
+import { stackReviewRoutes } from "./routes/stack-review";
+import { repoStackRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
@@ -40,6 +48,8 @@ import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
+import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
+import { StackMergeService } from "./services/stacks/StackMerge";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -51,6 +61,14 @@ const port = serverEnv.port;
 const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.channel}.pid`);
 
 logError("server", `starting on port ${port}`);
+
+// Record every GitHub request with the route or loop that caused it; see
+// docs/github-ledger.md. Off unless dev or REVV_GITHUB_LEDGER asks for it.
+const ledger = githubLedgerPath();
+if (ledger.enabled) installGitHubLedger({ path: ledger.path });
+
+/** `/api/prs/acme:42/conversation` → `/api/prs/:id/conversation`, when no route matched. */
+const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");
 
 const app = new Elysia()
   .use(
@@ -76,6 +94,13 @@ const app = new Elysia()
   .onRequest((ctx) => {
     // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
+    // Everything this request asks GitHub is attributed to it.
+    const { pathname } = new URL(ctx.request.url);
+    originStore.enterWith(newOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request"));
+  })
+  .onTransform({ as: "global" }, ({ request, route }) => {
+    const origin = originStore.getStore();
+    if (origin && route) origin.label = `${request.method} ${route}`;
   })
   .onAfterHandle(({ request, store, set }) => {
     const startMs = (store as { _revvStartMs?: number })._revvStartMs;
@@ -113,6 +138,11 @@ const app = new Elysia()
   .use(githubRoutes)
   .use(prRoutes)
   .use(prConversationRoutes)
+  .use(stackRoutes)
+  .use(repoStackRoutes)
+  .use(stackReviewRoutes)
+  .use(stackMergeRoutes)
+  .use(stackRebaseRoutes)
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
@@ -127,6 +157,7 @@ const app = new Elysia()
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)
+  .use(mcpStackBriefRoute)
   .use(mcpChatContextRoute)
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
@@ -146,6 +177,9 @@ const app = new Elysia()
   });
 
 logError("server", `listening on http://${serverEnv.host}:${port}`);
+
+// Whatever the boot tasks below set off is theirs, until a loop names itself.
+originStore.enterWith(newOrigin("boot", "boot"));
 
 // Migrate any plaintext GitHub tokens left in the `account` table into the OS
 // secure store, then null the columns. Awaited before the sync scheduler boots
@@ -251,6 +285,24 @@ AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePend
   .catch((err) => {
     logError("recap-jobs", "resumePending failed on boot:", err);
   });
+
+// Resume stack briefs left 'generating' by a previous run, bounded by
+// `resume_attempts`. Independent of the recap and walkthrough resumes: a
+// brief reads only its own row's snapshot and the DB.
+AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
+  (err) => {
+    logError("stack-brief", "resumePending failed on boot:", err);
+  },
+);
+
+// Stack merges are outward and destructive, so a run a previous process left
+// live is never resumed by itself: it becomes `expired`, and the user's
+// Continue picks it up from wherever GitHub is.
+AppRuntime.runPromise(Effect.flatMap(StackMergeService, (svc) => svc.expireStale())).catch(
+  (err) => {
+    logError("stack-merge", "expireStale failed on boot:", err);
+  },
+);
 
 // Resume any repos with cloneStatus 'pending' or 'error' on boot so that
 // repos that failed to clone (e.g. due to a server restart mid-clone) are

@@ -17,8 +17,9 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
 }> {}
 
 /**
- * Transport-level failure: DNS, TLS, connection reset, request timeout, or a
- * 5xx/408 from GitHub. **Retryable** — `retryTransient` in `github-rest.ts`
+ * Transport-level failure: DNS, TLS, connection reset, request timeout, a
+ * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
+ * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `github-rest.ts`
  * only retries this class, so nothing else may be mapped to it.
  */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
@@ -27,7 +28,8 @@ export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
 
 /**
  * GitHub understood the request and rejected it: a 4xx that isn't
- * 401/403/404/429, or a GraphQL response carrying an `errors` array.
+ * 401/403/404/429, or a GraphQL response carrying an `errors` array (other
+ * than GitHub's own failure, above).
  * **Not retryable** — replaying it produces the same rejection, so retrying
  * only burns the backoff budget (2s + 4s + 8s per call) and stalls the
  * sequential sync loops.
@@ -183,6 +185,29 @@ export class CloneNotReadyError extends Data.TaggedError("CloneNotReadyError")<{
 
 export class CloneInProgressError extends Data.TaggedError("CloneInProgressError")<{
   readonly repoId: string;
+}> {}
+
+/**
+ * A stack merge Revv won't start or continue as asked. `conflict`: GitHub
+ * moved under the request (a layer got new commits, a run is already going);
+ * `invalid`: the request itself can't be met (a blocked layer, a method the
+ * repo forbids). Nothing was merged.
+ */
+export class StackMergeRejectedError extends Data.TaggedError("StackMergeRejectedError")<{
+  readonly message: string;
+  readonly reason: "conflict" | "invalid";
+}> {}
+
+/**
+ * A stack rebase that didn't happen. `conflict`: a layer doesn't replay
+ * cleanly onto the one below (`files` says where); `moved`: GitHub moved
+ * under the request; `invalid`: the stack can't be rebased as it stands;
+ * `failed`: git or the push failed. Nothing was pushed in any case.
+ */
+export class StackRebaseRejectedError extends Data.TaggedError("StackRebaseRejectedError")<{
+  readonly message: string;
+  readonly reason: "conflict" | "moved" | "invalid" | "failed";
+  readonly files?: readonly string[];
 }> {}
 
 /**

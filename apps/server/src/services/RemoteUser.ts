@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { remoteUsers } from "../db/schema/remote-users";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import { DbService } from "./Db";
 
 // ── Service definition ───────────────────────────────────────────────────────
@@ -73,6 +74,23 @@ const AVATAR_FETCH_SIZE = 96;
  * honour it; other hosts ignore the extra query param. Returns the input
  * unchanged if it isn't a parseable absolute URL.
  */
+/**
+ * Which image an avatar URL names: its host and path (`/u/<id>`). The query
+ * isn't part of it: GraphQL and REST spell the same avatar differently
+ * (`?u=<hash>&v=4` vs `?v=4`), and GitHub Enterprise signs it afresh on every
+ * answer, so comparing whole URLs refetched an unchanged image each time the
+ * two kinds of caller took turns. A new avatar comes in on the TTL.
+ */
+function avatarIdentity(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return `${u.host}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
 function sizedAvatarUrl(url: string, size = AVATAR_FETCH_SIZE): string {
   try {
     const u = new URL(url);
@@ -100,7 +118,7 @@ export const RemoteUserServiceLive = Layer.effect(
 
     return {
       upsert: (params) =>
-        Effect.tryPromise(async () => {
+        githubTryPromise(async () => {
           const now = new Date();
 
           // Always lookup by (provider, login) — it's the only identifier
@@ -114,17 +132,15 @@ export const RemoteUserServiceLive = Layer.effect(
             )
             .get();
 
-          // Determine if we need to fetch the avatar. We track the *sized*
-          // URL as `lastAvatarUrl`, so rows cached before sizing was added
-          // (whose stored URL is the raw, full-res one) naturally fail the
-          // equality check and get refetched small on the next sync.
+          // Determine if we need to fetch the avatar: never fetched, past its
+          // TTL, or a different image (see `avatarIdentity`).
           const targetAvatarUrl = params.avatarUrl ? sizedAvatarUrl(params.avatarUrl) : null;
           let avatarContent: string | null = existing?.avatarContent ?? null;
           const shouldFetch =
             targetAvatarUrl &&
             (!existing?.lastFetchedAt ||
               now.getTime() - existing.lastFetchedAt.getTime() > AVATAR_TTL_MS ||
-              existing.lastAvatarUrl !== targetAvatarUrl);
+              avatarIdentity(existing.lastAvatarUrl) !== avatarIdentity(targetAvatarUrl));
 
           if (shouldFetch && targetAvatarUrl) {
             try {
@@ -209,7 +225,7 @@ export const RemoteUserServiceLive = Layer.effect(
         }).pipe(Effect.orElseSucceed(() => new Map<string, string>())),
 
       fetchAsDataUrl: (url) =>
-        Effect.tryPromise(() => fetchImageAsDataUrl(url)).pipe(Effect.orElseSucceed(() => "")),
+        githubTryPromise(() => fetchImageAsDataUrl(url)).pipe(Effect.orElseSucceed(() => "")),
     };
   }),
 );

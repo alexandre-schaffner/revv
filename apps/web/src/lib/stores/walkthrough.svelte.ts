@@ -836,7 +836,8 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
           }
           break;
         case "lifecycle:cache-hit":
-          entry.source = "remote";
+          // A restack carries this PR's own earlier review: local content.
+          if (event.data.source === "remote") entry.source = "remote";
           entry.walkthroughId = event.data.walkthroughId;
           break;
         case "lifecycle:edited":

@@ -4,6 +4,8 @@
 // and a `WalkthroughSnapshotV2`. Used by:
 //
 //   • RemoteWalkthroughCache.push — exports the row before gzip+upload.
+//   • WalkthroughJobs — carries a review over a pure restack (export the
+//     prior head's row, import it into the new head's).
 //   • Tests — round-trips a generated walkthrough through
 //     export → JSON → import to assert byte-for-byte equality.
 //
@@ -163,8 +165,10 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
 /**
  * Build a `WalkthroughSnapshotV2` from a completed walkthrough row.
  *
- * Pre-conditions checked by the caller (`RemoteWalkthroughCache.push`):
- *   • `status='complete'` (avoids exporting half-generated rows)
+ * Pre-conditions checked by the caller:
+ *   • `status='complete'` (`RemoteWalkthroughCache.push`), or `'superseded'`
+ *     with `completedAt` set (a restack carry, `findRestackSource`): never a
+ *     half-generated row
  *   • `lastCompletedPhase='D'`
  *   • summary non-empty, sentiment non-empty
  *   • ≥1 diff block, all 9 axes rated

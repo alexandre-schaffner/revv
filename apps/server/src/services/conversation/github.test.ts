@@ -230,3 +230,60 @@ describe("third-party check completion", () => {
     expect(final.annotations).toHaveLength(1);
   });
 });
+
+// GitHub answers a query that timed out or broke on its side with a 200 and
+// this message; it is not a verdict on the query, so it earns a retry.
+describe("GitHub's own GraphQL failures", () => {
+  const FAILURE = {
+    data: null,
+    errors: [
+      {
+        message:
+          "Something went wrong while executing your query on 2026-10-16T07:32:34Z. Please include `FAAB:231FE:2E4231:A23109:6AD1D30F` when reporting this issue.",
+      },
+    ],
+  };
+
+  const CONVERSATION = {
+    data: {
+      viewer: { login: "viewer" },
+      repository: {
+        viewerPermission: "WRITE",
+        pullRequest: {
+          number: 1,
+          url: "https://github.com/o/r/pull/1",
+          body: "",
+          createdAt: "2026-01-01T00:00:00Z",
+          state: "OPEN",
+          isDraft: false,
+          reviewDecision: null,
+          viewerCanUpdate: true,
+          author: { login: "author", __typename: "User" },
+          labels: { nodes: [] },
+          assignees: { nodes: [] },
+          participants: { nodes: [] },
+          reviewRequests: { nodes: [] },
+          timelineItems: { nodes: [], pageInfo: { hasPreviousPage: false, startCursor: null } },
+          commits: { nodes: [] },
+        },
+      },
+    },
+  };
+
+  it("asks the conversation again instead of failing the tab", async () => {
+    const queries = stubGraphql(() => (queries.length === 1 ? FAILURE : CONVERSATION));
+
+    const result = await Effect.runPromise(
+      fetchConversation(
+        { owner: "o", repo: "r" },
+        1,
+        "pr-id",
+        "token",
+        "https://ghe.test/api",
+      ).pipe(Effect.either),
+    );
+
+    expect(queries).toHaveLength(2);
+    expect(Either.isRight(result) && result.right.conversation.number).toBe(1);
+  });
+});

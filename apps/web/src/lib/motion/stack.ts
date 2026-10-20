@@ -20,12 +20,6 @@ import { tokens } from "./tokens";
 interface StackSnapshot {
   readonly height: number;
   readonly rects: readonly DOMRect[];
-  /**
-   * Each piece's `--shade`: how far its paper is mixed toward ink. Folded
-   * sheets are shaded by depth. A number, not the computed colour, because
-   * the colour is a `color-mix()` GSAP can't parse.
-   */
-  readonly shades: readonly number[];
 }
 
 /** Every moving part, in DOM order: the cards, then whatever follows them (the foot). */
@@ -36,15 +30,12 @@ export function snapshotStack(
   return {
     height: container.getBoundingClientRect().height,
     rects: pieces.map((piece) => piece.getBoundingClientRect()),
-    shades: pieces.map(
-      (piece) => Number.parseFloat(getComputedStyle(piece).getPropertyValue("--shade")) || 0,
-    ),
   };
 }
 
 const running = new WeakMap<HTMLElement, gsap.core.Timeline>();
 
-const CLEARED = "transform,transformOrigin,opacity,height,clipPath,willChange,--shade,--elev";
+const CLEARED = "transform,transformOrigin,opacity,height,clipPath,willChange,--elev";
 
 /**
  * Play the stack from `from` (a snapshot of `[...cards, foot]`) to its
@@ -127,10 +118,10 @@ export function flipStack(
     0,
   );
 
-  // The pile's elevation: dealt cards settle flat over the whole deal;
-  // gathered ones turn back into paper in the first half, before they tuck
-  // under, since only sheets can stack. Paint only (edges, corners,
-  // shadow), so it never moves the layout under the cards.
+  // How folded the pile is, for whatever the stylesheet keys off it (today,
+  // the dealt cards' rail elbows): eased over the whole deal, and over the
+  // first half of a gather, before the cards tuck under. Paint only, so it
+  // never moves the layout under the cards.
   tl.fromTo(
     container,
     { "--elev": opening ? 1 : 0 },
@@ -138,20 +129,6 @@ export function flipStack(
       "--elev": opening ? 0 : 1,
       duration: opening ? duration : duration * 0.5,
       ease: tokens.easeSoft,
-    },
-    0,
-  );
-
-  // A card darkens as it slides under (lower sheets catch less light) and
-  // brightens as it is dealt, rather than switching shade on the first frame.
-  tl.fromTo(
-    cards.slice(1),
-    { "--shade": (i: number) => from.shades[i + 1] ?? 0 },
-    {
-      "--shade": (i: number) => to.shades[i + 1] ?? 0,
-      duration,
-      ease: tokens.easeSoft,
-      stagger: { amount: spread, from: opening ? "start" : "end" },
     },
     0,
   );

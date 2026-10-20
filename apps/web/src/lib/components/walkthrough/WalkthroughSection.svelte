@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
+import type { Snippet } from "svelte";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -38,6 +39,12 @@ interface Props {
    * chapter). When omitted, only the per-block step anchors are jump targets.
    */
   id?: string | undefined;
+  /**
+   * A note in the rail beside the header, about this section's place in a
+   * stack. Called with the section's `semanticStepIndex`. Inline under the
+   * header when there's no rail.
+   */
+  margin?: Snippet<[number]> | undefined;
 }
 
 let {
@@ -49,6 +56,7 @@ let {
   chapterNumber,
   chapterCount,
   id = undefined,
+  margin = undefined,
 }: Props = $props();
 
 let collapsed = $state(false);
@@ -71,6 +79,13 @@ const rolledSeverity = $derived.by<Severity | null>(() => {
 });
 
 const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
+
+// The margin note runs down beside the first block too when that block has
+// no annotation of its own to sit there, so a note taller than the header
+// doesn't push the header's row open.
+const marginRows = $derived(
+  !collapsed && entries[0] && entries[0].renderedAnnotation === null ? 2 : 1,
+);
 
 function toggle(): void {
   collapsed = !collapsed;
@@ -129,6 +144,12 @@ $effect(() => {
 			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
+
+	{#if margin}
+		<div class="section-margin" style:grid-row="span {marginRows}">
+			{@render margin(section.semanticStepIndex)}
+		</div>
+	{/if}
 
 	{#if !collapsed}
 		<div
@@ -311,6 +332,17 @@ $effect(() => {
 		--severity-dot-color: var(--color-danger);
 	}
 
+	/* In the rail (col 5), its hairline level with the header's rule.
+	   Positioned so a layer preview hanging from it paints over the blocks
+	   that follow. */
+	.section-margin {
+		grid-column: 5;
+		align-self: start;
+		position: relative;
+		z-index: 2;
+		min-width: 0;
+	}
+
 	/* Density + body tone come from `prose prose-sm prose-dense`; this only
 	   sets the reading measure. */
 	.section-summary {
@@ -475,6 +507,11 @@ $effect(() => {
 			left: -24px;
 			top: 18px;
 			margin: 0;
+		}
+
+		/* No rail: the note reads inline under the header it belongs to. */
+		.section-margin {
+			margin: 0 0 18px;
 		}
 	}
 </style>

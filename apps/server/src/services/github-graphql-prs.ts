@@ -7,7 +7,7 @@
 import type { PullRequest } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, type GitHubError, GitHubNotFoundError } from "../domain/errors";
-import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
+import { type GraphqlConnection, githubGraphqlPartial, paginateGraphql } from "./github-rest";
 
 /**
  * A few active repos exceed 1,000 open PRs. Bounded for rate-limit safety, but
@@ -15,6 +15,9 @@ import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
  * didn't return.
  */
 const OPEN_PRS_MAX_PAGES = 50;
+
+/** The most open PRs a list holds; a repo with more is listed newest first, up to it. */
+export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * 100;
 
 /**
  * What an older GitHub Enterprise says when it predates stacks. Quoted, since
@@ -154,7 +157,12 @@ export interface OpenPrList {
   readonly stacks: "listed" | "unsupported" | "unknown";
 }
 
-/** Every open PR of `owner/repo`, most recently updated first. */
+/**
+ * Every open PR of `owner/repo`, most recently updated first. With
+ * `updatedSince`, only those updated at or after it: the list is ordered by
+ * `updatedAt`, so the walk stops at the first page that reaches older ones,
+ * and a busy repo costs the pages that moved rather than all of them.
+ */
 export function listOpenPrsViaGraphql(
   owner: string,
   repo: string,
@@ -162,7 +170,10 @@ export function listOpenPrsViaGraphql(
   token: string,
   apiBase: string,
   withStacks: boolean,
+  updatedSince: string | null = null,
 ): Effect.Effect<OpenPrList, GitHubError> {
+  const recent = (node: { readonly updatedAt: string }) =>
+    updatedSince === null || node.updatedAt >= updatedSince;
   const list = (withStacks: boolean) =>
     paginateGraphql<OpenPrsResp, GqlOpenPr>({
       query: openPrsQuery(withStacks),
@@ -172,7 +183,10 @@ export function listOpenPrsViaGraphql(
       token,
       apiBase,
       notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
-    }).pipe(Effect.map((nodes) => nodes.map((node) => mapPrNode(node, repositoryId))));
+      stopAfter: (page) => page.some((node) => !recent(node)),
+    }).pipe(
+      Effect.map((nodes) => nodes.filter(recent).map((node) => mapPrNode(node, repositoryId))),
+    );
 
   const withoutStacks = (stacks: OpenPrList["stacks"]) =>
     list(false).pipe(Effect.map((prs): OpenPrList => ({ prs, stacks })));
@@ -197,6 +211,141 @@ export function listOpenPrsViaGraphql(
         ),
     ),
   );
+}
+
+const closedPrsQuery = `query ClosedPullRequestsSince($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [CLOSED, MERGED], first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number updatedAt }
+    }
+  }
+}`;
+
+interface ClosedPrNode {
+  readonly number: number;
+  readonly updatedAt: string;
+}
+
+interface ClosedPrsResp {
+  readonly repository: { readonly pullRequests: GraphqlConnection<ClosedPrNode> } | null;
+}
+
+/** Closing a PR is an update, so a few pages always reach back far enough. */
+const CLOSED_SINCE_MAX_PAGES = 5;
+
+/**
+ * The PRs of `owner/repo` that closed or merged at or after `since`: what an
+ * {@link listOpenPrsViaGraphql} read with `updatedSince` can't see, since a
+ * closed PR leaves the open list. Null when they didn't fit in the pages
+ * allowed, which a caller must read as "unknown", never as "none".
+ */
+export function listClosedPrNumbersSince(
+  owner: string,
+  repo: string,
+  token: string,
+  apiBase: string,
+  since: string,
+): Effect.Effect<number[] | null, GitHubError> {
+  const recent = (node: ClosedPrNode) => node.updatedAt >= since;
+  return paginateGraphql<ClosedPrsResp, ClosedPrNode>({
+    query: closedPrsQuery,
+    variables: { owner, name: repo },
+    selectConnection: (data) => data.repository?.pullRequests,
+    maxPages: CLOSED_SINCE_MAX_PAGES,
+    token,
+    apiBase,
+    notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
+    stopAfter: (page) => page.some((node) => !recent(node)),
+  }).pipe(
+    Effect.map((nodes) => {
+      const last = nodes[nodes.length - 1];
+      if (last && recent(last) && nodes.length >= CLOSED_SINCE_MAX_PAGES * 100) return null;
+      return nodes.filter(recent).map((node) => node.number);
+    }),
+  );
+}
+
+/** The fields of one PR the archive needs, closed ones included. */
+const PR_DETAIL_FIELDS = `
+  number title body isDraft url createdAt updatedAt closedAt mergedAt state
+  headRefName baseRefName headRefOid baseRefOid additions deletions changedFiles
+  author { __typename login avatarUrl }
+  reviewRequests(first: 100) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { login }
+        ... on Bot { login }
+        ... on Mannequin { login }
+      }
+    }
+  }`;
+
+interface GqlPrDetail extends GqlOpenPr {
+  readonly state: "OPEN" | "CLOSED" | "MERGED";
+  readonly mergedAt: string | null;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
+/** Each alias carries a body, so fewer per request than the size-only batches. */
+const PR_DETAIL_CHUNK = 50;
+
+/**
+ * Many PRs of one repo by number, as the rows a REST detail fetch would have
+ * built — one request per {@link PR_DETAIL_CHUNK} instead of one each. A PR
+ * GitHub can't resolve is absent from the map; the others still answer.
+ */
+export function getPrsViaGraphql(
+  owner: string,
+  repo: string,
+  repositoryId: string,
+  numbers: readonly number[],
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, PullRequest>, GitHubError> {
+  return Effect.gen(function* () {
+    const result = new Map<number, PullRequest>();
+    for (let start = 0; start < numbers.length; start += PR_DETAIL_CHUNK) {
+      const chunk = numbers.slice(start, start + PR_DETAIL_CHUNK);
+      const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
+      const fields = chunk
+        .map((_, i) => `p${i}: pullRequest(number: $n${i}) { ${PR_DETAIL_FIELDS} }`)
+        .join("\n");
+      const variables: Record<string, string | number> = { owner, name: repo };
+      chunk.forEach((n, i) => {
+        variables[`n${i}`] = n;
+      });
+      const data = yield* githubGraphqlPartial<{
+        repository: Record<string, GqlPrDetail | null> | null;
+      }>(
+        `query PrDetails($owner: String!, $name: String!, ${argDefs}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`,
+        variables,
+        token,
+        apiBase,
+      );
+      chunk.forEach((n, i) => {
+        const node = data.repository?.[`p${i}`];
+        if (!node) return;
+        result.set(n, {
+          ...mapPrNode(node, repositoryId),
+          status: node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
+          additions: node.additions,
+          deletions: node.deletions,
+          changedFiles: node.changedFiles,
+          // The REST detail this replaces carried no stacks either.
+          stack: null,
+        });
+      });
+    }
+    return result;
+  });
 }
 
 /**

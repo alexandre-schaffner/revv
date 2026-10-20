@@ -9,10 +9,19 @@ import Warning from "phosphor-svelte/lib/Warning";
 import { onDestroy, onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { type StackCitations, stackCitations } from "$lib/actions/stack-citations.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
+import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
+import { readStackPlace } from "$lib/components/stack/margin/place";
+import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
+import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
+import { marginNotes } from "$lib/components/stack/margin/stack-margin";
+import { openStackLayer } from "$lib/components/stack/open-layer";
+import RestackBanner from "$lib/components/stack/RestackBanner.svelte";
+import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
@@ -27,6 +36,7 @@ import {
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
+import { getStack } from "$lib/stores/stacks.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
   getBlocks,
@@ -148,6 +158,21 @@ const selectedMode = $derived(getSelectedMode(prId));
 // keeps answering once the PR moves into the archive.
 const isMerged = $derived(getPrById(prId)?.status === "merged");
 const mergedAt = $derived(getPrById(prId)?.closedAt ?? undefined);
+// GitHub stack membership comes from the poll, so the stack overview shows
+// before its own read lands and before any walkthrough exists.
+const isStacked = $derived(getPrById(prId)?.stack != null);
+const walkthroughComplete = $derived(getWalkthroughUiState().kind === "complete");
+// `#N (layer k)` citations of the stack's other layers become chips.
+const stackForCitations = $derived.by((): StackCitations | null => {
+  const stack = isStacked ? getStack(prId) : null;
+  const here = stack?.layers.find((l) => l.prId === prId);
+  if (!stack || !here) return null;
+  return {
+    layers: stack.layers,
+    currentNumber: here.number,
+    open: (layer) => openStackLayer(prId, layer),
+  };
+});
 const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
 const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
@@ -716,6 +741,23 @@ $effect(() => {
 // which is what the chat agent reads when the user says "chapter N".
 const totalChapters = $derived(visibleSemanticSteps.length);
 
+// The rest of the stack, in the margin beside what it concerns: "Changed
+// again above" by the issue or chapter about a file an upper layer changes
+// too, "Relied on above" by the Overview. Null when the PR isn't stacked,
+// and then nothing below renders any differently.
+const stackPlace = $derived(isStacked ? readStackPlace(prId) : null);
+const stackNotes = $derived.by(() => {
+  if (!stackPlace) return null;
+  const chapterFiles = visibleSemanticSteps.map((s) => ({
+    index: s.semanticStepIndex,
+    files: (blocksBySection.get(s.semanticStepIndex) ?? []).flatMap(({ block }) =>
+      block.type === "code" || block.type === "diff" ? [block.filePath] : [],
+    ),
+  }));
+  const pageOrder = issueGroups.flatMap((g) => g.issues.map(({ issue }) => issue));
+  return marginNotes(stackPlace, pageOrder, chapterFiles);
+});
+
 // Mirror the block-stagger logic for issue cards. Issue cards have their
 // own CSS entrance animation (`issue-card-enter`), so without tracking they
 // replay on every tab revisit the same way blocks used to.
@@ -1064,7 +1106,18 @@ function handleResume(): void {
 	<FirstPassRibbon rows={firstPass.rows} />
 {/snippet}
 
-<div class="walkthrough">
+{#snippet stackMargin(index: number)}
+	{#if stackNotes && stackPlace}
+		{@const changed = stackNotes.chapters.get(index)}
+		{#if index === -1 && stackNotes.reliedOn.length > 0}
+			<ReliedOnNote links={stackNotes.reliedOn} place={stackPlace} />
+		{:else if changed}
+			<ChangedAboveNote note={changed} place={stackPlace} />
+		{/if}
+	{/if}
+{/snippet}
+
+<div class="walkthrough" use:stackCitations={stackForCitations}>
 	{#if isMerged}
 		<!-- Pressed into the top-right of the content column. Its own grid row
 		     (same 6-col template as the stepper header) so it aligns with the
@@ -1072,6 +1125,15 @@ function handleResume(): void {
 		     overlaps the stepper below it. -->
 		<div class="merged-stamp-row">
 			<MergedStamp {prId} {mergedAt} />
+		</div>
+	{/if}
+
+	{#if isStacked}
+		<!-- How the stack moved under this review. Above the chapters and
+		     outside them, so the chapter numbering the chat refers to stays
+		     put. Same 6-col grid, content in col 3. -->
+		<div class="stack-overview-row">
+			<RestackBanner {prId} />
 		</div>
 	{/if}
 
@@ -1102,7 +1164,7 @@ function handleResume(): void {
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={isStacked}>
 			{#if explorationSteps.length > 0}
 				<div class="exploration-feed exploration-feed--error">
 					{#each explorationSteps.slice(-6) as step, i (i)}
@@ -1129,7 +1191,7 @@ function handleResume(): void {
 		     error event didn't carry it), we can't address the retry at a
 		     specific repo, so we fall back to a generic Try again that
 		     regenerates the walkthrough. -->
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={isStacked}>
 			{#if !cloneRepoId}
 				<Warning size={20} weight="fill" />
 				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
@@ -1157,7 +1219,7 @@ function handleResume(): void {
 				<FirstPassPreview view={firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToDiffLine} />
 			</div>
 		{:else}
-			<div class="walkthrough-empty">
+			<div class="walkthrough-empty" class:walkthrough-empty--in-flow={isStacked}>
 				<p class="loading-text">No walkthrough generated yet for this PR.</p>
 			</div>
 		{/if}
@@ -1224,6 +1286,7 @@ function handleResume(): void {
 					class="issues-section"
 					class:issues-section--no-anim={issuesSectionAnimated}
 					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
+					{@attach stackNotes && stackNotes.issues.size > 1 ? spreadRailNotes : undefined}
 				>
 					<div class="issues-header">
 						<Warning size={13} weight="fill" />
@@ -1249,28 +1312,43 @@ function handleResume(): void {
 										     case jumpToStep would silently no-op and the click would feel
 										     broken. stepN is null whenever the lookup fails, which catches
 										     both a missing targetBlockId and an id that doesn't resolve. -->
-										{#if stepN !== null && targetBlockId}
-											<IssueCard
-												{issue}
-												clickable
-												onclick={() => selectIssue(issue.id, targetBlockId)}
-												stepTag={chapterTag ?? `→ Step ${stepN}`}
-												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-												noAnim={issueDelayById.get(issue.id) === -1}
-												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-												hideFileBadge={true}
-												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
-											/>
+										{@const railNote = stackNotes?.issues.get(issue.id)}
+										{#snippet issueCard()}
+											{#if stepN !== null && targetBlockId}
+												<IssueCard
+													{issue}
+													clickable
+													onclick={() => selectIssue(issue.id, targetBlockId)}
+													stepTag={chapterTag ?? `→ Step ${stepN}`}
+													animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+													noAnim={issueDelayById.get(issue.id) === -1}
+													onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+													hideFileBadge={true}
+													firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
+												/>
+											{:else}
+												<IssueCard
+													{issue}
+													stepTag={null}
+													animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+													noAnim={issueDelayById.get(issue.id) === -1}
+													onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+													hideFileBadge={true}
+													firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
+												/>
+											{/if}
+										{/snippet}
+										{#if railNote && stackPlace}
+											<!-- The note hangs in the rail beside its card (inline under
+											     it when there's no rail); the card itself doesn't move. -->
+											<div class="issue-noted">
+												{@render issueCard()}
+												<div class="issue-rail-note" data-rail-note>
+													<ChangedAboveNote note={railNote} place={stackPlace} forIssue />
+												</div>
+											</div>
 										{:else}
-											<IssueCard
-												{issue}
-												stepTag={null}
-												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-												noAnim={issueDelayById.get(issue.id) === -1}
-												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-												hideFileBadge={true}
-												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
-											/>
+											{@render issueCard()}
 										{/if}
 									{/each}
 								</div>
@@ -1329,6 +1407,7 @@ function handleResume(): void {
 				{selectedIssueSeverity}
 				chapterNumber={null}
 				chapterCount={totalChapters}
+				margin={stackNotes && stackNotes.reliedOn.length > 0 ? stackMargin : undefined}
 			/>
 			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
 				<WalkthroughSection
@@ -1340,6 +1419,7 @@ function handleResume(): void {
 					{selectedIssueSeverity}
 					chapterNumber={sectionIdx + 1}
 					chapterCount={totalChapters}
+					margin={stackNotes?.chapters.has(section.semanticStepIndex) ? stackMargin : undefined}
 				/>
 			{/each}
 
@@ -1441,6 +1521,12 @@ function handleResume(): void {
 					<span>{footerParts.join(" · ")}</span>
 				</footer>
 			{/if}
+
+			{#if isStacked && walkthroughComplete}
+				<div class="stack-handoff-slot">
+					<StackHandoffCard {prId} />
+				</div>
+			{/if}
 		</div>
 
 	{/if}
@@ -1507,6 +1593,7 @@ function handleResume(): void {
 	.walkthrough-content > .issues-section,
 	.walkthrough-content > .first-pass-section,
 	.walkthrough-content > .walkthrough-footer,
+	.walkthrough-content > .stack-handoff-slot,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
 	}
@@ -1562,6 +1649,104 @@ function handleResume(): void {
 	   different Svelte scope hash, so a scoped `> *` rule would skip it. */
 	.walkthrough-empty > :global(*) {
 		pointer-events: auto;
+	}
+
+	/* A stacked PR may have a restack banner above, and a pane-centred
+	   message would land on top of it: the empty state follows it in the flow. */
+	.walkthrough-empty--in-flow {
+		position: static;
+		inset: auto;
+		min-height: 40vh;
+	}
+
+	/* ── Stack row ─────────────────────────────────────────────────────
+	   The restack banner, on the same 6-col grid as the stepper header so it
+	   lands on col 3. */
+	.stack-overview-row {
+		display: grid;
+		grid-template-columns:
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+			48px
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(24px, 1fr);
+		row-gap: 12px;
+		padding: 20px 0 8px;
+	}
+
+	.stack-overview-row > :global(*) {
+		grid-column: 3;
+	}
+
+	.stack-handoff-slot {
+		min-width: 0;
+	}
+
+	/* `#N (layer k)` chips, minted into `{@html}` markdown by the
+	   `stackCitations` action, so global. A chip is a reference in the
+	   sentence: it keeps the text's baseline and size, and only the hover
+	   says it goes somewhere. */
+	.walkthrough :global(.stack-cite) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		margin: 0 0.0625rem;
+		padding: 0 0.375rem 0 0.3125rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.3125rem;
+		background: color-mix(in srgb, var(--color-text-muted) 7%, var(--color-bg-primary));
+		font: inherit;
+		font-size: 0.875em;
+		line-height: 1.45;
+		vertical-align: baseline;
+		color: var(--color-text-primary);
+		cursor: pointer;
+		transition:
+			background-color var(--duration-snap) var(--ease-standard),
+			border-color var(--duration-snap) var(--ease-standard);
+	}
+
+	.walkthrough :global(.stack-cite:hover:not(:disabled)),
+	.walkthrough :global(.stack-cite:focus-visible) {
+		border-color: var(--color-accent);
+		background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-primary));
+		outline: none;
+	}
+
+	.walkthrough :global(.stack-cite:disabled) {
+		cursor: default;
+	}
+
+	.walkthrough :global(.stack-cite-glyph) {
+		display: inline-flex;
+		color: var(--color-text-muted);
+	}
+
+	.walkthrough :global(.stack-cite[data-status="merged"] .stack-cite-glyph) {
+		color: var(--color-merged);
+	}
+
+	.walkthrough :global(.stack-cite[data-status="closed"] .stack-cite-glyph) {
+		color: var(--color-danger);
+	}
+
+	.walkthrough :global(.stack-cite[data-status="ready"] .stack-cite-glyph) {
+		color: var(--color-success);
+	}
+
+	.walkthrough :global(.stack-cite[data-status="not_ready"] .stack-cite-glyph) {
+		color: var(--color-warning);
+	}
+
+	.walkthrough :global(.stack-cite-num) {
+		font-family: var(--font-mono);
+		font-size: 0.9em;
+		font-weight: 500;
+	}
+
+	.walkthrough :global(.stack-cite-layer) {
+		color: var(--color-text-subtle);
 	}
 
 	/* Loading and stepper-header use the SAME 6-col grid as
@@ -1796,6 +1981,22 @@ function handleResume(): void {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+
+	/* An issue whose file an upper layer of the stack changes again: the card
+	   stays put and its note hangs in the rail, across col 4's 40px gap,
+	   top-aligned with the card. Positioned so it paints over the walkthrough
+	   that follows, which has a background of its own. */
+	.issue-noted {
+		position: relative;
+	}
+
+	.issue-rail-note {
+		position: absolute;
+		top: 0;
+		left: calc(100% + 40px);
+		z-index: 2;
+		width: 380px;
 	}
 
 	/* ── Blocks ──────────────────────────────────────────────────────── */
@@ -2239,6 +2440,7 @@ function handleResume(): void {
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
 		.merged-stamp-row,
+		.stack-overview-row,
 		.walkthrough-stepper-header {
 			display: block;
 			width: 100%;
@@ -2269,8 +2471,14 @@ function handleResume(): void {
 
 		.walkthrough-loading > :global(*),
 		.merged-stamp-row > :global(*),
+		.stack-overview-row > :global(*),
 		.walkthrough-stepper-header > :global(*) {
 			grid-column: auto;
+		}
+
+		/* Block layout has no row gap; the banner keeps its distance. */
+		.stack-overview-row > :global(* + *) {
+			margin-top: 12px;
 		}
 
 		.blocks {
@@ -2311,6 +2519,13 @@ function handleResume(): void {
 		.block-annotation {
 			padding: 0;
 			margin-top: 10px;
+		}
+
+		/* No rail: the issue's stack note reads under its card. */
+		.issue-rail-note {
+			position: static;
+			width: auto;
+			margin-top: 8px;
 		}
 	}
 </style>

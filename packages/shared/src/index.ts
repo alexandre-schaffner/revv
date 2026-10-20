@@ -119,7 +119,6 @@ export type {
   PrConversationResponse,
   PrLabel,
   PrMilestone,
-  PrStack,
   PrStackEntry,
   ReviewDecision,
   ReviewerEntry,
@@ -212,6 +211,31 @@ export type {
 export { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE } from "./recap";
 export type { SettingsUpdate } from "./settings-update";
 export { mergeSettingsUpdate } from "./settings-update";
+export type {
+  PrStackDetail,
+  RestackVerdict,
+  StackBrief,
+  StackBriefLayer,
+  StackBriefStatus,
+  StackFileOverlap,
+  StackHeadline,
+  StackLayer,
+  StackLayerLink,
+  StackLayerReview,
+  StackMergeLayerState,
+  StackMergeMode,
+  StackMergePlan,
+  StackMergePlanLayer,
+  StackMergeReadiness,
+  StackMergeRun,
+  StackMergeRunLayer,
+  StackMergeRunStatus,
+  StackRebaseResult,
+  StackReviewScope,
+  StackReviewStarted,
+  WalkthroughStackSnapshot,
+} from "./stacks";
+export { stackKey } from "./stacks";
 export type {
   AuthorRole,
   CloneStatus,

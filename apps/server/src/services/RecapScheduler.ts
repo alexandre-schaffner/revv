@@ -175,6 +175,10 @@ export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedul
 export const RecapSchedulerLive = Layer.effect(
   RecapScheduler,
   Effect.gen(function* () {
+    // The sweeps live in the layer's scope: forked under `start()`'s caller,
+    // they were interrupted the moment `start()` returned, before their first
+    // tick, so no recap was ever generated on schedule.
+    const loopScope = yield* Effect.scope;
     const { db } = yield* DbService;
     const settingsService = yield* SettingsService;
     const repoService = yield* RepositoryService;
@@ -319,8 +323,9 @@ export const RecapSchedulerLive = Layer.effect(
         const existing = yield* Ref.get(ref);
         if (existing !== null) return;
         const schedule = Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES));
-        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
+        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkIn(
           sweepPeriod(period).pipe(Effect.repeat(schedule)),
+          loopScope,
         );
         yield* Ref.set(ref, fiber);
       });

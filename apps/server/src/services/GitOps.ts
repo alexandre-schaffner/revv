@@ -681,3 +681,130 @@ export function classifyPushFailure(stderr: string): PushFailureKind {
 
   return "rejected";
 }
+
+// ── Stack rebase primitives ──────────────────────────────────────────────────
+//
+// The cascade in `stacks/stack-rebase-git.ts` works on SHAs in a scratch
+// worktree and pushes every layer at once. These never throw: a git failure is
+// an answer the cascade reads (a conflict, a moved branch), not an exception.
+
+export interface GitAttempt {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}
+
+async function attempt(cwd: string, args: string[], timeoutMs: number): Promise<GitAttempt> {
+  const r = await spawnGit(args, { cwd, timeoutMs, captureStdout: true });
+  return {
+    ok: r.exitCode === 0 && !r.timedOut,
+    stdout: r.stdout.trim(),
+    stderr: r.stderrTail,
+    timedOut: r.timedOut,
+  };
+}
+
+export async function isAncestor(cwd: string, ancestor: string, of: string): Promise<boolean> {
+  return (await attempt(cwd, ["merge-base", "--is-ancestor", ancestor, of], 30_000)).ok;
+}
+
+/** Null when there is none in the history the clone holds (a shallow clone may lack it). */
+export async function mergeBase(cwd: string, a: string, b: string): Promise<string | null> {
+  const r = await attempt(cwd, ["merge-base", a, b], 30_000);
+  return r.ok && r.stdout.length > 0 ? r.stdout : null;
+}
+
+export async function resolveRef(cwd: string, ref: string): Promise<string | null> {
+  const r = await attempt(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], 10_000);
+  return r.ok && r.stdout.length > 0 ? r.stdout : null;
+}
+
+/** Fetch refspecs and bare SHAs; `deepen` reaches further back in a shallow clone. */
+export async function fetchForRebase(
+  cwd: string,
+  authedUrl: string,
+  refspecs: readonly string[],
+  opts: { readonly deepen?: number; readonly timeoutMs: number },
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      "fetch",
+      "--no-tags",
+      ...(opts.deepen !== undefined ? [`--deepen=${opts.deepen}`] : []),
+      authedUrl,
+      ...refspecs,
+    ],
+    opts.timeoutMs,
+  );
+}
+
+export async function addDetachedWorktree(
+  clonePath: string,
+  path: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(clonePath, ["worktree", "add", "--detach", path, sha], timeoutMs);
+}
+
+/** Best-effort: remove a worktree git may or may not still know about, then prune. */
+export async function removeWorktree(clonePath: string, path: string): Promise<void> {
+  await runGitBestEffort(["worktree", "remove", "--force", path], clonePath);
+  await runGitBestEffort(["worktree", "prune"], clonePath);
+}
+
+export async function deleteRef(cwd: string, ref: string): Promise<void> {
+  await runGitBestEffort(["update-ref", "-d", ref], cwd);
+}
+
+/**
+ * `git rebase --onto onto upstream sha`, leaving HEAD detached at the result.
+ * The clone's refs belong to other worktrees, so the rebase is told never to
+ * move one, whatever the user's own config says.
+ */
+export async function rebaseDetached(
+  cwd: string,
+  onto: string,
+  upstream: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      "-c",
+      "rebase.updateRefs=false",
+      "-c",
+      "rebase.autoStash=false",
+      "rebase",
+      "--no-autosquash",
+      "--onto",
+      onto,
+      upstream,
+      sha,
+    ],
+    timeoutMs,
+  );
+}
+
+/** Push every update in one atomic push, each leased on the remote head it replaces. */
+export async function pushAtomicWithLeases(
+  cwd: string,
+  authedUrl: string,
+  updates: ReadonlyArray<{ readonly branch: string; readonly from: string; readonly to: string }>,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      "push",
+      "--atomic",
+      ...updates.map((u) => `--force-with-lease=refs/heads/${u.branch}:${u.from}`),
+      authedUrl,
+      ...updates.map((u) => `${u.to}:refs/heads/${u.branch}`),
+    ],
+    timeoutMs,
+  );
+}

@@ -5,6 +5,7 @@ import { account, user } from "../db/schema";
 import { userSettings } from "../db/schema/user-settings";
 import { GitHubAuthError } from "../domain/errors";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { SecretStore, type TokenPair } from "./SecretStore";
@@ -156,7 +157,7 @@ export const TokenProviderLive = Layer.effect(
           .where(eq(userSettings.id, "default"))
           .get();
         const customClientId = settingsRow?.githubHost === host ? settingsRow.githubClientId : null;
-        const { status, data } = yield* Effect.tryPromise({
+        const { status, data } = yield* githubTryPromise({
           try: async () => {
             const res = await fetch(tokenUrlForHost(host), {
               method: "POST",

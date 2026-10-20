@@ -13,6 +13,7 @@ import {
   loadLabelOptions,
   loadReviewerOptions,
 } from "$lib/stores/conversation.svelte";
+import { getStack } from "$lib/stores/stacks.svelte";
 import type { ReviewerChange } from "$lib/utils/conversation-patches";
 import { openExternal } from "$lib/utils/open-external";
 import CodeOwnersSection from "./CodeOwnersSection.svelte";
@@ -44,6 +45,8 @@ let {
   assigneesOpen = $bindable(false),
   labelsOpen = $bindable(false),
 }: Props = $props();
+
+const stack = $derived(getStack(prId));
 
 /** Who a review can be requested from. */
 type ReviewerRef =
@@ -141,9 +144,9 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 {/snippet}
 
 <div class="sidebar">
-	{#if conversation.stack}
+	{#if stack}
 		<div class="side-section side-section--stack">
-			<StackSection stack={conversation.stack} number={conversation.number} />
+			<StackSection {stack} number={conversation.number} />
 		</div>
 	{/if}
 

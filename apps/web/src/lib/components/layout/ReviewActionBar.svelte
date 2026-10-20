@@ -6,13 +6,16 @@ import GitMerge from "phosphor-svelte/lib/GitMerge";
 import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import PenNib from "phosphor-svelte/lib/PenNib";
+import Stack from "phosphor-svelte/lib/Stack";
 import XCircle from "phosphor-svelte/lib/XCircle";
+import { untrack } from "svelte";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
+import { getConversation } from "$lib/stores/conversation.svelte";
 import {
   closePr,
   convertPrToDraft,
@@ -31,6 +34,9 @@ import {
   getReviewBarSelectedCount,
   getReviewBarSubmitting,
 } from "$lib/stores/reviewBar.svelte";
+import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
+import { ensureStack, getLayer, getStack } from "$lib/stores/stacks.svelte";
+import { isMergeStateSettling, mergeBlocker } from "$lib/utils/merge-blocker";
 
 const pr = $derived(getSelectedPr());
 const rcSubmitting = $derived(getReviewBarSubmitting());
@@ -70,17 +76,77 @@ let mergeEligibility = $state<import("@revv/shared").MergeEligibility | null>(nu
 let mergeSubmitting = $state<string | null>(null);
 let mergeMenuOpen = $state(false);
 
+// The viewer's own standing verdict, from the Conversation tab's snapshot. A
+// later "request changes" or a stale-review dismissal brings Approve back.
+const conversation = $derived.by(() => {
+  const request = pr ? getConversation(pr.id).request : null;
+  return request?.status === "ok" ? request.data : null;
+});
+const viewerApproved = $derived(
+  conversation?.reviewers.some(
+    (r) =>
+      r.kind === "user" && r.actor.login === conversation.viewerLogin && r.verdict === "approved",
+  ) ?? false,
+);
+
+/** Re-asks while GitHub is still computing mergeability, then gives up. */
+const MERGEABILITY_RETRY_MS = 3_000;
+const MERGEABILITY_MAX_RETRIES = 4;
+
+// Mergeability moves with a new head, the review decision, and CI, so a
+// change in any of them asks again. The effect reads only these primitives:
+// the PR and conversation objects are replaced by every store update (a CI
+// poll, an SSE refresh, the cached snapshot then the fresh read), and
+// depending on them, or on when the conversation was read, re-asked GitHub on
+// each one.
+const mergeAskPrId = $derived(pr?.id ?? null);
+const mergeAskHeadSha = $derived(pr?.headSha ?? null);
+const mayMerge = $derived(isPrOwner || viewerApproved);
+// Asked once the conversation has answered (its cached snapshot is
+// near-instant), so its review decision and CI arriving don't re-ask straight
+// after. A failed read counts: the merge pill mustn't hinge on it.
+const conversationKnown = $derived.by(() => {
+  const status = pr ? getConversation(pr.id).request.status : "idle";
+  return status === "ok" || status === "error";
+});
+const conversationReviewDecision = $derived(conversation?.reviewDecision ?? null);
+const conversationCiState = $derived(conversation?.ci?.state ?? null);
 $effect(() => {
-  const prId = pr?.id;
-  const owner = isPrOwner;
-  if (!prId || !owner) {
+  const prId = mergeAskPrId;
+  void mergeAskHeadSha;
+  void conversationReviewDecision;
+  void conversationCiState;
+  if (!prId || !mayMerge || !conversationKnown) {
     mergeEligibility = null;
     return;
   }
-  getMergeEligibility(prId).then((el) => {
-    mergeEligibility = el;
-  });
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ask = (retriesLeft: number): void => {
+    void getMergeEligibility(prId).then((el) => {
+      if (cancelled) return;
+      mergeEligibility = el;
+      if (el && isMergeStateSettling(el.mergeStateStatus) && retriesLeft > 0) {
+        timer = setTimeout(() => ask(retriesLeft - 1), MERGEABILITY_RETRY_MS);
+      }
+    });
+  };
+  ask(MERGEABILITY_MAX_RETRIES);
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
 });
+
+const mergeBlockedReason = $derived(
+  mergeEligibility
+    ? mergeBlocker({
+        mergeStateStatus: mergeEligibility.mergeStateStatus,
+        reviewDecision: conversation?.reviewDecision ?? null,
+        ciState: conversation?.ci?.state ?? null,
+      })
+    : null,
+);
 
 async function runMerge(method: import("@revv/shared").MergeMethod): Promise<void> {
   if (!pr || mergeSubmitting !== null) return;
@@ -111,8 +177,8 @@ const MERGE_COMMIT: MergeOption = {
 };
 const MERGE_METHOD_OPTIONS: MergeOption[] = [
   MERGE_COMMIT,
-  { method: "squash", label: "Squash", menuLabel: "Squash and merge" },
-  { method: "rebase", label: "Rebase", menuLabel: "Rebase and merge" },
+  { method: "squash", label: "Squash and merge", menuLabel: "Squash and merge" },
+  { method: "rebase", label: "Rebase and merge", menuLabel: "Rebase and merge" },
 ];
 
 const mergeOptions = $derived.by(() => {
@@ -121,7 +187,118 @@ const mergeOptions = $derived.by(() => {
   return MERGE_METHOD_OPTIONS.filter((m) => allowed.includes(m.method));
 });
 const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
+
+// A stacked PR targets the branch of the layer below it, so merging it alone
+// while that layer is open lands it there, not in the stack's base. Such a
+// layer only offers "Merge through #N…", which merges the stack bottom-up.
+$effect(() => {
+  const id = pr?.id;
+  const stacked = pr?.stack != null;
+  if (id && stacked) untrack(() => void ensureStack(id));
+});
+const stackLayer = $derived(pr ? getLayer(pr.id) : null);
+const stack = $derived(pr ? getStack(pr.id) : null);
+const openBelow = $derived(
+  stack && stackLayer
+    ? stack.layers.some((l) => l.position < stackLayer.position && l.status !== "merged")
+    : false,
+);
+const openAbove = $derived(
+  stack && stackLayer
+    ? stack.layers.some((l) => l.position > stackLayer.position && l.status !== "merged")
+    : false,
+);
+const mergeThroughTitle = $derived(
+  stack && stackLayer
+    ? `This PR targets ${stackLayer.baseRef}, the layer below it. Merging it alone would land it there, not in ${stack.baseRefName}; merge the stack through here instead.`
+    : "",
+);
 </script>
+
+{#snippet mergeControl()}
+  {#if mergeEligibility?.canMerge && isPrOpen}
+    <!-- Eligibility resolves asynchronously, so the merge pill lands a
+         beat after the rest of the bar. Fade it in instead of popping. -->
+    <span
+      class="pill-wrap"
+      in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
+      out:gsapFade={{ duration: tokens.snap }}
+    >
+    {#if openBelow && pr && stackLayer}
+      <GlassPill
+        variant="success"
+        disabled={ownerSubmitting !== null}
+        onclick={() => openStackMergeSheet(pr.id)}
+        title={mergeThroughTitle}
+        aria-haspopup="dialog"
+      >
+        <Stack size={16} />
+        Merge through #{stackLayer.number}…
+      </GlassPill>
+    {:else}
+    <!-- GitHub would refuse the merge: keep the pill in place, disabled,
+         with the reason on hover rather than letting a click fail. -->
+    <div
+      class="glass-pill glass-pill--success merge-pill"
+      class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
+      title={mergeBlockedReason ?? undefined}
+    >
+      <button
+        type="button"
+        class="merge-pill-main"
+        disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
+        onclick={() => runMerge(primaryMerge.method)}
+        title={mergeBlockedReason ?? primaryMerge.menuLabel}
+      >
+        <GitMerge size={16} />
+        {mergeSubmitting === primaryMerge.method ? "Merging…" : primaryMerge.label}
+      </button>
+      {#if mergeOptions.length > 1 || openAbove}
+        <Popover bind:open={mergeMenuOpen}>
+          <PopoverTrigger>
+            <button
+              type="button"
+              class="merge-pill-chevron"
+              disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
+              aria-label="Merge options"
+              title="Choose merge strategy"
+            >
+              <CaretDown size={16} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent class="w-56 p-1" align="end" side="top">
+            {#each mergeOptions as option (option.method)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+                onclick={() => runMerge(option.method)}
+              >
+                <GitMerge size={12} />
+                {option.menuLabel}
+              </button>
+            {/each}
+            {#if openAbove && pr}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
+                title="Merge this layer and the ones above it, bottom-up"
+                onclick={() => {
+                  mergeMenuOpen = false;
+                  openStackMergeSheet(pr.id);
+                }}
+              >
+                <Stack size={12} />
+                Merge stack…
+              </button>
+            {/if}
+          </PopoverContent>
+        </Popover>
+      {/if}
+    </div>
+    {/if}
+    </span>
+  {/if}
+{/snippet}
 
 <div
   class="actions-float"
@@ -186,58 +363,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
         </GlassPill>
       {/if}
 
-      {#if mergeEligibility?.canMerge && isPrOpen}
-        <!-- Eligibility resolves asynchronously, so the merge pill lands a
-             beat after the rest of the bar. Fade it in instead of popping. -->
-        <span
-          class="pill-wrap"
-          in:gsapFadeY={{ duration: tokens.quick, y: 4 }}
-          out:gsapFade={{ duration: tokens.snap }}
-        >
-        <div
-          class="glass-pill glass-pill--success merge-pill"
-          class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-        >
-          <button
-            type="button"
-            class="merge-pill-main"
-            disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-            onclick={() => runMerge(primaryMerge.method)}
-            title={primaryMerge.menuLabel}
-          >
-            <GitMerge size={16} />
-            {mergeSubmitting === primaryMerge.method ? "Merging…" : primaryMerge.label}
-          </button>
-          {#if mergeOptions.length > 1}
-            <Popover bind:open={mergeMenuOpen}>
-              <PopoverTrigger>
-                <button
-                  type="button"
-                  class="merge-pill-chevron"
-                  disabled={ownerSubmitting !== null || mergeSubmitting !== null}
-                  aria-label="Merge options"
-                  title="Choose merge strategy"
-                >
-                  <CaretDown size={16} />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent class="w-56 p-1" align="end" side="top">
-                {#each mergeOptions as option (option.method)}
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
-                    onclick={() => runMerge(option.method)}
-                  >
-                    <GitMerge size={12} />
-                    {option.menuLabel}
-                  </button>
-                {/each}
-              </PopoverContent>
-            </Popover>
-          {/if}
-        </div>
-        </span>
-      {/if}
+      {@render mergeControl()}
 
       {#if isPrOpen}
         <GlassPill
@@ -268,17 +394,28 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
         <ArrowUp size={16} />
         {rcSubmitting !== null ? "Submitting…" : "Submit review"}
       </GlassPill>
-      <GlassPill
-        variant="success"
-        disabled={rcSubmitting !== null}
-        onclick={() => getReviewBarOnApprove()()}
-        title={rcApproveBlockerSummary
-          ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
-          : "Approve this pull request on GitHub"}
-      >
-        <Check size={16} />
-        {rcSubmitting === "approve" ? "Approving…" : "Approve"}
-      </GlassPill>
+      <!-- Once your approval stands, approving again does nothing; the next
+           step is merging, when you're allowed to. -->
+      {#if viewerApproved && mergeEligibility?.canMerge && isPrOpen}
+        {@render mergeControl()}
+      {:else if viewerApproved}
+        <GlassPill variant="success" disabled title="You approved this pull request">
+          <Check size={16} />
+          Approved
+        </GlassPill>
+      {:else}
+        <GlassPill
+          variant="success"
+          disabled={rcSubmitting !== null}
+          onclick={() => getReviewBarOnApprove()()}
+          title={rcApproveBlockerSummary
+            ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
+            : "Approve this pull request on GitHub"}
+        >
+          <Check size={16} />
+          {rcSubmitting === "approve" ? "Approving…" : "Approve"}
+        </GlassPill>
+      {/if}
     {/if}
   </div>
 </div>
@@ -342,9 +479,10 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
     background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
   }
 
+  /* The wrapper's `.is-disabled` already dims the pill; dimming the buttons
+     too would compound to near-invisible. */
   .merge-pill-main:disabled,
   .merge-pill-chevron:disabled {
     cursor: not-allowed;
-    opacity: 0.4;
   }
 </style>

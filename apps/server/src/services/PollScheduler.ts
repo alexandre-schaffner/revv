@@ -12,6 +12,7 @@ import {
 } from "../domain/errors";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -36,10 +37,10 @@ import {
 import { announceSyncChanges, collectSyncChanges } from "./poll-notifications";
 import {
   archiveClosedPrs,
-  findUnchangedRepos,
   type ListedSignature,
   movedRangePrIds,
   openListMoved,
+  probeRepos,
   syncRepoOpenPrs,
 } from "./poll-open-prs";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
@@ -48,6 +49,7 @@ import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
+import { StackService } from "./stacks/StackService";
 import { TokenProvider } from "./TokenProvider";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughJobs } from "./WalkthroughJobs";
@@ -114,6 +116,11 @@ type SyncTrigger = "periodic" | "manual" | "freshen";
 export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
+    // The loops live here, not under whoever called `start()`: a fiber forked
+    // from that call is interrupted the moment it returns, before its first
+    // tick. The layer's scope lasts as long as the runtime, and closing it
+    // interrupts them on shutdown.
+    const loopScope = yield* Effect.scope;
     // Capture all dependencies once at layer construction time
     const broadcaster = yield* Broadcaster;
     const github = yield* GitHubGateway;
@@ -138,6 +145,7 @@ export const PollSchedulerLive = Layer.effect(
       walkthroughService: yield* WalkthroughService,
       repoClone: yield* RepoCloneService,
       tokenProvider,
+      stackService: yield* StackService,
     };
 
     // Bad-token and rate-limit pauses, carried from one cycle to the next.
@@ -260,16 +268,21 @@ export const PollSchedulerLive = Layer.effect(
         for (const repoId of listedSignatures.keys()) {
           if (!liveRepoIds.has(repoId)) listedSignatures.delete(repoId);
         }
-        const unchangedRepoIds =
-          trigger === "manual"
-            ? new Set<string>()
-            : yield* findUnchangedRepos(deps, cycle, allRepos, listedSignatures);
+        // A manual sync never reuses rows, but still reads only what moved.
+        const probed = yield* probeRepos(
+          deps,
+          cycle,
+          allRepos,
+          listedSignatures,
+          trigger !== "manual",
+        );
 
         const ctx = {
           existingMap,
           existingByRepo: Map.groupBy(existingPrs, (pr) => pr.repositoryId),
           diffStatsHeadByPrId: new Map(diffStatsHeadRows.map((row) => [row.id, row.headSha])),
-          unchangedRepoIds,
+          unchangedRepoIds: probed.unchanged,
+          probedSignatures: probed.signatures,
           listedSignatures,
           stacklessUntil,
         };
@@ -368,14 +381,13 @@ export const PollSchedulerLive = Layer.effect(
     const backfillArchiveIfDue = (
       cycle: SyncCycle,
       allRepos: readonly Repository[],
-      existingPrs: readonly PullRequest[],
     ): Effect.Effect<boolean, never, GitHubInfra> =>
       Effect.suspend(() => {
         if (Date.now() - lastArchiveBackfillAt < ARCHIVE_BACKFILL_INTERVAL_MS) {
           return Effect.succeed(false);
         }
         lastArchiveBackfillAt = Date.now();
-        return backfillArchive(deps, cycle, allRepos, existingPrs);
+        return backfillArchive(deps, cycle, allRepos);
       });
 
     // The core sync effect — all services are plain values captured from the closure.
@@ -473,7 +485,7 @@ export const PollSchedulerLive = Layer.effect(
             new Map(allPrs.map((pr) => [pr.id, pr])),
             new Map(allRepos.map((r) => [r.id, r])),
           );
-          const archiveChanged = yield* backfillArchiveIfDue(cycle, allRepos, existingPrs);
+          const archiveChanged = yield* backfillArchiveIfDue(cycle, allRepos);
 
           // The maintenance passes can move what a client shows (repo avatars,
           // PRs the backfill pulled into the archive) after the list went out,
@@ -559,6 +571,7 @@ export const PollSchedulerLive = Layer.effect(
         if (claim === "fresh-enough") return;
         yield* syncAllRepos(trigger).pipe(
           Effect.ensuring(Ref.update(cycleGateRef, (gate) => ({ ...gate, inFlight: false }))),
+          withGitHubOrigin(`poll:sync:${trigger}`),
         );
       });
 
@@ -733,6 +746,7 @@ export const PollSchedulerLive = Layer.effect(
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
       ),
+      withGitHubOrigin("poll:threads"),
     );
 
     const stopThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
@@ -753,11 +767,12 @@ export const PollSchedulerLive = Layer.effect(
       // soon as I open Revv" symptom, made worse when an IDE shares the
       // account. Opening a PR force-syncs its threads on demand, so this delay
       // never affects the PR the user is actually looking at.
-      const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
+      const fiber: Fiber.Fiber<number, never> = yield* Effect.forkIn(
         syncThreadsForOpenPrs.pipe(
           Effect.repeat(schedule),
           Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
         ),
+        loopScope,
       );
       yield* Ref.set(threadFiberRef, fiber);
     });
@@ -767,8 +782,9 @@ export const PollSchedulerLive = Layer.effect(
         if (intervalMinutes <= 0) return;
         // Run immediately on start, then repeat at the given interval
         const schedule = Schedule.spaced(Duration.minutes(intervalMinutes));
-        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
+        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkIn(
           provideInfra(runSyncOnce("periodic").pipe(Effect.repeat(schedule))),
+          loopScope,
         );
         yield* Ref.set(fiberRef, fiber);
       });

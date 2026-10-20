@@ -33,6 +33,7 @@ import {
   type Walkthrough,
   type WalkthroughGenerationMode,
   type WalkthroughMode,
+  type WalkthroughStackSnapshot,
   type WalkthroughStatus,
   type WalkthroughStreamEvent,
   type WalkthroughTokenUsage,
@@ -75,6 +76,7 @@ import {
   DbError,
   type GitHubError,
   HeadShaMismatchError,
+  ImportError,
   type NotFoundError,
   type ReviewError,
   type ValidationError,
@@ -99,9 +101,19 @@ import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
+import {
+  changedFiles,
+  type DiffFingerprint,
+  fingerprintFiles,
+  isComparable,
+} from "./stacks/fingerprint";
+import { StackService } from "./stacks/StackService";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
-import { tryImportCachedWalkthrough } from "./walkthrough-cache-import";
+import {
+  tryCarryRestackedWalkthrough,
+  tryImportCachedWalkthrough,
+} from "./walkthrough-cache-import";
 import {
   buildContinuationAdjudicationState,
   continuationCounts,
@@ -196,13 +208,18 @@ interface ActiveJob {
  * do-over semantics as `user`; it is its own value so spans and
  * `lifecycle:started` can tell the two apart.
  */
-export type StartJobTrigger = "user" | "external_agent" | "resume" | "review_requested";
+export type StartJobTrigger =
+  | "user"
+  | "external_agent"
+  | "resume"
+  | "review_requested"
+  | "stack_review";
 
 /** `errorMessage` of a row whose run was cancelled (the user's Stop, or a supersede). */
 export const WALKTHROUGH_CANCELLED_MESSAGE = "Walkthrough cancelled";
 
 const isUserInitiated = (trigger: StartJobTrigger): boolean =>
-  trigger === "user" || trigger === "external_agent";
+  trigger === "user" || trigger === "external_agent" || trigger === "stack_review";
 
 export interface StartJobParams {
   readonly prId: string;
@@ -406,6 +423,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const cacheService = yield* CacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
     const broadcaster = yield* Broadcaster;
+    const stackService = yield* StackService;
 
     const registry = yield* Ref.make(new Map<string, ActiveJob>());
     const semaphore = yield* Semaphore.make(MAX_CONCURRENT_JOBS);
@@ -582,6 +600,13 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly splitRecommendation: { readonly pieces: number } | null;
       /** Snapshotted at job start so a settings change mid-run can't flip behaviour halfway through a retry budget. */
       readonly adjudicateContinuations: boolean;
+      /** The GitHub stack this PR is a layer of, as persisted on the row. */
+      readonly stack: WalkthroughStackSnapshot | null;
+      /**
+       * The parent review's fingerprint of the layer's own changes. With
+       * `stack`, it scopes an incremental run to the files that moved.
+       */
+      readonly parentFingerprint: DiffFingerprint | null;
     };
 
     interface LoopState {
@@ -721,6 +746,7 @@ export const WalkthroughJobsLive = Layer.effect(
           ...(ctx.filePriorities ? { filePriorities: ctx.filePriorities } : {}),
           ...(ctx.splitRecommendation ? { splitRecommendation: ctx.splitRecommendation } : {}),
           ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
+          ...(ctx.stack ? { stack: ctx.stack } : {}),
           onSessionId: (id: string) => {
             capturedOpencodeSessionId = id;
           },
@@ -1465,6 +1491,49 @@ export const WalkthroughJobsLive = Layer.effect(
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
 
+        // The stack and the layer's own-changes fingerprint are orchestrator
+        // inputs captured once, like the commits. A resume reads its row's
+        // snapshot back rather than refetching, so it prompts with the stack
+        // its first run saw.
+        const diffFingerprint = fingerprintFiles(files);
+        const stack =
+          partial !== null
+            ? ((yield* provideDb(walkthroughService.getStackInputs(partial.id)).pipe(
+                Effect.orElseSucceed(() => null),
+              ))?.stackContext ?? null)
+            : yield* stackService
+                .snapshot(resolved)
+                .pipe(
+                  Effect.provideService(DbService, { db }),
+                  Effect.provideService(CacheService, cacheService),
+                );
+
+        // A restack that left this layer's own changes byte-identical (hunk
+        // headers included, so every anchor still holds) carries the last
+        // finished review over instead of running the agent. Never on a
+        // resume: that row is already the agent's.
+        const restackSource =
+          stack !== null &&
+          partial === null &&
+          params.trigger !== "resume" &&
+          isComparable(diffFingerprint)
+            ? yield* provideDb(
+                walkthroughService.findRestackSource(pr.id, meta.headSha, mode),
+              ).pipe(
+                Effect.map((source) =>
+                  source !== null &&
+                  // A full review of identical changes answers any request;
+                  // an incremental one only stands in for another incremental.
+                  (source.generationMode === "full" ||
+                    source.generationMode === requestedGenerationMode) &&
+                  changedFiles(source.diffFingerprint, diffFingerprint).length === 0
+                    ? source
+                    : null,
+                ),
+                Effect.orElseSucceed(() => null),
+              )
+            : null;
+
         const startPlan = yield* resolveJobStart({
           prId: pr.id,
           headSha: meta.headSha,
@@ -1472,13 +1541,16 @@ export const WalkthroughJobsLive = Layer.effect(
           settings,
           agent,
           trigger: params.trigger,
+          // A carried review is an import too: no run to plan for.
           cacheProbe:
-            mode === "reviewer" &&
-            settings.cache.enabled &&
-            settings.cache.downloadsEnabled &&
-            partial === null
-              ? remoteCache.probe(repo.fullName, meta.headSha)
-              : Effect.succeed(false),
+            restackSource !== null
+              ? Effect.succeed(true)
+              : mode === "reviewer" &&
+                  settings.cache.enabled &&
+                  settings.cache.downloadsEnabled &&
+                  partial === null
+                ? remoteCache.probe(repo.fullName, meta.headSha)
+                : Effect.succeed(false),
         }).pipe(
           Effect.provideService(JevService, jevService),
           Effect.provideService(CacheService, cacheService),
@@ -1542,6 +1614,8 @@ export const WalkthroughJobsLive = Layer.effect(
             baseHeadSha,
             forceNew: isUserInitiated(params.trigger) && generationMode === "full",
             prCommits: commits,
+            stackContext: stack,
+            diffFingerprint,
             ...(generatedBy ? { generatedBy } : {}),
             // At insert, not a follow-up UPDATE: no kill-9 window without the tier.
             ...(assignedRisk !== null && answers !== null
@@ -1558,6 +1632,39 @@ export const WalkthroughJobsLive = Layer.effect(
               }),
           ),
         );
+
+        // Ahead of the team cache: it's local, and it's this PR's own review.
+        // A failed carry falls through to the cache, then the agent, on the
+        // row just created.
+        if (restackSource !== null && restackSource.generationMode === generationMode) {
+          const carried = yield* tryCarryRestackedWalkthrough({
+            db,
+            fromWalkthroughId: restackSource.id,
+            walkthroughId,
+            prId: pr.id,
+            repoFullName: repo.fullName,
+            headSha: meta.headSha,
+            importSnapshot: (snapshot) =>
+              provideDb(
+                snapshotImporter
+                  .import({ walkthroughId, snapshot })
+                  .pipe(
+                    Effect.zipRight(
+                      walkthroughService
+                        .markCarriedFrom(walkthroughId, restackSource.id)
+                        .pipe(
+                          Effect.mapError(
+                            (e) => new ImportError({ walkthroughId, reason: e.message, cause: e }),
+                          ),
+                        ),
+                    ),
+                  ),
+              ),
+            markComplete: setStatus(walkthroughId, "complete", { tokenUsage: ZERO_TOKEN_USAGE }),
+            emitEvent: (event) => emitEvent(walkthroughId, event),
+          });
+          if (carried) return { walkthroughId, reused: false };
+        }
 
         const importedFromCache = yield* tryImportCachedWalkthrough({
           enabled:
@@ -1582,6 +1689,15 @@ export const WalkthroughJobsLive = Layer.effect(
         if (params.trigger === "resume" && partial !== null && partial.modelUsed !== modelUsed) {
           yield* provideDb(walkthroughService.updateModelUsed(partial.id, modelUsed));
         }
+
+        // A stacked layer's incremental run reads the layer's current patches
+        // for the files that moved, judged against what the parent review saw.
+        const parentFingerprint =
+          stack !== null && generationMode === "incremental" && parentWalkthroughId !== null
+            ? ((yield* provideDb(walkthroughService.getStackInputs(parentWalkthroughId)).pipe(
+                Effect.orElseSucceed(() => null),
+              ))?.diffFingerprint ?? null)
+            : null;
 
         const abortController = new AbortController();
         const job: ActiveJob = {
@@ -1630,6 +1746,8 @@ export const WalkthroughJobsLive = Layer.effect(
             filePriorities,
             splitRecommendation: startPlan.splitRecommendation,
             adjudicateContinuations: settings.jev.enabled,
+            stack,
+            parentFingerprint,
           },
           params.trigger,
         );

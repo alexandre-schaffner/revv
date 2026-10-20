@@ -402,24 +402,19 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
   );
 }
 
+/** Most PRs one summaries request carries (the server's cap). */
+const THREAD_SUMMARIES_BATCH = 200;
+
 export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
   if (prIds.length === 0) return;
   try {
-    const results = await Promise.allSettled(
-      prIds.slice(0, 20).map(async (prId) => {
-        const { data, error } = await api.api.prs({ id: prId })["thread-summary"].get();
-        if (error || !data) return null;
-        return { prId, summary: data as ThreadSummary };
-      }),
-    );
-    const entries = results
-      .filter(
-        (r): r is PromiseFulfilledResult<{ prId: string; summary: ThreadSummary } | null> =>
-          r.status === "fulfilled",
-      )
-      .map((r) => r.value)
-      .filter((v): v is { prId: string; summary: ThreadSummary } => v !== null);
-    setBatchSummaries(entries);
+    // One request for the lot: a request per PR queued the page's own reads
+    // behind them in the browser's few connections to the server.
+    const { data, error } = await api.api.prs["thread-summaries"].post({
+      prIds: prIds.slice(0, THREAD_SUMMARIES_BATCH),
+    });
+    if (error || !data || !("summaries" in data)) return;
+    setBatchSummaries(data.summaries as { prId: string; summary: ThreadSummary }[]);
   } catch {
     // best-effort
   }

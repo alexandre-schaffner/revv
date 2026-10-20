@@ -36,6 +36,12 @@ import { ReviewServiceLive } from "./Review";
 import { SecretStoreLive } from "./SecretStore";
 import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
+import { StackBriefJobsLive } from "./stacks/StackBriefJobs";
+import { StackHeadlinesLive } from "./stacks/StackHeadlines";
+import { StackMergeServiceLive } from "./stacks/StackMerge";
+import { StackRebaseServiceLive } from "./stacks/StackRebase";
+import { StackReviewServiceLive } from "./stacks/StackReview";
+import { StackServiceLive } from "./stacks/StackService";
 import { TokenProviderLive } from "./TokenProvider";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
@@ -114,6 +120,16 @@ const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
+// StackService joins a PR's GitHub stack with Revv's per-layer state: PrContext
+// for repo + token, the kv cache and Db from BaseLayers.
+const StackServiceWithDeps = StackServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
+
+// StackHeadlines names each stack for the homepage queue: Db, cache, settings
+// and Broadcaster, all from BaseLayers.
+const StackHeadlinesWithDeps = StackHeadlinesLive.pipe(Layer.provide(BaseLayers));
+
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
@@ -166,6 +182,7 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RemoteWalkthroughCacheWithDeps,
       WalkthroughSnapshotImporterWithDeps,
       HunkScanServiceWithDeps,
+      StackServiceWithDeps,
     ),
   ),
 );
@@ -179,6 +196,7 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
       SyncServiceWithDeps,
       WalkthroughJobsWithDeps,
       RepoCloneServiceWithDeps,
+      StackServiceWithDeps,
     ),
   ),
 );
@@ -196,6 +214,43 @@ const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
 );
 
+// StackBriefJobs writes the stack brief: StackService for the stack, PrContext
+// for repo + token, the rest from BaseLayers. StackReview queues a stack's
+// walkthroughs through WalkthroughJobs, then asks StackBriefJobs for the brief.
+const StackBriefJobsWithDeps = StackBriefJobsLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+);
+const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      StackServiceWithDeps,
+      WalkthroughJobsWithDeps,
+      StackBriefJobsWithDeps,
+    ),
+  ),
+);
+
+// StackRebase rebases a stack in the repo's clone and pushes it: StackService
+// for fresh reads, PrContext for repo + token, the gateway and Broadcaster.
+const StackRebaseServiceWithDeps = StackRebaseServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+);
+
+// StackMerge merges a stack bottom-up: StackService for fresh reads, PrContext
+// for repo + token, StackRebase for a layer that fell behind, the GitHub
+// gateway, PR rows and Broadcaster from BaseLayers.
+const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      StackServiceWithDeps,
+      StackRebaseServiceWithDeps,
+    ),
+  ),
+);
+
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, realtime broadcaster, pr service, etag cache).
@@ -208,6 +263,8 @@ export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
   PrConversationServiceWithDeps,
+  StackServiceWithDeps,
+  StackHeadlinesWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,
@@ -216,6 +273,10 @@ export const AppLayer = Layer.mergeAll(
   HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,
   RecapSchedulerWithDeps,
+  StackBriefJobsWithDeps,
+  StackReviewServiceWithDeps,
+  StackMergeServiceWithDeps,
+  StackRebaseServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so

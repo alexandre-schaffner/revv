@@ -1,9 +1,10 @@
 <script lang="ts">
 /*
- * A GitHub stack in the repo homepage's queue: the one thing raised off the
- * page. Its PRs are cards, a pile of sheets gathered where the highest-ranked
- * one would sit, top of the stack first, set in a little and hung off a
- * hairline rail that runs down to the branch they land on.
+ * A GitHub stack in the repo homepage's queue. Its PRs are cards, a pile of
+ * sheets gathered where the highest-ranked one would sit, top of the stack
+ * first, set in a little and hung off a hairline rail that runs down to the
+ * branch they land on. The top card lies level with the rows around it; the
+ * pile grows away from the reader, sunk into the page behind it.
  *
  * A tall stack folds to its top card with the rest showing as sheet edges
  * beneath it, since ten rows of one chain would bury everything else in the
@@ -18,9 +19,10 @@
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import { tick } from "svelte";
 import TaggedPrRowBody from "$lib/components/repo/TaggedPrRowBody.svelte";
-import { flipStack, gsapHover, gsapPress, snapshotStack } from "$lib/motion";
+import { flipStack, gsapFade, gsapHover, gsapPress, snapshotStack, tokens } from "$lib/motion";
 import { STACK_FOLD_AT, type TaggedEntry } from "$lib/prs/tagged-prs";
 import { getVisitState } from "$lib/stores/pr-visits.svelte";
+import { getStackHeadline } from "$lib/stores/stack-headlines.svelte";
 
 interface Props {
   stack: Extract<TaggedEntry, { kind: "stack" }>;
@@ -40,6 +42,36 @@ const collapsible = $derived(size >= STACK_FOLD_AT);
 const visits = $derived(stack.members.map((m) => getVisitState(m.pr.id, m.pr.headSha)));
 /** Folded-away members the reader already opened and the author has since pushed to. */
 const hiddenMoved = $derived(open ? 0 : visits.slice(1).filter((v) => v === "moved").length);
+
+/**
+ * The feature the stack builds, once the server has named it. It can be
+ * renamed a moment after first paint (a name read off the titles, then the
+ * model's), so the name fades in when it changes rather than snapping.
+ */
+const named = $derived(getStackHeadline(stack.members[0].pr.repositoryId, stack.number));
+
+/*
+ * TEMPORARY dev toggle while two treatments are compared side by side:
+ * `localStorage["revv.stackHeadlineVariant"]` is "foot" (the name leads the
+ * foot's label) or "header" (a line above the top card). Delete the losing
+ * variant and this switch together.
+ */
+const headlineVariant: "foot" | "header" = (() => {
+  try {
+    return localStorage.getItem("revv.stackHeadlineVariant") === "header" ? "header" : "foot";
+  } catch {
+    return "foot";
+  }
+})();
+const nameInFoot = $derived(named !== null && headlineVariant === "foot");
+const nameInHeader = $derived(named !== null && headlineVariant === "header");
+/** Spelled out under the name in the foot only when the cards are dealt; folded it is the cover's tooltip. */
+const gistInFoot = $derived(nameInFoot && open && named?.gist != null);
+const stackLabel = $derived(
+  named
+    ? `${named.headline}: stack of ${size} pull requests onto ${stack.base}`
+    : `Stack of ${size} pull requests onto ${stack.base}`,
+);
 
 let root = $state<HTMLElement>();
 let cover = $state<HTMLButtonElement>();
@@ -78,12 +110,30 @@ async function toggle(): Promise<void> {
 <li
 	class="stack"
 	class:stack--folded={!open}
+	class:stack--headed={nameInHeader}
+	class:stack--gist={gistInFoot}
 	style:--sheets={open ? 0 : Math.min(size - 1, SHEETS_SHOWN)}
-	aria-label="Stack of {size} pull requests onto {stack.base}"
+	aria-label={stackLabel}
 	bind:this={root}
 	use:gsapHover={{ prop: '--fan' }}
 	use:gsapPress={{ scale: 0.995, disabled: open }}
 >
+	<!--
+		Variant B: the stack's name on a line of its own above the top card, the
+		rail rising to a node beside it so the line reads as what the cards hang
+		from.
+	-->
+	{#if nameInHeader && named}
+		<div class="stack-head">
+			{#key named.headline}
+				<span class="stack-head-name" in:gsapFade={{ duration: tokens.smooth }}>{named.headline}</span>
+			{/key}
+			<!-- Keyed without an `if` around it, so a gist that arrives with a rename fades in too. -->
+			{#key named.gist}
+				<span class="stack-head-gist" in:gsapFade={{ duration: tokens.smooth }}>{named.gist ?? ""}</span>
+			{/key}
+		</div>
+	{/if}
 	<ol class="stack-cards" id={cardsId}>
 		{#each stack.members as member, depth (member.pr.id)}
 			<li
@@ -92,8 +142,6 @@ async function toggle(): Promise<void> {
 				inert={!open}
 				bind:this={cards[depth]}
 			>
-				<!-- The raised state, drawn once and faded in: see `.lift`. -->
-				<span class="lift" aria-hidden="true"></span>
 				<div class="face" bind:this={faces[depth]}>
 					<TaggedPrRowBody row={member} visit={visits[depth] ?? "unvisited"} showBranch={false} />
 				</div>
@@ -113,9 +161,15 @@ async function toggle(): Promise<void> {
 			aria-expanded="false"
 			aria-controls={cardsId}
 			aria-label="Show all {size} pull requests in this stack"
+			aria-describedby={named?.gist ? `${cardsId}-gist` : undefined}
+			title={nameInFoot ? (named?.gist ?? undefined) : undefined}
 			bind:this={cover}
 			onclick={toggle}
-		></button>
+		>
+			{#if named?.gist}
+				<span class="sr-only" id="{cardsId}-gist">{named.gist}</span>
+			{/if}
+		</button>
 	{/if}
 	<!--
 		The foot is the stack's label and, once it can fold, its handle: the
@@ -124,14 +178,43 @@ async function toggle(): Promise<void> {
 		way a press goes.
 	-->
 	{#snippet caption()}
-		<span class="stack-caption">
-			{size} pull requests onto
-			<code class="stack-base" title={stack.base}>{stack.base}</code>
-		</span>
-		{#if hiddenMoved > 0}
-			<span class="stack-moved">
-				{hiddenMoved} with new commits
+		{#if nameInFoot && named}
+			<!--
+				Variant A: the name leads the label; dealt out, its gist sits on a
+				line under it. The first line keeps a fixed band, so the ring stays
+				centred on it however the foot grows.
+			-->
+			<span class="stack-label">
+				<span class="stack-line">
+					{#key named.headline}
+						<span class="stack-name" in:gsapFade={{ duration: tokens.smooth }}>{named.headline}</span>
+					{/key}
+					<span class="stack-caption stack-caption--led">
+						{size} pull requests onto
+						<code class="stack-base" title={stack.base}>{stack.base}</code>
+					</span>
+					{#if hiddenMoved > 0}
+						<span class="stack-moved">
+							{hiddenMoved} with new commits
+						</span>
+					{/if}
+				</span>
+				{#if open}
+					{#key named.gist}
+						<span class="stack-gist" in:gsapFade={{ duration: tokens.smooth }}>{named.gist ?? ""}</span>
+					{/key}
+				{/if}
 			</span>
+		{:else}
+			<span class="stack-caption">
+				{size} pull requests onto
+				<code class="stack-base" title={stack.base}>{stack.base}</code>
+			</span>
+			{#if hiddenMoved > 0}
+				<span class="stack-moved">
+					{hiddenMoved} with new commits
+				</span>
+			{/if}
 		{/if}
 		{#if collapsible}
 			<span class="stack-chevron" class:stack-chevron--open={open}>
@@ -160,15 +243,14 @@ async function toggle(): Promise<void> {
 
 <style>
 	/*
-	 * Flat rows sit at the page's level; a stack is the one thing raised off
-	 * it. It takes a row's hairline like any other entry, then a little air
-	 * so its cards read as lifted rather than as boxes jammed against lines.
+	 * Rows sit at the page's level, and so does a stack's top card: it takes
+	 * a row's hairline like any other entry and lines up with the rows
+	 * around it. The rest of a folded pile is what leaves that level, down
+	 * and away behind it.
 	 */
 	.stack {
-		/* 0–1: how much paper the cards are (see `.card`). A folded pile is
-		   raised; dealt out, its members lie flat like every other row, and
-		   only the indent and the rail group them. The fold eases it in
-		   between. */
+		/* 0–1: how folded the pile is, 1 folded and 0 dealt out. The fold
+		   eases it in between; the lower cards' elbows key off it. */
 		--elev: 0;
 		/* How far each sheet drops below, and draws in from, the one above. */
 		--sheet-drop: 0.5rem;
@@ -189,7 +271,7 @@ async function toggle(): Promise<void> {
 		   padding plus half the glyph's line box); the elbow turns into the
 		   card there. The rail runs from the first elbow to the middle of the
 		   ring on the foot, `--ring-y` down a foot `--foot-h` tall. */
-		--stack-pad-top: 0.625rem;
+		--stack-pad-top: 0rem;
 		--elbow-top: 0.8125rem;
 		--glyph-y: 21px;
 		--foot-h: 2.25rem;
@@ -250,16 +332,9 @@ async function toggle(): Promise<void> {
 	/* ── Cards ──────────────────────────────────────────────────────────── */
 
 	/*
-	 * A PR in a stack, as paper. How much paper is the stack's `--elev`:
-	 * dealt out, its members lie flat like any other row (a hairline above,
-	 * no edge, no shadow, square corners). Everything `--elev` drives is
-	 * paint, never layout: the fold eases it while the cards travel, so they
-	 * flatten as they are dealt and turn back into sheets as they are
-	 * gathered, without the layout under the animation moving.
-	 *
-	 * `--lift` raises the folded pile's top card on hover (the stack eases
-	 * it): it rises on `translate`, and the raised look is a separate layer
-	 * crossfaded on opacity, so the hover never repaints the card.
+	 * A PR in a stack, drawn the way a flat row is: square, on the page's
+	 * own paper, edged only by a hairline. Where it sits is what says it
+	 * belongs to a pile.
 	 *
 	 * Tints are mixed into the paper rather than laid over it: a translucent
 	 * card would show the sheets beneath it through.
@@ -267,8 +342,6 @@ async function toggle(): Promise<void> {
 	 * `position: relative` anchors the body's stretched link.
 	 */
 	.card {
-		--lift: 0;
-		--edge: color-mix(in srgb, var(--color-border) calc(var(--elev) * 100%), transparent);
 		position: relative;
 		/* Top card always above the rest, folded or not, so the others travel
 		   under it rather than over it. */
@@ -278,42 +351,32 @@ async function toggle(): Promise<void> {
 		/* A flat row's inset less the border, so a card's title sits on the
 		   same column as a flat row's. */
 		padding: calc(var(--spacing-inset) - 1px);
-		border: 1px solid var(--edge);
-		border-top-color: color-mix(
-			in srgb,
-			var(--color-border) calc(var(--elev) * 100%),
-			var(--color-border-subtle)
-		);
-		border-radius: calc(var(--radius-card) * var(--elev));
-		/* `--shade` (percent toward ink) darkens folded sheets with depth, and
-		   the fold animates it. */
-		background: color-mix(
-			in srgb,
-			var(--color-text-muted) calc(var(--shade, 0) * 1%),
-			var(--color-bg-primary)
-		);
-		box-shadow: 0 1px 3px rgb(0 0 0 / calc(var(--elev) * 0.07));
-		translate: 0 calc(var(--lift) * -1.5px);
+		border: 1px solid transparent;
+		border-top-color: var(--color-border-subtle);
+		background: var(--color-bg-primary);
 		transition: background var(--duration-instant) var(--ease-soft);
 	}
 
-	/* Dealt out, the other cards keep a row's hairline above them; the
-	   first one's would double the stack's own. */
+	/* Its hairline would double the stack's own. */
 	.card:first-child {
-		border-top-color: var(--edge);
+		border-top-color: transparent;
 	}
+
 
 	/* Read, then pushed to: the flat row's teal, mixed into the paper. */
 	.card--moved {
 		background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg-primary));
 	}
 
-	/* Dealt out, a member answers the pointer like a flat row. */
-	.stack:not(.stack--folded) .card:hover {
+	/* A member answers the pointer like a flat row. Folded, the top card
+	   answers it through the cover laid over the pile. */
+	.stack:not(.stack--folded) .card:hover,
+	.stack--folded:has(.stack-cover:hover) .card:first-child {
 		background: color-mix(in srgb, var(--color-text-muted) 6%, var(--color-bg-primary));
 	}
 
-	.stack:not(.stack--folded) .card--moved:hover {
+	.stack:not(.stack--folded) .card--moved:hover,
+	.stack--folded:has(.stack-cover:hover) .card--moved:first-child {
 		background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-primary));
 	}
 
@@ -329,18 +392,6 @@ async function toggle(): Promise<void> {
 		display: flex;
 		flex: 1 1 auto;
 		min-width: 0;
-	}
-
-	/* Sits exactly over the card's own border, so its edge replaces it; the
-	   shadow falls outside the box, so nothing inside is covered. */
-	.lift {
-		position: absolute;
-		inset: -1px;
-		border: 1px solid color-mix(in srgb, var(--color-text-muted) 45%, var(--color-border));
-		border-radius: inherit;
-		box-shadow: 0 4px 12px rgb(0 0 0 / 0.1);
-		opacity: var(--lift);
-		pointer-events: none;
 	}
 
 	/*
@@ -377,12 +428,15 @@ async function toggle(): Promise<void> {
 	/* ── Folded ─────────────────────────────────────────────────────────── */
 
 	/*
-	 * Every card but the top one leaves the flow and lies under it, each
+	 * Every card but the top one leaves the flow and lies behind it, each
 	 * sheet a little lower and a little narrower, so only its bottom edge
-	 * shows. The faces go blank, since what peeks out of a real stack is
-	 * paper, not a sliver of someone's title. Sheets get a shade darker the
-	 * deeper they sit, the way lower pages catch less light. Deeper than two,
-	 * they wait invisibly behind the second, ready to be dealt.
+	 * shows. The pile grows away from the reader, into the page: the top
+	 * card is level with the rows around it and the sheets sit beneath that
+	 * level. Each is drawn as nothing but a row's hairline along its foot,
+	 * the one edge of it that shows, fainter the deeper it sits: the queue's
+	 * own separator, repeated and drawn in. The faces go blank, since what peeks out of a real stack is
+	 * paper, not a sliver of someone's title. Deeper than two, sheets wait
+	 * invisibly behind the second, ready to be dealt.
 	 */
 	.stack--folded .stack-cards {
 		padding-bottom: calc(var(--sheets) * var(--sheet-drop));
@@ -395,38 +449,18 @@ async function toggle(): Promise<void> {
 		right: calc(min(var(--depth), 2) * var(--sheet-inset));
 		/* Plain paper, even under a card tinted for new commits: a teal
 		   sliver would read as a state of its own. */
-		background: color-mix(
-			in srgb,
-			var(--color-text-muted) calc(var(--shade, 0) * 1%),
-			var(--color-bg-primary)
-		);
-		/* A contact shadow only: a sheet lies flat on the one below. */
-		box-shadow: 0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+		border-color: transparent;
+		border-bottom-color: var(--color-border-subtle);
+		background: var(--color-bg-primary);
 		/* Fanning spends the room the foot keeps above its line, so the
 		   stack's height, and every row below it, stays put. On `translate`,
-		   like the lift, so it never lays anything out. */
+		   so it never lays anything out. */
 		translate: 0 calc(min(var(--depth), 2) * var(--fan) * 0.1875rem);
 	}
 
-	/* Folded, the top card is inert under the cover, so it rises with the
-	   stack's hover rather than its own. */
-	.stack--folded .card:first-child {
-		--lift: var(--fan);
-	}
-
-	/* Its own layer, so fading it is a compositor blend and never repaints
-	   the card under it. Only where a hover can raise it: a layer per card,
-	   held all the time, would cost memory for nothing. */
-	.stack--folded .card:first-child > .lift {
-		will-change: opacity;
-	}
-
+	/* The sheet nearest the top card takes the firmer line. */
 	.stack--folded .card:nth-child(2) {
-		--shade: 5;
-	}
-
-	.stack--folded .card:nth-child(n + 3) {
-		--shade: 10;
+		border-bottom-color: var(--color-border);
 	}
 
 	.stack--folded .card:nth-child(n + 4) {
@@ -454,7 +488,6 @@ async function toggle(): Promise<void> {
 		margin: 0;
 		padding: 0.375rem var(--spacing-inset) 0.375rem calc(var(--spacing-inset) + 1.4375rem);
 		border: none;
-		border-radius: var(--radius-card);
 		background: transparent;
 		font: inherit;
 		font-size: 0.75rem;
@@ -545,5 +578,142 @@ async function toggle(): Promise<void> {
 	.stack-foot--handle:hover .stack-chevron,
 	.stack-cover:hover ~ .stack-foot .stack-chevron {
 		color: var(--color-text-primary);
+	}
+
+	/* ── The feature's name ─────────────────────────────────────────────── */
+
+	/*
+	 * Variant A: the foot's label leads with the name, a step up from the
+	 * caption in size and ink, then "· 4 pull requests onto main" as before.
+	 * The first line is a band `--foot-h` tall less the foot's padding, on
+	 * a 1.5rem line, so the ring's `--ring-y` still lands on its middle;
+	 * dealt out, the gist adds a line under it and `--foot-h` grows by just
+	 * that much, which carries the rail's end and the ring along.
+	 */
+	.stack--gist {
+		--foot-h: 3.375rem;
+	}
+
+	.stack--gist .stack-foot {
+		align-items: flex-start;
+	}
+
+	.stack--gist .stack-chevron {
+		align-items: center;
+		height: 1.5rem;
+	}
+
+	.stack-label {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.stack-line {
+		display: flex;
+		align-items: baseline;
+		gap: 0.3125rem;
+		min-width: 0;
+		height: 1.5rem;
+		line-height: 1.5rem;
+		white-space: nowrap;
+	}
+
+	/* The name gives way before the branch does: the base is what the
+	   caption is for. */
+	.stack-name {
+		flex: 0 1 auto;
+		min-width: 4rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		letter-spacing: -0.005em;
+		color: var(--color-text-primary);
+	}
+
+	.stack-line .stack-caption {
+		flex-shrink: 0;
+	}
+
+	.stack-caption--led::before {
+		content: "\00b7" / "";
+		margin-right: 0.0625rem;
+		opacity: 0.5;
+	}
+
+	/* `--color-text-subtle`, not muted: it is read, not decoration. */
+	.stack-gist {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.75rem;
+		line-height: 1rem;
+		color: var(--color-text-subtle);
+	}
+
+	.stack-gist:empty {
+		display: none;
+	}
+
+	/*
+	 * Variant B: a line above the top card, on the cards' text column. The
+	 * rail starts at a solid node beside it, the stack's tip, and runs down
+	 * to the hollow ring at its base, so the line reads as what the cards
+	 * hang from.
+	 */
+	.stack--headed {
+		--head-h: 1.75rem;
+		--head-y: 1.25rem;
+		--node-r: 2.5px;
+	}
+
+	.stack--headed::before {
+		top: calc(var(--stack-pad-top) + var(--head-y));
+	}
+
+	.stack-head {
+		position: relative;
+		z-index: 25;
+		display: flex;
+		align-items: baseline;
+		gap: 0.625rem;
+		min-width: 0;
+		height: var(--head-h);
+		padding: 0.625rem var(--spacing-inset) 0 calc(var(--spacing-inset) + 1.4375rem);
+		line-height: 1.125rem;
+		white-space: nowrap;
+	}
+
+	.stack-head::after {
+		content: "";
+		position: absolute;
+		top: calc(var(--head-y) - var(--node-r));
+		left: calc(var(--rail-x) + 0.5px - var(--gutter) - var(--node-r));
+		width: calc(var(--node-r) * 2);
+		height: calc(var(--node-r) * 2);
+		border-radius: 50%;
+		background: var(--stack-rail);
+	}
+
+	/* The name keeps its room; the gist takes what is left. */
+	.stack-head-name {
+		flex: 0 0 auto;
+		max-width: 70%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		letter-spacing: -0.005em;
+		color: var(--color-text-primary);
+	}
+
+	.stack-head-gist {
+		flex: 1 1 0;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 0.75rem;
+		color: var(--color-text-subtle);
 	}
 </style>

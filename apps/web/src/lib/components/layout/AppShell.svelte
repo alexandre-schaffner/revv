@@ -2,8 +2,10 @@
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
+import StackMergeSheet from "$lib/components/stack/StackMergeSheet.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
-import { gsap, gsapFade, tokens } from "$lib/motion";
+import { gsap, gsapFade, gsapFadeY, tokens } from "$lib/motion";
+import { takeNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import {
   getActiveTab,
@@ -90,6 +92,21 @@ const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
 
 function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
+}
+
+// How far a page travels when it arrives from a direction (moving through a
+// PR stack): up the stack it drops in from above, down it rises from below.
+const PAGE_TRAVEL_PX = 14;
+
+// The page slot's entrance. A navigation that declared a direction slides
+// in from it; anything else keeps the plain crossfade. Read once per mount.
+function pageEnter(node: Element) {
+  const direction = takeNavigationIntent();
+  if (!direction) return gsapFade(node, { duration: tokens.quick });
+  return gsapFadeY(node, {
+    y: direction === "up" ? -PAGE_TRAVEL_PX : PAGE_TRAVEL_PX,
+    duration: tokens.smooth,
+  });
 }
 
 // Drag state — not reactive $state, just local mutable refs
@@ -268,7 +285,7 @@ function onRightHandleDblClick(): void {
 				it for Flip morphs; the default crossfade is the transition below.
 			-->
 			{#key page.url.pathname}
-				<div class="page-slot" data-page-root in:gsapFade={{ duration: tokens.quick }}>
+				<div class="page-slot" data-page-root in:pageEnter>
 					{@render children()}
 				</div>
 			{/key}
@@ -331,6 +348,7 @@ function onRightHandleDblClick(): void {
 	}}
 />
 <SettingsModal open={getSettingsOpen()} onClose={closeSettings} />
+<StackMergeSheet />
 
 <style>
 	.app-shell {

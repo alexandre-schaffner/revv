@@ -3,6 +3,7 @@ import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
+import { loadConversation } from "$lib/stores/conversation.svelte";
 import {
   deleteThread,
   getReviewFiles,
@@ -249,6 +250,10 @@ async function submit(action: Action): Promise<void> {
     // it the just-pushed comments keep their null externalId locally and a
     // second submit would re-post them as duplicates.
     await loadSession(prId, undefined, true);
+    // The review changed the viewer's verdict, which the action bar reads off
+    // the conversation: an approval swaps Approve for Merge. Re-read it before
+    // `submitting` clears, so Approve never re-arms in between.
+    await loadConversation(prId, { force: true });
 
     const payload = data as {
       htmlUrl?: string;

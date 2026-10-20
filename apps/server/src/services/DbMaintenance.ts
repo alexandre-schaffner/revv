@@ -37,6 +37,9 @@ export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceS
 export const DbMaintenanceLive = Layer.effect(
   DbMaintenance,
   Effect.gen(function* () {
+    // The sweep lives in the layer's scope: forked under `start()`'s caller,
+    // it was interrupted the moment `start()` returned, after one run.
+    const loopScope = yield* Effect.scope;
     const { db } = yield* DbService;
 
     const runMaintenance: Effect.Effect<void> = Effect.sync(() => {
@@ -132,8 +135,9 @@ export const DbMaintenanceLive = Layer.effect(
 
           // Run once immediately on start, then repeat every 6 hours
           const schedule = Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS));
-          const fiber = yield* Effect.forkChild(
+          const fiber = yield* Effect.forkIn(
             runMaintenance.pipe(Effect.repeat(schedule), Effect.asVoid),
+            loopScope,
           );
           yield* Ref.set(fiberRef, fiber);
         }),

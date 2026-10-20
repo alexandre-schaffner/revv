@@ -11,6 +11,7 @@ import { DbError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import {
+  OPEN_PRS_LIST_CAP,
   type OpenPrList,
   type OpenPrListSignature,
   sameSignature,
@@ -18,6 +19,7 @@ import {
 } from "./github-graphql-prs";
 import { apiBaseForHost } from "./github-rest";
 import {
+  announceStacks,
   broadcastToAccount,
   type GitHubInfra,
   type LiveAccount,
@@ -37,12 +39,35 @@ import type { SettingsService } from "./Settings";
 const CLOSED_PR_STATUS_FETCH_LIMIT = 10;
 
 /**
- * How long a repo can go without a real re-list on the strength of an
- * unchanged signature. Bounds what the signature can't see — a field GitHub
- * changes without bumping the PR's `updatedAt` (a base branch advancing), two
- * updates inside one second — and retries diff stats that failed.
+ * How long a repo can go without a full re-list, on the strength of unchanged
+ * signatures and reads of just what moved. Bounds what neither can see — a
+ * field GitHub changes without bumping the PR's `updatedAt` (a base branch
+ * advancing), two updates inside one second — and retries diff stats that
+ * failed. A big repo's full list is dozens of pages for that safety net
+ * alone, so it waits longer.
  */
 const FULL_LIST_MAX_AGE_MS = 30 * 60 * 1000;
+const LARGE_REPO_FULL_LIST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const LARGE_REPO_OPEN_PRS = 500;
+
+/**
+ * A stacked repo up to this size is fully re-listed every cycle: the signature
+ * only sees a stack change through the PR's `updatedAt`, and nothing promises
+ * GitHub bumps it for one. Past it, that costs too many pages per cycle.
+ */
+const STACKED_FULL_LIST_MAX_PRS = 300;
+
+function fullListMaxAge(listed: ListedSignature): number {
+  return listed.signature.count > LARGE_REPO_OPEN_PRS
+    ? LARGE_REPO_FULL_LIST_MAX_AGE_MS
+    : FULL_LIST_MAX_AGE_MS;
+}
+
+/** Whether `listed` can still stand in for a full list, read cheaply from here. */
+function canSkipFullList(listed: ListedSignature, now: number): boolean {
+  if (listed.hasStacks && listed.signature.count <= STACKED_FULL_LIST_MAX_PRS) return false;
+  return now - listed.fullListedAt < fullListMaxAge(listed);
+}
 
 /**
  * How long a host that refused the stack fields is listed without them before
@@ -97,38 +122,58 @@ export function openListMoved(
 export interface ListedSignature {
   readonly signature: OpenPrListSignature;
   readonly listedAt: number;
-  /**
-   * Whether any of its PRs sat in a stack. Such a repo is re-listed every
-   * cycle: the signature only sees a stack change through the PR's
-   * `updatedAt`, and nothing promises GitHub bumps it for one.
-   */
+  /** When the last *full* list landed; a read of what moved doesn't reset it. */
+  readonly fullListedAt: number;
+  /** Whether any of its PRs sat in a stack (see `STACKED_FULL_LIST_MAX_PRS`). */
   readonly hasStacks: boolean;
+  /**
+   * The repo has more open PRs than a list holds (`OPEN_PRS_LIST_CAP`), so the
+   * stored list is only its most recently updated ones and its count can't
+   * be checked against GitHub's: only the newest `updatedAt` can.
+   */
+  readonly truncated: boolean;
+}
+
+/** Whether a probe proves the list `listed` describes hasn't moved. */
+function listUnchanged(listed: ListedSignature, fresh: OpenPrListSignature): boolean {
+  return listed.truncated
+    ? fresh.latestUpdatedAt === listed.signature.latestUpdatedAt
+    : sameSignature(fresh, listed.signature);
 }
 
 /** Key of the per-account, per-host state the poll keeps between cycles. */
 const accountHostKey = (accountId: string, githubHost: string) => `${accountId}\u0000${githubHost}`;
 
+export interface ProbedRepos {
+  /** Repos whose open-PR list can't have changed: reuse the DB rows. */
+  readonly unchanged: Set<string>;
+  /** Every probed repo's current signature, by repo id. */
+  readonly signatures: Map<string, OpenPrListSignature>;
+}
+
 /**
- * Repos whose open-PR list can't have changed since it was last written, so
- * this cycle can reuse the DB rows instead of re-listing them.
+ * Where each repo's open-PR list stands against the one last written: the
+ * repos that can't have changed (reuse the DB rows), and the probed signature
+ * of the rest, which lets a read of just what moved check itself.
  *
- * One aliased GraphQL probe per account and host — 1 point per 80 repos —
- * against one list query per repo (1 point per 100 PRs each). Only repos with
- * a recent recorded list and no stacks qualify; a failed or skipped probe
- * qualifies none, which is exactly the old every-repo behaviour.
+ * One aliased GraphQL probe per account and host — 1 point per 80 repos.
+ * Only repos with a list recent enough to build on qualify; a failed or
+ * skipped probe qualifies none, which is exactly a full list for every repo.
+ * `reuse: false` (a manual sync) still probes, but proves nothing unchanged.
  */
-export const findUnchangedRepos = (
+export const probeRepos = (
   deps: PollDeps,
   cycle: SyncCycle,
   repos: readonly Repository[],
   listedSignatures: ReadonlyMap<string, ListedSignature>,
-): Effect.Effect<Set<string>, never, SettingsService> =>
+  reuse: boolean,
+): Effect.Effect<ProbedRepos, never, SettingsService> =>
   Effect.gen(function* () {
     const now = Date.now();
     const candidatesByGroup = new Map<string, Repository[]>();
     for (const repo of repos) {
       const listed = listedSignatures.get(repo.id);
-      if (!listed || listed.hasStacks || now - listed.listedAt >= FULL_LIST_MAX_AGE_MS) continue;
+      if (!listed || !canSkipFullList(listed, now)) continue;
       const accountId = cycle.repoToAccountId.get(repo.id);
       if (!accountId) continue;
       const key = accountHostKey(accountId, repo.githubHost);
@@ -138,6 +183,7 @@ export const findUnchangedRepos = (
     }
 
     const unchanged = new Set<string>();
+    const signatures = new Map<string, OpenPrListSignature>();
     yield* Effect.forEach(
       candidatesByGroup.values(),
       (group) =>
@@ -161,12 +207,16 @@ export const findUnchangedRepos = (
           for (const repo of group) {
             const fresh = probed.get(repo.fullName);
             const listed = listedSignatures.get(repo.id);
-            if (fresh && listed && sameSignature(fresh, listed.signature)) unchanged.add(repo.id);
+            if (!fresh || !listed) continue;
+            signatures.set(repo.id, fresh);
+            if (reuse && !listed.hasStacks && listUnchanged(listed, fresh)) {
+              unchanged.add(repo.id);
+            }
           }
         }),
       { concurrency: 3, discard: true },
     );
-    return unchanged;
+    return { unchanged, signatures };
   });
 
 /**
@@ -187,20 +237,7 @@ const listOpenPrs = (
   Effect.gen(function* () {
     const apiBase = apiBaseForHost(repo.githubHost);
     if (cycle.liveAccount(live.acc, "graphql")) {
-      const stacklessKey = accountHostKey(live.acc.id, repo.githubHost);
-      const stacklessUntil = ctx.stacklessUntil.get(stacklessKey);
-      const listing = yield* cycle.tryGuarded(
-        live.acc,
-        deps.github.prs.listOpen(repo.fullName, repo.id, live.token, apiBase, {
-          withStacks: stacklessUntil === undefined || Date.now() >= stacklessUntil,
-        }),
-        { errorLabel: `listPrs error for ${repo.fullName}` },
-      );
-      if (listing?.stacks === "unsupported") {
-        ctx.stacklessUntil.set(stacklessKey, Date.now() + STACKLESS_RECHECK_MS);
-      } else if (listing?.stacks === "listed") {
-        ctx.stacklessUntil.delete(stacklessKey);
-      }
+      const listing = yield* listOpenPrsGraphql(deps, cycle, ctx, repo, live, null);
       // Anything but a spent GraphQL budget is this repo's answer for the cycle.
       if (listing !== null || cycle.liveAccount(live.acc, "graphql")) return listing;
     }
@@ -213,6 +250,126 @@ const listOpenPrs = (
     // REST has no stacks.
     return prs === null ? null : { prs, stacks: "unknown" };
   });
+
+/**
+ * The GraphQL open list, all of it or (with `updatedSince`) what moved since.
+ * Stacks are asked for unless this account's host refused them recently. The
+ * refusal is remembered per account, not per host: GitHub may gate the fields
+ * per token, and one account's answer mustn't switch them off for the rest.
+ */
+const listOpenPrsGraphql = (
+  deps: PollDeps,
+  cycle: SyncCycle,
+  ctx: RepoListingContext,
+  repo: Repository,
+  live: LiveAccount,
+  updatedSince: string | null,
+): Effect.Effect<OpenPrList | null, never, GitHubInfra> =>
+  Effect.gen(function* () {
+    const stacklessKey = accountHostKey(live.acc.id, repo.githubHost);
+    const stacklessUntil = ctx.stacklessUntil.get(stacklessKey);
+    const listing = yield* cycle.tryGuarded(
+      live.acc,
+      deps.github.prs.listOpen(
+        repo.fullName,
+        repo.id,
+        live.token,
+        apiBaseForHost(repo.githubHost),
+        {
+          withStacks: stacklessUntil === undefined || Date.now() >= stacklessUntil,
+          updatedSince,
+        },
+      ),
+      { errorLabel: `listPrs error for ${repo.fullName}` },
+    );
+    if (listing?.stacks === "unsupported") {
+      ctx.stacklessUntil.set(stacklessKey, Date.now() + STACKLESS_RECHECK_MS);
+    } else if (listing?.stacks === "listed") {
+      ctx.stacklessUntil.delete(stacklessKey);
+    }
+    return listing;
+  });
+
+/** A repo's open list rebuilt from what moved, on top of the rows already stored. */
+interface DeltaListing extends OpenPrList {
+  /** Stored rows nothing touched: still open, not updated since. */
+  readonly kept: readonly PullRequest[];
+}
+
+/**
+ * Bring a repo's list up to date by reading only what moved since the last
+ * one: the open PRs updated since its newest `updatedAt`, and the PRs closed
+ * since. Null whenever that can't be trusted — no list to build on, no
+ * probed signature to check against, or a result whose size disagrees with
+ * the probe — and the caller lists the repo in full instead.
+ */
+const listOpenPrsDelta = (
+  deps: PollDeps,
+  cycle: SyncCycle,
+  ctx: RepoListingContext,
+  repo: Repository,
+  live: LiveAccount,
+): Effect.Effect<DeltaListing | null, never, GitHubInfra> =>
+  Effect.gen(function* () {
+    const listed = ctx.listedSignatures.get(repo.id);
+    const probed = ctx.probedSignatures.get(repo.id);
+    const since = listed?.signature.latestUpdatedAt ?? null;
+    if (!listed || !probed || since === null) return null;
+    if (!cycle.liveAccount(live.acc, "graphql")) return null;
+
+    const [open, closed] = yield* Effect.all(
+      [
+        listOpenPrsGraphql(deps, cycle, ctx, repo, live, since),
+        cycle.tryGuarded(
+          live.acc,
+          deps.github.prs.listClosedSince(
+            repo.fullName,
+            since,
+            live.token,
+            apiBaseForHost(repo.githubHost),
+          ),
+          { errorLabel: `closed-PR read error for ${repo.fullName}` },
+        ),
+      ],
+      { concurrency: 2 },
+    );
+    if (open === null || closed === null) return null;
+
+    const closedNumbers = new Set(closed);
+    const movedIds = new Set(open.prs.map((pr) => pr.id));
+    const kept = (ctx.existingByRepo.get(repo.id) ?? []).filter(
+      (pr) => !movedIds.has(pr.id) && !closedNumbers.has(pr.externalId),
+    );
+    // The probe counted GitHub's open list a moment ago. Anything else means
+    // a PR left or arrived without an update this read could see (deleted,
+    // transferred, or moved between the probe and now): list it all. A list
+    // cut at the cap can't be counted, and leans on the full-list safety net.
+    if (!listed.truncated && kept.length + open.prs.length !== probed.count) return null;
+    return { ...open, kept };
+  });
+
+/**
+ * Stacks whose detail moved since the pre-sync snapshot: a member joined,
+ * left, changed place, or its head or base moved. Both the old and the new
+ * stack of a PR that switched count.
+ */
+export function movedStackNumbers(
+  prs: readonly PullRequest[],
+  existingMap: ReadonlyMap<string, PullRequest>,
+): Set<number> {
+  const moved = new Set<number>();
+  for (const pr of prs) {
+    const existing = existingMap.get(pr.id);
+    const placeMoved = !sameStack(existing?.stack ?? null, pr.stack);
+    const rangeMoved =
+      existing !== undefined &&
+      (existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha);
+    if (!placeMoved && !rangeMoved) continue;
+    if (pr.stack) moved.add(pr.stack.number);
+    if (placeMoved && existing?.stack) moved.add(existing.stack.number);
+  }
+  return moved;
+}
 
 export interface RepoListing {
   /** The repo's open PRs as they now stand in SQLite. */
@@ -231,6 +388,8 @@ export interface RepoListingContext {
   /** `pull_requests.diff_stats_head_sha` by PR id, advanced as stats land. */
   readonly diffStatsHeadByPrId: Map<string, string | null>;
   readonly unchangedRepoIds: ReadonlySet<string>;
+  /** This cycle's probed signatures: what a read of just what moved checks against. */
+  readonly probedSignatures: ReadonlyMap<string, OpenPrListSignature>;
   /** Written here whenever a full list lands in SQLite. */
   readonly listedSignatures: Map<string, ListedSignature>;
   /**
@@ -270,10 +429,13 @@ export const syncRepoOpenPrs = (
       return { prs: [...(ctx.existingByRepo.get(repo.id) ?? [])], listed: false };
     }
 
-    const listing = yield* listOpenPrs(deps, cycle, ctx, repo, live);
+    const delta = yield* listOpenPrsDelta(deps, cycle, ctx, repo, live);
+    const listing = delta ?? (yield* listOpenPrs(deps, cycle, ctx, repo, live));
     // listPrs failed — leave existing DB rows untouched for this repo
     if (listing === null) return null;
+    // From here on, `prs` is what GitHub sent: everything, or just what moved.
     const { prs } = listing;
+    const kept = delta?.kept ?? [];
     const stacksKnown = listing.stacks === "listed";
 
     // Upsert PR authors into remote_users so their avatars are cached. Deduped
@@ -370,6 +532,12 @@ export const syncRepoOpenPrs = (
       Effect.orElseSucceed(() => false),
     );
 
+    if (upserted) {
+      const accountId = cycle.repoToAccountId.get(repo.id);
+      const stacks = movedStackNumbers(rows, ctx.existingMap);
+      if (accountId && stacks.size > 0) yield* announceStacks(deps, accountId, repo.id, stacks);
+    }
+
     if (upserted && diffStats !== null) {
       yield* Effect.try({
         try: () =>
@@ -401,24 +569,30 @@ export const syncRepoOpenPrs = (
       );
     }
 
+    // The repo's whole open list as it now stands in SQLite: the masked rows,
+    // not the raw payload, since everything downstream (the supersede gate,
+    // the change detection, the broadcast) must see the view that landed.
+    const current = [...rows, ...kept];
+
     // Only a list that fully landed may stand in for the next ones: rows
     // still missing their diff stats must come back round to get them.
     const statsComplete = needsStats.every((pr) => diffStats?.has(pr.externalId) === true);
     if (upserted && statsComplete) {
+      const now = Date.now();
+      const previous = ctx.listedSignatures.get(repo.id);
       ctx.listedSignatures.set(repo.id, {
-        signature: signatureOfList(prs),
-        listedAt: Date.now(),
-        hasStacks: rows.some((pr) => pr.stack !== null),
+        signature: signatureOfList(current),
+        listedAt: now,
+        fullListedAt: delta ? (previous?.fullListedAt ?? now) : now,
+        hasStacks: current.some((pr) => pr.stack !== null),
+        truncated: delta ? (previous?.truncated ?? false) : prs.length >= OPEN_PRS_LIST_CAP,
       });
     } else {
       ctx.listedSignatures.delete(repo.id);
     }
 
-    // The masked rows, not the raw payload: everything downstream (the
-    // supersede gate, the change detection, the broadcast) must see the same
-    // view that landed in SQLite.
-    yield* Effect.annotateCurrentSpan("prs_open", rows.length);
-    return { prs: rows, listed: true };
+    yield* Effect.annotateCurrentSpan("prs_open", current.length);
+    return { prs: current, listed: true };
   }).pipe(
     Effect.withSpan("PollScheduler.syncRepo", {
       attributes: { repo: repo.fullName, repoId: repo.id },
@@ -511,6 +685,14 @@ export const archiveClosedPrs = (
     // clients a low-latency signal they can patch in place without refetching
     // the archive list. Best-effort — if a single emit fails, the bulk update
     // still reconciles on the next `prs:updated` arrival.
+    // A stacked PR that merged or closed changes what its stack shows.
+    for (const pr of closedPrs) {
+      const accountId = cycle.repoToAccountId.get(pr.repositoryId);
+      if (accountId && pr.stack) {
+        yield* announceStacks(deps, accountId, pr.repositoryId, [pr.stack.number]);
+      }
+    }
+
     const closedPrMap = new Map(closedPrs.map((pr) => [pr.id, pr]));
     for (const upd of updates) {
       const pr = closedPrMap.get(upd.id);

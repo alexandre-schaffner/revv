@@ -17,6 +17,6 @@
       "@revv/shared/*": ["../../packages/shared/src/*"]
     }
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

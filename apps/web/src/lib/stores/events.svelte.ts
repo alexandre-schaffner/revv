@@ -49,6 +49,13 @@ import {
   onThreadUpdated,
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
+import { onStackHeadlineSignal } from "./stack-headlines.svelte";
+import {
+  onMemberWalkthroughLifecycle,
+  onStackBriefStatusChanged,
+  onStackMergeProgress,
+  onStackUpdated,
+} from "./stacks.svelte";
 import {
   applySynced,
   freshenPrList,
@@ -255,6 +262,18 @@ function dispatch(msg: ServerEventMessage): void {
   switch (msg.type) {
     case "walkthrough:event":
       onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
+      if (msg.data.event.type.startsWith("lifecycle:")) onMemberWalkthroughLifecycle(msg.data.prId);
+      break;
+    case "stack:updated":
+      onStackUpdated(msg.data);
+      onStackHeadlineSignal(msg.data);
+      break;
+    case "stack-merge:progress":
+      onStackMergeProgress(msg.data);
+      break;
+    case "stack-brief:status-changed":
+      onStackBriefStatusChanged(msg.data);
+      onStackHeadlineSignal(msg.data);
       break;
     case "hunk-scan:started":
       onHunkScanStarted(msg.data);

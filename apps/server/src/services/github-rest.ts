@@ -9,6 +9,8 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../domain/errors";
+import { githubTryPromise } from "../observability/github-ledger/origin";
+import { registerGitHubHost } from "../observability/github-ledger/record";
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
@@ -53,6 +55,8 @@ export function toGitHubError(e: unknown): GitHubError {
  * have no repo in hand (add-repo, onboarding, device auth).
  */
 export function apiBaseForHost(host: string): string {
+  // A self-hosted Enterprise host is GitHub too, as far as the ledger is concerned.
+  registerGitHubHost(host);
   return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
 }
 
@@ -180,7 +184,7 @@ export function githubFetch(
     attributes: { path, method: "GET" },
   })(
     Effect.gen(function* () {
-      const res = yield* Effect.tryPromise({
+      const res = yield* githubTryPromise({
         try: () => githubHttpFetch(`${apiBase}${path}`, { headers: githubHeaders(token) }, path),
         catch: toGitHubError,
       });
@@ -207,7 +211,7 @@ export function conditionalFetch(
       const cacheKey = cacheKeyForRequest(apiBase, path, token);
       const cached = yield* cache.get(cacheKey);
 
-      const result = yield* Effect.tryPromise({
+      const result = yield* githubTryPromise({
         try: async () => {
           const headers: Record<string, string> = githubHeaders(token);
           if (cached) {
@@ -282,7 +286,7 @@ export function conditionalFetchPaginated(
       const cacheKey = cacheKeyForRequest(apiBase, path, token);
       const cached = yield* cache.get(cacheKey);
 
-      const result = yield* Effect.tryPromise({
+      const result = yield* githubTryPromise({
         try: async () => {
           const headers: Record<string, string> = githubHeaders(token);
           if (cached) {
@@ -385,7 +389,7 @@ export function githubPost(
     attributes: { path, method: "POST" },
   })(
     Effect.gen(function* () {
-      const res = yield* Effect.tryPromise({
+      const res = yield* githubTryPromise({
         try: () =>
           githubHttpFetch(
             `${apiBase}${path}`,
@@ -420,7 +424,7 @@ export function githubPatch(
   body: Record<string, unknown>,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -448,7 +452,7 @@ export function githubPut(
   body: Record<string, unknown>,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -483,7 +487,7 @@ export function githubDelete(
   apiBase: string,
   body?: Record<string, unknown>,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -520,7 +524,7 @@ export function githubFetchRedirectText(
   return Effect.withSpan("GitHub.fetchRedirectText", {
     attributes: { path, method: "GET" },
   })(
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const res = await githubHttpFetch(
           `${apiBase}${path}`,
@@ -557,6 +561,15 @@ export interface GraphqlError {
   readonly path?: ReadonlyArray<string | number>;
 }
 
+/**
+ * GitHub's answer when a query fails on its side ("Something went wrong while
+ * executing your query. This may be the result of a timeout…", or on GitHub
+ * Enterprise "…executing your query on <time>. Please include `<id>`…").
+ */
+function isGraphqlServerFailure(message: string): boolean {
+  return message.startsWith("Something went wrong while executing your query");
+}
+
 interface GraphqlPayload<T> {
   readonly data?: T | null;
   readonly errors?: ReadonlyArray<GraphqlError>;
@@ -579,7 +592,7 @@ function postGraphql<T>(
   return Effect.withSpan("GitHub.graphql", {
     attributes: { operationName },
   })(
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const res = await githubHttpFetch(
           `${apiBase}/graphql`,
@@ -605,7 +618,13 @@ function postGraphql<T>(
             resource: "graphql",
           });
         }
-        // A 200 carrying `errors` means GraphQL parsed and rejected the query
+        // GitHub's own failure, in a 200: the query ran out of time or hit a
+        // bug on GitHub's side (expensive fields like a stack's merge states
+        // can tip it over). The next ask usually answers, so this one is
+        // transient, like the 5xx it stands in for.
+        const failed = payload.errors?.find((e) => isGraphqlServerFailure(e.message));
+        if (failed) throw new GitHubNetworkError({ cause: `GraphQL: ${failed.message}` });
+        // Any other 200 carrying `errors` means GraphQL parsed and rejected the query
         // (unknown field, missing scope, node not visible). That verdict is
         // stable, so this must NOT be a retryable network error — otherwise
         // every such call costs 4 attempts and ~14s of backoff, which in the
@@ -708,6 +727,9 @@ export interface GraphqlConnection<N> {
  * `selectConnection` returning nothing means the parent node isn't there (repo
  * or PR not visible to the token) and fails with `notFound()`, rather than
  * passing for an empty list.
+ *
+ * `stopAfter` ends the walk after a page it says is the last one worth
+ * reading (a list ordered newest first has reached what's already known).
  */
 export function paginateGraphql<T, N>(opts: {
   readonly query: string;
@@ -717,6 +739,7 @@ export function paginateGraphql<T, N>(opts: {
   readonly token: string;
   readonly apiBase: string;
   readonly notFound: () => GitHubError;
+  readonly stopAfter?: (page: readonly N[]) => boolean;
 }): Effect.Effect<N[], GitHubError> {
   return Effect.gen(function* () {
     const out: N[] = [];
@@ -730,10 +753,9 @@ export function paginateGraphql<T, N>(opts: {
       );
       const connection = opts.selectConnection(data);
       if (!connection) return yield* Effect.fail(opts.notFound());
-      for (const node of connection.nodes) {
-        if (node !== null) out.push(node);
-      }
-      if (!connection.pageInfo.hasNextPage) break;
+      const nodes = connection.nodes.filter((node): node is N => node !== null);
+      out.push(...nodes);
+      if (!connection.pageInfo.hasNextPage || opts.stopAfter?.(nodes)) break;
       cursor = connection.pageInfo.endCursor;
     }
     return out;
@@ -767,7 +789,7 @@ export function githubFetchPaginated(
         const next = yield* Effect.withSpan("GitHub.page", {
           attributes: { path, page },
         })(
-          Effect.tryPromise({
+          githubTryPromise({
             try: async () => {
               const res = await githubHttpFetch(pageUrl, { headers: githubHeaders(token) }, path);
               assertGitHubOk(res, path);

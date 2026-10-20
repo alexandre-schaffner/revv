@@ -568,6 +568,37 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     }
   })
 
+  // Many PRs' thread summaries in one request. The PR list wants every open
+  // PR's at once, and one request each filled the browser's handful of
+  // connections to this server ahead of the reads a page was waiting on.
+  .post(
+    "/thread-summaries",
+    async (ctx) => {
+      try {
+        const rows = await db
+          .select({ githubLogin: user.githubLogin })
+          .from(user)
+          .where(eq(user.id, ctx.session.user.id));
+        const login = rows[0]?.githubLogin ?? null;
+
+        const summaries = await AppRuntime.runPromise(
+          Effect.flatMap(SyncService, (s) =>
+            Effect.forEach(ctx.body.prIds, (prId) =>
+              s.getThreadSummary(prId, login).pipe(
+                Effect.map((summary) => ({ prId, summary })),
+                Effect.orElseSucceed(() => null),
+              ),
+            ),
+          ),
+        );
+        return { summaries: summaries.filter((entry) => entry !== null) };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ prIds: t.Array(t.String(), { maxItems: 200 }) }) },
+  )
+
   .get("/:id/thread-summary", async (ctx) => {
     try {
       // Look up the current user's GitHub login for role-aware counts.

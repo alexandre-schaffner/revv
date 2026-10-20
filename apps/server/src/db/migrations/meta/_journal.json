@@ -337,6 +337,20 @@
       "when": 1791897823334,
       "tag": "0440_pr_stack_membership",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1792139443925,
+      "tag": "0450_pr_stacks",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1792422267272,
+      "tag": "0460_stack_brief_chapters",
+      "breakpoints": true
     }
   ]
 }

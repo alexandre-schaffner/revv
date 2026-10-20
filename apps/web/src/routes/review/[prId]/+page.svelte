@@ -6,9 +6,15 @@ import { api } from "$lib/api/client";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
+import { readStackPlace } from "$lib/components/stack/margin/place";
+import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
+import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
+import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { getToken } from "$lib/stores/auth.svelte";
+import { loadConversation } from "$lib/stores/conversation.svelte";
 import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
@@ -32,6 +38,8 @@ import {
   switchPrViewState,
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
+import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
+import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
 import {
   deactivate as deactivateWalkthrough,
@@ -44,6 +52,16 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
+
+// Ask for the conversation the moment the route names the PR. The tab would
+// ask once it mounts, but that waits on the session check and the PR list;
+// the route needs neither, and the tab's own ask then finds this one.
+const routePrId = $derived(page.params.prId ?? null);
+const signedIn = $derived(getToken() !== null);
+$effect(() => {
+  const id = routePrId;
+  if (id && signedIn) untrack(() => void loadConversation(id));
+});
 // Review lens is derived from identity (author vs. signed-in user) — see
 // `getReviewModeForPr`. No manual override; the file fetch + session load
 // below resolve through it.
@@ -91,6 +109,47 @@ $effect(() => {
   if (!prId || !headSha || !jevEnabled) return;
   untrack(() => void ensureHunkScan(prId, headSha));
 });
+
+// The stack this PR sits in, for the walkthrough's stack surfaces and the
+// ⌥⌘↑/↓ keys; then, once the page has settled, the server warms the
+// neighbouring layers' diffs so the next move doesn't wait on GitHub. Keyed on
+// the PR and its stack number (a rebuilt stack is a new one to read), never
+// the store's map: `untrack` keeps it out, or every stack refresh would re-run
+// this and warm again.
+const stackNumber = $derived(pr?.stack?.number ?? null);
+$effect(() => {
+  const prId = pr?.id;
+  if (!prId || stackNumber === null) return;
+  let live = true;
+  let cancelIdle: (() => void) | null = null;
+  void untrack(() => ensureStack(prId)).then(() => {
+    if (live) cancelIdle = whenIdle(() => warmNeighbours(prId));
+  });
+  return () => {
+    live = false;
+    cancelIdle?.();
+  };
+});
+
+// Where this layer sits, beside the title: the thumb index in the gutter, the
+// "In the stack" note in the walkthrough's rail. Walkthrough tab only; the
+// Conversation tab has its own stack list. Null for an unstacked PR, which
+// keeps the title block exactly as it was. The headline names the stack.
+const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
+const stackRepositoryId = $derived(pr?.stack ? pr.repositoryId : null);
+$effect(() => {
+  const repositoryId = stackRepositoryId;
+  if (repositoryId) untrack(() => ensureStackHeadlines(repositoryId));
+});
+
+function whenIdle(run: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const handle = window.requestIdleCallback(run, { timeout: 2000 });
+    return () => window.cancelIdleCallback(handle);
+  }
+  const handle = setTimeout(run, 400);
+  return () => clearTimeout(handle);
+}
 
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
@@ -385,6 +444,9 @@ onDestroy(() => {
 			>
 				<h1 class="page-title">{pr.title}</h1>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+				{#if stackPlace}
+					<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+				{/if}
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge
 						variant="outline"
@@ -393,6 +455,10 @@ onDestroy(() => {
 					>
 						{walkthroughRiskLevel} risk
 					</Badge>
+				{/if}
+				{#if stackPlace}
+					<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
+					<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
 				{/if}
 			</div>
 
@@ -506,6 +572,60 @@ onDestroy(() => {
 	   of the title column), which is the "misplaced" symptom. */
 	.page-title-section--narrow > :global(*) {
 		grid-column: 3;
+	}
+
+	/* The stack, beside the title. The thumb index (gutter) and the note
+	   (rail) sit on the title's row with no height of their own, so they hang
+	   down beside the title block without opening it up; positioned so the
+	   walkthrough that follows, which paints a background, doesn't cover what
+	   hangs below. The one-line summary only shows when there's no rail. */
+	.page-title-section--narrow > .title-stack-thumb,
+	.page-title-section--narrow > .title-stack-note {
+		grid-row: 1;
+		align-self: start;
+		position: relative;
+		z-index: 3;
+		height: 0;
+	}
+
+	.page-title-section--narrow > .title-stack-thumb {
+		grid-column: 2;
+		display: flex;
+		justify-content: flex-end;
+		padding: 9px 14px 0 0;
+	}
+
+	/* The section's `gap: 4px` also opens 4px between this grid's columns,
+	   which the walkthrough grids below don't have: col 3 comes out 20px
+	   narrower and col 5 starts 4px left of the walkthrough's rail. The
+	   margin puts the note back on the rail's line, so its hairline lines up
+	   with the notes further down. */
+	.page-title-section--narrow > .title-stack-note {
+		grid-column: 5;
+		margin: 0 -4px 0 4px;
+		padding-top: 9px;
+	}
+
+	.page-title-section--narrow > .title-stack-line {
+		display: none;
+		min-width: 0;
+	}
+
+	@container (max-width: 1335px) {
+		/* No rail: the thumb index moves into the 72px gutter (the same spot,
+		   14px clear of the title), the note becomes the line under the
+		   subtitle. */
+		.page-title-section--narrow > .title-stack-thumb {
+			grid-column: 1;
+		}
+
+		.page-title-section--narrow > .title-stack-note {
+			display: none;
+		}
+
+		.page-title-section--narrow > .title-stack-line {
+			display: block;
+		}
 	}
 
 	@container (max-width: 1335px) {

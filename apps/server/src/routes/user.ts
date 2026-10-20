@@ -7,6 +7,7 @@ import { db } from "../auth";
 import { account, repositories, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
 import { AppRuntime } from "../runtime";
+import { CacheService } from "../services/Cache";
 import { GitHubGateway } from "../services/GitHub";
 import { Identity } from "../services/Identity";
 import { PullRequestService } from "../services/PullRequest";
@@ -213,7 +214,14 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
             .pipe(Effect.orElseSucceed(() => null));
           const host = settings?.githubHost?.trim() || undefined;
           const token = yield* identityService.tokenForUser(userId, host);
-          return yield* github.repos.orgsForUser(token);
+          // Asked on every app launch; orgs rarely move. Only answers are kept.
+          const cache = yield* CacheService;
+          return yield* cache.getOrFetch(
+            "github-orgs",
+            `${userId}:${host ?? ""}`,
+            () => github.repos.orgsForUser(token),
+            { ttlMs: 10 * 60 * 1000 },
+          );
         }).pipe(Effect.orElseSucceed(() => [] as Org[])),
       );
       return { orgs };

@@ -16,7 +16,7 @@
 // service is the sole writer. Content writes go through the recap MCP tool
 // handlers in `ai/providers/recap-tools/`.
 
-import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
+import type { ProjectRecap, PullRequest, RecapPeriod, RecapStreamEvent } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
@@ -530,37 +530,28 @@ export const ProjectRecapJobsLive = Layer.effect(
           `backfilling ${missing.length} closed PR(s) for ${repoFullName} window ${periodStart}..${periodEnd}`,
         );
 
-        // Fetch full PR data for each missing number. Bounded concurrency
-        // mirrors the diff loader. Failures degrade silently — a missing
-        // backfill row just means that one PR stays absent from the recap.
-        const fetched = yield* Effect.forEach(
-          missing,
-          (m) =>
-            provideGithubDeps(prCtx.fetchPr(repoFullName, m.number, token)).pipe(
-              Effect.catch((err) =>
-                Effect.sync(() => {
-                  debug(
-                    "recap-jobs",
-                    `getPr #${m.number} failed during backfill for ${repoFullName}:`,
-                    err instanceof Error ? err.message : String(err),
-                  );
-                  return null;
-                }),
-              ),
-            ),
-          { concurrency: 3 },
+        // One batched read for every missing number. A failure degrades
+        // silently: the missing PRs just stay absent from the recap.
+        const fetched = yield* provideGithubDeps(
+          prCtx.fetchPrs(
+            repoFullName,
+            repoId,
+            missing.map((m) => m.number),
+            token,
+          ),
+        ).pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              debug(
+                "recap-jobs",
+                `PR read failed during backfill for ${repoFullName}:`,
+                err instanceof Error ? err.message : String(err),
+              );
+              return new Map<number, PullRequest>();
+            }),
+          ),
         );
-
-        // Repoint every fetched row at our local repo id — `getPr` derives
-        // `id` and `repositoryId` from `${owner}/${repo}` because it
-        // doesn't know the local row id (see `mapPr` in GitHub.ts).
-        const upsertable = fetched
-          .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
-          .map((pr) => ({
-            ...pr,
-            id: `${repoId}:${pr.externalId}`,
-            repositoryId: repoId,
-          }));
+        const upsertable = [...fetched.values()];
 
         if (upsertable.length === 0) return { addedCount: 0 };
 

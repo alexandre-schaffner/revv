@@ -3,9 +3,10 @@
  * after the open-PR list has gone out, because nothing on screen waits on it.
  */
 import type { PullRequest, Repository } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { account, user } from "../db/schema/auth";
+import { pullRequests } from "../db/schema/pull-requests";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { apiBaseForHost } from "./github-rest";
@@ -277,7 +278,6 @@ export const backfillArchive = (
   deps: PollDeps,
   cycle: SyncCycle,
   repos: readonly Repository[],
-  existingPrs: readonly PullRequest[],
 ): Effect.Effect<boolean, never, GitHubInfra> =>
   Effect.gen(function* () {
     const { db, github, prService } = deps;
@@ -286,14 +286,36 @@ export const backfillArchive = (
     ).toISOString();
     const backfillUntilIso = new Date().toISOString();
 
+    // Every PR the mirror already holds, open or not. Reading only the open
+    // ones made each archived PR look missing, so every hour re-fetched up to
+    // the per-repo cap of PRs already in the archive.
+    const knownRows = yield* Effect.try(() =>
+      repos.length === 0
+        ? []
+        : db
+            .select({
+              repositoryId: pullRequests.repositoryId,
+              externalId: pullRequests.externalId,
+            })
+            .from(pullRequests)
+            .where(
+              inArray(
+                pullRequests.repositoryId,
+                repos.map((r) => r.id),
+              ),
+            )
+            .all(),
+    ).pipe(Effect.orElseSucceed(() => null));
+    // Without the mirror's answer, every PR would look missing: skip a round.
+    if (knownRows === null) return false;
     const existingExternalIdsByRepo = new Map<string, Set<number>>();
-    for (const pr of existingPrs) {
-      let set = existingExternalIdsByRepo.get(pr.repositoryId);
+    for (const row of knownRows) {
+      let set = existingExternalIdsByRepo.get(row.repositoryId);
       if (!set) {
         set = new Set<number>();
-        existingExternalIdsByRepo.set(pr.repositoryId, set);
+        existingExternalIdsByRepo.set(row.repositoryId, set);
       }
-      set.add(pr.externalId);
+      set.add(row.externalId);
     }
 
     let upserted = 0;
@@ -323,30 +345,25 @@ export const backfillArchive = (
             .filter((s) => !known.has(s.number))
             .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
           if (missing.length === 0) return;
-          // The detail fetches below are REST, a different budget from search.
-          if (!cycle.liveAccountForRepo(repo.id, "core")) return;
+          // One batched GraphQL read for them all (50 a request), a different
+          // budget from search: a PR detail fetch each cost a REST point and a
+          // round trip per PR.
+          const detailLive = cycle.liveAccountForRepo(repo.id, "graphql");
+          if (!detailLive) return;
 
-          const fetched = yield* Effect.forEach(
-            missing,
-            (m) =>
-              cycle.tryGuarded(
-                live.acc,
-                github.prs.get(repo.fullName, m.number, live.token, repoApiBase),
-              ),
-            { concurrency: 3 },
+          const fetched = yield* cycle.tryGuarded(
+            detailLive.acc,
+            github.prs.getMany(
+              repo.fullName,
+              repo.id,
+              missing.map((m) => m.number),
+              detailLive.token,
+              repoApiBase,
+            ),
+            { errorLabel: `archive backfill read failed for ${repo.fullName}` },
           );
-
-          // Repoint every fetched row at our local repo id — `getPr` derives
-          // `id` and `repositoryId` from `${owner}/${repo}` because it doesn't
-          // know the local row id. Matches the recap-jobs backfill (see
-          // ProjectRecapJobs.backfillMissingPrs).
-          const upsertable = fetched
-            .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
-            .map((pr) => ({
-              ...pr,
-              id: `${repo.id}:${pr.externalId}`,
-              repositoryId: repo.id,
-            }));
+          if (!fetched) return;
+          const upsertable = [...fetched.values()];
           if (upsertable.length === 0) return;
 
           yield* withDb(db, prService.upsertPrs(upsertable)).pipe(

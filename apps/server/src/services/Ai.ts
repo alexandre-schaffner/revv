@@ -38,6 +38,7 @@ import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
 import { SettingsService } from "./Settings";
+import type { PromptDiffSource } from "./walkthrough-prompt-files";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ export class AiService extends Context.Service<
           readonly parentWalkthroughId: string | null;
           readonly baseHeadSha: string | null;
           readonly headSha: string;
-          readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
+          readonly diffSource?: PromptDiffSource;
         };
         continuation?: ContinuationContext;
         onSessionId?: (sessionId: string) => void;

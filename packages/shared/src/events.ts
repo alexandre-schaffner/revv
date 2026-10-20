@@ -15,6 +15,7 @@ import type {
   NewPrSessionStatus,
 } from "./new-pr-session";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
+import type { StackBriefStatus, StackMergeRun } from "./stacks";
 import type {
   CloneStatus,
   CommentThread,
@@ -130,6 +131,34 @@ export interface PrArchivedEnvelope {
 export interface PrConversationUpdatedEnvelope {
   type: "pr:conversation-updated";
   data: { prId: string; fetchedAt: string | null };
+}
+
+// ── Stacks ──────────────────────────────────────────────────────────────────
+
+/**
+ * Signal: something a stack's detail shows moved — a member's place, head or
+ * base (seen by the poll), a member's walkthrough lifecycle, or a merge. The
+ * server dropped its cached GitHub read; a view showing this stack re-reads
+ * `GET /api/prs/:id/stack`. `repositoryId` + `stackNumber` are routing keys.
+ */
+export interface StackUpdatedEnvelope {
+  type: "stack:updated";
+  data: { repositoryId: string; stackNumber: number };
+}
+
+/** Full state: a stack merge run after every step it takes. */
+export interface StackMergeProgressEnvelope {
+  type: "stack-merge:progress";
+  data: StackMergeRun;
+}
+
+/**
+ * Signal: a stack brief changed lifecycle. The brief itself rides on the
+ * stack detail; a view showing this stack re-reads it.
+ */
+export interface StackBriefStatusChangedEnvelope {
+  type: "stack-brief:status-changed";
+  data: { repositoryId: string; stackNumber: number; briefId: string; status: StackBriefStatus };
 }
 
 export interface PrsSyncStartedEnvelope {
@@ -356,6 +385,9 @@ export type ServerEventMessage =
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope
   | PrConversationUpdatedEnvelope
+  | StackUpdatedEnvelope
+  | StackMergeProgressEnvelope
+  | StackBriefStatusChangedEnvelope
   | PrsSyncStartedEnvelope
   | PrsSyncCompleteEnvelope
   | ReposUpdatedEnvelope

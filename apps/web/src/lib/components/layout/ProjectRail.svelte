@@ -1,7 +1,10 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
+import House from "phosphor-svelte/lib/House";
 import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
+import { goto } from "$app/navigation";
+import { page } from "$app/state";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
@@ -20,6 +23,13 @@ type OwnerGroup = {
 
 const repos = $derived(getRepositories());
 const activeRepoId = $derived(getSelectedRepoId());
+// `/` is the all-repos feed — the rail's only destination that isn't a repo.
+const isHome = $derived(page.url.pathname === "/");
+
+async function handleHome(): Promise<void> {
+  if (page.url.pathname === "/") return;
+  await goto("/");
+}
 
 // Group repos by owner (case-insensitive). First-seen owner / first-seen
 // repo order preserves whatever the server returned so grouping doesn't
@@ -48,6 +58,27 @@ function handleAddRepo(): void {
 </script>
 
 <aside class="rail" aria-label="Projects">
+	<!-- Home is pinned above the scrollable folder list (Discord-style) so
+	     the way back to the feed never scrolls out of reach. -->
+	<div class="rail-home">
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				<button
+					type="button"
+					class="rail-action home-button"
+					class:home-button--active={isHome}
+					onclick={handleHome}
+					aria-label="Home"
+					aria-current={isHome ? 'page' : undefined}
+				>
+					<House size={18} weight={isHome ? 'fill' : 'regular'} />
+				</button>
+			</Tooltip.Trigger>
+			<Tooltip.Content side="right" sideOffset={8}>Home</Tooltip.Content>
+		</Tooltip.Root>
+		<div class="rail-divider" aria-hidden="true"></div>
+	</div>
+
 	<div class="rail-top">
 		{#each ownerGroups as group (group.owner)}
 			{@const collapsed = isOwnerCollapsed(group.owner)}
@@ -417,6 +448,51 @@ function handleAddRepo(): void {
 	   so the centering reads cleanly. */
 	:global(.folder-pill-content .repo-button--active .avatar) {
 		box-shadow: 0 0 0 2px var(--color-accent, var(--color-text-primary));
+	}
+
+	/* Pinned home destination. Lives outside the scrollable .rail-top, so
+	   flex-shrink: 0 keeps it from collapsing when the folder list
+	   overflows. Horizontal padding matches .rail-top's inset so the home
+	   button and the repo tiles share one vertical axis. */
+	.rail-home {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+		padding: 0 var(--spacing-inset) 6px;
+	}
+
+	.home-button {
+		position: relative;
+	}
+
+	/* Active idiom mirrors .repo-button--active: the accent bar at the
+	   button's left edge. The icon's fill weight (set inline) is the
+	   second half of the on/off signal. */
+	.home-button--active {
+		background: var(--color-bg-elevated);
+		color: var(--color-text-primary);
+	}
+
+	.home-button--active::before {
+		content: '';
+		position: absolute;
+		left: -8px;
+		top: 8px;
+		bottom: 8px;
+		width: 3px;
+		border-radius: 0 2px 2px 0;
+		background: var(--color-accent, var(--color-text-primary));
+	}
+
+	/* Hairline separating the pinned home button from the folder list —
+	   same job as the divider under Discord's DM button. */
+	.rail-divider {
+		width: 24px;
+		height: 1px;
+		flex-shrink: 0;
+		background: var(--color-border-subtle);
 	}
 
 	.rail-action {

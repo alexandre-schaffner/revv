@@ -20,6 +20,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "knip": "knip",
+    "github:audit": "bun apps/server/scripts/github-audit.ts",
     "dev:web": "cd apps/web && bun run dev",
     "dev:server": "cd apps/server && bun run dev",
     "dev:collector": "bun scripts/dev-collector.ts",

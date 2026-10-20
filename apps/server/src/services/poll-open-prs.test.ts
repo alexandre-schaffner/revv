@@ -9,10 +9,10 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
 import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
 import {
-  findUnchangedRepos,
   type ListedSignature,
   movedRangePrIds,
   openListMoved,
+  probeRepos,
   type RepoListingContext,
   syncRepoOpenPrs,
 } from "./poll-open-prs";
@@ -85,7 +85,9 @@ function seedAccount(db: Db): void {
 
 interface Fakes {
   readonly log: string[];
-  listOpen: () => Effect.Effect<PullRequest[], GitHubRateLimitError>;
+  listOpen: (updatedSince: string | null) => Effect.Effect<PullRequest[], GitHubRateLimitError>;
+  /** PR numbers closed since; null when they didn't fit. */
+  listClosedSince: () => Effect.Effect<number[] | null>;
   listOpenRest: () => Effect.Effect<PullRequest[]>;
   probe: () => Effect.Effect<Map<string, OpenPrListSignature>>;
   /** What the GraphQL list could tell about stacks, when it asked for them. */
@@ -105,6 +107,12 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
       markReauthRequired: () => Effect.void,
     },
     remoteUserService: { upsert: () => Effect.void },
+    stackService: {
+      invalidate: (repositoryId: string, stackNumber: number) =>
+        Effect.sync(() => {
+          fakes.log.push(`stack:${repositoryId}:${stackNumber}`);
+        }),
+    },
     github: {
       prs: {
         listOpen: (
@@ -112,10 +120,16 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
           _repoId: string,
           _token: string,
           _apiBase: string,
-          { withStacks = true }: { withStacks?: boolean } = {},
+          {
+            withStacks = true,
+            updatedSince = null,
+          }: { withStacks?: boolean; updatedSince?: string | null } = {},
         ) => {
-          fakes.log.push(withStacks ? "list:graphql" : "list:graphql:no-stacks");
-          return fakes.listOpen().pipe(
+          fakes.log.push(
+            (withStacks ? "list:graphql" : "list:graphql:no-stacks") +
+              (updatedSince ? `:since=${updatedSince}` : ""),
+          );
+          return fakes.listOpen(updatedSince).pipe(
             Effect.map(
               (prs): OpenPrList => ({
                 prs,
@@ -127,6 +141,10 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
         listOpenRest: () => {
           fakes.log.push("list:rest");
           return fakes.listOpenRest();
+        },
+        listClosedSince: () => {
+          fakes.log.push("closed-since");
+          return fakes.listClosedSince();
         },
         probeOpenLists: () => {
           fakes.log.push("probe");
@@ -175,6 +193,7 @@ function setup(fakes: Partial<Omit<Fakes, "log" | "upserts">> = {}) {
     upserts: [],
     listOpen: () => Effect.succeed([]),
     listOpenRest: () => Effect.succeed([]),
+    listClosedSince: () => Effect.succeed([]),
     probe: () => Effect.succeed(new Map()),
     ...fakes,
   };
@@ -190,6 +209,7 @@ function context(existing: PullRequest[], overrides: Partial<RepoListingContext>
     existingByRepo: Map.groupBy(existing, (p) => p.repositoryId),
     diffStatsHeadByPrId: new Map<string, string | null>(),
     unchangedRepoIds: new Set<string>(),
+    probedSignatures: new Map<string, OpenPrListSignature>(),
     listedSignatures: new Map<string, ListedSignature>(),
     stacklessUntil: new Map<string, number>(),
     ...overrides,
@@ -367,6 +387,18 @@ describe("syncRepoOpenPrs stack membership", () => {
     expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([STACKED, null]);
   });
 
+  it("announces a stack a member joined, left, or moved in", async () => {
+    const env = setup({
+      listOpen: () =>
+        Effect.succeed([pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })]),
+    });
+
+    await sync(env, [pr(1), pr(2, { stack: { number: 9, position: 1 } })]);
+
+    // #1 joined stack 4; stack 9 didn't move, so nothing re-reads it.
+    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
+  });
+
   it("keeps the stored stack when GitHub refused the stack fields", async () => {
     const stored = pr(1, { stack: STACKED });
     const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unknown" });
@@ -428,8 +460,128 @@ describe("syncRepoOpenPrs stack membership", () => {
   });
 });
 
-describe("findUnchangedRepos", () => {
+describe("reading only what moved", () => {
+  const OLD = "2026-01-01T00:00:00Z";
+  const NEW = "2026-01-02T00:00:00Z";
+  const stored = [pr(1, { updatedAt: OLD }), pr(2, { updatedAt: OLD })];
+  const listed = (count: number): ListedSignature => ({
+    signature: { count, latestUpdatedAt: OLD },
+    listedAt: Date.now() - 60_000,
+    fullListedAt: Date.now() - 10 * 60_000,
+    hasStacks: false,
+    truncated: false,
+  });
+
+  const run = (
+    env: ReturnType<typeof setup>,
+    probed: OpenPrListSignature,
+    existing: PullRequest[] = stored,
+    truncated = false,
+  ) => {
+    const ctx = context(existing, {
+      listedSignatures: new Map([[REPO.id, { ...listed(existing.length), truncated }]]),
+      probedSignatures: new Map([[REPO.id, probed]]),
+    });
+    return Effect.runPromise(
+      provideInfra(
+        env.db,
+        Effect.gen(function* () {
+          return yield* syncRepoOpenPrs(env.deps, yield* env.openCycle(), ctx, REPO);
+        }),
+      ),
+    ).then((result) => ({ result, ctx }));
+  };
+
+  it("reads the PRs updated since the last list, and writes only those", async () => {
+    const env = setup({
+      listOpen: (since) =>
+        Effect.succeed(since ? [pr(2, { updatedAt: NEW, headSha: "moved" })] : stored),
+    });
+
+    const { result, ctx } = await run(env, { count: 2, latestUpdatedAt: NEW });
+
+    expect(env.log).toContain(`list:graphql:since=${OLD}`);
+    expect(env.log).toContain("closed-since");
+    expect(env.upserts.map((u) => u.rows.map((r) => r.id))).toEqual([["repo-1:2"]]);
+    expect(result?.prs.map((p) => [p.id, p.headSha]).sort()).toEqual([
+      ["repo-1:1", "head-1"],
+      ["repo-1:2", "moved"],
+    ]);
+    expect(ctx.listedSignatures.get(REPO.id)?.signature).toEqual({
+      count: 2,
+      latestUpdatedAt: NEW,
+    });
+  });
+
+  it("keeps the full-list clock running, so the safety net still comes round", async () => {
+    const env = setup({ listOpen: () => Effect.succeed([pr(2, { updatedAt: NEW })]) });
+    const before = listed(2).fullListedAt;
+
+    const { ctx } = await run(env, { count: 2, latestUpdatedAt: NEW });
+
+    expect(ctx.listedSignatures.get(REPO.id)?.fullListedAt).toBeLessThanOrEqual(before);
+  });
+
+  it("drops a PR that closed since, so the cycle archives it", async () => {
+    const env = setup({
+      listOpen: () => Effect.succeed([]),
+      listClosedSince: () => Effect.succeed([2]),
+    });
+
+    const { result } = await run(env, { count: 1, latestUpdatedAt: OLD });
+
+    expect(result?.prs.map((p) => p.id)).toEqual(["repo-1:1"]);
+    expect(result?.listed).toBe(true);
+    expect(env.upserts.flatMap((u) => u.rows)).toEqual([]);
+  });
+
+  it("lists in full when the result disagrees with the probe's count", async () => {
+    const env = setup({
+      listOpen: (since) => Effect.succeed(since ? [] : [pr(1, { updatedAt: OLD })]),
+    });
+
+    // One PR vanished without a close this read could see (deleted, transferred).
+    const { result } = await run(env, { count: 1, latestUpdatedAt: OLD });
+
+    expect(env.log).toContain("list:graphql");
+    expect(result?.prs.map((p) => p.id)).toEqual(["repo-1:1"]);
+  });
+
+  it("trusts a list cut at the cap without counting it", async () => {
+    const env = setup({
+      listOpen: (since) => Effect.succeed(since ? [pr(2, { updatedAt: NEW })] : stored),
+    });
+
+    // GitHub has far more open PRs than the stored list could ever hold.
+    const { result } = await run(env, { count: 5801, latestUpdatedAt: NEW }, stored, true);
+
+    expect(env.log.filter((l) => l.startsWith("list:graphql"))).toEqual([
+      `list:graphql:since=${OLD}`,
+    ]);
+    expect(result?.prs).toHaveLength(2);
+  });
+
+  it("lists in full when the closed PRs couldn't all be read", async () => {
+    const env = setup({ listClosedSince: () => Effect.succeed(null) });
+
+    await run(env, { count: 2, latestUpdatedAt: NEW });
+
+    expect(env.log.filter((l) => l.startsWith("list:graphql"))).toEqual([
+      `list:graphql:since=${OLD}`,
+      "list:graphql",
+    ]);
+  });
+});
+
+describe("probeRepos", () => {
   const signature = { count: 2, latestUpdatedAt: "2026-01-03T00:00:00Z" };
+  const listedAt = (at: number): ListedSignature => ({
+    signature,
+    listedAt: at,
+    fullListedAt: at,
+    hasStacks: false,
+    truncated: false,
+  });
 
   it("skips only repos whose probed signature matches a recent list", async () => {
     const other = { ...REPO, id: "repo-2", fullName: "octo/other" };
@@ -457,21 +609,69 @@ describe("findUnchangedRepos", () => {
               ["repo-2", "acc-1"],
             ]),
           );
-          return yield* findUnchangedRepos(
+          return (yield* probeRepos(
             deps,
             cycle,
             [REPO, other],
             new Map([
-              ["repo-1", { signature, listedAt: Date.now(), hasStacks: false }],
-              ["repo-2", { signature, listedAt: Date.now(), hasStacks: false }],
+              ["repo-1", listedAt(Date.now())],
+              ["repo-2", listedAt(Date.now())],
             ]),
-          );
+            true,
+          )).unchanged;
         }),
       ),
     );
 
     expect([...unchanged]).toEqual(["repo-1"]);
     expect(log).toEqual(["probe"]);
+  });
+
+  it("a list cut at the cap is unchanged when its newest update is", async () => {
+    const { db, deps, openCycle } = setup({
+      probe: () => Effect.succeed(new Map([["octo/repo", { ...signature, count: 5801 }]])),
+    });
+
+    const probed = await Effect.runPromise(
+      provideInfra(
+        db,
+        Effect.gen(function* () {
+          return yield* probeRepos(
+            deps,
+            yield* openCycle(),
+            [REPO],
+            new Map([[REPO.id, { ...listedAt(Date.now()), truncated: true }]]),
+            true,
+          );
+        }),
+      ),
+    );
+
+    expect([...probed.unchanged]).toEqual([REPO.id]);
+  });
+
+  it("a manual sync probes, but proves nothing unchanged", async () => {
+    const { db, deps, openCycle } = setup({
+      probe: () => Effect.succeed(new Map([["octo/repo", signature]])),
+    });
+
+    const probed = await Effect.runPromise(
+      provideInfra(
+        db,
+        Effect.gen(function* () {
+          return yield* probeRepos(
+            deps,
+            yield* openCycle(),
+            [REPO],
+            new Map([[REPO.id, listedAt(Date.now())]]),
+            false,
+          );
+        }),
+      ),
+    );
+
+    expect(probed.unchanged.size).toBe(0);
+    expect(probed.signatures.get(REPO.id)).toEqual(signature);
   });
 
   it("does not probe for repos without a recent list", async () => {
@@ -481,14 +681,13 @@ describe("findUnchangedRepos", () => {
       provideInfra(
         db,
         Effect.gen(function* () {
-          return yield* findUnchangedRepos(
+          return (yield* probeRepos(
             deps,
             yield* openCycle(),
             [REPO],
-            new Map([
-              [REPO.id, { signature, listedAt: Date.now() - 31 * 60 * 1000, hasStacks: false }],
-            ]),
-          );
+            new Map([[REPO.id, listedAt(Date.now() - 31 * 60 * 1000)]]),
+            true,
+          )).unchanged;
         }),
       ),
     );
@@ -506,12 +705,13 @@ describe("findUnchangedRepos", () => {
       provideInfra(
         db,
         Effect.gen(function* () {
-          return yield* findUnchangedRepos(
+          return (yield* probeRepos(
             deps,
             yield* openCycle(),
             [REPO],
-            new Map([[REPO.id, { signature, listedAt: Date.now(), hasStacks: true }]]),
-          );
+            new Map([[REPO.id, { ...listedAt(Date.now()), hasStacks: true }]]),
+            true,
+          )).unchanged;
         }),
       ),
     );

@@ -9,8 +9,10 @@ import {
   type WalkthroughBlock,
   type WalkthroughLead,
   type WalkthroughMode,
+  type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
+import type { PromptDiffSource } from "../../services/walkthrough-prompt-files";
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 //
@@ -245,6 +247,38 @@ export interface WalkthroughPromptHints {
    * verify, never findings — see {@link renderHunkLeadRules}.
    */
   hunkLeads?: ReadonlyArray<WalkthroughLead>;
+  /**
+   * The GitHub stack this PR is a layer of, as captured at job start. A
+   * resume prompts with the same snapshot, so the stack reads the same.
+   */
+  stack?: WalkthroughStackSnapshot;
+}
+
+/**
+ * Where this layer sits and what that means for the review: the diff is the
+ * layer alone, so an absence may be a higher layer's job, and a lower
+ * layer's code isn't this review's to judge.
+ */
+function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
+  const layers = [...stack.layers].sort((a, b) => a.position - b.position);
+  return [
+    "### Stack",
+    `This pull request is layer ${stack.position} of ${layers.length} in stack #${stack.number}, onto \`${stack.baseRefName}\`.`,
+    "",
+    ...layers.map(
+      (l) =>
+        `- Layer ${l.position}: #${l.number} "${l.title}" — ${l.status.replace("_", " ")}${
+          l.position === stack.position ? " ← this PR" : ""
+        }`,
+    ),
+    "",
+    "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
+    "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
+    "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
+    "- Cite another layer as `#N (layer k)`.",
+    "- Place this layer in the stack in one sentence of the overview's Context part.",
+    "- A split recommendation, if there is one, concerns this layer alone.",
+  ];
 }
 
 export function buildWalkthroughPrompt(
@@ -263,7 +297,7 @@ export function buildWalkthroughPrompt(
       readonly parentWalkthroughId: string | null;
       readonly baseHeadSha: string | null;
       readonly headSha: string;
-      readonly diffSource?: "full_pr" | "incremental_range" | "full_pr_fallback";
+      readonly diffSource?: PromptDiffSource;
     };
   },
   maxTokenBudget = 40000,
@@ -283,6 +317,9 @@ export function buildWalkthroughPrompt(
   if (params.pr.body) {
     lines.push("", "### Description", params.pr.body);
   }
+  if (params.stack) {
+    lines.push("", ...renderStackBlock(params.stack));
+  }
   lines.push("", WALKTHROUGH_SHARED_REVIEW_PRINCIPLES);
 
   if (params.reviewMode?.mode === "incremental") {
@@ -299,7 +336,9 @@ export function buildWalkthroughPrompt(
           ? "full PR diff fallback because the incremental range could not be resolved locally"
           : params.reviewMode.diffSource === "incremental_range"
             ? "incremental range only"
-            : "full PR diff"
+            : params.reviewMode.diffSource === "stack_layer_delta"
+              ? "this layer's current changes in the files that changed since the prior review (stacked PR: lower-layer churn excluded)"
+              : "full PR diff"
       }`,
     );
   }
@@ -315,7 +354,9 @@ export function buildWalkthroughPrompt(
     params.reviewMode?.mode === "incremental"
       ? params.reviewMode.diffSource === "full_pr_fallback"
         ? "### Changed Files (full PR diff fallback — incremental range unavailable)"
-        : "### Changed Files in Incremental Range (diff — prior reviewed head to current head)"
+        : params.reviewMode.diffSource === "stack_layer_delta"
+          ? "### Changed Files Since the Prior Review (diff — this layer's current changes, per file)"
+          : "### Changed Files in Incremental Range (diff — prior reviewed head to current head)"
       : "### Changed Files (diff — you can read full file contents with your tools)";
 
   // Leads ride under their file's header, so the agent meets each one while
@@ -386,29 +427,33 @@ export function buildWalkthroughPrompt(
     lines.push("#### Other files", ...renderFileLeads(strayLeads, true), "");
   }
 
-  lines.push(
-    "",
-    "## First actions",
-    "",
-    "1. Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
+  // Numbered at render: the stack step only exists for a stacked PR.
+  const firstActions = [
+    "Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
+    ...(params.stack
+      ? [
+          "Call `get_stack_context` once during Phase A. It returns what the other layers of this stack do: the takeaways and open issues of the layers below, the descriptions and changed files of the layers above. Read it before you plan the chapters, and again before flagging anything as missing.",
+        ]
+      : []),
     mode === REVIEW_MODE.author
-      ? "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
-      : "2. Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
+      ? "Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository. Use it only for risk patterns that are directly relevant to the current diff."
+      : "Call `get_repo_context` once during Phase A. It returns recent daily/weekly project recaps for this repository, which let you ground your overview in what shipped recently, recurring themes, and risk patterns. Empty list = no prior context, proceed without. Do not cite recap themes unless directly relevant to this PR — no padding.",
     params.assignedRisk
-      ? `3. The risk tier for this PR is already set to \`${params.assignedRisk}\` — it is a given, not yours to decide. Do NOT pass \`risk_level\` to \`set_overview\`; a value sent there is ignored. Work to that tier's chapter count and issue budget (see "Risk tiers" in the system prompt).${
+      ? `The risk tier for this PR is already set to \`${params.assignedRisk}\` — it is a given, not yours to decide. Do NOT pass \`risk_level\` to \`set_overview\`; a value sent there is ignored. Work to that tier's chapter count and issue budget (see "Risk tiers" in the system prompt).${
           hasRankedFiles
             ? " The changed-files list is already triaged — work down it in the order given."
             : " Still triage the changed-files list into substantive and mechanical: generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter."
         }`
       : hasRankedFiles
-        ? '3. The changed-files list above is already triaged — work down it in the order given. Size the risk tier on the tier-2-and-above pile only (see "Planning the chapters" in the system prompt).'
-        : '3. Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
-  );
+        ? 'The changed-files list above is already triaged — work down it in the order given. Size the risk tier on the tier-2-and-above pile only (see "Planning the chapters" in the system prompt).'
+        : 'Triage the changed-files list above into substantive and mechanical before you declare the risk tier (see "Planning the chapters" in the system prompt). Generated output — lockfiles, snapshots, `.d.ts`, migration meta, vendored bundles, formatter-only reflows — gets one line naming the category and count, never a chapter. Size the tier on the substantive pile only.',
+  ];
+  lines.push("", "## First actions", "", ...firstActions.map((a, i) => `${i + 1}. ${a}`));
 
   if (params.splitRecommendation) {
     lines.push(
       "",
-      `4. This pull request has been judged to carry ${params.splitRecommendation.pieces} independent concerns, and it earns a split recommendation. That call is made — your job is to NAME the seams, concretely and in the author's terms ("three PRs: the migration, the rate limiter, the unrelated lint fix"), never "consider breaking this up". Put the named split in the overview's takeaway line, raise it as a \`warning\` on the \`scope\` axis, and lead the Phase C verdict with it. Then review the pull request in front of you anyway, at the depth its risk deserves — the recommendation is for the author, the review is for whoever has to merge it today.`,
+      `${firstActions.length + 1}. This pull request has been judged to carry ${params.splitRecommendation.pieces} independent concerns, and it earns a split recommendation. That call is made — your job is to NAME the seams, concretely and in the author's terms ("three PRs: the migration, the rate limiter, the unrelated lint fix"), never "consider breaking this up". Put the named split in the overview's takeaway line, raise it as a \`warning\` on the \`scope\` axis, and lead the Phase C verdict with it. Then review the pull request in front of you anyway, at the depth its risk deserves — the recommendation is for the author, the review is for whoever has to merge it today.`,
     );
   }
 

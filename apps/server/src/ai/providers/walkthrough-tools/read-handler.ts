@@ -10,7 +10,8 @@ import type {
   WalkthroughPipelinePhase,
   WalkthroughState,
 } from "@revv/shared";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -18,11 +19,14 @@ import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
+import { takeawayOf } from "../../../services/stacks/overlay";
+import { parseStackSnapshot } from "../../../services/stacks/snapshot";
 import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
 import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
   GetRepoContextInput,
+  GetStackContextInput,
   GetWalkthroughStateInput,
   WalkthroughToolHandler,
 } from "./spec";
@@ -485,6 +489,158 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
       {
         type: "text" as const,
         text: JSON.stringify({ priorRecaps, instructions }),
+      },
+    ],
+  };
+};
+
+// ── Handler: get_stack_context ───────────────────────────────────────────────
+//
+// Read-only. The stack the orchestrator captured at job start, plus what Revv
+// knows about the other layers now. Lower layers come as their review's
+// takeaway and open issues (what this layer builds on, as judged); upper
+// layers as their description and file list (what may fill an absence here).
+// DB-only and bounded, so a tall stack can't flood the agent's context. The
+// sibling data is live, not snapshotted: in a stack review, a lower layer's
+// takeaway can land while this layer is still being written.
+
+const STACK_ISSUES_PER_LAYER = 8;
+const STACK_BODY_EXCERPT_CHARS = 600;
+const STACK_FILES_PER_LAYER = 60;
+
+export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput> = async (ctx) => {
+  const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
+  if (!row) {
+    return errorResult(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
+  }
+  const stack = parseStackSnapshot(row.stackContext);
+  const repo = ctx.db
+    .select({ repositoryId: pullRequests.repositoryId })
+    .from(pullRequests)
+    .where(eq(pullRequests.id, row.pullRequestId))
+    .get();
+  if (!stack || !repo) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            stack: null,
+            instructions: "This PR is not part of a stack. Review it as a standalone pull request.",
+          }),
+        },
+      ],
+    };
+  }
+
+  const others = stack.layers.filter((l) => l.position !== stack.position);
+  const prRows =
+    others.length === 0
+      ? []
+      : ctx.db
+          .select({
+            id: pullRequests.id,
+            externalId: pullRequests.externalId,
+            title: pullRequests.title,
+            body: pullRequests.body,
+          })
+          .from(pullRequests)
+          .where(
+            and(
+              eq(pullRequests.repositoryId, repo.repositoryId),
+              inArray(
+                pullRequests.externalId,
+                others.map((l) => l.number),
+              ),
+            ),
+          )
+          .all();
+  const prByNumber = new Map(prRows.map((p) => [p.externalId, p]));
+
+  const lowerLayers = others
+    .filter((l) => l.position < stack.position)
+    .sort((a, b) => a.position - b.position)
+    .map((l) => {
+      const pr = prByNumber.get(l.number);
+      const base = { position: l.position, number: l.number, status: l.status };
+      if (!pr) return { ...base, title: l.title, tracked: false, review: null };
+      const reviewed = ctx.db
+        .select({ id: walkthroughsTable.id, summary: walkthroughsTable.summary })
+        .from(walkthroughsTable)
+        .where(
+          and(
+            eq(walkthroughsTable.pullRequestId, pr.id),
+            inArray(walkthroughsTable.status, ["complete", "superseded"]),
+            eq(walkthroughsTable.lastCompletedPhase, "D"),
+            isNotNull(walkthroughsTable.completedAt),
+          ),
+        )
+        .orderBy(desc(walkthroughsTable.generatedAt))
+        .get();
+      if (!reviewed) return { ...base, title: pr.title, tracked: true, review: null };
+      const openIssues = ctx.db
+        .select({ title: walkthroughIssues.title, severity: walkthroughIssues.severity })
+        .from(walkthroughIssues)
+        .where(
+          and(
+            eq(walkthroughIssues.walkthroughId, reviewed.id),
+            eq(walkthroughIssues.resolutionStatus, "open"),
+          ),
+        )
+        .orderBy(asc(walkthroughIssues.order))
+        .all();
+      return {
+        ...base,
+        title: pr.title,
+        tracked: true,
+        review: {
+          takeaway: takeawayOf(reviewed.summary),
+          openIssueCount: openIssues.length,
+          openIssues: openIssues.slice(0, STACK_ISSUES_PER_LAYER),
+        },
+      };
+    });
+
+  const upperLayers = others
+    .filter((l) => l.position > stack.position)
+    .sort((a, b) => a.position - b.position)
+    .map((l) => {
+      const pr = prByNumber.get(l.number);
+      const base = { position: l.position, number: l.number, status: l.status };
+      if (!pr) return { ...base, title: l.title, tracked: false, files: null };
+      const body = pr.body?.trim() ?? "";
+      const files = ctx.db
+        .select({ path: prDiffFiles.path })
+        .from(prDiffFiles)
+        .where(eq(prDiffFiles.prId, pr.id))
+        .orderBy(asc(prDiffFiles.path))
+        .all()
+        .map((f) => f.path);
+      return {
+        ...base,
+        title: pr.title,
+        tracked: true,
+        bodyExcerpt:
+          body.length > STACK_BODY_EXCERPT_CHARS
+            ? `${body.slice(0, STACK_BODY_EXCERPT_CHARS)}…`
+            : body,
+        // Empty until Revv has fetched that layer's diff; not "changes nothing".
+        files: files.slice(0, STACK_FILES_PER_LAYER),
+        fileCount: files.length,
+      };
+    });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          stack,
+          lowerLayers,
+          upperLayers,
+          instructions:
+            "Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as `#N (layer k)`. An upper layer with an empty file list just hasn't been fetched by Revv yet.",
+        }),
       },
     ],
   };

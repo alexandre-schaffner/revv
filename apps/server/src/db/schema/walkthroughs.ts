@@ -200,6 +200,30 @@ export const walkthroughs = sqliteTable(
      * the lifetime of the row.
      */
     nextSeq: integer("next_seq").notNull().default(0),
+    /**
+     * The PR stack as the agent saw it (JSON `WalkthroughStackSnapshot` from
+     * `@revv/shared`), captured once at job start like `prCommits`. Null for a
+     * PR outside any stack, a host without stacks, or a row from before
+     * stacks were tracked. A resume prompts with the same stack; a later read
+     * compares it against the live stack to tell which layers moved since.
+     */
+    stackContext: text("stack_context"),
+    /**
+     * Per-file fingerprint of the PR's own changes at job start (JSON
+     * `Record<filename, hash>` over status + patch, hunk headers included).
+     * For a stacked PR the files are already scoped to the layer, so a new
+     * head with an identical fingerprint is a pure restack: the review can
+     * be carried over without anchors drifting. A file GitHub sent without
+     * a patch hashes as `blob:<status>`, which never matches, so such a
+     * layer is never carried.
+     */
+    diffFingerprint: text("diff_fingerprint"),
+    /**
+     * The row this one's content was carried from when a restack left the
+     * layer's own changes byte-identical. Set by the orchestrator alongside
+     * the snapshot import; null for every agent-generated row.
+     */
+    carriedFromWalkthroughId: text("carried_from_walkthrough_id"),
   },
   (t) => ({
     /**

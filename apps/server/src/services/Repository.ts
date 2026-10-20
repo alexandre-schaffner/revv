@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
+import { githubPromise } from "../observability/github-ledger/origin";
 import { DbService } from "./Db";
 
 /**
@@ -223,7 +224,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       const rawUrl = data.avatarUrl !== undefined ? data.avatarUrl : existing.avatarUrl;
       const urlChanged = data.avatarUrl !== undefined && data.avatarUrl !== existing.avatarUrl;
       if (rawUrl && (urlChanged || existing.avatarContent == null)) {
-        const fetched = yield* Effect.promise(() => fetchAvatarAsDataUrl(rawUrl));
+        const fetched = yield* githubPromise(() => fetchAvatarAsDataUrl(rawUrl));
         if (fetched !== null && fetched !== existing.avatarContent) {
           updates.avatarContent = fetched;
         }
