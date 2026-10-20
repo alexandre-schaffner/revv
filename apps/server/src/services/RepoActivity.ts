@@ -8,13 +8,13 @@ import type {
 import { Effect } from "effect";
 import { logError } from "../logger";
 import { CacheService } from "./Cache";
-import {
-  type CodeFrequencyWeek,
-  type CommitActivityWeek,
-  GitHubGateway,
-  type PrSearchPage,
-  type RepoStat,
-} from "./GitHub";
+import { GitHubGateway } from "./GitHub";
+import type {
+  CodeFrequencyWeek,
+  CommitActivityWeek,
+  PrSearchPage,
+  RepoStat,
+} from "./github-repo-stats";
 import { apiBaseForHost } from "./github-rest";
 
 const REPO_ACTIVITY_NS = "repo-activity";

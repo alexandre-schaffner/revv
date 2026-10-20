@@ -347,11 +347,21 @@ describe("nextStep", () => {
       number: 101,
     });
 
-    const rebased = runLayer(1, { expectedHeadSha: "h1r", rebasedFrom: "h1" });
+    const rebased = runLayer(1, {
+      expectedHeadSha: "h1r",
+      rebasedFrom: "h1",
+      rebasedToMerge: true,
+    });
     expect(nextStep(driven([rebased]), at("DIRTY", { headSha: "h1r" }))).toEqual({
       kind: "fail",
       number: 101,
       message: "#101 needs a rebase onto main",
+    });
+    // Rebased along with a layer below it, it still has its own rebase.
+    const carried = runLayer(1, { expectedHeadSha: "h1r", rebasedFrom: "h1" });
+    expect(nextStep(driven([carried]), at("BEHIND", { headSha: "h1r" }))).toEqual({
+      kind: "rebase",
+      number: 101,
     });
     // GitHub still showing the head the run rebased away from is catching up.
     expect(nextStep(driven([rebased]), at("CLEAN"))).toMatchObject({
@@ -363,6 +373,29 @@ describe("nextStep", () => {
       stackOf([layer(1, { mergeStateStatus: "BEHIND" })], { viewerCanPush: false }),
     );
     expect(nextStep(driven([runLayer(1)]), noPush)).toMatchObject({ kind: "fail" });
+  });
+
+  test("rebases only while every run layer above still holds its confirmed head", () => {
+    const behind = (three: Partial<GitHubStackLayer>) =>
+      readOf(stackOf([layer(1, { mergeStateStatus: "BEHIND" }), layer(2), layer(3, three)]));
+    const layers = [runLayer(1), runLayer(2), runLayer(3)];
+    expect(nextStep(driven(layers), behind({}))).toEqual({ kind: "rebase", number: 101 });
+    expect(nextStep(driven(layers), behind({ headSha: "pushed" }))).toEqual({
+      kind: "fail",
+      number: 103,
+      message: "#103 got new commits after you confirmed — review them first",
+    });
+    // GitHub still showing the head Revv's last rebase replaced: wait for it.
+    const carried = [
+      runLayer(1),
+      runLayer(2),
+      runLayer(3, { expectedHeadSha: "h3r", rebasedFrom: "h3" }),
+    ];
+    expect(nextStep(driven(carried), behind({}))).toEqual({
+      kind: "wait",
+      number: 101,
+      reason: "mergeability",
+    });
   });
 
   test("running checks: driven waits, auto hands over, then waits on GitHub", () => {

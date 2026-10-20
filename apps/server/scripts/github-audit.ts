@@ -8,10 +8,10 @@
 //   bun run github:audit --file ~/Library/Application\ Support/Revv/github-ledger.prod.jsonl
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { analyze } from "../src/observability/github-ledger/analyze";
+import { githubLedgerPath, ledgerBesideDb } from "../src/observability/github-ledger/config";
 import { formatReport, formatTimeline } from "../src/observability/github-ledger/format";
 import type { GitHubCall } from "../src/observability/github-ledger/record";
 import { selectCalls } from "../src/observability/github-ledger/select";
@@ -35,12 +35,12 @@ if (values.help) {
 }
 
 const serverDir = resolve(import.meta.dir, "..");
-const env = process.env.REVV_GITHUB_LEDGER;
 const candidates = [
   values.file,
-  env && env !== "1" && env !== "0" ? env : undefined,
-  join(serverDir, "github-ledger.dev.jsonl"),
-  join(homedir(), "Library/Application Support/Revv/github-ledger.prod.jsonl"),
+  githubLedgerPath() ?? undefined,
+  // Where `make dev` and the installed app write theirs.
+  ledgerBesideDb("dev", join(serverDir, "revv-dev.db")),
+  ledgerBesideDb("prod", ""),
 ].filter((p): p is string => typeof p === "string");
 const file = candidates.find((p) => existsSync(p));
 if (!file) {

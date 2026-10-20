@@ -55,6 +55,8 @@ interface WorldOptions {
   readonly rebaseFails?: () => string | null;
   /** Cancel the run (the row leaves `running`) before this many saves. */
   readonly cancelAtSave?: number;
+  /** Cancel the run while git replays the rebase, before the push. */
+  readonly cancelDuringRebase?: boolean;
 }
 
 function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
@@ -68,6 +70,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
     kind: "retarget" | "settle" | "auto" | "rebased";
   }[] = [];
   const writes: string[] = [];
+  let pushes = 0;
   const saves: { run: StackMergeRun; effects: SaveEffects }[] = [];
 
   const set = (number: number, patch: Partial<GitHubStackLayer>) => {
@@ -131,11 +134,14 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
         set(number, { baseRef: base });
         settle(number);
       }),
-    rebase: (current) =>
-      Effect.suspend(() => {
+    rebase: (current, proceed) =>
+      Effect.gen(function* () {
         writes.push("rebase stack");
         const failure = opts.rebaseFails?.();
-        if (failure) return Effect.fail(failure);
+        if (failure) return yield* Effect.fail(failure);
+        if (opts.cancelDuringRebase) cancelled = true;
+        if (!(yield* proceed)) return yield* Effect.fail("Cancelled before the push");
+        pushes += 1;
         const moved = current.layers.flatMap((l) =>
           l.status === "merged" || !l.headSha
             ? []
@@ -145,7 +151,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
         for (const m of moved) {
           pending.push({ number: m.number, dueAt: reads + 2, kind: "rebased" });
         }
-        return Effect.succeed(moved);
+        return moved;
       }),
     enableAutoMerge: (nodeId, method, sha) =>
       Effect.sync(() => {
@@ -168,7 +174,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
         saves.push({ run, effects });
         return true;
       }),
-    isActive: () => Effect.succeed(!cancelled),
+    isActive: () => Effect.sync(() => !cancelled),
     now: () => now,
     sleep: (ms) =>
       Effect.sync(() => {
@@ -191,7 +197,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
     }
   }
 
-  return { port, writes, saves, elapsed: () => now };
+  return { port, writes, saves, elapsed: () => now, pushes: () => pushes };
 }
 
 function runOf(count: number, mode: StackMergeMode = "driven"): StackMergeRun {
@@ -272,6 +278,42 @@ describe("driveRun", () => {
     expect(run.status).toBe("failed");
     expect(run.error).toBe("#102 needs a rebase onto main");
     expect(gh.writes.filter((w) => w === "rebase stack")).toHaveLength(1);
+  });
+
+  test("rebases again for a layer a later merge left behind", async () => {
+    const gh = world([layer(1), layer(2), layer(3)], {
+      settlesTo: (n) => (n === 101 ? "CLEAN" : "BEHIND"),
+    });
+    const run = await drive(runOf(3), gh.port);
+    expect(run.status).toBe("complete");
+    expect(gh.writes).toEqual([
+      "merge #101 merge @h1",
+      "rebase stack",
+      "merge #102 merge @h2r",
+      "rebase stack",
+      "merge #103 merge @h3rr",
+    ]);
+  });
+
+  test("won't rebase over a layer above that got new commits after the confirm", async () => {
+    const gh = world([layer(1), layer(2), layer(3, { headSha: "h3x" })], {
+      settlesTo: (n) => (n === 102 ? "BEHIND" : "CLEAN"),
+    });
+    const run = await drive(runOf(3), gh.port);
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("#103 got new commits after you confirmed — review them first");
+    expect(gh.writes).toEqual(["merge #101 merge @h1"]);
+    expect(run.layers[2]?.state).toBe("failed");
+  });
+
+  test("a cancel while the rebase replays stops it before the push", async () => {
+    const gh = world([layer(1), layer(2)], {
+      settlesTo: (n) => (n === 102 ? "BEHIND" : "CLEAN"),
+      cancelDuringRebase: true,
+    });
+    await drive(runOf(2), gh.port);
+    expect(gh.writes).toEqual(["merge #101 merge @h1", "rebase stack"]);
+    expect(gh.pushes()).toBe(0);
   });
 
   test("stops with the rebase's own reason when it can't rebase", async () => {

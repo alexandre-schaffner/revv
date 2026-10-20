@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { fingerprintFiles } from "./stacks/fingerprint";
 import {
   type PromptFile,
+  REVERTED_FILE_STATUS,
   resolveIncrementalPromptFiles,
   stackLayerDeltaFiles,
 } from "./walkthrough-prompt-files";
@@ -33,6 +34,21 @@ describe("stackLayerDeltaFiles", () => {
     expect(stackLayerDeltaFiles(now, fingerprintFiles(reviewed)).map((f) => f.filename)).toEqual([
       "src/b.ts",
       "src/new.ts",
+      "src/gone.ts",
+    ]);
+  });
+
+  it("names a file the layer stopped changing as reverted, with no patch", () => {
+    const now = reviewed.slice(0, 2);
+    expect(stackLayerDeltaFiles(now, fingerprintFiles(reviewed))).toEqual([
+      {
+        filename: "src/gone.ts",
+        previousFilename: null,
+        status: REVERTED_FILE_STATUS,
+        additions: 0,
+        deletions: 0,
+        patch: null,
+      },
     ]);
   });
 
@@ -78,7 +94,7 @@ describe("resolveIncrementalPromptFiles on a stacked layer", () => {
       ),
     );
     expect(result.diffSource).toBe("stack_layer_delta");
-    expect(result.files.map((f) => f.filename)).toEqual(["src/b.ts"]);
+    expect(result.files.map((f) => f.filename)).toEqual(["src/b.ts", "src/gone.ts"]);
   });
 
   it("keeps the full diff for a full run", async () => {

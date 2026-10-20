@@ -6,19 +6,12 @@
 // call, so a walkthrough landing shows up without invalidating anything.
 // Nothing here is journaled: losing the cache costs one fetch.
 
-import type {
-  PrStackDetail,
-  RiskLevel,
-  StackBrief,
-  StackBriefStatus,
-  StackLayerLink,
-  WalkthroughStackSnapshot,
-} from "@revv/shared";
+import type { PrStackDetail, RiskLevel, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { prDiffFiles } from "../../db/schema/pr-diff-files";
 import { pullRequests } from "../../db/schema/pull-requests";
-import { stackBriefLayers, stackBriefs } from "../../db/schema/stack-briefs";
+import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import {
@@ -28,6 +21,7 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../../domain/errors";
+import { withDb } from "../../effects/with-db";
 import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { Broadcaster } from "../Broadcaster";
@@ -58,6 +52,8 @@ import {
   type RawPrStackAnswer,
   STACK_SCHEMA_TOKENS,
 } from "./queries";
+import { isCompleteReview, readBriefLayers } from "./reads";
+import { parseStackSnapshot } from "./snapshot";
 
 const CACHE_NS = "pr-stack";
 /** A read this young is served as is: switching layers mustn't refetch. */
@@ -82,18 +78,14 @@ export class StackService extends Context.Tag("StackService")<
       prId: string,
       userId: string,
       accountId?: string,
-    ) => Effect.Effect<PrStackDetail | null, StackError, DbService | CacheService>;
+    ) => Effect.Effect<PrStackDetail | null, StackError>;
     /** The GitHub half only, always fresh from GitHub (merges, plans). */
-    readonly fetchFresh: (
-      ctx: PrContextBasic,
-    ) => Effect.Effect<GitHubStack | null, StackError, DbService | CacheService>;
+    readonly fetchFresh: (ctx: PrContextBasic) => Effect.Effect<GitHubStack | null, StackError>;
     /**
      * The stack as a walkthrough's agent will see it, for the walkthrough
      * row. Never fails: a stack Revv can't read is a walkthrough without one.
      */
-    readonly snapshot: (
-      ctx: PrContextBasic,
-    ) => Effect.Effect<WalkthroughStackSnapshot | null, never, DbService | CacheService>;
+    readonly snapshot: (ctx: PrContextBasic) => Effect.Effect<WalkthroughStackSnapshot | null>;
     /**
      * Age the cached GitHub read out, after the poll saw a member move: every
      * read re-asks GitHub, but a page can still draw the old one meanwhile.
@@ -101,7 +93,7 @@ export class StackService extends Context.Tag("StackService")<
     readonly invalidate: (
       repositoryId: string,
       stackNumber: number,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<void, DbError>;
   }
 >() {}
 
@@ -114,15 +106,6 @@ function repoRef(ctx: PrContextBasic) {
 
 function isUnreachable(e: unknown): boolean {
   return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
-
-function parseJson<T>(json: string | null): T | null {
-  if (!json) return null;
-  try {
-    return JSON.parse(json) as T;
-  } catch {
-    return null;
-  }
 }
 
 /** A host without stacks answers the schema complaint; that's "no stack". */
@@ -192,8 +175,6 @@ export function toSnapshot(stack: GitHubStack, position: number): WalkthroughSta
 }
 
 // ── Revv's facts ────────────────────────────────────────────────────────────
-
-const TERMINAL_PHASE = "D";
 
 /** Everything the overlay needs from the DB, in five reads. */
 export function readStackFacts(
@@ -300,7 +281,7 @@ export function readStackFacts(
             summary: w.summary,
             openIssues: counts?.open ?? 0,
             criticalIssues: counts?.critical ?? 0,
-            stackContext: parseJson<WalkthroughStackSnapshot>(w.stackContext),
+            stackContext: parseStackSnapshot(w.stackContext),
             fingerprint: parseFingerprint(w.diffFingerprint),
             carried: w.carriedFrom !== null,
           };
@@ -310,9 +291,7 @@ export function readStackFacts(
         for (const pr of prRows) {
           const rows = wtRows.filter((w) => w.prId === pr.id);
           const current = rows.find((w) => w.status !== "superseded" && w.prHeadSha === pr.headSha);
-          const latestComplete = rows.find(
-            (w) => w.phase === TERMINAL_PHASE && w.completedAt !== null && w.status !== "error",
-          );
+          const latestComplete = rows.find(isCompleteReview);
           const files = filesByPr.get(pr.id);
           tracked.set(pr.externalId, {
             prId: pr.id,
@@ -392,26 +371,13 @@ function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief
     .orderBy(desc(stackBriefs.createdAt))
     .get();
   if (!row) return null;
-  const layers = db
-    .select()
-    .from(stackBriefLayers)
-    .where(eq(stackBriefLayers.briefId, row.id))
-    .orderBy(stackBriefLayers.position)
-    .all();
   return {
     id: row.id,
-    status: row.status as StackBriefStatus,
+    status: row.status,
     stale: row.signature !== stackSignature(stack.layers),
     arc: row.arc,
-    reviewOrder: parseJson<number[]>(row.reviewOrder) ?? [],
-    layers: layers.map((l) => ({
-      position: l.position,
-      prNumber: l.prNumber,
-      role: l.role,
-      reviewFocus: l.reviewFocus,
-      chapter: l.chapter,
-      buildsOn: parseJson<StackLayerLink[]>(l.buildsOn) ?? [],
-    })),
+    reviewOrder: row.reviewOrder,
+    layers: readBriefLayers(db, row.id),
     completedAt: row.completedAt,
   };
 }
@@ -421,6 +387,7 @@ function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief
 export const StackServiceLive = Layer.effect(
   StackService,
   Effect.gen(function* () {
+    const { db } = yield* DbService;
     const prContext = yield* PrContextService;
     const cache = yield* CacheService;
     const broadcaster = yield* Broadcaster;
@@ -431,9 +398,12 @@ export const StackServiceLive = Layer.effect(
       Effect.gen(function* () {
         const stack = yield* askStack(ctx);
         if (stack) {
-          yield* cache.set(CACHE_NS, cacheKey(ctx.repo.id, stack.number), stack, {
-            ttlMs: CACHE_TTL_MS,
-          });
+          yield* withDb(
+            db,
+            cache.set(CACHE_NS, cacheKey(ctx.repo.id, stack.number), stack, {
+              ttlMs: CACHE_TTL_MS,
+            }),
+          );
         }
         return stack;
       });
@@ -485,8 +455,11 @@ export const StackServiceLive = Layer.effect(
       revalidateFor: string | null = null,
     ) =>
       Effect.gen(function* () {
-        const mirror = yield* readMirror(ctx.repo.id, stackNumber);
-        const cached = yield* cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber));
+        const mirror = yield* withDb(db, readMirror(ctx.repo.id, stackNumber));
+        const cached = yield* withDb(
+          db,
+          cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber)),
+        );
         const usable = cached !== null && agreesWithMirror(cached, mirror);
         if (usable && Date.now() - Date.parse(cached.fetchedAt) < FRESH_FOR_MS) {
           return { stack: cached as GitHubStack | null, stale: false };
@@ -510,13 +483,13 @@ export const StackServiceLive = Layer.effect(
 
     const detail = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
+        const ctx = yield* withDb(db, prContext.resolveBasic(prId, userId, accountId));
         // The poll's record of membership is the cheap gate: a PR it never
         // saw stacked costs GitHub nothing here.
         if (!ctx.pr.stack) return null;
         const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId ?? null);
         if (!stack) return null;
-        const facts = yield* readStackFacts(ctx.repo.id, stack);
+        const facts = yield* withDb(db, readStackFacts(ctx.repo.id, stack));
         return overlayStack(stack, facts, ctx.pr.externalId, stale);
       });
 
@@ -543,7 +516,7 @@ export const StackServiceLive = Layer.effect(
         if (!cached) return;
         const aged: GitHubStack = { ...cached, fetchedAt: new Date(0).toISOString() };
         yield* cache.set(CACHE_NS, key, aged, { ttlMs: CACHE_TTL_MS });
-      });
+      }).pipe((eff) => withDb(db, eff));
 
     return { detail, fetchFresh, snapshot, invalidate };
   }),

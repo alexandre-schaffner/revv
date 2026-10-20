@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,5 +231,35 @@ describe("stack rebase in Revv's clone", () => {
     } finally {
       await cleanupReplay(input);
     }
+  });
+
+  it("runs none of the user's hooks and never signs", async () => {
+    const hooks = join(root, "hooks");
+    const ran = join(root, "hook-ran");
+    mkdirSync(hooks);
+    for (const hook of ["post-checkout", "pre-rebase", "post-rewrite", "pre-push"]) {
+      writeFileSync(join(hooks, hook), `#!/bin/sh\necho ${hook} >> "${ran}"\nexit 1\n`);
+      chmodSync(join(hooks, hook), 0o755);
+    }
+    git(revv, ["config", "core.hooksPath", hooks]);
+    git(revv, ["config", "commit.gpgsign", "true"]);
+    git(revv, ["config", "gpg.program", "/usr/bin/false"]);
+    git(dev, ["checkout", "-q", "main"]);
+    commit(dev, "trunk.txt", "trunk\n", "trunk moved");
+    git(dev, ["push", "-q", "origin", "main"]);
+
+    const { replay, push } = await rebaseAndPush(stepsFor());
+    expect(replay.kind).toBe("replayed");
+    expect(push).toEqual({ kind: "pushed" });
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  it("leaves the clone's other worktrees alone, even ones whose folder is gone", async () => {
+    const elsewhere = join(root, "elsewhere");
+    git(revv, ["worktree", "add", "-q", "--detach", elsewhere, "HEAD"]);
+    rmSync(elsewhere, { recursive: true, force: true });
+
+    await rebaseAndPush(stepsFor());
+    expect(git(revv, ["worktree", "list", "--porcelain"])).toContain(elsewhere);
   });
 });

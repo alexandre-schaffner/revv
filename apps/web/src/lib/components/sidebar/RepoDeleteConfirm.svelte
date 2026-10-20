@@ -27,12 +27,13 @@ let unmanaged = $derived(repo?.managed === false);
 
 <AlertDialog.Root {open} {onOpenChange}>
 	<AlertDialog.Portal>
-		<AlertDialog.Overlay class="confirm-overlay" />
+		<AlertDialog.Overlay class="confirm-overlay" data-glass />
 		<AlertDialog.Content>
 			{#snippet child({ props })}
 				<div
 					{...props}
 					class="confirm-content"
+					data-glass
 					use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}
 				>
 					<div class="confirm-header">

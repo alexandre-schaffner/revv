@@ -30,6 +30,7 @@ let {
 				bind:this={ref}
 				{...props}
 				data-slot="dialog-content"
+				data-glass
 				class={cn(
 					"text-popover-foreground grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 text-sm sm:max-w-sm fixed top-[20%] inset-x-0 mx-auto z-50 w-full outline-none",
 					className

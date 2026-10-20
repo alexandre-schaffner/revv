@@ -7,6 +7,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { account, user } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
+import { DbError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { apiBaseForHost } from "./github-rest";
@@ -289,23 +290,33 @@ export const backfillArchive = (
     // Every PR the mirror already holds, open or not. Reading only the open
     // ones made each archived PR look missing, so every hour re-fetched up to
     // the per-repo cap of PRs already in the archive.
-    const knownRows = yield* Effect.try(() =>
-      repos.length === 0
-        ? []
-        : db
-            .select({
-              repositoryId: pullRequests.repositoryId,
-              externalId: pullRequests.externalId,
-            })
-            .from(pullRequests)
-            .where(
-              inArray(
-                pullRequests.repositoryId,
-                repos.map((r) => r.id),
-              ),
-            )
-            .all(),
-    ).pipe(Effect.orElseSucceed(() => null));
+    const knownRows = yield* Effect.try({
+      try: () =>
+        repos.length === 0
+          ? []
+          : db
+              .select({
+                repositoryId: pullRequests.repositoryId,
+                externalId: pullRequests.externalId,
+              })
+              .from(pullRequests)
+              .where(
+                inArray(
+                  pullRequests.repositoryId,
+                  repos.map((r) => r.id),
+                ),
+              )
+              .all(),
+      catch: (cause) =>
+        new DbError({ message: "Failed to read mirrored PRs for the archive backfill", cause }),
+    }).pipe(
+      Effect.catchTag("DbError", (err) =>
+        Effect.sync(() => {
+          logError("PollScheduler", err.message, err.cause);
+          return null;
+        }),
+      ),
+    );
     // Without the mirror's answer, every PR would look missing: skip a round.
     if (knownRows === null) return false;
     const existingExternalIdsByRepo = new Map<string, Set<number>>();

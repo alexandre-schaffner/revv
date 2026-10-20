@@ -8,8 +8,8 @@
 // layer's commits out of the layer above (`git rebase --onto`, not a plain
 // rebase that would replay them).
 
+import { isOpenLayer } from "@revv/shared";
 import type { GitHubStack } from "./map";
-import { RETARGET_BY_PATCH } from "./merge-plan";
 
 export interface RebaseStep {
   readonly number: number;
@@ -45,7 +45,7 @@ export function planStackRebase(stack: GitHubStack): RebasePlanResult {
 
   for (const [i, layer] of layers.entries()) {
     if (layer.status === "merged") continue;
-    const above = layers.slice(i + 1).some((l) => l.status !== "merged" && l.status !== "closed");
+    const above = layers.slice(i + 1).some(isOpenLayer);
     if (layer.status === "closed") {
       if (above) {
         return {
@@ -74,7 +74,7 @@ export function planStackRebase(stack: GitHubStack): RebasePlanResult {
 
     if (lowestOpen === null) {
       lowestOpen = layer.number;
-      if (RETARGET_BY_PATCH && below?.status === "merged" && layer.baseRef !== stack.baseRefName) {
+      if (below?.status === "merged" && layer.baseRef !== stack.baseRefName) {
         retarget = layer.number;
       }
     }
@@ -82,14 +82,4 @@ export function planStackRebase(stack: GitHubStack): RebasePlanResult {
 
   if (steps.length === 0) return { ok: false, message: "Nothing in this stack is open" };
   return { ok: true, plan: { steps, retarget } };
-}
-
-/** An open layer whose base has commits it lacks, or that needs rebasing past a merge. */
-export function stackNeedsRebase(stack: GitHubStack): boolean {
-  return stack.layers.some(
-    (l) =>
-      l.status !== "merged" &&
-      l.status !== "closed" &&
-      ((l.behindBy ?? 0) > 0 || l.mergeStateStatus === "BEHIND" || l.mergeStateStatus === "DIRTY"),
-  );
 }

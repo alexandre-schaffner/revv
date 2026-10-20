@@ -10,7 +10,6 @@ import {
   GitHubRateLimitError,
 } from "../domain/errors";
 import { githubTryPromise } from "../observability/github-ledger/origin";
-import { registerGitHubHost } from "../observability/github-ledger/record";
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
@@ -23,6 +22,22 @@ export const retryTransient = <A, R>(
   effect: Effect.Effect<A, GitHubError, R>,
 ): Effect.Effect<A, GitHubError, R> =>
   effect.pipe(Effect.retry({ schedule: retrySchedule, while: isTransientGitHubError }));
+
+/**
+ * {@link retryTransient} for a query with a lighter shape to fall back on:
+ * GitHub's own GraphQL failure (the query timed out on its side) goes
+ * straight to the fallback rather than being asked again as is, three times
+ * over. Transport failures are still retried.
+ */
+export const retryTransientBeforeFallback = <A, R>(
+  effect: Effect.Effect<A, GitHubError, R>,
+): Effect.Effect<A, GitHubError, R> =>
+  effect.pipe(
+    Effect.retry({
+      schedule: retrySchedule,
+      while: (e) => isTransientGitHubError(e) && graphqlErrorsOf(e) === null,
+    }),
+  );
 
 function cacheKeyForRequest(apiBase: string, path: string, token: string): string {
   const separator = path.includes("?") ? "&" : "?";
@@ -55,8 +70,6 @@ export function toGitHubError(e: unknown): GitHubError {
  * have no repo in hand (add-repo, onboarding, device auth).
  */
 export function apiBaseForHost(host: string): string {
-  // A self-hosted Enterprise host is GitHub too, as far as the ledger is concerned.
-  registerGitHubHost(host);
   return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
 }
 
@@ -193,6 +206,57 @@ export function githubFetch(
       return yield* Effect.tryPromise({ try: () => res.json(), catch: toGitHubError });
     }),
   );
+}
+
+/**
+ * {@link githubFetch} for an endpoint whose status carries the answer: the
+ * statuses in `answered` (a `/stats/*` 422, a collaborator check's 404) come
+ * back with their body instead of failing, and so does every 2xx (a
+ * `/stats/*` 202 "still computing", a 204 "empty"). Any other status fails
+ * as {@link githubFetch} would. `body` is null when there was none.
+ */
+export function githubFetchStatus(
+  path: string,
+  token: string,
+  apiBase: string,
+  answered: readonly number[] = [],
+): Effect.Effect<{ readonly status: number; readonly body: unknown }, GitHubError> {
+  return Effect.withSpan("GitHub.fetch", {
+    attributes: { path, method: "GET" },
+  })(
+    githubTryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          { headers: githubHeaders(token) },
+          path,
+        );
+        if (!answered.includes(res.status)) assertGitHubOk(res, path);
+        const text = await res.text();
+        return { status: res.status, body: text ? (JSON.parse(text) as unknown) : null };
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+/**
+ * Fetch an image GitHub serves (an avatar) as a `data:` URL, for callers that
+ * cache the bytes rather than the URL. No token: avatar hosts don't take one.
+ */
+export function githubFetchDataUrl(url: string): Effect.Effect<string, GitHubError> {
+  return githubTryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(url, {}, url);
+      if (!res.ok) {
+        throw new GitHubApiError({ status: res.status, cause: `HTTP ${res.status} for ${url}` });
+      }
+      const contentType = res.headers.get("content-type") ?? "image/png";
+      const base64 = Buffer.from(await res.arrayBuffer()).toString("base64");
+      return `data:${contentType};base64,${base64}`;
+    },
+    catch: toGitHubError,
+  });
 }
 
 export function conditionalFetch(
@@ -570,6 +634,31 @@ function isGraphqlServerFailure(message: string): boolean {
   return message.startsWith("Something went wrong while executing your query");
 }
 
+/**
+ * The `errors` GitHub answered a GraphQL request with, kept whole as the
+ * `cause` of the failure they caused. Reads as `GraphQL: <messages>`, so
+ * anything that only prints a cause still sees what it always saw.
+ */
+export class GraphqlErrorAnswer {
+  constructor(readonly errors: ReadonlyArray<GraphqlError>) {}
+
+  toString(): string {
+    return `GraphQL: ${this.errors.map((e) => e.message).join("; ") || "empty data field"}`;
+  }
+}
+
+/**
+ * The GraphQL `errors` behind a failure: GitHub parsed the query and refused
+ * it, or failed running it. Null when GraphQL never answered (HTTP, auth,
+ * rate limit, network), which both shapes of a query would meet alike.
+ */
+export function graphqlErrorsOf(err: GitHubError): ReadonlyArray<GraphqlError> | null {
+  return (err instanceof GitHubApiError || err instanceof GitHubNetworkError) &&
+    err.cause instanceof GraphqlErrorAnswer
+    ? err.cause.errors
+    : null;
+}
+
 interface GraphqlPayload<T> {
   readonly data?: T | null;
   readonly errors?: ReadonlyArray<GraphqlError>;
@@ -623,7 +712,7 @@ function postGraphql<T>(
         // can tip it over). The next ask usually answers, so this one is
         // transient, like the 5xx it stands in for.
         const failed = payload.errors?.find((e) => isGraphqlServerFailure(e.message));
-        if (failed) throw new GitHubNetworkError({ cause: `GraphQL: ${failed.message}` });
+        if (failed) throw new GitHubNetworkError({ cause: new GraphqlErrorAnswer([failed]) });
         // Any other 200 carrying `errors` means GraphQL parsed and rejected the query
         // (unknown field, missing scope, node not visible). That verdict is
         // stable, so this must NOT be a retryable network error — otherwise
@@ -632,17 +721,16 @@ function postGraphql<T>(
         if (!tolerateErrors && payload.errors && payload.errors.length > 0) {
           throw new GitHubApiError({
             status: res.status,
-            cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
+            cause: new GraphqlErrorAnswer(payload.errors),
           });
         }
         // A query GraphQL refused outright (an unknown field on an older GitHub
-        // Enterprise) answers with no `data` at all. Keep its messages: callers
+        // Enterprise) answers with no `data` at all. Keep its errors: callers
         // read them to tell a schema complaint from any other failure.
         if (!payload.data) {
-          const messages = payload.errors?.map((e) => e.message).join("; ");
           throw new GitHubApiError({
             status: res.status,
-            cause: `GraphQL: ${messages || "empty data field"}`,
+            cause: new GraphqlErrorAnswer(payload.errors ?? []),
           });
         }
         return { data: payload.data, errors: payload.errors ?? [] };
@@ -698,17 +786,35 @@ export function githubGraphqlWithErrors<T = unknown>(
  * query without them. Anything else (auth, rate limit, network) is answered
  * the same way by both shapes, so it fails as is. Reports which shape
  * answered, for follow-up queries that must match it.
+ *
+ * `anyGraphqlFailure` widens the retry to every failure GraphQL answered —
+ * a refusal or a timeout on GitHub's side — for modern fields that are
+ * optional garnish: one PR's field can be refused or tip the query over,
+ * and the rest of the answer shouldn't wait on it. `outdated` then tells a
+ * host that lacks the fields apart from one that failed on them this once.
  */
 export function withSchemaFallback<A, R>(
   ask: (modern: boolean) => Effect.Effect<A, GitHubError, R>,
   modernTokens: readonly string[],
-): Effect.Effect<{ readonly value: A; readonly modern: boolean }, GitHubError, R> {
+  options: { readonly anyGraphqlFailure?: boolean } = {},
+): Effect.Effect<
+  { readonly value: A; readonly modern: boolean; readonly outdated: boolean },
+  GitHubError,
+  R
+> {
+  const outdated = (err: GitHubError) => {
+    if (!(err instanceof GitHubApiError)) return false;
+    // A refusal raised outside `postGraphql` carries its messages as text.
+    const messages = graphqlErrorsOf(err)?.map((e) => e.message) ?? [String(err.cause)];
+    return messages.some((message) => modernTokens.some((token) => message.includes(token)));
+  };
   return ask(true).pipe(
-    Effect.map((value) => ({ value, modern: true })),
+    Effect.map((value) => ({ value, modern: true, outdated: false })),
     Effect.catch((err) =>
-      err instanceof GitHubApiError &&
-      modernTokens.some((token) => String(err.cause).includes(token))
-        ? ask(false).pipe(Effect.map((value) => ({ value, modern: false })))
+      outdated(err) || (options.anyGraphqlFailure === true && graphqlErrorsOf(err) !== null)
+        ? ask(false).pipe(
+            Effect.map((value) => ({ value, modern: false, outdated: outdated(err) })),
+          )
         : Effect.fail(err),
     ),
   );

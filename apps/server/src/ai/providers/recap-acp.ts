@@ -14,30 +14,18 @@
 // events + heartbeat) and best-effort tool-call pills; everything substantive
 // reaches the UI via the per-handler `ctx.emit` SSE emissions and the DB.
 //
-// Notable differences from the opencode/codex drivers, all consequences of ACP
-// not carrying a machine tool name for MCP tools (it tags built-in tools with a
-// `kind` but MCP tools arrive with only a human title — see acp-decoders.ts):
-//   • The "did the model actually call any tools?" guard reads `ctx.toolCalls`
-//     (populated by the `/mcp/recap` route's `beforeToolCall`) rather than
-//     counting MCP tool-call frames off the agent stream.
-//   • Throughput token fields are unavailable over ACP and stay absent (an
-//     accepted regression vs. the pre-migration drivers).
+// The session itself is driven by `mcp-agent-acp.ts`, shared with the stack
+// brief; this file adds the recap prompt and the reasoning stream.
 
-import type { McpServer } from "@agentclientprotocol/sdk";
 import type { AcpAgentId, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
-import { serverEnv } from "../../config";
-import { AGENT_IDLE_TIMEOUT_MS, CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
-import { debug, logError } from "../../logger";
-import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { logError } from "../../logger";
 import {
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
-  makeActivityBeacon,
   type NormalizedAgentEvent,
-  withAgentTurn,
 } from "../agent-stream";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
+import { runMcpAgentViaAcp } from "./mcp-agent-acp";
 import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-event-dispatch";
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
@@ -83,14 +71,7 @@ export interface RecapAcpResult {
  * caller observes that flag separately, not this return value.
  */
 export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promise<RecapAcpResult> {
-  let sessionToken: string | null = null;
-  let sessionId: string | null = null;
-  let handle: AcpConnectionHandle | null = null;
   let validatedCompleteSeen = false;
-  // Liveness for the harness' idle deadline — poked by the agent's own ACP
-  // session updates (its MCP tool calls arrive on that stream too, they just
-  // carry no machine name).
-  const activity = makeActivityBeacon();
 
   // Wrap onCompleted so a complete_recap-triggered abort reads as success.
   const toolCtx: RecapToolContext = {
@@ -106,130 +87,60 @@ export async function runRecapAgentViaAcp(params: RunRecapAgentAcpParams): Promi
     params.ctx.priorRecaps,
   )}`;
 
-  try {
-    handle = await getAcpConnection(params.workingDir, params.acpAgentId, {
-      model: params.modelUsed,
-      thinkingEffort: params.thinkingEffort,
-    });
-    const h = handle;
-    if (!h.httpMcpSupported) {
-      // HTTP MCP is MANDATORY here (all content flows through it), unlike chat
-      // where it degrades. Fail loudly.
-      throw new Error(
-        `ACP agent '${params.acpAgentId}' does not advertise HTTP MCP support; recap generation requires it`,
+  // Visible assistant text is discarded; reasoning becomes `thought` events +
+  // a throttled phase heartbeat. MCP-tool content reaches the UI via the route
+  // handlers' `ctx.emit`, not this stream.
+  const dispatchState = createRecapDispatchState();
+  const fanOut = (event: RecapStreamEvent): void => {
+    if (validatedCompleteSeen) return;
+    try {
+      params.ctx.emit(event);
+    } catch (err) {
+      logError(
+        "recap-acp",
+        `ctx.emit threw for event type=${event.type}:`,
+        err instanceof Error ? err.message : String(err),
       );
     }
+  };
+  const onAgentEvent = (ev: NormalizedAgentEvent): void => {
+    if (ev.kind === "error") {
+      logError("recap-acp", `session.error: ${ev.message}`);
+      return;
+    }
+    dispatchRecapStreamEvent(ev, dispatchState, fanOut);
+  };
+  const decodeState = makeAcpDecodeState();
 
-    return await withAgentTurn<RecapAcpResult>({
-      externalAbort: params.abortController,
-      hardTimeoutMs: CLI_WALKTHROUGH_TIMEOUT_MS,
-      idleTimeoutMs: AGENT_IDLE_TIMEOUT_MS,
-      activity,
-      jobStarted: async () => {
-        h.jobStarted();
-      },
-      jobEnded: async () => {
-        h.jobEnded();
-      },
+  const sessionToken = await params.sessionDeps.issueSessionToken(toolCtx);
+  try {
+    const outcome = await runMcpAgentViaAcp({
+      acpAgentId: params.acpAgentId,
+      modelUsed: params.modelUsed,
+      thinkingEffort: params.thinkingEffort,
+      workingDir: params.workingDir,
+      abortController: params.abortController,
+      route: "/mcp/recap",
+      mcpServerName: `${RECAP_MCP_SERVER}-${params.ctx.recapId}`,
+      sessionToken,
+      prompt: userMessage,
+      toolCalls: params.ctx.toolCalls,
+      isValidated: () => validatedCompleteSeen,
+      purpose: "recap generation",
       debugLabel: "recap-acp",
-      abortSession: async () => {
-        if (sessionId) await h.cancel(sessionId);
-      },
-      run: async (ctx) => {
-        // ── 1. Issue session token + hand the agent our HTTP MCP endpoint ──
-        sessionToken = await params.sessionDeps.issueSessionToken(toolCtx);
-        const mcpUrl = `http://127.0.0.1:${serverEnv.port}/mcp/recap`;
-        const mcpServers: McpServer[] = [
-          {
-            type: "http",
-            name: `${RECAP_MCP_SERVER}-${params.ctx.recapId}`,
-            url: mcpUrl,
-            headers: [{ name: "Authorization", value: `Bearer ${sessionToken}` }],
-          },
-        ];
-        debug("recap-acp", `registering MCP ${RECAP_MCP_SERVER} → ${mcpUrl}`);
-
-        // ── 2. Open a FRESH session (never loadSession) ──────────────────
-        const created = await h.newSession(mcpServers);
-        sessionId = created.sessionId;
-        debug("recap-acp", "created session:", sessionId);
-
-        // ── 3. Stream session updates through the shared recap dispatcher ──
-        // Visible assistant text is discarded; reasoning becomes `thought`
-        // events + a throttled phase heartbeat. MCP-tool content reaches the
-        // UI via the route handlers' `ctx.emit`, not this stream.
-        const dispatchState = createRecapDispatchState();
-        const fanOut = (event: RecapStreamEvent): void => {
-          if (validatedCompleteSeen) return;
-          try {
-            params.ctx.emit(event);
-          } catch (err) {
-            logError(
-              "recap-acp",
-              `ctx.emit threw for event type=${event.type}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        };
-        const onAgentEvent = (ev: NormalizedAgentEvent): void => {
-          if (ev.kind === "error") {
-            logError("recap-acp", `session.error: ${ev.message}`);
-            return;
-          }
-          dispatchRecapStreamEvent(ev, dispatchState, fanOut);
-        };
-        const decodeState = makeAcpDecodeState();
-        h.setListener(sessionId, (update) => {
-          activity.note();
-          for (const ev of decodeAcpSessionUpdate(update, decodeState)) onAgentEvent(ev);
-        });
-
-        // ── 4. Prompt and await the turn ─────────────────────────────────
-        debug("recap-acp", `prompting session ${sessionId}`, "model:", params.modelUsed);
-        const stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
-        debug("recap-acp", `prompt returned for session ${sessionId} (stop=${stopReason})`);
-
-        // A cancel that fired because `complete_recap` validated is success.
-        if ((ctx.wasCancelled() || ctx.wasTimeout()) && !validatedCompleteSeen) {
-          return {};
-        }
-        if (validatedCompleteSeen) return {};
-
-        // ── 5. NoToolCalls guard ──────────────────────────────────────────
-        // ACP gives MCP tool calls no machine name, so we can't count them off
-        // the stream — the `/mcp/recap` route records every call in
-        // `ctx.toolCalls` instead. Zero calls means the model never engaged the
-        // tool surface (doesn't support tool calling, or auth isn't configured).
-        if ((params.ctx.toolCalls?.size ?? 0) === 0) {
-          const msg =
-            `The model finished without calling any tools. This usually means the selected ` +
-            `model (${params.modelUsed}) does not support tool calling through the '${params.acpAgentId}' ` +
-            `ACP agent, or the provider is not configured for it.`;
-          logError("recap-acp", msg);
-          params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: msg } });
-          return { error: msg };
-        }
-
-        return {};
+      onSessionUpdate: (update) => {
+        for (const ev of decodeAcpSessionUpdate(update, decodeState)) onAgentEvent(ev);
       },
     });
-  } catch (err) {
-    // An abort fired by a successful `complete_recap` is success, not failure.
-    if (validatedCompleteSeen) return {};
-    const message = withAgentKeychainHint(
-      params.acpAgentId,
-      err instanceof Error ? err.message : String(err),
-    );
-    logError("recap-acp", "run failed:", message);
-    return { error: message };
+    if (outcome.noToolCalls && outcome.error) {
+      params.ctx.emit({ type: "error", data: { code: "NoToolCalls", message: outcome.error } });
+    }
+    return outcome.error ? { error: outcome.error } : {};
   } finally {
-    if (handle && sessionId) handle.setListener(sessionId, null);
-    if (sessionToken) {
-      try {
-        await params.sessionDeps.clearSessionToken(sessionToken);
-      } catch {
-        /* ignore */
-      }
+    try {
+      await params.sessionDeps.clearSessionToken(sessionToken);
+    } catch {
+      /* ignore */
     }
   }
 }

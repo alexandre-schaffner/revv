@@ -110,15 +110,17 @@ $effect(() => {
   untrack(() => void ensureHunkScan(prId, headSha));
 });
 
-// The stack this PR sits in, for the walkthrough's stack surfaces and the
-// ⌥⌘↑/↓ keys; then, once the page has settled, the server warms the
-// neighbouring layers' diffs so the next move doesn't wait on GitHub. Keyed on
-// the PR and its stack number (a rebuilt stack is a new one to read), never
-// the store's map: `untrack` keeps it out, or every stack refresh would re-run
-// this and warm again.
+// The stack this PR sits in, for the walkthrough's stack surfaces, the merge
+// pill and the ⌥⌘↑/↓ keys; then, once the page has settled, the server warms
+// the neighbouring layers' diffs so the next move doesn't wait on GitHub.
+// Keyed on primitives, the PR id and its stack number (a rebuilt stack is a
+// new one to read): the PR object is replaced on every `prs:updated` and
+// refocus, and the store's map changes on every stack refresh; `untrack`
+// keeps the latter out. Either would re-read and warm again.
+const stackPrId = $derived(pr?.stack ? pr.id : null);
 const stackNumber = $derived(pr?.stack?.number ?? null);
 $effect(() => {
-  const prId = pr?.id;
+  const prId = stackPrId;
   if (!prId || stackNumber === null) return;
   let live = true;
   let cancelIdle: (() => void) | null = null;

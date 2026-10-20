@@ -1070,8 +1070,10 @@ diffs-container {
 }
 
 /* Glass during that crossfade: a solid fill instead of a live blur, which
-   the transition's snapshots can't reproduce (see `crossfade.ts`).
-   `!important` has to outrank each surface's own background and filter. */
+   the transition's snapshots can't reproduce (see `crossfade.ts`). Every
+   glass surface carries `data-glass`; the crossfade computes its fill and
+   adds `.glass-frozen`. `!important` has to outrank each surface's own
+   background and filter. */
 :root.document-crossfade .glass-frozen {
   /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
   backdrop-filter: none !important;

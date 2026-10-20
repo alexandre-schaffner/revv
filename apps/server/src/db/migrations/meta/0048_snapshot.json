@@ -3830,6 +3830,21 @@
           "notNull": true,
           "autoincrement": false
         },
+        "chapter": {
+          "name": "chapter",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "builds_on": {
+          "name": "builds_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "text",

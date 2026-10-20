@@ -251,8 +251,9 @@ async function submit(action: Action): Promise<void> {
     // second submit would re-post them as duplicates.
     await loadSession(prId, undefined, true);
     // The review changed the viewer's verdict, which the action bar reads off
-    // the conversation: an approval swaps Approve for Merge. Re-read it before
-    // `submitting` clears, so Approve never re-arms in between.
+    // the conversation: an approval turns Approve into a spent "Approved".
+    // Re-read it before `submitting` clears, so Approve never re-arms in
+    // between.
     await loadConversation(prId, { force: true });
 
     const payload = data as {

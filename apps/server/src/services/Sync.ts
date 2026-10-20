@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import type { CommentThread, ThreadSummary, UserRole } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Context, Deferred, Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -578,7 +579,7 @@ export const SyncServiceLive = Layer.effect(
      * asking GitHub again. In-memory and per process: losing it costs one
      * duplicate pull.
      */
-    const pulling = new Map<string, Deferred.Deferred<PullResult, SyncError>>();
+    const pullOnce = keyedSingleFlight<string, PullResult, SyncError>();
     const lastPulled = new Map<string, number>();
     const PULL_REUSE_MS = 5_000;
     const NOTHING_NEW: PullResult = {
@@ -591,18 +592,15 @@ export const SyncServiceLive = Layer.effect(
     const pullCommentsOnce = (
       prId: string,
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
-      Effect.suspend(() => {
-        const running = pulling.get(prId);
-        if (running) return Deferred.await(running);
-        // What the last pull found was its caller's news; this one hears nothing moved.
-        const pulledAt = lastPulled.get(prId);
-        if (pulledAt !== undefined && Date.now() - pulledAt < PULL_REUSE_MS) {
-          return Effect.succeed(NOTHING_NEW);
-        }
-        return Effect.gen(function* () {
-          const done = yield* Deferred.make<PullResult, SyncError>();
-          pulling.set(prId, done);
-          return yield* pullComments(prId).pipe(
+      pullOnce(
+        prId,
+        Effect.suspend(() => {
+          // What the last pull found was its caller's news; this one hears nothing moved.
+          const pulledAt = lastPulled.get(prId);
+          if (pulledAt !== undefined && Date.now() - pulledAt < PULL_REUSE_MS) {
+            return Effect.succeed(NOTHING_NEW);
+          }
+          return pullComments(prId).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 const now = Date.now();
@@ -612,15 +610,9 @@ export const SyncServiceLive = Layer.effect(
                 lastPulled.set(prId, now);
               }),
             ),
-            Effect.onExit((exit) =>
-              Effect.zipRight(
-                Effect.sync(() => pulling.delete(prId)),
-                Deferred.done(done, exit),
-              ),
-            ),
           );
-        });
-      });
+        }),
+      );
 
     const syncThreads = (
       prId: string,

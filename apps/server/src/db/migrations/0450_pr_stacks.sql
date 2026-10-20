@@ -5,6 +5,8 @@ CREATE TABLE `stack_brief_layers` (
 	`pr_number` integer NOT NULL,
 	`role` text NOT NULL,
 	`review_focus` text NOT NULL,
+	`chapter` text NOT NULL,
+	`builds_on` text DEFAULT '[]' NOT NULL,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`brief_id`) REFERENCES `stack_briefs`(`id`) ON UPDATE no action ON DELETE cascade
 );

@@ -21,6 +21,14 @@ export function stackKey(repositoryId: string, stackNumber: number): string {
   return `${repositoryId}:${stackNumber}`;
 }
 
+/** A layer that can still change or merge: neither merged nor closed. */
+export function isOpenLayer(layer: { readonly status: string }): boolean {
+  return layer.status !== "merged" && layer.status !== "closed";
+}
+
+/** GitHub `mergeStateStatus` values under which a PR can merge right now. */
+export const MERGEABLE_STATES: ReadonlySet<string> = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
+
 /** What Revv's walkthroughs know about one layer at its current head. */
 export type StackLayerReview =
   | { readonly kind: "none" }
@@ -64,7 +72,8 @@ export type RestackVerdict =
   | { readonly kind: "needs-rebase" }
   | { readonly kind: "unknown" };
 
-export interface StackLayer extends PrStackEntry {
+/** One layer as GitHub reports it: the half of `StackLayer` the server caches. */
+export interface GitHubStackLayerFields extends PrStackEntry {
   readonly headSha: string | null;
   /** The branch this layer targets: the layer below's head, or the stack base. */
   readonly baseRef: string;
@@ -86,6 +95,9 @@ export interface StackLayer extends PrStackEntry {
    * say (a merged layer, or a branch it couldn't compare).
    */
   readonly behindBy: number | null;
+}
+
+export interface StackLayer extends GitHubStackLayerFields {
   /** Revv's row for this PR, or null when Revv doesn't track it (yet). */
   readonly prId: string | null;
   readonly review: StackLayerReview;
@@ -125,8 +137,8 @@ export interface StackBriefLayer {
   readonly role: string;
   /** One line: where a reviewer of this layer should look hardest. */
   readonly reviewFocus: string;
-  /** The stack phase this layer belongs to; null for briefs written before chapters. */
-  readonly chapter: string | null;
+  /** The stack phase this layer belongs to, 1–3 words ("Roles", "Storage"). */
+  readonly chapter: string;
   /** The lower layers this one stands on, and what it takes from each. */
   readonly buildsOn: readonly StackLayerLink[];
 }
@@ -251,6 +263,11 @@ export interface StackMergeRunLayer {
    * showing this one is GitHub catching up, not new commits.
    */
   readonly rebasedFrom?: string;
+  /**
+   * The run rebased the stack to merge this layer. One still behind after
+   * that needs a hand, not another rebase.
+   */
+  readonly rebasedToMerge?: boolean;
 }
 
 export interface StackMergeRun {

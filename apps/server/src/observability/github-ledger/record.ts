@@ -59,11 +59,21 @@ export interface GitHubCall {
 
 // ── Classifying a URL ───────────────────────────────────────────────────────
 
+/** Enterprise hosts, learned from the API requests the ledger has seen go to them. */
 const extraHosts = new Set<string>();
 
-/** Teach the ledger an Enterprise host (`api.<host>` and `<host>` both count). */
-export function registerGitHubHost(host: string): void {
-  extraHosts.add(host.toLowerCase());
+/**
+ * Whether a request is a GitHub API call by its own say: every one Revv makes
+ * carries `X-GitHub-Api-Version`. That's how a self-hosted Enterprise host,
+ * which no hostname rule can know, is recognised; its web host (`<host>` of
+ * `api.<host>`, where its avatars live) counts from then on.
+ */
+function learnedFromRequest(url: URL, init: RequestInit | undefined, request: Request | null) {
+  const declared =
+    headerOf(init, "x-github-api-version") ?? request?.headers.get("x-github-api-version") ?? null;
+  if (declared === null) return false;
+  extraHosts.add(url.hostname.toLowerCase().replace(/^api\./, ""));
+  return true;
 }
 
 export function isGitHubHost(hostname: string): boolean {
@@ -278,7 +288,9 @@ export function installGitHubLedger(options: { path?: string | null } = {}): voi
     } catch {
       return original(input, init);
     }
-    if (!isGitHubHost(url.hostname)) return original(input, init);
+    if (!isGitHubHost(url.hostname) && !learnedFromRequest(url, init, request)) {
+      return original(input, init);
+    }
 
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const body = bodyText(init?.body);

@@ -5,7 +5,14 @@
 // verdict, and anything the restack check found. One place decides them, so
 // a layer never reads two ways on one page.
 
-import type { ReviewVerdict, RiskLevel, StackBrief, StackLayer } from "@revv/shared";
+import {
+  isOpenLayer,
+  type ReviewVerdict,
+  type RiskLevel,
+  type StackBrief,
+  type StackLayer,
+} from "@revv/shared";
+import { plural } from "$lib/utils/plural";
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   low: "Low risk",
@@ -33,11 +40,6 @@ export type LayerFact =
     }
   | { readonly kind: "text"; readonly key: string; readonly tone: Tone; readonly label: string };
 
-/** Still to land: merged and closed layers are the stack's history. */
-export function isOpenLayer(layer: StackLayer): boolean {
-  return layer.status !== "merged" && layer.status !== "closed";
-}
-
 /**
  * The layer has no review of its current head (and none on the way). A
  * review carried over a restack counts: the layer's own changes are the
@@ -53,6 +55,12 @@ export function needsReview(layer: StackLayer): boolean {
     layer.headSha !== null &&
     review.reviewedHeadSha !== layer.headSha
   );
+}
+
+/** The stack's brief, when it has one worth reading: written, even if for an older version. */
+export function readableBrief(brief: StackBrief | null): StackBrief | null {
+  if (!brief) return null;
+  return brief.status === "complete" || brief.status === "superseded" ? brief : null;
 }
 
 /** What the layer contributes: the brief's one line for it, else its walkthrough's takeaway. */
@@ -87,10 +95,7 @@ export function layerFacts(layer: StackLayer): LayerFact[] {
     }
     const rest = review.openIssues - review.criticalIssues;
     if (rest > 0) {
-      const label =
-        review.criticalIssues > 0
-          ? `${rest} more ${rest === 1 ? "issue" : "issues"}`
-          : `${rest} ${rest === 1 ? "issue" : "issues"}`;
+      const label = plural(rest, review.criticalIssues > 0 ? "more issue" : "issue");
       facts.push({ kind: "text", key: "issues", tone: "subtle", label });
     }
   }

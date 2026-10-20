@@ -6,8 +6,15 @@
  */
 import type { PullRequest } from "@revv/shared";
 import { Effect } from "effect";
-import { GitHubApiError, type GitHubError, GitHubNotFoundError } from "../domain/errors";
-import { type GraphqlConnection, githubGraphqlPartial, paginateGraphql } from "./github-rest";
+import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import {
+  type GraphqlConnection,
+  githubGraphqlPartial,
+  paginateGraphql,
+  retryTransient,
+  retryTransientBeforeFallback,
+  withSchemaFallback,
+} from "./github-rest";
 
 /**
  * A few active repos exceed 1,000 open PRs. Bounded for rate-limit safety, but
@@ -16,8 +23,11 @@ import { type GraphqlConnection, githubGraphqlPartial, paginateGraphql } from ".
  */
 const OPEN_PRS_MAX_PAGES = 50;
 
+/** PRs per page of the open list: one request, and one GraphQL point. */
+export const OPEN_PRS_PAGE_SIZE = 100;
+
 /** The most open PRs a list holds; a repo with more is listed newest first, up to it. */
-export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * 100;
+export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * OPEN_PRS_PAGE_SIZE;
 
 /**
  * What an older GitHub Enterprise says when it predates stacks. Quoted, since
@@ -26,30 +36,33 @@ export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * 100;
 const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
 
 // Exactly the fields `mapPrNode` reads. `additions`/`deletions`/`changedFiles`
-// are left out on purpose: GitHub computes them per PR, which made this query
-// ~20% slower, and `listPrDiffStats` already fetches them for the PRs that
-// actually need them.
+// are left out on purpose: GitHub computes them per PR, which made the open
+// list ~20% slower, and `listPrDiffStatsViaGraphql` already fetches them for
+// the PRs that actually need them.
+const PR_NODE_FIELDS = `
+  number title body isDraft url createdAt updatedAt closedAt
+  headRefName baseRefName headRefOid baseRefOid
+  author { __typename login avatarUrl }
+  reviewRequests(first: 100) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { login }
+        ... on Bot { login }
+        ... on Mannequin { login }
+      }
+    }
+  }`;
+
 const openPrsQuery = (
   withStacks: boolean,
 ) => `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
+    pullRequests(states: OPEN, first: ${OPEN_PRS_PAGE_SIZE}, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title body isDraft url createdAt updatedAt closedAt
-        headRefName baseRefName headRefOid baseRefOid
+        ${PR_NODE_FIELDS}
         ${withStacks ? "stack { number } stackEntry { position }" : ""}
-        author { __typename login avatarUrl }
-        reviewRequests(first: 100) {
-          nodes {
-            requestedReviewer {
-              __typename
-              ... on User { login }
-              ... on Bot { login }
-              ... on Mannequin { login }
-            }
-          }
-        }
       }
     }
   }
@@ -188,27 +201,29 @@ export function listOpenPrsViaGraphql(
       Effect.map((nodes) => nodes.filter(recent).map((node) => mapPrNode(node, repositoryId))),
     );
 
-  const withoutStacks = (stacks: OpenPrList["stacks"]) =>
-    list(false).pipe(Effect.map((prs): OpenPrList => ({ prs, stacks })));
-
-  if (!withStacks) return withoutStacks("unknown");
-  return list(true).pipe(
-    Effect.map((prs): OpenPrList => ({ prs, stacks: "listed" })),
-    // Stacks are garnish on the poll's most important request, so any refusal
-    // GraphQL answers with earns one retry without them: a host that predates
-    // them, but also a FORBIDDEN or timeout on one PR's stack, which would
-    // otherwise stall the repo's whole list for as long as it lasted. HTTP,
-    // auth, rate-limit and network failures hit both shapes alike and fail
-    // as is.
-    Effect.catchIf(
-      (err): err is GitHubApiError =>
-        err instanceof GitHubApiError && String(err.cause).startsWith("GraphQL:"),
-      (err) =>
-        withoutStacks(
-          STACK_TOKENS.some((token) => String(err.cause).includes(token))
-            ? "unsupported"
-            : "unknown",
-        ),
+  if (!withStacks) {
+    return list(false).pipe(
+      retryTransient,
+      Effect.map((prs): OpenPrList => ({ prs, stacks: "unknown" })),
+    );
+  }
+  // Stacks are garnish on the poll's most important request, so any failure
+  // GraphQL answers with earns one ask without them: a host that predates
+  // them, but also a FORBIDDEN on one PR's stack, or a query the stack fields
+  // tipped into a timeout on GitHub's side, which would otherwise stall the
+  // repo's whole list for as long as it lasted. HTTP, auth, rate-limit and
+  // network failures hit both shapes alike and fail as is.
+  return withSchemaFallback(
+    (modern) =>
+      modern ? list(true).pipe(retryTransientBeforeFallback) : list(false).pipe(retryTransient),
+    STACK_TOKENS,
+    { anyGraphqlFailure: true },
+  ).pipe(
+    Effect.map(
+      ({ value, modern, outdated }): OpenPrList => ({
+        prs: value,
+        stacks: modern ? "listed" : outdated ? "unsupported" : "unknown",
+      }),
     ),
   );
 }
@@ -266,21 +281,108 @@ export function listClosedPrNumbersSince(
   );
 }
 
-/** The fields of one PR the archive needs, closed ones included. */
-const PR_DETAIL_FIELDS = `
-  number title body isDraft url createdAt updatedAt closedAt mergedAt state
-  headRefName baseRefName headRefOid baseRefOid additions deletions changedFiles
-  author { __typename login avatarUrl }
-  reviewRequests(first: 100) {
-    nodes {
-      requestedReviewer {
-        __typename
-        ... on User { login }
-        ... on Bot { login }
-        ... on Mannequin { login }
-      }
+// ── Aliased batches ─────────────────────────────────────────────────────────
+//
+// Many PRs of one repo, or many repos, in one request: one aliased field per
+// item. GitHub answers an alias it can't resolve (PR deleted, repo renamed,
+// access revoked) with `null` plus an `errors` entry, which must not cost the
+// other aliases theirs; such an item is absent from the result, which callers
+// read as "unknown", never as "none".
+
+/**
+ * `selection` of each PR in `numbers`, one request per `chunkSize`, keyed by
+ * PR number.
+ */
+function prsByNumber<N>(
+  operation: string,
+  owner: string,
+  repo: string,
+  numbers: readonly number[],
+  selection: string,
+  chunkSize: number,
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, N>, GitHubError> {
+  return Effect.gen(function* () {
+    const result = new Map<number, N>();
+    for (let start = 0; start < numbers.length; start += chunkSize) {
+      const chunk = numbers.slice(start, start + chunkSize);
+      const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
+      const fields = chunk
+        .map((_, i) => `p${i}: pullRequest(number: $n${i}) { ${selection} }`)
+        .join("\n");
+      const variables: Record<string, string | number> = { owner, name: repo };
+      chunk.forEach((n, i) => {
+        variables[`n${i}`] = n;
+      });
+      const data = yield* githubGraphqlPartial<{ repository: Record<string, N | null> | null }>(
+        `query ${operation}($owner: String!, $name: String!, ${argDefs}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`,
+        variables,
+        token,
+        apiBase,
+      );
+      chunk.forEach((n, i) => {
+        const node = data.repository?.[`p${i}`];
+        if (node) result.set(n, node);
+      });
     }
-  }`;
+    return result;
+  });
+}
+
+/**
+ * Comfortably inside GitHub's per-query node limit (each alias asks for one
+ * node), and small enough that the request body stays modest on GHE.
+ */
+const REPO_CHUNK_SIZE = 80;
+
+/** `selection` of each repo in `repoFullNames` (`owner/name`), keyed by full name. */
+export function reposByName<N>(
+  operation: string,
+  repoFullNames: readonly string[],
+  selection: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<string, N>, GitHubError> {
+  return Effect.gen(function* () {
+    const result = new Map<string, N>();
+    for (let start = 0; start < repoFullNames.length; start += REPO_CHUNK_SIZE) {
+      const chunk = repoFullNames.slice(start, start + REPO_CHUNK_SIZE);
+      const argDefs: string[] = [];
+      const fields: string[] = [];
+      const variables: Record<string, string> = {};
+      chunk.forEach((fullName, i) => {
+        const [owner, name] = fullName.split("/");
+        if (!owner || !name) return;
+        argDefs.push(`$o${i}: String!, $n${i}: String!`);
+        fields.push(`r${i}: repository(owner: $o${i}, name: $n${i}) { ${selection} }`);
+        variables[`o${i}`] = owner;
+        variables[`n${i}`] = name;
+      });
+      if (fields.length === 0) continue;
+
+      const data = yield* githubGraphqlPartial<Record<string, N | null>>(
+        `query ${operation}(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
+        variables,
+        token,
+        apiBase,
+      );
+      chunk.forEach((fullName, i) => {
+        const node = data[`r${i}`];
+        if (node) result.set(fullName, node);
+      });
+    }
+    return result;
+  });
+}
+
+/** The fields of one PR the archive needs, closed ones included. */
+const PR_DETAIL_FIELDS = `${PR_NODE_FIELDS}
+  mergedAt state additions deletions changedFiles`;
 
 interface GqlPrDetail extends GqlOpenPr {
   readonly state: "OPEN" | "CLOSED" | "MERGED";
@@ -306,46 +408,68 @@ export function getPrsViaGraphql(
   token: string,
   apiBase: string,
 ): Effect.Effect<Map<number, PullRequest>, GitHubError> {
-  return Effect.gen(function* () {
-    const result = new Map<number, PullRequest>();
-    for (let start = 0; start < numbers.length; start += PR_DETAIL_CHUNK) {
-      const chunk = numbers.slice(start, start + PR_DETAIL_CHUNK);
-      const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
-      const fields = chunk
-        .map((_, i) => `p${i}: pullRequest(number: $n${i}) { ${PR_DETAIL_FIELDS} }`)
-        .join("\n");
-      const variables: Record<string, string | number> = { owner, name: repo };
-      chunk.forEach((n, i) => {
-        variables[`n${i}`] = n;
-      });
-      const data = yield* githubGraphqlPartial<{
-        repository: Record<string, GqlPrDetail | null> | null;
-      }>(
-        `query PrDetails($owner: String!, $name: String!, ${argDefs}) {
-  repository(owner: $owner, name: $name) {
-${fields}
-  }
-}`,
-        variables,
-        token,
-        apiBase,
-      );
-      chunk.forEach((n, i) => {
-        const node = data.repository?.[`p${i}`];
-        if (!node) return;
-        result.set(n, {
-          ...mapPrNode(node, repositoryId),
-          status: node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
-          additions: node.additions,
-          deletions: node.deletions,
-          changedFiles: node.changedFiles,
-          // The REST detail this replaces carried no stacks either.
-          stack: null,
-        });
-      });
-    }
-    return result;
-  });
+  return prsByNumber<GqlPrDetail>(
+    "PrDetails",
+    owner,
+    repo,
+    numbers,
+    PR_DETAIL_FIELDS,
+    PR_DETAIL_CHUNK,
+    token,
+    apiBase,
+  ).pipe(
+    Effect.map(
+      (nodes) =>
+        new Map(
+          [...nodes].map(([n, node]): [number, PullRequest] => [
+            n,
+            {
+              ...mapPrNode(node, repositoryId),
+              status:
+                node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
+              additions: node.additions,
+              deletions: node.deletions,
+              changedFiles: node.changedFiles,
+              // The REST detail this replaces carried no stacks either.
+              stack: null,
+            },
+          ]),
+        ),
+    ),
+  );
+}
+
+/** Per-PR diff size. */
+export interface PrDiffStats {
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
+/** Each alias is 3 scalar fields; 100 also keeps the request body comfortable on GHE. */
+const DIFF_STATS_CHUNK = 100;
+
+/**
+ * Diff size for many PRs of one repo, keyed by PR number: one aliased request
+ * per {@link DIFF_STATS_CHUNK}, where a REST detail fetch was one each.
+ */
+export function listPrDiffStatsViaGraphql(
+  owner: string,
+  repo: string,
+  numbers: readonly number[],
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, PrDiffStats>, GitHubError> {
+  return prsByNumber<PrDiffStats>(
+    "PrDiffStats",
+    owner,
+    repo,
+    numbers,
+    "additions deletions changedFiles",
+    DIFF_STATS_CHUNK,
+    token,
+    apiBase,
+  );
 }
 
 /**
@@ -378,12 +502,6 @@ export function sameSignature(a: OpenPrListSignature, b: OpenPrListSignature): b
   return a.count === b.count && a.latestUpdatedAt === b.latestUpdatedAt;
 }
 
-/**
- * Comfortably inside GitHub's per-query node limit (each alias asks for one
- * node), and small enough that the request body stays modest on GHE.
- */
-const SIGNATURE_CHUNK_SIZE = 80;
-
 interface SignatureNode {
   readonly pullRequests: {
     readonly totalCount: number;
@@ -404,40 +522,24 @@ export function probeOpenPrListSignatures(
   token: string,
   apiBase: string,
 ): Effect.Effect<Map<string, OpenPrListSignature>, GitHubError> {
-  return Effect.gen(function* () {
-    const result = new Map<string, OpenPrListSignature>();
-    for (let start = 0; start < repoFullNames.length; start += SIGNATURE_CHUNK_SIZE) {
-      const chunk = repoFullNames.slice(start, start + SIGNATURE_CHUNK_SIZE);
-      const argDefs: string[] = [];
-      const fields: string[] = [];
-      const variables: Record<string, string> = {};
-      chunk.forEach((fullName, i) => {
-        const [owner, name] = fullName.split("/");
-        if (!owner || !name) return;
-        argDefs.push(`$o${i}: String!, $n${i}: String!`);
-        fields.push(
-          `r${i}: repository(owner: $o${i}, name: $n${i}) { pullRequests(states: OPEN, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount nodes { updatedAt } } }`,
-        );
-        variables[`o${i}`] = owner;
-        variables[`n${i}`] = name;
-      });
-      if (fields.length === 0) continue;
-
-      const data = yield* githubGraphqlPartial<Record<string, SignatureNode | null>>(
-        `query OpenPrListSignatures(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
-        variables,
-        token,
-        apiBase,
-      );
-      chunk.forEach((fullName, i) => {
-        const node = data[`r${i}`];
-        if (!node) return;
-        result.set(fullName, {
-          count: node.pullRequests.totalCount,
-          latestUpdatedAt: node.pullRequests.nodes[0]?.updatedAt ?? null,
-        });
-      });
-    }
-    return result;
-  });
+  return reposByName<SignatureNode>(
+    "OpenPrListSignatures",
+    repoFullNames,
+    "pullRequests(states: OPEN, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount nodes { updatedAt } }",
+    token,
+    apiBase,
+  ).pipe(
+    Effect.map(
+      (nodes) =>
+        new Map(
+          [...nodes].map(([fullName, node]): [string, OpenPrListSignature] => [
+            fullName,
+            {
+              count: node.pullRequests.totalCount,
+              latestUpdatedAt: node.pullRequests.nodes[0]?.updatedAt ?? null,
+            },
+          ]),
+        ),
+    ),
+  );
 }

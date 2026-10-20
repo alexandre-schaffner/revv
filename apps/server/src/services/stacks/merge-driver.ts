@@ -59,10 +59,14 @@ export interface MergeDriverPort {
     sha: string,
   ) => Effect.Effect<void, GitHubError>;
   /**
-   * Rebase every open layer of `stack` onto the one below it and push them.
-   * Answers the layers it moved, or why it couldn't, in the reader's terms.
+   * Rebase every open layer of `stack` onto the one below it and push them,
+   * unless `proceed` says no once the rebase is replayed. Answers the layers
+   * it moved, or why it couldn't, in the reader's terms.
    */
-  readonly rebase: (stack: GitHubStack) => Effect.Effect<StackRebaseResult["rebased"], string>;
+  readonly rebase: (
+    stack: GitHubStack,
+    proceed: Effect.Effect<boolean>,
+  ) => Effect.Effect<StackRebaseResult["rebased"], string>;
   /**
    * Commit the run, then announce it. False when the row has left
    * `running`/`waiting` (the user cancelled): the loop stops without
@@ -219,7 +223,9 @@ export function driveRun(
         }
         case "rebase": {
           if (!(yield* commit({ ...stepped, status: "running" }, moved))) return run;
-          const done = yield* Effect.either(port.rebase(stackRead.stack));
+          // A cancel that lands while git replays must still stop the push.
+          const stillOurs = port.isActive(run.id).pipe(Effect.orElseSucceed(() => false));
+          const done = yield* Effect.either(port.rebase(stackRead.stack, stillOurs));
           if (done._tag === "Left") {
             yield* stop(decision.number, done.left);
             return run;
@@ -234,7 +240,9 @@ export function driveRun(
             return run;
           }
           // The rebased heads are Revv's own, made from the ones the user
-          // confirmed: the run merges those instead.
+          // confirmed: the run merges those instead. Only the layer this
+          // rebase was for has spent its rebase; the ones above get theirs
+          // when a merge below leaves them behind again.
           const rebased = run.layers.map((l): StackMergeRunLayer => {
             const moved = pushed.get(l.number);
             if (!moved) return l;
@@ -246,6 +254,7 @@ export function driveRun(
                 ? {
                     state: "merging" as const,
                     message: `Rebased onto ${stackRead.stack.baseRefName}`,
+                    rebasedToMerge: true,
                   }
                 : {}),
             };

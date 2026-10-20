@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { StackBriefStatus } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles } from "../../../db/schema/pr-diff-files";
@@ -49,7 +50,7 @@ const SNAPSHOT: StackBriefSnapshot = {
   capturedAt: "2026-10-16T00:00:00.000Z",
 };
 
-function seed(status = "generating"): Db {
+function seed(status: StackBriefStatus = "generating"): Db {
   const db = createDb(":memory:");
   // The brief's repository parent is irrelevant to the tools.
   (db as unknown as { session: { client: { run: (sql: string) => void } } }).session.client.run(
@@ -199,7 +200,7 @@ describe("set_arc", () => {
     await setArcHandler(ctx, { ...arc, review_order: [122, 121] });
     const after = brief(db);
     expect(after.lastCompletedPhase).toBe("R");
-    expect(after.reviewOrder).toBe("[122,121]");
+    expect(after.reviewOrder).toEqual([122, 121]);
     expect(text(await setArcHandler(ctx, { ...arc, review_order: [122, 121] }))).toContain(
       "already stored",
     );
@@ -228,7 +229,7 @@ describe("set_layer_role chapters and links", () => {
     await setLayerRoleHandler(ctx, { ...role(3), builds_on: links });
     const row = db.select().from(stackBriefLayers).get();
     expect(row?.chapter).toBe("Storage");
-    expect(JSON.parse(row?.buildsOn ?? "[]")).toEqual(links);
+    expect(row?.buildsOn).toEqual(links);
   });
 
   it("refuses a link to a layer that isn't below, twice, or too many", async () => {
@@ -252,15 +253,6 @@ describe("set_layer_role chapters and links", () => {
         .isError,
     ).toBe(true);
     expect(db.select().from(stackBriefLayers).all()).toHaveLength(0);
-  });
-
-  it("counts a role written before chapters as missing", async () => {
-    const db = seed();
-    const ctx = ctxFor(db);
-    await setLayerRoleHandler(ctx, role(2));
-    db.update(stackBriefLayers).set({ chapter: null }).run();
-    await setLayerRoleHandler(ctx, role(3));
-    expect(brief(db).lastCompletedPhase).toBe("none");
   });
 });
 

@@ -18,7 +18,8 @@
 // transitions go through ProjectRecapJobs (single-writer per invariant #11).
 
 import type { RecapPeriod } from "@revv/shared";
-import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { DbService } from "./Db";
@@ -153,6 +154,24 @@ function enumerateWeeklyPeriods(
   return result;
 }
 
+/**
+ * Whether an existing daily recap for a closed `window` should be generated
+ * again. Only the most recently closed day qualifies, and only when its recap
+ * was written before the day ended — typically a manual rolling recap that
+ * could not yet see the evening's merges. Older days keep whatever they have:
+ * the cold-start backfill looks back a week, and holding those to the same
+ * test would regenerate the whole week on every launch.
+ */
+export function dailyRecapIsStale(
+  window: { readonly periodEnd: string },
+  generatedAt: string,
+  now: Date = new Date(),
+): boolean {
+  const end = new Date(window.periodEnd).getTime();
+  if (end !== startOfUtcDay(now).getTime()) return false;
+  return new Date(generatedAt).getTime() < end;
+}
+
 // ── Service tag ──────────────────────────────────────────────────────────────
 
 type RecapSchedulerService = {
@@ -175,10 +194,6 @@ export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedul
 export const RecapSchedulerLive = Layer.effect(
   RecapScheduler,
   Effect.gen(function* () {
-    // The sweeps live in the layer's scope: forked under `start()`'s caller,
-    // they were interrupted the moment `start()` returned, before their first
-    // tick, so no recap was ever generated on schedule.
-    const loopScope = yield* Effect.scope;
     const { db } = yield* DbService;
     const settingsService = yield* SettingsService;
     const repoService = yield* RepositoryService;
@@ -189,8 +204,8 @@ export const RecapSchedulerLive = Layer.effect(
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    const dailyFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
-    const weeklyFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
+    const dailyLoop = yield* makeRestartableLoop;
+    const weeklyLoop = yield* makeRestartableLoop;
 
     // True until the first tick after boot completes. Cold-start backfills
     // use the wider lookback; subsequent ticks only look at the current
@@ -227,16 +242,13 @@ export const RecapSchedulerLive = Layer.effect(
             ).pipe(Effect.catch(() => Effect.succeed(null)));
 
             // ── Daily stale-check ────────────────────────────────────────
-            // If a daily recap for this window was generated today, it's
-            // fresh — skip. If it was generated before today, it's stale
-            // (new PRs may have merged since) — regenerate.
+            // Yesterday's recap written before yesterday ended may have
+            // missed PRs merged since — regenerate it. See `dailyRecapIsStale`.
             if (existing && period === "daily") {
-              const generatedAt = new Date(existing.generatedAt);
-              const todayStart = startOfUtcDay(now);
-              if (generatedAt.getTime() >= todayStart.getTime()) {
+              if (!dailyRecapIsStale(window, existing.generatedAt, now)) {
                 debug(
                   "recap-scheduler",
-                  `skip fresh daily recap for ${repo.fullName} ${window.periodStart}`,
+                  `keep daily recap for ${repo.fullName} ${window.periodStart}`,
                 );
                 continue;
               }
@@ -318,26 +330,10 @@ export const RecapSchedulerLive = Layer.effect(
         ),
       );
 
-    const startFiberFor = (period: RecapPeriod, ref: typeof dailyFiberRef): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const existing = yield* Ref.get(ref);
-        if (existing !== null) return;
-        const schedule = Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES));
-        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkIn(
-          sweepPeriod(period).pipe(Effect.repeat(schedule)),
-          loopScope,
-        );
-        yield* Ref.set(ref, fiber);
-      });
-
-    const stopFiberRef = (ref: typeof dailyFiberRef): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const fiber = yield* Ref.get(ref);
-        if (fiber !== null) {
-          yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-          yield* Ref.set(ref, null);
-        }
-      });
+    const sweepLoop = (period: RecapPeriod) =>
+      sweepPeriod(period).pipe(
+        Effect.repeat(Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES))),
+      );
 
     return {
       start: () =>
@@ -350,14 +346,14 @@ export const RecapSchedulerLive = Layer.effect(
             debug("recap-scheduler", "recap disabled — not starting fibers");
             return;
           }
-          if (enabled.daily) yield* startFiberFor("daily", dailyFiberRef);
-          if (enabled.weekly) yield* startFiberFor("weekly", weeklyFiberRef);
+          if (enabled.daily) yield* dailyLoop.start(sweepLoop("daily"));
+          if (enabled.weekly) yield* weeklyLoop.start(sweepLoop("weekly"));
         }),
 
       stop: () =>
         Effect.gen(function* () {
-          yield* stopFiberRef(dailyFiberRef);
-          yield* stopFiberRef(weeklyFiberRef);
+          yield* dailyLoop.stop;
+          yield* weeklyLoop.stop;
         }),
 
       checkNow: (period) => sweepPeriod(period),

@@ -25,8 +25,7 @@
 
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import { getAcpConnection } from "../acp/acp-connection";
-import { decodeAcpSessionUpdate, makeAcpDecodeState, withAgentTurn } from "../agent-stream";
+import { promptOnce } from "./prompt-once";
 
 export const FALLBACK_PROMPTS: readonly string[] = [
   "What's the riskiest change here?",
@@ -221,48 +220,15 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
 // ── ACP one-shot ─────────────────────────────────────────────────────────────
 
 async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
-  const userMessage = buildUserMessage(input);
-  const h = await getAcpConnection(input.cwd, input.acpAgentId, {
+  const collected = await promptOnce({
+    cwd: input.cwd,
+    agent: input.acpAgentId,
     model: input.model,
-    thinkingEffort: input.thinkingEffort,
+    effort: input.thinkingEffort,
+    timeoutMs: SUGGESTIONS_TIMEOUT_MS,
+    text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
+    debugLabel: "suggestions-acp",
   });
-
-  let sessionId: string | null = null;
-  let collected = "";
-
-  try {
-    await withAgentTurn<void>({
-      hardTimeoutMs: SUGGESTIONS_TIMEOUT_MS,
-      jobStarted: async () => {
-        h.jobStarted();
-      },
-      jobEnded: async () => {
-        h.jobEnded();
-      },
-      debugLabel: "suggestions-acp",
-      abortSession: async () => {
-        if (sessionId) await h.cancel(sessionId);
-      },
-      run: async () => {
-        // Fresh session, NO MCP servers — the agent has only its built-in
-        // tools and the prompt tells it to just read + answer in JSON.
-        const created = await h.newSession([]);
-        sessionId = created.sessionId;
-        const decodeState = makeAcpDecodeState();
-        h.setListener(sessionId, (update) => {
-          for (const ev of decodeAcpSessionUpdate(update, decodeState)) {
-            if (ev.kind === "text-delta") collected += ev.data;
-          }
-        });
-        // ACP has no separate system-prompt channel — prepend it (codex-style).
-        const promptText = `${SYSTEM_PROMPT}\n\n---\n\n${userMessage}`;
-        await h.prompt(sessionId, [{ type: "text", text: promptText }]);
-      },
-    });
-  } finally {
-    if (sessionId) h.setListener(sessionId, null);
-  }
-
   const parsed = parsePrompts(collected);
   if (!parsed) {
     throw new Error(`acp agent returned unparseable output (len=${collected.length})`);

@@ -54,17 +54,39 @@ export interface PromptFilesResult {
 }
 
 /**
+ * Status of a file the parent review read that the layer no longer changes:
+ * its own change was reverted, so there is no patch left to show.
+ */
+export const REVERTED_FILE_STATUS = "reverted";
+
+/**
  * A stacked layer's current patches, kept to the files whose own changes
  * differ from what the parent review read. After a rebase onto a moved
  * layer, `git diff oldHead newHead` is mostly the lower layer's churn; the
  * layer's three-dot file list, filtered by fingerprint, is only its own.
+ * A file the parent review read that the layer no longer touches comes
+ * last, as a patchless `reverted` entry, so the agent can retire what it
+ * said about it.
  */
 export function stackLayerDeltaFiles(
   files: ReadonlyArray<PromptFile>,
   parentFingerprint: DiffFingerprint,
 ): PromptFile[] {
   const changed = new Set(changedFiles(parentFingerprint, fingerprintFiles(files)));
-  return files.filter((f) => changed.has(f.filename));
+  const current = new Set(files.map((f) => f.filename));
+  const reverted = [...changed]
+    .filter((filename) => !current.has(filename))
+    .map(
+      (filename): PromptFile => ({
+        filename,
+        previousFilename: null,
+        status: REVERTED_FILE_STATUS,
+        additions: 0,
+        deletions: 0,
+        patch: null,
+      }),
+    );
+  return [...files.filter((f) => changed.has(f.filename)), ...reverted];
 }
 
 function authedRepoUrl(ctx: PromptFilesContext): string {

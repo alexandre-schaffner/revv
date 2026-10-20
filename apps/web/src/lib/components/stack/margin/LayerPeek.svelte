@@ -9,8 +9,8 @@ import type { StackLayer } from "@revv/shared";
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import Warning from "phosphor-svelte/lib/Warning";
 import { gsapFadeY, tokens } from "$lib/motion";
+import { layerRole, REVIEW_VERDICT_LABEL } from "$lib/stacks/stack-layer-facts";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
-import { layerRole, REVIEW_VERDICT_LABEL } from "../stack-layer-facts";
 import { layerHint, plainTitle, richText, type StackPlace } from "./stack-margin";
 
 interface Props {

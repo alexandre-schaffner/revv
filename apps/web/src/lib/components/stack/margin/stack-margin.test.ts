@@ -136,7 +136,7 @@ describe("stackChapters", () => {
 
   it("falls back to runs of the same scope", () => {
     const partial = brief();
-    const layers = partial.layers.map((l, i) => (i === 0 ? { ...l, chapter: null } : l));
+    const layers = partial.layers.slice(1);
     expect(stackChapters(LAYERS, { ...partial, layers }).map((c) => c.name)).toEqual([
       "db",
       "api",

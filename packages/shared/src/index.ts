@@ -218,6 +218,7 @@ export type {
 export type { SettingsUpdate } from "./settings-update";
 export { mergeSettingsUpdate } from "./settings-update";
 export type {
+  GitHubStackLayerFields,
   PrStackDetail,
   RestackVerdict,
   StackBrief,
@@ -241,7 +242,7 @@ export type {
   StackReviewStarted,
   WalkthroughStackSnapshot,
 } from "./stacks";
-export { stackKey } from "./stacks";
+export { isOpenLayer, MERGEABLE_STATES, stackKey } from "./stacks";
 export type {
   AuthorRole,
   CloneStatus,

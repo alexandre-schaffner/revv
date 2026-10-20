@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isOpenLayer, loginsMatch, type MergeEligibility, type MergeMethod } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
@@ -17,9 +18,12 @@ import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import { getConversation } from "$lib/stores/conversation.svelte";
 import {
+  askMergeEligibility,
+  getMergeEligibilityRequest,
+} from "$lib/stores/merge-eligibility.svelte";
+import {
   closePr,
   convertPrToDraft,
-  getMergeEligibility,
   getSelectedPr,
   markPrReadyForReview,
   mergePr,
@@ -35,8 +39,9 @@ import {
   getReviewBarSubmitting,
 } from "$lib/stores/reviewBar.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
-import { ensureStack, getLayer, getStack } from "$lib/stores/stacks.svelte";
-import { isMergeStateSettling, mergeBlocker } from "$lib/utils/merge-blocker";
+import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
+import { mergeBlocker } from "$lib/utils/merge-blocker";
+import MergeConfirmDialog from "./MergeConfirmDialog.svelte";
 
 const pr = $derived(getSelectedPr());
 const rcSubmitting = $derived(getReviewBarSubmitting());
@@ -52,7 +57,7 @@ $effect(() => {
 });
 
 const currentUserLogin = $derived(getCurrentUserLogin());
-const isPrOwner = $derived(!!pr && pr.authorLogin === currentUserLogin);
+const isPrOwner = $derived(!!pr && loginsMatch(pr.authorLogin, currentUserLogin));
 // Draft toggle, merge, and close only make sense on an open PR; a closed or
 // merged one keeps just the submit-review pill (GitHub has no reopen path here).
 const isPrOpen = $derived(pr?.status === "open");
@@ -72,9 +77,11 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
   }
 }
 
-let mergeEligibility = $state<import("@revv/shared").MergeEligibility | null>(null);
 let mergeSubmitting = $state<string | null>(null);
 let mergeMenuOpen = $state(false);
+/** The strategy a reviewer picked, waiting on their confirmation. */
+let mergeToConfirm = $state<MergeOption | null>(null);
+let mergeConfirmOpen = $state(false);
 
 // The viewer's own standing verdict, from the Conversation tab's snapshot. A
 // later "request changes" or a stale-review dismissal brings Approve back.
@@ -85,18 +92,16 @@ const conversation = $derived.by(() => {
 const viewerApproved = $derived(
   conversation?.reviewers.some(
     (r) =>
-      r.kind === "user" && r.actor.login === conversation.viewerLogin && r.verdict === "approved",
+      r.kind === "user" &&
+      loginsMatch(r.actor.login, conversation.viewerLogin) &&
+      r.verdict === "approved",
   ) ?? false,
 );
 
-/** Re-asks while GitHub is still computing mergeability, then gives up. */
-const MERGEABILITY_RETRY_MS = 3_000;
-const MERGEABILITY_MAX_RETRIES = 4;
-
 // Mergeability moves with a new head, the review decision, and CI, so a
-// change in any of them asks again. The effect reads only these primitives:
-// the PR and conversation objects are replaced by every store update (a CI
-// poll, an SSE refresh, the cached snapshot then the fresh read), and
+// change in any of them asks again. The ask is keyed on these primitives
+// only: the PR and conversation objects are replaced by every store update
+// (a CI poll, an SSE refresh, the cached snapshot then the fresh read), and
 // depending on them, or on when the conversation was read, re-asked GitHub on
 // each one.
 const mergeAskPrId = $derived(pr?.id ?? null);
@@ -111,53 +116,21 @@ const conversationKnown = $derived.by(() => {
 });
 const conversationReviewDecision = $derived(conversation?.reviewDecision ?? null);
 const conversationCiState = $derived(conversation?.ci?.state ?? null);
-$effect(() => {
-  const prId = mergeAskPrId;
-  void mergeAskHeadSha;
-  void conversationReviewDecision;
-  void conversationCiState;
-  if (!prId || !mayMerge || !conversationKnown) {
-    mergeEligibility = null;
-    return;
-  }
-  let cancelled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const ask = (retriesLeft: number): void => {
-    void getMergeEligibility(prId).then((el) => {
-      if (cancelled) return;
-      mergeEligibility = el;
-      if (el && isMergeStateSettling(el.mergeStateStatus) && retriesLeft > 0) {
-        timer = setTimeout(() => ask(retriesLeft - 1), MERGEABILITY_RETRY_MS);
-      }
-    });
-  };
-  ask(MERGEABILITY_MAX_RETRIES);
-  return () => {
-    cancelled = true;
-    clearTimeout(timer);
-  };
-});
-
-const mergeBlockedReason = $derived(
-  mergeEligibility
-    ? mergeBlocker({
-        mergeStateStatus: mergeEligibility.mergeStateStatus,
-        reviewDecision: conversation?.reviewDecision ?? null,
-        ciState: conversation?.ci?.state ?? null,
-      })
+const mergeAskKey = $derived(
+  mergeAskPrId && mayMerge && conversationKnown
+    ? `${mergeAskHeadSha} ${conversationReviewDecision} ${conversationCiState}`
     : null,
 );
-
-async function runMerge(method: import("@revv/shared").MergeMethod): Promise<void> {
-  if (!pr || mergeSubmitting !== null) return;
-  mergeSubmitting = method;
-  mergeMenuOpen = false;
-  try {
-    await mergePr(pr.id, method);
-  } finally {
-    mergeSubmitting = null;
-  }
-}
+$effect(() => {
+  const prId = mergeAskPrId;
+  const key = mergeAskKey;
+  if (prId && key !== null) untrack(() => askMergeEligibility(prId, key));
+});
+const mergeEligibility = $derived.by((): MergeEligibility | null => {
+  if (!mergeAskPrId || mergeAskKey === null) return null;
+  const request = getMergeEligibilityRequest(mergeAskPrId);
+  return request.status === "ok" ? request.data : null;
+});
 
 // Repos disable merge strategies freely (squash-only is common); GitHub
 // answers a disabled strategy with a 405, so the pill offers exactly what
@@ -165,7 +138,7 @@ async function runMerge(method: import("@revv/shared").MergeMethod): Promise<voi
 // list can only mean a stale/failed eligibility read — fall back to all three
 // rather than stranding the author with no merge button.
 interface MergeOption {
-  method: import("@revv/shared").MergeMethod;
+  method: MergeMethod;
   label: string;
   menuLabel: string;
 }
@@ -191,21 +164,17 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
 // A stacked PR targets the branch of the layer below it, so merging it alone
 // while that layer is open lands it there, not in the stack's base. Such a
 // layer only offers "Merge through #N…", which merges the stack bottom-up.
-$effect(() => {
-  const id = pr?.id;
-  const stacked = pr?.stack != null;
-  if (id && stacked) untrack(() => void ensureStack(id));
-});
+// The review page reads the stack.
 const stackLayer = $derived(pr ? getLayer(pr.id) : null);
 const stack = $derived(pr ? getStack(pr.id) : null);
 const openBelow = $derived(
   stack && stackLayer
-    ? stack.layers.some((l) => l.position < stackLayer.position && l.status !== "merged")
+    ? stack.layers.some((l) => l.position < stackLayer.position && isOpenLayer(l))
     : false,
 );
 const openAbove = $derived(
   stack && stackLayer
-    ? stack.layers.some((l) => l.position > stackLayer.position && l.status !== "merged")
+    ? stack.layers.some((l) => l.position > stackLayer.position && isOpenLayer(l))
     : false,
 );
 const mergeThroughTitle = $derived(
@@ -213,6 +182,54 @@ const mergeThroughTitle = $derived(
     ? `This PR targets ${stackLayer.baseRef}, the layer below it. Merging it alone would land it there, not in ${stack.baseRefName}; merge the stack through here instead.`
     : "",
 );
+// Until the stack read lands, or when it fails, a layer above the bottom
+// can't tell whether the ones below it are still open, so it isn't offered a
+// plain merge. The bottom layer sits on the base and may merge alone.
+const stackUnknownReason = $derived.by(() => {
+  if (!pr?.stack || pr.stack.position <= 1 || stackLayer) return null;
+  return getStackRequest(pr.id).status === "error"
+    ? "Couldn't read the stack this PR sits in"
+    : "Reading the stack this PR sits in…";
+});
+
+const mergeBlockedReason = $derived(
+  stackUnknownReason ??
+    (mergeEligibility
+      ? mergeBlocker({
+          mergeStateStatus: mergeEligibility.mergeStateStatus,
+          reviewDecision: conversationReviewDecision,
+          ciState: conversationCiState,
+        })
+      : null),
+);
+const mergeDisabled = $derived(
+  ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null,
+);
+
+/**
+ * The author merges their own PR straight away. Anyone else confirms first:
+ * merging someone else's work is never a single press.
+ */
+function requestMerge(option: MergeOption): void {
+  mergeMenuOpen = false;
+  if (isPrOwner) {
+    void runMerge(option.method);
+    return;
+  }
+  mergeToConfirm = option;
+  mergeConfirmOpen = true;
+}
+
+async function runMerge(method: MergeMethod): Promise<void> {
+  if (!pr || mergeSubmitting !== null) return;
+  mergeSubmitting = method;
+  mergeMenuOpen = false;
+  try {
+    await mergePr(pr.id, method);
+  } finally {
+    mergeSubmitting = null;
+  }
+}
 </script>
 
 {#snippet mergeControl()}
@@ -240,14 +257,15 @@ const mergeThroughTitle = $derived(
          with the reason on hover rather than letting a click fail. -->
     <div
       class="glass-pill glass-pill--success merge-pill"
-      class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
+      data-glass
+      class:is-disabled={mergeDisabled}
       title={mergeBlockedReason ?? undefined}
     >
       <button
         type="button"
         class="merge-pill-main"
-        disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
-        onclick={() => runMerge(primaryMerge.method)}
+        disabled={mergeDisabled}
+        onclick={() => requestMerge(primaryMerge)}
         title={mergeBlockedReason ?? primaryMerge.menuLabel}
       >
         <GitMerge size={16} />
@@ -259,7 +277,7 @@ const mergeThroughTitle = $derived(
             <button
               type="button"
               class="merge-pill-chevron"
-              disabled={ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null}
+              disabled={mergeDisabled}
               aria-label="Merge options"
               title="Choose merge strategy"
             >
@@ -271,7 +289,7 @@ const mergeThroughTitle = $derived(
               <button
                 type="button"
                 class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-bg-tertiary"
-                onclick={() => runMerge(option.method)}
+                onclick={() => requestMerge(option)}
               >
                 <GitMerge size={12} />
                 {option.menuLabel}
@@ -394,15 +412,15 @@ const mergeThroughTitle = $derived(
         <ArrowUp size={16} />
         {rcSubmitting !== null ? "Submitting…" : "Submit review"}
       </GlassPill>
-      <!-- Once your approval stands, approving again does nothing; the next
-           step is merging, when you're allowed to. -->
-      {#if viewerApproved && mergeEligibility?.canMerge && isPrOpen}
-        {@render mergeControl()}
-      {:else if viewerApproved}
+      <!-- Once your approval stands, Approve stays put as a spent "Approved"
+           and merging, when you're allowed to, is its own pill beside it,
+           behind a confirmation: a second press on Approve never merges. -->
+      {#if viewerApproved}
         <GlassPill variant="success" disabled title="You approved this pull request">
           <Check size={16} />
           Approved
         </GlassPill>
+        {@render mergeControl()}
       {:else}
         <GlassPill
           variant="success"
@@ -419,6 +437,21 @@ const mergeThroughTitle = $derived(
     {/if}
   </div>
 </div>
+
+{#if pr && !isPrOwner}
+  <MergeConfirmDialog
+    open={mergeConfirmOpen}
+    prNumber={pr.externalId}
+    authorLogin={pr.authorLogin}
+    targetBranch={pr.targetBranch}
+    methodLabel={(mergeToConfirm ?? primaryMerge).menuLabel}
+    onOpenChange={(open) => (mergeConfirmOpen = open)}
+    onConfirm={() => {
+      mergeConfirmOpen = false;
+      if (mergeToConfirm) void runMerge(mergeToConfirm.method);
+    }}
+  />
+{/if}
 
 <style>
   /* The bar wrapper now uses the shared `.actions-float` / `.actions-row`

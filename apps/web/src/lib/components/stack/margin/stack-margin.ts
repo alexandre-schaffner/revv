@@ -12,6 +12,9 @@
 // above"; no file overlaps means no "Changed again above".
 
 import type { PrStackDetail, StackBrief, StackBriefLayer, StackLayer } from "@revv/shared";
+import { layerAt, layerOf } from "$lib/stacks/locate";
+import { RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
+import { plural } from "$lib/utils/plural";
 
 // ── Wording ─────────────────────────────────────────────────────────────────
 
@@ -109,7 +112,7 @@ export function stackChapters(
   layers: readonly StackLayer[],
   brief: StackBrief | null,
 ): StackChapter[] {
-  const fromBrief = new Map(brief?.layers.map((l) => [l.prNumber, l.chapter?.trim() || null]));
+  const fromBrief = new Map(brief?.layers.map((l) => [l.prNumber, l.chapter]));
   const useBrief = layers.length > 0 && layers.every((l) => fromBrief.get(l.number));
   const out: { name: string | null; layers: StackLayer[] }[] = [];
   for (const layer of layers) {
@@ -158,11 +161,6 @@ export interface StackPlace {
   readonly chapters: readonly StackChapter[];
 }
 
-function readableBrief(brief: StackBrief | null): StackBrief | null {
-  if (!brief) return null;
-  return brief.status === "complete" || brief.status === "superseded" ? brief : null;
-}
-
 function briefStateOf(brief: StackBrief | null): BriefState {
   if (!brief || brief.status === "error") return "none";
   if (brief.status === "generating") return "writing";
@@ -184,9 +182,7 @@ export function stackPlace(
   headline: string | null,
 ): StackPlace | null {
   if (stack.layers.length < 2) return null;
-  const here =
-    stack.layers.find((l) => l.prId === prId) ??
-    (prNumber === null ? undefined : stack.layers.find((l) => l.number === prNumber));
+  const here = layerOf(stack, prId, prNumber);
   if (!here) return null;
   const brief = readableBrief(stack.brief);
   const byNumber = new Map(stack.layers.map((l) => [l.number, l]));
@@ -213,7 +209,7 @@ export function stackPlace(
     role: briefLayer(brief, here.number)?.role.trim() || null,
     buildsOn: (briefLayer(brief, here.number)?.buildsOn ?? []).flatMap(link),
     usedBy,
-    next: stack.layers.find((l) => l.position === here.position + 1) ?? null,
+    next: layerAt(stack, here, 1),
     chapters: stackChapters(stack.layers, brief),
   };
 }
@@ -299,8 +295,6 @@ export function marginNotes(
 
 // ── The popover's words for a layer ─────────────────────────────────────────
 
-const RISK: Record<string, string> = { low: "Low risk", medium: "Medium risk", high: "High risk" };
-
 /**
  * What a layer's row in the stack list says on its right: only the states
  * that tell the reader something. An unreviewed draft is the default.
@@ -313,10 +307,7 @@ export function layerHint(layer: StackLayer, here: StackLayer): string {
   const { review } = layer;
   if (review.kind === "generating") return "Reviewing";
   if (review.kind !== "complete") return "";
-  const risk = review.riskLevel ? RISK[review.riskLevel] : null;
-  const issues =
-    review.openIssues > 0
-      ? `${review.openIssues} ${review.openIssues === 1 ? "issue" : "issues"}`
-      : null;
+  const risk = review.riskLevel ? RISK_LABEL[review.riskLevel] : null;
+  const issues = review.openIssues > 0 ? plural(review.openIssues, "issue") : null;
   return [risk, issues].filter(Boolean).join(" · ") || "Reviewed";
 }

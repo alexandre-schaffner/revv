@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 const repoRoot = import.meta.dir.replace(/\/scripts$/, "");
 
@@ -15,24 +15,12 @@ const featureRoots = [
   /^apps\/server\/src\/ai\/providers\/stack-brief(?:-|\/)/,
 ];
 
+// Modules are named by repo path without extension; imports are resolved to
+// the same form before comparing, whatever depth they are written from.
 const forbiddenImports = new Set([
-  "../services/GitHub",
-  "../services/Repository",
-  "../services/TokenProvider",
-  "./GitHub",
-  "./Repository",
-  "./TokenProvider",
-  // From `services/stacks/`.
-  "../GitHub",
-  "../Repository",
-  "../TokenProvider",
-  // From `ai/providers/` and `ai/providers/stack-brief-tools/`.
-  "../../services/GitHub",
-  "../../services/Repository",
-  "../../services/TokenProvider",
-  "../../../services/GitHub",
-  "../../../services/Repository",
-  "../../../services/TokenProvider",
+  "apps/server/src/services/GitHub",
+  "apps/server/src/services/Repository",
+  "apps/server/src/services/TokenProvider",
 ]);
 
 const identityBoundaryRoots = [
@@ -41,10 +29,8 @@ const identityBoundaryRoots = [
 ];
 
 const identityForbiddenImports = new Set([
-  "../services/SecretStore",
-  "../services/TokenProvider",
-  "./services/SecretStore",
-  "./services/TokenProvider",
+  "apps/server/src/services/SecretStore",
+  "apps/server/src/services/TokenProvider",
 ]);
 
 // ── Local Git boundary ──────────────────────────────────────────────────────
@@ -55,7 +41,7 @@ const identityForbiddenImports = new Set([
 // and the subprocess registry/signal-handling in one place. `clone-policy` is
 // `RepoCloneService`'s own read-only inspection/policy helper, so it sits
 // inside the module boundary too.
-const gitRunnerSpecifierPattern = /(^|\/)git-runner$/;
+const gitRunnerModule = "apps/server/src/services/git-runner";
 const gitRunnerAllowedImporters = new Set([
   "apps/server/src/services/RepoClone.ts",
   "apps/server/src/services/clone-policy.ts",
@@ -80,6 +66,14 @@ function listTsFiles(dir: string): string[] {
   return files;
 }
 
+/** The repo path a relative import names, without extension; null for a package. */
+function resolveImport(importerRel: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) return null;
+  return join(dirname(importerRel), specifier)
+    .replace(/\.(?:ts|tsx|js)$/, "")
+    .replace(/\/index$/, "");
+}
+
 const importPattern = /import\s+(?:type\s+)?[\s\S]*?\s+from\s+["']([^"']+)["']/g;
 const violations: string[] = [];
 
@@ -90,19 +84,21 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
   for (const match of source.matchAll(importPattern)) {
     const specifier = match[1];
     if (!specifier) continue;
+    const target = resolveImport(rel, specifier);
+    if (target === null) continue;
 
-    if (featureRoots.some((pattern) => pattern.test(rel)) && forbiddenImports.has(specifier)) {
+    if (featureRoots.some((pattern) => pattern.test(rel)) && forbiddenImports.has(target)) {
       violations.push(`${rel} imports ${specifier}`);
     }
 
     if (
       identityBoundaryRoots.some((pattern) => pattern.test(rel)) &&
-      identityForbiddenImports.has(specifier)
+      identityForbiddenImports.has(target)
     ) {
       violations.push(`${rel} imports ${specifier}; use Identity instead`);
     }
 
-    if (gitRunnerSpecifierPattern.test(specifier) && !gitRunnerAllowedImporters.has(rel)) {
+    if (target === gitRunnerModule && !gitRunnerAllowedImporters.has(rel)) {
       violations.push(
         `${rel} imports ${specifier}; spawn git through RepoCloneService or GitOps, not git-runner directly`,
       );

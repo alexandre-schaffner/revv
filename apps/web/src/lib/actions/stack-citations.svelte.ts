@@ -2,25 +2,20 @@
 //
 // The walkthrough agent cites the other layers of a stack as `#122 (layer 3)`.
 // This action walks the rendered markdown and turns each citation of a PR in
-// the stack on screen into a compact chip (the layer's state glyph and its
-// number) that opens that layer. A `#N` that isn't a member, or isn't written
-// as a layer citation, stays text: an issue reference reads the same way and
-// must not become a stack jump.
+// the stack on screen into the margin notes' `LayerChip` (the layer's state
+// glyph and its number), which opens that layer. A `#N` that isn't a member,
+// or isn't written as a layer citation, stays text: an issue reference reads
+// the same way and must not become a stack jump.
 //
 // Same shape as `mentionReferences`: a MutationObserver re-decorates as the
 // stream lands content, microtask-scheduled so it runs after Svelte patches
 // the DOM, paused while it mutates so its own nodes don't re-trigger it.
 
-import type { StackEntryStatus, StackLayer } from "@revv/shared";
+import type { StackLayer } from "@revv/shared";
+import { mount, unmount } from "svelte";
 import type { Action } from "svelte/action";
-import { phosphorMarkup } from "$lib/utils/phosphor-markup";
-
-export interface StackCitations {
-  readonly layers: readonly StackLayer[];
-  /** The layer on screen. Cited, it reads as a chip but goes nowhere. */
-  readonly currentNumber: number;
-  readonly open: (layer: StackLayer) => void;
-}
+import LayerChip from "$lib/components/stack/margin/LayerChip.svelte";
+import type { StackPlace } from "$lib/components/stack/margin/stack-margin";
 
 const CITE_CLASS = "stack-cite";
 const NUMBER_ATTR = "data-stack-number";
@@ -29,122 +24,117 @@ const SOURCE_ATTR = "data-stack-source";
 
 const CITATION_RE = /#(\d+)\s*\(layer\s+\d+(?:\s+of\s+\d+)?\)/gi;
 
-const GLYPH: Record<StackEntryStatus, string> = {
-  merged: phosphorMarkup("GitMerge", { size: 12 }),
-  closed: phosphorMarkup("XCircle", { size: 12 }),
-  draft: phosphorMarkup("FileDashed", { size: 12 }),
-  ready: phosphorMarkup("CheckCircle", { size: 12, weight: "fill" }),
-  not_ready: phosphorMarkup("MinusCircle", { size: 12, weight: "fill" }),
-};
-
-/**
- * Bring a chip up to date with the stack as it stands: its glyph follows the
- * layer's state, and its title is the hover that names the layer. Called on
- * every pass, so a chip minted before a layer merged picks the merge up.
- */
-function syncChip(chip: HTMLElement, layer: StackLayer, currentNumber: number): void {
-  const here = layer.number === currentNumber;
-  const status = chip.dataset.status;
-  if (status !== layer.status) {
-    chip.dataset.status = layer.status;
-    const glyph = chip.querySelector(".stack-cite-glyph");
-    if (glyph) glyph.innerHTML = GLYPH[layer.status];
-  }
-  const label = `#${layer.number}, layer ${layer.position}: ${layer.title}`;
-  chip.title = here ? `${label} (this layer)` : label;
-  chip.setAttribute("aria-label", here ? `${label}, the layer on screen` : `Open ${label}`);
-  chip.toggleAttribute("disabled", here);
+/** A mounted chip, and the way to hand it the stack as it stands. */
+interface Chip {
+  readonly instance: ReturnType<typeof mount>;
+  readonly update: (layer: StackLayer, place: StackPlace) => void;
 }
 
-function makeChip(source: string, layer: StackLayer, currentNumber: number): HTMLElement {
-  const chip = document.createElement("button");
-  chip.type = "button";
-  chip.className = CITE_CLASS;
-  chip.setAttribute(NUMBER_ATTR, String(layer.number));
-  chip.setAttribute(SOURCE_ATTR, source);
-
-  const glyph = document.createElement("span");
-  glyph.className = "stack-cite-glyph";
-  glyph.setAttribute("aria-hidden", "true");
-  const num = document.createElement("span");
-  num.className = "stack-cite-num";
-  num.textContent = `#${layer.number}`;
-  const where = document.createElement("span");
-  where.className = "stack-cite-layer";
-  where.textContent = `layer ${layer.position}`;
-  chip.append(glyph, num, where);
-
-  syncChip(chip, layer, currentNumber);
-  return chip;
-}
-
-function decorateTextNode(
-  text: Text,
-  byNumber: ReadonlyMap<number, StackLayer>,
-  currentNumber: number,
-): void {
-  const value = text.nodeValue ?? "";
-  const frag = document.createDocumentFragment();
-  let last = 0;
-  let changed = false;
-  for (const match of value.matchAll(CITATION_RE)) {
-    const layer = byNumber.get(Number(match[1]));
-    if (!layer) continue;
-    if (match.index > last) frag.append(value.slice(last, match.index));
-    frag.append(makeChip(match[0], layer, currentNumber));
-    last = match.index + match[0].length;
-    changed = true;
-  }
-  if (!changed) return;
-  if (last < value.length) frag.append(value.slice(last));
-  text.replaceWith(frag);
+function mountChip(host: HTMLElement, layer: StackLayer, place: StackPlace): Chip {
+  let current = $state.raw({ layer, place });
+  const instance = mount(LayerChip, {
+    target: host,
+    props: {
+      get layer() {
+        return current.layer;
+      },
+      get place() {
+        return current.place;
+      },
+    },
+  });
+  return {
+    instance,
+    update: (nextLayer, nextPlace) => {
+      current = { layer: nextLayer, place: nextPlace };
+    },
+  };
 }
 
 /** Text a citation can't sit in: links, code, and chips already minted. */
 const SKIP = `a, code, pre, button, .${CITE_CLASS}`;
 
-function decorate(node: HTMLElement, citations: StackCitations | null): void {
-  if (!citations) {
-    for (const chip of node.querySelectorAll<HTMLElement>(`.${CITE_CLASS}`)) {
-      chip.replaceWith(document.createTextNode(chip.getAttribute(SOURCE_ATTR) ?? ""));
-    }
-    return;
-  }
-  const byNumber = new Map(citations.layers.map((l) => [l.number, l]));
-  for (const chip of node.querySelectorAll<HTMLElement>(`.${CITE_CLASS}`)) {
-    const layer = byNumber.get(Number(chip.getAttribute(NUMBER_ATTR)));
-    if (layer) syncChip(chip, layer, citations.currentNumber);
-    else chip.replaceWith(document.createTextNode(chip.getAttribute(SOURCE_ATTR) ?? ""));
-  }
-  // Only rendered markdown carries citations; the diff and the chrome around
-  // it never do, and walking them would cost a pass over every line of code.
-  const roots = node.matches(".prose")
-    ? [node]
-    : Array.from(node.querySelectorAll<HTMLElement>(".prose"));
-  const texts: Text[] = [];
-  for (const root of roots) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const value = n.nodeValue ?? "";
-      if (!value.includes("#") || !/layer/i.test(value)) continue;
-      if (n.parentElement?.closest(SKIP)) continue;
-      texts.push(n as Text);
-    }
-  }
-  for (const t of texts) decorateTextNode(t, byNumber, citations.currentNumber);
-}
-
 /**
- * The bound value is the stack the walkthrough belongs to, or null when the
- * PR isn't stacked (which also turns any chips back into text).
+ * The bound value is the PR's place in its stack, or null when it isn't
+ * stacked (which also turns any chips back into text).
  */
-export const stackCitations: Action<HTMLElement, StackCitations | null | undefined> = (
-  node,
-  value,
-) => {
+export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> = (node, value) => {
   let destroyed = false;
   let scheduled = false;
-  let citations: StackCitations | null = value ?? null;
+  let place: StackPlace | null = value ?? null;
+  const chips = new Map<HTMLElement, Chip>();
+
+  const unmountChip = (host: HTMLElement): void => {
+    const chip = chips.get(host);
+    if (chip) void unmount(chip.instance);
+    chips.delete(host);
+  };
+
+  const revert = (host: HTMLElement): void => {
+    unmountChip(host);
+    host.replaceWith(document.createTextNode(host.getAttribute(SOURCE_ATTR) ?? ""));
+  };
+
+  const decorateTextNode = (
+    text: Text,
+    byNumber: ReadonlyMap<number, StackLayer>,
+    at: StackPlace,
+  ): void => {
+    const value = text.nodeValue ?? "";
+    const frag = document.createDocumentFragment();
+    const minted: [HTMLElement, StackLayer][] = [];
+    let last = 0;
+    for (const match of value.matchAll(CITATION_RE)) {
+      const layer = byNumber.get(Number(match[1]));
+      if (!layer) continue;
+      if (match.index > last) frag.append(value.slice(last, match.index));
+      const host = document.createElement("span");
+      host.className = CITE_CLASS;
+      host.setAttribute(NUMBER_ATTR, String(layer.number));
+      host.setAttribute(SOURCE_ATTR, match[0]);
+      frag.append(host);
+      minted.push([host, layer]);
+      last = match.index + match[0].length;
+    }
+    if (minted.length === 0) return;
+    if (last < value.length) frag.append(value.slice(last));
+    text.replaceWith(frag);
+    for (const [host, layer] of minted) chips.set(host, mountChip(host, layer, at));
+  };
+
+  const decorate = (): void => {
+    // `{@html}` re-renders drop hosts without telling us; their chips go too.
+    for (const host of [...chips.keys()]) {
+      if (!node.contains(host)) unmountChip(host);
+    }
+    if (!place) {
+      for (const host of [...chips.keys()]) revert(host);
+      return;
+    }
+    const at = place;
+    const byNumber = new Map(at.stack.layers.map((l) => [l.number, l]));
+    for (const [host, chip] of [...chips]) {
+      const layer = byNumber.get(Number(host.getAttribute(NUMBER_ATTR)));
+      if (layer) chip.update(layer, at);
+      else revert(host);
+    }
+    // Only rendered markdown carries citations; the diff and the chrome around
+    // it never do, and walking them would cost a pass over every line of code.
+    const roots = node.matches(".prose")
+      ? [node]
+      : Array.from(node.querySelectorAll<HTMLElement>(".prose"));
+    const texts: Text[] = [];
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const value = n.nodeValue ?? "";
+        if (!value.includes("#") || !/layer/i.test(value)) continue;
+        if (n.parentElement?.closest(SKIP)) continue;
+        texts.push(n as Text);
+      }
+    }
+    for (const t of texts) decorateTextNode(t, byNumber, at);
+  };
 
   const schedule = (): void => {
     if (destroyed || scheduled) return;
@@ -153,35 +143,24 @@ export const stackCitations: Action<HTMLElement, StackCitations | null | undefin
       scheduled = false;
       if (destroyed) return;
       observer.disconnect();
-      decorate(node, citations);
+      decorate();
       if (!destroyed) observer.observe(node, { childList: true, subtree: true });
     });
   };
 
-  const onClick = (e: MouseEvent): void => {
-    const chip = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${CITE_CLASS}`);
-    if (!chip || !citations || !node.contains(chip)) return;
-    e.preventDefault();
-    const number = Number(chip.getAttribute(NUMBER_ATTR));
-    if (number === citations.currentNumber) return;
-    const layer = citations.layers.find((l) => l.number === number);
-    if (layer) citations.open(layer);
-  };
-
   const observer = new MutationObserver(schedule);
   observer.observe(node, { childList: true, subtree: true });
-  node.addEventListener("click", onClick);
   schedule();
 
   return {
     update(next) {
-      citations = next ?? null;
+      place = next ?? null;
       schedule();
     },
     destroy() {
       destroyed = true;
       observer.disconnect();
-      node.removeEventListener("click", onClick);
+      for (const host of [...chips.keys()]) unmountChip(host);
     },
   };
 };

@@ -28,6 +28,7 @@ import { hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
+import { plain, thrownMessage } from "$lib/api/wire";
 import {
   addAssigneesPatch,
   addLabelsPatch,
@@ -128,15 +129,6 @@ function accept(prId: string, conversation: PrConversation, stale: boolean): voi
   });
 }
 
-/**
- * Eden revives ISO strings into `Date`s on the way in; the shared types say
- * `string`. A JSON round trip puts them back, so formatting code downstream
- * never has to ask which one it holds.
- */
-function plain<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 /** A conversation off the wire, ready to render. */
 function received(value: unknown): PrConversation {
   return hydrateConversationAvatars(plain(value) as PrConversation);
@@ -214,7 +206,7 @@ async function fetchConversation(prId: string): Promise<void> {
     const response = plain(data) as PrConversationResponse;
     accept(prId, hydrateConversationAvatars(response.conversation), response.stale);
   } catch (e) {
-    failed(e instanceof Error ? e.message : String(e));
+    failed(thrownMessage(e));
   }
 }
 
@@ -256,7 +248,7 @@ export async function loadCheckDetails(prId: string, checkRunId: number): Promis
     }
     put(RequestState.ok(plain(data) as CheckDetails));
   } catch (e) {
-    put(RequestState.error(e instanceof Error ? e.message : String(e)));
+    put(RequestState.error(thrownMessage(e)));
   }
 }
 

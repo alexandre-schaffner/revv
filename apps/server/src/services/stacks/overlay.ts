@@ -6,18 +6,19 @@
 // DB by `StackService` on every request and never cached, so a walkthrough
 // landing shows up on the next read without invalidating anything.
 
-import type {
-  PrStackDetail,
-  RestackVerdict,
-  RiskLevel,
-  StackBrief,
-  StackFileOverlap,
-  StackLayer,
-  StackLayerReview,
-  WalkthroughStackSnapshot,
+import {
+  isOpenLayer,
+  type PrStackDetail,
+  type RestackVerdict,
+  type RiskLevel,
+  type StackBrief,
+  type StackFileOverlap,
+  type StackLayer,
+  type StackLayerReview,
+  type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import { changedFiles, type DiffFingerprint, isComparable } from "./fingerprint";
-import type { GitHubStack, GitHubStackLayer } from "./map";
+import { classifyLayerMergeState, type GitHubStack, type GitHubStackLayer } from "./map";
 
 /** One walkthrough row, as much of it as the overlay reads. */
 export interface WalkthroughFact {
@@ -85,8 +86,6 @@ function reviewOf(layer: GitHubStackLayer, tracked: TrackedLayer | undefined): S
   };
 }
 
-const NEEDS_REBASE_STATES = new Set(["DIRTY", "BEHIND"]);
-
 /**
  * How this layer's latest review relates to the stack now. Merged and closed
  * layers are done; their review needs no verdict.
@@ -96,16 +95,19 @@ export function restackVerdict(
   layers: readonly GitHubStackLayer[],
   tracked: TrackedLayer | undefined,
 ): RestackVerdict {
-  if (layer.status === "merged" || layer.status === "closed") return { kind: "current" };
+  if (!isOpenLayer(layer)) return { kind: "current" };
 
   const below = layers.filter((l) => l.position < layer.position);
   const mergedBelow = below.filter((l) => l.status === "merged");
-  // A layer below landed, and this one still targets its branch or can't
-  // merge cleanly: the author has to restack before anything else matters.
+  // A layer below landed, and this one still targets its branch, is behind
+  // its base or conflicts with it: the author has to restack before anything
+  // else matters.
+  const mergeState = classifyLayerMergeState(layer);
   if (
     mergedBelow.length > 0 &&
     (mergedBelow.some((l) => l.headRef === layer.baseRef) ||
-      NEEDS_REBASE_STATES.has(layer.mergeStateStatus ?? ""))
+      mergeState === "behind" ||
+      mergeState === "conflicts")
   ) {
     return { kind: "needs-rebase" };
   }
@@ -151,7 +153,7 @@ export function fileOverlaps(
   if (!viewer || !mine || mine.length === 0) return [];
   const own = new Set(mine);
   return layers
-    .filter((l) => l.number !== viewerNumber && l.status !== "merged" && l.status !== "closed")
+    .filter((l) => l.number !== viewerNumber && isOpenLayer(l))
     .flatMap((l): StackFileOverlap[] => {
       const files = (tracked.get(l.number)?.files ?? []).filter((f) => own.has(f)).sort();
       return files.length > 0 ? [{ number: l.number, position: l.position, files }] : [];

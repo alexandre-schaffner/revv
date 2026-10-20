@@ -1,9 +1,11 @@
 <script lang="ts">
 import type { PrStackDetail, StackEntryStatus, StackLayer } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import { openStackLayer } from "$lib/components/stack/open-layer";
+import RebaseStackConfirm from "$lib/components/stack/RebaseStackConfirm.svelte";
 import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
+import StackLayerList from "$lib/components/stack/StackLayerList.svelte";
 import { Button } from "$lib/components/ui/button";
+import { openStackLayer } from "$lib/stacks/open-layer";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 
@@ -37,6 +39,7 @@ const topFirst = $derived([...entries].reverse());
 const need = $derived(rebaseNeed(stack));
 const rebase = $derived(getStackRebase(stack));
 const rebasing = $derived(rebase.status === "loading");
+let confirmingRebase = $state(false);
 
 const needText = $derived.by(() => {
   if (!need) return "";
@@ -74,46 +77,49 @@ function open(entry: StackLayer): void {
 					variant="outline"
 					size="xs"
 					disabled={rebasing}
-					onclick={() => void rebaseStack(prId, stack)}
+					onclick={() => (confirmingRebase = true)}
 					title="Replay every open layer onto the one below it, the bottom onto {baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile."
 				>
 					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
 					{rebasing ? 'Rebasing…' : 'Rebase stack'}
 				</Button>
+				<RebaseStackConfirm
+					open={confirmingRebase}
+					{stack}
+					onOpenChange={(open) => (confirmingRebase = open)}
+					onConfirm={() => {
+						confirmingRebase = false;
+						void rebaseStack(prId, stack);
+					}}
+				/>
 			{/if}
 		</div>
 		{#if rebase.status === 'error'}
 			<p class="stack-rebase-error">{rebase.error}</p>
 		{/if}
 	{/if}
-	<ol class="stack-list">
-		{#each topFirst as entry (entry.number)}
+	<StackLayerList layers={topFirst} {baseRefName} --stack-spine-bottom="10px">
+		{#snippet row(entry)}
 			{@const current = entry.number === number}
-			<li class="stack-item">
-				<button
-					type="button"
-					class="stack-entry"
-					class:stack-entry--current={current}
-					aria-current={current ? 'page' : undefined}
-					disabled={current}
-					onclick={() => open(entry)}
-				>
-					<span class="stack-glyph" aria-hidden="true">
-						<StackLayerGlyph status={entry.status} />
-					</span>
-					<span class="stack-text">
-						<span class="stack-title">{entry.title}</span>
-						<span class="stack-meta">#{entry.number} · {entry.headRef}</span>
-					</span>
-					<span class="stack-status stack-status--{entry.status}">{STATUS_LABEL[entry.status]}</span>
-				</button>
-			</li>
-		{/each}
-		<li class="stack-item stack-base">
-			<span class="stack-glyph stack-glyph--base" aria-hidden="true"></span>
-			<code>{baseRefName}</code>
-		</li>
-	</ol>
+			<button
+				type="button"
+				class="stack-entry"
+				class:stack-entry--current={current}
+				aria-current={current ? 'page' : undefined}
+				disabled={current}
+				onclick={() => open(entry)}
+			>
+				<span class="stack-layer-glyph stack-glyph" aria-hidden="true">
+					<StackLayerGlyph status={entry.status} />
+				</span>
+				<span class="stack-text">
+					<span class="stack-title">{entry.title}</span>
+					<span class="stack-meta">#{entry.number} · {entry.headRef}</span>
+				</span>
+				<span class="stack-status stack-status--{entry.status}">{STATUS_LABEL[entry.status]}</span>
+			</button>
+		{/snippet}
+	</StackLayerList>
 </section>
 
 <style>
@@ -163,26 +169,6 @@ function open(entry: StackLayer): void {
 		color: var(--color-danger);
 	}
 
-	.stack-list {
-		position: relative;
-		display: flex;
-		flex-direction: column;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-
-	/* The spine the entries hang on, base at the bottom. */
-	.stack-list::before {
-		content: "";
-		position: absolute;
-		top: 16px;
-		bottom: 10px;
-		left: 14.5px;
-		width: 1px;
-		background: var(--color-border);
-	}
-
 	.stack-entry {
 		display: flex;
 		align-items: flex-start;
@@ -209,27 +195,10 @@ function open(entry: StackLayer): void {
 		background: var(--color-tree-active-bg);
 	}
 
-	.stack-glyph {
-		position: relative;
-		z-index: 1;
-		display: grid;
-		place-items: center;
-		flex-shrink: 0;
-		width: 14px;
-		height: 18px;
-		background: var(--color-bg-primary);
-		border-radius: 50%;
-	}
-
 	.stack-entry--current .stack-glyph,
 	.stack-entry:hover:not(:disabled) .stack-glyph {
 		background: transparent;
 	}
-
-
-
-
-
 
 	.stack-text {
 		display: flex;
@@ -293,28 +262,5 @@ function open(entry: StackLayer): void {
 	.stack-status--closed {
 		color: var(--color-danger);
 		background: color-mix(in srgb, var(--color-danger) 10%, transparent);
-	}
-
-	.stack-base {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 6px 8px;
-	}
-
-	.stack-glyph--base {
-		width: 9px;
-		height: 9px;
-		margin: 0 2.5px;
-		border: 1.5px solid var(--color-text-muted);
-	}
-
-	.stack-base code {
-		padding: 1px 6px;
-		border-radius: 4px;
-		background: var(--color-bg-tertiary);
-		font-family: var(--font-mono);
-		font-size: 0.75rem;
-		color: var(--color-text-secondary);
 	}
 </style>

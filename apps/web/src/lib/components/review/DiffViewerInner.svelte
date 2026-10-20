@@ -141,6 +141,7 @@ function buildViewModePill(
 
   const pill = document.createElement("div");
   pill.dataset.viewPill = "";
+  pill.dataset.glass = "";
 
   const unifiedBtn = makeBtn("Rows", "Unified view", currentMode === "unified");
   const splitBtn = makeBtn("Columns", "Split view", currentMode === "split");

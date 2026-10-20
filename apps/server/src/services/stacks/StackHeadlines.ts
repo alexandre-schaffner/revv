@@ -5,7 +5,8 @@
 // costs GitHub anything. A stack the model hasn't named yet answers a name
 // read off its titles at once, and gets named in the background on the cheap
 // suggestions model; the answer is cached on the titles, so pushes don't ask
-// again, and `stack:updated` tells the homepage to re-read.
+// again, and `stack:updated` tells the homepage to re-read. A naming that
+// fails is not asked again for a while: the titles' name stands meanwhile.
 
 import { createHash } from "node:crypto";
 import { resolveThinkingEffort, type StackHeadline } from "@revv/shared";
@@ -15,6 +16,7 @@ import { generateStackHeadline } from "../../ai/providers/stack-headline";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import { DbError } from "../../domain/errors";
+import { withDb } from "../../effects/with-db";
 import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
@@ -23,6 +25,8 @@ import { firstSentence, headlineFromTitles } from "./headline";
 
 const CACHE_NS = "stack-headline";
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** After a failed naming, how long the stack keeps its titles' name before asking again. */
+const RETRY_AFTER_MS = 60 * 60 * 1000;
 
 interface NamedStack {
   readonly headline: string;
@@ -36,8 +40,8 @@ interface StackMembers {
   readonly layers: ReadonlyArray<{ number: number; title: string; body: string | null }>;
 }
 
-export class StackHeadlines extends Context.Tag("StackHeadlines")<
-  StackHeadlines,
+export class StackHeadlineService extends Context.Tag("StackHeadlineService")<
+  StackHeadlineService,
   {
     /**
      * A headline per stack of the repo's open PRs, keyed by stack number.
@@ -61,20 +65,20 @@ function namingKey(repositoryId: string, stack: StackMembers): string {
   return `${repositoryId}:${stack.stackNumber}:${digest}`;
 }
 
-export const StackHeadlinesLive = Layer.effect(
-  StackHeadlines,
+export const StackHeadlineServiceLive = Layer.effect(
+  StackHeadlineService,
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const cache = yield* CacheService;
     const settings = yield* SettingsService;
     const broadcaster = yield* Broadcaster;
-    const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) =>
-      Effect.provideService(eff, DbService, { db });
 
     // One naming at a time: the homepage can show many unnamed stacks at once,
-    // and each is a model turn. A reconstructible cache; a restart asks again.
+    // and each is a model turn. Reconstructible caches; a restart asks again.
     const naming = yield* Effect.makeSemaphore(1);
     const inflight = new Set<string>();
+    /** Naming key → when a failed naming may be retried. */
+    const failedUntil = new Map<string, number>();
 
     const readStacks = (repositoryId: string) =>
       Effect.try({
@@ -154,8 +158,11 @@ export const StackHeadlinesLive = Layer.effect(
             thinkingEffort: resolveThinkingEffort(current.aiThinkingEffort),
           }),
         );
-        if (!named) return;
-        yield* withDb(cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS }));
+        if (!named) {
+          failedUntil.set(key, Date.now() + RETRY_AFTER_MS);
+          return;
+        }
+        yield* withDb(db, cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS }));
         yield* broadcaster.broadcastToAccount(accountId, {
           type: "stack:updated",
           data: { repositoryId, stackNumber: stack.stackNumber },
@@ -163,7 +170,9 @@ export const StackHeadlinesLive = Layer.effect(
       }).pipe(
         naming.withPermits(1),
         Effect.ensuring(Effect.sync(() => inflight.delete(key))),
-        Effect.catchAllCause(() => Effect.void),
+        Effect.catchAllCause(() =>
+          Effect.sync(() => failedUntil.set(key, Date.now() + RETRY_AFTER_MS)),
+        ),
       );
 
     const forRepo = (repositoryId: string, accountId: string) =>
@@ -172,7 +181,7 @@ export const StackHeadlinesLive = Layer.effect(
         const out: Record<number, StackHeadline> = {};
         for (const stack of stacks) {
           const key = namingKey(repositoryId, stack);
-          const named = yield* withDb(cache.get<NamedStack>(CACHE_NS, key));
+          const named = yield* withDb(db, cache.get<NamedStack>(CACHE_NS, key));
           const gist = yield* briefGist(repositoryId, stack.stackNumber);
           if (named) {
             out[stack.stackNumber] = {
@@ -187,7 +196,8 @@ export const StackHeadlinesLive = Layer.effect(
             gist,
             source: gist ? "brief" : "titles",
           };
-          if (!inflight.has(key)) {
+          if (!inflight.has(key) && (failedUntil.get(key) ?? 0) <= Date.now()) {
+            failedUntil.delete(key);
             inflight.add(key);
             yield* Effect.forkDaemon(name(repositoryId, accountId, stack, key));
           }

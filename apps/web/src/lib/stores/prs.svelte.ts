@@ -406,17 +406,19 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
 const THREAD_SUMMARIES_BATCH = 200;
 
 export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
-  if (prIds.length === 0) return;
-  try {
-    // One request for the lot: a request per PR queued the page's own reads
-    // behind them in the browser's few connections to the server.
-    const { data, error } = await api.api.prs["thread-summaries"].post({
-      prIds: prIds.slice(0, THREAD_SUMMARIES_BATCH),
-    });
-    if (error || !data || !("summaries" in data)) return;
-    setBatchSummaries(data.summaries as { prId: string; summary: ThreadSummary }[]);
-  } catch {
-    // best-effort
+  // As few requests as the server's cap allows, one after another: a request
+  // per PR queued the page's own reads behind them in the browser's few
+  // connections to the server.
+  for (let i = 0; i < prIds.length; i += THREAD_SUMMARIES_BATCH) {
+    try {
+      const { data, error } = await api.api.prs["thread-summaries"].post({
+        prIds: prIds.slice(i, i + THREAD_SUMMARIES_BATCH),
+      });
+      if (error || !data || !("summaries" in data)) continue;
+      setBatchSummaries(data.summaries as { prId: string; summary: ThreadSummary }[]);
+    } catch {
+      // best-effort
+    }
   }
 }
 

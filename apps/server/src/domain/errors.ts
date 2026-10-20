@@ -188,23 +188,14 @@ export class CloneInProgressError extends Data.TaggedError("CloneInProgressError
 }> {}
 
 /**
- * A stack merge Revv won't start or continue as asked. `conflict`: GitHub
- * moved under the request (a layer got new commits, a run is already going);
- * `invalid`: the request itself can't be met (a blocked layer, a method the
- * repo forbids). Nothing was merged.
+ * A stack merge or rebase Revv won't carry out as asked; nothing was merged or
+ * pushed. The message is the user's to read. `conflict`: GitHub moved under
+ * the request (a layer got new commits, a run is already going) or a layer
+ * doesn't replay cleanly (`files` says where); `moved`: a layer moved while
+ * Revv rebased; `invalid`: the request can't be met as the stack stands (a
+ * blocked layer, a method the repo forbids); `failed`: git or the push failed.
  */
-export class StackMergeRejectedError extends Data.TaggedError("StackMergeRejectedError")<{
-  readonly message: string;
-  readonly reason: "conflict" | "invalid";
-}> {}
-
-/**
- * A stack rebase that didn't happen. `conflict`: a layer doesn't replay
- * cleanly onto the one below (`files` says where); `moved`: GitHub moved
- * under the request; `invalid`: the stack can't be rebased as it stands;
- * `failed`: git or the push failed. Nothing was pushed in any case.
- */
-export class StackRebaseRejectedError extends Data.TaggedError("StackRebaseRejectedError")<{
+export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
   readonly message: string;
   readonly reason: "conflict" | "moved" | "invalid" | "failed";
   readonly files?: readonly string[];

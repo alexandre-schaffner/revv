@@ -125,6 +125,18 @@ describe("the interceptor", () => {
     expect(readCalls()).toHaveLength(0);
   });
 
+  test("learns a self-hosted Enterprise host from the API calls Revv makes to it", async () => {
+    await (
+      await fetch("https://api.git.corp.test/repos/o/r", {
+        headers: { "X-GitHub-Api-Version": "2022-11-28" },
+      })
+    ).text();
+    // Its avatars live on the web host, and carry no API header.
+    await (await fetch("https://git.corp.test/avatars/u/1")).text();
+    await Bun.sleep(5);
+    expect(readCalls().map((call) => call.host)).toEqual(["api.git.corp.test", "git.corp.test"]);
+  });
+
   test("attributes each fiber's calls to its own run, across awaits and concurrency", async () => {
     // Three runs at once, each awaiting between calls: the scheduler resumes
     // them from shared callbacks, which is where an ALS-only design mixes them up.

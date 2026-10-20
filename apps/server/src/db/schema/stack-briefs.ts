@@ -1,3 +1,4 @@
+import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
@@ -8,6 +9,13 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { repositories } from "./repositories";
+
+const STACK_BRIEF_STATUSES = [
+  "generating",
+  "complete",
+  "error",
+  "superseded",
+] as const satisfies readonly StackBriefStatus[];
 
 /**
  * The whole-stack overview: the arc of a GitHub PR stack, each layer's role,
@@ -37,13 +45,18 @@ export const stackBriefs = sqliteTable(
      * same stack.
      */
     stackSnapshot: text("stack_snapshot").notNull(),
-    /** Orchestrator-only: `generating | complete | error | superseded`. */
-    status: text("status").notNull().default("generating"),
-    /** Tool side effect only: `none | L | R`. */
-    lastCompletedPhase: text("last_completed_phase").notNull().default("none"),
+    /** Orchestrator-only. */
+    status: text("status", { enum: STACK_BRIEF_STATUSES }).notNull().default("generating"),
+    /** Tool side effect only. */
+    lastCompletedPhase: text("last_completed_phase", { enum: ["none", "L", "R"] })
+      .notNull()
+      .default("none"),
     arc: text("arc").notNull().default(""),
-    /** JSON PR numbers in the recommended review order. */
-    reviewOrder: text("review_order").notNull().default("[]"),
+    /** PR numbers in the recommended review order. */
+    reviewOrder: text("review_order", { mode: "json" })
+      .$type<number[]>()
+      .notNull()
+      .default(sql`'[]'`),
     resumeAttempts: integer("resume_attempts").notNull().default(0),
     supersededBy: text("superseded_by").references((): AnySQLiteColumn => stackBriefs.id, {
       onDelete: "set null",
@@ -77,15 +90,17 @@ export const stackBriefLayers = sqliteTable(
     reviewFocus: text("review_focus").notNull(),
     /**
      * The stack's phase this layer belongs to, 1–3 words ("Roles", "Storage").
-     * Consecutive layers sharing one read as a chapter of the stack. Null for
-     * rows written before chapters existed.
+     * Consecutive layers sharing one read as a chapter of the stack.
      */
-    chapter: text("chapter"),
+    chapter: text("chapter").notNull(),
     /**
-     * JSON `{ number, uses }[]`: the lower layers this one actually builds on,
-     * and what it takes from each, in a short phrase.
+     * The lower layers this one actually builds on, and what it takes from
+     * each, in a short phrase.
      */
-    buildsOn: text("builds_on").notNull().default("[]"),
+    buildsOn: text("builds_on", { mode: "json" })
+      .$type<StackLayerLink[]>()
+      .notNull()
+      .default(sql`'[]'`),
     updatedAt: text("updated_at").notNull(),
   },
   (t) => [uniqueIndex("stack_brief_layers_brief_position_unique").on(t.briefId, t.position)],

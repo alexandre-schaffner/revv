@@ -60,7 +60,15 @@ export async function loadRepoActivity(repoId: string): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     const answer = await fetchActivity(repoId);
     if (typeof answer === "string") {
-      setEntry(repoId, RequestState.error(answer));
+      // A miss while asking after the commits keeps what is already on screen;
+      // the commits just stop being asked for, as if the budget ran out.
+      const shown = getRepoActivity(repoId);
+      setEntry(
+        repoId,
+        shown.status === "ok"
+          ? RequestState.ok({ ...shown.data, commitsPending: false })
+          : RequestState.error(answer),
+      );
       return;
     }
     const ready = answer.commits.status === "ready" ? answer.commits : null;

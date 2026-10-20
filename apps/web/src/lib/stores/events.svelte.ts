@@ -50,10 +50,10 @@ import {
 } from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
 import { onStackHeadlineSignal } from "./stack-headlines.svelte";
+import { onStackMergeProgress } from "./stack-merge.svelte";
 import {
   onMemberWalkthroughLifecycle,
   onStackBriefStatusChanged,
-  onStackMergeProgress,
   onStackUpdated,
 } from "./stacks.svelte";
 import {

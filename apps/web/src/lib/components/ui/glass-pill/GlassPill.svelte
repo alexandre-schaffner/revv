@@ -25,6 +25,7 @@ const iconClass = $derived(icon ? "glass-pill--icon" : "");
 <button
 	type="button"
 	class="glass-pill {variantClass} {iconClass} {extraClass}"
+	data-glass
 	{...rest}
 >
 	{@render children()}

@@ -599,9 +599,9 @@ export type WalkthroughLifecyclePhase =
 
 /**
  * Why a job started — surfaced on `lifecycle:started` for telemetry and to
- * let the UI tweak its spinner copy. Mirrors the server's `StartJobTrigger`
- * plus `cache-import` for the snapshot-replay fast path. Treat as an open
- * string union; new variants don't break existing clients.
+ * let the UI tweak its spinner copy. Every `StartJobTrigger`, plus
+ * `cache-import` for the snapshot-replay fast path. Treat as an open string
+ * union; new variants don't break existing clients.
  */
 export type WalkthroughStartTrigger =
   | "user"
@@ -610,6 +610,14 @@ export type WalkthroughStartTrigger =
   | "review_requested"
   | "stack_review"
   | "cache-import";
+
+/**
+ * Who asked the server to run a walkthrough job. `external_agent` is a
+ * coding agent outside Revv (`request_walkthrough`) acting on the user's
+ * behalf, so it gets the same do-over semantics as `user`; it is its own
+ * value so spans and `lifecycle:started` can tell the two apart.
+ */
+export type StartJobTrigger = Exclude<WalkthroughStartTrigger, "cache-import">;
 
 export type WalkthroughStreamEvent =
   | { type: "summary"; data: { summary: string; riskLevel: RiskLevel } }

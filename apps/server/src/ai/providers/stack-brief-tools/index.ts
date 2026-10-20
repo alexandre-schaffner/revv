@@ -51,14 +51,14 @@ const STACK_BRIEF_TOOL_SPECS: StackBriefToolSpecRecord[] = [
   {
     name: "set_layer_role",
     description:
-      "Phase L. Atomic idempotent write, keyed on the layer's position: call once per open layer. `role` is one line on what the layer contributes to the stack; `review_focus` is one line on where its reviewer should look hardest. Re-calling with the same position replaces the line.",
+      "Phase L. Atomic idempotent write, keyed on the layer's position: call once per open layer. `role` is one line on what the layer contributes to the stack; `review_focus` is one line on where its reviewer should look hardest; `chapter` is the one-to-three-word phase of the stack it belongs to, shared by consecutive layers doing one job; `builds_on` names at most three lower layers it directly depends on, each with a phrase on what it takes from them. Re-calling with the same position replaces the line.",
     inputSchema: setLayerRoleSchema,
     handler: setLayerRoleHandler,
   },
   {
     name: "set_arc",
     description:
-      "Phase R. Atomic write, after every layer has a role (fails otherwise, naming the missing ones). `arc_markdown`: two to four sentences on what the stack achieves end to end and how the layers build on each other. `review_order`: every open layer's PR number exactly once.",
+      "Phase R. Atomic write, after every layer has a role (fails otherwise, naming the missing ones). `arc_markdown`: two or three sentences on what the stack achieves end to end, told through its chapters, citing at most two layers as #N. `review_order`: every open layer's PR number exactly once.",
     inputSchema: setArcSchema,
     handler: setArcHandler,
   },

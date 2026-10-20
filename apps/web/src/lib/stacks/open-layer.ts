@@ -10,6 +10,7 @@ import { buildPullRequestDeepLink, type PrStackEntry } from "@revv/shared";
 import { setNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import { getPrById, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
+import { getLayer } from "$lib/stores/stacks.svelte";
 
 /** A stack member, with Revv's id for it when the stack read knew one. */
 type Layer = Pick<PrStackEntry, "number"> & {
@@ -23,7 +24,7 @@ type Layer = Pick<PrStackEntry, "number"> & {
  */
 export function openStackLayer(fromPrId: string, layer: Layer): void {
   const from = getPrById(fromPrId);
-  const here = from?.stack?.position;
+  const here = getLayer(fromPrId)?.position ?? from?.stack?.position;
   if (here !== undefined && layer.position !== undefined && layer.position !== here) {
     setNavigationIntent(layer.position > here ? "up" : "down");
   }

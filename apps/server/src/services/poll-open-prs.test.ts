@@ -9,6 +9,8 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
 import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
 import {
+  archiveClosedPrs,
+  decideListing,
   type ListedSignature,
   movedRangePrIds,
   openListMoved,
@@ -146,6 +148,7 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
           fakes.log.push("closed-since");
           return fakes.listClosedSince();
         },
+        get: (_repo: string, n: number) => Effect.succeed(pr(n, { status: "merged" })),
         probeOpenLists: () => {
           fakes.log.push("probe");
           return fakes.probe();
@@ -170,7 +173,9 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
           fakes.log.push(`upsert:${rows.map((r) => r.headSha).join(",")}`);
           fakes.upserts.push({ rows, stacksKnown: options?.stacksKnown ?? false });
         }),
+      markPrsClosed: () => Effect.void,
     },
+    repoClone: { pruneWorktree: () => Effect.void },
   };
   return deps as unknown as PollDeps;
 }
@@ -651,8 +656,10 @@ describe("probeRepos", () => {
   });
 
   it("a manual sync probes, but proves nothing unchanged", async () => {
+    // Big enough that reading what moved beats listing it all.
+    const big = { ...signature, count: 250 };
     const { db, deps, openCycle } = setup({
-      probe: () => Effect.succeed(new Map([["octo/repo", signature]])),
+      probe: () => Effect.succeed(new Map([["octo/repo", big]])),
     });
 
     const probed = await Effect.runPromise(
@@ -663,7 +670,7 @@ describe("probeRepos", () => {
             deps,
             yield* openCycle(),
             [REPO],
-            new Map([[REPO.id, listedAt(Date.now())]]),
+            new Map([[REPO.id, { ...listedAt(Date.now()), signature: big }]]),
             false,
           );
         }),
@@ -671,7 +678,7 @@ describe("probeRepos", () => {
     );
 
     expect(probed.unchanged.size).toBe(0);
-    expect(probed.signatures.get(REPO.id)).toEqual(signature);
+    expect(probed.signatures.get(REPO.id)).toEqual(big);
   });
 
   it("does not probe for repos without a recent list", async () => {
@@ -718,6 +725,72 @@ describe("probeRepos", () => {
 
     expect(unchanged.size).toBe(0);
     expect(log).toEqual([]);
+  });
+});
+
+describe("archiveClosedPrs", () => {
+  it("announces a stack once, however many of its layers closed", async () => {
+    const { db, deps, log, openCycle } = setup();
+    const stacked = (n: number, position: number) => pr(n, { stack: { number: 4, position } });
+
+    await Effect.runPromise(
+      provideInfra(
+        db,
+        Effect.gen(function* () {
+          const cycle = yield* openCycle();
+          yield* archiveClosedPrs(
+            deps,
+            cycle,
+            [stacked(1, 1), stacked(2, 2), pr(3)],
+            new Map([[REPO.id, REPO]]),
+          );
+        }),
+      ),
+    );
+
+    expect(log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
+  });
+});
+
+describe("decideListing", () => {
+  const NOW = Date.parse("2026-01-10T00:00:00Z");
+  const OLD = "2026-01-01T00:00:00Z";
+  const listed = (count: number, overrides: Partial<ListedSignature> = {}): ListedSignature => ({
+    signature: { count, latestUpdatedAt: OLD },
+    listedAt: NOW - 60_000,
+    fullListedAt: NOW - 60_000,
+    hasStacks: false,
+    truncated: false,
+    ...overrides,
+  });
+  const moved = (count: number) => ({ count, latestUpdatedAt: "2026-01-09T00:00:00Z" });
+
+  it("reuses an unchanged list, except on a manual sync", () => {
+    expect(decideListing(listed(40), { count: 40, latestUpdatedAt: OLD }, NOW, true)).toBe("reuse");
+    expect(decideListing(listed(40), { count: 40, latestUpdatedAt: OLD }, NOW, false)).toBe("full");
+  });
+
+  // Reading what moved is two requests; a list that fits in two pages is no dearer.
+  it("lists a small repo in full, and reads a big one by what moved", () => {
+    expect(decideListing(listed(40), moved(41), NOW, true)).toBe("full");
+    expect(decideListing(listed(200), moved(200), NOW, true)).toBe("full");
+    expect(decideListing(listed(250), moved(250), NOW, true)).toBe("delta");
+  });
+
+  it("never trusts a probe over a stacked repo it can list every cycle", () => {
+    const stacked = listed(40, { hasStacks: true });
+    expect(decideListing(stacked, { count: 40, latestUpdatedAt: OLD }, NOW, true)).toBe("full");
+    const bigStacked = listed(400, { hasStacks: true });
+    expect(decideListing(bigStacked, { count: 400, latestUpdatedAt: OLD }, NOW, true)).toBe(
+      "delta",
+    );
+  });
+
+  it("lists in full once the safety net comes round, or with nothing to build on", () => {
+    const stale = listed(250, { fullListedAt: NOW - 31 * 60_000 });
+    expect(decideListing(stale, moved(250), NOW, true)).toBe("full");
+    expect(decideListing(undefined, moved(250), NOW, true)).toBe("full");
+    expect(decideListing(listed(250), undefined, NOW, true)).toBe("full");
   });
 });
 

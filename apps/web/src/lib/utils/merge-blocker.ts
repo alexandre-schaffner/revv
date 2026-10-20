@@ -1,7 +1,4 @@
-import type { CiRollupState, ReviewDecision } from "@revv/shared";
-
-/** Merge states GitHub lets through; mirrors the server's stack readiness. */
-const MERGEABLE_STATES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
+import { type CiRollupState, MERGEABLE_STATES, type ReviewDecision } from "@revv/shared";
 
 /** GitHub computes mergeability lazily; the first read is often this. */
 export function isMergeStateSettling(mergeStateStatus: string): boolean {

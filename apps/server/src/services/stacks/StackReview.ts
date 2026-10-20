@@ -7,13 +7,12 @@
 // (the UI offers "Review remaining") and nothing here needs resuming.
 
 import type { StackLayer, StackReviewScope, StackReviewStarted } from "@revv/shared";
-import { stackKey } from "@revv/shared";
+import { isOpenLayer, stackKey } from "@revv/shared";
 import { inArray } from "drizzle-orm";
 import { Cause, Context, Duration, Effect, Layer, Ref } from "effect";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { DbError, NotFoundError } from "../../domain/errors";
 import { logError } from "../../logger";
-import { CacheService } from "../Cache";
 import { DbService } from "../Db";
 import { WalkthroughJobs } from "../WalkthroughJobs";
 import { StackBriefJobs } from "./StackBriefJobs";
@@ -49,9 +48,7 @@ export function planStackReview(
   const queue: { number: number; prId: string }[] = [];
   const watching: string[] = [];
   const untracked: number[] = [];
-  const open = [...layers]
-    .filter((l) => l.status !== "merged" && l.status !== "closed")
-    .sort((a, b) => a.position - b.position);
+  const open = [...layers].filter(isOpenLayer).sort((a, b) => a.position - b.position);
   for (const layer of open) {
     if (layer.prId === null) {
       untracked.push(layer.number);
@@ -90,7 +87,6 @@ export const StackReviewServiceLive = Layer.effect(
   StackReviewService,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const cache = yield* CacheService;
     const stacks = yield* StackService;
     const walkthroughJobs = yield* WalkthroughJobs;
     const briefJobs = yield* StackBriefJobs;
@@ -178,12 +174,7 @@ export const StackReviewServiceLive = Layer.effect(
 
     const start = (prId: string, userId: string, accountId: string, scope: StackReviewScope) =>
       Effect.gen(function* () {
-        const detail = yield* stacks
-          .detail(prId, userId, accountId)
-          .pipe(
-            Effect.provideService(DbService, { db }),
-            Effect.provideService(CacheService, cache),
-          );
+        const detail = yield* stacks.detail(prId, userId, accountId);
         if (!detail) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
 
         const plan = planStackReview(detail.layers, scope);

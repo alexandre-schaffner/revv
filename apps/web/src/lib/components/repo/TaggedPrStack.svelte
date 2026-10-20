@@ -50,23 +50,8 @@ const hiddenMoved = $derived(open ? 0 : visits.slice(1).filter((v) => v === "mov
  */
 const named = $derived(getStackHeadline(stack.members[0].pr.repositoryId, stack.number));
 
-/*
- * TEMPORARY dev toggle while two treatments are compared side by side:
- * `localStorage["revv.stackHeadlineVariant"]` is "foot" (the name leads the
- * foot's label) or "header" (a line above the top card). Delete the losing
- * variant and this switch together.
- */
-const headlineVariant: "foot" | "header" = (() => {
-  try {
-    return localStorage.getItem("revv.stackHeadlineVariant") === "header" ? "header" : "foot";
-  } catch {
-    return "foot";
-  }
-})();
-const nameInFoot = $derived(named !== null && headlineVariant === "foot");
-const nameInHeader = $derived(named !== null && headlineVariant === "header");
 /** Spelled out under the name in the foot only when the cards are dealt; folded it is the cover's tooltip. */
-const gistInFoot = $derived(nameInFoot && open && named?.gist != null);
+const gistInFoot = $derived(open && named?.gist != null);
 const stackLabel = $derived(
   named
     ? `${named.headline}: stack of ${size} pull requests onto ${stack.base}`
@@ -110,7 +95,6 @@ async function toggle(): Promise<void> {
 <li
 	class="stack"
 	class:stack--folded={!open}
-	class:stack--headed={nameInHeader}
 	class:stack--gist={gistInFoot}
 	style:--sheets={open ? 0 : Math.min(size - 1, SHEETS_SHOWN)}
 	aria-label={stackLabel}
@@ -118,22 +102,6 @@ async function toggle(): Promise<void> {
 	use:gsapHover={{ prop: '--fan' }}
 	use:gsapPress={{ scale: 0.995, disabled: open }}
 >
-	<!--
-		Variant B: the stack's name on a line of its own above the top card, the
-		rail rising to a node beside it so the line reads as what the cards hang
-		from.
-	-->
-	{#if nameInHeader && named}
-		<div class="stack-head">
-			{#key named.headline}
-				<span class="stack-head-name" in:gsapFade={{ duration: tokens.smooth }}>{named.headline}</span>
-			{/key}
-			<!-- Keyed without an `if` around it, so a gist that arrives with a rename fades in too. -->
-			{#key named.gist}
-				<span class="stack-head-gist" in:gsapFade={{ duration: tokens.smooth }}>{named.gist ?? ""}</span>
-			{/key}
-		</div>
-	{/if}
 	<ol class="stack-cards" id={cardsId}>
 		{#each stack.members as member, depth (member.pr.id)}
 			<li
@@ -162,7 +130,7 @@ async function toggle(): Promise<void> {
 			aria-controls={cardsId}
 			aria-label="Show all {size} pull requests in this stack"
 			aria-describedby={named?.gist ? `${cardsId}-gist` : undefined}
-			title={nameInFoot ? (named?.gist ?? undefined) : undefined}
+			title={named?.gist ?? undefined}
 			bind:this={cover}
 			onclick={toggle}
 		>
@@ -178,10 +146,10 @@ async function toggle(): Promise<void> {
 		way a press goes.
 	-->
 	{#snippet caption()}
-		{#if nameInFoot && named}
+		{#if named}
 			<!--
-				Variant A: the name leads the label; dealt out, its gist sits on a
-				line under it. The first line keeps a fixed band, so the ring stays
+				The name leads the label; dealt out, its gist sits on a line under
+				it. The first line keeps a fixed band, so the ring stays
 				centred on it however the foot grows.
 			-->
 			<span class="stack-label">
@@ -583,7 +551,7 @@ async function toggle(): Promise<void> {
 	/* ── The feature's name ─────────────────────────────────────────────── */
 
 	/*
-	 * Variant A: the foot's label leads with the name, a step up from the
+	 * The foot's label leads with the name, a step up from the
 	 * caption in size and ink, then "· 4 pull requests onto main" as before.
 	 * The first line is a band `--foot-h` tall less the foot's padding, on
 	 * a 1.5rem line, so the ring's `--ring-y` still lands on its middle;
@@ -654,66 +622,5 @@ async function toggle(): Promise<void> {
 
 	.stack-gist:empty {
 		display: none;
-	}
-
-	/*
-	 * Variant B: a line above the top card, on the cards' text column. The
-	 * rail starts at a solid node beside it, the stack's tip, and runs down
-	 * to the hollow ring at its base, so the line reads as what the cards
-	 * hang from.
-	 */
-	.stack--headed {
-		--head-h: 1.75rem;
-		--head-y: 1.25rem;
-		--node-r: 2.5px;
-	}
-
-	.stack--headed::before {
-		top: calc(var(--stack-pad-top) + var(--head-y));
-	}
-
-	.stack-head {
-		position: relative;
-		z-index: 25;
-		display: flex;
-		align-items: baseline;
-		gap: 0.625rem;
-		min-width: 0;
-		height: var(--head-h);
-		padding: 0.625rem var(--spacing-inset) 0 calc(var(--spacing-inset) + 1.4375rem);
-		line-height: 1.125rem;
-		white-space: nowrap;
-	}
-
-	.stack-head::after {
-		content: "";
-		position: absolute;
-		top: calc(var(--head-y) - var(--node-r));
-		left: calc(var(--rail-x) + 0.5px - var(--gutter) - var(--node-r));
-		width: calc(var(--node-r) * 2);
-		height: calc(var(--node-r) * 2);
-		border-radius: 50%;
-		background: var(--stack-rail);
-	}
-
-	/* The name keeps its room; the gist takes what is left. */
-	.stack-head-name {
-		flex: 0 0 auto;
-		max-width: 70%;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		font-size: 0.8125rem;
-		font-weight: 500;
-		letter-spacing: -0.005em;
-		color: var(--color-text-primary);
-	}
-
-	.stack-head-gist {
-		flex: 1 1 0;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		font-size: 0.75rem;
-		color: var(--color-text-subtle);
 	}
 </style>

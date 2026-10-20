@@ -19,6 +19,7 @@
 
 import type { AcpAgentId, ProjectRecap, RecapStreamEvent, ThinkingEffort } from "@revv/shared";
 import { eq } from "drizzle-orm";
+import { recoverMissedGate } from "../ai/providers/mcp-agent-acp";
 import { type RecapAcpSessionDeps, runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   completeRecapHandler,
@@ -28,7 +29,6 @@ import {
 } from "../ai/providers/recap-tools";
 import type { Db } from "../db";
 import { projectRecaps, recapPrEntries } from "../db/schema/index";
-import { debug } from "../logger";
 
 export interface RecapAgentResult {
   /** True when `complete_recap` returned success during this run. */
@@ -115,7 +115,14 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
   let errorMessage = outcome.error;
 
   if (!validatedComplete) {
-    const recovered = await recoverMissedFinalToolCall(ctx, outcome.error);
+    const recovered = await recoverMissedGate({
+      toolCalls: ctx.toolCalls,
+      stateTool: "get_recap_state",
+      ready: () => recapWritten(ctx),
+      gate: () => completeRecapHandler(ctx, {}),
+      debugLabel: "recap-agent-runner",
+      what: `recap ${ctx.recapId}`,
+    });
     if (recovered.recovered) {
       validatedComplete = true;
     } else if (recovered.error && !outcome.error) {
@@ -131,19 +138,8 @@ export async function runRecapAgent(params: RunRecapAgentParams): Promise<RecapA
   };
 }
 
-interface RecoveryResult {
-  readonly recovered: boolean;
-  readonly error?: string;
-}
-
-async function recoverMissedFinalToolCall(
-  ctx: RecapToolContext,
-  existingError: string | undefined,
-): Promise<RecoveryResult> {
-  if (!ctx.toolCalls?.has("get_recap_state")) {
-    return { recovered: false };
-  }
-
+/** Lede and at least one entry: what `complete_recap` would accept. */
+function recapWritten(ctx: RecapToolContext): boolean {
   const row = ctx.db
     .select({ lede: projectRecaps.lede })
     .from(projectRecaps)
@@ -154,26 +150,5 @@ async function recoverMissedFinalToolCall(
     .from(recapPrEntries)
     .where(eq(recapPrEntries.recapId, ctx.recapId))
     .all();
-  const hasLede = (row?.lede ?? "").trim().length > 0;
-  const hasEntries = entries.length > 0;
-  if (!hasLede || !hasEntries) {
-    return { recovered: false };
-  }
-
-  debug(
-    "recap-agent-runner",
-    `recovering recap ${ctx.recapId}: validating after missed complete_recap`,
-  );
-  const complete = await completeRecapHandler(ctx, {});
-  if (complete.isError) {
-    const error = firstToolText(complete) ?? existingError;
-    return error ? { recovered: false, error } : { recovered: false };
-  }
-  return { recovered: true };
-}
-
-function firstToolText(result: {
-  content: Array<{ type: "text"; text: string }>;
-}): string | undefined {
-  return result.content[0]?.text;
+  return (row?.lede ?? "").trim().length > 0 && entries.length > 0;
 }

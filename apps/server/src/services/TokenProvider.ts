@@ -1,9 +1,10 @@
 import { eq } from "drizzle-orm";
-import { Context, Deferred, Effect, Layer, Ref } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
 import { userSettings } from "../db/schema/user-settings";
 import { GitHubAuthError } from "../domain/errors";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
 import { githubTryPromise } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
@@ -105,10 +106,8 @@ export const TokenProviderLive = Layer.effect(
     // De-dupe concurrent refreshes of the same account — PollScheduler fans
     // out per-repo and would otherwise fire N parallel refresh grants, each
     // invalidating the previous one's rotated refresh token. Holds the
-    // in-flight grant per account as a Deferred so followers await the leader.
-    const refreshInFlight = yield* Ref.make(
-      new Map<string, Deferred.Deferred<string, GitHubAuthError>>(),
-    );
+    // in-flight grant per account so followers await the leader's outcome.
+    const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError>();
 
     /** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */
     function hostFromProviderId(providerId: string): string {
@@ -207,27 +206,7 @@ export const TokenProviderLive = Layer.effect(
       });
 
     const refreshAccountToken = (accountId: string): Effect.Effect<string, GitHubAuthError> =>
-      Effect.gen(function* () {
-        // Atomically claim the in-flight slot: the leader installs its own
-        // Deferred and runs the grant; followers receive the leader's Deferred
-        // and await its outcome instead of issuing a second grant.
-        const own = yield* Deferred.make<string, GitHubAuthError>();
-        const leader = yield* Ref.modify(refreshInFlight, (m) => {
-          const existing = m.get(accountId);
-          if (existing) return [existing, m] as const;
-          return [own, new Map(m).set(accountId, own)] as const;
-        });
-        if (leader !== own) return yield* Deferred.await(leader);
-
-        const exit = yield* Effect.exit(doRefresh(accountId));
-        yield* Ref.update(refreshInFlight, (m) => {
-          const next = new Map(m);
-          next.delete(accountId);
-          return next;
-        });
-        yield* Deferred.done(own, exit);
-        return yield* Deferred.await(own);
-      });
+      refreshOnce(accountId, doRefresh(accountId));
 
     const markReauthRequired = (accountId: string): Effect.Effect<void> =>
       Effect.gen(function* () {

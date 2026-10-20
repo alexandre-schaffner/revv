@@ -91,6 +91,8 @@ Kept off GSAP by design — moving them would be a regression:
   `::view-transition-old/new(root)`. `app.css` only retimes it to
   `--duration-ceremonial-medium` / `--ease-soft`. GSAP can't reach those
   pseudo-elements, and the snapshot is what lets canvases and iframes fade
-  with everything else.
+  with everything else. Glass surfaces are frozen to solid fills for the
+  fade, found by their `data-glass` attribute: a new `backdrop-filter`
+  surface must carry it.
 - **`transition: background-color` / `color`** on hover states — compositor
   paint crossfades on dozens of list items.

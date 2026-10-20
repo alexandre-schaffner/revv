@@ -3,9 +3,9 @@
 // MCP tool surface for the stack brief: the agent-written arc of a GitHub PR
 // stack. Two phases, in order:
 //
-//   Phase L — one `set_layer_role(position, role, review_focus)` per layer,
-//             upserted on (brief_id, position). The phase advances to 'L'
-//             when every layer in the snapshot has a row.
+//   Phase L — one `set_layer_role(position, role, review_focus, chapter,
+//             builds_on)` per layer, upserted on (brief_id, position). The
+//             phase advances to 'L' when every layer in the snapshot has a row.
 //   Phase R — one `set_arc(arc_markdown, review_order)`. Requires every
 //             layer's role.
 //
@@ -15,11 +15,10 @@
 
 import { z } from "zod";
 import type { Db } from "../../../db";
+import { parseJsonWith, stackEntryStatusSchema } from "../../../services/stacks/snapshot";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Snapshot: the stack the agent was handed ────────────────────────────────
-
-const stackEntryStatusSchema = z.enum(["merged", "closed", "draft", "ready", "not_ready"]);
 
 const snapshotLayerSchema = z.object({
   position: z.number().int(),
@@ -53,12 +52,7 @@ export const stackBriefSnapshotSchema = z.object({
 export type StackBriefSnapshot = z.infer<typeof stackBriefSnapshotSchema>;
 
 export function parseStackBriefSnapshot(json: string): StackBriefSnapshot | null {
-  try {
-    const parsed = stackBriefSnapshotSchema.safeParse(JSON.parse(json));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  return parseJsonWith(stackBriefSnapshotSchema, json);
 }
 
 // ── Handler execution context ────────────────────────────────────────────────

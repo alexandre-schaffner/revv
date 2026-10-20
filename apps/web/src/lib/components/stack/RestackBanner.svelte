@@ -23,7 +23,8 @@ import { gsapFadeY } from "$lib/motion";
 import { getStackRebase, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 import { getLayer, getStack } from "$lib/stores/stacks.svelte";
 import { regenerate } from "$lib/stores/walkthrough.svelte";
-import { openStackLayer } from "./open-layer";
+import { openStackLayer } from "$lib/stacks/open-layer";
+import RebaseStackConfirm from "./RebaseStackConfirm.svelte";
 
 interface Props {
   prId: string;
@@ -86,6 +87,7 @@ const dismissKey = $derived.by(() => {
 const visible = $derived(banner !== null && dismissKey !== null && !dismissed.has(dismissKey));
 
 let reviewing = $state(false);
+let confirmingRebase = $state(false);
 const rebasing = $derived(stack ? getStackRebase(stack).status === "loading" : false);
 
 async function reviewWhatsNew(): Promise<void> {
@@ -161,10 +163,19 @@ function fileCount(n: number): string {
 				class="action"
 				disabled={rebasing}
 				title="Replay every open layer onto the one below it and force-push them together"
-				onclick={() => void rebaseStack(prId, current)}
+				onclick={() => (confirmingRebase = true)}
 			>
 				{rebasing ? 'Rebasing…' : 'Rebase stack'}
 			</button>
+			<RebaseStackConfirm
+				open={confirmingRebase}
+				stack={current}
+				onOpenChange={(open) => (confirmingRebase = open)}
+				onConfirm={() => {
+					confirmingRebase = false;
+					void rebaseStack(prId, current);
+				}}
+			/>
 		{/if}
 
 		<button type="button" class="close" aria-label="Dismiss" title="Dismiss" onclick={dismiss}>

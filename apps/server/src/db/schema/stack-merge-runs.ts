@@ -1,3 +1,4 @@
+import type { StackMergeRunLayer } from "@revv/shared";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { repositories } from "./repositories";
 
@@ -27,13 +28,14 @@ export const stackMergeRuns = sqliteTable(
     stackNumber: integer("stack_number").notNull(),
     /** The highest position to merge, inclusive. */
     throughPosition: integer("through_position").notNull(),
-    /** `MergeMethod`. */
-    method: text("method").notNull(),
-    /** `StackMergeMode`: `auto` hands the upper layers to GitHub's auto-merge. */
-    mode: text("mode").notNull(),
-    status: text("status").notNull(),
-    /** JSON `StackMergeRunLayer[]`, base first. */
-    layers: text("layers").notNull(),
+    method: text("method", { enum: ["merge", "squash", "rebase"] }).notNull(),
+    /** `auto` hands the upper layers to GitHub's auto-merge. */
+    mode: text("mode", { enum: ["auto", "driven"] }).notNull(),
+    status: text("status", {
+      enum: ["running", "waiting", "complete", "failed", "cancelled", "expired"],
+    }).notNull(),
+    /** Base first. */
+    layers: text("layers", { mode: "json" }).$type<StackMergeRunLayer[]>().notNull(),
     error: text("error"),
     /** The account whose token runs the merges. */
     accountId: text("account_id").notNull(),

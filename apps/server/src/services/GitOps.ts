@@ -687,6 +687,13 @@ export function classifyPushFailure(stderr: string): PushFailureKind {
 // The cascade in `stacks/stack-rebase-git.ts` works on SHAs in a scratch
 // worktree and pushes every layer at once. These never throw: a git failure is
 // an answer the cascade reads (a conflict, a moved branch), not an exception.
+//
+// The clone may be the user's own repo, so every command that would run a
+// hook or sign a commit runs with `UNATTENDED`: the user's hooks (husky's
+// post-checkout, a pre-push test run) are theirs to run, and a signing
+// prompt nobody sees would hang the rebase until it times out.
+
+const UNATTENDED = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] as const;
 
 export interface GitAttempt {
   readonly ok: boolean;
@@ -746,13 +753,21 @@ export async function addDetachedWorktree(
   sha: string,
   timeoutMs: number,
 ): Promise<GitAttempt> {
-  return attempt(clonePath, ["worktree", "add", "--detach", path, sha], timeoutMs);
+  return attempt(clonePath, [...UNATTENDED, "worktree", "add", "--detach", path, sha], timeoutMs);
 }
 
-/** Best-effort: remove a worktree git may or may not still know about, then prune. */
+/**
+ * Best-effort: remove a worktree git may or may not still know about. Never
+ * a `worktree prune`: in the user's repo that drops their own worktrees on a
+ * drive that isn't mounted.
+ */
 export async function removeWorktree(clonePath: string, path: string): Promise<void> {
   await runGitBestEffort(["worktree", "remove", "--force", path], clonePath);
-  await runGitBestEffort(["worktree", "prune"], clonePath);
+}
+
+/** `rebase --abort` in the scratch worktree, without the user's hooks. */
+export async function abortDetachedRebase(cwd: string): Promise<boolean> {
+  return (await attempt(cwd, [...UNATTENDED, "rebase", "--abort"], 30_000)).ok;
 }
 
 export async function deleteRef(cwd: string, ref: string): Promise<void> {
@@ -774,6 +789,7 @@ export async function rebaseDetached(
   return attempt(
     cwd,
     [
+      ...UNATTENDED,
       "-c",
       "rebase.updateRefs=false",
       "-c",
@@ -799,6 +815,7 @@ export async function pushAtomicWithLeases(
   return attempt(
     cwd,
     [
+      ...UNATTENDED,
       "push",
       "--atomic",
       ...updates.map((u) => `--force-with-lease=refs/heads/${u.branch}:${u.from}`),

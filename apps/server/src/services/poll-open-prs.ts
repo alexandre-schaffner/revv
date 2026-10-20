@@ -12,6 +12,7 @@ import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import {
   OPEN_PRS_LIST_CAP,
+  OPEN_PRS_PAGE_SIZE,
   type OpenPrList,
   type OpenPrListSignature,
   sameSignature,
@@ -53,9 +54,16 @@ const LARGE_REPO_OPEN_PRS = 500;
 /**
  * A stacked repo up to this size is fully re-listed every cycle: the signature
  * only sees a stack change through the PR's `updatedAt`, and nothing promises
- * GitHub bumps it for one. Past it, that costs too many pages per cycle.
+ * GitHub bumps it for one. Past it, that costs too many pages per cycle, and
+ * the repo is read by what moved like any other.
  */
 const STACKED_FULL_LIST_MAX_PRS = 300;
+
+/**
+ * What a read of just what moved costs at least: the open PRs updated since,
+ * and the PRs closed since, one request each.
+ */
+const DELTA_MIN_REQUESTS = 2;
 
 function fullListMaxAge(listed: ListedSignature): number {
   return listed.signature.count > LARGE_REPO_OPEN_PRS
@@ -63,10 +71,39 @@ function fullListMaxAge(listed: ListedSignature): number {
     : FULL_LIST_MAX_AGE_MS;
 }
 
-/** Whether `listed` can still stand in for a full list, read cheaply from here. */
-function canSkipFullList(listed: ListedSignature, now: number): boolean {
+/**
+ * Whether a probe could spare `listed`'s repo a full list. A stacked repo up
+ * to {@link STACKED_FULL_LIST_MAX_PRS} never: nothing a probe sees covers its
+ * stacks. Neither does a list past {@link fullListMaxAge}.
+ */
+function worthProbing(listed: ListedSignature, now: number): boolean {
   if (listed.hasStacks && listed.signature.count <= STACKED_FULL_LIST_MAX_PRS) return false;
   return now - listed.fullListedAt < fullListMaxAge(listed);
+}
+
+/**
+ * How a repo's open list is brought up to date this cycle:
+ *
+ * - `reuse`: the probe proves nothing moved, so the DB rows stand. Never for
+ *   a manual sync (`reuse: false`), nor a repo holding a stack, whose stack
+ *   can move without the signature seeing it.
+ * - `delta`: read only what moved since the last list, checked against the
+ *   probe's count. Only where it is cheaper than the full list, which a repo
+ *   whose open PRs fit in {@link DELTA_MIN_REQUESTS} pages isn't.
+ * - `full`: list everything.
+ *
+ * `probed` is undefined for a repo that wasn't probed, or the probe couldn't
+ * answer for.
+ */
+export function decideListing(
+  listed: ListedSignature | undefined,
+  probed: OpenPrListSignature | undefined,
+  now: number,
+  reuse: boolean,
+): "reuse" | "delta" | "full" {
+  if (!listed || !probed || !worthProbing(listed, now)) return "full";
+  if (reuse && !listed.hasStacks && listUnchanged(listed, probed)) return "reuse";
+  return Math.ceil(probed.count / OPEN_PRS_PAGE_SIZE) > DELTA_MIN_REQUESTS ? "delta" : "full";
 }
 
 /**
@@ -147,19 +184,21 @@ const accountHostKey = (accountId: string, githubHost: string) => `${accountId}\
 export interface ProbedRepos {
   /** Repos whose open-PR list can't have changed: reuse the DB rows. */
   readonly unchanged: Set<string>;
-  /** Every probed repo's current signature, by repo id. */
+  /**
+   * Repos to read by what moved, by repo id, with the probed signature that
+   * read checks itself against.
+   */
   readonly signatures: Map<string, OpenPrListSignature>;
 }
 
 /**
- * Where each repo's open-PR list stands against the one last written: the
- * repos that can't have changed (reuse the DB rows), and the probed signature
- * of the rest, which lets a read of just what moved check itself.
+ * Probe the repos a probe could spare a full list, and sort them by
+ * {@link decideListing}: the ones to reuse, and the ones to read by what
+ * moved. Every other repo is listed in full.
  *
  * One aliased GraphQL probe per account and host — 1 point per 80 repos.
- * Only repos with a list recent enough to build on qualify; a failed or
- * skipped probe qualifies none, which is exactly a full list for every repo.
- * `reuse: false` (a manual sync) still probes, but proves nothing unchanged.
+ * A failed or skipped probe sorts none, which is exactly a full list for
+ * every repo.
  */
 export const probeRepos = (
   deps: PollDeps,
@@ -173,7 +212,7 @@ export const probeRepos = (
     const candidatesByGroup = new Map<string, Repository[]>();
     for (const repo of repos) {
       const listed = listedSignatures.get(repo.id);
-      if (!listed || !canSkipFullList(listed, now)) continue;
+      if (!listed || !worthProbing(listed, now)) continue;
       const accountId = cycle.repoToAccountId.get(repo.id);
       if (!accountId) continue;
       const key = accountHostKey(accountId, repo.githubHost);
@@ -206,12 +245,9 @@ export const probeRepos = (
           if (!probed) return;
           for (const repo of group) {
             const fresh = probed.get(repo.fullName);
-            const listed = listedSignatures.get(repo.id);
-            if (!fresh || !listed) continue;
-            signatures.set(repo.id, fresh);
-            if (reuse && !listed.hasStacks && listUnchanged(listed, fresh)) {
-              unchanged.add(repo.id);
-            }
+            const plan = decideListing(listedSignatures.get(repo.id), fresh, now, reuse);
+            if (plan === "reuse") unchanged.add(repo.id);
+            else if (plan === "delta" && fresh) signatures.set(repo.id, fresh);
           }
         }),
       { concurrency: 3, discard: true },
@@ -222,10 +258,6 @@ export const probeRepos = (
 /**
  * One repo's open PRs over GraphQL, or over the REST list when the account's
  * GraphQL budget is spent — before the call or by it.
- *
- * Stacks are asked for unless this account's host refused them recently. The
- * refusal is remembered per account, not per host: GitHub may gate the fields
- * per token, and one account's answer mustn't switch them off for the rest.
  */
 const listOpenPrs = (
   deps: PollDeps,
@@ -299,9 +331,9 @@ interface DeltaListing extends OpenPrList {
 /**
  * Bring a repo's list up to date by reading only what moved since the last
  * one: the open PRs updated since its newest `updatedAt`, and the PRs closed
- * since. Null whenever that can't be trusted — no list to build on, no
- * probed signature to check against, or a result whose size disagrees with
- * the probe — and the caller lists the repo in full instead.
+ * since. Null whenever that wasn't the plan (no probed signature: see
+ * {@link decideListing}) or can't be trusted — a result whose size disagrees
+ * with the probe — and the caller lists the repo in full instead.
  */
 const listOpenPrsDelta = (
   deps: PollDeps,
@@ -388,7 +420,10 @@ export interface RepoListingContext {
   /** `pull_requests.diff_stats_head_sha` by PR id, advanced as stats land. */
   readonly diffStatsHeadByPrId: Map<string, string | null>;
   readonly unchangedRepoIds: ReadonlySet<string>;
-  /** This cycle's probed signatures: what a read of just what moved checks against. */
+  /**
+   * The repos this cycle reads by what moved, with the probed signature each
+   * read checks against (`ProbedRepos.signatures`).
+   */
   readonly probedSignatures: ReadonlyMap<string, OpenPrListSignature>;
   /** Written here whenever a full list lands in SQLite. */
   readonly listedSignatures: Map<string, ListedSignature>;
@@ -457,7 +492,7 @@ export const syncRepoOpenPrs = (
     }
 
     // The list carries no diff size (hence 0/0/0); one aliased GraphQL request
-    // fills it in — see `listPrDiffStats` for why not one detail fetch per PR.
+    // fills it in — see `listPrDiffStatsViaGraphql` for why not one detail fetch per PR.
     // Only requested for PRs never sized or whose head just moved, so steady
     // state adds no extra request.
     //
@@ -680,19 +715,28 @@ export const archiveClosedPrs = (
       ),
     );
 
+    // A stacked PR that merged or closed changes what its stack shows.
+    const stacksByRepo = Map.groupBy(
+      closedPrs.flatMap((pr) => (pr.stack ? [{ repoId: pr.repositoryId, stack: pr.stack }] : [])),
+      (entry) => entry.repoId,
+    );
+    for (const [repoId, entries] of stacksByRepo) {
+      const accountId = cycle.repoToAccountId.get(repoId);
+      if (accountId) {
+        yield* announceStacks(
+          deps,
+          accountId,
+          repoId,
+          entries.map((entry) => entry.stack.number),
+        );
+      }
+    }
+
     // Targeted `pr:archived` envelopes for each transition. The full PR set
     // still goes out via the cycle's `prs:updated` broadcast; this gives
     // clients a low-latency signal they can patch in place without refetching
     // the archive list. Best-effort — if a single emit fails, the bulk update
     // still reconciles on the next `prs:updated` arrival.
-    // A stacked PR that merged or closed changes what its stack shows.
-    for (const pr of closedPrs) {
-      const accountId = cycle.repoToAccountId.get(pr.repositoryId);
-      if (accountId && pr.stack) {
-        yield* announceStacks(deps, accountId, pr.repositoryId, [pr.stack.number]);
-      }
-    }
-
     const closedPrMap = new Map(closedPrs.map((pr) => [pr.id, pr]));
     for (const upd of updates) {
       const pr = closedPrMap.get(upd.id);

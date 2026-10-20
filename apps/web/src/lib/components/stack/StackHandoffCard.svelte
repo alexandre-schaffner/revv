@@ -9,26 +9,27 @@
  * a handoff in the middle of reading would be an interruption.
  */
 
+import { isOpenLayer, loginsMatch } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import { gsapFadeY } from "$lib/motion";
-import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { getPrById } from "$lib/stores/prs.svelte";
-import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
-import { getLayer, getNeighbour, getStack } from "$lib/stores/stacks.svelte";
-import { openStackLayer } from "./open-layer";
-import StackLayerGlyph from "./StackLayerGlyph.svelte";
+import { openStackLayer } from "$lib/stacks/open-layer";
 import {
-  isOpenLayer,
   layerFacts,
   layerRole,
   needsReview,
   REVIEW_VERDICT_LABEL,
   RISK_LABEL,
-} from "./stack-layer-facts";
+  readableBrief,
+} from "$lib/stacks/stack-layer-facts";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
+import { getLayer, getNeighbour, getStack } from "$lib/stores/stacks.svelte";
+import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
 interface Props {
   prId: string;
@@ -39,18 +40,11 @@ let { prId }: Props = $props();
 const stack = $derived(getStack(prId));
 const here = $derived(getLayer(prId));
 const next = $derived(getNeighbour(prId, 1));
-const brief = $derived(
-  stack?.brief && (stack.brief.status === "complete" || stack.brief.status === "superseded")
-    ? stack.brief
-    : null,
-);
+const brief = $derived(readableBrief(stack?.brief ?? null));
 const nextRole = $derived(next ? layerRole(next, brief) : null);
 const nextFacts = $derived(next ? layerFacts(next) : []);
 
-const isOwner = $derived.by(() => {
-  const login = getCurrentUserLogin();
-  return login !== null && getPrById(prId)?.authorLogin === login;
-});
+const isOwner = $derived(loginsMatch(getPrById(prId)?.authorLogin, getCurrentUserLogin()));
 const atTop = $derived(stack !== null && here !== null && next === null);
 const allReviewed = $derived(
   stack?.layers.filter(isOpenLayer).every((l) => l.review.kind === "complete" && !needsReview(l)) ??

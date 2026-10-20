@@ -7,6 +7,7 @@
 // the one case where a review can be carried over without anchors drifting.
 
 import { createHash } from "node:crypto";
+import { isOpenLayer } from "@revv/shared";
 
 export type DiffFingerprint = Readonly<Record<string, string>>;
 
@@ -71,7 +72,7 @@ export function stackSignature(
 ): string {
   return hash(
     layers
-      .filter((l) => l.status !== "merged" && l.status !== "closed")
+      .filter(isOpenLayer)
       .map((l) => `${l.number}@${l.headSha ?? "?"}`)
       .join(","),
   );

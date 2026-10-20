@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AppChannel } from "@revv/shared";
 import { serverEnv } from "./config";
 
 /**
@@ -12,9 +13,9 @@ import { serverEnv } from "./config";
  * resolution used by `auth.ts` (signing key) and `SecretStore`
  * (encrypted-file fallback).
  */
-export function appDataDir(): string {
+export function appDataDir(channel: AppChannel = serverEnv.channel): string {
   const home = homedir();
-  const appDir = serverEnv.channel === "dev" ? "Revv Dev" : "Revv";
+  const appDir = channel === "dev" ? "Revv Dev" : "Revv";
   return join(home, "Library", "Application Support", appDir);
 }
 

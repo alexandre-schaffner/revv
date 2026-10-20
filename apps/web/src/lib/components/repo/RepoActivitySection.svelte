@@ -21,14 +21,20 @@ import RepoActivityChart from "$lib/components/repo/RepoActivityChart.svelte";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getTaggedPrs } from "$lib/stores/prs.svelte";
 import { getRepoActivity, loadRepoActivity } from "$lib/stores/repo-activity.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
+import type { OwnerPalette } from "$lib/utils/avatarPalette";
+import { repoInkRamp } from "$lib/utils/repo-ink";
 
 interface Props {
   repoId: string;
-  /** Four steps of the repo's ink, faint to full. */
-  ramp: string[];
+  /** The owner's palette, which the hero above prints in. */
+  palette: OwnerPalette;
 }
 
-let { repoId, ramp }: Props = $props();
+let { repoId, palette }: Props = $props();
+
+/** Four steps of the repo's ink, faint to full. */
+const ramp = $derived(repoInkRamp(palette, getResolvedTheme()));
 
 $effect(() => {
   const id = repoId;

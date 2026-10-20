@@ -11,11 +11,11 @@
 // (invariants 8 and 11).
 
 import { randomUUID } from "node:crypto";
-import type { StackBriefStatus } from "@revv/shared";
-import { resolveThinkingEffort } from "@revv/shared";
+import { isOpenLayer, resolveThinkingEffort, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
-import { isAcpAgentAvailable, resolveGenerationModel } from "../../ai/acp/presets";
+import { isAcpAgentAvailable } from "../../ai/acp/presets";
+import { recoverMissedGate } from "../../ai/providers/mcp-agent-acp";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
   completeStackBriefHandler,
@@ -30,13 +30,13 @@ import { DbError } from "../../domain/errors";
 import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";
 import { Broadcaster } from "../Broadcaster";
-import { CacheService } from "../Cache";
 import { DbService } from "../Db";
 import { analyzeJobFailure } from "../job-failure";
 import { makeStartJobMutex } from "../job-mutex";
 import { PrContextService } from "../PrContext";
 import { SettingsService } from "../Settings";
 import { makeSessionTokenStore } from "../session-token-store";
+import { resolveWalkthroughLaunch } from "../walkthrough-job-context";
 import { stackSignature } from "./fingerprint";
 import type { GitHubStack } from "./map";
 import { type StackError, StackService } from "./StackService";
@@ -82,9 +82,6 @@ export class StackBriefJobs extends Context.Tag("StackBriefJobs")<
   }
 >() {}
 
-const isOpen = (layer: { readonly status: string }) =>
-  layer.status !== "merged" && layer.status !== "closed";
-
 /** The stack the agent will brief, frozen onto the row. */
 export function buildStackBriefSnapshot(
   stack: GitHubStack,
@@ -93,7 +90,7 @@ export function buildStackBriefSnapshot(
   return {
     stackNumber: stack.number,
     baseRefName: stack.baseRefName,
-    layers: stack.layers.filter(isOpen).map((l) => {
+    layers: stack.layers.filter(isOpenLayer).map((l) => {
       const pr = tracked.get(l.number);
       const body = pr?.body?.trim() ?? "";
       return {
@@ -125,7 +122,6 @@ export const StackBriefJobsLive = Layer.effect(
   StackBriefJobs,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const cache = yield* CacheService;
     const broadcaster = yield* Broadcaster;
     const prCtx = yield* PrContextService;
     const settingsService = yield* SettingsService;
@@ -212,21 +208,29 @@ export const StackBriefJobsLive = Layer.effect(
           return;
         }
 
-        // The user's walkthrough agent and model: the brief is written by the
-        // same hand as the layers' walkthroughs it summarises.
+        // The user's walkthrough agent and model, resolved the way a
+        // walkthrough resolves them: the brief is written by the same hand as
+        // the layers' walkthroughs it summarises.
         const settings = yield* settingsService
           .getSettings()
           .pipe(Effect.orElseSucceed(() => null));
         const agent = yield* settingsService.resolveAgent().pipe(Effect.orElseSucceed(() => null));
-        if (!agent || !isAcpAgentAvailable(agent)) {
+        if (!settings || !agent || !isAcpAgentAvailable(agent)) {
           yield* finish(job.briefId, "error", {
             errorMessage: `The configured agent ('${agent ?? "unknown"}') is not available on this machine.`,
           });
           return;
         }
-        const modelUsed =
-          resolveGenerationModel(agent, settings?.aiModel) ??
-          (agent === "opencode" ? "opencode" : "claude-sonnet-4-20250514");
+        const { modelUsed } = resolveWalkthroughLaunch({
+          agent,
+          trigger: "user",
+          configuredModel: settings.aiModel,
+          routedModel: null,
+          priorModel: null,
+          configuredEffort: settings.aiThinkingEffort,
+          routedEffort: null,
+          maxTurns: settings.aiMaxTurns,
+        });
         const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
           Effect.orElseSucceed(() => null),
         );
@@ -253,7 +257,7 @@ export const StackBriefJobsLive = Layer.effect(
                 sessionToken,
                 acpAgentId: agent,
                 modelUsed,
-                thinkingEffort: resolveThinkingEffort(settings?.aiThinkingEffort),
+                thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
                 workingDir: repo?.clonePath ?? process.cwd(),
                 abortController: job.abortController,
                 isValidated: () => job.validated,
@@ -263,25 +267,29 @@ export const StackBriefJobsLive = Layer.effect(
         );
 
         if (job.superseded) return;
-        if (outcome.validatedComplete) {
+        if (outcome.validated) {
           yield* finish(job.briefId, "complete", { modelUsed });
           return;
         }
 
-        // The agent may have written everything and stopped short of the
-        // gate. The gate only reads the DB, so run it on the agent's behalf.
-        if (ctx.toolCalls?.has("get_stack_brief_state")) {
-          const gate = yield* Effect.promise(() => completeStackBriefHandler(ctx, {}));
-          if (!gate.isError) {
-            debug("stack-brief", `${job.briefId}: completed after a missed complete_stack_brief`);
-            yield* finish(job.briefId, "complete", { modelUsed });
-            return;
-          }
+        const recovered = yield* Effect.promise(() =>
+          recoverMissedGate({
+            toolCalls: ctx.toolCalls,
+            stateTool: "get_stack_brief_state",
+            gate: () => completeStackBriefHandler(ctx, {}),
+            debugLabel: "stack-brief",
+            what: `stack brief ${job.briefId}`,
+          }),
+        );
+        if (recovered.recovered) {
+          yield* finish(job.briefId, "complete", { modelUsed });
+          return;
         }
         yield* finish(job.briefId, "error", {
           modelUsed,
           errorMessage:
             outcome.error ??
+            recovered.error ??
             "The agent stopped before complete_stack_brief; the brief is unfinished",
         });
       });
@@ -339,14 +347,9 @@ export const StackBriefJobsLive = Layer.effect(
     const ensure = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
         const ctx = yield* withDb(db, prCtx.resolveBasic(prId, userId, accountId));
-        const stack = yield* stacks
-          .fetchFresh(ctx)
-          .pipe(
-            Effect.provideService(DbService, { db }),
-            Effect.provideService(CacheService, cache),
-          );
+        const stack = yield* stacks.fetchFresh(ctx);
         if (!stack) return null;
-        const open = stack.layers.filter(isOpen);
+        const open = stack.layers.filter(isOpenLayer);
         if (open.length === 0) return null;
         const repositoryId = ctx.repo.id;
         const signature = stackSignature(stack.layers);

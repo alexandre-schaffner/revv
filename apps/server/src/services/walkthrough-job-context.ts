@@ -2,6 +2,7 @@ import type {
   AcpAgentId,
   GeneratedBy,
   GenerationProviderConfig,
+  StartJobTrigger,
   ThinkingEffort,
   ThinkingEffortSetting,
 } from "@revv/shared";
@@ -37,7 +38,7 @@ function buildWalkthroughProviderConfig(input: {
 /** Resolve the guarded model and the immutable provider snapshot for one job. */
 export function resolveWalkthroughLaunch(input: {
   readonly agent: AcpAgentId;
-  readonly trigger: "user" | "external_agent" | "resume" | "review_requested" | "stack_review";
+  readonly trigger: StartJobTrigger;
   readonly configuredModel: string;
   readonly routedModel: string | null | undefined;
   readonly priorModel: string | null | undefined;

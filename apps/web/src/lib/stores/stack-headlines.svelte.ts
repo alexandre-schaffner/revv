@@ -6,9 +6,9 @@
 
 import type { StackHeadline } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { singleFlight } from "./single-flight";
 
 let byRepo = $state(new Map<string, ReadonlyMap<number, StackHeadline>>());
-const inflight = new Map<string, Promise<void>>();
 
 async function fetchHeadlines(repositoryId: string): Promise<void> {
   try {
@@ -25,17 +25,11 @@ async function fetchHeadlines(repositoryId: string): Promise<void> {
   }
 }
 
-function load(repositoryId: string): Promise<void> {
-  const running = inflight.get(repositoryId);
-  if (running) return running;
-  const promise = fetchHeadlines(repositoryId).finally(() => inflight.delete(repositoryId));
-  inflight.set(repositoryId, promise);
-  return promise;
-}
+const reads = singleFlight<void>((repositoryId) => fetchHeadlines(repositoryId));
 
 /** Read the repo's stack headlines once; later reads come from `stack:updated`. */
 export function ensureStackHeadlines(repositoryId: string): void {
-  if (!byRepo.has(repositoryId)) void load(repositoryId);
+  if (!byRepo.has(repositoryId)) void reads.run(repositoryId);
 }
 
 export function getStackHeadline(repositoryId: string, stackNumber: number): StackHeadline | null {
@@ -44,5 +38,5 @@ export function getStackHeadline(repositoryId: string, stackNumber: number): Sta
 
 /** A stack of a repo the queue shows moved or got named: re-read that repo. */
 export function onStackHeadlineSignal(data: { repositoryId: string }): void {
-  if (byRepo.has(data.repositoryId)) void load(data.repositoryId);
+  if (byRepo.has(data.repositoryId)) void reads.rerun(data.repositoryId);
 }

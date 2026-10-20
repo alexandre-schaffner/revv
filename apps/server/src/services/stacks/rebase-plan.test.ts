@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { GitHubStack, GitHubStackLayer } from "./map";
-import { planStackRebase, stackNeedsRebase } from "./rebase-plan";
+import { planStackRebase } from "./rebase-plan";
 
 function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubStackLayer {
   return {
@@ -103,18 +103,5 @@ describe("planStackRebase", () => {
     expect(
       planStackRebase(stackOf([layer(1, { status: "merged" }), layer(2, { status: "merged" })])),
     ).toMatchObject({ ok: false });
-  });
-});
-
-describe("stackNeedsRebase", () => {
-  test("an open layer behind its base needs one; a merged one doesn't count", () => {
-    expect(stackNeedsRebase(stackOf([layer(1), layer(2)]))).toBe(false);
-    expect(stackNeedsRebase(stackOf([layer(1, { behindBy: 3 }), layer(2)]))).toBe(true);
-    expect(stackNeedsRebase(stackOf([layer(1, { status: "merged", behindBy: 3 }), layer(2)]))).toBe(
-      false,
-    );
-    expect(stackNeedsRebase(stackOf([layer(1), layer(2, { mergeStateStatus: "DIRTY" })]))).toBe(
-      true,
-    );
   });
 });

@@ -202,4 +202,21 @@ describe("buildWalkthroughPrompt stack block", () => {
     expect(prompt).toContain("lower-layer churn excluded");
     expect(prompt).toContain("### Changed Files Since the Prior Review");
   });
+
+  it("tells the agent a layer reverted its change to a file", () => {
+    const prompt = buildWalkthroughPrompt({
+      ...BASE,
+      stack,
+      files: [{ ...file("src/gone.ts", ""), status: "reverted", additions: 0, deletions: 0 }],
+      reviewMode: {
+        mode: "incremental",
+        parentWalkthroughId: "wt-0",
+        baseHeadSha: "old",
+        headSha: "new",
+        diffSource: "stack_layer_delta",
+      },
+    });
+    expect(prompt).toContain("#### src/gone.ts (reverted, +0 -0)");
+    expect(prompt).toContain("[Change reverted — this layer no longer touches this file]");
+  });
 });

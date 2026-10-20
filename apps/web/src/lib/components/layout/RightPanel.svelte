@@ -490,7 +490,7 @@ function activitiesForTurn(
 
 <div class="panel" class:panel--stacked={stacked}>
 	<!-- Header -->
-	<div class="panel-header">
+	<div class="panel-header" data-glass>
 		{#if stacked}
 			<!-- Stacked over the main pane: the panel *is* the view, so the exit
 				 is a back button at the head of the row (Slack thread style)
@@ -887,7 +887,7 @@ function activitiesForTurn(
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:gsapSlide={{ duration: tokens.smooth }}>
-			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none">
+			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none" data-glass>
 				<!-- Proposed commits from the agent -->
 				{#if commitCount > 0 && proposed}
 					<div transition:gsapSlide={{ duration: tokens.smooth }}>
@@ -1161,6 +1161,7 @@ function activitiesForTurn(
 			onsubmit={handlePromptSubmit}
 			onstop={handleStop}
 			status={inputStatus}
+			data-glass
 			class={'composer-glass composer-glass-input transition-[border-color,box-shadow] duration-quick ease-out-expo' + (showQueueDock ? ' composer-glass--attached rounded-t-none border-t-0' : '') + (!prId ? ' opacity-60' : '')}
 		>
 			<PromptInputBody>

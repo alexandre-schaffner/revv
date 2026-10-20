@@ -10,9 +10,9 @@
  * deletions hang below in neutral grey; position carries the sign, the legend
  * names it.
  *
- * Bars cap at a high percentile of the year rather than its maximum, so one
- * vendored-dependency week doesn't flatten the rest to slivers. A capped bar
- * is drawn full height and the tooltip carries its real value.
+ * Bars cap at four times the year's median week rather than its maximum, so
+ * one vendored-dependency week doesn't flatten the rest to slivers. A capped
+ * bar is drawn full height and the tooltip carries its real value.
  */
 
 import type { RepoActivityWeek } from "@revv/shared";

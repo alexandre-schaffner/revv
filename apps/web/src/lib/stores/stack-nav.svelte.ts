@@ -7,14 +7,14 @@
 // (higher positions, landing later), "down" toward the base, the way the
 // stack lists draw it.
 
-import type { PrStackDetail, StackLayer } from "@revv/shared";
+import { isOpenLayer, type PrStackDetail, type StackLayer } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import { openStackLayer } from "$lib/components/stack/open-layer";
-import { isOpenLayer, needsReview } from "$lib/components/stack/stack-layer-facts";
-import { type NavigationDirection, setNavigationIntent } from "./navigation-intent.svelte";
+import { openStackLayer } from "$lib/stacks/open-layer";
+import { needsReview } from "$lib/stacks/stack-layer-facts";
+import type { NavigationDirection } from "./navigation-intent.svelte";
 import { getSelectedPr } from "./prs.svelte";
 import { openStackMergeSheet } from "./stack-merge.svelte";
-import { getStack, startStackReview } from "./stacks.svelte";
+import { getLayer, getNeighbour, getStack, startStackReview } from "./stacks.svelte";
 
 export interface StackView {
   readonly prId: string;
@@ -29,9 +29,7 @@ export function getStackView(): StackView | null {
   if (!pr?.stack) return null;
   const stack = getStack(pr.id);
   if (!stack || stack.layers.length < 2) return null;
-  const here =
-    stack.layers.find((l) => l.prId === pr.id) ??
-    stack.layers.find((l) => l.number === pr.externalId);
+  const here = getLayer(pr.id);
   return here ? { prId: pr.id, stack, here } : null;
 }
 
@@ -46,7 +44,6 @@ function layerNeedsReview(layer: StackLayer): boolean {
 export function openLayer(layer: StackLayer): void {
   const view = getStackView();
   if (!view || layer.position === view.here.position) return;
-  setNavigationIntent(layer.position > view.here.position ? "up" : "down");
   openStackLayer(view.prId, layer);
 }
 
@@ -54,8 +51,7 @@ export function openLayer(layer: StackLayer): void {
 export function moveInStack(direction: NavigationDirection): void {
   const view = getStackView();
   if (!view) return;
-  const offset = direction === "up" ? 1 : -1;
-  const target = view.stack.layers.find((l) => l.position === view.here.position + offset);
+  const target = getNeighbour(view.prId, direction === "up" ? 1 : -1);
   if (target) openLayer(target);
 }
 

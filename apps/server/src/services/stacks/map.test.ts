@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agreesWithMirror,
+  classifyLayerMergeState,
   type GitHubStack,
   type MirroredLayer,
   stackFromMirror,
@@ -91,5 +92,22 @@ describe("stackStatus", () => {
     ["OPEN", false, null, "not_ready"],
   ] as const)("%s draft=%s %s → %s", (state, isDraft, mergeStateStatus, status) => {
     expect(stackStatus({ state, isDraft, mergeStateStatus })).toBe(status);
+  });
+});
+
+describe("classifyLayerMergeState", () => {
+  const of = (mergeStateStatus: string | null, behindBy: number | null = null) =>
+    classifyLayerMergeState({ mergeStateStatus, behindBy });
+
+  test("reads GitHub's states, a compare's behind count over a mergeable one", () => {
+    expect(of("CLEAN")).toBe("mergeable");
+    expect(of("UNSTABLE")).toBe("mergeable");
+    expect(of("CLEAN", 2)).toBe("behind");
+    expect(of("BEHIND")).toBe("behind");
+    expect(of("DIRTY", 2)).toBe("conflicts");
+    expect(of("BLOCKED")).toBe("blocked");
+    expect(of(null)).toBe("unknown");
+    expect(of("UNKNOWN")).toBe("unknown");
+    expect(of("DRAFT")).toBe("unmodeled");
   });
 });

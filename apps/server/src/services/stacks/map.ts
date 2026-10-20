@@ -3,12 +3,15 @@
 // GitHub's raw stack → the GitHub half of `PrStackDetail`. The Revv half
 // (tracked rows, reviews, restack verdicts) is joined on in `overlay.ts`.
 
-import type {
-  CiRollupState,
-  MergeMethod,
-  ReviewDecision,
-  ReviewVerdict,
-  StackEntryStatus,
+import {
+  type CiRollupState,
+  type GitHubStackLayerFields,
+  isOpenLayer,
+  MERGEABLE_STATES,
+  type MergeMethod,
+  type ReviewDecision,
+  type ReviewVerdict,
+  type StackEntryStatus,
 } from "@revv/shared";
 import type {
   LayerComparison,
@@ -16,9 +19,6 @@ import type {
   RawPrStackAnswer,
   RawStackPullRequest,
 } from "./queries";
-
-/** Merge states GitHub would let through once the PRs below have landed. */
-const READY_MERGE_STATES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
 
 /** Where a stacked PR stands, the way GitHub's stack list labels it. */
 export function stackStatus(pr: {
@@ -29,33 +29,39 @@ export function stackStatus(pr: {
   if (pr.state === "MERGED") return "merged";
   if (pr.state === "CLOSED") return "closed";
   if (pr.isDraft) return "draft";
-  return READY_MERGE_STATES.has(pr.mergeStateStatus ?? "") ? "ready" : "not_ready";
+  return MERGEABLE_STATES.has(pr.mergeStateStatus ?? "") ? "ready" : "not_ready";
 }
 
 /** One layer as GitHub reports it, before Revv's overlay. */
-export interface GitHubStackLayer {
+export interface GitHubStackLayer extends GitHubStackLayerFields {
+  /** For GraphQL mutations (auto-merge); never sent to the client. */
   readonly nodeId: string;
-  readonly position: number;
-  readonly number: number;
-  readonly title: string;
-  readonly url: string;
-  readonly headRef: string;
-  readonly status: StackEntryStatus;
-  readonly headSha: string | null;
-  readonly baseRef: string;
-  readonly mergeStateStatus: string | null;
-  readonly reviewDecision: ReviewDecision | null;
-  readonly viewerReview: ReviewVerdict | null;
-  readonly checks: CiRollupState | null;
-  readonly additions: number;
-  readonly deletions: number;
-  readonly changedFiles: number;
-  readonly authorLogin: string | null;
-  readonly mergedAt: string | null;
-  readonly autoMergeEnabled: boolean;
-  readonly isInMergeQueue: boolean;
-  /** Commits on the base branch the head lacks; null until compared, or when GitHub can't. */
-  readonly behindBy: number | null;
+}
+
+/**
+ * A layer's GitHub merge state in the terms Revv acts on. The merge plan, the
+ * merge driver and the restack verdict all branch on this.
+ *
+ *   mergeable — GitHub would merge it now.
+ *   behind    — its base has commits it lacks (BEHIND, or a compare said so).
+ *               A stack only merges a linear history, so it needs a rebase.
+ *   conflicts — DIRTY. A rebase of the stack may clear it (a squash-merged
+ *               layer below) or may not.
+ *   blocked   — BLOCKED: reviews, checks, protection, or the layers below.
+ *   unknown   — GitHub is still computing it.
+ *   unmodeled — any other state.
+ */
+type LayerMergeState = "mergeable" | "behind" | "conflicts" | "blocked" | "unknown" | "unmodeled";
+
+export function classifyLayerMergeState(
+  layer: Pick<GitHubStackLayerFields, "mergeStateStatus" | "behindBy">,
+): LayerMergeState {
+  const state = layer.mergeStateStatus ?? "UNKNOWN";
+  if (state === "DIRTY") return "conflicts";
+  if (state === "BEHIND" || (layer.behindBy ?? 0) > 0) return "behind";
+  if (MERGEABLE_STATES.has(state)) return "mergeable";
+  if (state === "BLOCKED") return "blocked";
+  return state === "UNKNOWN" ? "unknown" : "unmodeled";
 }
 
 /** The GitHub half of a stack, cached briefly on the server. */
@@ -173,8 +179,6 @@ export interface MirroredLayer {
   readonly fetchedAt: string;
 }
 
-const isOpen = (status: string): boolean => status !== "merged" && status !== "closed";
-
 /**
  * Whether a stack read agrees with the poll on the open layers: the same PRs
  * at the same positions. A stack is rebuilt by re-creating it, so after a
@@ -191,11 +195,8 @@ export function agreesWithMirror(stack: GitHubStack, mirror: readonly MirroredLa
       .map(([number, position]) => `${number}@${position}`)
       .join(",");
   return (
-    open(
-      stack.layers
-        .filter((l) => l.status !== "merged" && l.status !== "closed")
-        .map((l) => [l.number, l.position]),
-    ) === open(mirror.filter((l) => isOpen(l.status)).map((l) => [l.number, l.position]))
+    open(stack.layers.filter(isOpenLayer).map((l) => [l.number, l.position])) ===
+    open(mirror.filter(isOpenLayer).map((l) => [l.number, l.position]))
   );
 }
 
@@ -260,7 +261,7 @@ export function stackFromMirror(
 /** Open layers, whose base tip a rebase would have to put under them. */
 export function layersToCompare(stack: GitHubStack): LayerComparison[] {
   return stack.layers
-    .filter((l) => l.status !== "merged" && l.status !== "closed")
+    .filter(isOpenLayer)
     .map((l) => ({ number: l.number, baseRef: l.baseRef, headRef: l.headRef }));
 }
 

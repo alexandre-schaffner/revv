@@ -12,20 +12,12 @@
 // behind its base.
 
 import { join } from "node:path";
-import type { StackMergeRunStatus, StackRebaseResult } from "@revv/shared";
-import { and, eq, inArray } from "drizzle-orm";
+import { isOpenLayer, type StackRebaseResult } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { serverEnv } from "../../config";
-import { stackMergeRuns } from "../../db/schema/stack-merge-runs";
-import {
-  DbError,
-  type GitHubError,
-  NotFoundError,
-  StackRebaseRejectedError,
-} from "../../domain/errors";
+import { DbError, type GitHubError, NotFoundError, StackRejectedError } from "../../domain/errors";
 import { logError } from "../../logger";
 import { Broadcaster } from "../Broadcaster";
-import type { CacheService } from "../Cache";
 import { worktreeHolderPath } from "../clone-policy";
 import { DbService } from "../Db";
 import { GitHubGateway } from "../GitHub";
@@ -34,11 +26,10 @@ import type { SettingsService } from "../Settings";
 import type { GitHubStack } from "./map";
 import { planStackRebase } from "./rebase-plan";
 import { type StackError, StackService } from "./StackService";
+import { liveRunFor } from "./stack-merge-runs";
 import { cleanupReplay, pushStack, type ReplayInput, replayStack } from "./stack-rebase-git";
 
-const LIVE_MERGE_STATUSES: readonly StackMergeRunStatus[] = ["running", "waiting"];
-
-export type StackRebaseError = StackError | StackRebaseRejectedError | NotFoundError;
+export type StackRebaseError = StackError | StackRejectedError | NotFoundError;
 
 export class StackRebaseService extends Context.Tag("StackRebaseService")<
   StackRebaseService,
@@ -55,25 +46,25 @@ export class StackRebaseService extends Context.Tag("StackRebaseService")<
     ) => Effect.Effect<StackRebaseResult, StackRebaseError>;
     /**
      * Rebase `stack` as just read. For a running stack merge, which has
-     * already checked the heads it holds.
+     * already checked the heads it holds; `proceed`, asked once the rebase is
+     * replayed, can still call the push off.
      */
     readonly rebaseStack: (
       ctx: PrContextBasic,
       stack: GitHubStack,
       accountId: string,
-    ) => Effect.Effect<StackRebaseResult, StackRebaseRejectedError | GitHubError>;
+      proceed?: Effect.Effect<boolean>,
+    ) => Effect.Effect<StackRebaseResult, StackRejectedError | GitHubError>;
   }
 >() {}
 
 const rejected = (
-  reason: StackRebaseRejectedError["reason"],
+  reason: StackRejectedError["reason"],
   message: string,
   files?: readonly string[],
 ) =>
   Effect.fail(
-    new StackRebaseRejectedError(
-      files === undefined ? { message, reason } : { message, reason, files },
-    ),
+    new StackRejectedError(files === undefined ? { message, reason } : { message, reason, files }),
   );
 
 /** Conflicting paths as a reader takes them in: the first few, then a count. */
@@ -85,7 +76,7 @@ function describeFiles(files: readonly string[]): string {
 export const StackRebaseServiceLive = Layer.effect(
   StackRebaseService,
   Effect.gen(function* () {
-    const context = yield* Effect.context<DbService | CacheService | SettingsService>();
+    const context = yield* Effect.context<DbService | SettingsService>();
     const { db } = Context.get(context, DbService);
     const stacks = yield* StackService;
     const github = yield* GitHubGateway;
@@ -117,14 +108,14 @@ export const StackRebaseServiceLive = Layer.effect(
       Effect.tryPromise({
         try: run,
         catch: (cause) =>
-          new StackRebaseRejectedError({
+          new StackRejectedError({
             message: `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
             reason: "failed",
           }),
       });
 
     /** Replay and push, inside the scratch worktree's lifetime. */
-    const replayAndPush = (input: ReplayInput) =>
+    const replayAndPush = (input: ReplayInput, proceed: Effect.Effect<boolean>) =>
       Effect.gen(function* () {
         const replay = yield* gitStep("Rebasing the stack failed", () => replayStack(input));
         if (replay.kind === "conflict") {
@@ -136,6 +127,12 @@ export const StackRebaseServiceLive = Layer.effect(
           );
         }
         if (replay.kind === "failed") return yield* rejected("failed", replay.message);
+        if (!(yield* proceed)) {
+          return yield* rejected(
+            "invalid",
+            "The merge was cancelled before Revv pushed the rebase",
+          );
+        }
 
         const moved = input.steps.flatMap((step) => {
           const to = replay.heads.get(step.number);
@@ -160,7 +157,12 @@ export const StackRebaseServiceLive = Layer.effect(
         ),
       );
 
-    const rebaseStack = (ctx: PrContextBasic, stack: GitHubStack, accountId: string) =>
+    const rebaseStack = (
+      ctx: PrContextBasic,
+      stack: GitHubStack,
+      accountId: string,
+      proceed: Effect.Effect<boolean> = Effect.succeed(true),
+    ) =>
       Effect.gen(function* () {
         const key = `${ctx.repo.id}:${stack.number}`;
         if (rebasing.has(key))
@@ -172,7 +174,7 @@ export const StackRebaseServiceLive = Layer.effect(
           const { plan } = planned;
 
           const input = yield* replayInput(ctx, stack, plan.steps);
-          const rebased = yield* replayAndPush(input);
+          const rebased = yield* replayAndPush(input, proceed);
 
           // The layer below merged: GitHub keeps the next one on the merged
           // branch until something points it at the base.
@@ -196,9 +198,9 @@ export const StackRebaseServiceLive = Layer.effect(
 
           // Pushed: everything after is best-effort.
           if (rebased.length > 0 || retargeted.length > 0) {
-            yield* Effect.provide(stacks.invalidate(ctx.repo.id, stack.number), context).pipe(
-              Effect.catchAll(() => Effect.void),
-            );
+            yield* stacks
+              .invalidate(ctx.repo.id, stack.number)
+              .pipe(Effect.catchAll(() => Effect.void));
             yield* broadcaster.broadcastToAccount(accountId, {
               type: "stack:updated",
               data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
@@ -210,18 +212,7 @@ export const StackRebaseServiceLive = Layer.effect(
 
     const mergeRunning = (repositoryId: string, stackNumber: number) =>
       Effect.try({
-        try: () =>
-          db
-            .select({ id: stackMergeRuns.id })
-            .from(stackMergeRuns)
-            .where(
-              and(
-                eq(stackMergeRuns.repositoryId, repositoryId),
-                eq(stackMergeRuns.stackNumber, stackNumber),
-                inArray(stackMergeRuns.status, [...LIVE_MERGE_STATUSES]),
-              ),
-            )
-            .get() !== undefined,
+        try: () => liveRunFor(db, repositoryId, stackNumber) !== undefined,
         catch: (cause) => new DbError({ message: "stack merge run read failed", cause }),
       });
 
@@ -238,8 +229,7 @@ export const StackRebaseServiceLive = Layer.effect(
         if (!stack.viewerCanPush) {
           return yield* rejected("invalid", `You can't push to ${ctx.repo.fullName}`);
         }
-        for (const layer of stack.layers) {
-          if (layer.status === "merged" || layer.status === "closed") continue;
+        for (const layer of stack.layers.filter(isOpenLayer)) {
           if (expectedHeads[String(layer.number)] !== layer.headSha) {
             return yield* rejected(
               "moved",

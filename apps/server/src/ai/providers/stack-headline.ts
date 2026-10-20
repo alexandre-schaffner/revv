@@ -10,8 +10,7 @@
 
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
-import { getAcpConnection } from "../acp/acp-connection";
-import { decodeAcpSessionUpdate, makeAcpDecodeState, withAgentTurn } from "../agent-stream";
+import { promptOnce } from "./prompt-once";
 
 const HEADLINE_TIMEOUT_MS = 30_000;
 const MAX_HEADLINE_LENGTH = 48;
@@ -88,44 +87,15 @@ export function parseStackHeadline(raw: string): GeneratedStackHeadline | null {
 }
 
 async function generateViaAcp(input: StackHeadlineInput): Promise<GeneratedStackHeadline> {
-  const h = await getAcpConnection(input.cwd, input.acpAgentId, {
+  const collected = await promptOnce({
+    cwd: input.cwd,
+    agent: input.acpAgentId,
     model: input.model,
-    thinkingEffort: input.thinkingEffort,
+    effort: input.thinkingEffort,
+    timeoutMs: HEADLINE_TIMEOUT_MS,
+    text: `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`,
+    debugLabel: "stack-headline-acp",
   });
-
-  let sessionId: string | null = null;
-  let collected = "";
-  try {
-    await withAgentTurn<void>({
-      hardTimeoutMs: HEADLINE_TIMEOUT_MS,
-      jobStarted: async () => {
-        h.jobStarted();
-      },
-      jobEnded: async () => {
-        h.jobEnded();
-      },
-      debugLabel: "stack-headline-acp",
-      abortSession: async () => {
-        if (sessionId) await h.cancel(sessionId);
-      },
-      run: async () => {
-        const created = await h.newSession([]);
-        sessionId = created.sessionId;
-        const decodeState = makeAcpDecodeState();
-        h.setListener(sessionId, (update) => {
-          for (const ev of decodeAcpSessionUpdate(update, decodeState)) {
-            if (ev.kind === "text-delta") collected += ev.data;
-          }
-        });
-        // ACP has no separate system-prompt channel.
-        const promptText = `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(input)}`;
-        await h.prompt(sessionId, [{ type: "text", text: promptText }]);
-      },
-    });
-  } finally {
-    if (sessionId) h.setListener(sessionId, null);
-  }
-
   const parsed = parseStackHeadline(collected);
   if (!parsed) throw new Error(`unparseable output (len=${collected.length})`);
   return parsed;

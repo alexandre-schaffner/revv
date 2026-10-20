@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { canonicalRecapBoundaries, windowIsCurrent } from "./RecapScheduler";
+import { canonicalRecapBoundaries, dailyRecapIsStale, windowIsCurrent } from "./RecapScheduler";
 
 // 2026-06-04 is a Thursday; its ISO week opens on Monday 2026-06-01.
 const NOW = new Date("2026-06-04T09:30:00.000Z");
@@ -49,5 +49,25 @@ describe("canonicalRecapBoundaries", () => {
       periodStart: "2026-05-25T00:00:00.000Z",
       periodEnd: "2026-06-01T00:00:00.000Z",
     });
+  });
+});
+
+describe("dailyRecapIsStale", () => {
+  const YESTERDAY = { periodEnd: "2026-06-04T00:00:00.000Z" };
+  const THREE_DAYS_AGO = { periodEnd: "2026-06-02T00:00:00.000Z" };
+
+  it("regenerates yesterday's recap written before yesterday closed", () => {
+    expect(dailyRecapIsStale(YESTERDAY, "2026-06-03T16:00:00.000Z", NOW)).toBe(true);
+  });
+
+  it("keeps yesterday's recap written after yesterday closed", () => {
+    expect(dailyRecapIsStale(YESTERDAY, "2026-06-04T00:15:00.000Z", NOW)).toBe(false);
+  });
+
+  // The cold-start backfill looks back a week; regenerating every older day
+  // whose recap predates today meant a week of agent runs on every launch.
+  it("never regenerates an older day that already has a recap", () => {
+    expect(dailyRecapIsStale(THREE_DAYS_AGO, "2026-06-02T00:15:00.000Z", NOW)).toBe(false);
+    expect(dailyRecapIsStale(THREE_DAYS_AGO, "2026-06-01T16:00:00.000Z", NOW)).toBe(false);
   });
 });

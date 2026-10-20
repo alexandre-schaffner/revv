@@ -2,7 +2,7 @@ import type { WalkthroughSnapshotV2, WalkthroughStreamEvent } from "@revv/shared
 import { Effect, Option } from "effect";
 import { ZERO_TOKEN_USAGE } from "../ai/agent-stream/token-usage";
 import type { Db } from "../db/index";
-import type { ImportError } from "../domain/errors";
+import { type DbError, ImportError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 
@@ -63,8 +63,9 @@ export function tryImportCachedWalkthrough(input: {
 /**
  * Carry this PR's finished review at an earlier head into the partial row at
  * the new one: the same export the team cache ships (issues already posted
- * to GitHub stay behind), through the same import and lifecycle boundary.
- * The caller has established the restack is pure; this only moves content.
+ * to GitHub stay behind), through the same import and lifecycle boundary,
+ * then record where the content came from. The caller has established the
+ * restack is pure; this only moves content.
  */
 export function tryCarryRestackedWalkthrough(input: {
   readonly db: Db;
@@ -74,15 +75,31 @@ export function tryCarryRestackedWalkthrough(input: {
   readonly repoFullName: string;
   readonly headSha: string;
   readonly importSnapshot: (snapshot: WalkthroughSnapshotV2) => Effect.Effect<void, ImportError>;
+  readonly markCarriedFrom: Effect.Effect<void, DbError>;
   readonly markComplete: Effect.Effect<void>;
   readonly emitEvent: (event: WalkthroughStreamEvent) => Effect.Effect<unknown>;
 }): Effect.Effect<boolean> {
-  const { db, fromWalkthroughId, repoFullName, ...rest } = input;
+  const { db, fromWalkthroughId, repoFullName, importSnapshot, markCarriedFrom, ...rest } = input;
   return tryImportCachedWalkthrough({
     ...rest,
     enabled: true,
     source: "restack",
     repoFullName,
+    importSnapshot: (snapshot) =>
+      importSnapshot(snapshot).pipe(
+        Effect.zipRight(
+          markCarriedFrom.pipe(
+            Effect.mapError(
+              (e) =>
+                new ImportError({
+                  walkthroughId: input.walkthroughId,
+                  reason: e.message,
+                  cause: e,
+                }),
+            ),
+          ),
+        ),
+      ),
     fetchSnapshot: Effect.try({
       try: () =>
         Option.some(

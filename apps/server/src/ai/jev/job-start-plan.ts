@@ -1,4 +1,4 @@
-import type { AcpAgentId, RiskLevel, UserSettings } from "@revv/shared";
+import type { AcpAgentId, RiskLevel, StartJobTrigger, UserSettings } from "@revv/shared";
 import {
   filePriorityOrder,
   type JobStartAnswers,
@@ -21,7 +21,7 @@ type JobStartSettings = Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev
 
 export function shouldResolveJobStart(input: {
   readonly settings: JobStartSettings;
-  readonly trigger: "user" | "external_agent" | "resume" | "review_requested" | "stack_review";
+  readonly trigger: StartJobTrigger;
   readonly cacheWillHit: boolean;
 }): boolean {
   return input.settings.jev.enabled && input.trigger !== "resume" && !input.cacheWillHit;

@@ -5,12 +5,14 @@
 // (CLAUDE.md invariant 3) and an out-of-order call fails with an error the
 // agent can act on, before the row is touched (invariant 5).
 
+import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { takeawayOf } from "../../../services/stacks/overlay";
+import { isCompleteReview, readBriefLayers } from "../../../services/stacks/reads";
 import {
   ARC_MAX_CHARS,
   BUILDS_ON_MAX,
@@ -45,10 +47,10 @@ function err(text: string): StackBriefToolResult {
 type Db = StackBriefToolContext["db"];
 
 interface LoadedBrief {
-  readonly status: string;
-  readonly phase: string;
+  readonly status: StackBriefStatus;
+  readonly phase: "none" | "L" | "R";
   readonly arc: string;
-  readonly reviewOrder: string;
+  readonly reviewOrder: number[];
   readonly snapshot: StackBriefSnapshot;
 }
 
@@ -89,45 +91,12 @@ function loadGenerating(
   return brief;
 }
 
-function writtenLayers(db: Db, briefId: string) {
-  return db
-    .select({
-      position: stackBriefLayers.position,
-      prNumber: stackBriefLayers.prNumber,
-      role: stackBriefLayers.role,
-      reviewFocus: stackBriefLayers.reviewFocus,
-      chapter: stackBriefLayers.chapter,
-      buildsOn: stackBriefLayers.buildsOn,
-    })
-    .from(stackBriefLayers)
-    .where(eq(stackBriefLayers.briefId, briefId))
-    .orderBy(stackBriefLayers.position)
-    .all()
-    .map(({ buildsOn, ...row }) => ({ ...row, buildsOn: JSON.parse(buildsOn) as BuildsOnLink[] }));
-}
-
-/**
- * Snapshot layers without a role yet, as `#N (position P)` labels. A row from
- * before chapters existed counts as missing, so a resumed run rewrites it.
- */
+/** Snapshot layers without a role yet, as `#N (position P)` labels. */
 function missingLayers(db: Db, briefId: string, snapshot: StackBriefSnapshot): string[] {
-  const written = new Set(
-    writtenLayers(db, briefId)
-      .filter((l) => l.chapter !== null)
-      .map((l) => l.position),
-  );
+  const written = new Set(readBriefLayers(db, briefId).map((l) => l.position));
   return snapshot.layers
     .filter((l) => !written.has(l.position))
     .map((l) => `#${l.number} (position ${l.position})`);
-}
-
-function parseOrder(json: string): number[] {
-  try {
-    const parsed: unknown = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === "number") : [];
-  } catch {
-    return [];
-  }
 }
 
 /** One line of prose: trimmed, single-spaced, or the reason it isn't. */
@@ -149,11 +118,6 @@ function oneLine(
   return { value };
 }
 
-interface BuildsOnLink {
-  readonly number: number;
-  readonly uses: string;
-}
-
 /**
  * The links a layer declares, checked against the stack: each a layer below
  * it (open or merged), once, at most {@link BUILDS_ON_MAX}. Order is kept so
@@ -163,7 +127,7 @@ function checkBuildsOn(
   links: ReadonlyArray<{ number: number; uses: string }>,
   layer: { position: number; number: number },
   snapshot: StackBriefSnapshot,
-): { value: BuildsOnLink[] } | { error: string } {
+): { value: StackLayerLink[] } | { error: string } {
   if (links.length > BUILDS_ON_MAX) {
     return {
       error: `builds_on has ${links.length} layers; name at most ${BUILDS_ON_MAX}, the ones this layer leans on hardest.`,
@@ -174,7 +138,7 @@ function checkBuildsOn(
     ...snapshot.merged.map((m) => m.number),
   ]);
   const seen = new Set<number>();
-  const value: BuildsOnLink[] = [];
+  const value: StackLayerLink[] = [];
   for (const link of links) {
     if (!below.has(link.number)) {
       return {
@@ -197,7 +161,7 @@ export const getStackBriefStateHandler: StackBriefToolHandler<GetStackBriefState
 ) => {
   const brief = loadBrief(ctx.db, ctx.briefId, "get_stack_brief_state");
   if (isToolResult(brief)) return brief;
-  const layers = writtenLayers(ctx.db, ctx.briefId);
+  const layers = readBriefLayers(ctx.db, ctx.briefId);
   const resuming = layers.length > 0 || brief.arc.trim().length > 0;
   return ok(
     JSON.stringify({
@@ -212,7 +176,7 @@ export const getStackBriefStateHandler: StackBriefToolHandler<GetStackBriefState
       },
       layersWritten: layers,
       arc: brief.arc || null,
-      reviewOrder: parseOrder(brief.reviewOrder),
+      reviewOrder: brief.reviewOrder,
       instructions:
         "Call get_stack_layers next. Then set_layer_role once per layer in snapshot.layers, then set_arc, then complete_stack_brief." +
         (resuming
@@ -261,7 +225,7 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
           .where(inArray(walkthroughs.pullRequestId, prIds))
           .orderBy(desc(walkthroughs.generatedAt))
           .all()
-          .filter((w) => w.phase === "D" && w.completedAt !== null && w.status !== "error");
+          .filter(isCompleteReview);
 
   const layers = brief.snapshot.layers.map((layer) => {
     const files = layer.prId ? (filesByPr.get(layer.prId) ?? []) : [];
@@ -345,7 +309,7 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
 
     const links = checkBuildsOn(input.builds_on, layer, brief.snapshot);
     if ("error" in links) return err(`Error: ${links.error}`);
-    const buildsOn = JSON.stringify(links.value);
+    const buildsOn = links.value;
 
     const existing = ctx.db
       .select({
@@ -368,7 +332,7 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
       existing.role !== role.value ||
       existing.reviewFocus !== focus.value ||
       existing.chapter !== chapter.value ||
-      existing.buildsOn !== buildsOn
+      JSON.stringify(existing.buildsOn) !== JSON.stringify(buildsOn)
     ) {
       const now = new Date().toISOString();
       ctx.db
@@ -446,13 +410,16 @@ export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, inp
       );
     }
 
-    const reviewOrder = JSON.stringify(given);
-    if (brief.phase === "R" && brief.arc === arc && brief.reviewOrder === reviewOrder) {
+    if (
+      brief.phase === "R" &&
+      brief.arc === arc &&
+      JSON.stringify(brief.reviewOrder) === JSON.stringify(given)
+    ) {
       return ok("Arc already stored. Call complete_stack_brief.");
     }
     ctx.db
       .update(stackBriefs)
-      .set({ arc, reviewOrder, lastCompletedPhase: "R" })
+      .set({ arc, reviewOrder: given, lastCompletedPhase: "R" })
       .where(eq(stackBriefs.id, ctx.briefId))
       .run();
     return ok("Arc stored. Call complete_stack_brief.");

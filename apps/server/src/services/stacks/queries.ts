@@ -109,6 +109,20 @@ export interface RawPrStackAnswer {
   } | null;
 }
 
+// ── One PR's state, for a layer the stack stopped listing ───────────────────
+
+export const PR_STATE_QUERY = `
+  query PrMergeState($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) { state }
+    }
+  }
+`;
+
+export interface RawPrState {
+  readonly repository: { readonly pullRequest: { readonly state: string } | null } | null;
+}
+
 // ── How far each layer is behind its base ───────────────────────────────────
 //
 // The stack query can't say whether a layer still sits on its base's tip:

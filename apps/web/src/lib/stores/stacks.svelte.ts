@@ -9,15 +9,17 @@
 import {
   type PrStackDetail,
   type StackLayer,
-  type StackMergeRun,
   type StackReviewScope,
   type StackReviewStarted,
   stackKey,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
+import { plain, thrownMessage } from "$lib/api/wire";
+import { layerAt, layerOf } from "$lib/stacks/locate";
 import { RequestState } from "./_types";
 import { getPrById } from "./prs.svelte";
+import { singleFlight } from "./single-flight";
 
 interface StackEntry {
   readonly request: RequestState<PrStackDetail>;
@@ -32,9 +34,7 @@ const FRESH_FOR_MS = 15_000;
 const REFRESH_DEBOUNCE_MS = 400;
 
 let entries = $state(new Map<string, StackEntry>());
-let mergeRuns = $state(new Map<string, StackMergeRun>());
 
-const inflight = new Map<string, Promise<void>>();
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function setEntry(key: string, entry: StackEntry): void {
@@ -46,10 +46,6 @@ function setEntry(key: string, entry: StackEntry): void {
 function keyForPr(prId: string): string | null {
   const pr = getPrById(prId);
   return pr?.stack ? stackKey(pr.repositoryId, pr.stack.number) : null;
-}
-
-function plain<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function fetchStack(key: string, prId: string): Promise<void> {
@@ -77,16 +73,19 @@ async function fetchStack(key: string, prId: string): Promise<void> {
       entries = new Map(entries);
       return;
     }
-    setEntry(stackKey(stack.repositoryId, stack.number), {
-      request: RequestState.ok(stack),
-      viaPrId: prId,
-      loadedAt: Date.now(),
-    });
+    const actual = stackKey(stack.repositoryId, stack.number);
+    setEntry(actual, { request: RequestState.ok(stack), viaPrId: prId, loadedAt: Date.now() });
+    // The poll filed this PR under another stack. Its placeholder resolves to
+    // nothing rather than loading forever; a read already shown there stays.
+    if (actual !== key && entries.get(key)?.request.status !== "ok") {
+      entries.delete(key);
+      entries = new Map(entries);
+    }
   } catch (e) {
     const current = entries.get(key);
     if (current?.request.status !== "ok") {
       setEntry(key, {
-        request: RequestState.error(e instanceof Error ? e.message : String(e)),
+        request: RequestState.error(thrownMessage(e)),
         viaPrId: prId,
         loadedAt: 0,
       });
@@ -94,13 +93,7 @@ async function fetchStack(key: string, prId: string): Promise<void> {
   }
 }
 
-function load(key: string, prId: string): Promise<void> {
-  const running = inflight.get(key);
-  if (running) return running;
-  const promise = fetchStack(key, prId).finally(() => inflight.delete(key));
-  inflight.set(key, promise);
-  return promise;
-}
+const reads = singleFlight(fetchStack);
 
 /** Read the PR's stack unless a fresh copy is on hand. No-op for an unstacked PR. */
 export function ensureStack(prId: string): Promise<void> {
@@ -110,13 +103,16 @@ export function ensureStack(prId: string): Promise<void> {
   if (entry?.request.status === "ok" && Date.now() - entry.loadedAt < FRESH_FOR_MS) {
     return Promise.resolve();
   }
-  return load(key, prId);
+  return reads.run(key, prId);
 }
 
-/** Re-read a stack now, whatever its age. */
+/**
+ * Re-read a stack now, whatever its age. A read already in flight may predate
+ * the change that asked for this one, so it reads again after that one ends.
+ */
 export function refreshStack(prId: string): Promise<void> {
   const key = keyForPr(prId);
-  return key ? load(key, prId) : Promise.resolve();
+  return key ? reads.rerun(key, prId) : Promise.resolve();
 }
 
 /** The PR's stack request, or idle when it isn't stacked. */
@@ -133,19 +129,15 @@ export function getStack(prId: string): PrStackDetail | null {
 
 /** The layer the PR occupies in its loaded stack. */
 export function getLayer(prId: string): StackLayer | null {
-  return getStack(prId)?.layers.find((l) => l.prId === prId) ?? null;
+  const stack = getStack(prId);
+  return stack ? layerOf(stack, prId, getPrById(prId)?.externalId ?? null) : null;
 }
 
 /** The layer `offset` positions away (+1 is up, toward the top), or null at an end. */
 export function getNeighbour(prId: string, offset: number): StackLayer | null {
   const stack = getStack(prId);
-  const here = stack?.layers.find((l) => l.prId === prId);
-  if (!stack || !here) return null;
-  return stack.layers.find((l) => l.position === here.position + offset) ?? null;
-}
-
-export function getMergeRun(repositoryId: string, stackNumber: number): StackMergeRun | null {
-  return mergeRuns.get(stackKey(repositoryId, stackNumber)) ?? null;
+  const here = getLayer(prId);
+  return stack && here ? layerAt(stack, here, offset) : null;
 }
 
 function scheduleRefresh(key: string): void {
@@ -158,41 +150,30 @@ function scheduleRefresh(key: string): void {
     setTimeout(() => {
       refreshTimers.delete(key);
       const current = entries.get(key);
-      if (current) void load(key, current.viaPrId);
+      if (current) void reads.rerun(key, current.viaPrId);
     }, REFRESH_DEBOUNCE_MS),
   );
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
 
+/** The stack moved on GitHub, or something Revv shows on it did: re-read it shortly. */
 export function onStackUpdated(data: { repositoryId: string; stackNumber: number }): void {
   scheduleRefresh(stackKey(data.repositoryId, data.stackNumber));
 }
 
+/** The brief rides on the stack detail, so a brief's lifecycle is a stack update. */
 export function onStackBriefStatusChanged(data: {
   repositoryId: string;
   stackNumber: number;
 }): void {
-  scheduleRefresh(stackKey(data.repositoryId, data.stackNumber));
-}
-
-export function onStackMergeProgress(run: StackMergeRun): void {
-  mergeRuns.set(stackKey(run.repositoryId, run.stackNumber), run);
-  mergeRuns = new Map(mergeRuns);
-  scheduleRefresh(stackKey(run.repositoryId, run.stackNumber));
+  onStackUpdated(data);
 }
 
 /** A member's walkthrough started, finished, or moved: its layer's review state changed. */
 export function onMemberWalkthroughLifecycle(prId: string): void {
   const key = keyForPr(prId);
   if (key) scheduleRefresh(key);
-}
-
-/** Seed a merge run read over REST (the sheet opening mid-run). */
-export function setMergeRun(run: StackMergeRun | null, key: string): void {
-  if (run) mergeRuns.set(key, run);
-  else mergeRuns.delete(key);
-  mergeRuns = new Map(mergeRuns);
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────

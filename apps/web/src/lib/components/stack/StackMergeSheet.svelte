@@ -1,21 +1,14 @@
 <script lang="ts">
-import type {
-  MergeMethod,
-  StackMergeLayerState,
-  StackMergePlan,
-  StackMergePlanLayer,
-  StackMergeRun,
-} from "@revv/shared";
+import type { MergeMethod, StackMergePlan, StackMergePlanLayer, StackMergeRun } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
-import Circle from "phosphor-svelte/lib/Circle";
 import CircleNotch from "phosphor-svelte/lib/CircleNotch";
 import Clock from "phosphor-svelte/lib/Clock";
 import Desktop from "phosphor-svelte/lib/Desktop";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Warning from "phosphor-svelte/lib/Warning";
-import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
+import { expectedHeads } from "$lib/api/wire";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
@@ -23,17 +16,21 @@ import SegmentedControl, {
   type SegmentedOption,
 } from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
+import { RequestState } from "$lib/stores/_types";
 import {
   cancelStackMerge,
   closeStackMergeSheet,
   continueStackMerge,
+  getMergeRun,
   getStackMergePlan,
   getStackMergeSheetPrId,
   loadStackMergePlan,
+  type StackMergeAnswer,
   startStackMerge,
 } from "$lib/stores/stack-merge.svelte";
-import { getMergeRun } from "$lib/stores/stacks.svelte";
-import StackLayerGlyph from "./StackLayerGlyph.svelte";
+import MergePickerRow from "./MergePickerRow.svelte";
+import MergeProgressRow from "./MergeProgressRow.svelte";
+import StackLayerList from "./StackLayerList.svelte";
 
 // "Merge this stack through layer N." The layers read bottom-up toward the
 // base branch, like the stack list; the list is also the picker for how far
@@ -47,8 +44,12 @@ const plan = $derived<StackMergePlan | null>(request.status === "ok" ? request.d
 
 let through = $state<number | null>(null);
 let method = $state<MergeMethod>("merge");
-let submitting = $state(false);
-let actionError = $state<string | null>(null);
+/** The last start, cancel or continue; its refusal shows until the next one. */
+let action = $state<RequestState<StackMergeRun>>(RequestState.idle());
+const submitting = $derived(action.status === "loading");
+const actionError = $derived(action.status === "error" ? action.error : null);
+/** A stopped run the user started over from: the picker shows in its place. */
+let setAside = $state<string | null>(null);
 /** When the sheet opened: a run that finished before it isn't news. */
 let openedAt = 0;
 
@@ -77,8 +78,8 @@ $effect(() => {
   untrack(() => {
     openedAt = Date.now();
     through = null;
-    actionError = null;
-    submitting = false;
+    action = RequestState.idle();
+    setAside = null;
     void loadStackMergePlan(id).then(applyDefaults);
   });
 });
@@ -87,24 +88,24 @@ $effect(() => {
 
 const run = $derived.by<StackMergeRun | null>(() => {
   if (!plan) return null;
-  const live = getMergeRun(plan.repositoryId, plan.stackNumber) ?? plan.activeRun;
-  if (!live) return null;
-  if (live.status === "complete" || live.status === "cancelled") {
-    return Date.parse(live.updatedAt) >= openedAt ? live : null;
+  const latest = getMergeRun(plan.repositoryId, plan.stackNumber);
+  if (!latest || latest.id === setAside) return null;
+  if (latest.status === "complete" || latest.status === "cancelled") {
+    return Date.parse(latest.updatedAt) >= openedAt ? latest : null;
   }
-  return live;
+  return latest;
 });
 const runLive = $derived(run?.status === "running" || run?.status === "waiting");
 const runStopped = $derived(run?.status === "failed" || run?.status === "expired");
 
 // A run that just ended moved the stack; re-read it so the rows say so.
-let lastRunStatus: string | null = null;
+let wasLive = false;
 $effect(() => {
-  const status = run?.status ?? null;
+  const live = runLive;
   const id = prId;
   untrack(() => {
-    const ended = lastRunStatus !== null && status !== lastRunStatus && !runLive;
-    lastRunStatus = status;
+    const ended = wasLive && !live;
+    wasLive = live;
     if (ended && id) void loadStackMergePlan(id, true);
   });
 });
@@ -164,69 +165,54 @@ const methodHint = $derived.by(() => {
   return "This repository doesn't allow merge commits, so the layers above may need a rebase.";
 });
 
+// ── Actions ───────────────────────────────────────────────────────────────
+
+/** Run one call at a time; its answer becomes `action`. Null when one is already running. */
+async function act(call: () => Promise<StackMergeAnswer>): Promise<StackMergeAnswer | null> {
+  if (submitting) return null;
+  action = RequestState.loading();
+  const result = await call();
+  action = result.ok ? RequestState.ok(result.run) : RequestState.error(result.error);
+  return result;
+}
+
 async function confirm(): Promise<void> {
-  if (!prId || !plan || target === null || submitting) return;
-  submitting = true;
-  actionError = null;
-  const expectedHeads: Record<string, string> = {};
-  for (const layer of toMerge) {
-    if (layer.headSha) expectedHeads[String(layer.number)] = layer.headSha;
-  }
-  const result = await startStackMerge(prId, { throughPosition: target, method, expectedHeads });
-  submitting = false;
-  if (!result.ok) {
-    actionError = result.error;
-    // The refusal usually means GitHub moved; show the stack as it is now.
-    void loadStackMergePlan(prId, true);
-  }
+  const id = prId;
+  const throughPosition = target;
+  if (!id || !plan || throughPosition === null) return;
+  const heads = expectedHeads(toMerge);
+  const result = await act(() =>
+    startStackMerge(id, { throughPosition, method, expectedHeads: heads }),
+  );
+  // The refusal usually means GitHub moved; show the stack as it is now.
+  if (result && !result.ok) void loadStackMergePlan(id, true);
 }
 
-async function cancelRun(): Promise<void> {
-  if (!run || submitting) return;
-  submitting = true;
-  const result = await cancelStackMerge(run.id);
-  submitting = false;
-  actionError = result.ok ? null : result.error;
+function cancelRun(): void {
+  const runId = run?.id;
+  if (runId) void act(() => cancelStackMerge(runId));
 }
 
-async function continueRun(): Promise<void> {
-  if (!run || submitting) return;
-  submitting = true;
-  actionError = null;
-  const result = await continueStackMerge(run.id);
-  submitting = false;
-  if (!result.ok) actionError = result.error;
+function continueRun(): void {
+  const runId = run?.id;
+  if (runId) void act(() => continueStackMerge(runId));
+}
+
+/** Leave the stopped run where it stopped and pick again from the stack as it is now. */
+function startOver(): void {
+  if (!run || !prId) return;
+  setAside = run.id;
+  through = null;
+  action = RequestState.idle();
+  void loadStackMergePlan(prId).then(applyDefaults);
 }
 
 function retry(): void {
   if (prId) void loadStackMergePlan(prId).then(applyDefaults);
 }
 
-// ── Run rows ──────────────────────────────────────────────────────────────
-
-function runState(number: number): { state: StackMergeLayerState; message: string | null } | null {
-  const layer = run?.layers.find((l) => l.number === number);
-  return layer ? { state: layer.state, message: layer.message } : null;
-}
-
-function runLine(state: StackMergeLayerState, message: string | null): string {
-  switch (state) {
-    case "pending":
-      return "Waiting its turn";
-    case "retargeting":
-      return `Pointing it at ${plan?.baseRefName ?? "the base"}`;
-    case "rebasing":
-      return `Rebasing the stack onto ${plan?.baseRefName ?? "the base"}`;
-    case "merging":
-      if (run?.status !== "waiting") return "Merging";
-      return message ? `${message}, waiting for GitHub` : "Waiting for GitHub";
-    case "auto_merge":
-      return "GitHub auto-merge will finish it";
-    case "merged":
-      return "Merged";
-    case "failed":
-      return message ?? "Stopped here";
-  }
+function runState(number: number) {
+  return run?.layers.find((l) => l.number === number) ?? null;
 }
 
 const title = $derived.by(() => {
@@ -253,6 +239,11 @@ function onOpenChange(open: boolean): void {
   if (!open) closeStackMergeSheet();
 }
 </script>
+
+{#snippet keepOpen()}
+	<Desktop size={14} />
+	<span>Keep Revv open until the stack is merged.</span>
+{/snippet}
 
 <Dialog.Root open={prId !== null} {onOpenChange}>
 	<Dialog.Content class="stack-merge-sheet">
@@ -298,104 +289,33 @@ function onOpenChange(open: boolean): void {
 				</div>
 			{/if}
 
-			<ol
-				class="layers"
+			<StackLayerList
+				layers={topFirst}
+				baseRefName={plan.baseRefName}
 				role={run ? 'list' : 'radiogroup'}
 				aria-label={run ? 'Merge progress' : 'Merge through'}
+				--stack-layer-gap="2px"
 			>
-				{#each topFirst as layer (layer.number)}
-					{@const progress = run ? runState(layer.number) : null}
-					{@const refusal = pickRefusal.get(layer.position) ?? null}
-					{@const inRange = target !== null && layer.position <= target}
+				{#snippet row(layer)}
 					{#if run}
-						<li class="layer layer--run" class:layer--outside={!progress}>
-							<span class="layer-glyph" aria-hidden="true">
-								{#if !progress}
-									<StackLayerGlyph status={layer.status} />
-								{:else if progress.state === 'merged'}
-									<GitMerge size={14} weight="bold" class="tone-merged" />
-								{:else if progress.state === 'failed'}
-									<XCircle size={14} weight="fill" class="tone-danger" />
-								{:else if progress.state === 'auto_merge'}
-									<Clock size={14} weight="bold" class="tone-accent" />
-								{:else if progress.state === 'retargeting'}
-									<ArrowsClockwise size={14} weight="bold" class="tone-accent" />
-								{:else if progress.state === 'merging' || progress.state === 'rebasing'}
-									<CircleNotch size={14} weight="bold" class="tone-accent motion-essential-spin" />
-								{:else}
-									<Circle size={14} class="tone-muted" />
-								{/if}
-							</span>
-							<span class="layer-text">
-								<span class="layer-title">{layer.title}</span>
-								<span class="layer-meta">
-									#{layer.number}
-									{#if progress}
-										{#key progress.state}
-											<span
-												class="layer-state"
-												class:tone-danger={progress.state === 'failed'}
-												in:gsapFade={{ duration: tokens.quick }}
-											>
-												· <Shimmer
-													active={runLive &&
-														(progress.state === 'merging' ||
-															progress.state === 'retargeting' ||
-															progress.state === 'rebasing')}
-													>{runLine(progress.state, progress.message)}</Shimmer
-												>
-											</span>
-										{/key}
-									{:else}
-										· Not in this merge
-									{/if}
-								</span>
-							</span>
-						</li>
+						<MergeProgressRow
+							{layer}
+							progress={runState(layer.number)}
+							live={runLive}
+							waiting={run.status === 'waiting'}
+							baseRefName={plan.baseRefName}
+						/>
 					{:else}
-						<li class="layer">
-							<button
-								type="button"
-								role="radio"
-								class="layer-pick"
-								class:layer-pick--range={inRange && layer.readiness !== 'merged'}
-								aria-checked={layer.position === target}
-								disabled={refusal !== null}
-								title={refusal ?? `Merge everything through #${layer.number}`}
-								onclick={() => (through = layer.position)}
-							>
-								<span class="layer-glyph" aria-hidden="true">
-									<StackLayerGlyph status={layer.status} />
-								</span>
-								<span class="layer-text">
-									<span class="layer-title">{layer.title}</span>
-									<span class="layer-meta">
-										#{layer.number}
-										{#if layer.readiness === 'merged'}
-											· Merged
-										{:else if layer.readiness === 'blocked'}
-											<span class="tone-warning">· {layer.reasons.join(' · ')}</span>
-										{:else if layer.reasons.length > 0}
-											· {layer.reasons.join(' · ')}
-										{:else}
-											· Ready
-										{/if}
-									</span>
-								</span>
-								{#if layer.position === target}
-									<span class="layer-target" in:gsapFade={{ duration: tokens.snap }}>
-										Through here
-									</span>
-								{/if}
-							</button>
-						</li>
+						<MergePickerRow
+							{layer}
+							refusal={pickRefusal.get(layer.position) ?? null}
+							inRange={target !== null && layer.position <= target}
+							isTarget={layer.position === target}
+							onpick={() => (through = layer.position)}
+						/>
 					{/if}
-				{/each}
-				<li class="layer layer--base">
-					<span class="layer-glyph layer-glyph--base" aria-hidden="true"></span>
-					<code>{plan.baseRefName}</code>
-				</li>
-			</ol>
+				{/snippet}
+			</StackLayerList>
 
 			{#if !run}
 				<div class="options">
@@ -416,8 +336,7 @@ function onOpenChange(open: boolean): void {
 								you quit Revv.
 							</span>
 						{:else}
-							<Desktop size={14} />
-							<span>Keep Revv open until the stack is merged.</span>
+							{@render keepOpen()}
 						{/if}
 					</p>
 				</div>
@@ -432,8 +351,7 @@ function onOpenChange(open: boolean): void {
 				</p>
 			{:else if runLive && run.mode === 'driven'}
 				<p class="run-note">
-					<Desktop size={14} />
-					<span>Keep Revv open until the stack is merged.</span>
+					{@render keepOpen()}
 				</p>
 			{/if}
 
@@ -477,8 +395,24 @@ function onOpenChange(open: boolean): void {
 					<Button variant="outline" size="sm" class="pill" onclick={closeStackMergeSheet}>
 						Close
 					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						class="pill"
+						disabled={submitting}
+						title="Read the stack again and pick what to merge, at the heads it has now"
+						onclick={startOver}
+					>
+						Start over
+					</Button>
 					<span use:gsapPress={{ disabled: submitting }}>
-						<Button size="sm" class="pill pill--merge" disabled={submitting} onclick={continueRun}>
+						<Button
+							size="sm"
+							class="pill pill--merge"
+							disabled={submitting}
+							title="Pick up where it stopped, with the heads you confirmed"
+							onclick={continueRun}
+						>
 							<ArrowsClockwise size={14} weight="bold" />
 							{submitting ? 'Continuing…' : 'Continue'}
 						</Button>
@@ -558,29 +492,8 @@ function onOpenChange(open: boolean): void {
 		color: var(--color-text-primary);
 	}
 
-	/* The spine the layers hang on, base at the bottom, as in the stack list. */
-	.layers {
-		position: relative;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-
-	.layers::before {
-		content: "";
-		position: absolute;
-		top: 16px;
-		bottom: 12px;
-		left: 14.5px;
-		width: 1px;
-		background: var(--color-border);
-	}
-
-	.layer--run,
-	.layer-pick {
+	/* The two kinds of row, the picker's and the run's, share one frame and type. */
+	:global(.stack-merge-sheet .layer-row) {
 		display: flex;
 		align-items: flex-start;
 		gap: 8px;
@@ -588,53 +501,9 @@ function onOpenChange(open: boolean): void {
 		padding: 6px 8px;
 		border: 1px solid transparent;
 		border-radius: 8px;
-		background: none;
-		font: inherit;
-		text-align: left;
 	}
 
-	.layer-pick {
-		cursor: pointer;
-	}
-
-	.layer-pick:hover:not(:disabled) {
-		background: var(--color-tree-hover-bg);
-	}
-
-	.layer-pick:disabled {
-		cursor: default;
-	}
-
-	.layer-pick--range {
-		background: color-mix(in srgb, var(--color-success) 6%, transparent);
-	}
-
-	.layer-pick[aria-checked="true"] {
-		border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
-	}
-
-	.layer-pick:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 1px;
-	}
-
-	.layer--outside {
-		opacity: 0.55;
-	}
-
-	.layer-glyph {
-		position: relative;
-		z-index: 1;
-		display: grid;
-		place-items: center;
-		flex-shrink: 0;
-		width: 14px;
-		height: 18px;
-		background: var(--color-bg-primary);
-		border-radius: 50%;
-	}
-
-	.layer-text {
+	:global(.stack-merge-sheet .layer-text) {
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
@@ -642,7 +511,7 @@ function onOpenChange(open: boolean): void {
 		min-width: 0;
 	}
 
-	.layer-title {
+	:global(.stack-merge-sheet .layer-title) {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -652,43 +521,9 @@ function onOpenChange(open: boolean): void {
 		color: var(--color-text-primary);
 	}
 
-	.layer-pick:disabled .layer-title {
-		color: var(--color-text-secondary);
-	}
-
-	.layer-meta {
+	:global(.stack-merge-sheet .layer-meta) {
 		font-size: 0.6875rem;
 		color: var(--color-text-muted);
-	}
-
-	.layer-state {
-		display: inline;
-	}
-
-	.layer-target {
-		flex-shrink: 0;
-		align-self: center;
-		padding: 0 8px;
-		border-radius: 999px;
-		font-size: 0.6875rem;
-		font-weight: 500;
-		line-height: 18px;
-		color: var(--color-success);
-		background: color-mix(in srgb, var(--color-success) 12%, transparent);
-	}
-
-	.layer--base {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 6px 8px;
-	}
-
-	.layer-glyph--base {
-		width: 9px;
-		height: 9px;
-		margin: 0 2.5px;
-		border: 1.5px solid var(--color-text-muted);
 	}
 
 	.options {
@@ -733,12 +568,11 @@ function onOpenChange(open: boolean): void {
 		color: var(--color-merged);
 	}
 
-	:global(.stack-merge-sheet .tone-danger),
-	.tone-danger {
+	:global(.stack-merge-sheet .tone-danger) {
 		color: var(--color-danger);
 	}
 
-	.tone-warning {
+	:global(.stack-merge-sheet .tone-warning) {
 		color: var(--color-warning);
 	}
 

@@ -599,23 +599,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     { body: t.Object({ prIds: t.Array(t.String(), { maxItems: 200 }) }) },
   )
 
-  .get("/:id/thread-summary", async (ctx) => {
-    try {
-      // Look up the current user's GitHub login for role-aware counts.
-      const rows = await db
-        .select({ githubLogin: user.githubLogin })
-        .from(user)
-        .where(eq(user.id, ctx.session.user.id));
-      const login = rows[0]?.githubLogin ?? null;
-
-      return await AppRuntime.runPromise(
-        Effect.flatMap(SyncService, (s) => s.getThreadSummary(ctx.params.id, login)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
   // ── Owner-only PR mutations (draft toggle, close) ─────────────────────
   //
   // All three endpoints follow the same shape: resolve PR + repo + token,
@@ -702,16 +685,10 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             // The merge succeeded, so we know the PR is merged. Do not trust
             // github.getPr here — it goes through the ETag cache and can return
             // the stale pre-merge body because the merge PUT and the PR GET are
-            // different cache keys. Construct the updated row locally instead.
-            const now = new Date().toISOString();
-            const refreshed = {
-              ...pr,
-              status: "merged" as const,
-              closedAt: now,
-              updatedAt: now,
-              fetchedAt: now,
-            };
-            yield* prService.upsertPrs([refreshed]);
+            // different cache keys. Mark the row locally instead.
+            yield* prService.markPrsClosed([
+              { id: pr.id, status: "merged", closedAt: new Date().toISOString() },
+            ]);
             const all = yield* prService.listPrs(accountId);
             yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
           }),

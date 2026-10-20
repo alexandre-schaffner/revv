@@ -31,10 +31,8 @@ import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
-import { stackMergeRoutes } from "./routes/stack-merge";
-import { stackRebaseRoutes } from "./routes/stack-rebase";
 import { stackReviewRoutes } from "./routes/stack-review";
-import { repoStackRoutes, stackRoutes } from "./routes/stacks";
+import { repoStackRoutes, stackMergeRoutes, stackRebaseRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
@@ -64,8 +62,8 @@ logError("server", `starting on port ${port}`);
 
 // Record every GitHub request with the route or loop that caused it; see
 // docs/github-ledger.md. Off unless dev or REVV_GITHUB_LEDGER asks for it.
-const ledger = githubLedgerPath();
-if (ledger.enabled) installGitHubLedger({ path: ledger.path });
+const ledgerPath = githubLedgerPath();
+if (ledgerPath !== null) installGitHubLedger({ path: ledgerPath });
 
 /** `/api/prs/acme:42/conversation` → `/api/prs/:id/conversation`, when no route matched. */
 const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");

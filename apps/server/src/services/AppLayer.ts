@@ -37,7 +37,7 @@ import { SecretStoreLive } from "./SecretStore";
 import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
 import { StackBriefJobsLive } from "./stacks/StackBriefJobs";
-import { StackHeadlinesLive } from "./stacks/StackHeadlines";
+import { StackHeadlineServiceLive } from "./stacks/StackHeadlines";
 import { StackMergeServiceLive } from "./stacks/StackMerge";
 import { StackRebaseServiceLive } from "./stacks/StackRebase";
 import { StackReviewServiceLive } from "./stacks/StackReview";
@@ -126,9 +126,9 @@ const StackServiceWithDeps = StackServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
-// StackHeadlines names each stack for the homepage queue: Db, cache, settings
+// StackHeadlineService names each stack for the homepage queue: Db, cache, settings
 // and Broadcaster, all from BaseLayers.
-const StackHeadlinesWithDeps = StackHeadlinesLive.pipe(Layer.provide(BaseLayers));
+const StackHeadlineServiceWithDeps = StackHeadlineServiceLive.pipe(Layer.provide(BaseLayers));
 
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
@@ -264,7 +264,7 @@ export const AppLayer = Layer.mergeAll(
   PrContextServiceWithDeps,
   PrConversationServiceWithDeps,
   StackServiceWithDeps,
-  StackHeadlinesWithDeps,
+  StackHeadlineServiceWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,

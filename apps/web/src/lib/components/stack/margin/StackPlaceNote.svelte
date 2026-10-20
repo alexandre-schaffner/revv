@@ -7,6 +7,7 @@
  */
 import StackSimple from "phosphor-svelte/lib/StackSimple";
 import BriefAction from "./BriefAction.svelte";
+import Joined from "./Joined.svelte";
 import LayerChip from "./LayerChip.svelte";
 import MarginNote from "./MarginNote.svelte";
 import RichLine from "./RichLine.svelte";
@@ -36,11 +37,11 @@ const buildsOn = $derived.by(() => {
 		<p>
 			{#if buildsOn.length > 0}
 				Stands on
-				{#each buildsOn as link, i (link.layer.number)}{#if i > 0}{i === buildsOn.length - 1 ? ' and ' : ', '}{/if}<LayerChip layer={link.layer} {place} />{#if link.uses} (<RichLine parts={richText(link.uses, [])} {place} />){/if}{/each}.
+				<Joined items={buildsOn} key={(link) => link.layer.number}>{#snippet item(link)}<LayerChip layer={link.layer} {place} />{#if link.uses} (<RichLine parts={richText(link.uses, [])} {place} />){/if}{/snippet}</Joined>.
 			{/if}
 			{#if place.usedBy.length > 0}
 				Used above by
-				{#each place.usedBy as link, i (link.layer.number)}{#if i > 0}{i === place.usedBy.length - 1 ? ' and ' : ', '}{/if}<LayerChip layer={link.layer} {place} />{/each}.
+				<Joined items={place.usedBy} key={(link) => link.layer.number}>{#snippet item(link)}<LayerChip layer={link.layer} {place} />{/snippet}</Joined>.
 			{/if}
 		</p>
 	{/if}

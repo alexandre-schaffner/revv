@@ -17,6 +17,7 @@ import {
   isReviewError,
   NotFoundError,
   RepoNotAccessibleError,
+  StackRejectedError,
   SyncError,
   ValidationError,
 } from "../domain/errors";
@@ -128,6 +129,8 @@ export function unwrapEffectError(e: unknown): unknown {
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
+const STACK_REJECTION_STATUS = { conflict: 409, moved: 409, invalid: 400, failed: 422 } as const;
+
 /**
  * Maps tagged Effect domain errors to HTTP responses.
  * Unwraps FiberFailure first, then checks instanceof.
@@ -137,7 +140,12 @@ export function unwrapEffectError(e: unknown): unknown {
 export function handleAppError(
   raw: unknown,
   ctx: { set: { status?: number | string } },
-): { error: string; detail?: string; action?: { label: string; url: string } } {
+): {
+  error: string;
+  detail?: string;
+  action?: { label: string; url: string };
+  files?: readonly string[];
+} {
   const e = unwrapEffectError(raw);
 
   if (e instanceof NotFoundError) {
@@ -173,6 +181,12 @@ export function handleAppError(
   if (e instanceof ValidationError) {
     ctx.set.status = 400;
     return { error: e.message };
+  }
+
+  // A refusal is the user's to read ("#122 got new commits…").
+  if (e instanceof StackRejectedError) {
+    ctx.set.status = STACK_REJECTION_STATUS[e.reason];
+    return e.files === undefined ? { error: e.message } : { error: e.message, files: e.files };
   }
 
   if (e instanceof ExternalIntegrationError) {

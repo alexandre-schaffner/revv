@@ -12,7 +12,10 @@ import {
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
-import type { PromptDiffSource } from "../../services/walkthrough-prompt-files";
+import {
+  type PromptDiffSource,
+  REVERTED_FILE_STATUS,
+} from "../../services/walkthrough-prompt-files";
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 //
@@ -281,6 +284,31 @@ function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
   ];
 }
 
+/** How an incremental run's prompt describes the diff it was handed. */
+const INCREMENTAL_DIFF_SOURCE: Record<
+  PromptDiffSource,
+  { readonly input: string; readonly heading: string }
+> = {
+  full_pr: {
+    input: "full PR diff",
+    heading: "### Changed Files in Incremental Range (diff — prior reviewed head to current head)",
+  },
+  incremental_range: {
+    input: "incremental range only",
+    heading: "### Changed Files in Incremental Range (diff — prior reviewed head to current head)",
+  },
+  full_pr_fallback: {
+    input: "full PR diff fallback because the incremental range could not be resolved locally",
+    heading: "### Changed Files (full PR diff fallback — incremental range unavailable)",
+  },
+  stack_layer_delta: {
+    input:
+      "this layer's current changes in the files that changed since the prior review (stacked PR: lower-layer churn excluded)",
+    heading:
+      "### Changed Files Since the Prior Review (diff — this layer's current changes, per file)",
+  },
+};
+
 export function buildWalkthroughPrompt(
   params: WalkthroughPromptHints & {
     pr: {
@@ -331,15 +359,7 @@ export function buildWalkthroughPrompt(
       `Previous reviewed head: ${params.reviewMode.baseHeadSha ?? "unknown"}`,
       `Current head: ${params.reviewMode.headSha}`,
       `Prior walkthrough id: ${params.reviewMode.parentWalkthroughId ?? "unknown"}`,
-      `Diff input: ${
-        params.reviewMode.diffSource === "full_pr_fallback"
-          ? "full PR diff fallback because the incremental range could not be resolved locally"
-          : params.reviewMode.diffSource === "incremental_range"
-            ? "incremental range only"
-            : params.reviewMode.diffSource === "stack_layer_delta"
-              ? "this layer's current changes in the files that changed since the prior review (stacked PR: lower-layer churn excluded)"
-              : "full PR diff"
-      }`,
+      `Diff input: ${INCREMENTAL_DIFF_SOURCE[params.reviewMode.diffSource ?? "full_pr"].input}`,
     );
   }
 
@@ -352,11 +372,7 @@ export function buildWalkthroughPrompt(
 
   const changedFilesHeading =
     params.reviewMode?.mode === "incremental"
-      ? params.reviewMode.diffSource === "full_pr_fallback"
-        ? "### Changed Files (full PR diff fallback — incremental range unavailable)"
-        : params.reviewMode.diffSource === "stack_layer_delta"
-          ? "### Changed Files Since the Prior Review (diff — this layer's current changes, per file)"
-          : "### Changed Files in Incremental Range (diff — prior reviewed head to current head)"
+      ? INCREMENTAL_DIFF_SOURCE[params.reviewMode.diffSource ?? "full_pr"].heading
       : "### Changed Files (diff — you can read full file contents with your tools)";
 
   // Leads ride under their file's header, so the agent meets each one while
@@ -413,6 +429,8 @@ export function buildWalkthroughPrompt(
       }
       lines.push(header, "```diff", file.patch, "```", "");
       approxTokens += patchTokens;
+    } else if (file.status === REVERTED_FILE_STATUS) {
+      lines.push(header, "[Change reverted — this layer no longer touches this file]", "");
     } else {
       lines.push(header, "[No patch available — binary or too large]", "");
     }

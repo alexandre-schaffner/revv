@@ -563,6 +563,22 @@ describe("listPrs", () => {
     expect(queries).toHaveLength(2);
   });
 
+  // A transient failure, but the stack fields are what tipped the query over:
+  // asking the same heavy query again would keep timing out.
+  it("asks once without stacks when the stack query times out on GitHub's side", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message:
+        "Something went wrong while executing your query. This may be the result of a timeout.",
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.stacks).toBe("unknown");
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(queries).toHaveLength(2);
+  });
+
   it("skips the stack fields when told to", async () => {
     const db = createDb(":memory:");
     const queries = stubStackRefusal({ message: "unreachable" });

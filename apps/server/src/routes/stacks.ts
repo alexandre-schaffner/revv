@@ -1,14 +1,24 @@
 // GitHub PR stacks: the stack a PR sits in, with Revv's per-layer state, and
-// the flows that act on a whole stack (review it, merge it, brief it).
+// the flows that act on a whole stack (review it, merge it, rebase it, brief
+// it). A merge or rebase Revv refuses answers with the refusal's own message
+// (`StackRejectedError`, mapped in `handleAppError`).
 
+import {
+  isOpenLayer,
+  type StackMergePlan,
+  type StackMergeRun,
+  type StackRebaseResult,
+} from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { getOrFetchDiffFiles } from "../services/DiffCache";
 import { PullRequestService } from "../services/PullRequest";
 import { RepositoryService } from "../services/Repository";
-import { StackHeadlines } from "../services/stacks/StackHeadlines";
+import { StackHeadlineService } from "../services/stacks/StackHeadlines";
+import { StackMergeService } from "../services/stacks/StackMerge";
+import { StackRebaseService } from "../services/stacks/StackRebase";
 import { StackService } from "../services/stacks/StackService";
 import { handleAppError, withAccount } from "./middleware";
 
@@ -48,10 +58,7 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
           const here = stack?.layers.find((l) => l.prId === ctx.params.id);
           if (!stack || !here) return 0;
           const neighbours = stack.layers.flatMap((l) =>
-            l.prId !== null &&
-            Math.abs(l.position - here.position) === 1 &&
-            l.status !== "merged" &&
-            l.status !== "closed"
+            l.prId !== null && Math.abs(l.position - here.position) === 1 && isOpenLayer(l)
               ? [l.prId]
               : [],
           );
@@ -91,10 +98,107 @@ export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
   .get("/:id/stack-headlines", async (ctx) => {
     try {
       const headlines = await AppRuntime.runPromise(
-        Effect.flatMap(StackHeadlines, (s) => s.forRepo(ctx.params.id, ctx.account.accountId)),
+        Effect.flatMap(StackHeadlineService, (s) =>
+          s.forRepo(ctx.params.id, ctx.account.accountId),
+        ),
       );
       return { headlines };
     } catch (e) {
       return handleAppError(e, ctx);
     }
   });
+
+type Rejection = ReturnType<typeof handleAppError>;
+
+const mergeMethod = t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]);
+
+/**
+ * Merge a stack through a chosen layer, bottom-up. The plan says what can
+ * merge and why not; a run is persisted and advanced against GitHub's state.
+ */
+export const stackMergeRoutes = new Elysia({ prefix: "/api" })
+  .use(withAccount)
+  .get("/prs/:id/stack/merge-plan", async (ctx): Promise<StackMergePlan | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) =>
+          s.plan(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post(
+    "/prs/:id/stack/merge",
+    async (ctx): Promise<StackMergeRun | Rejection> => {
+      try {
+        return await AppRuntime.runPromise(
+          Effect.flatMap(StackMergeService, (s) =>
+            s.start(ctx.params.id, ctx.session.user.id, ctx.account.accountId, ctx.body),
+          ),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      body: t.Object({
+        throughPosition: t.Integer({ minimum: 1 }),
+        method: mergeMethod,
+        /** Head SHAs the user saw in the sheet, by PR number; a moved layer is never merged. */
+        expectedHeads: t.Record(t.String(), t.String()),
+      }),
+    },
+  )
+  .post("/stack-merges/:id/cancel", async (ctx): Promise<StackMergeRun | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.account.accountId)),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post("/stack-merges/:id/continue", async (ctx): Promise<StackMergeRun | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) =>
+          s.continueRun(ctx.params.id, ctx.account.accountId),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });
+
+/**
+ * Rebase a stack: every open layer back on top of the one below it, the way
+ * GitHub's "Rebase stack" button does it, run in Revv's clone and pushed in
+ * one atomic, leased push.
+ */
+export const stackRebaseRoutes = new Elysia({ prefix: "/api" }).use(withAccount).post(
+  "/prs/:id/stack/rebase",
+  async (ctx): Promise<StackRebaseResult | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackRebaseService, (s) =>
+          s.rebase(
+            ctx.params.id,
+            ctx.session.user.id,
+            ctx.account.accountId,
+            ctx.body.expectedHeads,
+          ),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  },
+  {
+    body: t.Object({
+      /** Head SHAs the user saw, by PR number; a layer that moved since is never rebased. */
+      expectedHeads: t.Record(t.String(), t.String()),
+    }),
+  },
+);

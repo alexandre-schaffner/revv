@@ -14,7 +14,6 @@ import {
   walkthroughSemanticSteps,
   walkthroughs,
 } from "../db/schema";
-import { ImportError } from "../domain/errors";
 import { DbService } from "./Db";
 import { fingerprintFiles } from "./stacks/fingerprint";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
@@ -23,6 +22,7 @@ import {
   WalkthroughSnapshotImporterLive,
 } from "./WalkthroughSnapshotImporter";
 import { tryCarryRestackedWalkthrough } from "./walkthrough-cache-import";
+import { planRestackCarry, resolveStackInputs } from "./walkthrough-stack-inputs";
 
 const NOW = "2026-10-16T00:00:00Z";
 const FILES = [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n+a" }];
@@ -196,22 +196,8 @@ describe("tryCarryRestackedWalkthrough", () => {
           prId: "pr-1",
           repoFullName: "o/r",
           headSha: "head-2",
-          importSnapshot: (snapshot) =>
-            provide(
-              importer
-                .import({ walkthroughId, snapshot })
-                .pipe(
-                  Effect.zipRight(
-                    service
-                      .markCarriedFrom(walkthroughId, "wt-old")
-                      .pipe(
-                        Effect.mapError(
-                          (e) => new ImportError({ walkthroughId, reason: e.message }),
-                        ),
-                      ),
-                  ),
-                ),
-            ),
+          importSnapshot: (snapshot) => provide(importer.import({ walkthroughId, snapshot })),
+          markCarriedFrom: provide(service.markCarriedFrom(walkthroughId, "wt-old")),
           markComplete: provide(service.setStatus(walkthroughId, "complete")),
           emitEvent: (event) => Effect.sync(() => events.push(event)),
         });
@@ -245,5 +231,76 @@ describe("tryCarryRestackedWalkthrough", () => {
       type: "lifecycle:cache-hit",
       data: { walkthroughId: carried.walkthroughId, source: "restack" },
     });
+  });
+});
+
+describe("planRestackCarry", () => {
+  const fingerprint = fingerprintFiles(FILES);
+  const source = (generationMode: "full" | "incremental") => ({
+    id: "wt-old",
+    generationMode,
+    diffFingerprint: fingerprint,
+  });
+
+  it("carries a full review into an incremental request, as a full review", () => {
+    expect(planRestackCarry(source("full"), "incremental", fingerprint)).toEqual({
+      fromWalkthroughId: "wt-old",
+      generationMode: "full",
+    });
+  });
+
+  it("never lets an incremental review stand in for a full one", () => {
+    expect(planRestackCarry(source("incremental"), "full", fingerprint)).toBeNull();
+    expect(planRestackCarry(source("incremental"), "incremental", fingerprint)).toEqual({
+      fromWalkthroughId: "wt-old",
+      generationMode: "incremental",
+    });
+  });
+
+  it("stands aside when the layer's own changes moved", () => {
+    const moved = fingerprintFiles([
+      { filename: "src/a.ts", status: "modified", patch: "@@ -2 +2 @@\n+a" },
+    ]);
+    expect(planRestackCarry(source("full"), "full", moved)).toBeNull();
+  });
+});
+
+describe("resolveStackInputs", () => {
+  const inputs = (db: Db, overrides: Partial<Parameters<typeof resolveStackInputs>[0]> = {}) =>
+    run(
+      db,
+      resolveStackInputs({
+        prId: "pr-1",
+        headSha: "head-2",
+        mode: "reviewer",
+        files: FILES,
+        partialId: null,
+        isResume: false,
+        requestedGenerationMode: "incremental",
+        resolvedGenerationMode: "incremental",
+        parentWalkthroughId: "wt-old",
+        snapshotStack: Effect.succeed(STACK),
+        ...overrides,
+      }),
+    );
+
+  // A carry the request accepted must be the carry the job runs: an
+  // incremental request answered by a full review imports it, rather than
+  // skipping the job-start plan and paying for an agent run with no files.
+  it("plans the carry an incremental request accepts from a full review", async () => {
+    const db = createDb(":memory:");
+    seedSource(db);
+    const result = await inputs(db);
+    expect(result.stack).toEqual(STACK);
+    expect(result.restack).toEqual({ fromWalkthroughId: "wt-old", generationMode: "full" });
+    expect(result.parentFingerprint).toBeNull();
+  });
+
+  it("never carries on a resume", async () => {
+    const db = createDb(":memory:");
+    seedSource(db);
+    const result = await inputs(db, { isResume: true });
+    expect(result.restack).toBeNull();
+    expect(result.parentFingerprint).toEqual(fingerprintFiles(FILES));
   });
 });

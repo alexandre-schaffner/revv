@@ -1,6 +1,11 @@
 import { prefersReducedMotion } from "./reduced-motion";
 
 let crossfading = false;
+/** Bumped by every crossfade, so only the latest of overlapping ones cleans up. */
+let generation = 0;
+
+/** On <html> for the length of a crossfade: retimes the fade and freezes glass (app.css). */
+const CROSSFADE = "document-crossfade";
 
 /** Whether a whole-document crossfade is mid-flight. */
 export function isDocumentCrossfading(): boolean {
@@ -39,59 +44,18 @@ function solidOver(color: string, under: string): string {
 }
 
 /**
- * Selectors of every style rule that sets a backdrop filter. Walking the
- * stylesheets is a few milliseconds; reading the computed style of every
- * element on a busy route was ~80ms, all of it inside the click.
- */
-function glassSelectors(): string[] {
-  const found = new Set<string>();
-  const walk = (rules: CSSRuleList) => {
-    for (const rule of rules) {
-      if (rule instanceof CSSStyleRule) {
-        const style = rule.style;
-        const filter = style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter");
-        if (filter && filter !== "none") found.add(rule.selectorText);
-      }
-      // Grouping rules (@media, @layer, @supports) and nested style rules.
-      if ("cssRules" in rule && rule.cssRules) walk(rule.cssRules as CSSRuleList);
-    }
-  };
-  for (const sheet of document.styleSheets) {
-    try {
-      walk(sheet.cssRules);
-    } catch {
-      // A cross-origin sheet; nothing of ours.
-    }
-  }
-  return [...found];
-}
-
-function glassElements(): HTMLElement[] {
-  const elements = new Set<HTMLElement>();
-  for (const selector of glassSelectors()) {
-    try {
-      for (const el of document.querySelectorAll<HTMLElement>(selector)) elements.add(el);
-    } catch {
-      // A selector querySelectorAll can't take (a pseudo-element); skip it.
-    }
-  }
-  for (const el of document.querySelectorAll<HTMLElement>("[style*='backdrop-filter']")) {
-    elements.add(el);
-  }
-  return [...elements];
-}
-
-/**
- * Freeze the page's glass to solid fills. `before` runs between reading and
- * writing: anything that invalidates styles (the crossfade's root class) has
- * to come after the reads, or the first read pays for a whole-document
- * recalc inside the click.
+ * Freeze the page's glass to solid fills. A glass surface is marked with
+ * `data-glass`, on the element that carries the backdrop filter, so finding
+ * them is one query rather than a walk of every stylesheet. `before` runs
+ * between reading and writing: anything that invalidates styles (the
+ * crossfade's root class) has to come after the reads, or the first read
+ * pays for a whole-document recalc inside the click.
  */
 function freezeGlass(before?: () => void): void {
   const page = getComputedStyle(document.body).backgroundColor;
   const glass: [HTMLElement, string][] = [];
-  for (const el of glassElements()) {
-    // The rule matched; the cascade may still have overridden it.
+  for (const el of document.querySelectorAll<HTMLElement>("[data-glass]")) {
+    // Marked glass whose blur a caller took away (a dialog with its own chrome) stays as it is.
     const style = getComputedStyle(el);
     const filter = style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter");
     if (filter && filter !== "none") glass.push([el, style.backgroundColor]);
@@ -139,11 +103,19 @@ export async function crossfadeDocument(update: () => void | Promise<void>): Pro
     return;
   }
   const root = document.documentElement;
+  const mine = ++generation;
+  // A crossfade still running is skipped by this one. Its frozen glass would
+  // read back as the fill it was frozen to, so thaw it before reading.
+  if (crossfading) {
+    thawGlass();
+    root.classList.remove(CROSSFADE);
+  }
   crossfading = true;
-  freezeGlass(() => root.classList.add("document-crossfade"));
+  freezeGlass(() => root.classList.add(CROSSFADE));
   try {
     await document.startViewTransition(async () => {
       await update();
+      if (mine !== generation) return;
       // The new page's glass, in the new colours: thaw to read them, refreeze.
       thawGlass();
       freezeGlass();
@@ -152,8 +124,12 @@ export async function crossfadeDocument(update: () => void | Promise<void>): Pro
     // Skipped by a newer transition, or the update threw — either way the
     // page is in its new state; there's nothing left to fade.
   } finally {
-    thawGlass();
-    crossfading = false;
-    root.classList.remove("document-crossfade");
+    // Only the latest crossfade puts the page back: one it skipped settles
+    // while the latest is still fading, with its glass still frozen.
+    if (mine === generation) {
+      thawGlass();
+      crossfading = false;
+      root.classList.remove(CROSSFADE);
+    }
   }
 }

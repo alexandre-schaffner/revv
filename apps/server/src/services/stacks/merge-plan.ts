@@ -4,10 +4,11 @@
 // GitHub. No I/O here: `StackMerge.ts` reads GitHub, feeds the read in, and
 // carries out whatever this returns.
 //
-// GitHub's native-stack merge behaviour hasn't been observed yet (the S0 spike
-// needs a stack, and stacks can't be made through the API), so every place
-// that leans on an assumption about it is a named constant below, with what
-// S0 has to confirm.
+// TODO(S0): GitHub's native-stack merge behaviour hasn't been observed yet
+// (the spike needs a stack, and stacks can't be made through the API). Two
+// assumptions ride on it: an upper layer reports BLOCKED only because the
+// layers below haven't landed (`layerReadiness`), and a PATCHed base keeps a
+// PR in its stack (`withinBudget`'s retarget, `planStackRebase`'s).
 
 import type {
   MergeMethod,
@@ -17,29 +18,13 @@ import type {
   StackMergeRun,
   StackMergeRunLayer,
 } from "@revv/shared";
-import type { GitHubStack, GitHubStackLayer } from "./map";
-
-/** Merge states GitHub would let through right now. */
-const MERGEABLE_STATES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
-
-/**
- * A layer whose base is a lower layer's branch is judged on its own reviews
- * and checks: GitHub may report it BLOCKED (or UNKNOWN) only because it can't
- * merge before the layers under it land. Unverified until S0.
- */
-const UPPER_LAYER_BLOCKED_MEANS_WAITING = true;
+import { classifyLayerMergeState, type GitHubStack, type GitHubStackLayer } from "./map";
 
 /**
  * After the layer below merges, wait this long for GitHub to point the next
  * layer at the stack base itself before Revv does it.
  */
 export const RETARGET_WAIT_MS = 60_000;
-/**
- * Revv retargets a layer GitHub didn't (`PATCH /pulls/:n {base}`). S0 must
- * confirm that a PATCHed base keeps the PR in its stack; if it doesn't, turn
- * this off and the run stops with a message instead.
- */
-export const RETARGET_BY_PATCH = true;
 /** GitHub recomputes mergeability lazily; a fresh base leaves it UNKNOWN for a while. */
 export const MERGEABILITY_WAIT_MS = 2 * 60_000;
 /**
@@ -91,11 +76,13 @@ export function layerReadiness(
   }
   if (layer.status === "draft") return { readiness: "blocked", reasons: ["Still a draft"] };
 
-  const state = layer.mergeStateStatus ?? "UNKNOWN";
-  if (state === "DIRTY") {
+  const mergeState = classifyLayerMergeState(layer);
+  // A run would try a rebase, but a conflict found before it starts is the
+  // author's to settle.
+  if (mergeState === "conflicts") {
     return { readiness: "blocked", reasons: [`Conflicts with ${layer.baseRef}`] };
   }
-  if (state === "BEHIND" || (layer.behindBy ?? 0) > 0) {
+  if (mergeState === "behind") {
     const behind = `Behind ${layer.baseRef}`;
     if (!stack.viewerCanPush) return { readiness: "blocked", reasons: [behind] };
     // The run rebases it before merging, so what's left is the layer's own
@@ -109,7 +96,7 @@ export function layerReadiness(
       ? rest
       : { readiness: "ready", reasons: [`${behind}: Revv rebases it first`, ...rest.reasons] };
   }
-  if (MERGEABLE_STATES.has(state)) return { readiness: "ready", reasons: [] };
+  if (mergeState === "mergeable") return { readiness: "ready", reasons: [] };
 
   const { hard, checksRunning } = ownBlockers(layer);
   if (hard.length > 0) return { readiness: "blocked", reasons: hard };
@@ -120,14 +107,12 @@ export function layerReadiness(
   }
   // Nothing of its own holds it. On the stack base, BLOCKED is branch
   // protection; on a lower layer's branch it's the layers below.
-  if (state === "BLOCKED") {
-    if (!onStackBase(layer, stack) && UPPER_LAYER_BLOCKED_MEANS_WAITING) {
-      return { readiness: "ready", reasons: [] };
-    }
+  if (mergeState === "blocked" && onStackBase(layer, stack)) {
     return { readiness: "blocked", reasons: ["Blocked by branch protection"] };
   }
-  // UNKNOWN (GitHub still computing), DRAFT-ish states we didn't model: a run
-  // waits for GitHub to settle and stops cleanly if it settles badly.
+  // An upper layer's BLOCKED, UNKNOWN (GitHub still computing), states we
+  // didn't model: a run waits for GitHub to settle and stops cleanly if it
+  // settles badly.
   return { readiness: "ready", reasons: [] };
 }
 
@@ -255,7 +240,7 @@ export type StepDecision =
   | { readonly kind: "wait"; readonly number: number; readonly reason: WaitReason }
   | { readonly kind: "retarget"; readonly number: number; readonly base: string }
   | { readonly kind: "merge"; readonly number: number; readonly sha: string }
-  /** The layer fell behind its base (a merge below moved it): rebase the stack, once. */
+  /** The layer fell behind its base (a merge below moved it): rebase the stack, once per layer. */
   | { readonly kind: "rebase"; readonly number: number }
   | {
       readonly kind: "auto_merge";
@@ -276,6 +261,34 @@ export function reconcileLayers(
   return layers.map((l) =>
     l.state !== "merged" && isMerged(read, l.number) ? { ...l, state: "merged", message: null } : l,
   );
+}
+
+/**
+ * The rebase replays and force-pushes every open layer from the heads GitHub
+ * reports, so it may only start once every run layer above `number` still
+ * holds the head the user confirmed (or Revv's own rebased one). Null when
+ * they all do.
+ */
+function aboveBeforeRebase(
+  layers: readonly StackMergeRunLayer[],
+  read: StackRead,
+  number: number,
+): StepDecision | null {
+  for (const l of layers) {
+    if (l.number === number || l.state === "merged" || isMerged(read, l.number)) continue;
+    const head = read.stack.layers.find((s) => s.number === l.number)?.headSha;
+    if (head === undefined || head === l.expectedHeadSha) continue;
+    // Revv's last rebase pushed it; GitHub may still report the old head.
+    if (l.rebasedFrom !== undefined && head === l.rebasedFrom) {
+      return { kind: "wait", number, reason: "mergeability" };
+    }
+    return {
+      kind: "fail",
+      number: l.number,
+      message: `#${l.number} got new commits after you confirmed — review them first`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -313,20 +326,21 @@ export function nextStep(
   // Everything below has merged, so this layer belongs on the stack base.
   if (!onStackBase(layer, read.stack)) return { kind: "wait", number, reason: "retarget" };
 
-  const state = layer.mergeStateStatus ?? "UNKNOWN";
-  if (state === "UNKNOWN") return { kind: "wait", number, reason: "mergeability" };
+  const mergeState = classifyLayerMergeState(layer);
   // A stacked PR only merges with a linear history. GitHub rebases what's
   // left of a stack after its own merges, not after Revv's, so the run does.
-  if (state === "DIRTY" || state === "BEHIND" || (layer.behindBy ?? 0) > 0) {
-    return target.rebasedFrom === undefined && read.stack.viewerCanPush
-      ? { kind: "rebase", number }
-      : {
-          kind: "fail",
-          number,
-          message: `#${number} needs a rebase onto ${read.stack.baseRefName}`,
-        };
+  if (mergeState === "behind" || mergeState === "conflicts") {
+    if (target.rebasedToMerge || !read.stack.viewerCanPush) {
+      return {
+        kind: "fail",
+        number,
+        message: `#${number} needs a rebase onto ${read.stack.baseRefName}`,
+      };
+    }
+    return aboveBeforeRebase(run.layers, read, number) ?? { kind: "rebase", number };
   }
-  if (MERGEABLE_STATES.has(state)) {
+  if (mergeState === "unknown") return { kind: "wait", number, reason: "mergeability" };
+  if (mergeState === "mergeable") {
     return { kind: "merge", number, sha: target.expectedHeadSha };
   }
   if (layer.status === "draft") return { kind: "fail", number, message: `#${number} is a draft` };
@@ -365,13 +379,7 @@ export function withinBudget(
   const { number } = decision;
   switch (decision.reason) {
     case "retarget":
-      return RETARGET_BY_PATCH
-        ? { kind: "retarget", number, base: baseRefName }
-        : {
-            kind: "fail",
-            number,
-            message: `GitHub didn't point #${number} at ${baseRefName} after the layer below merged`,
-          };
+      return { kind: "retarget", number, base: baseRefName };
     case "mergeability":
       return {
         kind: "fail",

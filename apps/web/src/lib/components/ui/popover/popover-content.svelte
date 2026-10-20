@@ -35,6 +35,7 @@ let {
 					bind:this={ref}
 					{...props}
 					data-slot="popover-content"
+					data-glass
 					class={cn(
 						"text-text-primary flex flex-col gap-2.5 rounded-xl p-3 text-sm z-50 w-72 origin-(--transform-origin) outline-hidden",
 						className

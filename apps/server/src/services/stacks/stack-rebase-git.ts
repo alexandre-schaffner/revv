@@ -9,12 +9,12 @@
 // Nothing here names a local branch: the clone shares refs with the PR
 // worktrees (and, for linked repos, with the user's own checkouts), so the
 // rebase works on SHAs and the push maps them straight onto the remote
-// branches. Commits are written with the user's own git config, so their
-// identity and signing setup apply.
+// branches. Commits are written with the user's own identity, but neither
+// their hooks nor their signing setup run: nobody is there to answer them.
 
 import { existsSync, rmSync } from "node:fs";
 import {
-  abortRebase,
+  abortDetachedRebase,
   addDetachedWorktree,
   classifyPushFailure,
   commitExists,
@@ -77,7 +77,7 @@ const baseRef = (stackNumber: number) => `refs/revv/stack-rebase/${stackNumber}/
 
 /** Drop the scratch worktree, whatever state a previous run left it in. */
 async function clearScratch(input: ReplayInput): Promise<void> {
-  if (existsSync(input.scratchPath)) await abortRebase(input.scratchPath).catch(() => false);
+  if (existsSync(input.scratchPath)) await abortDetachedRebase(input.scratchPath);
   await removeWorktree(input.clonePath, input.scratchPath);
   if (existsSync(input.scratchPath)) {
     rmSync(input.scratchPath, { recursive: true, force: true });
@@ -169,7 +169,7 @@ export async function replayStack(input: ReplayInput): Promise<ReplayOutcome> {
     const rebased = await rebaseDetached(scratchPath, onto, upstream, step.tip, REBASE_TIMEOUT_MS);
     if (!rebased.ok) {
       const files = await unmergedPaths(scratchPath).catch(() => []);
-      await abortRebase(scratchPath);
+      await abortDetachedRebase(scratchPath);
       if (files.length > 0) return { kind: "conflict", number: step.number, ontoLabel, files };
       return {
         kind: "failed",
