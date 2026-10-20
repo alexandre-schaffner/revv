@@ -20,6 +20,8 @@ timelines (right-panel slide + vignette crossfade).
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
 | `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`). |
 | `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapPop`, `gsapRise`, `gsapSlide`). |
+| `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). |
+| `frames.ts` | `afterPaint` — start motion once a heavy frame has been drawn. |
 | `stack.ts` | `snapshotStack` + `flipStack`: FLIP fold/unfold for a stack of cards (homepage PR stacks). |
 | `index.ts` | Public surface — `from "$lib/motion"`. |
 
@@ -77,9 +79,18 @@ Kept off GSAP by design — moving them would be a regression:
 - **`text-shimmer-sweep`** — continuous `background-position` sweep on streamed
   AI text. Per-glyph GSAP would not be cheaper.
 - **`indeterminate-progress`** — single element, low cost, runs only when active.
+- **`skeleton-sweep`** — the `.skeleton` placeholder highlight (and its SVG
+  twin on the repo activity heatmap). Compositor-only translate, the spinner's
+  reasoning; under reduced motion it plays once and leaves a still block.
 - **`sd-char-in` / `.sd-char-new`** — per-character fade on markdown injected
   via `{@html}`. No Svelte handle for `use:`, so a keyframe is the right tool.
 - **Dotmatrix variants** — three animation kinds with their own reduced-motion
   handling; ~24 variants, no visible improvement from migration.
+- **The document crossfade** (`crossfade.ts`, used by theme switching) —
+  a root View Transition, whose fade is the browser's own animation on
+  `::view-transition-old/new(root)`. `app.css` only retimes it to
+  `--duration-ceremonial-medium` / `--ease-soft`. GSAP can't reach those
+  pseudo-elements, and the snapshot is what lets canvases and iframes fade
+  with everything else.
 - **`transition: background-color` / `color`** on hover states — compositor
   paint crossfades on dozens of list items.

@@ -14,6 +14,11 @@ export const tokens = {
   smooth: 0.22,
   slow: 0.32,
   pulse: 1.4,
+  // Ceremonial tier: theatrical moments only (onboarding, the repo hero's sky
+  // turning between day and night). Mirrors `--duration-ceremonial-*`.
+  ceremonialQuick: 0.28,
+  ceremonialMedium: 0.48,
+  ceremonialSlow: 0.72,
 
   // Easings (bare cubic-bezier control points; CustomEase consumes these)
   easeOutExpo: "0.16, 1, 0.3, 1",

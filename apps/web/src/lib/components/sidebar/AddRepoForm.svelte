@@ -332,8 +332,8 @@ function prCountFor(
 			<div class="skeleton-list" aria-hidden="true">
 				{#each [58, 44, 66, 38, 52] as width, i (i)}
 					<div class="skeleton-row">
-						<span class="sk sk-avatar"></span>
-						<span class="sk sk-line" style="width: {width}%"></span>
+						<span class="skeleton sk-avatar"></span>
+						<span class="skeleton sk-line" style="width: {width}%"></span>
 					</div>
 				{/each}
 			</div>
@@ -870,27 +870,6 @@ function prCountFor(
 		padding: 7px 10px;
 	}
 
-	.sk {
-		background: var(--color-glass-active-bg);
-		border-radius: 5px;
-		position: relative;
-		overflow: hidden;
-	}
-
-	.sk::after {
-		content: "";
-		position: absolute;
-		inset: 0;
-		background: linear-gradient(
-			90deg,
-			transparent,
-			color-mix(in srgb, var(--color-text-primary) 6%, transparent),
-			transparent
-		);
-		transform: translateX(-100%);
-		animation: sk-shimmer 1.4s var(--ease-soft) infinite;
-	}
-
 	.sk-avatar {
 		width: 18px;
 		height: 18px;
@@ -900,12 +879,6 @@ function prCountFor(
 
 	.sk-line {
 		height: 9px;
-	}
-
-	@keyframes sk-shimmer {
-		to {
-			transform: translateX(100%);
-		}
 	}
 
 	.sr-only {
@@ -918,12 +891,6 @@ function prCountFor(
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.sk::after {
-			animation: none;
-		}
 	}
 
 	/* ── Footer ─────────────────────────────────────────── */

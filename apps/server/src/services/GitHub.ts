@@ -212,6 +212,38 @@ export interface AppInstallation {
   readonly appSlug: string;
 }
 
+/**
+ * A repo statistic from GitHub's `/stats/*` endpoints. GitHub computes these
+ * lazily: the first request for a repo answers 202 and kicks off the job, so
+ * `computing` means "ask again shortly". `unavailable` is its 422 for repos
+ * too large to compute the statistic (10,000+ commits, for code frequency).
+ */
+export type RepoStat<T> =
+  | { readonly kind: "ready"; readonly data: T }
+  | { readonly kind: "computing" }
+  | { readonly kind: "unavailable" };
+
+/** One week of `/stats/commit_activity`: `week` is its Sunday, in Unix seconds. */
+export interface CommitActivityWeek {
+  readonly week: number;
+  /** Commits per day, Sunday first. */
+  readonly days: readonly number[];
+}
+
+/** One week of `/stats/code_frequency`: Sunday (Unix seconds), additions, deletions (negative). */
+export type CodeFrequencyWeek = readonly [week: number, additions: number, deletions: number];
+
+/** One page of PR search: GitHub's total match count, and up to 100 of the matches. */
+export interface PrSearchPage {
+  readonly total: number;
+  readonly items: ReadonlyArray<{
+    readonly number: number;
+    readonly authorLogin: string;
+    readonly createdAt: string;
+    readonly mergedAt: string | null;
+  }>;
+}
+
 interface GitHubGatewayFlatService {
   /**
    * Every open PR of one repo, most recently updated first.
@@ -715,6 +747,29 @@ interface GitHubGatewayFlatService {
     repo: string,
     username: string,
   ) => Effect.Effect<"admin" | "maintain" | "write" | "triage" | "read" | "none", GitHubError>;
+  /**
+   * The first 100 PRs matching `qualifiers` in one repo (`is:pr` is implied),
+   * newest first, plus the total match count. One Search API call: callers
+   * that need more than the total should narrow the query, not page.
+   */
+  readonly searchPullRequests: (
+    fullName: string,
+    qualifiers: string,
+    token: string,
+    apiBase: string,
+  ) => Effect.Effect<PrSearchPage, GitHubError>;
+  /** Commits per day over the last 52 weeks (`GET /repos/{repo}/stats/commit_activity`). */
+  readonly getCommitActivity: (
+    fullName: string,
+    token: string,
+    apiBase: string,
+  ) => Effect.Effect<RepoStat<readonly CommitActivityWeek[]>, GitHubError>;
+  /** Weekly additions and deletions over the repo's history (`GET /repos/{repo}/stats/code_frequency`). */
+  readonly getCodeFrequency: (
+    fullName: string,
+    token: string,
+    apiBase: string,
+  ) => Effect.Effect<RepoStat<readonly CodeFrequencyWeek[]>, GitHubError>;
 }
 
 export interface GhReviewComment {
@@ -1825,7 +1880,76 @@ ${fields}
       },
       catch: toGitHubError,
     }),
+
+  searchPullRequests: (fullName, qualifiers, token, apiBase) =>
+    githubTryPromise({
+      try: async (): Promise<PrSearchPage> => {
+        const q = `repo:${fullName} is:pr ${qualifiers}`;
+        const params = new URLSearchParams({ q, per_page: "100", sort: "created", order: "desc" });
+        const path = `/search/issues?${params.toString()}`;
+        const res = await fetch(`${apiBase}${path}`, { headers: githubHeaders(token) });
+        assertGitHubOk(res, path);
+        const body = (await res.json()) as { total_count?: unknown; items?: unknown };
+        const items: PrSearchPage["items"][number][] = [];
+        for (const raw of Array.isArray(body.items) ? body.items : []) {
+          if (raw === null || typeof raw !== "object") continue;
+          const item = raw as Record<string, unknown>;
+          const user = item.user as Record<string, unknown> | null | undefined;
+          const prMeta = item.pull_request as Record<string, unknown> | null | undefined;
+          if (typeof item.number !== "number" || typeof item.created_at !== "string") continue;
+          items.push({
+            number: item.number,
+            authorLogin: typeof user?.login === "string" ? user.login : "",
+            createdAt: item.created_at,
+            mergedAt: typeof prMeta?.merged_at === "string" ? prMeta.merged_at : null,
+          });
+        }
+        const total = typeof body.total_count === "number" ? body.total_count : items.length;
+        return { total, items };
+      },
+      catch: toGitHubError,
+    }).pipe(retryTransient),
+
+  getCommitActivity: (fullName, token, apiBase) =>
+    fetchRepoStat<readonly CommitActivityWeek[]>(
+      `/repos/${fullName}/stats/commit_activity`,
+      token,
+      apiBase,
+    ),
+
+  getCodeFrequency: (fullName, token, apiBase) =>
+    fetchRepoStat<readonly CodeFrequencyWeek[]>(
+      `/repos/${fullName}/stats/code_frequency`,
+      token,
+      apiBase,
+    ),
 };
+
+/**
+ * GET a `/stats/*` endpoint. Bypasses the ETag cache on purpose: a 202 has no
+ * body worth replaying, and callers cache the computed result themselves.
+ */
+function fetchRepoStat<T extends readonly unknown[]>(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<RepoStat<T>, GitHubError> {
+  return githubTryPromise({
+    try: async (): Promise<RepoStat<T>> => {
+      const res = await fetch(`${apiBase}${path}`, { headers: githubHeaders(token) });
+      if (res.status === 202) return { kind: "computing" };
+      if (res.status === 422) return { kind: "unavailable" };
+      assertGitHubOk(res, path);
+      // 204 is an empty repository.
+      if (res.status === 204) return { kind: "ready", data: [] as unknown as T };
+      const body: unknown = await res.json();
+      return Array.isArray(body)
+        ? { kind: "ready", data: body as unknown as T }
+        : { kind: "computing" };
+    },
+    catch: toGitHubError,
+  });
+}
 
 type GitHubGatewayFlat = typeof githubGatewayFlat;
 
@@ -1874,6 +1998,9 @@ export interface GitHubGatewayService {
     readonly appInstallationsForUser: GitHubGatewayFlat["listUserAppInstallations"];
     readonly teamsForOrg: GitHubGatewayFlat["listTeamsForOrg"];
     readonly collaboratorPermission: GitHubGatewayFlat["getCollaboratorPermission"];
+    readonly commitActivity: GitHubGatewayFlat["getCommitActivity"];
+    readonly codeFrequency: GitHubGatewayFlat["getCodeFrequency"];
+    readonly searchPullRequests: GitHubGatewayFlat["searchPullRequests"];
   };
   readonly files: {
     readonly content: GitHubGatewayFlat["getFileContent"];
@@ -1934,6 +2061,9 @@ export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
     appInstallationsForUser: githubGatewayFlat.listUserAppInstallations,
     teamsForOrg: githubGatewayFlat.listTeamsForOrg,
     collaboratorPermission: githubGatewayFlat.getCollaboratorPermission,
+    commitActivity: githubGatewayFlat.getCommitActivity,
+    codeFrequency: githubGatewayFlat.getCodeFrequency,
+    searchPullRequests: githubGatewayFlat.searchPullRequests,
   },
   files: {
     content: githubGatewayFlat.getFileContent,

@@ -677,6 +677,40 @@
   animation: motion-essential-spin 1s linear infinite;
 }
 
+/* ── Skeleton ─────────────────────────────────────────────────────────────
+   A placeholder block with a faint highlight sweeping across it. Size it at
+   the call site. `skeleton-sweep` is a compositor-only translate, the same
+   reasoning as the spinner above; SVG placeholders reuse the keyframe on a
+   gradient rect (`transform-box: fill-box`) masked to their shapes.
+   Consumers: sidebar/AddRepoForm, repo/RepoActivitySection,
+   repo/RepoActivityChart. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--color-glass-active-bg);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: skeleton-sweep var(--duration-pulse) var(--ease-soft) infinite;
+}
+
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
 /* ── Text shimmer (ported from OpenCode UI) ──────────────────────────────
    Two-layer stacked grid: a base text layer and a shimmer layer with a
    moving gradient clipped to text glyphs. The 360% background-size gives
@@ -1026,6 +1060,27 @@ diffs-container {
   pointer-events: auto;
 }
 
+/* The document crossfade (`$lib/motion/crossfade.ts`) that theme switches
+   play through: the browser's own root View Transition fade, retimed to
+   the ceremonial tier. */
+:root.document-crossfade::view-transition-old(root),
+:root.document-crossfade::view-transition-new(root) {
+  animation-duration: var(--duration-ceremonial-medium);
+  animation-timing-function: var(--ease-soft);
+}
+
+/* Glass during that crossfade: a solid fill instead of a live blur, which
+   the transition's snapshots can't reproduce (see `crossfade.ts`).
+   `!important` has to outrank each surface's own background and filter. */
+:root.document-crossfade .glass-frozen {
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  backdrop-filter: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  -webkit-backdrop-filter: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  background: var(--glass-fill) !important;
+}
+
 /* ──────────────────────────────────────────────────────────
    Theme swap — flip every surface in the same frame.
 
@@ -1044,8 +1099,10 @@ diffs-container {
    4 dropped frames against 1 for the cut, and the parts CSS cannot
    interpolate — the Pierre diff canvas and file tree (shadow DOM),
    xterm terminals (canvas), artifact iframes — cut at 0ms anyway,
-   so the chrome ends up fading behind them. A theme swap is a
-   state change, not motion; it wants to be a cut.
+   so the chrome ends up fading behind them. So the swap itself
+   stays a cut, and the fade the user sees is the document
+   crossfade above: one snapshot of the whole rendering fading out
+   over the new page, which no transition here would interrupt.
 
    Not a motion token and not subject to the reduced-motion
    contract: this suppresses animation rather than defining any.

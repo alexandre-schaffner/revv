@@ -2,11 +2,14 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { NotFoundError } from "../domain/errors";
 import { AppRuntime } from "../runtime";
 import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-policy";
 import { GitHubGateway } from "../services/GitHub";
 import { apiBaseForHost } from "../services/github-rest";
+import { Identity } from "../services/Identity";
 import { PollScheduler } from "../services/PollScheduler";
+import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { diagnoseRepoNotFound } from "../services/repo-access";
@@ -148,6 +151,31 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         Effect.gen(function* () {
           const cloneSvc = yield* RepoCloneService;
           return yield* cloneSvc.getCloneStatus(ctx.params.id);
+        }),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  // The repo homepage's activity section: a year of commits for the heatmap,
+  // and recent PR flow for its KPIs. `commits` answers `{ status:
+  // "computing" }` while GitHub builds the statistics; the client retries.
+  .get("/:id/activity", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const repoSvc = yield* RepositoryService;
+          const identity = yield* Identity;
+          // The homepage lists every account's repos, so the request's own
+          // account (keyed on the default host) may not be this repo's. Use
+          // the viewer's account on the repo's host, and only if it owns it.
+          const repo = yield* repoSvc.getRepoById(ctx.params.id);
+          const owner = yield* repoSvc.getAccountIdForRepo(repo.id);
+          const account = yield* identity.resolveAccount(ctx.session.user.id, repo.githubHost);
+          if (account.accountId !== owner) {
+            return yield* Effect.fail(new NotFoundError({ resource: "repository", id: repo.id }));
+          }
+          return yield* getRepoActivityResponse(repo, account.accessToken);
         }),
       );
     } catch (e) {
