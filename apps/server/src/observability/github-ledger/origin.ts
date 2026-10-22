@@ -18,9 +18,9 @@ function newRun(label: string, kind: OriginKind): Run {
   return { label, kind, runId: runId() };
 }
 
-class GitHubOrigin extends Context.Reference<GitHubOrigin>()("GitHubOrigin", {
-  defaultValue: (): Run | null => null,
-}) {}
+const GitHubOrigin = Context.Reference<Run | null>("GitHubOrigin", {
+  defaultValue: () => null,
+});
 
 const ambientOrigin = new AsyncLocalStorage<Run>();
 
@@ -61,7 +61,7 @@ const underOrigin =
 
 export function githubTryPromise<A>(
   thunk: (signal: AbortSignal) => PromiseLike<A>,
-): Effect.Effect<A, Cause.UnknownException>;
+): Effect.Effect<A, Cause.UnknownError>;
 export function githubTryPromise<A, E>(options: {
   readonly try: (signal: AbortSignal) => PromiseLike<A>;
   readonly catch: (error: unknown) => E;
@@ -73,10 +73,10 @@ export function githubTryPromise<A, E>(
         readonly try: (signal: AbortSignal) => PromiseLike<A>;
         readonly catch: (error: unknown) => E;
       },
-): Effect.Effect<A, E | Cause.UnknownException> {
+): Effect.Effect<A, E | Cause.UnknownError> {
   return Effect.flatMap(
     GitHubOrigin,
-    (origin): Effect.Effect<A, E | Cause.UnknownException> =>
+    (origin): Effect.Effect<A, E | Cause.UnknownError> =>
       typeof arg === "function"
         ? Effect.tryPromise(underOrigin(origin, arg))
         : Effect.tryPromise({ try: underOrigin(origin, arg.try), catch: arg.catch }),

@@ -43,7 +43,7 @@ const STALE_RUN_MS = 30 * 60_000;
 
 export type StackMergeError = StackError | StackRejectedError | NotFoundError;
 
-export class StackMergeService extends Context.Tag("StackMergeService")<
+export class StackMergeService extends Context.Service<
   StackMergeService,
   {
     readonly plan: (
@@ -73,7 +73,7 @@ export class StackMergeService extends Context.Tag("StackMergeService")<
     /** On boot: every run a previous process left live becomes `expired`. */
     readonly expireStale: () => Effect.Effect<number, DbError>;
   }
->() {}
+>()("StackMergeService") {}
 
 const asPr = (ctx: PrContextBasic, number: number): PrContextBasic => ({
   ...ctx,
@@ -209,7 +209,7 @@ export const StackMergeServiceLive = Layer.effect(
 
       return {
         read: (run) =>
-          provided(withCurrent((c) => readStack(c, run))).pipe(Effect.catchAll(stackError)),
+          provided(withCurrent((c) => readStack(c, run))).pipe(Effect.catch(stackError)),
         merge: (number, method, sha) =>
           provided(
             withCurrent((c) =>
@@ -251,7 +251,7 @@ export const StackMergeServiceLive = Layer.effect(
             yield* announce(accountId, run);
             if (effects.merged.length > 0) {
               yield* provided(markMerged(accountId, run.repositoryId, effects.merged)).pipe(
-                Effect.catchAll((err) =>
+                Effect.catch((err) =>
                   Effect.sync(() => logError("stack-merge", "merged PR rows update failed", err)),
                 ),
               );
@@ -259,7 +259,7 @@ export const StackMergeServiceLive = Layer.effect(
             if (effects.stackMoved) {
               yield* stacks
                 .markStale(run.repositoryId, run.stackNumber)
-                .pipe(Effect.catchAll(() => Effect.void));
+                .pipe(Effect.catch(() => Effect.void));
               yield* broadcaster.broadcastToAccount(accountId, {
                 type: "stack:updated",
                 data: { repositoryId: run.repositoryId, stackNumber: run.stackNumber },
@@ -287,9 +287,9 @@ export const StackMergeServiceLive = Layer.effect(
         if (driving.has(run.id)) return;
         const tokenAccountId = yield* prContext.getAccountIdForRepo(ctx.repo.id);
         driving.add(run.id);
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           driveRun(run, portFor(ctx, accountId, tokenAccountId)).pipe(
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 logError("stack-merge", `run ${run.id} stopped unexpectedly:`, Cause.pretty(cause));
                 const message = "Revv hit an error mid-merge — Continue to pick up where GitHub is";
@@ -301,7 +301,7 @@ export const StackMergeServiceLive = Layer.effect(
                   }),
                 );
                 if (failed) yield* announce(accountId, toRun(failed));
-              }).pipe(Effect.catchAll(() => Effect.void)),
+              }).pipe(Effect.catch(() => Effect.void)),
             ),
             Effect.ensuring(Effect.sync(() => driving.delete(run.id))),
             withGitHubOrigin("stack:merge"),

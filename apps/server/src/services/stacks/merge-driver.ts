@@ -131,11 +131,11 @@ export function driveRun(
       );
 
     while (true) {
-      const read = yield* Effect.either(port.read(run));
-      if (read._tag === "Left") {
+      const read = yield* Effect.result(port.read(run));
+      if (read._tag === "Failure") {
         readFailures += 1;
-        if (!isTransient(read.left) || readFailures >= MAX_READ_FAILURES) {
-          yield* stop(null, `${describe(read.left)} — Continue to try again`);
+        if (!isTransient(read.failure) || readFailures >= MAX_READ_FAILURES) {
+          yield* stop(null, `${describe(read.failure)} — Continue to try again`);
           return run;
         }
         if (!(yield* port.isActive(run.id))) return run;
@@ -143,11 +143,11 @@ export function driveRun(
         continue;
       }
       readFailures = 0;
-      if (read.right === null) {
+      if (read.success === null) {
         yield* stop(null, "GitHub no longer reports this stack — finish the rest on GitHub");
         return run;
       }
-      const stackRead = read.right;
+      const stackRead = read.success;
 
       const before = run.layers;
       const layers = reconcileLayers(before, stackRead);
@@ -204,12 +204,12 @@ export function driveRun(
         case "rebase": {
           if ((yield* commit({ ...stepped, status: "running" }, moved)) === "ended") return run;
           const stillOurs = port.isActive(run.id).pipe(Effect.orElseSucceed(() => false));
-          const done = yield* Effect.either(port.rebase(stackRead.stack, stillOurs));
-          if (done._tag === "Left") {
-            yield* stop(decision.number, done.left);
+          const done = yield* Effect.result(port.rebase(stackRead.stack, stillOurs));
+          if (done._tag === "Failure") {
+            yield* stop(decision.number, done.failure);
             return run;
           }
-          const pushed = new Map(done.right.map((l) => [l.number, l]));
+          const pushed = new Map(done.success.map((l) => [l.number, l]));
           if (!pushed.has(decision.number)) {
             yield* stop(
               decision.number,
@@ -252,9 +252,9 @@ export function driveRun(
               : decision.kind === "merge"
                 ? port.merge(decision.number, run.method, decision.sha)
                 : port.enableAutoMerge(decision.nodeId, run.method, decision.sha);
-          const done = yield* Effect.either(write);
-          if (done._tag === "Left") {
-            yield* stop(decision.number, writeFailure(decision, done.left));
+          const done = yield* Effect.result(write);
+          if (done._tag === "Failure") {
+            yield* stop(decision.number, writeFailure(decision, done.failure));
             return run;
           }
           if (decision.kind === "merge") {

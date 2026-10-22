@@ -10,7 +10,7 @@ export const keyedSingleFlight = <K, A, E>() => {
         inFlight.set(key, own);
         return run.pipe(
           Effect.onExit((exit) =>
-            Effect.zipRight(
+            Effect.andThen(
               Effect.sync(() => inFlight.delete(key)),
               Deferred.done(own, exit),
             ),

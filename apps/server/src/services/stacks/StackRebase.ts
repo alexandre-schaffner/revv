@@ -30,7 +30,7 @@ import { logContradiction, membershipAfterRetarget } from "./unverified-github";
 
 export type StackRebaseError = StackError | StackRejectedError | NotFoundError;
 
-export class StackRebaseService extends Context.Tag("StackRebaseService")<
+export class StackRebaseService extends Context.Service<
   StackRebaseService,
   {
     /**
@@ -55,7 +55,7 @@ export class StackRebaseService extends Context.Tag("StackRebaseService")<
       proceed?: Effect.Effect<boolean>,
     ) => Effect.Effect<StackRebaseResult, StackRejectedError | GitHubError>;
   }
->() {}
+>()("StackRebaseService") {}
 
 const rejected = (rejection: StackRejection, message: string) =>
   Effect.fail(new StackRejectedError({ message, rejection }));
@@ -158,7 +158,7 @@ export const StackRebaseServiceLive = Layer.effect(
         const contradicted = membershipAfterRetarget(stack, number, reread);
         if (contradicted) logContradiction("stack-rebase", contradicted);
       }).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.sync(() =>
             logError("stack-rebase", `re-reading #${number}'s stack after retargeting failed`, err),
           ),
@@ -187,7 +187,7 @@ export const StackRebaseServiceLive = Layer.effect(
 
           const retargeted: number[] = [];
           if (plan.retarget !== null) {
-            const done = yield* Effect.either(
+            const done = yield* Effect.result(
               Effect.provide(
                 github.prs.updateBase(
                   ctx.repo.fullName,
@@ -199,18 +199,18 @@ export const StackRebaseServiceLive = Layer.effect(
                 context,
               ),
             );
-            if (done._tag === "Right") {
+            if (done._tag === "Success") {
               retargeted.push(plan.retarget);
               yield* checkMembership(ctx, stack, plan.retarget);
             } else {
-              logError("stack-rebase", `retargeting #${plan.retarget} failed`, done.left);
+              logError("stack-rebase", `retargeting #${plan.retarget} failed`, done.failure);
             }
           }
 
           if (rebased.length > 0 || retargeted.length > 0) {
             yield* stacks
               .markStale(ctx.repo.id, stack.number)
-              .pipe(Effect.catchAll(() => Effect.void));
+              .pipe(Effect.catch(() => Effect.void));
             yield* broadcaster.broadcastToAccount(accountId, {
               type: "stack:updated",
               data: { repositoryId: ctx.repo.id, stackNumber: stack.number },

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolveThinkingEffort, type StackHeadline } from "@revv/shared";
 import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Semaphore } from "effect";
 import { generateStackHeadline } from "../../ai/providers/stack-headline";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
@@ -28,7 +28,7 @@ interface StackMembers {
   readonly layers: ReadonlyArray<{ number: number; title: string; body: string | null }>;
 }
 
-export class StackHeadlineService extends Context.Tag("StackHeadlineService")<
+export class StackHeadlineService extends Context.Service<
   StackHeadlineService,
   {
     /**
@@ -41,7 +41,7 @@ export class StackHeadlineService extends Context.Tag("StackHeadlineService")<
       accountId: string,
     ) => Effect.Effect<Record<number, StackHeadline>, DbError>;
   }
->() {}
+>()("StackHeadlineService") {}
 
 function namingKey(repositoryId: string, stack: StackMembers): string {
   const digest = createHash("sha256")
@@ -60,7 +60,7 @@ export const StackHeadlineServiceLive = Layer.effect(
     const settings = yield* SettingsService;
     const broadcaster = yield* Broadcaster;
 
-    const naming = yield* Effect.makeSemaphore(1);
+    const naming = yield* Semaphore.make(1);
     const inflight = new Set<string>();
     const failedUntil = new Map<string, number>();
 
@@ -152,7 +152,7 @@ export const StackHeadlineServiceLive = Layer.effect(
       }).pipe(
         naming.withPermits(1),
         Effect.ensuring(Effect.sync(() => inflight.delete(key))),
-        Effect.catchAllCause(() =>
+        Effect.catchCause(() =>
           Effect.sync(() => failedUntil.set(key, Date.now() + RETRY_AFTER_MS)),
         ),
       );
@@ -181,7 +181,7 @@ export const StackHeadlineServiceLive = Layer.effect(
           if (!inflight.has(key) && (failedUntil.get(key) ?? 0) <= Date.now()) {
             failedUntil.delete(key);
             inflight.add(key);
-            yield* Effect.forkDaemon(name(repositoryId, accountId, stack, key));
+            yield* Effect.forkDetach(name(repositoryId, accountId, stack, key));
           }
         }
         return out;

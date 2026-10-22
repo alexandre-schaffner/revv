@@ -16,7 +16,7 @@ import { ConcurrentPushError } from "../domain/errors";
 
 export type PushHolder = "chat-push" | "base-sync";
 
-export class PrPushLockService extends Context.Tag("PrPushLockService")<
+export class PrPushLockService extends Context.Service<
   PrPushLockService,
   {
     /** Claim the PR, or fail with `ConcurrentPushError` when someone else holds it. */
@@ -27,7 +27,7 @@ export class PrPushLockService extends Context.Tag("PrPushLockService")<
     readonly release: (prId: string) => Effect.Effect<void>;
     readonly holder: (prId: string) => PushHolder | null;
   }
->() {}
+>()("PrPushLockService") {}
 
 export const PrPushLockServiceLive = Layer.sync(PrPushLockService, () => {
   const held = new Map<string, PushHolder>();

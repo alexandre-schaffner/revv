@@ -1,5 +1,5 @@
 import type { MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
-import { Context, Effect, Result, Layer } from "effect";
+import { Context, Effect, Layer, Result } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
@@ -725,7 +725,9 @@ export interface GitHubGatewayService {
   };
 }
 
-export class GitHubGateway extends Context.Service<GitHubGateway, GitHubGatewayService>()("GitHubGateway") {}
+export class GitHubGateway extends Context.Service<GitHubGateway, GitHubGatewayService>()(
+  "GitHubGateway",
+) {}
 
 export interface GhReviewComment {
   readonly id: number;

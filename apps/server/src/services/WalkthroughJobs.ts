@@ -83,9 +83,9 @@ import {
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
-import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";

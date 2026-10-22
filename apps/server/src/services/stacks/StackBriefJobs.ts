@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isOpenLayer, resolveThinkingEffort, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
+import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable } from "../../ai/acp/presets";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
@@ -38,12 +38,12 @@ const BODY_EXCERPT_CHARS = 1200;
 interface ActiveBriefJob {
   readonly briefId: string;
   readonly abortController: AbortController;
-  fiber: Fiber.RuntimeFiber<void, never> | null;
+  fiber: Fiber.Fiber<void, never> | null;
   superseded: boolean;
   validated: boolean;
 }
 
-export class StackBriefJobs extends Context.Tag("StackBriefJobs")<
+export class StackBriefJobs extends Context.Service<
   StackBriefJobs,
   {
     /**
@@ -60,7 +60,7 @@ export class StackBriefJobs extends Context.Tag("StackBriefJobs")<
     readonly resumePending: () => Effect.Effect<void>;
     readonly resolveSessionToken: (token: string) => Effect.Effect<StackBriefToolContext | null>;
   }
->() {}
+>()("StackBriefJobs") {}
 
 export function buildStackBriefSnapshot(
   stack: GitHubStack,
@@ -107,7 +107,7 @@ export const StackBriefJobsLive = Layer.effect(
     const stacks = yield* StackService;
 
     const registry = yield* Ref.make(new Map<string, ActiveBriefJob>());
-    const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_BRIEF_JOBS);
+    const semaphore = yield* Semaphore.make(MAX_CONCURRENT_BRIEF_JOBS);
     const stackMutex = yield* makeStartJobMutex();
     const sessions = yield* makeSessionTokenStore<StackBriefToolContext>(SESSION_TOKEN_TTL_MS);
 
@@ -128,7 +128,7 @@ export const StackBriefJobsLive = Layer.effect(
         });
       }).pipe(
         Effect.timeout("5 seconds"),
-        Effect.catchAll(() => Effect.void),
+        Effect.catch(() => Effect.void),
       );
 
     const finish = (
@@ -155,7 +155,7 @@ export const StackBriefJobsLive = Layer.effect(
         );
         if (moved) yield* announce(moved.repositoryId, moved.stackNumber, briefId, status);
       }).pipe(
-        Effect.catchAll((e) =>
+        Effect.catch((e) =>
           Effect.sync(() => logError("stack-brief", `status → ${status} failed for ${briefId}`, e)),
         ),
       );
@@ -275,7 +275,7 @@ export const StackBriefJobsLive = Layer.effect(
 
         const body = runJob(job).pipe(
           semaphore.withPermits(1),
-          Effect.catchAllCause((cause) => {
+          Effect.catchCause((cause) => {
             if (
               analyzeJobFailure(cause, { cancelledByUser: job.superseded }) === "leave-for-resume"
             ) {
@@ -290,7 +290,7 @@ export const StackBriefJobsLive = Layer.effect(
           Effect.ensuring(removeJob(job)),
           Effect.withSpan("StackBriefJobs.job", { attributes: { briefId } }),
         );
-        job.fiber = yield* Effect.forkDaemon(body);
+        job.fiber = yield* Effect.forkDetach(body);
       });
 
     const stopRun = (briefId: string): Effect.Effect<void> =>
@@ -301,7 +301,10 @@ export const StackBriefJobsLive = Layer.effect(
         if (!job.abortController.signal.aborted) {
           job.abortController.abort(new Error("Stack brief superseded"));
         }
-        if (job.fiber) yield* Fiber.interruptFork(job.fiber);
+        if (job.fiber) {
+          const fiber = job.fiber;
+          yield* Effect.sync(() => fiber.interruptUnsafe());
+        }
         yield* sessions.clearWhere((c) => c.briefId === briefId);
       });
 
@@ -436,9 +439,7 @@ export const StackBriefJobsLive = Layer.effect(
           yield* launch(row.id);
         }
       }).pipe(
-        Effect.catchAll((e) =>
-          Effect.sync(() => logError("stack-brief", "resumePending failed", e)),
-        ),
+        Effect.catch((e) => Effect.sync(() => logError("stack-brief", "resumePending failed", e))),
         Effect.withSpan("StackBriefJobs.resumePending"),
       );
 

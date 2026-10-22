@@ -280,10 +280,10 @@ describe("GitHub's own GraphQL failures", () => {
         "pr-id",
         "token",
         "https://ghe.test/api",
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(2);
-    expect(Either.isRight(result) && result.right.conversation.number).toBe(1);
+    expect(Result.isSuccess(result) && result.success.conversation.number).toBe(1);
   });
 });

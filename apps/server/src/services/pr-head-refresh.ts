@@ -3,16 +3,16 @@
 // one. Shared by the chat push (`ChatChangesPush`) and the base sync
 // (`BaseConflicts`).
 
-import { Effect } from "effect";
+import { type Context, Effect } from "effect";
 import { STACK_UNSEEN } from "../domain/observed-pr";
 import type { Broadcaster } from "./Broadcaster";
 import type { PrContextService } from "./PrContext";
 import type { PullRequestService } from "./PullRequest";
 
 interface Deps {
-  readonly prService: PullRequestService["Type"];
-  readonly prCtx: PrContextService["Type"];
-  readonly broadcaster: Broadcaster["Type"];
+  readonly prService: Context.Service.Shape<typeof PullRequestService>;
+  readonly prCtx: Context.Service.Shape<typeof PrContextService>;
+  readonly broadcaster: Context.Service.Shape<typeof Broadcaster>;
 }
 
 export const makePrHeadRefresh = ({ prService, prCtx, broadcaster }: Deps) => {
@@ -55,7 +55,7 @@ export const makePrHeadRefresh = ({ prService, prCtx, broadcaster }: Deps) => {
             fetchedAt: now,
           },
         ])
-        .pipe(Effect.catchAll(() => Effect.void));
+        .pipe(Effect.catch(() => Effect.void));
     });
 
   const broadcastPrsUpdated = (prId: string) =>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { prDiffFiles, pullRequests } from "../db/schema";
 import { GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
@@ -64,7 +64,7 @@ function seedPr(db: Db): void {
 
 function runDiffCache<A>(
   db: Db,
-  use: (s: DiffCacheService["Type"]) => Effect.Effect<A, never, DbService>,
+  use: (s: Context.Service.Shape<typeof DiffCacheService>) => Effect.Effect<A, never, DbService>,
 ): Promise<A> {
   return Effect.runPromise(
     Effect.flatMap(DiffCacheService, use).pipe(
@@ -252,7 +252,7 @@ describe("files cached for a PR's current head and base", () => {
             ];
           }),
       },
-    } as unknown as GitHubGateway["Type"];
+    } as unknown as Context.Service.Shape<typeof GitHubGateway>;
     const getOrFetch = () =>
       Effect.runPromise(
         getOrFetchDiffFiles("pr-1", "o/r", 1, "token").pipe(

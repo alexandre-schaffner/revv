@@ -60,7 +60,7 @@ const CHECK_FRESH_MS = 30_000;
 
 export type BaseConflictsError = BaseConflictsRejectedError | AiNotConfiguredError | PrContextError;
 
-export class BaseConflictsService extends Context.Tag("BaseConflictsService")<
+export class BaseConflictsService extends Context.Service<
   BaseConflictsService,
   {
     readonly check: (params: {
@@ -85,7 +85,7 @@ export class BaseConflictsService extends Context.Tag("BaseConflictsService")<
       DbService | GitHubEtagCache | SettingsService
     >;
   }
->() {}
+>()("BaseConflictsService") {}
 
 const rejected = (reason: BaseConflictsRejection, message: string) =>
   Effect.fail(new BaseConflictsRejectedError({ reason, message }));
@@ -212,7 +212,7 @@ export const BaseConflictsServiceLive = Layer.effect(
         } satisfies BaseConflictsCheck;
       });
 
-    const check: BaseConflictsService["Type"]["check"] = (params) =>
+    const check: Context.Service.Shape<typeof BaseConflictsService>["check"] = (params) =>
       Effect.gen(function* () {
         const ctx = yield* prCtx.resolveBasic(params.prId, params.userId, params.accountId);
         const cached = checks.get(ctx.pr.id);
@@ -242,7 +242,7 @@ export const BaseConflictsServiceLive = Layer.effect(
 
     /** Everything up to the paused (or clean) operation, failing as a refusal. */
     const prepare = (
-      params: Parameters<BaseConflictsService["Type"]["resolve"]>[0],
+      params: Parameters<Context.Service.Shape<typeof BaseConflictsService>["resolve"]>[0],
       scratch: { path: string | null; repo: SyncRepo | null },
     ) =>
       Effect.gen(function* () {
@@ -331,7 +331,7 @@ export const BaseConflictsServiceLive = Layer.effect(
         return { ctx, repo, op, remoteHead, started };
       });
 
-    const resolve: BaseConflictsService["Type"]["resolve"] = (params) =>
+    const resolve: Context.Service.Shape<typeof BaseConflictsService>["resolve"] = (params) =>
       Effect.gen(function* () {
         yield* pushLock
           .acquire(params.prId, "base-sync")
@@ -348,7 +348,7 @@ export const BaseConflictsServiceLive = Layer.effect(
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => checks.delete(params.prId)).pipe(
-              Effect.zipRight(pushLock.release(params.prId)),
+              Effect.andThen(pushLock.release(params.prId)),
             ),
           ),
         );
@@ -423,8 +423,8 @@ export const BaseConflictsServiceLive = Layer.effect(
               token: ctx.token,
               newTip: verified.head,
             })
-            .pipe(Effect.catchAll(() => Effect.void));
-          yield* headRefresh.broadcastPrsUpdated(pr.id).pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
+          yield* headRefresh.broadcastPrsUpdated(pr.id).pipe(Effect.catch(() => Effect.void));
           yield* offer({
             kind: "result",
             status: "pushed",
@@ -434,9 +434,9 @@ export const BaseConflictsServiceLive = Layer.effect(
           });
         });
 
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           run.pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               offer({
                 kind: "result",
                 status: "failed",

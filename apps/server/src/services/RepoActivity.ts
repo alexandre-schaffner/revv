@@ -216,7 +216,7 @@ export const getRepoActivityResponse = (repo: Repository, token: string) =>
       [
         getRepoActivity(repo, token),
         getRepoPrFlow(repo, token).pipe(
-          Effect.catchAll((e) =>
+          Effect.catch((e) =>
             Effect.sync(() => {
               logError("RepoActivity", `PR flow unavailable for ${repo.fullName}:`, e);
               return null;

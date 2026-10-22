@@ -54,7 +54,7 @@ export type StackError = GitHubError | PrContextError | DbError;
 
 const cacheKey = (repositoryId: string, stackNumber: number) => `${repositoryId}:${stackNumber}`;
 
-export class StackService extends Context.Tag("StackService")<
+export class StackService extends Context.Service<
   StackService,
   {
     /**
@@ -71,7 +71,7 @@ export class StackService extends Context.Tag("StackService")<
     readonly snapshot: (ctx: PrContextBasic) => Effect.Effect<WalkthroughStackSnapshot | null>;
     readonly markStale: (repositoryId: string, stackNumber: number) => Effect.Effect<void, DbError>;
   }
->() {}
+>()("StackService") {}
 
 function repoRef(ctx: PrContextBasic) {
   const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
@@ -119,7 +119,7 @@ function withLayerBehind(
     ctx.apiBase,
   ).pipe(
     Effect.map((answer) => withBehind(stack, answer)),
-    Effect.catchAll((err) =>
+    Effect.catch((err) =>
       Effect.sync(() => {
         logError("stacks", `comparing stack #${stack.number}'s layers failed`, err);
         return stack;
@@ -333,7 +333,7 @@ export function chooseStackSource(args: {
   };
 }
 
-type Db = DbService["Type"]["db"];
+type Db = Context.Service.Shape<typeof DbService>["db"];
 
 function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief | null {
   const row = db
@@ -397,12 +397,12 @@ export const StackServiceLive = Layer.effect(
               })
             : Effect.void,
         ),
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => logError("stacks", `background re-read of ${key} failed`, cause)),
         ),
         Effect.ensuring(Effect.sync(() => revalidating.delete(key))),
         withGitHubOrigin("stack:revalidate"),
-        Effect.forkDaemon,
+        Effect.forkDetach,
         Effect.asVoid,
       );
     };
@@ -463,7 +463,7 @@ export const StackServiceLive = Layer.effect(
         const position = stack.layers.find((l) => l.number === ctx.pr.externalId)?.position;
         return position === undefined ? null : toSnapshot(stack, position);
       }).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.sync(() => {
             logError("stacks", `stack snapshot for ${ctx.pr.id} failed`, err);
             return null;

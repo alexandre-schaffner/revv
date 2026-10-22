@@ -1,6 +1,6 @@
 import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
-import { Cause, Chunk, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { pullRequests } from "../db/schema/pull-requests";
 import {

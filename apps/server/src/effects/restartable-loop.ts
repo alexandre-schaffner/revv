@@ -15,7 +15,7 @@ export interface RestartableLoop {
 export const makeRestartableLoop: Effect.Effect<RestartableLoop, never, Scope.Scope> = Effect.gen(
   function* () {
     const scope = yield* Effect.scope;
-    const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<unknown> | null>(null);
+    const fiberRef = yield* Ref.make<Fiber.Fiber<unknown> | null>(null);
 
     return {
       start: (loop) =>

@@ -62,12 +62,12 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
                 pr.changedFiles,
               );
             }).pipe(
-              Effect.catchAll((err) =>
+              Effect.catch((err) =>
                 Effect.sync(() => logError("stacks", `warming the diff of ${prId} failed`, err)),
               ),
             );
 
-          yield* Effect.forkDaemon(
+          yield* Effect.forkDetach(
             Effect.forEach(neighbours, warmOne, { concurrency: "unbounded", discard: true }),
           );
           return neighbours.length;

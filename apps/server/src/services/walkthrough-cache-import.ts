@@ -78,7 +78,7 @@ export function tryCarryRestackedWalkthrough(input: {
     repoFullName,
     importSnapshot: (snapshot) =>
       importSnapshot(snapshot).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           markCarriedFrom.pipe(
             Effect.mapError(
               (e) =>

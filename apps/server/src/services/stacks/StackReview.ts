@@ -47,7 +47,7 @@ export function planStackReview(
   return { queue, watching, untracked };
 }
 
-export class StackReviewService extends Context.Tag("StackReviewService")<
+export class StackReviewService extends Context.Service<
   StackReviewService,
   {
     /**
@@ -61,7 +61,7 @@ export class StackReviewService extends Context.Tag("StackReviewService")<
       scope: StackReviewScope,
     ) => Effect.Effect<StackReviewStarted, StackError | NotFoundError>;
   }
->() {}
+>()("StackReviewService") {}
 
 export const StackReviewServiceLive = Layer.effect(
   StackReviewService,
@@ -118,7 +118,7 @@ export const StackReviewServiceLive = Layer.effect(
             .startJob({ prId: layer.prId, userId, trigger: "stack_review" })
             .pipe(
               Effect.map((r) => r.walkthroughId),
-              Effect.catchAllCause((cause) =>
+              Effect.catchCause((cause) =>
                 Effect.sync(() => {
                   logError(
                     "stack-review",
@@ -142,7 +142,7 @@ export const StackReviewServiceLive = Layer.effect(
         yield* briefJobs
           .ensure(prId, userId, accountId)
           .pipe(
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() =>
                 logError("stack-review", "stack brief failed", Cause.pretty(cause)),
               ),
@@ -165,9 +165,9 @@ export const StackReviewServiceLive = Layer.effect(
         });
         if (joined) return { queued: joined, untracked: plan.untracked };
 
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           review(plan, prId, userId, accountId).pipe(
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() =>
                 logError("stack-review", `review of ${key} failed`, Cause.pretty(cause)),
               ),
