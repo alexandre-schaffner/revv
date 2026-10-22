@@ -649,6 +649,7 @@
        --ease-anticipate : playful overshoot, reserve for delight moments */
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-anticipate: cubic-bezier(0.68, -0.55, 0.27, 1.55);
 
@@ -656,6 +657,8 @@
   --stagger-tight: 25ms;
   --stagger-default: 40ms;
   --stagger-loose: 80ms;
+  --stagger-deal-total: 90ms;
+  --stagger-gather-total: 40ms;
 }
 
 /* ──────────────────────────────────────────────────────────

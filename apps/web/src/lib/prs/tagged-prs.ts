@@ -186,3 +186,55 @@ export function compareTaggedRows(
   if (primary === 0) return tiebreak(a, b);
   return dir === "asc" ? primary : -primary;
 }
+
+export type TaggedEntry =
+  | { readonly kind: "row"; readonly row: TaggedRow }
+  | {
+      readonly kind: "stack";
+      readonly number: number;
+      readonly members: readonly [TaggedRow, ...TaggedRow[]];
+      readonly base: string;
+    };
+
+export function groupStacks(rows: readonly TaggedRow[]): TaggedEntry[] {
+  const byStack = new Map<number, TaggedRow[]>();
+  for (const row of rows) {
+    const { stack } = row.pr;
+    if (stack === null) continue;
+    const members = byStack.get(stack.number);
+    if (members) members.push(row);
+    else byStack.set(stack.number, [row]);
+  }
+
+  const entries: TaggedEntry[] = [];
+  for (const row of rows) {
+    const { stack } = row.pr;
+    if (stack === null) {
+      entries.push({ kind: "row", row });
+      continue;
+    }
+    const members = byStack.get(stack.number);
+    if (members === undefined) continue;
+    byStack.delete(stack.number);
+    members.sort((a, b) => (b.pr.stack?.position ?? 0) - (a.pr.stack?.position ?? 0));
+    const [top, ...rest] = members;
+    const bottom = rest.at(-1);
+    if (top === undefined || bottom === undefined) {
+      entries.push({ kind: "row", row });
+      continue;
+    }
+    entries.push({
+      kind: "stack",
+      number: stack.number,
+      members: [top, ...rest],
+      base: bottom.pr.targetBranch,
+    });
+  }
+  return entries;
+}
+
+export const STACK_FOLD_AT = 3;
+
+export function isStackOpen(size: number, chosen: boolean | undefined): boolean {
+  return chosen ?? size < STACK_FOLD_AT;
+}
