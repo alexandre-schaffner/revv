@@ -1,6 +1,7 @@
 import { and, inArray, isNotNull, lt, sql } from "drizzle-orm";
-import { Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Context, Duration, Effect, Layer, Schedule } from "effect";
 import { cacheEntries, githubEtagCache, kvCache, pullRequests } from "../db/schema/index";
+import { makeRestartableLoop } from "../effects/restartable-loop";
 import { logError } from "../logger";
 import { DbService } from "./Db";
 
@@ -37,6 +38,7 @@ export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceS
 export const DbMaintenanceLive = Layer.effect(
   DbMaintenance,
   Effect.gen(function* () {
+    const sweep = yield* makeRestartableLoop;
     const { db } = yield* DbService;
 
     const runMaintenance: Effect.Effect<void> = Effect.sync(() => {
@@ -122,30 +124,14 @@ export const DbMaintenanceLive = Layer.effect(
       ),
     );
 
-    const fiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
-
     return {
+      // Run once immediately on start, then repeat every 6 hours
       start: () =>
-        Effect.gen(function* () {
-          const existing = yield* Ref.get(fiberRef);
-          if (existing !== null) return; // already running
+        sweep.start(
+          runMaintenance.pipe(Effect.repeat(Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS)))),
+        ),
 
-          // Run once immediately on start, then repeat every 6 hours
-          const schedule = Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS));
-          const fiber = yield* Effect.forkChild(
-            runMaintenance.pipe(Effect.repeat(schedule), Effect.asVoid),
-          );
-          yield* Ref.set(fiberRef, fiber);
-        }),
-
-      stop: () =>
-        Effect.gen(function* () {
-          const fiber = yield* Ref.get(fiberRef);
-          if (fiber !== null) {
-            yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-            yield* Ref.set(fiberRef, null);
-          }
-        }),
+      stop: () => sweep.stop,
 
       runNow: () => runMaintenance,
     };
