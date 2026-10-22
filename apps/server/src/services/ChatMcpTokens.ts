@@ -45,7 +45,7 @@ interface TokenEntry extends ChatTokenResolved {
   readonly issuedAt: number;
 }
 
-export class ChatMcpTokens extends Context.Tag("ChatMcpTokens")<
+export class ChatMcpTokens extends Context.Service<
   ChatMcpTokens,
   {
     /** Mint a fresh token bound to the supplied identity. Returns the bearer token. */
@@ -55,7 +55,7 @@ export class ChatMcpTokens extends Context.Tag("ChatMcpTokens")<
     /** Revoke a token (best-effort — silent if already gone). */
     readonly clear: (token: string) => Effect.Effect<void>;
   }
->() {}
+>()("ChatMcpTokens") {}
 
 export const ChatMcpTokensLive = Layer.effect(
   ChatMcpTokens,

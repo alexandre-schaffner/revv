@@ -108,7 +108,7 @@ export interface CreateMessageParams {
 
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class ReviewService extends Context.Tag("ReviewService")<
+export class ReviewService extends Context.Service<
   ReviewService,
   {
     // Sessions
@@ -255,7 +255,7 @@ export class ReviewService extends Context.Tag("ReviewService")<
       sessionId: string,
     ) => Effect.Effect<HunkDecision[], ReviewError, DbService>;
   }
->() {}
+>()("ReviewService") {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 

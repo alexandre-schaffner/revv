@@ -38,7 +38,18 @@ import {
   type WalkthroughTokenUsage,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  type Scope,
+  Semaphore,
+} from "effect";
 import {
   accumulateTokenUsage,
   addThroughput,
@@ -70,6 +81,8 @@ import {
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withTraceAnchor } from "../observability/span-graft";
+import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
@@ -157,7 +170,7 @@ interface ActiveJob {
    * from the durable wire cursor stamped by `walkthroughService.bumpSeq`.
    */
   nextSeq: number;
-  fiber: Fiber.RuntimeFiber<unknown, unknown> | null;
+  fiber: Fiber.Fiber<unknown, unknown> | null;
   cancelledByUser: boolean;
   /**
    * Why the job was cancelled, or null if it ended on its own.
@@ -232,7 +245,7 @@ export type StartJobError =
 
 // ── Service tag ──────────────────────────────────────────────────────────────
 
-export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
+export class WalkthroughJobs extends Context.Service<
   WalkthroughJobs,
   {
     /**
@@ -364,7 +377,7 @@ export class WalkthroughJobs extends Context.Tag("WalkthroughJobs")<
      */
     readonly incrementPrerenderFailures: (walkthroughId: string) => Effect.Effect<void>;
   }
->() {}
+>()("WalkthroughJobs") {}
 
 export type SubscribeResult =
   | {
@@ -395,7 +408,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const broadcaster = yield* Broadcaster;
 
     const registry = yield* Ref.make(new Map<string, ActiveJob>());
-    const semaphore = yield* Effect.makeSemaphore(MAX_CONCURRENT_JOBS);
+    const semaphore = yield* Semaphore.make(MAX_CONCURRENT_JOBS);
 
     // Per-PR mutex for `startJob`. Without this, two concurrent startJob
     // calls for the same prId can both pass the in-memory `findActiveByPr`
@@ -662,7 +675,15 @@ export const WalkthroughJobsLive = Layer.effect(
         const partial = ctx.partial;
         let generator: AsyncGenerator<WalkthroughStreamEvent>;
         let capturedOpencodeSessionId: string | undefined;
-        const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath);
+        const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath).pipe(
+          Effect.tap((result) =>
+            Effect.annotateCurrentSpan({
+              diff_source: result.diffSource,
+              files: result.files.length,
+            }),
+          ),
+          Effect.withSpan("Walkthrough.resolveDiff"),
+        );
         const hunkLeads = yield* prepareFirstPassLeads(
           db,
           job.walkthroughId,
@@ -672,7 +693,7 @@ export const WalkthroughJobsLive = Layer.effect(
         yield* emitEvent(job.walkthroughId, {
           type: "leads",
           data: { leads: hunkLeads },
-        }).pipe(Effect.catchAll(() => Effect.void));
+        }).pipe(Effect.catch(() => Effect.void));
 
         const buildStreamParams = (overrideContinuation?: ContinuationContext) => ({
           pr: {
@@ -791,7 +812,7 @@ export const WalkthroughJobsLive = Layer.effect(
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
                 data: { tokenUsage: currentTokenUsage },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
 
               // Orchestrator is the lifecycle owner; validates a stable issue set independently before writing `complete`.
               yield* Effect.promise(() => awaitJudgments(job.walkthroughId));
@@ -803,7 +824,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   ctx.mode,
                   ctx.generationMode,
                 ),
-              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+              ).pipe(Effect.catch(() => Effect.succeed(null)));
 
               if (dbState?.lastCompletedPhase === "D") {
                 const missingComments = findIssuesMissingInlineComment(db, job.walkthroughId);
@@ -816,8 +837,8 @@ export const WalkthroughJobsLive = Layer.effect(
                   // (invariant #8 — commit first, broadcast second; the
                   // cache push is broadcast-equivalent).
                   if (job.mode === "reviewer") {
-                    yield* Effect.forkDaemon(
-                      remoteCache.push(job.walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+                    yield* Effect.forkDetach(
+                      remoteCache.push(job.walkthroughId).pipe(Effect.catch(() => Effect.void)),
                     );
                   }
                   yield* emitEvent(job.walkthroughId, {
@@ -826,7 +847,7 @@ export const WalkthroughJobsLive = Layer.effect(
                       walkthroughId: job.walkthroughId,
                       tokenUsage: currentTokenUsage,
                     },
-                  }).pipe(Effect.catchAll(() => Effect.void));
+                  }).pipe(Effect.catch(() => Effect.void));
                   return { _tag: "returnDone", tokenUsage: currentTokenUsage } as const;
                 }
                 debug(
@@ -869,7 +890,7 @@ export const WalkthroughJobsLive = Layer.effect(
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
                 data: { code: "AiGenerationError", message: event.data.message },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
               return {
                 _tag: "returnError",
                 code: "AiGenerationError",
@@ -890,7 +911,7 @@ export const WalkthroughJobsLive = Layer.effect(
               yield* emitEvent(job.walkthroughId, {
                 type: "usage",
                 data: { tokenUsage: combined },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
               return { _tag: "continue" } as const;
             }
 
@@ -905,7 +926,7 @@ export const WalkthroughJobsLive = Layer.effect(
               return { _tag: "continue" } as const;
             }
 
-            yield* emitEvent(job.walkthroughId, event).pipe(Effect.catchAll(() => Effect.void));
+            yield* emitEvent(job.walkthroughId, event).pipe(Effect.catch(() => Effect.void));
             return { _tag: "continue" } as const;
           });
 
@@ -921,7 +942,7 @@ export const WalkthroughJobsLive = Layer.effect(
           Effect.gen(function* () {
             const partialForContinuation = yield* provideDb(
               walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
-            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+            ).pipe(Effect.catch(() => Effect.succeed(null)));
 
             if (!partialForContinuation) {
               debug("walkthrough-jobs", "auto-continuation: no partial — accepting incomplete");
@@ -991,7 +1012,7 @@ export const WalkthroughJobsLive = Layer.effect(
             awaitPendingJudgments: Effect.promise(() => awaitJudgments(job.walkthroughId)),
             loadFinalState: provideDb(
               walkthroughService.getPartial(ctx.pr.id, ctx.prHeadSha, ctx.mode, ctx.generationMode),
-            ).pipe(Effect.catchAll(() => Effect.succeed(null))),
+            ).pipe(Effect.catch(() => Effect.succeed(null))),
             countMissingInlineComments: missingInlineCommentCount,
             setStatus: (status, options) => setStatus(job.walkthroughId, status, options),
             emitEvent: (event) => emitEvent(job.walkthroughId, event),
@@ -1034,7 +1055,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   ctx.mode,
                   ctx.generationMode,
                 ),
-              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+              ).pipe(Effect.catch(() => Effect.succeed(null)));
               const verdict = yield* adjudicateContinuation({
                 enabled: ctx.adjudicateContinuations,
                 ...adjudicationState(state, partialNow),
@@ -1055,7 +1076,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   walkthroughId: job.walkthroughId,
                   tokenUsage: currentTokenUsage,
                 },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
               return;
             }
 
@@ -1077,7 +1098,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 phase: "rating",
                 message: `Finishing walkthrough (phase ${continuation.partial.lastCompletedPhase})...`,
               },
-            }).pipe(Effect.catchAll(() => Effect.void));
+            }).pipe(Effect.catch(() => Effect.void));
 
             state.currentGenerator = continuation.generator;
             return yield* runWithAutoContinuation(state);
@@ -1104,9 +1125,21 @@ export const WalkthroughJobsLive = Layer.effect(
                     job.walkthroughId,
                     capturedOpencodeSessionId,
                   ),
-                ).pipe(Effect.catchAll(() => Effect.void))
+                ).pipe(Effect.catch(() => Effect.void))
               : Effect.void,
           ),
+        );
+
+        // KPI telemetry: stamp the generation span (see `launchJob`) with the
+        // final token totals. Reached only on a completed run; a
+        // failed generation re-raises above and skips this.
+        yield* Effect.annotateCurrentSpan(
+          "input_tokens",
+          initialState.accumulatedTokenUsage.inputTokens,
+        );
+        yield* Effect.annotateCurrentSpan(
+          "output_tokens",
+          initialState.accumulatedTokenUsage.outputTokens,
         );
       });
 
@@ -1140,16 +1173,16 @@ export const WalkthroughJobsLive = Layer.effect(
               ...(ctx.assignedRisk !== null ? { riskLevel: ctx.assignedRisk } : {}),
               modelUsed: ctx.modelUsed,
             },
-          }).pipe(Effect.catchAll(() => Effect.void));
+          }).pipe(Effect.catch(() => Effect.void));
 
           const handleFailure = (cause: Cause.Cause<AiError>) =>
             Effect.gen(function* () {
-              const interruptedOnly = Cause.isInterruptedOnly(cause);
+              const interruptedOnly = Cause.hasInterruptsOnly(cause);
               const cancelledByUser = job.cancelledByUser;
 
               if (!interruptedOnly) {
                 logError("walkthrough-jobs", "job failed:", Cause.pretty(cause));
-                const failure = Cause.failureOption(cause);
+                const failure = Cause.findErrorOption(cause);
                 if (Option.isSome(failure)) {
                   const err = failure.value as {
                     _tag: string;
@@ -1170,7 +1203,9 @@ export const WalkthroughJobsLive = Layer.effect(
                     [tag, msg, detail].filter(Boolean).join(" — "),
                   );
                 }
-                const defect = Cause.defects(cause);
+                const defect = cause.reasons
+                  .filter(Cause.isDieReason)
+                  .map((reason) => reason.defect);
                 if (defect.length > 0) {
                   for (const d of defect) {
                     logError(
@@ -1193,7 +1228,7 @@ export const WalkthroughJobsLive = Layer.effect(
                 return;
               }
 
-              const failureOpt = Cause.failureOption(cause);
+              const failureOpt = Cause.findErrorOption(cause);
               const message = cancelledByUser
                 ? WALKTHROUGH_CANCELLED_MESSAGE
                 : failureOpt._tag === "Some"
@@ -1214,7 +1249,7 @@ export const WalkthroughJobsLive = Layer.effect(
               const code = cancelledByUser ? "Cancelled" : "AiGenerationError";
 
               yield* setStatus(job.walkthroughId, "error", { errorMessage: message }).pipe(
-                Effect.catchAll(() => Effect.void),
+                Effect.catch(() => Effect.void),
               );
 
               // A superseding cancel has its own announcement coming
@@ -1226,11 +1261,17 @@ export const WalkthroughJobsLive = Layer.effect(
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
                 data: { code, message },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
             });
 
           const scopedBody = buildJobBody(job, ctx).pipe(
             Effect.scoped,
+            // Publish the generation span so the ACP driver and the MCP tool
+            // handlers — both of which run outside this fiber — can file their
+            // spans inside this generation's trace. Listed before the
+            // `withSpan` below so it resolves to that span, not the caller's.
+            withTraceAnchor(job.walkthroughId),
+            withWalkthroughMetrics(job.walkthroughId),
             Effect.annotateLogs({
               walkthroughId: job.walkthroughId,
               prId: job.prId,
@@ -1253,16 +1294,30 @@ export const WalkthroughJobsLive = Layer.effect(
             // doesn't surface as an unhandled daemon-fiber defect. Skipped on
             // interrupt, which is what leaves the fiber's exit interrupted —
             // exactly the shape it had when this was the only handler.
-            Effect.catchAllCause(() => Effect.void),
+            Effect.catchCause(() => Effect.void),
             Effect.ensuring(removeJob(job.walkthroughId)),
             Effect.ensuring(
               // Clear any session tokens issued for this job.
               sessionStore.clearWhere((payload) => payload.walkthroughId === job.walkthroughId),
             ),
+            // The generation span. Unlike `WalkthroughJobs.job` (which forks and
+            // returns in ~0 ms), this wraps the forked work, so its duration is
+            // the real end-to-end generation time — the basis for the
+            // walkthrough-gen-duration KPI. KPI attributes (`input_tokens`,
+            // `output_tokens`, `tool_call_count`) are annotated from inside
+            // `buildJobBody` on completion.
+            Effect.withSpan("WalkthroughJobs.generate", {
+              attributes: {
+                walkthroughId: job.walkthroughId,
+                prId: job.prId,
+                trigger,
+                model: ctx.modelUsed,
+              },
+            }),
           );
 
-          const fiber = yield* Effect.forkDaemon(scopedBody);
-          job.fiber = fiber as Fiber.RuntimeFiber<unknown, unknown>;
+          const fiber = yield* Effect.forkDetach(scopedBody);
+          job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );
 
@@ -1661,7 +1716,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   code: "ResumeAttemptsExceeded",
                   message,
                 },
-              }).pipe(Effect.catchAll(() => Effect.void));
+              }).pipe(Effect.catch(() => Effect.void));
               continue;
             }
 
@@ -1679,7 +1734,7 @@ export const WalkthroughJobsLive = Layer.effect(
               // leaving the row stuck at `generating` forever.
               generationMode: row.generationMode,
             }).pipe(
-              Effect.catchAllCause((cause) =>
+              Effect.catchCause((cause) =>
                 Effect.sync(() => {
                   logError(
                     "walkthrough-jobs",
@@ -1705,7 +1760,7 @@ export const WalkthroughJobsLive = Layer.effect(
         yield* emitEvent(oldId, {
           type: "lifecycle:superseded",
           data: { walkthroughId: oldId, supersededBy: newId },
-        }).pipe(Effect.catchAll(() => Effect.void));
+        }).pipe(Effect.catch(() => Effect.void));
       });
 
     const supersedeForPr = (prId: string, exceptHeadSha?: string, mode?: WalkthroughMode) =>
@@ -1741,7 +1796,7 @@ export const WalkthroughJobsLive = Layer.effect(
           yield* emitEvent(id, {
             type: "lifecycle:superseded",
             data: { walkthroughId: id, supersededBy: null },
-          }).pipe(Effect.catchAll(() => Effect.void));
+          }).pipe(Effect.catch(() => Effect.void));
         }
       });
 
@@ -1819,7 +1874,7 @@ export const WalkthroughJobsLive = Layer.effect(
                   event,
                 },
               })
-              .pipe(Effect.catchAll(() => Effect.void));
+              .pipe(Effect.catch(() => Effect.void));
           } else {
             debug(
               "wt-trace",
@@ -1903,7 +1958,7 @@ export const WalkthroughJobsLive = Layer.effect(
         if (mode !== "reviewer") return false;
         const settings = yield* settingsService
           .getSettings()
-          .pipe(Effect.catchAll(() => Effect.succeed(null)));
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!settings?.cache.enabled || !settings.cache.downloadsEnabled) return false;
 
         const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha);
@@ -1926,12 +1981,12 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const importResult = yield* provideDb(
           snapshotImporter.import({ walkthroughId, snapshot }),
-        ).pipe(Effect.either);
+        ).pipe(Effect.result);
 
-        if (importResult._tag === "Left") {
+        if (importResult._tag === "Failure") {
           logError(
             "walkthrough-jobs",
-            `tryHydrateFromRemoteCache import failed pr=${prId}: ${importResult.left.reason}`,
+            `tryHydrateFromRemoteCache import failed pr=${prId}: ${importResult.failure.reason}`,
           );
           return false;
         }
@@ -1942,14 +1997,14 @@ export const WalkthroughJobsLive = Layer.effect(
         yield* emitEvent(walkthroughId, {
           type: "lifecycle:cache-hit",
           data: { walkthroughId, source: "remote" },
-        }).pipe(Effect.catchAll(() => Effect.void));
+        }).pipe(Effect.catch(() => Effect.void));
         yield* emitEvent(walkthroughId, {
           type: "lifecycle:complete",
           data: {
             walkthroughId,
             tokenUsage: ZERO_TOKEN_USAGE,
           },
-        }).pipe(Effect.catchAll(() => Effect.void));
+        }).pipe(Effect.catch(() => Effect.void));
 
         debug(
           "walkthrough-jobs",
@@ -1957,7 +2012,7 @@ export const WalkthroughJobsLive = Layer.effect(
         );
         return true;
       }).pipe(
-        Effect.catchAll((e) => {
+        Effect.catch((e) => {
           logError(
             "walkthrough-jobs",
             `tryHydrateFromRemoteCache failed pr=${prId}: ${e instanceof Error ? e.message : String(e)}`,

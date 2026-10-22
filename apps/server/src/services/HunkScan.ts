@@ -12,7 +12,7 @@
 
 import type { HunkScanEventMessage, HunkScanRow, HunkScanSnapshot } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect";
+import { Context, Deferred, Effect, Exit, type Fiber, Layer, Option, Semaphore } from "effect";
 import { pullRequests, repositories } from "../db/schema";
 import { DbError } from "../domain/errors";
 import { debug } from "../logger";
@@ -41,7 +41,7 @@ const MAX_CONCURRENT_HUNK_SCANS = 2;
  */
 export const HUNK_SCAN_JOIN_BUDGET_MS = 30_000;
 
-export class HunkScanService extends Context.Tag("HunkScanService")<
+export class HunkScanService extends Context.Service<
   HunkScanService,
   {
     /**
@@ -59,14 +59,14 @@ export class HunkScanService extends Context.Tag("HunkScanService")<
     /** What's persisted for one PR head. */
     readonly snapshot: (prId: string, headSha: string) => Effect.Effect<HunkScanSnapshot>;
   }
->() {}
+>()("HunkScanService") {}
 
 interface InFlight {
   readonly headSha: string;
   /** The diff the run was seeded from (`selectionFingerprint`). */
   readonly fingerprint: string;
   readonly done: Deferred.Deferred<HunkScanRow[]>;
-  readonly fiber: Fiber.RuntimeFiber<unknown>;
+  readonly fiber: Fiber.Fiber<unknown>;
 }
 
 export const HunkScanServiceLive = Layer.effect(
@@ -75,7 +75,7 @@ export const HunkScanServiceLive = Layer.effect(
     const context = yield* Effect.context<JevService | CacheService | DbService>();
     const { db } = Context.get(context, DbService);
     const broadcaster = yield* Broadcaster;
-    const callSlots = yield* Effect.makeSemaphore(MAX_CONCURRENT_HUNK_SCANS);
+    const callSlots = yield* Semaphore.make(MAX_CONCURRENT_HUNK_SCANS);
 
     /** By PR id: one run per PR at a time. */
     const inFlight = new Map<string, InFlight>();
@@ -112,7 +112,7 @@ export const HunkScanServiceLive = Layer.effect(
             return current.done;
           }
           if (current !== undefined && current.headSha !== input.headSha) {
-            yield* Fiber.interruptFork(current.fiber);
+            yield* Effect.sync(() => current.fiber.interruptUnsafe());
           }
           const after = current?.headSha === input.headSha ? current.done : null;
 
@@ -120,7 +120,7 @@ export const HunkScanServiceLive = Layer.effect(
           const body = Effect.gen(function* () {
             if (after !== null) yield* Deferred.await(after);
             const accountId = yield* accountIdFor(input.prId).pipe(
-              Effect.catchAll((e) =>
+              Effect.catch((e) =>
                 Effect.sync(() => {
                   debug("jev", `hunk-scan events dropped: ${String(e)}`);
                   return null;
@@ -149,7 +149,7 @@ export const HunkScanServiceLive = Layer.effect(
             ),
           );
           // A fork inherits the uninterruptible region; the run itself must stay interruptible.
-          const fiber = yield* Effect.forkDaemon(Effect.interruptible(body));
+          const fiber = yield* Effect.forkDetach(Effect.interruptible(body));
           inFlight.set(input.prId, { headSha: input.headSha, fingerprint, done, fiber });
           return done;
         }),
@@ -171,7 +171,7 @@ export const HunkScanServiceLive = Layer.effect(
                     `hunk-scan ${input.prId}: past the join budget, going ahead with what's answered`,
                   ),
                 ).pipe(
-                  Effect.zipRight(snapshot(input.prId, input.headSha)),
+                  Effect.andThen(snapshot(input.prId, input.headSha)),
                   Effect.map((s) => s.rows),
                 ),
             }),

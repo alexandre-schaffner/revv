@@ -30,8 +30,12 @@
       ]
     },
     "apps/server": {
-      "entry": ["src/index.ts", "src/**/*.test.ts"],
+      "entry": ["src/index.ts", "src/**/*.test.ts", "src/observability/profiling-preload.ts"],
       "ignoreDependencies": ["bun-types", "drizzle-kit"]
+    },
+    "apps/collector": {
+      "entry": ["src/index.ts", "src/**/*.test.ts"],
+      "ignoreDependencies": ["bun-types"]
     },
     "packages/shared": {
       "entry": ["src/index.ts"]

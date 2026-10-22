@@ -47,7 +47,7 @@ interface Registration {
   readonly writer: EventWriter;
 }
 
-export class Broadcaster extends Context.Tag("Broadcaster")<
+export class Broadcaster extends Context.Service<
   Broadcaster,
   {
     /**
@@ -65,7 +65,7 @@ export class Broadcaster extends Context.Tag("Broadcaster")<
     /** Best-effort broadcast to every registered writer regardless of account. */
     readonly broadcastAll: (msg: ServerEventMessage) => Effect.Effect<void>;
   }
->() {}
+>()("Broadcaster") {}
 
 export const BroadcasterLive = Layer.effect(
   Broadcaster,

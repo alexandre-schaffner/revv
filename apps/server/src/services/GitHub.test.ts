@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { createDb, type Db } from "../db/index";
 import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
@@ -140,18 +140,18 @@ describe("GitHubGateway rate-limit handling", () => {
         const github = yield* GitHubGateway;
         return yield* github.prs
           .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
     expect(calls).toHaveLength(1);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(GitHubRateLimitError);
-      expect(result.left._tag).toBe("GitHubRateLimitError");
-      if (result.left._tag === "GitHubRateLimitError") {
-        expect(result.left.kind).toBe("secondary");
-        expect(result.left.retryAfter).toBe(30);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(GitHubRateLimitError);
+      expect(result.failure._tag).toBe("GitHubRateLimitError");
+      if (result.failure._tag === "GitHubRateLimitError") {
+        expect(result.failure.kind).toBe("secondary");
+        expect(result.failure.retryAfter).toBe(30);
       }
     }
   });
@@ -371,14 +371,14 @@ describe("GitHubGateway error classification", () => {
         const github = yield* GitHubGateway;
         return yield* github.prs
           .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
     expect(calls).toHaveLength(1);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(GitHubApiError);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(GitHubApiError);
     }
   });
 
@@ -391,15 +391,15 @@ describe("GitHubGateway error classification", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.reviews.listThreads("octo/repo", 1, "token").pipe(Effect.either);
+        return yield* github.reviews.listThreads("octo/repo", 1, "token").pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
     expect(calls).toHaveLength(1);
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(GitHubApiError);
-      expect(String((result.left as GitHubApiError).cause)).toContain("nope");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(GitHubApiError);
+      expect(String((result.failure as GitHubApiError).cause)).toContain("nope");
     }
   });
 });
@@ -411,7 +411,7 @@ describe("listPrs", () => {
         const github = yield* GitHubGateway;
         return yield* github.prs
           .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -427,7 +427,9 @@ describe("listPrs", () => {
 
     const result = await listOpen(db);
 
-    expect(Either.isRight(result) && result.right.map((pr) => pr.externalId)).toEqual([2, 1, 3]);
+    expect(Result.isSuccess(result) && result.success.map((pr) => pr.externalId)).toEqual([
+      2, 1, 3,
+    ]);
     expect(bodies).toHaveLength(2);
     expect((bodies[0] as { variables: unknown }).variables).toEqual({
       owner: "octo",
@@ -462,9 +464,9 @@ describe("listPrs", () => {
 
     const result = await listOpen(db);
 
-    expect(Either.isRight(result)).toBe(true);
-    if (!Either.isRight(result)) return;
-    const [bot, ghost] = result.right;
+    expect(Result.isSuccess(result)).toBe(true);
+    if (!Result.isSuccess(result)) return;
+    const [bot, ghost] = result.success;
     expect(bot).toMatchObject({
       id: "repo-1:1",
       repositoryId: "repo-1",
@@ -495,10 +497,10 @@ describe("listPrs", () => {
     const result = await listOpen(db);
 
     expect(calls).toHaveLength(1);
-    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubRateLimitError);
-    if (Either.isLeft(result) && result.left._tag === "GitHubRateLimitError") {
-      expect(result.left.resetAt.getTime()).toBe(1_800_000_000_000);
-      expect(result.left.resource).toBe("graphql");
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(GitHubRateLimitError);
+    if (Result.isFailure(result) && result.failure._tag === "GitHubRateLimitError") {
+      expect(result.failure.resetAt.getTime()).toBe(1_800_000_000_000);
+      expect(result.failure.resource).toBe("graphql");
     }
   });
 
@@ -508,7 +510,7 @@ describe("listPrs", () => {
 
     const result = await listOpen(db);
 
-    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubNotFoundError);
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(GitHubNotFoundError);
   });
 });
 
@@ -565,7 +567,7 @@ describe("probeOpenPrLists", () => {
         const github = yield* GitHubGateway;
         return yield* github.prs
           .probeOpenLists(fullNames, "token", "https://api.github.test")
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -590,9 +592,9 @@ describe("probeOpenPrLists", () => {
 
     expect(bodies).toHaveLength(1);
     expect(bodies[0]?.variables).toMatchObject({ o0: "octo", n0: "a", n1: "gone", n2: "empty" });
-    expect(Either.isRight(result)).toBe(true);
-    if (!Either.isRight(result)) return;
-    expect([...result.right.entries()]).toEqual([
+    expect(Result.isSuccess(result)).toBe(true);
+    if (!Result.isSuccess(result)) return;
+    expect([...result.success.entries()]).toEqual([
       ["octo/a", { count: 3, latestUpdatedAt: "2026-01-02T00:00:00Z" }],
       ["octo/empty", { count: 0, latestUpdatedAt: null }],
     ]);
@@ -609,9 +611,9 @@ describe("probeOpenPrLists", () => {
 
     const result = await probe(db, ["octo/a"]);
 
-    expect(Either.isLeft(result) && result.left).toBeInstanceOf(GitHubRateLimitError);
-    if (Either.isLeft(result) && result.left._tag === "GitHubRateLimitError") {
-      expect(result.left.resource).toBe("graphql");
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(GitHubRateLimitError);
+    if (Result.isFailure(result) && result.failure._tag === "GitHubRateLimitError") {
+      expect(result.failure.resource).toBe("graphql");
     }
   });
 });
@@ -647,14 +649,14 @@ describe("listReviewThreads", () => {
           const github = yield* GitHubGateway;
           return yield* github.reviews
             .listThreads("octo/repo", 1, "token", "https://api.github.test")
-            .pipe(Effect.either);
+            .pipe(Effect.result);
         }).pipe(Effect.provide(gatewayLayer(db))),
       );
 
     const first = await run();
-    expect(Either.isRight(first) && first.right.map((t) => t.nodeId)).toEqual(["t1", "t2"]);
+    expect(Result.isSuccess(first) && first.success.map((t) => t.nodeId)).toEqual(["t1", "t2"]);
     const missing = await run();
-    expect(Either.isLeft(missing) && missing.left).toBeInstanceOf(GitHubNotFoundError);
+    expect(Result.isFailure(missing) && missing.failure).toBeInstanceOf(GitHubNotFoundError);
   });
 });
 

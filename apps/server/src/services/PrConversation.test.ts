@@ -124,23 +124,23 @@ describe("conversation account isolation", () => {
         Effect.gen(function* () {
           const s = yield* PrConversationService;
           return yield* Effect.all([
-            s.cached("b-pr", "a", "a-account").pipe(Effect.either),
-            s.load("b-pr", "a", "a-account").pipe(Effect.either),
-            s.checks("b-pr", "a", "a-account").pipe(Effect.either),
-            s.checkDetails("b-pr", "a", "a-account", 123).pipe(Effect.either),
-            s.labelOptions("b-pr", "a", "a-account").pipe(Effect.either),
-            s.assigneeOptions("b-pr", "a", "a-account", "").pipe(Effect.either),
-            s.reviewerOptions("b-pr", "a", "a-account", "").pipe(Effect.either),
+            s.cached("b-pr", "a", "a-account").pipe(Effect.result),
+            s.load("b-pr", "a", "a-account").pipe(Effect.result),
+            s.checks("b-pr", "a", "a-account").pipe(Effect.result),
+            s.checkDetails("b-pr", "a", "a-account", 123).pipe(Effect.result),
+            s.labelOptions("b-pr", "a", "a-account").pipe(Effect.result),
+            s.assigneeOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
+            s.reviewerOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
             s
               .write("b-pr", "a", "a-account", { kind: "post_comment", body: "unauthorized" })
-              .pipe(Effect.either),
+              .pipe(Effect.result),
           ]);
         }),
       );
       expect(results).toHaveLength(8);
       for (const result of results) {
-        expect(result._tag).toBe("Left");
-        if (result._tag === "Left") expect(result.left).toBeInstanceOf(NotFoundError);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure).toBeInstanceOf(NotFoundError);
       }
       expect(tokenReads).toEqual([]);
       expect(githubCalls).toBe(0);

@@ -48,7 +48,7 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 
 ### Server (`apps/server`)
 
-- **Effect system** throughout: services use `Effect.gen`, `Context.Tag`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
+- **Effect system** throughout: services use `Effect.gen`, `Context.Service`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
 - **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`, `TokenProvider`
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
 - **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
@@ -105,7 +105,7 @@ All packages extend `tsconfig.base.json` which enables `strict`, `exactOptionalP
 
 Canonical patterns live in [`docs/conventions.md`](docs/conventions.md). Existing violations are tracked in [`docs/conventions-backlog.md`](docs/conventions-backlog.md). The rules below are the headline summary; the doc is the authority.
 
-- **Effect services.** Service tag `XService` pairs with Layer `XServiceLive`. No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.fork` / `Effect.sleep` / `Effect.async`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
+- **Effect services.** Service tag `XService` pairs with Layer `XServiceLive`. No `Effect.runPromise` inside an Effect-returning method — schedule with `Effect.forkChild` / `Effect.sleep` / `Effect.callback`. Tagged errors live in `apps/server/src/domain/errors.ts`, never inline. Drizzle calls inside `Effect.gen` are wrapped in `Effect.try*` mapping to a tagged DB error. ([§2](docs/conventions.md#effect-services))
 - **SSE event envelopes.** Shape is `{ type, data? }`; type strings are `namespace:action` colon-style; payload contract is one of signal / full-state / delta and documented at the type definition. Data-bearing envelopes are account-scoped (`broadcastToAccount`); `broadcastAll` is reserved for server-global sync signals. Source of truth: `packages/shared/src/events.ts`. ([§3](docs/conventions.md#event-envelopes))
 - **Web stores.** Singleton module + `getX/setX` exports; per-PR state is `Map<prId, Entry>` with shared `setEntry/deleteEntry/updateEntry` helpers; every Map/Set write is followed by reassignment for reactivity; request-state is a tagged `RequestState<T>` union, not parallel boolean+nullable triples; event handlers are named `on<EventName>` matching the message type. ([§4](docs/conventions.md#stores))
 - **Motion.** All durations and easings come from the `@theme` block in `app.css` (`--duration-snap/quick/smooth`, `--ease-soft/out-expo/standard`). A ceremonial tier (`--duration-ceremonial-quick/medium/slow`) is reserved for onboarding-style theatrical motion. No hand-typed `cubic-bezier(...)`, no `220ms`/`0.55s` literals. ([§5.1–5.2](docs/conventions.md#motion-tokens))
@@ -243,6 +243,15 @@ New agent subsystems must mirror this architecture: durable `*_jobs` table with 
 phase enum + `resumeAttempts`, MCP tool surface with phase preconditions, orchestrator
 owns lifecycle, resume-on-boot. If you find yourself adding in-memory state that couldn't
 survive a `kill -9`, stop — you're building on sand.
+
+## Performance investigations
+
+For trace reviews, stack profiling, or performance fixes, follow
+[`docs/performance.md`](docs/performance.md). Run `bun run perf:review` to collect
+ranked trace evidence and sampled stack summaries. Use separate bounded profiles
+and equivalent unprofiled before/after benchmarks. A latency ranking alone is not
+proof of a CPU bottleneck or an improvement. Preserve the subsystem invariants
+and record reproducible evidence with each proposed optimization.
 
 ## Operational Reminders
 

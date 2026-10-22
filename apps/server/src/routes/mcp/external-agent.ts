@@ -90,7 +90,7 @@ async function resolveContext(
     });
     void AppRuntime.runPromise(
       Effect.flatMap(RemoteWalkthroughCache, (cache) =>
-        cache.push(walkthroughId).pipe(Effect.catchAll(() => Effect.void)),
+        cache.push(walkthroughId).pipe(Effect.catch(() => Effect.void)),
       ),
     ).catch((error) => {
       logError(

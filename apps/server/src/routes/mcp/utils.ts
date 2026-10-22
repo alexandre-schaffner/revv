@@ -7,6 +7,7 @@
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
 import { debug, logError } from "../../logger";
+import { withGraftedSpan } from "../../observability/span-graft";
 
 // ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
 
@@ -113,6 +114,15 @@ export interface BindHttpOptions<Ctx, Meta, Result extends McpToolResult> {
     meta: Meta,
   ) => ReadonlyArray<ToolSpec<Ctx, Result>>;
   readonly rejectToolCall?: (toolName: string, meta: Meta) => string | null;
+  /**
+   * Key under which the job that provoked this call published its trace anchor
+   * (see observability/span-graft.ts) — the walkthrough id for generation, the
+   * recap id for recaps. Returning it files each `tools/call` span inside that
+   * job's trace instead of a trace of its own, which is what makes an agent's
+   * content writes visible in the generation timeline. Omit for surfaces with
+   * no owning job (chat context): the span is still recorded, just unparented.
+   */
+  readonly traceAnchorKey?: (meta: Meta) => string | null;
   readonly beforeToolCall?: (call: HttpToolCall<Ctx, Meta>) => void;
   readonly servedMessage?: (requests: readonly JsonRpcRequest[], ctx: Ctx, meta: Meta) => string;
 }
@@ -189,7 +199,13 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
 
   try {
     options.beforeToolCall?.({ toolName: name, ctx: resolved.ctx, meta: resolved.meta });
-    const result = await spec.handler(resolved.ctx, parsed.data);
+    const anchorKey = options.traceAnchorKey?.(resolved.meta) ?? null;
+    const result = await withGraftedSpan(
+      anchorKey,
+      `Mcp.${name}`,
+      { attributes: { mcp_tool: name, ...(anchorKey ? { walkthrough_id: anchorKey } : {}) } },
+      () => spec.handler(resolved.ctx, parsed.data),
+    );
     return jsonRpcSuccess(id, result);
   } catch (err) {
     logError(

@@ -118,7 +118,7 @@ const FIBER_FAILURE_CAUSE = Symbol.for("effect/Runtime/FiberFailure/Cause");
 export function unwrapEffectError(e: unknown): unknown {
   if (e !== null && typeof e === "object" && FIBER_FAILURE_CAUSE in e) {
     const cause = (e as Record<symbol, unknown>)[FIBER_FAILURE_CAUSE];
-    const opt = Cause.failureOption(cause as Cause.Cause<unknown>);
+    const opt = Cause.findErrorOption(cause as Cause.Cause<unknown>);
     if (Option.isSome(opt)) {
       return opt.value;
     }

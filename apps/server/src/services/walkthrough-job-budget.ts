@@ -110,7 +110,7 @@ export function finishWalkthroughAtBudgetEnd(input: {
           type: "lifecycle:error",
           data: { code: "AutoContinuationExhausted", message },
         })
-        .pipe(Effect.catchAll(() => Effect.void));
+        .pipe(Effect.catch(() => Effect.void));
     } else {
       yield* input.setStatus("complete", { tokenUsage });
       yield* input
@@ -118,13 +118,13 @@ export function finishWalkthroughAtBudgetEnd(input: {
           type: "lifecycle:complete",
           data: { walkthroughId: input.walkthroughId, tokenUsage },
         })
-        .pipe(Effect.catchAll(() => Effect.void));
+        .pipe(Effect.catch(() => Effect.void));
     }
     yield* input
       .emitEvent({
         type: "done",
         data: { walkthroughId: input.walkthroughId, tokenUsage },
       })
-      .pipe(Effect.catchAll(() => Effect.void));
+      .pipe(Effect.catch(() => Effect.void));
   });
 }

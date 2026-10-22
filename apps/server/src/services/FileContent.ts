@@ -15,7 +15,7 @@ import type { SettingsService } from "./Settings";
  * Backed by the `file_content_cache` table; the primary key encodes the
  * triple separated by NUL bytes.
  */
-export class FileContentService extends Context.Tag("FileContentService")<
+export class FileContentService extends Context.Service<
   FileContentService,
   {
     /** Returns cached content or null on cache miss. */
@@ -41,7 +41,7 @@ export class FileContentService extends Context.Tag("FileContentService")<
     /** Stats for observability (hit/miss counters since process start). */
     readonly stats: () => { readonly hits: number; readonly misses: number };
   }
->() {}
+>()("FileContentService") {}
 
 /** Encode the composite primary key for the file_content_cache table. */
 function makeKey(repoFullName: string, path: string, ref: string): string {

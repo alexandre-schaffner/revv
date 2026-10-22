@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema";
 import { Broadcaster } from "./Broadcaster";
@@ -164,11 +164,11 @@ describe("TokenProvider.refreshAccountToken", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const p = yield* TokenProvider;
-        return yield* p.refreshAccountToken("acc").pipe(Effect.either);
+        return yield* p.refreshAccountToken("acc").pipe(Effect.result);
       }).pipe(Effect.provide(buildLayer(db, store, hub))),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
     expect(fetchStub.calls()).toBe(0);
   });
 
@@ -182,11 +182,11 @@ describe("TokenProvider.refreshAccountToken", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const p = yield* TokenProvider;
-        return yield* p.refreshAccountToken("acc").pipe(Effect.either);
+        return yield* p.refreshAccountToken("acc").pipe(Effect.result);
       }).pipe(Effect.provide(buildLayer(db, store, hub))),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
     expect(fetchStub.calls()).toBe(0);
   });
 
@@ -200,11 +200,11 @@ describe("TokenProvider.refreshAccountToken", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const p = yield* TokenProvider;
-        return yield* p.refreshAccountToken("acc").pipe(Effect.either);
+        return yield* p.refreshAccountToken("acc").pipe(Effect.result);
       }).pipe(Effect.provide(buildLayer(db, store, hub))),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
     expect(store.map.get("acc")).toEqual({ accessToken: "old", refreshToken: "r1" });
   });
 

@@ -84,7 +84,7 @@ function gcsErr(prefix: string, cause: unknown): BlobStoreUnavailable {
   return new BlobStoreUnavailable({ message: `${prefix}: ${message}`, cause });
 }
 
-export const GcsBlobStoreLive = Layer.scoped(
+export const GcsBlobStoreLive = Layer.effect(
   BlobStore,
   Effect.gen(function* () {
     const settings = yield* SettingsService;
@@ -248,7 +248,7 @@ export const GcsBlobStoreLive = Layer.scoped(
               },
             }),
           ),
-          Effect.catchAll((e) =>
+          Effect.catch((e) =>
             Effect.sync(() => {
               logError("gcs-blob-store", "status check failed:", e.message);
               return { healthy: false as const, detail: e.message } satisfies BlobStoreStatus;

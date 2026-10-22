@@ -53,7 +53,7 @@ type AddRepoData = Omit<
   readonly clonePath?: string | null;
 };
 
-export class RepositoryService extends Context.Tag("RepositoryService")<
+export class RepositoryService extends Context.Service<
   RepositoryService,
   {
     readonly listRepos: (accountId?: string) => Effect.Effect<Repository[], never, DbService>;
@@ -82,7 +82,7 @@ export class RepositoryService extends Context.Tag("RepositoryService")<
       accountId?: string,
     ) => Effect.Effect<Repository, NotFoundError, DbService>;
   }
->() {}
+>()("RepositoryService") {}
 
 export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   listRepos: (accountId) =>

@@ -30,10 +30,9 @@ type DbMaintenanceService = {
   readonly runNow: () => Effect.Effect<void>;
 };
 
-export class DbMaintenance extends Context.Tag("DbMaintenance")<
-  DbMaintenance,
-  DbMaintenanceService
->() {}
+export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceService>()(
+  "DbMaintenance",
+) {}
 
 export const DbMaintenanceLive = Layer.effect(
   DbMaintenance,
@@ -116,14 +115,14 @@ export const DbMaintenanceLive = Layer.effect(
         );
       }
     }).pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.sync(() => {
           logError("DbMaintenance", "maintenance run failed:", cause);
         }),
       ),
     );
 
-    const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
+    const fiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
 
     return {
       start: () =>
@@ -133,7 +132,7 @@ export const DbMaintenanceLive = Layer.effect(
 
           // Run once immediately on start, then repeat every 6 hours
           const schedule = Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS));
-          const fiber = yield* Effect.fork(
+          const fiber = yield* Effect.forkChild(
             runMaintenance.pipe(Effect.repeat(schedule), Effect.asVoid),
           );
           yield* Ref.set(fiberRef, fiber);

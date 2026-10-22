@@ -1,5 +1,5 @@
 import { and, eq, lt } from "drizzle-orm";
-import { Context, Effect, type Exit, Layer, Runtime } from "effect";
+import { Context, Effect, type Exit, Layer } from "effect";
 import { kvCache } from "../db/schema/index";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
@@ -49,7 +49,7 @@ export interface CacheStatsSnapshot {
  *
  * Stats are best-effort, in-memory only, and reset on process restart.
  */
-export class CacheService extends Context.Tag("CacheService")<
+export class CacheService extends Context.Service<
   CacheService,
   {
     readonly get: <T>(ns: string, key: string) => Effect.Effect<T | null, DbError, DbService>;
@@ -68,7 +68,7 @@ export class CacheService extends Context.Tag("CacheService")<
     ) => Effect.Effect<T, E | DbError, R | DbService>;
     readonly stats: () => Effect.Effect<CacheStatsSnapshot, DbError, DbService>;
   }
->() {}
+>()("CacheService") {}
 
 export const CacheServiceLive = Layer.sync(CacheService, () => {
   // Hot-path mirror so repeated reads don't hit SQLite. Values expire on read
@@ -252,8 +252,8 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       // slipping past their `catchAll`.
       // The fetcher chain also writes through `set`, which requires
       // DbService. Grab a runtime that carries both.
-      const runtime = yield* Effect.runtime<R | DbService>();
-      const promise = Runtime.runPromise(runtime)(
+      const runtime = yield* Effect.context<R | DbService>();
+      const promise = Effect.runPromiseWith(runtime)(
         fetcher().pipe(
           Effect.tap((value) =>
             set(ns, key, value, opts).pipe(Effect.orElseSucceed(() => undefined)),

@@ -1,6 +1,6 @@
 import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
-import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { pullRequests } from "../db/schema/pull-requests";
 import {
@@ -87,10 +87,9 @@ type PollSchedulerService = {
   readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
 };
 
-export class PollScheduler extends Context.Tag("PollScheduler")<
-  PollScheduler,
-  PollSchedulerService
->() {}
+export class PollScheduler extends Context.Service<PollScheduler, PollSchedulerService>()(
+  "PollScheduler",
+) {}
 
 const METADATA_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 const ARCHIVE_BACKFILL_INTERVAL_MS = 60 * 60 * 1000;
@@ -221,7 +220,7 @@ export const PollSchedulerLive = Layer.effect(
       );
 
     // Fiber ref for the running poll loop — null when stopped
-    const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    const fiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
 
     // ── Cycle phases ──────────────────────────────────────────────────────
     // Each is one step of `syncAllRepos`, reading the cycle's account context
@@ -340,7 +339,7 @@ export const PollSchedulerLive = Layer.effect(
           if (!isTrustedHeadShaMove(existing, pr)) return Effect.void;
           return walkthroughJobs
             .supersedeForPr(pr.id, pr.headSha)
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
         },
         { discard: true },
       );
@@ -508,12 +507,12 @@ export const PollSchedulerLive = Layer.effect(
           }));
         }),
       ).pipe(
-        Effect.tapErrorCause((cause) =>
+        Effect.tapCause((cause) =>
           Effect.sync(() => {
             logError("PollScheduler", "syncAllRepos top-level failure:", Cause.pretty(cause));
           }),
         ),
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           broadcastGlobal({
             type: "error",
             data: { code: "SYNC_ERROR", message: String(cause) },
@@ -609,7 +608,7 @@ export const PollSchedulerLive = Layer.effect(
         if (headMoved && row.headSha !== null) {
           yield* walkthroughJobs
             .supersedeForPr(prId, row.headSha)
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
         }
 
         if (row.status !== "open") {
@@ -640,7 +639,7 @@ export const PollSchedulerLive = Layer.effect(
     // Separate fiber that periodically reconciles threads for open PRs.
     // Opening a PR triggers an immediate targeted sync, so this background
     // sweep stays intentionally slow to avoid GitHub rate-limit bursts.
-    const threadFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    const threadFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
 
     // `pr.updatedAt` as of the last sweep that reconciled this PR. Purely a
     // cost optimisation and fully reconstructible — losing it on restart just
@@ -700,7 +699,7 @@ export const PollSchedulerLive = Layer.effect(
               }),
             ),
             Effect.asVoid,
-            Effect.catchAllCause((cause) =>
+            Effect.catchCause((cause) =>
               Effect.sync(() => {
                 // Leave the watermark alone on failure so the next sweep retries
                 // this PR instead of assuming it is up to date.
@@ -724,7 +723,7 @@ export const PollSchedulerLive = Layer.effect(
         }
       }
     }).pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         broadcastGlobal({
           type: "error",
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
@@ -750,7 +749,7 @@ export const PollSchedulerLive = Layer.effect(
       // soon as I open Revv" symptom, made worse when an IDE shares the
       // account. Opening a PR force-syncs its threads on demand, so this delay
       // never affects the PR the user is actually looking at.
-      const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
+      const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
         syncThreadsForOpenPrs.pipe(
           Effect.repeat(schedule),
           Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
@@ -764,7 +763,7 @@ export const PollSchedulerLive = Layer.effect(
         if (intervalMinutes <= 0) return;
         // Run immediately on start, then repeat at the given interval
         const schedule = Schedule.spaced(Duration.minutes(intervalMinutes));
-        const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
+        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
           provideInfra(runSyncOnce("periodic").pipe(Effect.repeat(schedule))),
         );
         yield* Ref.set(fiberRef, fiber);
@@ -812,7 +811,7 @@ export const PollSchedulerLive = Layer.effect(
             (e) => (e as { _tag?: string })._tag === "NotFoundError",
             () => Effect.void,
           ),
-          Effect.catchAllCause((cause) => {
+          Effect.catchCause((cause) => {
             // Cause.pretty alone collapses to "An error has occurred"
             // when the failure's wrapper Error has no useful .message.
             // Dig into the typed failure (SyncError carries `.cause`
@@ -820,7 +819,7 @@ export const PollSchedulerLive = Layer.effect(
             // the pretty cause AND the underlying error's message +
             // stack so we can actually diagnose what broke.
             const pretty = Cause.pretty(cause);
-            const failure = Cause.failureOption(cause);
+            const failure = Cause.findErrorOption(cause);
             const detail = (() => {
               if (failure._tag !== "Some") return null;
               const v = failure.value as {
@@ -840,7 +839,7 @@ export const PollSchedulerLive = Layer.effect(
               const tid = v.threadId ? ` (thread ${v.threadId})` : "";
               return [tag + tid, msg, inner].filter(Boolean).join(" — ");
             })();
-            const defects = Chunk.toReadonlyArray(Cause.defects(cause));
+            const defects = cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect);
             const defectStr = defects.length
               ? defects
                   .map((d) =>
@@ -858,12 +857,12 @@ export const PollSchedulerLive = Layer.effect(
             const userMessage = detail ?? "Unknown error";
             return Effect.gen(function* () {
               const prRow = yield* withDb(prService.getPr(prId)).pipe(
-                Effect.catchAll(() => Effect.succeed(null)),
+                Effect.catch(() => Effect.succeed(null)),
               );
               if (!prRow) return;
               const accountId = yield* withDb(
                 repoService.getAccountIdForRepo(prRow.repositoryId),
-              ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+              ).pipe(Effect.catch(() => Effect.succeed(null)));
               if (!accountId) return;
               yield* broadcaster
                 .broadcastToAccount(accountId, {

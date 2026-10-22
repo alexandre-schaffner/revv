@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: Revv
+    folder: Revv
+    type: file
+    disableDeletion: false
+    editable: false
+    options:
+      path: /etc/grafana/dashboards

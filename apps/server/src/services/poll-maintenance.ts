@@ -250,11 +250,15 @@ export const refetchDiffs = (
           fetchedAt: new Date().toISOString(),
         }));
 
+        yield* Effect.annotateCurrentSpan("files", files.length);
         // `cacheFiles` also records the PR's real diff size from this list.
         yield* withDb(deps.db, deps.diffCache.cacheFiles(prId, files)).pipe(
           Effect.orElseSucceed(() => undefined),
         );
-      }).pipe(Effect.orElseSucceed(() => undefined)),
+      }).pipe(
+        Effect.withSpan("PollScheduler.refreshPrFiles", { attributes: { prId } }),
+        Effect.orElseSucceed(() => undefined),
+      ),
     { concurrency: 1, discard: true },
   );
 

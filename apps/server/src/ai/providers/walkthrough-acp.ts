@@ -49,6 +49,11 @@ import {
 import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
+import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
+import {
+  recordWalkthroughToken,
+  startWalkthroughPrompt,
+} from "../../observability/walkthrough-metrics";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
@@ -204,6 +209,12 @@ export function streamWalkthroughViaAcp(
   // Exploration tool-call ids we surfaced as pills, so their later `tool-result`
   // can be forwarded as an `exploration-result` (and others dropped).
   const surfacedExplorationCallIds = new Set<string>();
+  // Open spans for the agent's own tool calls, keyed on ACP call id. The agent
+  // reads and greps inside our worktree for as long as it likes; without these
+  // that time is indistinguishable from model inference in the timeline. Closed
+  // on the matching `tool-result`, and swept in the `finally` below so a turn
+  // that dies mid-tool-call doesn't leak an unended span.
+  const openToolSpans = new Map<string, ReturnType<typeof graftedSpan>>();
   const PHASE_ORDER: WalkthroughLifecyclePhase[] = [
     "connecting",
     "exploring",
@@ -258,6 +269,9 @@ export function streamWalkthroughViaAcp(
   // pills, context-occupancy. MCP content tool calls are ignored here (they're
   // surfaced by the route via `onContentEvent`).
   const handleAgentEvent = (ev: NormalizedAgentEvent): void => {
+    if (ev.kind === "reasoning-delta" || ev.kind === "text-delta") {
+      recordWalkthroughToken(params.walkthroughId, ev.data);
+    }
     if (ev.kind === "usage") {
       tokenUsage = mergeContextOccupancy(tokenUsage, {
         ...ZERO_TOKEN_USAGE,
@@ -295,7 +309,19 @@ export function streamWalkthroughViaAcp(
     if (ev.kind === "tool-call") {
       if (EXPLORATION_TOOLS.has(ev.toolName)) {
         transitionPhase("exploring", "Reading files and understanding changes...");
-        if (ev.callId) surfacedExplorationCallIds.add(ev.callId);
+        if (ev.callId) {
+          surfacedExplorationCallIds.add(ev.callId);
+          openToolSpans.set(
+            ev.callId,
+            graftedSpan(params.walkthroughId, `Agent.${ev.toolName}`, {
+              attributes: {
+                walkthrough_id: params.walkthroughId,
+                agent_tool: ev.toolName,
+                call_id: ev.callId,
+              },
+            }),
+          );
+        }
         push({
           type: "exploration",
           data: buildActivity(ev.toolName, ev.input, params.worktreePath, ev.callId),
@@ -305,6 +331,12 @@ export function streamWalkthroughViaAcp(
     }
 
     if (ev.kind === "tool-result") {
+      const toolSpan = openToolSpans.get(ev.callId);
+      if (toolSpan) {
+        openToolSpans.delete(ev.callId);
+        if (ev.isError) toolSpan.fail(new Error("agent tool reported an error"));
+        toolSpan.end();
+      }
       // Only forward results for exploration pills we actually surfaced — the
       // feed keys peeks by callId and ignores unmatched ones anyway.
       if (surfacedExplorationCallIds.has(ev.callId)) {
@@ -356,7 +388,20 @@ export function streamWalkthroughViaAcp(
     try {
       // Acquire the connection BEFORE `withAgentTurn` so `jobStarted`/`jobEnded`
       // /`abortSession` close over a live handle (the chat-acp ordering).
-      handle = await getAcpConnection(params.worktreePath, params.acpAgentId, launch);
+      // Cold-start cost of the agent subprocess. Pooled per worktree, so this
+      // is ~0 on a warm handle and seconds on a cold one — a difference worth
+      // seeing rather than guessing at.
+      const connectSpan = graftedSpan(params.walkthroughId, "Acp.connect", {
+        attributes: { walkthrough_id: params.walkthroughId, acp_agent: params.acpAgentId },
+      });
+      try {
+        handle = await getAcpConnection(params.worktreePath, params.acpAgentId, launch);
+      } catch (err) {
+        connectSpan.fail(err);
+        throw err;
+      } finally {
+        connectSpan.end();
+      }
       const h = handle;
       if (!h.httpMcpSupported) {
         // HTTP MCP is MANDATORY here (all content flows through it), unlike chat
@@ -411,7 +456,21 @@ export function streamWalkthroughViaAcp(
           // ── 2. Open a FRESH session (never loadSession) ──────────────────
           // Auto-continuations rely on `get_walkthrough_state` (invariant #6),
           // not session memory, so every run is a clean session.
-          const created = await h.newSession(mcpServers);
+          // Session creation includes the agent's own MCP handshake against
+          // `/mcp/walkthrough` (initialize + tools/list), which is a real
+          // round-trip through our own HTTP server, not a local no-op.
+          const sessionSpan = graftedSpan(params.walkthroughId, "Acp.newSession", {
+            attributes: { walkthrough_id: params.walkthroughId, acp_agent: params.acpAgentId },
+          });
+          let created: Awaited<ReturnType<typeof h.newSession>>;
+          try {
+            created = await h.newSession(mcpServers);
+          } catch (err) {
+            sessionSpan.fail(err);
+            throw err;
+          } finally {
+            sessionSpan.end();
+          }
           sessionId = created.sessionId;
           debug("walkthrough-acp", "created session:", sessionId);
           if (params.onSessionId) params.onSessionId(sessionId);
@@ -439,7 +498,37 @@ export function streamWalkthroughViaAcp(
             "model:",
             launch.model ?? "(default)",
           );
-          const stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
+          // The agent turn itself. Re-anchored so everything the turn provokes
+          // — the agent's own tool calls above, and the MCP content writes
+          // arriving over HTTP — nests inside this span rather than beside it.
+          // Whatever wall clock this span does NOT account for through a child
+          // is model inference; the dashboard reports that residue directly.
+          const promptSpan = graftedSpan(params.walkthroughId, "Acp.prompt", {
+            attributes: {
+              walkthrough_id: params.walkthroughId,
+              acp_agent: params.acpAgentId,
+              prompt_chars: userMessage.length,
+              "gen_ai.operation.name": "invoke_agent",
+              "gen_ai.agent.name": params.acpAgentId,
+              "gen_ai.conversation.id": sessionId,
+              ...(launch.model
+                ? { model: launch.model, "gen_ai.request.model": launch.model }
+                : {}),
+            },
+          });
+          const restoreAnchor = publishTraceAnchor(params.walkthroughId, promptSpan.anchor);
+          let stopReason: Awaited<ReturnType<typeof h.prompt>>;
+          try {
+            startWalkthroughPrompt(params.walkthroughId);
+            stopReason = await h.prompt(sessionId, [{ type: "text", text: userMessage }]);
+            promptSpan.setAttributes({ stop_reason: String(stopReason) });
+          } catch (err) {
+            promptSpan.fail(err);
+            throw err;
+          } finally {
+            restoreAnchor();
+            promptSpan.end();
+          }
 
           if (ctx.wasCancelled() || ctx.wasTimeout()) {
             cancelled = true;
@@ -489,6 +578,11 @@ export function streamWalkthroughViaAcp(
       return ZERO_TOKEN_USAGE;
     } finally {
       clearInterval(heartbeatInterval);
+      // A cancelled or timed-out turn can leave a tool call without its result.
+      // End those spans rather than leaking them — an unended span never
+      // reaches the exporter, so the timeline would silently lose the call.
+      for (const span of openToolSpans.values()) span.end();
+      openToolSpans.clear();
       if (handle && sessionId) handle.setListener(sessionId, null);
       await params.deps.unregisterActivityNotifier(params.walkthroughId).catch(() => {
         /* ignore */

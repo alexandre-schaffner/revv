@@ -41,7 +41,7 @@ export function buildCacheKey(method: string, pathWithQuery: string): string {
  * Backed by the `github_etag_cache` SQLite table + in-memory counters for
  * observability. Counters reset on process restart.
  */
-export class GitHubEtagCache extends Context.Tag("GitHubEtagCache")<
+export class GitHubEtagCache extends Context.Service<
   GitHubEtagCache,
   {
     readonly get: (cacheKey: string) => Effect.Effect<CachedBody | null, never, DbService>;
@@ -57,7 +57,7 @@ export class GitHubEtagCache extends Context.Tag("GitHubEtagCache")<
     readonly recordMiss: () => void;
     readonly stats: () => EtagStats;
   }
->() {}
+>()("GitHubEtagCache") {}
 
 export const GitHubEtagCacheLive = Layer.sync(GitHubEtagCache, () => {
   let hits304 = 0;

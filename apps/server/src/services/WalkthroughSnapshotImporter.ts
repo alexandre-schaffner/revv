@@ -36,7 +36,7 @@ import { debug } from "../logger";
 import { DbService } from "./Db";
 import { validateSnapshot } from "./walkthrough-snapshot";
 
-export class WalkthroughSnapshotImporter extends Context.Tag("WalkthroughSnapshotImporter")<
+export class WalkthroughSnapshotImporter extends Context.Service<
   WalkthroughSnapshotImporter,
   {
     /**
@@ -58,7 +58,7 @@ export class WalkthroughSnapshotImporter extends Context.Tag("WalkthroughSnapsho
       readonly snapshot: WalkthroughSnapshotV2;
     }) => Effect.Effect<void, ImportError, DbService>;
   }
->() {}
+>()("WalkthroughSnapshotImporter") {}
 
 export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshotImporter, {
   import: ({ walkthroughId, snapshot }) =>

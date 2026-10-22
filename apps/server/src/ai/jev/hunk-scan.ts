@@ -411,7 +411,7 @@ export function scanHunks<R>(
       Effect.suspend(() => {
         const sentInRound = round;
         return Effect.sleep(Math.max(0, pausedUntil - Date.now())).pipe(
-          Effect.zipRight(judgeWindow(target, window)),
+          Effect.andThen(judgeWindow(target, window)),
           Effect.tapError((error) => onFailure(error, sentInRound)),
         );
       });

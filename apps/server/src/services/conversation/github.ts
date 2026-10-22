@@ -378,17 +378,17 @@ export function fetchCheckDetails(
         `${base}/actions/jobs/${checkRunId}/logs`,
         token,
         apiBase,
-      ).pipe(Effect.either);
-      if (text._tag === "Right") {
-        log = extractLogTail(text.right);
+      ).pipe(Effect.result);
+      if (text._tag === "Success") {
+        log = extractLogTail(text.success);
       } else {
         logUnavailable =
-          text.left instanceof GitHubAccessDeniedError
+          text.failure instanceof GitHubAccessDeniedError
             ? "permission"
-            : text.left instanceof GitHubNotFoundError ||
-                (text.left instanceof GitHubApiError && text.left.status === 410)
+            : text.failure instanceof GitHubNotFoundError ||
+                (text.failure instanceof GitHubApiError && text.failure.status === 410)
               ? "expired"
-              : yield* Effect.fail(text.left);
+              : yield* Effect.fail(text.failure);
       }
     }
 
