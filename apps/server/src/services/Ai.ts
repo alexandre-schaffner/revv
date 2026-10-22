@@ -20,6 +20,7 @@ import {
   type ChatHistoryEntry,
   type ChatPrContext,
   type ChatWalkthroughContext,
+  type ResolveConflictsTask,
 } from "../ai/prompts/chat";
 import type { WalkthroughPromptHints } from "../ai/prompts/walkthrough";
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
@@ -173,17 +174,17 @@ export class AiService extends Context.Service<
       params: ChatParams,
     ) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
     /**
-     * One-shot agent invocation for resolving merge conflicts. Runs the
-     * configured CLI agent against `cwd` (an in-progress merge worktree)
-     * with a dedicated system prompt that ALLOWS `git merge --continue`
-     * but forbids push / amend / abort. Does NOT persist the session —
+     * One-shot agent invocation for resolving conflicts. Runs the
+     * configured CLI agent against `cwd` (a worktree with a merge or rebase
+     * paused on conflicts) with a `task`-specific system prompt that ALLOWS
+     * `git merge --continue` / `git rebase --continue` but forbids push /
+     * amend / abort. Does NOT persist the session —
      * this is not part of the chat conversation, and we don't want it to
      * pollute the session JSONL or `chat_messages` history.
      */
     readonly resolveMergeConflict: (params: {
       readonly cwd: string;
-      readonly agentBranch: string;
-      readonly sourceBranch: string;
+      readonly task: ResolveConflictsTask;
       readonly conflictFiles: ReadonlyArray<string>;
       readonly abortController?: AbortController | undefined;
       /**
@@ -381,12 +382,8 @@ export const AiServiceLive = Layer.effect(
             return yield* Effect.fail(new AiNotConfiguredError());
           }
 
-          const systemPrompt = buildResolveConflictsPrompt({
-            agentBranch: params.agentBranch,
-            sourceBranch: params.sourceBranch,
-            conflictFiles: params.conflictFiles,
-          });
-          const message = buildResolveConflictsUserMessage();
+          const systemPrompt = buildResolveConflictsPrompt(params.task, params.conflictFiles);
+          const message = buildResolveConflictsUserMessage(params.task);
 
           // ACP transport: one-shot, no resume, no review-context MCP. The
           // system prompt forbids push/amend/abort (auto-allow keeps that

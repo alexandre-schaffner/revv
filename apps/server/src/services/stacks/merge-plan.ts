@@ -1,24 +1,19 @@
-// ── Stack merge: the pure half ──────────────────────────────────────────────
-//
-// What can merge, how far, and what a run does next, decided from one read of
-// GitHub. No I/O here: `StackMerge.ts` reads GitHub, feeds the read in, and
-// carries out whatever this returns.
-//
-// TODO(S0): GitHub's native-stack merge behaviour hasn't been observed yet
-// (the spike needs a stack, and stacks can't be made through the API). Two
-// assumptions ride on it: an upper layer reports BLOCKED only because the
-// layers below haven't landed (`layerReadiness`), and a PATCHed base keeps a
-// PR in its stack (`withinBudget`'s retarget, `planStackRebase`'s).
-
-import type {
-  MergeMethod,
-  StackMergeMode,
-  StackMergePlanLayer,
-  StackMergeReadiness,
-  StackMergeRun,
-  StackMergeRunLayer,
+import {
+  classifyLayerMergeState,
+  type MergeMethod,
+  type StackMergeMode,
+  type StackMergePlanLayer,
+  type StackMergeReadiness,
+  type StackMergeRun,
+  type StackMergeRunLayer,
 } from "@revv/shared";
-import { classifyLayerMergeState, type GitHubStack, type GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "./map";
+import {
+  baseWasMoved,
+  blockedOnlyByLayersBelow,
+  contradiction,
+  type UnverifiedStackBehaviour,
+} from "./unverified-github";
 
 /**
  * After the layer below merges, wait this long for GitHub to point the next
@@ -33,16 +28,11 @@ export const MERGEABILITY_WAIT_MS = 2 * 60_000;
  * BLOCKED as branch protection.
  */
 export const PROTECTION_GRACE_MS = 60_000;
-/** A driven run waits this long for a layer's checks, then stops. */
 export const CHECKS_WAIT_MS = 30 * 60_000;
-/** How long a run watches a layer it handed to GitHub's auto-merge. */
 export const AUTO_MERGE_WAIT_MS = 45 * 60_000;
-
-// ── Readiness ───────────────────────────────────────────────────────────────
 
 export interface LayerReadiness {
   readonly readiness: StackMergeReadiness;
-  /** Why a blocked layer can't merge, or what a ready one is still waiting on. */
   readonly reasons: readonly string[];
 }
 
@@ -50,7 +40,6 @@ function onStackBase(layer: GitHubStackLayer, stack: GitHubStack): boolean {
   return layer.baseRef === stack.baseRefName;
 }
 
-/** Reviews and checks, the layer's own requirements whatever its base. */
 function ownBlockers(layer: GitHubStackLayer): { hard: string[]; checksRunning: boolean } {
   const hard: string[] = [];
   if (layer.reviewDecision === "changes_requested") hard.push("Changes requested");
@@ -60,11 +49,6 @@ function ownBlockers(layer: GitHubStackLayer): { hard: string[]; checksRunning: 
   return { hard, checksRunning };
 }
 
-/**
- * Whether GitHub would merge this layer once everything below it landed.
- * In `auto` mode a layer only waiting on checks is ready: GitHub's auto-merge
- * takes it from there.
- */
 export function layerReadiness(
   layer: GitHubStackLayer,
   stack: GitHubStack,
@@ -77,16 +61,12 @@ export function layerReadiness(
   if (layer.status === "draft") return { readiness: "blocked", reasons: ["Still a draft"] };
 
   const mergeState = classifyLayerMergeState(layer);
-  // A run would try a rebase, but a conflict found before it starts is the
-  // author's to settle.
   if (mergeState === "conflicts") {
     return { readiness: "blocked", reasons: [`Conflicts with ${layer.baseRef}`] };
   }
   if (mergeState === "behind") {
     const behind = `Behind ${layer.baseRef}`;
     if (!stack.viewerCanPush) return { readiness: "blocked", reasons: [behind] };
-    // The run rebases it before merging, so what's left is the layer's own
-    // requirements, which GitHub can't vouch for until then.
     const rest = layerReadiness(
       { ...layer, mergeStateStatus: "UNKNOWN", behindBy: 0 },
       stack,
@@ -105,14 +85,10 @@ export function layerReadiness(
       ? { readiness: "ready", reasons: ["Checks still running; GitHub merges it when they pass"] }
       : { readiness: "blocked", reasons: ["Checks still running"] };
   }
-  // Nothing of its own holds it. On the stack base, BLOCKED is branch
-  // protection; on a lower layer's branch it's the layers below.
-  if (mergeState === "blocked" && onStackBase(layer, stack)) {
+  if (blockedOnlyByLayersBelow(layer, stack)) return { readiness: "ready", reasons: [] };
+  if (mergeState === "blocked") {
     return { readiness: "blocked", reasons: ["Blocked by branch protection"] };
   }
-  // An upper layer's BLOCKED, UNKNOWN (GitHub still computing), states we
-  // didn't model: a run waits for GitHub to settle and stops cleanly if it
-  // settles badly.
   return { readiness: "ready", reasons: [] };
 }
 
@@ -140,11 +116,6 @@ export function planLayers(
   });
 }
 
-/**
- * The highest position reachable from the lowest open layer through
- * contiguous ready layers. Null when nothing is open or the lowest open
- * layer can't merge.
- */
 export function defaultThrough(layers: readonly StackMergePlanLayer[]): number | null {
   let through: number | null = null;
   for (const layer of [...layers].sort((a, b) => a.position - b.position)) {
@@ -155,30 +126,24 @@ export function defaultThrough(layers: readonly StackMergePlanLayer[]): number |
   return through;
 }
 
-// ── Starting a run ──────────────────────────────────────────────────────────
-
 export interface StartRequest {
   readonly throughPosition: number;
   readonly method: MergeMethod;
-  /** Head SHAs the user confirmed, by PR number. */
   readonly expectedHeads: Readonly<Record<string, string>>;
 }
 
 export interface StartRefusal {
   readonly message: string;
-  /** `conflict`: GitHub moved since the user looked. `invalid`: the ask can't be met. */
-  readonly reason: "conflict" | "invalid";
+  readonly reason: "stale" | "invalid";
 }
 
-/** Why a run can't start as asked, in the reader's terms; null when it can. */
 export function startRefusal(
   stack: GitHubStack,
   layers: readonly StackMergePlanLayer[],
   req: StartRequest,
 ): StartRefusal | null {
   const invalid = (message: string): StartRefusal => ({ message, reason: "invalid" });
-  // An empty list is a host too old to say; the merge itself is the judge.
-  if (stack.allowedMethods.length > 0 && !stack.allowedMethods.includes(req.method)) {
+  if (!stack.allowedMethods.includes(req.method)) {
     return invalid(`This repository doesn't allow ${req.method} merges`);
   }
   const target = layers.find((l) => l.position === req.throughPosition);
@@ -187,14 +152,13 @@ export function startRefusal(
   if (upTo.every((l) => l.readiness === "merged")) {
     return invalid(`Everything through #${target.number} is already merged`);
   }
-  // A moved head first: the user's whole view of the stack is stale.
   for (const layer of upTo) {
     if (layer.readiness === "merged") continue;
     const expected = req.expectedHeads[String(layer.number)];
     if (!expected || expected !== layer.headSha) {
       return {
         message: `#${layer.number} got new commits since you opened this — review them first`,
-        reason: "conflict",
+        reason: "stale",
       };
     }
   }
@@ -206,7 +170,6 @@ export function startRefusal(
   return null;
 }
 
-/** The run's layers as confirmed: every layer through the target, base first. */
 export function initialRunLayers(
   layers: readonly StackMergePlanLayer[],
   throughPosition: number,
@@ -223,24 +186,32 @@ export function initialRunLayers(
     }));
 }
 
-// ── Stepping a run ──────────────────────────────────────────────────────────
-
-/** One read of GitHub, as a step sees it. */
 export interface StackRead {
   readonly stack: GitHubStack;
-  /** Run layers GitHub's stack no longer lists but reports merged on their own. */
-  readonly mergedOutside: ReadonlySet<number>;
+  readonly mergedUnlisted: ReadonlySet<number>;
+}
+
+/** Run layers to ask GitHub for the stack through: still-open first, top down. */
+export function stackAskOrder(layers: readonly StackMergeRunLayer[]): StackMergeRunLayer[] {
+  return [...layers].sort(
+    (a, b) =>
+      Number(a.state === "merged") - Number(b.state === "merged") || b.position - a.position,
+  );
 }
 
 export type WaitReason = "retarget" | "mergeability" | "protection" | "checks" | "auto_merge";
 
 export type StepDecision =
   | { readonly kind: "complete" }
-  | { readonly kind: "fail"; readonly number: number; readonly message: string }
+  | {
+      readonly kind: "fail";
+      readonly number: number;
+      readonly message: string;
+      readonly contradicts?: UnverifiedStackBehaviour;
+    }
   | { readonly kind: "wait"; readonly number: number; readonly reason: WaitReason }
   | { readonly kind: "retarget"; readonly number: number; readonly base: string }
   | { readonly kind: "merge"; readonly number: number; readonly sha: string }
-  /** The layer fell behind its base (a merge below moved it): rebase the stack, once per layer. */
   | { readonly kind: "rebase"; readonly number: number }
   | {
       readonly kind: "auto_merge";
@@ -250,10 +221,9 @@ export type StepDecision =
     };
 
 const isMerged = (read: StackRead, number: number) =>
-  read.mergedOutside.has(number) ||
+  read.mergedUnlisted.has(number) ||
   read.stack.layers.some((l) => l.number === number && l.status === "merged");
 
-/** The run's layers with whatever GitHub reports merged marked so. */
 export function reconcileLayers(
   layers: readonly StackMergeRunLayer[],
   read: StackRead,
@@ -263,12 +233,6 @@ export function reconcileLayers(
   );
 }
 
-/**
- * The rebase replays and force-pushes every open layer from the heads GitHub
- * reports, so it may only start once every run layer above `number` still
- * holds the head the user confirmed (or Revv's own rebased one). Null when
- * they all do.
- */
 function aboveBeforeRebase(
   layers: readonly StackMergeRunLayer[],
   read: StackRead,
@@ -291,10 +255,6 @@ function aboveBeforeRebase(
   return null;
 }
 
-/**
- * What to do about the lowest layer not yet merged. Waits come back without a
- * budget; `withinBudget` turns an overlong one into its fallback.
- */
 export function nextStep(
   run: Pick<StackMergeRun, "layers" | "mode">,
   read: StackRead,
@@ -305,7 +265,12 @@ export function nextStep(
   if (!target) return { kind: "complete" };
   const { number } = target;
   const layer = read.stack.layers.find((l) => l.number === number);
-  if (!layer) return { kind: "fail", number, message: `#${number} is no longer in this stack` };
+  if (!layer) {
+    const message = `#${number} is no longer in this stack`;
+    return baseWasMoved(target)
+      ? contradiction("base-change-keeps-membership", number, message)
+      : { kind: "fail", number, message };
+  }
 
   if (layer.status === "closed") return { kind: "fail", number, message: `#${number} was closed` };
   // The run's own rebase pushed this layer; GitHub may still report the old head.
@@ -319,11 +284,9 @@ export function nextStep(
       message: `#${number} got new commits after you confirmed — review them first`,
     };
   }
-  // Already handed over; GitHub merges it when it's ready.
   if (target.state === "auto_merge" && layer.autoMergeEnabled) {
     return { kind: "wait", number, reason: "auto_merge" };
   }
-  // Everything below has merged, so this layer belongs on the stack base.
   if (!onStackBase(layer, read.stack)) return { kind: "wait", number, reason: "retarget" };
 
   const mergeState = classifyLayerMergeState(layer);
@@ -369,7 +332,6 @@ const BUDGETS: Record<WaitReason, number> = {
   auto_merge: AUTO_MERGE_WAIT_MS,
 };
 
-/** A wait past its budget becomes what the run does instead of waiting longer. */
 export function withinBudget(
   decision: StepDecision,
   waitedMs: number,
@@ -399,7 +361,6 @@ export function withinBudget(
   }
 }
 
-/** The layer state a decision puts its layer in while the run carries it out. */
 export function layerStateFor(decision: StepDecision): StackMergeRunLayer["state"] | null {
   switch (decision.kind) {
     case "wait":

@@ -11,6 +11,7 @@ import {
   RETARGET_WAIT_MS,
   reconcileLayers,
   type StackRead,
+  stackAskOrder,
   startRefusal,
   withinBudget,
 } from "./merge-plan";
@@ -58,9 +59,9 @@ function stackOf(
   };
 }
 
-const readOf = (stack: GitHubStack, mergedOutside: number[] = []): StackRead => ({
+const readOf = (stack: GitHubStack, mergedUnlisted: number[] = []): StackRead => ({
   stack,
-  mergedOutside: new Set(mergedOutside),
+  mergedUnlisted: new Set(mergedUnlisted),
 });
 
 function runLayer(position: number, over: Partial<StackMergeRunLayer> = {}): StackMergeRunLayer {
@@ -230,13 +231,6 @@ describe("startRefusal", () => {
     ).toContain("rebase");
   });
 
-  test("an empty method list is a host too old to say", () => {
-    const old = stackOf(stack.layers, { allowedMethods: [] });
-    expect(
-      startRefusal(old, layers, { throughPosition: 1, method: "rebase", expectedHeads: heads }),
-    ).toBeNull();
-  });
-
   test("refuses a range with a blocked layer", () => {
     expect(
       startRefusal(stack, layers, { throughPosition: 3, method: "merge", expectedHeads: heads }),
@@ -252,7 +246,7 @@ describe("startRefusal", () => {
       }),
     ).toEqual({
       message: "#102 got new commits since you opened this — review them first",
-      reason: "conflict",
+      reason: "stale",
     });
     expect(
       startRefusal(stack, layers, { throughPosition: 2, method: "merge", expectedHeads: {} })
@@ -312,7 +306,26 @@ describe("nextStep", () => {
 
   test("a layer missing outright stops the run", () => {
     const read = readOf(stackOf([layer(2)]));
-    expect(nextStep(driven([runLayer(1)]), read)).toMatchObject({ kind: "fail", number: 101 });
+    expect(nextStep(driven([runLayer(1)]), read)).toEqual({
+      kind: "fail",
+      number: 101,
+      message: "#101 is no longer in this stack",
+    });
+  });
+
+  test("a layer gone after its base moved contradicts base-change-keeps-membership", () => {
+    const read = readOf(stackOf([layer(1, { status: "merged" }), layer(3)]));
+    expect(
+      nextStep(
+        driven([runLayer(1, { state: "merged" }), runLayer(2, { state: "retargeting" })]),
+        read,
+      ),
+    ).toEqual({
+      kind: "fail",
+      number: 102,
+      message: "#102 is no longer in this stack",
+      contradicts: "base-change-keeps-membership",
+    });
   });
 
   test("a moved head stops the run", () => {
@@ -341,7 +354,6 @@ describe("nextStep", () => {
     });
     expect(nextStep(driven([runLayer(1)]), at("DIRTY"))).toEqual({ kind: "rebase", number: 101 });
     expect(nextStep(driven([runLayer(1)]), at("BEHIND"))).toEqual({ kind: "rebase", number: 101 });
-    // CLEAN, but GitHub stacks only merge a linear history.
     expect(nextStep(driven([runLayer(1)]), at("CLEAN", { behindBy: 2 }))).toEqual({
       kind: "rebase",
       number: 101,
@@ -357,13 +369,11 @@ describe("nextStep", () => {
       number: 101,
       message: "#101 needs a rebase onto main",
     });
-    // Rebased along with a layer below it, it still has its own rebase.
     const carried = runLayer(1, { expectedHeadSha: "h1r", rebasedFrom: "h1" });
     expect(nextStep(driven([carried]), at("BEHIND", { headSha: "h1r" }))).toEqual({
       kind: "rebase",
       number: 101,
     });
-    // GitHub still showing the head the run rebased away from is catching up.
     expect(nextStep(driven([rebased]), at("CLEAN"))).toMatchObject({
       kind: "wait",
       reason: "mergeability",
@@ -385,7 +395,6 @@ describe("nextStep", () => {
       number: 103,
       message: "#103 got new commits after you confirmed — review them first",
     });
-    // GitHub still showing the head Revv's last rebase replaced: wait for it.
     const carried = [
       runLayer(1),
       runLayer(2),
@@ -407,7 +416,6 @@ describe("nextStep", () => {
       nodeId: "N1",
       sha: "h1",
     });
-    // GitHub's read can lag the mutation; never enable twice.
     expect(
       nextStep({ mode: "auto", layers: [runLayer(1, { state: "auto_merge" })] }, read),
     ).toEqual({ kind: "wait", number: 101, reason: "auto_merge" });
@@ -444,6 +452,18 @@ describe("withinBudget", () => {
   test("an auto-merge watch past its budget stops with a Continue", () => {
     const wait = { kind: "wait", number: 101, reason: "auto_merge" } as const;
     expect(withinBudget(wait, AUTO_MERGE_WAIT_MS, "main")).toMatchObject({ kind: "fail" });
+  });
+});
+
+describe("stackAskOrder", () => {
+  test("asks through open layers first, top down, then merged ones", () => {
+    const order = stackAskOrder([
+      runLayer(1, { state: "merged" }),
+      runLayer(2, { state: "merged" }),
+      runLayer(3),
+      runLayer(4, { state: "failed" }),
+    ]);
+    expect(order.map((l) => l.position)).toEqual([4, 3, 2, 1]);
   });
 });
 

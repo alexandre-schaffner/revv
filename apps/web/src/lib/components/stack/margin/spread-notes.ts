@@ -1,9 +1,3 @@
-// Rail notes hung beside issue cards are positioned off their card, so two
-// noted cards close together would stack their notes on top of each other.
-// This keeps each note at least a gap below the one above it, by `translate`
-// alone: nothing in the main column moves. A note laid out inline (the
-// narrow layout) is in the flow already and is left alone.
-
 import type { Attachment } from "svelte/attachments";
 
 const GAP_PX = 16;

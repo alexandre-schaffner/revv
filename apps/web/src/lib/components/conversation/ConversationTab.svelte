@@ -24,6 +24,7 @@ import { getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
+import BaseConflicts from "./BaseConflicts.svelte";
 import CiChecks from "./CiChecks.svelte";
 import CommentCard from "./CommentCard.svelte";
 import ConversationSidebar from "./ConversationSidebar.svelte";
@@ -147,6 +148,11 @@ function onKeydown(e: KeyboardEvent): void {
 				/>
 			</div>
 
+			<!-- The other half of GitHub's merge box: conflicts with the base. -->
+			<div class="slot-conflicts">
+				<BaseConflicts {prId} {conversation} />
+			</div>
+
 			{#if canComment && conversation.state === 'open'}
 				<div class="slot-composer">
 					<MarkdownEditor
@@ -226,6 +232,10 @@ function onKeydown(e: KeyboardEvent): void {
 		/* Clears the floating review action bar. */
 		padding: 16px 0 100px;
 		background: var(--color-bg-primary);
+	}
+
+	.slot-conflicts:empty {
+		display: none;
 	}
 
 	.conversation-main {
@@ -389,6 +399,7 @@ function onKeydown(e: KeyboardEvent): void {
 		}
 
 		.slot-checks,
+		.slot-conflicts,
 		.slot-timeline,
 		.slot-composer,
 		.slot-review,

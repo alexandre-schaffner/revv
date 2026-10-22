@@ -133,8 +133,6 @@ export interface PrConversationUpdatedEnvelope {
   data: { prId: string; fetchedAt: string | null };
 }
 
-// ── Stacks ──────────────────────────────────────────────────────────────────
-
 /**
  * Signal: something a stack's detail shows moved — a member's place, head or
  * base (seen by the poll), a member's walkthrough lifecycle, or a merge. The

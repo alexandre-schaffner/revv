@@ -59,8 +59,7 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import { DbError, ReviewError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
-import { type DiffFingerprint, parseFingerprint } from "./stacks/fingerprint";
-import { parseStackSnapshot } from "./stacks/snapshot";
+import type { DiffFingerprint } from "./stacks/fingerprint";
 import { decodeWalkthroughIssue } from "./walkthrough-issue";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 
@@ -307,7 +306,6 @@ function deriveRoundFocusTitle(
   return toFiveWordTitle(cleanCommitSubject(preferred ?? subjects.at(-1) ?? ""));
 }
 
-/** A finished review a restack could carry to a new head. */
 export interface RestackSource {
   readonly id: string;
   readonly generationMode: WalkthroughGenerationMode;
@@ -386,20 +384,10 @@ export class WalkthroughService extends Context.Service<
        * keeps the `'low'` default and the agent judges the tier itself.
        */
       risk?: { readonly level: RiskLevel; readonly confidence: number };
-      /**
-       * The PR's stack at job start and the fingerprint of its own changes,
-       * captured like `prCommits`: orchestrator inputs, written at insert so
-       * a cache or restack import lands on a row that already carries them.
-       */
       stackContext?: WalkthroughStackSnapshot | null;
       diffFingerprint?: DiffFingerprint | null;
     }) => Effect.Effect<string, ReviewError, DbService>;
 
-    /**
-     * The stack snapshot and fingerprint a row was created with. A resume
-     * prompts with these rather than refetching, so its prompt matches the
-     * first run's.
-     */
     readonly getStackInputs: (walkthroughId: string) => Effect.Effect<
       {
         readonly stackContext: WalkthroughStackSnapshot | null;
@@ -423,7 +411,6 @@ export class WalkthroughService extends Context.Service<
       mode: WalkthroughMode,
     ) => Effect.Effect<RestackSource | null, DbError, DbService>;
 
-    /** Record which row a restack import carried this one's content from. */
     readonly markCarriedFrom: (
       walkthroughId: string,
       fromWalkthroughId: string,
@@ -793,10 +780,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
                 baseHeadSha: params.baseHeadSha ?? null,
                 resumeAttempts: 0,
                 prCommits: params.prCommits ? JSON.stringify(params.prCommits) : null,
-                stackContext: params.stackContext ? JSON.stringify(params.stackContext) : null,
-                diffFingerprint: params.diffFingerprint
-                  ? JSON.stringify(params.diffFingerprint)
-                  : null,
+                stackContext: params.stackContext ?? null,
+                diffFingerprint: params.diffFingerprint ?? null,
                 generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
                 generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
                 generatedByDisplayName: params.generatedBy?.displayName ?? null,
@@ -1041,11 +1026,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             .get(),
         catch: (cause) => new DbError({ message: "getStackInputs failed", cause }),
       });
-      if (!row) return null;
-      return {
-        stackContext: parseStackSnapshot(row.stackContext),
-        diffFingerprint: parseFingerprint(row.diffFingerprint),
-      };
+      return row ?? null;
     }),
 
   findRestackSource: (prId, headSha, mode) =>
@@ -1066,8 +1047,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             )
             .get();
           if (live) return null;
-          // `completedAt` is stamped only on the transition to 'complete', so
-          // a superseded row that carries it finished before it was retired.
           const row = db
             .select({
               id: walkthroughs.id,
@@ -1087,12 +1066,11 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
             )
             .orderBy(desc(walkthroughs.generatedAt))
             .get();
-          const fingerprint = parseFingerprint(row?.diffFingerprint ?? null);
-          if (!row || !fingerprint) return null;
+          if (!row?.diffFingerprint) return null;
           return {
             id: row.id,
             generationMode: row.generationMode === "incremental" ? "incremental" : "full",
-            diffFingerprint: fingerprint,
+            diffFingerprint: row.diffFingerprint,
           };
         },
         catch: (cause) => new DbError({ message: "findRestackSource failed", cause }),

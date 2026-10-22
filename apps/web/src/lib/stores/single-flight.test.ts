@@ -25,7 +25,7 @@ describe("singleFlight", () => {
     expect(calls).toEqual(["first"]);
   });
 
-  it("reads again after the in-flight read when a rerun arrives mid-flight", async () => {
+  it("reads again after the in-flight read when a runFromNow arrives mid-flight", async () => {
     const gates = [deferred(), deferred()];
     const calls: string[] = [];
     const reads = singleFlight<string>(async (_key, arg) => {
@@ -34,14 +34,13 @@ describe("singleFlight", () => {
       await gate?.promise;
     });
     const first = reads.run("k", "a");
-    const second = reads.rerun("k", "b");
-    reads.rerun("k", "c");
+    const second = reads.runFromNow("k", "b");
+    reads.runFromNow("k", "c");
     gates[0]?.resolve();
     await Promise.resolve();
     gates[1]?.resolve();
     await second;
     await first;
-    // One more read, with the latest argument, not one per rerun.
     expect(calls).toEqual(["a", "c"]);
   });
 
@@ -51,7 +50,7 @@ describe("singleFlight", () => {
       n += 1;
     });
     await reads.run("k");
-    await reads.rerun("k");
+    await reads.runFromNow("k");
     expect(n).toBe(2);
   });
 });

@@ -13,12 +13,6 @@
  * TaggedPrRow for where the row deliberately improves on GitHub rather than
  * copying it.
  *
- * No frame around it, and one height on the page. A PR on its own is a
- * flat row (TaggedPrRow), parted from the next by a hairline. A GitHub stack
- * (TaggedPrStack) is a row too, on that same level, with the rest of its
- * pile sunk behind it; inside a bordered table its cards were a box within
- * a box.
- *
  * No entrance motion. This is a surface the user lands on many times a day;
  * a staggered reveal on every render (and on every SSE tick that re-keys a
  * row) is a tax, not polish. Motion here is state only: a folded stack
@@ -92,21 +86,11 @@ const rows = $derived.by(() => {
 
 const entries = $derived(groupStacks(rows));
 
-// Each stack names the feature it builds; read the repo's names once it has
-// a stack to show. Idempotent, so the SSE ticks that re-derive `hasStacks`
-// cost nothing.
 const hasStacks = $derived(entries.some((entry) => entry.kind === "stack"));
 $effect(() => {
   if (hasStacks) ensureStackHeadlines(repoId);
 });
 
-/**
- * Whether the reader opened (true) or folded (false) each stack, by stack
- * number; absent means its default (see `isStackOpen`). Kept here rather than
- * in the stack, so it outlives a filter that briefly hides one. Session-only
- * like the filter and sort: every stack starts at its default on the next
- * visit.
- */
 const chosenOpen = new SvelteMap<number, boolean>();
 
 const headline = $derived(

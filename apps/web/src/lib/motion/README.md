@@ -20,8 +20,8 @@ timelines (right-panel slide + vignette crossfade).
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
 | `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`). |
 | `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapPop`, `gsapRise`, `gsapSlide`). |
-| `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). |
-| `frames.ts` | `afterPaint` — start motion once a heavy frame has been drawn. |
+| `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). `turnLook` — turn one element to a new look at the same pace, cutting instead while a page crossfade already fades it. |
+| `frames.ts` | `afterPaint` — internal to `crossfade.ts`: `turnLook` starts once the heavy frame that caused it has been drawn. |
 | `stack.ts` | `snapshotStack` + `flipStack`: FLIP fold/unfold for a stack of cards (homepage PR stacks). |
 | `index.ts` | Public surface — `from "$lib/motion"`. |
 

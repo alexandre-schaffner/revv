@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Effect } from "effect";
-import { githubTryPromise, newOrigin, originStore, withGitHubOrigin } from "./origin";
+import { Deferred, Effect } from "effect";
+import { enterOrigin, githubTryPromise, seedOriginFromAmbient, withGitHubOrigin } from "./origin";
 import { clearCalls, installGitHubLedger, isGitHubHost, readCalls, templateOf } from "./record";
 
 describe("templateOf", () => {
@@ -29,17 +29,27 @@ describe("isGitHubHost", () => {
     ["api.github.com", true],
     ["avatars.githubusercontent.com", true],
     ["api.nocturlab.ghe.com", true],
+    ["git.corp.test", true],
+    ["api.git.corp.test", true],
+    ["corp.test", false],
     ["registry.npmjs.org", false],
   ])("%s → %s", (host, expected) => {
-    expect(isGitHubHost(host)).toBe(expected);
+    expect(isGitHubHost(host, () => ["git.corp.test"])).toBe(expected);
   });
 });
 
 describe("the interceptor", () => {
   const realFetch = globalThis.fetch;
 
+  const asRequest = <A, E>(label: string, effect: Effect.Effect<A, E>) =>
+    new Promise<A>((resolve, reject) =>
+      setTimeout(() => {
+        enterOrigin(label, "request");
+        Effect.runPromise(seedOriginFromAmbient(effect)).then(resolve, reject);
+      }, 0),
+    );
+
   beforeAll(() => {
-    // Every GitHub answer takes a few ms and says how much budget it used.
     globalThis.fetch = Object.assign(
       async (input: RequestInfo | URL) => {
         await Bun.sleep(5);
@@ -57,7 +67,7 @@ describe("the interceptor", () => {
       },
       { preconnect: realFetch.preconnect },
     ) as typeof fetch;
-    installGitHubLedger();
+    installGitHubLedger({ enterpriseHosts: () => ["git.corp.test"] });
   });
 
   afterAll(() => {
@@ -125,21 +135,14 @@ describe("the interceptor", () => {
     expect(readCalls()).toHaveLength(0);
   });
 
-  test("learns a self-hosted Enterprise host from the API calls Revv makes to it", async () => {
-    await (
-      await fetch("https://api.git.corp.test/repos/o/r", {
-        headers: { "X-GitHub-Api-Version": "2022-11-28" },
-      })
-    ).text();
-    // Its avatars live on the web host, and carry no API header.
+  test("records the Enterprise hosts it is configured with", async () => {
+    await (await fetch("https://api.git.corp.test/repos/o/r")).text();
     await (await fetch("https://git.corp.test/avatars/u/1")).text();
     await Bun.sleep(5);
     expect(readCalls().map((call) => call.host)).toEqual(["api.git.corp.test", "git.corp.test"]);
   });
 
   test("attributes each fiber's calls to its own run, across awaits and concurrency", async () => {
-    // Three runs at once, each awaiting between calls: the scheduler resumes
-    // them from shared callbacks, which is where an ALS-only design mixes them up.
     const run = (label: string) =>
       Effect.gen(function* () {
         for (let i = 0; i < 3; i++) {
@@ -157,9 +160,9 @@ describe("the interceptor", () => {
         }
       }).pipe(withGitHubOrigin(label));
 
-    // Started from inside a request, the way a route would; the runs must not inherit it.
-    await originStore.run(newOrigin("GET /api/x", "request"), () =>
-      Effect.runPromise(Effect.all([run("a"), run("b"), run("c")], { concurrency: "unbounded" })),
+    await asRequest(
+      "GET /api/x",
+      Effect.all([run("a"), run("b"), run("c")], { concurrency: "unbounded" }),
     );
 
     const calls = readCalls();
@@ -171,19 +174,45 @@ describe("the interceptor", () => {
     expect(runIds.size).toBe(3);
   });
 
+  test("a fiber another request's fiber wakes keeps its own request", async () => {
+    const handoff = Effect.runSync(Deferred.make<void>());
+    const woken = asRequest(
+      "GET /api/a",
+      Effect.gen(function* () {
+        yield* Deferred.await(handoff);
+        yield* githubTryPromise(() => fetch("https://api.github.com/user").then((r) => r.text()));
+      }),
+    );
+    const waker = asRequest("GET /api/b", Deferred.succeed(handoff, undefined));
+    await Promise.all([woken, waker]);
+    expect(readCalls().map((call) => call.origin.label)).toEqual(["GET /api/a"]);
+  });
+
+  test("a fiber with no origin stays unattributed when a request's fiber wakes it", async () => {
+    const handoff = Effect.runSync(Deferred.make<void>());
+    const woken = Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Deferred.await(handoff);
+        yield* githubTryPromise(() => fetch("https://api.github.com/user").then((r) => r.text()));
+      }),
+    );
+    await asRequest("GET /api/b", Deferred.succeed(handoff, undefined));
+    await woken;
+    expect(readCalls().map((call) => call.origin.label)).toEqual(["unattributed"]);
+  });
+
   test("an Effect that names no run keeps the request it was started from", async () => {
     const route = (label: string) =>
-      originStore.run(newOrigin(label, "request"), () =>
-        Effect.runPromise(
-          Effect.gen(function* () {
-            yield* Effect.sleep(2);
-            yield* githubTryPromise(() =>
-              fetch(`https://api.github.com/user?who=${encodeURIComponent(label)}`).then((r) =>
-                r.text(),
-              ),
-            );
-          }),
-        ),
+      asRequest(
+        label,
+        Effect.gen(function* () {
+          yield* Effect.sleep(2);
+          yield* githubTryPromise(() =>
+            fetch(`https://api.github.com/user?who=${encodeURIComponent(label)}`).then((r) =>
+              r.text(),
+            ),
+          );
+        }),
       );
     await Promise.all([route("GET /api/a"), route("GET /api/b")]);
     const calls = readCalls();

@@ -1,16 +1,3 @@
-// ── `#N (layer k)` citations in a stacked PR's walkthrough ─────────────────
-//
-// The walkthrough agent cites the other layers of a stack as `#122 (layer 3)`.
-// This action walks the rendered markdown and turns each citation of a PR in
-// the stack on screen into the margin notes' `LayerChip` (the layer's state
-// glyph and its number), which opens that layer. A `#N` that isn't a member,
-// or isn't written as a layer citation, stays text: an issue reference reads
-// the same way and must not become a stack jump.
-//
-// Same shape as `mentionReferences`: a MutationObserver re-decorates as the
-// stream lands content, microtask-scheduled so it runs after Svelte patches
-// the DOM, paused while it mutates so its own nodes don't re-trigger it.
-
 import type { StackLayer } from "@revv/shared";
 import { mount, unmount } from "svelte";
 import type { Action } from "svelte/action";
@@ -19,12 +6,10 @@ import type { StackPlace } from "$lib/components/stack/margin/stack-margin";
 
 const CITE_CLASS = "stack-cite";
 const NUMBER_ATTR = "data-stack-number";
-/** The text a chip replaced, so a chip can turn back into it. */
 const SOURCE_ATTR = "data-stack-source";
 
 const CITATION_RE = /#(\d+)\s*\(layer\s+\d+(?:\s+of\s+\d+)?\)/gi;
 
-/** A mounted chip, and the way to hand it the stack as it stands. */
 interface Chip {
   readonly instance: ReturnType<typeof mount>;
   readonly update: (layer: StackLayer, place: StackPlace) => void;
@@ -51,7 +36,6 @@ function mountChip(host: HTMLElement, layer: StackLayer, place: StackPlace): Chi
   };
 }
 
-/** Text a citation can't sit in: links, code, and chips already minted. */
 const SKIP = `a, code, pre, button, .${CITE_CLASS}`;
 
 /**
@@ -118,8 +102,6 @@ export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> 
       if (layer) chip.update(layer, at);
       else revert(host);
     }
-    // Only rendered markdown carries citations; the diff and the chrome around
-    // it never do, and walking them would cost a pass over every line of code.
     const roots = node.matches(".prose")
       ? [node]
       : Array.from(node.querySelectorAll<HTMLElement>(".prose"));

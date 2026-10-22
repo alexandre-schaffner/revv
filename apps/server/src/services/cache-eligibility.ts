@@ -139,8 +139,7 @@ export const CacheEligibilityLive = Layer.effect(
         .collaboratorPermission(token, host, owner, repo, login)
         .pipe(Effect.catch(() => Effect.succeed("none" as PermLevel)));
 
-    // Invalidate on settings changes (host set may change). Scoped to the
-    // layer: a plain fork here died with the layer's construction.
+    // Invalidate on settings changes (host set may change).
     yield* Effect.forkScoped(
       settingsSvc
         .settingsChanges()

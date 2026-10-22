@@ -5,14 +5,6 @@ export function isMergeStateSettling(mergeStateStatus: string): boolean {
   return mergeStateStatus.toUpperCase() === "UNKNOWN";
 }
 
-/**
- * What a merge press would meet right now.
- *
- * - `open`    — GitHub would take it.
- * - `bypass`  — branch protection holds it (`BLOCKED`, for `rule`), but the
- *               viewer may merge past it; the UI says so and always confirms.
- * - `blocked` — GitHub would refuse it, for `reason`.
- */
 export type MergeGate =
   | { readonly kind: "open" }
   | { readonly kind: "bypass"; readonly rule: string }
@@ -20,9 +12,7 @@ export type MergeGate =
 
 /**
  * `BLOCKED` alone doesn't say which rule holds the PR, so the review decision
- * and CI rollup from the conversation narrow it down. Only `BLOCKED` is
- * bypassable: conflicts, a draft, or a state GitHub is still computing stop
- * everyone.
+ * and CI rollup from the conversation narrow it down.
  */
 export function mergeGate(input: {
   mergeStateStatus: string;

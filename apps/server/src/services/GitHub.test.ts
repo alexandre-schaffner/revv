@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Layer, Result } from "effect";
 import { createDb, type Db } from "../db/index";
 import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../domain/errors";
+import { STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
@@ -502,8 +503,8 @@ describe("listPrs", () => {
     if (!Result.isSuccess(result)) return;
     expect(result.success.hostPredatesStacks).toBe(false);
     const [stacked, plain] = result.success.prs;
-    expect(stacked?.stack).toEqual({ number: 12, position: 3 });
-    expect(plain?.stack).toBeNull();
+    expect(stacked?.stack).toEqual(stackSeen({ number: 12, position: 3 }));
+    expect(plain?.stack).toEqual(stackSeen(null));
   });
 
   const listWith = (db: ReturnType<typeof createDb>, withStacks?: boolean) =>
@@ -520,7 +521,6 @@ describe("listPrs", () => {
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
-  /** Answers the stack-asking query with `stackError`, any other with one PR. */
   const stubStackRefusal = (stackError: { message: string; path?: string[] }) => {
     const queries: string[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -545,11 +545,10 @@ describe("listPrs", () => {
 
     expect(listing.hostPredatesStacks).toBe(true);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
-    expect(listing.prs[0]).not.toHaveProperty("stack");
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
     expect(queries).toHaveLength(2);
   });
 
-  // A field-level refusal on one PR's stack must not stall the repo's list.
   it("asks again without stacks when GitHub refuses them for any other reason", async () => {
     const db = createDb(":memory:");
     const queries = stubStackRefusal({
@@ -561,13 +560,10 @@ describe("listPrs", () => {
 
     expect(listing.hostPredatesStacks).toBe(false);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
-    // Not seen, so not "unstacked".
-    expect(listing.prs[0]).not.toHaveProperty("stack");
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
     expect(queries).toHaveLength(2);
   });
 
-  // A transient failure, but the stack fields are what tipped the query over:
-  // asking the same heavy query again would keep timing out.
   it("asks once without stacks when the stack query times out on GitHub's side", async () => {
     const db = createDb(":memory:");
     const queries = stubStackRefusal({
@@ -579,8 +575,7 @@ describe("listPrs", () => {
 
     expect(listing.hostPredatesStacks).toBe(false);
     expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
-    // Not seen, so not "unstacked".
-    expect(listing.prs[0]).not.toHaveProperty("stack");
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
     expect(queries).toHaveLength(2);
   });
 
@@ -591,7 +586,7 @@ describe("listPrs", () => {
     const listing = await listWith(db, false);
 
     expect(listing.hostPredatesStacks).toBe(false);
-    expect(listing.prs[0]).not.toHaveProperty("stack");
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
     expect(queries).toHaveLength(1);
   });
 
@@ -879,7 +874,6 @@ describe("listPrDiffStats", () => {
 describe("mergeEligibility", () => {
   const mergeFields = ["mergeCommitAllowed", "squashMergeAllowed", "rebaseMergeAllowed"];
 
-  /** Answers like a host whose schema lacks `missing`, recording each query. */
   const stubHost = (opts: {
     missing: readonly string[];
     viewerPermission: string;

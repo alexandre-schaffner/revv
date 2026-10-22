@@ -1,11 +1,3 @@
-// ── Review the stack ────────────────────────────────────────────────────────
-//
-// Queue walkthroughs for a stack's open layers, bottom-up, then write the
-// stack brief once they've all landed. The queue lives in a daemon fiber and
-// is only a cache: every walkthrough row is durable from `createPartial`, so
-// after a crash the stack's own detail says which layers still need a review
-// (the UI offers "Review remaining") and nothing here needs resuming.
-
 import type { StackLayer, StackReviewScope, StackReviewStarted } from "@revv/shared";
 import { isOpenLayer, stackKey } from "@revv/shared";
 import { inArray } from "drizzle-orm";
@@ -13,34 +5,22 @@ import { Cause, Context, Duration, Effect, Layer, Ref } from "effect";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { DbError, NotFoundError } from "../../domain/errors";
 import { logError } from "../../logger";
+import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { WalkthroughJobs } from "../WalkthroughJobs";
 import { StackBriefJobs } from "./StackBriefJobs";
 import { type StackError, StackService } from "./StackService";
 
-/**
- * Stack jobs in flight at once. The walkthrough semaphore (5 slots) would
- * queue the rest anyway; the cap keeps one tall stack from taking all of it.
- */
 const MAX_LAYERS_IN_FLIGHT = 2;
 const POLL_INTERVAL = Duration.seconds(3);
-/** Past this, the daemon stops waiting and leaves the brief to a later ask. */
 const REVIEW_BUDGET_MS = 2 * 60 * 60 * 1000;
 
 export interface StackReviewPlan {
-  /** Layers to start, bottom-up. */
   readonly queue: ReadonlyArray<{ readonly number: number; readonly prId: string }>;
-  /** Reviews already generating, outside the queue: the brief waits for them too. */
   readonly watching: readonly string[];
-  /** Open layers Revv doesn't track. */
   readonly untracked: readonly number[];
 }
 
-/**
- * Which layers a stack review starts. `remaining` skips a layer whose
- * review is generating, or complete at the layer's current head; `all`
- * takes every open tracked layer (a generating one is joined, not rerun).
- */
 export function planStackReview(
   layers: readonly StackLayer[],
   scope: StackReviewScope,
@@ -91,7 +71,6 @@ export const StackReviewServiceLive = Layer.effect(
     const walkthroughJobs = yield* WalkthroughJobs;
     const briefJobs = yield* StackBriefJobs;
 
-    /** Stacks with a review daemon running, and what it queued. */
     const running = yield* Ref.make(new Map<string, readonly number[]>());
 
     const generatingCount = (ids: readonly string[]): Effect.Effect<number, DbError> =>
@@ -108,7 +87,6 @@ export const StackReviewServiceLive = Layer.effect(
             catch: (cause) => new DbError({ message: "stack review poll failed", cause }),
           });
 
-    /** Poll until `ready`, or give up at the deadline (false). */
     const waitUntil = (
       ready: Effect.Effect<boolean, DbError>,
       deadline: number,
@@ -201,6 +179,7 @@ export const StackReviewServiceLive = Layer.effect(
                 return next;
               }),
             ),
+            withGitHubOrigin("stack:review"),
           ),
         );
         return { queued, untracked: plan.untracked };

@@ -85,6 +85,7 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withTraceAnchor } from "../observability/span-graft";
 import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
@@ -583,12 +584,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly splitRecommendation: { readonly pieces: number } | null;
       /** Snapshotted at job start so a settings change mid-run can't flip behaviour halfway through a retry budget. */
       readonly adjudicateContinuations: boolean;
-      /** The GitHub stack this PR is a layer of, as persisted on the row. */
       readonly stack: WalkthroughStackSnapshot | null;
-      /**
-       * The parent review's fingerprint of the layer's own changes. With
-       * `stack`, it scopes an incremental run to the files that moved.
-       */
       readonly parentFingerprint: DiffFingerprint | null;
     };
 
@@ -1325,7 +1321,10 @@ export const WalkthroughJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* Effect.forkDetach(scopedBody);
+          const fiber = yield* scopedBody.pipe(
+            withGitHubOrigin("walkthrough:job"),
+            Effect.forkDetach,
+          );
           job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );
@@ -1520,7 +1519,6 @@ export const WalkthroughJobsLive = Layer.effect(
           settings,
           agent,
           trigger: params.trigger,
-          // A carried review is an import too: no run to plan for.
           cacheProbe:
             restack !== null
               ? Effect.succeed(true)
@@ -1592,9 +1590,6 @@ export const WalkthroughJobsLive = Layer.effect(
           ),
         );
 
-        // Ahead of the team cache: it's local, and it's this PR's own review.
-        // A failed carry falls through to the cache, then the agent, on the
-        // row just created.
         if (restack !== null) {
           const carried = yield* tryCarryRestackedWalkthrough({
             db,

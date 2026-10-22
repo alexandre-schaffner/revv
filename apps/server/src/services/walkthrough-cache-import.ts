@@ -8,8 +8,6 @@ import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 
 /**
  * Import a cache hit and emit the same lifecycle boundary as agent completion.
- * `source` names where the snapshot came from: the team cache (default), or
- * this PR's own review at an earlier head that a restack left intact.
  */
 export function tryImportCachedWalkthrough(input: {
   readonly enabled: boolean;
@@ -60,13 +58,6 @@ export function tryImportCachedWalkthrough(input: {
   });
 }
 
-/**
- * Carry this PR's finished review at an earlier head into the partial row at
- * the new one: the same export the team cache ships (issues already posted
- * to GitHub stay behind), through the same import and lifecycle boundary,
- * then record where the content came from. The caller has established the
- * restack is pure; this only moves content.
- */
 export function tryCarryRestackedWalkthrough(input: {
   readonly db: Db;
   readonly fromWalkthroughId: string;

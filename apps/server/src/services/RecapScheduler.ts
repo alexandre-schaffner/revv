@@ -22,6 +22,7 @@ import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { DbService } from "./Db";
 import { ProjectRecapService } from "./ProjectRecap";
 import { ProjectRecapJobs } from "./ProjectRecapJobs";
@@ -154,22 +155,22 @@ function enumerateWeeklyPeriods(
   return result;
 }
 
-/**
- * Whether an existing daily recap for a closed `window` should be generated
- * again. Only the most recently closed day qualifies, and only when its recap
- * was written before the day ended — typically a manual rolling recap that
- * could not yet see the evening's merges. Older days keep whatever they have:
- * the cold-start backfill looks back a week, and holding those to the same
- * test would regenerate the whole week on every launch.
- */
-export function dailyRecapIsStale(
-  window: { readonly periodEnd: string },
+type ClosedDay = { readonly periodEnd: string };
+
+function isLatestClosedDay(day: ClosedDay, now: Date): boolean {
+  return new Date(day.periodEnd).getTime() === startOfUtcDay(now).getTime();
+}
+
+function writtenBeforeDayClosed(day: ClosedDay, generatedAt: string): boolean {
+  return new Date(generatedAt).getTime() < new Date(day.periodEnd).getTime();
+}
+
+export function latestDayRecapPredatesClose(
+  day: ClosedDay,
   generatedAt: string,
   now: Date = new Date(),
 ): boolean {
-  const end = new Date(window.periodEnd).getTime();
-  if (end !== startOfUtcDay(now).getTime()) return false;
-  return new Date(generatedAt).getTime() < end;
+  return isLatestClosedDay(day, now) && writtenBeforeDayClosed(day, generatedAt);
 }
 
 // ── Service tag ──────────────────────────────────────────────────────────────
@@ -242,10 +243,8 @@ export const RecapSchedulerLive = Layer.effect(
             ).pipe(Effect.catch(() => Effect.succeed(null)));
 
             // ── Daily stale-check ────────────────────────────────────────
-            // Yesterday's recap written before yesterday ended may have
-            // missed PRs merged since — regenerate it. See `dailyRecapIsStale`.
             if (existing && period === "daily") {
-              if (!dailyRecapIsStale(window, existing.generatedAt, now)) {
+              if (!latestDayRecapPredatesClose(window, existing.generatedAt, now)) {
                 debug(
                   "recap-scheduler",
                   `keep daily recap for ${repo.fullName} ${window.periodStart}`,
@@ -332,6 +331,7 @@ export const RecapSchedulerLive = Layer.effect(
 
     const sweepLoop = (period: RecapPeriod) =>
       sweepPeriod(period).pipe(
+        withGitHubOrigin(`recap:sweep:${period}`),
         Effect.repeat(Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES))),
       );
 

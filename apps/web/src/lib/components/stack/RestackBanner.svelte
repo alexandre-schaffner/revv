@@ -1,18 +1,10 @@
 <script lang="ts" module>
 import { SvelteSet } from "svelte/reactivity";
 
-/** Banners the reader closed, by PR and verdict, for this session only. */
 const dismissed = new SvelteSet<string>();
 </script>
 
 <script lang="ts">
-/*
- * One calm line at the top of a stacked PR's walkthrough when the stack moved
- * under its review: the server's restack verdict for this layer, in the
- * reader's terms, with the one action that answers it. Informational unless
- * the layer itself changed (review what's new) or can't merge (rebase).
- */
-
 import type { RestackVerdict, StackLayer } from "@revv/shared";
 import Checks from "phosphor-svelte/lib/Checks";
 import GitDiff from "phosphor-svelte/lib/GitDiff";
@@ -22,7 +14,7 @@ import X from "phosphor-svelte/lib/X";
 import { gsapFadeY } from "$lib/motion";
 import { getStackRebase, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 import { getLayer, getStack } from "$lib/stores/stacks.svelte";
-import { regenerate } from "$lib/stores/walkthrough.svelte";
+import { getWalkthroughUiState, regenerate } from "$lib/stores/walkthrough.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import RebaseStackConfirm from "./RebaseStackConfirm.svelte";
 
@@ -40,15 +32,19 @@ type Banner =
 
 const stack = $derived(getStack(prId));
 const layer = $derived(getLayer(prId));
+// The verdict compares against the last *complete* review, so it still reads
+// `layer-changed` while the review of the new head runs. Clicking again would
+// cancel that run and start over.
+const reviewRunning = $derived(
+  layer?.review.kind === "generating" || getWalkthroughUiState().kind === "streaming",
+);
 
-/** The banner the verdict calls for, or null when the review still reads true. */
 const banner = $derived.by((): Banner | null => {
   if (!stack || !layer) return null;
   const verdict: RestackVerdict = layer.restack;
   const below = stack.layers.filter((l) => l.position < layer.position);
   switch (verdict.kind) {
     case "below-moved": {
-      // The nearest moved layer is the one this layer builds on most directly.
       const moved = below
         .filter((l) => verdict.layers.includes(l.number))
         .sort((a, b) => b.position - a.position);
@@ -58,7 +54,9 @@ const banner = $derived.by((): Banner | null => {
     case "restacked":
       return { kind: "carried" };
     case "layer-changed":
-      return verdict.files.length > 0 ? { kind: "layer-changed", files: verdict.files } : null;
+      return verdict.files.length > 0 && !reviewRunning
+        ? { kind: "layer-changed", files: verdict.files }
+        : null;
     case "needs-rebase": {
       const merged = below
         .filter((l) => l.status === "merged")
@@ -71,7 +69,6 @@ const banner = $derived.by((): Banner | null => {
   }
 });
 
-/** What the reader closed: the same verdict on the same PR stays closed, a new one shows. */
 const dismissKey = $derived.by(() => {
   if (!banner) return null;
   switch (banner.kind) {
@@ -86,18 +83,11 @@ const dismissKey = $derived.by(() => {
 
 const visible = $derived(banner !== null && dismissKey !== null && !dismissed.has(dismissKey));
 
-let reviewing = $state(false);
 let confirmingRebase = $state(false);
 const rebasing = $derived(stack ? getStackRebase(stack).status === "loading" : false);
 
-async function reviewWhatsNew(): Promise<void> {
-  if (reviewing) return;
-  reviewing = true;
-  try {
-    await regenerate(prId, undefined, "incremental");
-  } finally {
-    reviewing = false;
-  }
+function reviewWhatsNew(): void {
+  void regenerate(prId, undefined, "incremental");
 }
 
 function dismiss(): void {
@@ -153,9 +143,7 @@ function fileCount(n: number): string {
 				See #{target.number}
 			</button>
 		{:else if banner.kind === 'layer-changed'}
-			<button type="button" class="action" disabled={reviewing} onclick={reviewWhatsNew}>
-				{reviewing ? 'Starting…' : "Review what's new"}
-			</button>
+			<button type="button" class="action" onclick={reviewWhatsNew}>Review what's new</button>
 		{:else if banner.kind === 'needs-rebase' && stack?.viewerCanPush}
 			{@const current = stack}
 			<button
@@ -185,8 +173,6 @@ function fileCount(n: number): string {
 {/if}
 
 <style>
-	/* One line, tinted toward its tone, a hairline of the same hue. Calm by
-	   default; only a rebase speaks in the warning colour. */
 	.banner {
 		--tone: var(--color-text-subtle);
 		display: flex;

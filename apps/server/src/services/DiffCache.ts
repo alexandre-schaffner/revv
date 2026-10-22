@@ -1,5 +1,6 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../db/index";
 import { prDiffFiles, pullRequests } from "../db/schema/index";
 import { type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
@@ -18,10 +19,85 @@ export interface CachedDiffFile {
   readonly fetchedAt: string;
 }
 
+/** A PR as its row stood when a files fetch started. */
+export type FetchedFor = Pick<typeof pullRequests.$inferSelect, "id" | "headSha" | "baseSha">;
+
+const prsWithCurrentFiles = (db: Db) =>
+  db
+    .select({ id: pullRequests.id })
+    .from(pullRequests)
+    .where(
+      and(
+        eq(pullRequests.diffFilesHeadSha, pullRequests.headSha),
+        sql`${pullRequests.diffFilesBaseSha} is ${pullRequests.baseSha}`,
+      ),
+    );
+
+function storedRange(db: Db, prId: string): FetchedFor {
+  return (
+    db
+      .select({ id: pullRequests.id, headSha: pullRequests.headSha, baseSha: pullRequests.baseSha })
+      .from(pullRequests)
+      .where(eq(pullRequests.id, prId))
+      .get() ?? { id: prId, headSha: null, baseSha: null }
+  );
+}
+
+/**
+ * Cached files per PR id, in stored order; a PR absent from the map has nothing cached for its
+ * current head and base.
+ */
+export function readCurrentHeadFiles(
+  db: Db,
+  prIds: readonly string[],
+): ReadonlyMap<string, CachedDiffFile[]> {
+  const byPr = new Map<string, CachedDiffFile[]>();
+  if (prIds.length === 0) return byPr;
+  for (const r of db
+    .select()
+    .from(prDiffFiles)
+    .where(
+      and(
+        inArray(prDiffFiles.prId, [...prIds]),
+        inArray(prDiffFiles.prId, prsWithCurrentFiles(db)),
+      ),
+    )
+    .all()) {
+    const files = byPr.get(r.prId) ?? [];
+    files.push({
+      path: r.path,
+      oldPath: r.oldPath ?? null,
+      status: r.status,
+      additions: r.additions,
+      deletions: r.deletions,
+      patch: r.patch ?? null,
+      fetchedAt: r.fetchedAt,
+    });
+    byPr.set(r.prId, files);
+  }
+  return byPr;
+}
+
+/** One file's cached patch for the PR's current head and base, or null when none is cached. */
+export function readCurrentHeadPatch(db: Db, prId: string, path: string): string | null {
+  const row = db
+    .select({ patch: prDiffFiles.patch })
+    .from(prDiffFiles)
+    .where(
+      and(
+        eq(prDiffFiles.prId, prId),
+        eq(prDiffFiles.path, path),
+        inArray(prDiffFiles.prId, prsWithCurrentFiles(db)),
+      ),
+    )
+    .get();
+  return row?.patch ?? null;
+}
+
 export class DiffCacheService extends Context.Service<
   DiffCacheService,
   {
-    /** Returns cached files, or null on cache miss (no rows for this PR). */
+    /** The files cached for the PR's current head and base, or null when there are none. */
     readonly getCachedFiles: (
       prId: string,
     ) => Effect.Effect<CachedDiffFile[] | null, never, DbService>;
@@ -34,9 +110,13 @@ export class DiffCacheService extends Context.Service<
      * additions/deletions/changed_files are derived here rather than by the
      * caller so the cached rows and the recorded size land in one transaction
      * and cannot drift apart.
+     *
+     * `fetchedFor` is the PR row as read before the fetch started. The files
+     * read as the PR's diff only while its head and base are still that
+     * row's, so a fetch that raced a head move is refetched, never served.
      */
     readonly cacheFiles: (
-      prId: string,
+      fetchedFor: FetchedFor,
       files: CachedDiffFile[],
     ) => Effect.Effect<void, never, DbService>;
     /**
@@ -45,11 +125,7 @@ export class DiffCacheService extends Context.Service<
      * `pullRequests.diffFilesCachedCount`.
      */
     readonly getCachedFileCount: (prId: string) => Effect.Effect<number | null, never, DbService>;
-    /** Delete all cached files for a PR. */
-    readonly invalidateFiles: (prId: string) => Effect.Effect<void, never, DbService>;
-    /** Delete all cached files for multiple PRs. */
-    readonly invalidateFilesForPrs: (prIds: string[]) => Effect.Effect<void, never, DbService>;
-    /** Return the set of PR IDs that have at least one cached diff row. */
+    /** The PRs with files cached for their current head and base. */
     readonly getPrIdsWithCachedDiffs: () => Effect.Effect<string[], never, DbService>;
   }
 >()("DiffCacheService") {}
@@ -58,23 +134,13 @@ export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
   getCachedFiles: (prId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const rows = db.select().from(prDiffFiles).where(eq(prDiffFiles.prId, prId)).all();
-      // null = cache miss (never fetched); treat no-rows as cache miss so re-fetch is safe
-      if (rows.length === 0) return null;
-      return rows.map((r) => ({
-        path: r.path,
-        oldPath: r.oldPath ?? null,
-        status: r.status,
-        additions: r.additions,
-        deletions: r.deletions,
-        patch: r.patch ?? null,
-        fetchedAt: r.fetchedAt,
-      }));
+      return readCurrentHeadFiles(db, [prId]).get(prId) ?? null;
     }),
 
-  cacheFiles: (prId, files) =>
+  cacheFiles: (fetchedFor, files) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
+      const prId = fetchedFor.id;
       // One row per path — the table is keyed on `(prId, path)`, so a repeated
       // path would collapse on write anyway. Collapsing here first (last entry
       // wins, matching the upsert) keeps the derived stats below counting each
@@ -140,6 +206,8 @@ export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
               deletions,
               changedFiles: rows.length,
               diffFilesCachedCount: rows.length,
+              diffFilesHeadSha: fetchedFor.headSha,
+              diffFilesBaseSha: fetchedFor.baseSha,
             })
             .where(eq(pullRequests.id, prId))
             .run();
@@ -158,35 +226,14 @@ export const DiffCacheServiceLive = Layer.succeed(DiffCacheService, {
       return row?.count ?? null;
     }),
 
-  invalidateFiles: (prId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      db.transaction((tx) => {
-        tx.delete(prDiffFiles).where(eq(prDiffFiles.prId, prId)).run();
-        tx.update(pullRequests)
-          .set({ diffFilesCachedCount: null })
-          .where(eq(pullRequests.id, prId))
-          .run();
-      });
-    }),
-
-  invalidateFilesForPrs: (prIds) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      if (prIds.length === 0) return;
-      db.transaction((tx) => {
-        tx.delete(prDiffFiles).where(inArray(prDiffFiles.prId, prIds)).run();
-        tx.update(pullRequests)
-          .set({ diffFilesCachedCount: null })
-          .where(inArray(pullRequests.id, prIds))
-          .run();
-      });
-    }),
-
   getPrIdsWithCachedDiffs: () =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const rows = db.selectDistinct({ prId: prDiffFiles.prId }).from(prDiffFiles).all();
+      const rows = db
+        .selectDistinct({ prId: prDiffFiles.prId })
+        .from(prDiffFiles)
+        .where(inArray(prDiffFiles.prId, prsWithCurrentFiles(db)))
+        .all();
       return rows.map((r) => r.prId);
     }),
 });
@@ -264,6 +311,7 @@ export const getOrFetchDiffFiles = (
     const github = yield* GitHubGateway;
     const { db } = yield* DbService;
 
+    const fetchedFor = storedRange(db, prId);
     const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
     if (cached !== null) {
       const cachedCount = yield* withDb(db, diffCache.getCachedFileCount(prId));
@@ -284,6 +332,6 @@ export const getOrFetchDiffFiles = (
 
     const files = toCachedDiffFiles(fetched.fileList);
 
-    yield* withDb(db, diffCache.cacheFiles(prId, files));
+    yield* withDb(db, diffCache.cacheFiles(fetchedFor, files));
     return files;
   });

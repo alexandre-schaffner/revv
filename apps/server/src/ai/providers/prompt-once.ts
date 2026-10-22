@@ -1,10 +1,3 @@
-// ── prompt-once ─────────────────────────────────────────────────────────────
-//
-// One throwaway ACP turn with no MCP servers: a fresh session, one prompt,
-// the agent's visible text back. For small labelling jobs (chat starter
-// prompts, stack headlines) that never touch the agent pipelines' tool
-// surface. The session id is never surfaced or resumed into.
-
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { getAcpConnection } from "../acp/acp-connection";
 import { decodeAcpSessionUpdate, makeAcpDecodeState, withAgentTurn } from "../agent-stream";
@@ -20,7 +13,6 @@ export interface PromptOnceInput {
   readonly debugLabel: string;
 }
 
-/** The agent's text deltas for one prompt, concatenated. Throws on any failure. */
 export async function promptOnce(input: PromptOnceInput): Promise<string> {
   const h = await getAcpConnection(input.cwd, input.agent, {
     model: input.model,
@@ -43,8 +35,6 @@ export async function promptOnce(input: PromptOnceInput): Promise<string> {
         if (sessionId) await h.cancel(sessionId);
       },
       run: async () => {
-        // No MCP servers: the agent has only its built-in tools, and the
-        // prompt tells it to just read and answer.
         const created = await h.newSession([]);
         sessionId = created.sessionId;
         const decodeState = makeAcpDecodeState();

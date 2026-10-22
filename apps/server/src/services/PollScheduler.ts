@@ -114,12 +114,6 @@ const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
  */
 type SyncTrigger = "periodic" | "manual" | "freshen";
 
-/**
- * How many PRs one background thread sweep reconciles at most. Each PR with
- * local threads costs a GraphQL call, which is never a free 304; the cap keeps
- * the first sweep after launch — when every open PR is due — from landing as
- * one burst.
- */
 const THREAD_SWEEP_MAX_PRS = 20;
 
 /**
@@ -131,20 +125,11 @@ const THREAD_SWEEP_MAX_PRS = 20;
  */
 const THREAD_RECHECK_INTERVAL_MS = 30 * 60 * 1000;
 
-/** What the thread sweep last saw of a PR. */
 export interface ThreadSweepMark {
   readonly updatedAt: string;
   readonly sweptAt: number;
 }
 
-/**
- * The open PRs a thread sweep should look at, most deserving first: PRs whose
- * `updatedAt` moved since their last sweep, then PRs never swept, then — when
- * {@link THREAD_RECHECK_INTERVAL_MS} has passed — unchanged PRs, oldest sweep
- * first. `recheck` marks the last group: the caller sweeps those only when they
- * still have an unresolved thread. Uncapped; the caller stops at
- * {@link THREAD_SWEEP_MAX_PRS}.
- */
 export function rankThreadSweep<P extends Pick<PullRequest, "id" | "updatedAt">>(
   openPrs: readonly P[],
   marks: ReadonlyMap<string, ThreadSweepMark>,
@@ -216,8 +201,6 @@ export const PollSchedulerLive = Layer.effect(
     // reconstructible cache: empty after a restart, so the first cycle lists
     // every repo.
     const listedSignatures = new Map<string, ListedSignature>();
-    // Accounts whose host refused the stack fields, and until when the open-PR
-    // list skips them. Reconstructible the same way.
     const stacklessUntil = new Map<string, number>();
 
     // Bind the captured db handle for convenience
@@ -317,7 +300,6 @@ export const PollSchedulerLive = Layer.effect(
         for (const repoId of listedSignatures.keys()) {
           if (!liveRepoIds.has(repoId)) listedSignatures.delete(repoId);
         }
-        // A manual sync never reuses rows, but still reads only what moved.
         const probed = yield* probeRepos(
           deps,
           cycle,
@@ -483,8 +465,8 @@ export const PollSchedulerLive = Layer.effect(
           // produced anything worth broadcasting at all.
           const existingPrs = yield* withDb(prService.listPrs());
           const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
-          // Taken before the lists land: the list phase drops the cached diff
-          // of every PR whose range moved, and these are the ones to re-fill.
+          // Taken before the lists land, which leave a moved PR's cached diff
+          // stale: these are the ones to re-fill.
           const cachedDiffPrIds = new Set(yield* withDb(diffCache.getPrIdsWithCachedDiffs()));
 
           const { allPrs, listedRepoIds } = yield* syncOpenPrLists(
@@ -627,10 +609,8 @@ export const PollSchedulerLive = Layer.effect(
     /**
      * Reconcile a single PR against GitHub's PR *detail* endpoint.
      *
-     * Repeats the poll's follow-through on a head-SHA move — invalidate the
-     * cached diff, supersede walkthroughs pinned to the old SHA — because
-     * without it a refresh would leave the UI showing a new head SHA against
-     * the previous commit's diff.
+     * Repeats the poll's follow-through on a head-SHA move: supersede
+     * walkthroughs pinned to the old SHA.
      */
     const refreshPr = (
       prId: string,
@@ -667,9 +647,6 @@ export const PollSchedulerLive = Layer.effect(
         // row we had. Without it a lagging read cancels the walkthrough
         // generating at the real head.
         const headMoved = row.headSha !== null && isTrustedHeadShaMove(existing, row);
-        // Drop the old head's diff before the new head lands, so nothing can
-        // read the new head against it (see `syncRepoOpenPrs`).
-        if (headMoved) yield* withDb(diffCache.invalidateFiles(prId));
         yield* withDb(prService.upsertPrs([row]));
         if (headMoved && row.headSha !== null) {
           yield* walkthroughJobs
@@ -732,7 +709,6 @@ export const PollSchedulerLive = Layer.effect(
             Effect.orElseSucceed(() => null),
           );
           if (summary !== null && summary.total === summary.resolved) {
-            // Nothing left to resolve: wait out another interval before asking.
             threadSweepMarks.set(pr.id, { updatedAt: pr.updatedAt, sweptAt: now });
             continue;
           }

@@ -1,11 +1,4 @@
 #!/usr/bin/env bun
-// Audit the GitHub call ledger: what Revv asked GitHub, who asked, and what
-// of it was slow or wasted. See docs/github-ledger.md.
-//
-//   bun run github:audit                     # everything in the dev ledger
-//   bun run github:audit --since 2m          # just the last two minutes
-//   bun run github:audit --origin conversation --timeline
-//   bun run github:audit --file ~/Library/Application\ Support/Revv/github-ledger.prod.jsonl
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -38,7 +31,6 @@ const serverDir = resolve(import.meta.dir, "..");
 const candidates = [
   values.file,
   githubLedgerPath() ?? undefined,
-  // Where `make dev` and the installed app write theirs.
   ledgerBesideDb("dev", join(serverDir, "revv-dev.db")),
   ledgerBesideDb("prod", ""),
 ].filter((p): p is string => typeof p === "string");
@@ -57,9 +49,7 @@ for (const path of [`${file}.1`, file]) {
     if (!line.trim()) continue;
     try {
       calls.push(JSON.parse(line) as GitHubCall);
-    } catch {
-      // A line cut off by a crash mid-write.
-    }
+    } catch {}
   }
 }
 

@@ -1,10 +1,4 @@
 <script lang="ts">
-/*
- * The second step before a reviewer merges someone else's pull request, or
- * before anyone merges past branch protections. The merge pill sits beside
- * Approve, so it never fires on one click: this names the PR, its author,
- * where it lands, and any rule it bypasses, and the merge happens from here.
- */
 import { AlertDialog } from "bits-ui";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
@@ -18,7 +12,6 @@ interface Props {
   /** Null when the viewer is merging their own pull request. */
   authorLogin: string | null;
   targetBranch: string;
-  /** The strategy's menu label, e.g. "Squash and merge". */
   methodLabel: string;
   /** The branch-protection rule this merge bypasses, or null for a plain merge. */
   bypassRule: string | null;

@@ -14,25 +14,18 @@ export const tokens = {
   smooth: 0.22,
   slow: 0.32,
   pulse: 1.4,
-  // Ceremonial tier: theatrical moments only (onboarding, the repo hero's sky
-  // turning between day and night). Mirrors `--duration-ceremonial-*`.
   ceremonialQuick: 0.28,
   ceremonialMedium: 0.48,
   ceremonialSlow: 0.72,
 
   // Easings (bare cubic-bezier control points; CustomEase consumes these)
   easeOutExpo: "0.16, 1, 0.3, 1",
-  // Gentler than expo: most of the travel early, but no snap. For motion
-  // the eye follows the whole way (a hover lift, cards being dealt).
   easeOutQuart: "0.25, 1, 0.5, 1",
   easeSoft: "0.4, 0, 0.2, 1",
 
   stagger: {
     tight: 0.025,
-    // Total budgets, not per item: spread across however many cards a stack
-    // has, so a tall one deals as quickly as a short one. Gathering is the
-    // exit, so it's quicker.
-    deal: 0.09,
-    gather: 0.04,
+    dealTotal: 0.09,
+    gatherTotal: 0.04,
   },
 } as const;

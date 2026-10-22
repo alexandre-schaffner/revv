@@ -18,8 +18,6 @@ describe("rankThreadSweep", () => {
     ]);
   });
 
-  // An unresolved thread used to put a PR in every 5-minute sweep forever,
-  // each one a billed GraphQL call.
   it("leaves an unchanged PR alone until the recheck interval has passed", () => {
     const marks = new Map<string, ThreadSweepMark>([
       ["recent", { updatedAt: "2026-06-04T10:00:00.000Z", sweptAt: NOW - 5 * MINUTE }],

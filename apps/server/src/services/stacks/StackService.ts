@@ -1,15 +1,6 @@
-// ── Stack service ───────────────────────────────────────────────────────────
-//
-// One PR's GitHub stack, joined with what Revv knows about each layer. The
-// GitHub half is one GraphQL read kept briefly in the kv cache (the poll
-// drops it when a member moves); the Revv half is read from the DB on every
-// call, so a walkthrough landing shows up without invalidating anything.
-// Nothing here is journaled: losing the cache costs one fetch.
-
 import type { PrStackDetail, RiskLevel, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { prDiffFiles } from "../../db/schema/pr-diff-files";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
@@ -27,15 +18,16 @@ import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
+import { readCurrentHeadFiles } from "../DiffCache";
 import { githubGraphql, githubGraphqlPartial, withSchemaFallback } from "../github-rest";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
-import { fingerprintFiles, parseFingerprint, stackSignature } from "./fingerprint";
+import { fingerprintFiles, stackSignature } from "./fingerprint";
 import {
-  agreesWithMirror,
   type GitHubStack,
   layersToCompare,
   type MirroredLayer,
   mapGitHubStack,
+  membershipSupersededByPoll,
   stackFromMirror,
   withBehind,
 } from "./map";
@@ -53,17 +45,13 @@ import {
   STACK_SCHEMA_TOKENS,
 } from "./queries";
 import { isCompleteReview, readBriefLayers } from "./reads";
-import { parseStackSnapshot } from "./snapshot";
 
 const CACHE_NS = "pr-stack";
-/** A read this young is served as is: switching layers mustn't refetch. */
 const FRESH_FOR_MS = 30_000;
-/** Kept as the fallback when GitHub can't be reached. */
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type StackError = GitHubError | PrContextError | DbError;
 
-/** Where a PR's GitHub stack lives in the cache. */
 const cacheKey = (repositoryId: string, stackNumber: number) => `${repositoryId}:${stackNumber}`;
 
 export class StackService extends Context.Tag("StackService")<
@@ -79,21 +67,9 @@ export class StackService extends Context.Tag("StackService")<
       userId: string,
       accountId?: string,
     ) => Effect.Effect<PrStackDetail | null, StackError>;
-    /** The GitHub half only, always fresh from GitHub (merges, plans). */
     readonly fetchFresh: (ctx: PrContextBasic) => Effect.Effect<GitHubStack | null, StackError>;
-    /**
-     * The stack as a walkthrough's agent will see it, for the walkthrough
-     * row. Never fails: a stack Revv can't read is a walkthrough without one.
-     */
     readonly snapshot: (ctx: PrContextBasic) => Effect.Effect<WalkthroughStackSnapshot | null>;
-    /**
-     * Age the cached GitHub read out, after the poll saw a member move: every
-     * read re-asks GitHub, but a page can still draw the old one meanwhile.
-     */
-    readonly invalidate: (
-      repositoryId: string,
-      stackNumber: number,
-    ) => Effect.Effect<void, DbError>;
+    readonly markStale: (repositoryId: string, stackNumber: number) => Effect.Effect<void, DbError>;
   }
 >() {}
 
@@ -108,7 +84,6 @@ function isUnreachable(e: unknown): boolean {
   return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
 }
 
-/** A host without stacks answers the schema complaint; that's "no stack". */
 function askStack(ctx: PrContextBasic) {
   return Effect.gen(function* () {
     const ref = yield* repoRef(ctx);
@@ -129,10 +104,6 @@ function askStack(ctx: PrContextBasic) {
   });
 }
 
-/**
- * Fill in how far each open layer is behind its base. Best-effort: the stack
- * reads the same without it, only the Rebase stack offer goes quiet.
- */
 function withLayerBehind(
   ctx: PrContextBasic,
   ref: { owner: string; repo: string },
@@ -174,9 +145,6 @@ export function toSnapshot(stack: GitHubStack, position: number): WalkthroughSta
   };
 }
 
-// ── Revv's facts ────────────────────────────────────────────────────────────
-
-/** Everything the overlay needs from the DB, in five reads. */
 export function readStackFacts(
   repositoryId: string,
   stack: GitHubStack,
@@ -247,29 +215,7 @@ export function readStackFacts(
           }
         }
 
-        // The poll drops a PR's cached files before its new head lands, so
-        // whatever `pr_diff_files` holds belongs to the current head.
-        const fingerprintable = prRows.filter((r) => r.headSha !== null).map((r) => r.id);
-        const filesByPr = new Map<
-          string,
-          { filename: string; status: string; patch: string | null }[]
-        >();
-        if (fingerprintable.length > 0) {
-          for (const f of db
-            .select({
-              prId: prDiffFiles.prId,
-              path: prDiffFiles.path,
-              status: prDiffFiles.status,
-              patch: prDiffFiles.patch,
-            })
-            .from(prDiffFiles)
-            .where(inArray(prDiffFiles.prId, fingerprintable))
-            .all()) {
-            const list = filesByPr.get(f.prId) ?? [];
-            list.push({ filename: f.path, status: f.status, patch: f.patch });
-            filesByPr.set(f.prId, list);
-          }
-        }
+        const filesByPr = readCurrentHeadFiles(db, prIds);
 
         const toFact = (w: (typeof wtRows)[number]): WalkthroughFact => {
           const counts = issueCounts.get(w.id);
@@ -281,8 +227,8 @@ export function readStackFacts(
             summary: w.summary,
             openIssues: counts?.open ?? 0,
             criticalIssues: counts?.critical ?? 0,
-            stackContext: parseStackSnapshot(w.stackContext),
-            fingerprint: parseFingerprint(w.diffFingerprint),
+            stackContext: w.stackContext,
+            fingerprint: w.diffFingerprint,
             carried: w.carriedFrom !== null,
           };
         };
@@ -295,8 +241,12 @@ export function readStackFacts(
           const files = filesByPr.get(pr.id);
           tracked.set(pr.externalId, {
             prId: pr.id,
-            currentFingerprint: files ? fingerprintFiles(files) : null,
-            files: files ? files.map((f) => f.filename) : null,
+            currentFingerprint: files
+              ? fingerprintFiles(
+                  files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
+                )
+              : null,
+            files: files ? files.map((f) => f.path) : null,
             current: current ? toFact(current) : null,
             latestComplete: latestComplete ? toFact(latestComplete) : null,
           });
@@ -313,7 +263,6 @@ export function readStackFacts(
   });
 }
 
-/** The poll's rows for one stack: its open layers, and those that landed in it. */
 function readMirror(
   repositoryId: string,
   stackNumber: number,
@@ -354,6 +303,36 @@ function readMirror(
   });
 }
 
+type StackSource =
+  | { readonly kind: "fresh-cache"; readonly stack: GitHubStack }
+  | {
+      readonly kind: "cache-then-revalidate";
+      readonly stack: GitHubStack;
+      readonly accountId: string;
+    }
+  | { readonly kind: "github"; readonly ifUnreachable: GitHubStack | null };
+
+export function chooseStackSource(args: {
+  readonly cached: GitHubStack | null;
+  readonly mirror: readonly MirroredLayer[];
+  readonly stackNumber: number;
+  readonly now: number;
+  readonly revalidateFor: string | null;
+}): StackSource {
+  const { cached, mirror, stackNumber, now, revalidateFor } = args;
+  const usable = cached && !membershipSupersededByPoll(cached, mirror) ? cached : null;
+  if (usable && now - Date.parse(usable.fetchedAt) < FRESH_FOR_MS) {
+    return { kind: "fresh-cache", stack: usable };
+  }
+  if (usable && revalidateFor !== null) {
+    return { kind: "cache-then-revalidate", stack: usable, accountId: revalidateFor };
+  }
+  return {
+    kind: "github",
+    ifUnreachable: usable ?? stackFromMirror(stackNumber, mirror, new Date(now).toISOString()),
+  };
+}
+
 type Db = DbService["Type"]["db"];
 
 function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief | null {
@@ -382,8 +361,6 @@ function readBrief(db: Db, repositoryId: string, stack: GitHubStack): StackBrief
   };
 }
 
-// ── Live ────────────────────────────────────────────────────────────────────
-
 export const StackServiceLive = Layer.effect(
   StackService,
   Effect.gen(function* () {
@@ -391,7 +368,6 @@ export const StackServiceLive = Layer.effect(
     const prContext = yield* PrContextService;
     const cache = yield* CacheService;
     const broadcaster = yield* Broadcaster;
-    /** Stacks being re-read in the background; a reconstructible coalescing set. */
     const revalidating = new Set<string>();
 
     const fetchFresh = (ctx: PrContextBasic) =>
@@ -408,10 +384,6 @@ export const StackServiceLive = Layer.effect(
         return stack;
       });
 
-    /**
-     * Re-read a stack from GitHub off the request path, then tell the
-     * account's clients, who re-read it. One at a time per stack.
-     */
     const revalidate = (ctx: PrContextBasic, stackNumber: number, accountId: string) => {
       const key = cacheKey(ctx.repo.id, stackNumber);
       if (revalidating.has(key)) return Effect.void;
@@ -429,26 +401,12 @@ export const StackServiceLive = Layer.effect(
           Effect.sync(() => logError("stacks", `background re-read of ${key} failed`, cause)),
         ),
         Effect.ensuring(Effect.sync(() => revalidating.delete(key))),
-        // Nobody waits on it: its GitHub time is background work, not the page's.
         withGitHubOrigin("stack:revalidate"),
         Effect.forkDaemon,
         Effect.asVoid,
       );
     };
 
-    /**
-     * The cached read when it's fresh and still agrees with the poll on who is
-     * in the stack, else GitHub. When GitHub can't be reached: the cached read
-     * if it agrees, else the stack rebuilt from the poll's rows, both marked
-     * stale. A cached read that disagrees is never served: after a rebuild it
-     * is a different stack, and two layers of one stack would show two.
-     *
-     * With `revalidateFor` (a page asking, on behalf of that account), an
-     * older read that still agrees is answered at once and re-read in the
-     * background: its layers' merge states are computed on demand, which
-     * costs GitHub seconds on a tall stack, and the page shouldn't wait on
-     * them to draw what it already knows.
-     */
     const githubStack = (
       ctx: PrContextBasic,
       stackNumber: number,
@@ -460,32 +418,36 @@ export const StackServiceLive = Layer.effect(
           db,
           cache.get<GitHubStack>(CACHE_NS, cacheKey(ctx.repo.id, stackNumber)),
         );
-        const usable = cached !== null && agreesWithMirror(cached, mirror);
-        if (usable && Date.now() - Date.parse(cached.fetchedAt) < FRESH_FOR_MS) {
-          return { stack: cached as GitHubStack | null, stale: false };
+        const source = chooseStackSource({
+          cached,
+          mirror,
+          stackNumber,
+          now: Date.now(),
+          revalidateFor,
+        });
+        switch (source.kind) {
+          case "fresh-cache":
+            return { stack: source.stack, stale: false };
+          case "cache-then-revalidate":
+            yield* revalidate(ctx, stackNumber, source.accountId);
+            return { stack: source.stack, stale: false };
+          case "github": {
+            const { ifUnreachable } = source;
+            return yield* fetchFresh(ctx).pipe(
+              Effect.map((stack) => ({ stack, stale: false })),
+              Effect.catchIf(isUnreachable, (err) =>
+                ifUnreachable
+                  ? Effect.succeed({ stack: ifUnreachable, stale: true })
+                  : Effect.fail(err),
+              ),
+            );
+          }
         }
-        if (usable && revalidateFor !== null) {
-          yield* revalidate(ctx, stackNumber, revalidateFor);
-          return { stack: cached as GitHubStack | null, stale: false };
-        }
-        return yield* fetchFresh(ctx).pipe(
-          Effect.map((stack) => ({ stack, stale: false })),
-          Effect.catchIf(isUnreachable, (err) => {
-            const fallback = usable
-              ? cached
-              : stackFromMirror(stackNumber, mirror, new Date().toISOString());
-            return fallback
-              ? Effect.succeed({ stack: fallback as GitHubStack | null, stale: true })
-              : Effect.fail(err);
-          }),
-        );
       });
 
     const detail = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
         const ctx = yield* withDb(db, prContext.resolveBasic(prId, userId, accountId));
-        // The poll's record of membership is the cheap gate: a PR it never
-        // saw stacked costs GitHub nothing here.
         if (!ctx.pr.stack) return null;
         const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId ?? null);
         if (!stack) return null;
@@ -509,7 +471,7 @@ export const StackServiceLive = Layer.effect(
         ),
       );
 
-    const invalidate = (repositoryId: string, stackNumber: number) =>
+    const markStale = (repositoryId: string, stackNumber: number) =>
       Effect.gen(function* () {
         const key = cacheKey(repositoryId, stackNumber);
         const cached = yield* cache.get<GitHubStack>(CACHE_NS, key);
@@ -518,6 +480,6 @@ export const StackServiceLive = Layer.effect(
         yield* cache.set(CACHE_NS, key, aged, { ttlMs: CACHE_TTL_MS });
       }).pipe((eff) => withDb(db, eff));
 
-    return { detail, fetchFresh, snapshot, invalidate };
+    return { detail, fetchFresh, snapshot, markStale };
   }),
 );

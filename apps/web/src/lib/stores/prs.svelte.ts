@@ -402,13 +402,9 @@ export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error
   );
 }
 
-/** Most PRs one summaries request carries (the server's cap). */
 const THREAD_SUMMARIES_BATCH = 200;
 
 export async function fetchThreadSummaries(prIds: string[]): Promise<void> {
-  // As few requests as the server's cap allows, one after another: a request
-  // per PR queued the page's own reads behind them in the browser's few
-  // connections to the server.
   for (let i = 0; i < prIds.length; i += THREAD_SUMMARIES_BATCH) {
     try {
       const { data, error } = await api.api.prs["thread-summaries"].post({

@@ -74,7 +74,6 @@ function tracked(f: WalkthroughFact | null, current = fingerprintFiles(files)): 
   };
 }
 
-/** The layer under review in these two-layer stacks. */
 function second(layers: GitHubStackLayer[]): GitHubStackLayer {
   const layer = layers[1];
   if (!layer) throw new Error("fixture stack needs two layers");

@@ -250,18 +250,9 @@ export interface WalkthroughPromptHints {
    * verify, never findings — see {@link renderHunkLeadRules}.
    */
   hunkLeads?: ReadonlyArray<WalkthroughLead>;
-  /**
-   * The GitHub stack this PR is a layer of, as captured at job start. A
-   * resume prompts with the same snapshot, so the stack reads the same.
-   */
   stack?: WalkthroughStackSnapshot;
 }
 
-/**
- * Where this layer sits and what that means for the review: the diff is the
- * layer alone, so an absence may be a higher layer's job, and a lower
- * layer's code isn't this review's to judge.
- */
 function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
   const layers = [...stack.layers].sort((a, b) => a.position - b.position);
   return [
@@ -284,7 +275,6 @@ function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
   ];
 }
 
-/** How an incremental run's prompt describes the diff it was handed. */
 const INCREMENTAL_DIFF_SOURCE: Record<
   PromptDiffSource,
   { readonly input: string; readonly heading: string }
@@ -445,7 +435,6 @@ export function buildWalkthroughPrompt(
     lines.push("#### Other files", ...renderFileLeads(strayLeads, true), "");
   }
 
-  // Numbered at render: the stack step only exists for a stacked PR.
   const firstActions = [
     "Call `get_walkthrough_state` before any other tool. The response will tell you whether this is a fresh run or a resume, and exactly which phase + steps are persisted. Use it to decide where to pick up. Never assume you are starting from scratch.",
     ...(params.stack

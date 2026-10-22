@@ -1,40 +1,21 @@
-// ── The GitHub call ledger ──────────────────────────────────────────────────
-//
-// One record per HTTP request Revv sends to GitHub, taken at `fetch` itself so
-// no call site can slip past it: REST, GraphQL, OAuth, avatars, downloads.
-// Records land in a ring buffer (what `/api/_debug/github` analyzes) and,
-// when a path is configured, a JSONL file (what `bun run github:audit` reads
-// after the fact). Dev-only by default; see `docs/github-ledger.md`.
-
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { type Origin, originStore } from "./origin";
+import { currentOrigin, type Origin } from "./origin";
 
 export interface GitHubCall {
   readonly id: number;
-  /** Epoch ms. */
   readonly start: number;
-  /** Until the response headers arrived. */
   ttfbMs: number | null;
-  /** Until the body was fully read; null when nobody read it. */
   durationMs: number | null;
   readonly method: string;
   readonly host: string;
-  /** Path and query, as sent. */
   readonly url: string;
-  /** `GET /repos/{owner}/{repo}/pulls/{n}` or `graphql PrConversation`. */
   readonly op: string;
-  /** A mutation: never a duplicate, never cacheable. */
   readonly write: boolean;
-  /** Identical requests share it (method, URL, body, token). */
   readonly key: string;
-  /** The pages of one read share it: `key` without `page=` or the GraphQL cursor. */
   readonly read: string;
-  /** A page past the first: REST `page=` > 1, or a GraphQL cursor variable set. */
   readonly paged: boolean;
-  /** Which token, hashed: two accounts asking the same thing aren't duplicates. */
   readonly account: string | null;
-  /** Sent `If-None-Match` / `If-Modified-Since`. */
   readonly conditional: boolean;
   status: number | null;
   bytes: number | null;
@@ -46,42 +27,19 @@ export interface GitHubCall {
     /** `x-ratelimit-reset`, epoch seconds: which hour's budget `used` counts. */
     reset: number;
   } | null;
-  /** Network failure, HTTP error, or GraphQL `errors[0]`. */
   error: string | null;
   readonly origin: { label: string; kind: Origin["kind"] | "none"; runId: string };
-  /** GitHub requests already in flight when this one started. */
   readonly inflight: number;
-  /** Of those, how many were background work. */
   readonly inflightBackground: number;
-  /** The caller's frame outside the GitHub plumbing. */
   readonly site: string | null;
 }
 
-// ── Classifying a URL ───────────────────────────────────────────────────────
-
-/** Enterprise hosts, learned from the API requests the ledger has seen go to them. */
-const extraHosts = new Set<string>();
-
-/**
- * Whether a request is a GitHub API call by its own say: every one Revv makes
- * carries `X-GitHub-Api-Version`. That's how a self-hosted Enterprise host,
- * which no hostname rule can know, is recognised; its web host (`<host>` of
- * `api.<host>`, where its avatars live) counts from then on.
- */
-function learnedFromRequest(url: URL, init: RequestInit | undefined, request: Request | null) {
-  const declared =
-    headerOf(init, "x-github-api-version") ?? request?.headers.get("x-github-api-version") ?? null;
-  if (declared === null) return false;
-  extraHosts.add(url.hostname.toLowerCase().replace(/^api\./, ""));
-  return true;
-}
-
-export function isGitHubHost(hostname: string): boolean {
+export function isGitHubHost(hostname: string, enterpriseHosts: () => Iterable<string>): boolean {
   const h = hostname.toLowerCase();
   if (h === "github.com" || h.endsWith(".github.com")) return true;
   if (h.endsWith(".githubusercontent.com") || h.endsWith(".ghe.com")) return true;
-  for (const extra of extraHosts) {
-    if (h === extra || h.endsWith(`.${extra}`)) return true;
+  for (const host of enterpriseHosts()) {
+    if (h === host || h.endsWith(`.${host}`)) return true;
   }
   return false;
 }
@@ -89,7 +47,6 @@ export function isGitHubHost(hostname: string): boolean {
 const SHA = /^[0-9a-f]{40}$/i;
 const NUMBER = /^\d+$/;
 
-/** A REST path with its identifiers folded, so one endpoint reads as one row. */
 export function templateOf(pathname: string): string {
   const parts = pathname.split("/").filter(Boolean);
   const out: string[] = [];
@@ -124,7 +81,6 @@ const CURSOR_VARIABLE = /^(after|before|cursor|.+Cursor)$/;
 interface GraphqlRequest {
   readonly name: string;
   readonly mutation: boolean;
-  /** The body with cursor variables dropped: what stays the same across pages. */
   readonly readBody: string;
   readonly paged: boolean;
 }
@@ -136,7 +92,6 @@ function parseGraphql(body: string): GraphqlRequest {
       variables?: Record<string, unknown> | null;
     };
     const m = typeof query === "string" ? query.match(/(query|mutation)\s+(\w+)/) : null;
-    // An unnamed query is named by where it reaches: `{repository.pullRequest}`.
     const path =
       typeof query === "string"
         ? [...query.replace(/\([^)]*\)/g, "").matchAll(/(\w+)\s*\{/g)]
@@ -181,7 +136,6 @@ function headerOf(init: RequestInit | undefined, name: string): string | null {
 
 const shortHash = (s: string) => Bun.hash(s).toString(36);
 
-// Frames from the plumbing every call goes through; the caller is below them.
 const PLUMBING = /github-ledger|github-rest\.ts|node:|native|\(unknown\)|<anonymous>/;
 
 function callSite(): string | null {
@@ -194,8 +148,6 @@ function callSite(): string | null {
   return null;
 }
 
-// ── Storage ─────────────────────────────────────────────────────────────────
-
 const RING = 5000;
 const ring: GitHubCall[] = [];
 let ringStart = 0;
@@ -203,6 +155,7 @@ let nextId = 1;
 let inflight = 0;
 let inflightBackground = 0;
 let sink: { path: string; maxBytes: number; written: number } | null = null;
+let ledgerEnterpriseHosts: () => Iterable<string> = () => [];
 
 function remember(call: GitHubCall): void {
   if (ring.length < RING) ring.push(call);
@@ -212,7 +165,6 @@ function remember(call: GitHubCall): void {
   }
 }
 
-/** Oldest first. */
 export function readCalls(): GitHubCall[] {
   return [...ring.slice(ringStart), ...ring.slice(0, ringStart)];
 }
@@ -225,7 +177,6 @@ export function clearCalls(): void {
 function persist(call: GitHubCall): void {
   if (!sink) return;
   try {
-    // One rotation keeps the file bounded without losing the last session.
     if (sink.written > sink.maxBytes) {
       renameSync(sink.path, `${sink.path}.1`);
       sink.written = 0;
@@ -233,14 +184,9 @@ function persist(call: GitHubCall): void {
     const line = `${JSON.stringify(call)}\n`;
     appendFileSync(sink.path, line);
     sink.written += line.length;
-  } catch {
-    // The ledger must never cost a request.
-  }
+  } catch {}
 }
 
-// ── The interceptor ─────────────────────────────────────────────────────────
-
-/** Read the body on the side: how long the transfer took, its size, GraphQL errors. */
 async function observeBody(call: GitHubCall, res: Response, isGraphql: boolean): Promise<void> {
   if (!res.body) {
     call.bytes = 0;
@@ -263,11 +209,12 @@ async function observeBody(call: GitHubCall, res: Response, isGraphql: boolean):
 
 type Fetch = typeof fetch;
 
-/**
- * Wrap `globalThis.fetch` so every GitHub request is recorded. Idempotent.
- * `path` adds the JSONL sink.
- */
-export function installGitHubLedger(options: { path?: string | null } = {}): void {
+export function installGitHubLedger(options: {
+  readonly path?: string | null;
+  /** Lowercase web hosts of the GitHub Enterprise servers to record, read on each non-GitHub.com request. */
+  readonly enterpriseHosts: () => Iterable<string>;
+}): void {
+  ledgerEnterpriseHosts = options.enterpriseHosts;
   if (options.path) {
     mkdirSync(dirname(options.path), { recursive: true });
     sink = {
@@ -288,9 +235,7 @@ export function installGitHubLedger(options: { path?: string | null } = {}): voi
     } catch {
       return original(input, init);
     }
-    if (!isGitHubHost(url.hostname) && !learnedFromRequest(url, init, request)) {
-      return original(input, init);
-    }
+    if (!isGitHubHost(url.hostname, ledgerEnterpriseHosts)) return original(input, init);
 
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const body = bodyText(init?.body);
@@ -299,7 +244,7 @@ export function installGitHubLedger(options: { path?: string | null } = {}): voi
     const page = Number(url.searchParams.get("page") ?? "1");
     const firstPage = new URL(url);
     firstPage.searchParams.delete("page");
-    const origin = originStore.getStore();
+    const origin = currentOrigin();
     const gql = isGraphql ? parseGraphql(body) : null;
     const background = origin?.kind !== "request";
     const call: GitHubCall = {

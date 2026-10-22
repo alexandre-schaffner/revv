@@ -1,31 +1,28 @@
-// ── Merge eligibility ───────────────────────────────────────────────────────
-//
-// Whether the viewer can merge a PR, and what GitHub says about it right now
-// (mergeable state, allowed methods), for the review bar's merge pill. One
-// entry per PR. GitHub computes mergeability lazily and often answers
-// `UNKNOWN` first, so the store re-asks on its own while the answer settles.
-
-import type { MergeEligibility } from "@revv/shared";
+import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
 import { isMergeStateSettling } from "$lib/utils/merge-blocker";
 import { RequestState } from "./_types";
 import { getMergeEligibility } from "./prs.svelte";
 
+/** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
+export interface MergeQuestion {
+  readonly prId: string;
+  readonly headSha: string | null;
+  readonly reviewDecision: ReviewDecision | null;
+  readonly ciState: CiRollupState | null;
+}
+
 interface Entry {
+  readonly question: MergeQuestion;
   readonly request: RequestState<MergeEligibility>;
-  /** What the answer was asked for; a different key asks again. */
-  readonly askedFor: string;
   readonly askedAt: number;
 }
 
-/** Re-asks while GitHub is still computing mergeability, then gives up. */
 const RETRY_MS = 3_000;
 const MAX_RETRIES = 4;
-/** An answer this young is reused when the same question comes back. */
 const FRESH_FOR_MS = 15_000;
 
 let entries = $state(new Map<string, Entry>());
 
-/** The latest ask per PR; an answer to any earlier one is dropped. */
 const generations = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -39,21 +36,48 @@ function updateEntry(prId: string, update: (entry: Entry) => Entry): void {
   if (entry) setEntry(prId, update(entry));
 }
 
-export function getMergeEligibilityRequest(prId: string): RequestState<MergeEligibility> {
-  return entries.get(prId)?.request ?? RequestState.idle();
+/**
+ * The question for a PR as Revv currently sees it. Everyone who asks about
+ * the same PR builds it here, so equal views share one GitHub call.
+ */
+export function mergeQuestionFor(
+  prId: string,
+  headSha: string | null,
+  conversation: PrConversation | null,
+): MergeQuestion {
+  return {
+    prId,
+    headSha,
+    reviewDecision: conversation?.reviewDecision ?? null,
+    ciState: conversation?.ci?.state ?? null,
+  };
+}
+
+function sameQuestion(a: MergeQuestion, b: MergeQuestion): boolean {
+  return (
+    a.prId === b.prId &&
+    a.headSha === b.headSha &&
+    a.reviewDecision === b.reviewDecision &&
+    a.ciState === b.ciState
+  );
+}
+
+/** The PR's latest answer; null without a question. */
+export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility | null {
+  const request = question ? entries.get(question.prId)?.request : undefined;
+  return request?.status === "ok" ? request.data : null;
 }
 
 /**
- * Ask GitHub whether `prId` can merge. `askedFor` names what the answer
- * depends on (head, review decision, CI): the same key within a few seconds
- * reuses the answer on hand, a new one asks again. An answer already shown
- * stays up while the new one is on its way.
+ * Asks GitHub unless an equal question is in flight, retrying, or answered
+ * under `FRESH_FOR_MS` ago. The PR's last answer stays up meanwhile.
  */
-export function askMergeEligibility(prId: string, askedFor: string): void {
+export function askMergeEligibility(question: MergeQuestion): void {
+  const { prId } = question;
   const entry = entries.get(prId);
   if (
     entry &&
-    entry.askedFor === askedFor &&
+    sameQuestion(entry.question, question) &&
     (entry.request.status === "loading" ||
       retryTimers.has(prId) ||
       Date.now() - entry.askedAt < FRESH_FOR_MS)
@@ -65,8 +89,8 @@ export function askMergeEligibility(prId: string, askedFor: string): void {
   const generation = (generations.get(prId) ?? 0) + 1;
   generations.set(prId, generation);
   setEntry(prId, {
+    question,
     request: entry?.request.status === "ok" ? entry.request : RequestState.loading(),
-    askedFor,
     askedAt: Date.now(),
   });
   ask(prId, generation, MAX_RETRIES);

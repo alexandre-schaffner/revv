@@ -1,35 +1,16 @@
-// ── Stack rebase: the pure half ─────────────────────────────────────────────
-//
-// What a cascading rebase replays, decided from one read of GitHub. The same
-// cascade GitHub's "Rebase stack" button and `gh stack rebase` run: bottom-up,
-// every open layer goes onto the (rebased) open layer below it, the lowest
-// onto the stack base's tip. A layer's own commits start where the layer
-// below's head was before the rebase, which is also what keeps a squash-merged
-// layer's commits out of the layer above (`git rebase --onto`, not a plain
-// rebase that would replay them).
-
 import { isOpenLayer } from "@revv/shared";
 import type { GitHubStack } from "./map";
 
 export interface RebaseStep {
   readonly number: number;
-  /** The branch the rebased head is pushed to. */
   readonly headRef: string;
-  /** The head before the rebase, which the push leases against. */
   readonly tip: string;
-  /** The stack base's tip, or the rebased head of the open layer below. */
   readonly onto: { readonly kind: "base" } | { readonly kind: "layer"; readonly number: number };
-  /**
-   * Where the layer's own commits begin, best guess first: the head the layer
-   * below had. Only a candidate that is an ancestor of `tip` is used; with
-   * none, the merge base with the onto side is.
-   */
   readonly upstreams: readonly string[];
 }
 
 export interface RebasePlan {
   readonly steps: readonly RebaseStep[];
-  /** The lowest open layer, when it still targets a merged layer's branch. */
   readonly retarget: number | null;
 }
 

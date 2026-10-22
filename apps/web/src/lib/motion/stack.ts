@@ -1,18 +1,3 @@
-/**
- * Fold and unfold a stack of cards (the homepage's PR stacks).
- *
- * FLIP: the caller snapshots the stack, flips its state so the DOM lands in
- * the new layout, then hands both to `flipStack`, which plays each card from
- * where it was to where it now is. The layout itself stays pure CSS, so a
- * reduced-motion reader, an SSE re-render or an interrupted fold all settle
- * on exactly what the stylesheet says.
- *
- * Unfolding deals the cards out from under the top one: each slides down
- * from its sheet, widening to full size, and its face fades in once it has
- * cleared the card above, while the whole pile flattens into rows. Folding
- * gathers them back, faster, the way an exit should be: the rows turn back
- * into sheets and their faces go first, then the cards tuck under.
- */
 import { gsap } from "./gsap";
 import { prefersReducedMotion } from "./reduced-motion";
 import { tokens } from "./tokens";
@@ -22,7 +7,6 @@ interface StackSnapshot {
   readonly rects: readonly DOMRect[];
 }
 
-/** Every moving part, in DOM order: the cards, then whatever follows them (the foot). */
 export function snapshotStack(
   container: HTMLElement,
   pieces: readonly HTMLElement[],
@@ -37,17 +21,18 @@ const running = new WeakMap<HTMLElement, gsap.core.Timeline>();
 
 const CLEARED = "transform,transformOrigin,opacity,height,clipPath,willChange,--elev";
 
-/**
- * Play the stack from `from` (a snapshot of `[...cards, foot]`) to its
- * current layout.
- *
- * `cards[0]` is the top card, which never moves; `faces` are the cards'
- * contents, faded so a folded sheet reads as blank paper. `foot` isn't
- * tweened at all: every frame it is hung just under the lowest card, and the
- * tray is sized to end just under it. On a clock of its own it either let
- * dealt cards land on it (it left too late) or opened an empty trough under
- * them (it left too early); tied to the cards, neither can happen.
- */
+const CLIP_BOTTOM_EDGE_ONLY = "inset(-1rem -1rem 0 -1rem)";
+
+const CARDS_VISIBLE_WHILE_FOLDED = 3;
+
+const SHORT_STACK_CARDS = 2;
+const TALL_STACK_CARDS = 11;
+const TALL_STACK_EXTRA_TIME = { deal: 0.5, gather: 0.4 } as const;
+
+function tallness(cardCount: number): number {
+  return Math.min(1, (cardCount - SHORT_STACK_CARDS) / (TALL_STACK_CARDS - SHORT_STACK_CARDS));
+}
+
 export function flipStack(
   container: HTMLElement,
   cards: readonly HTMLElement[],
@@ -57,27 +42,17 @@ export function flipStack(
   opening: boolean,
 ): void {
   const everything = [container, ...cards, ...faces, ...(foot ? [foot] : [])];
-  // A fold that interrupts an unfold (or the reverse) starts from wherever
-  // the cards were mid-flight: `from` was measured with their transforms
-  // applied. The old run's inline styles go before measuring where they now
-  // land, and killing it drops its clean-up, which would otherwise strip
-  // this run's styles when it ended.
   running.get(container)?.kill();
   gsap.set(everything, { clearProps: CLEARED });
   if (prefersReducedMotion()) return;
 
   const to = snapshotStack(container, foot ? [...cards, foot] : cards);
-  // Time grows with the distance the cards cover, up to half again for a
-  // tall stack: one fixed duration either dragged a pair of cards or flung
-  // ten of them across the page in a blur. Quart, not expo, on the way out:
-  // the eye follows a dealt card the whole way, and expo's snap read as a
-  // jump.
-  const reach = Math.min(1, (cards.length - 2) / 9);
-  const duration = opening ? tokens.slow * (1 + 0.5 * reach) : tokens.smooth * (1 + 0.4 * reach);
+  const tall = tallness(cards.length);
+  const duration = opening
+    ? tokens.slow * (1 + TALL_STACK_EXTRA_TIME.deal * tall)
+    : tokens.smooth * (1 + TALL_STACK_EXTRA_TIME.gather * tall);
   const ease = opening ? tokens.easeOutQuart : tokens.easeSoft;
-  // A fixed budget spread across however many cards there are keeps a tall
-  // stack as quick as a short one.
-  const spread = opening ? tokens.stagger.deal : tokens.stagger.gather;
+  const spread = opening ? tokens.stagger.dealTotal : tokens.stagger.gatherTotal;
 
   const tl = gsap.timeline({
     onUpdate: () => hangFoot(container, cards, foot, to),
@@ -88,12 +63,7 @@ export function flipStack(
   });
   running.set(container, tl);
 
-  // Clipped at the bottom while it moves, so a card on its way under can't
-  // paint over the row below the stack. Only the bottom: the cards sit flush
-  // with the stack's sides, and `overflow: hidden` would shave their shadows
-  // off for the length of the fold, then pop them back.
-  gsap.set(container, { height: from.height, clipPath: "inset(-1rem -1rem 0 -1rem)" });
-  // Each moving card on its own layer for the length of the fold only.
+  gsap.set(container, { height: from.height, clipPath: CLIP_BOTTOM_EDGE_ONLY });
   gsap.set(cards.slice(1), { willChange: "transform" });
 
   tl.fromTo(
@@ -110,18 +80,11 @@ export function flipStack(
       scaleX: 1,
       duration,
       ease,
-      // Dealt top-down, the way cards come off a deck; gathered bottom-up,
-      // so the card with the furthest to go sets off first. Their stacking
-      // order (the stack's CSS z-index) keeps each one under the card above.
       stagger: { amount: spread, from: opening ? "start" : "end" },
     },
     0,
   );
 
-  // How folded the pile is, for whatever the stylesheet keys off it (today,
-  // the dealt cards' rail elbows): eased over the whole deal, and over the
-  // first half of a gather, before the cards tuck under. Paint only, so it
-  // never moves the layout under the cards.
   tl.fromTo(
     container,
     { "--elev": opening ? 1 : 0 },
@@ -133,20 +96,16 @@ export function flipStack(
     0,
   );
 
-  // Sheets past the second are invisible while folded: they arrive out of
-  // (and leave into) the second sheet rather than popping.
-  const deep = cards.slice(3);
-  if (deep.length > 0) {
+  const hiddenWhileFolded = cards.slice(CARDS_VISIBLE_WHILE_FOLDED);
+  if (hiddenWhileFolded.length > 0) {
     tl.fromTo(
-      deep,
+      hiddenWhileFolded,
       { opacity: opening ? 0 : 1 },
       { opacity: opening ? 1 : 0, duration: duration * 0.6, ease: tokens.easeSoft },
       opening ? 0 : duration * 0.4,
     );
   }
 
-  // A face appears once its card has mostly cleared the one above, and goes
-  // before its card starts to tuck under.
   tl.fromTo(
     faces.slice(1),
     { opacity: opening ? 0 : 1 },
@@ -160,7 +119,6 @@ export function flipStack(
   );
 }
 
-/** The inverse transform that puts piece `i`, laid out at `to`, back where it was in `from`. */
 function offset(
   from: StackSnapshot,
   to: StackSnapshot,
@@ -172,16 +130,6 @@ function offset(
   return { x: a.left - b.left, y: a.top - b.top, scaleX: a.width / b.width };
 }
 
-/**
- * Hang the foot under the lowest card as it stands this frame, at the gap it
- * keeps at rest, and end the tray the same distance under the foot as it
- * will at rest. Without a foot, the tray alone follows the lowest card.
- *
- * Reads where each card is from GSAP's own `y`, never from the DOM: the
- * cards are laid out at their resting places and only translated, so their
- * resting rect plus `y` is exact, and measuring instead would force a
- * layout on every frame right after this one writes the tray's height.
- */
 function hangFoot(
   container: HTMLElement,
   cards: readonly HTMLElement[],

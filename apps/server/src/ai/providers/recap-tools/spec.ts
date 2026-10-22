@@ -15,18 +15,21 @@
 //   Phase 3 — Write per-PR entries (one atomic idempotent call per PR):
 //     • add_pr_entry(prId, position, theme, verb, description,
 //                    linesAdded, linesRemoved)
-//       Upsert on `(recap_id, pr_id)`; replay-safe.
+//       Upsert on `(recap_id, pr_id)`; replay-safe. Restamps the recap's
+//       derived fields in the same transaction: `summary_stats` from the
+//       source bundle, `source_pr_ids` / `source_walkthrough_ids` from the
+//       entries.
 //
 //   Phase 4 — Finalize:
 //     • complete_recap → validation gate. Requires non-empty lede + ≥1 entry.
-//       Also stamps `summary_stats` from the source bundle and derives
-//       `source_pr_ids` / `source_walkthrough_ids` from the entries.
+//       Writes nothing.
 //
 // Per CLAUDE.md invariants #2 + #11: agents never write `status` directly.
 // `complete_recap` only validates; the orchestrator observes the run's natural
 // end and flips `status` to `'complete'` after.
 
 import type { ProjectRecap, RecapPeriod, RecapStreamEvent, RecapSummaryStats } from "@revv/shared";
+import type { Effect } from "effect";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
@@ -59,7 +62,7 @@ export interface RecapToolContext {
    * Returns null when the prId is not in the source bundle or when
    * both diff cache and GitHub are unavailable.
    */
-  readonly getPrDiff: (prId: string) => Promise<RecapSourcePrDiff | null>;
+  readonly getPrDiff: (prId: string) => Effect.Effect<RecapSourcePrDiff | null>;
   /**
    * Hook fired the moment the agent calls `complete_recap` and validation
    * passes. The orchestrator subscribes here so it knows the agent
@@ -72,13 +75,8 @@ export interface RecapToolContext {
    * produce content so the SSE endpoint can forward it to subscribers.
    */
   readonly emit: (event: RecapStreamEvent) => void;
-
-  /**
-   * Tool names that actually reached a handler during this run. Used by the
-   * runner for narrow recovery (e.g., the agent set the lede + entries but
-   * never called `complete_recap`). Ephemeral, reconstructible state.
-   */
-  readonly toolCalls?: Set<string>;
+  /** A tool call reached the route, before its handler runs. */
+  readonly onToolCall: (toolName: string) => void;
 }
 
 export interface RecapToolResult extends McpToolResult {

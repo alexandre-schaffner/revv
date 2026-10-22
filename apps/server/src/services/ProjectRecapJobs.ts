@@ -21,19 +21,22 @@ import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
-import type {
-  RecapSourcePrDiff,
-  RecapSourcePrDiffFile,
-  RecapSourcePrDigest,
-  RecapToolContext,
+import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
+import {
+  type RecapSourcePrDiff,
+  type RecapSourcePrDiffFile,
+  type RecapSourcePrDigest,
+  type RecapToolContext,
+  recapCompletionBlocker,
 } from "../ai/providers/recap-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
-import { type RecapError, ValidationError } from "../domain/errors";
+import { DbError, type RecapError, ValidationError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withTraceAnchor } from "../observability/span-graft";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -45,7 +48,6 @@ import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { windowIsCurrent } from "./RecapScheduler";
-import { runRecapAgent } from "./recap-agent-runner";
 import {
   attachRecapDigests,
   buildDigestForRecapPr,
@@ -161,22 +163,10 @@ export class ProjectRecapJobs extends Context.Service<
     readonly emitEvent: (recapId: string, event: RecapStreamEvent) => Effect.Effect<EmitResult>;
 
     /**
-     * Issue an opaque session token bound to a prepared {@link RecapToolContext}.
-     * The HTTP MCP route at `/mcp/recap` authenticates opencode tool calls
-     * against this map and resolves them to the per-job context (recapId +
-     * sourceBundle + priorRecaps + onCompleted hook). Mirrors the
-     * walkthrough session-token pattern.
-     */
-    readonly issueSessionToken: (ctx: RecapToolContext) => Effect.Effect<string>;
-
-    /**
-     * Resolve a session token. Returns null when the token is unknown or
-     * its TTL has elapsed.
+     * Resolve a `/mcp/recap` bearer token to the per-job tool context it was
+     * issued for. Null when the token is unknown or its TTL has elapsed.
      */
     readonly resolveSessionToken: (token: string) => Effect.Effect<RecapToolContext | null>;
-
-    /** Invalidate a session token early (job end / cancel). */
-    readonly clearSessionToken: (token: string) => Effect.Effect<void>;
   }
 >()("ProjectRecapJobs") {}
 
@@ -440,7 +430,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // round-trip. Failure is non-fatal — we still return the diff.
         yield* provideDb(
           diffCache.cacheFiles(
-            pr.id,
+            pr,
             fetched.map((f) => ({
               path: f.filename,
               oldPath: f.previousFilename,
@@ -531,8 +521,6 @@ export const ProjectRecapJobsLive = Layer.effect(
           `backfilling ${missing.length} closed PR(s) for ${repoFullName} window ${periodStart}..${periodEnd}`,
         );
 
-        // One batched read for every missing number. A failure degrades
-        // silently: the missing PRs just stay absent from the recap.
         const fetched = yield* provideGithubDeps(
           prCtx.fetchPrs(
             repoFullName,
@@ -573,7 +561,7 @@ export const ProjectRecapJobsLive = Layer.effect(
 
     // ── Job body ─────────────────────────────────────────────────────────
 
-    const buildJobBody = (job: ActiveRecapJob): Effect.Effect<void> =>
+    const buildJobBody = (job: ActiveRecapJob): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         debug("recap-jobs", "running agent for", job.recapId);
 
@@ -707,15 +695,16 @@ export const ProjectRecapJobsLive = Layer.effect(
         // scale with many PRs without retaining every raw diff in context.
         // `getPrDiff` remains as a fallback tool for parity/old prompts, but
         // the normal path reads `diffDigest` from get_recap_state.
-        let cachedToken: string | null | undefined;
-        const getPrDiff = async (prId: string): Promise<RecapSourcePrDiff | null> => {
-          if (cachedToken === undefined) {
-            cachedToken = await Effect.runPromise(resolveRepoToken(job.repoId));
-          }
-          const allRows = [...windowed, ...openPrs];
-          const row = allRows.find((r) => r.pr.id === prId);
-          if (!row) return null;
-          return Effect.runPromise(loadDiffForPr(row.pr, repo.fullName, cachedToken));
+        const repoToken = yield* Effect.cached(resolveRepoToken(job.repoId));
+        const jobContext = yield* Effect.context<never>();
+        const sourceRows = [...windowed, ...openPrs];
+        const getPrDiff = (prId: string): Effect.Effect<RecapSourcePrDiff | null> => {
+          const row = sourceRows.find((r) => r.pr.id === prId);
+          if (!row) return Effect.succeed(null);
+          return repoToken.pipe(
+            Effect.flatMap((token) => loadDiffForPr(row.pr, repo.fullName, token)),
+            Effect.provide(jobContext),
+          );
         };
 
         // Compact diffs into per-PR digests for every PR (archived OR open)
@@ -726,13 +715,10 @@ export const ProjectRecapJobsLive = Layer.effect(
         // a body excerpt, and active-work entries would read very differently
         // from shipped entries.
         const digestEntries = yield* Effect.forEach(
-          [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
+          sourceRows.filter((row) => row.walkthrough === null),
           (row) =>
             Effect.gen(function* () {
-              if (cachedToken === undefined) {
-                cachedToken = yield* resolveRepoToken(job.repoId);
-              }
-              const diff = yield* loadDiffForPr(row.pr, repo.fullName, cachedToken).pipe(
+              const diff = yield* loadDiffForPr(row.pr, repo.fullName, yield* repoToken).pipe(
                 Effect.catch(() => Effect.succeed(null)),
               );
               const digest = buildDigestForRecapPr(row.pr, diff);
@@ -826,50 +812,48 @@ export const ProjectRecapJobsLive = Layer.effect(
           return;
         }
 
-        // Session-token deps for the `/mcp/recap` HTTP bearer. Threaded through
-        // as callbacks so `recap-agent-runner.ts` stays decoupled from the
-        // Effect runtime (and avoids a layer cycle with this service).
-        const sessionDeps = {
-          issueSessionToken: (ctx: RecapToolContext) => Effect.runPromise(issueSessionToken(ctx)),
-          clearSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
+        const modelUsed =
+          resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5";
+        let calledAnyTool = false;
+        const ctx: RecapToolContext = {
+          db,
+          recapId: job.recapId,
+          sourceBundle: bundle,
+          priorRecaps,
+          getPrDiff,
+          emit,
+          onToolCall: () => {
+            calledAnyTool = true;
+          },
+          onCompleted: () => {
+            job.validatedComplete = true;
+            if (!job.abortController.signal.aborted) {
+              job.abortController.abort(new Error("Recap completed"));
+            }
+          },
         };
 
         // Emit initial phase so the UI knows the job is active.
         emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });
 
-        // Run the agent. The runner returns whether the agent reached the
-        // validation gate (complete_recap returned success). On any error
-        // we transition to 'error'; on success we transition to 'complete'.
         agentStartMs = Date.now();
-        const result = yield* Effect.tryPromise({
-          try: async () => {
-            return await runRecapAgent({
-              db,
-              recapId: job.recapId,
-              sourceBundle: bundle,
-              priorRecaps,
-              abortController: job.abortController,
-              modelUsed:
-                resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5",
-              acpAgentId,
-              thinkingEffort: resolveThinkingEffort(settings?.aiThinkingEffort),
-              repoWorkingDir: repo.clonePath ?? process.cwd(),
-              sessionDeps,
-              onCompleted: () => {
-                job.validatedComplete = true;
-              },
-              getPrDiff,
-              emitEvent: emit,
-            });
-          },
-          catch: (e) => new ValidationError({ message: String(e) }),
-        }).pipe(
-          Effect.catch((err) =>
-            Effect.sync(() => {
-              logError("recap-jobs", `runRecapAgent failed for ${job.recapId}:`, err);
-              return null;
-            }),
-          ),
+        const outcome = yield* Effect.acquireUseRelease(
+          issueSessionToken(ctx),
+          (sessionToken) =>
+            Effect.promise(() =>
+              runRecapAgentViaAcp({
+                ctx,
+                sessionToken,
+                acpAgentId,
+                modelUsed,
+                thinkingEffort: resolveThinkingEffort(settings?.aiThinkingEffort),
+                workingDir: repo.clonePath ?? process.cwd(),
+                abortController: job.abortController,
+                calledAnyTool: () => calledAnyTool,
+                isValidated: () => job.validatedComplete,
+              }),
+            ),
+          (sessionToken) => clearSessionToken(sessionToken),
         );
 
         if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
@@ -890,10 +874,13 @@ export const ProjectRecapJobsLive = Layer.effect(
           return;
         }
 
-        if (job.validatedComplete && result) {
-          const completeOptions: { tokenUsage?: Record<string, number>; modelUsed?: string } = {};
-          if (result.tokenUsage) completeOptions.tokenUsage = result.tokenUsage;
-          if (result.modelUsed) completeOptions.modelUsed = result.modelUsed;
+        const blocker = outcome.validated
+          ? null
+          : yield* Effect.try({
+              try: () => recapCompletionBlocker(db, job.recapId),
+              catch: (cause) => new DbError({ message: "recap completion check failed", cause }),
+            });
+        if (blocker === null) {
           yield* setStatus(
             {
               id: job.recapId,
@@ -901,15 +888,14 @@ export const ProjectRecapJobsLive = Layer.effect(
               period: job.period,
             },
             "complete",
-            completeOptions,
+            { modelUsed },
           );
           emit({ type: "done", data: { recapId: job.recapId } });
           return;
         }
 
-        // Agent terminated without validation. Mark error.
         const msg =
-          result?.errorMessage ??
+          outcome.error ??
           "Agent finished without calling complete_recap — the overview may be empty or invalid";
         emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
         yield* setStatus(
@@ -986,7 +972,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* Effect.forkDetach(scopedBody);
+          const fiber = yield* scopedBody.pipe(withGitHubOrigin("recap:job"), Effect.forkDetach);
           job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );
@@ -1260,9 +1246,7 @@ export const ProjectRecapJobsLive = Layer.effect(
       resumePending,
       subscribe,
       emitEvent,
-      issueSessionToken,
       resolveSessionToken,
-      clearSessionToken,
     };
   }),
 );

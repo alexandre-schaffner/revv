@@ -30,8 +30,7 @@ export const pullRequests = sqliteTable(
     /**
      * How many `pr_diff_files` rows the last complete GitHub files fetch
      * produced for this PR. Written only by `DiffCacheService.cacheFiles`, in
-     * the same transaction as the rows themselves, and cleared when the cache
-     * is invalidated.
+     * the same transaction as the rows themselves.
      *
      * Deliberately separate from `changed_files`. That column is GitHub's own
      * stat and counts file *entries*, which exceeds the number of distinct
@@ -41,11 +40,20 @@ export const pullRequests = sqliteTable(
      * `changed_files` — and the completeness guard, comparing the two, made
      * every single page view re-fetch all 30 pages from GitHub. This column is
      * the honest signal: "the cache holds everything the last fetch returned."
-     * Null on rows written before this column existed, and on rows whose diff
-     * cache was invalidated; both fall back to the `changed_files` comparison
-     * and self-heal after one fetch.
+     * Null on rows written before this column existed, which fall back to the
+     * `changed_files` comparison and self-heal after one fetch.
      */
     diffFilesCachedCount: integer("diff_files_cached_count"),
+    /**
+     * The `head_sha` and `base_sha` this row held when the fetch behind the
+     * cached `pr_diff_files` rows started. Written only by
+     * `DiffCacheService.cacheFiles`, with the rows. The rows are this PR's
+     * diff only while both still equal `head_sha` and `base_sha`; a null
+     * `diff_files_head_sha` (never stamped, or fetched while the head was
+     * unknown) never matches.
+     */
+    diffFilesHeadSha: text("diff_files_head_sha"),
+    diffFilesBaseSha: text("diff_files_base_sha"),
     headSha: text("head_sha"),
     baseSha: text("base_sha"),
     createdAt: text("created_at").notNull(),
@@ -77,11 +85,6 @@ export const pullRequests = sqliteTable(
      * GitHub's native stack this PR belongs to (`PullRequest.stack.number`)
      * and its place in it (`stackEntry.position`, 1 sits on the base branch).
      * Null when the PR isn't stacked, or the host predates stacks.
-     *
-     * Overwritten only by the open-PR poll's GraphQL list, which is the one
-     * source that knows: `upsertPrs` leaves both out of its conflict `set`
-     * for a row without `stack` (`ObservedPr`), so a REST refresh of one PR
-     * can't erase what the list learned.
      */
     stackNumber: integer("stack_number"),
     stackPosition: integer("stack_position"),

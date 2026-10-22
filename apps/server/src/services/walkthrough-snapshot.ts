@@ -4,8 +4,6 @@
 // and a `WalkthroughSnapshotV2`. Used by:
 //
 //   • RemoteWalkthroughCache.push — exports the row before gzip+upload.
-//   • WalkthroughJobs — carries a review over a pure restack (export the
-//     prior head's row, import it into the new head's).
 //   • Tests — round-trips a generated walkthrough through
 //     export → JSON → import to assert byte-for-byte equality.
 //

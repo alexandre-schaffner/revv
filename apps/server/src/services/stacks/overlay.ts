@@ -1,12 +1,5 @@
-// ── Revv's half of a stack ──────────────────────────────────────────────────
-//
-// Joins what GitHub says about a stack with what Revv knows about each layer:
-// is it tracked here, what did its latest walkthrough find, and did the
-// stack move under that walkthrough since. Pure: the facts are read from the
-// DB by `StackService` on every request and never cached, so a walkthrough
-// landing shows up on the next read without invalidating anything.
-
 import {
+  classifyLayerMergeState,
   isOpenLayer,
   type PrStackDetail,
   type RestackVerdict,
@@ -18,9 +11,8 @@ import {
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import { changedFiles, type DiffFingerprint, isComparable } from "./fingerprint";
-import { classifyLayerMergeState, type GitHubStack, type GitHubStackLayer } from "./map";
+import type { GitHubStack, GitHubStackLayer } from "./map";
 
-/** One walkthrough row, as much of it as the overlay reads. */
 export interface WalkthroughFact {
   readonly id: string;
   readonly status: "generating" | "complete" | "error" | "superseded";
@@ -36,24 +28,18 @@ export interface WalkthroughFact {
 
 export interface TrackedLayer {
   readonly prId: string;
-  /** The layer's fingerprint at its current head, when Revv has its files cached. */
   readonly currentFingerprint: DiffFingerprint | null;
-  /** The layer's changed paths at its current head, when Revv has them cached. */
   readonly files: readonly string[] | null;
-  /** The live walkthrough row at the layer's current head, if any. */
   readonly current: WalkthroughFact | null;
-  /** The newest walkthrough that finished all four phases, at any head. */
   readonly latestComplete: WalkthroughFact | null;
 }
 
 export interface RevvStackFacts {
   readonly repositoryId: string;
-  /** Keyed on PR number. */
   readonly tracked: ReadonlyMap<number, TrackedLayer>;
   readonly brief: StackBrief | null;
 }
 
-/** The overview's first line is the walkthrough's unlabelled takeaway. */
 export function takeawayOf(summary: string): string | null {
   for (const raw of summary.split("\n")) {
     const line = raw
@@ -86,10 +72,6 @@ function reviewOf(layer: GitHubStackLayer, tracked: TrackedLayer | undefined): S
   };
 }
 
-/**
- * How this layer's latest review relates to the stack now. Merged and closed
- * layers are done; their review needs no verdict.
- */
 export function restackVerdict(
   layer: GitHubStackLayer,
   layers: readonly GitHubStackLayer[],
@@ -99,9 +81,6 @@ export function restackVerdict(
 
   const below = layers.filter((l) => l.position < layer.position);
   const mergedBelow = below.filter((l) => l.status === "merged");
-  // A layer below landed, and this one still targets its branch, is behind
-  // its base or conflicts with it: the author has to restack before anything
-  // else matters.
   const mergeState = classifyLayerMergeState(layer);
   if (
     mergedBelow.length > 0 &&
@@ -116,8 +95,6 @@ export function restackVerdict(
   if (!reviewed) return { kind: "unknown" };
 
   if (reviewed.prHeadSha !== null && reviewed.prHeadSha !== layer.headSha) {
-    // A newer head than the review read. Whether the layer's own changes
-    // moved is a question for the fingerprints.
     const now = tracked.currentFingerprint;
     if (!reviewed.fingerprint || !now) return { kind: "unknown" };
     const files = changedFiles(reviewed.fingerprint, now);
@@ -137,12 +114,6 @@ export function restackVerdict(
   return moved.length > 0 ? { kind: "below-moved", layers: moved } : { kind: "current" };
 }
 
-/**
- * The open layers that change files the viewer's layer changes, nearest
- * first and, at equal distance, the one above first: a fix asked for here
- * may be rewritten there. Layers Revv holds no files for are left out rather
- * than guessed at.
- */
 export function fileOverlaps(
   layers: readonly GitHubStackLayer[],
   tracked: ReadonlyMap<number, TrackedLayer>,

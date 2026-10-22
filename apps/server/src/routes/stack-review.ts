@@ -1,6 +1,3 @@
-// Review a whole stack: generate walkthroughs for its layers bottom-up, and
-// the stack brief (the agent-written arc of the whole stack).
-
 import type { StackReviewStarted } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -11,8 +8,6 @@ import { handleAppError, withAccount } from "./middleware";
 
 export const stackReviewRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)
-  // Queue walkthroughs for the stack's open layers, bottom-up. `remaining`
-  // skips layers that already have a walkthrough at their current head.
   .post(
     "/:id/stack/review",
     async (ctx): Promise<StackReviewStarted | { error: string }> => {
@@ -28,9 +23,6 @@ export const stackReviewRoutes = new Elysia({ prefix: "/api/prs" })
     },
     { body: t.Object({ scope: t.Union([t.Literal("remaining"), t.Literal("all")]) }) },
   )
-  // Start a brief for the stack's current version, unless one exists for it.
-  // Answers the brief id generating or already written, null when the PR
-  // isn't stacked.
   .post(
     "/:id/stack/brief",
     async (ctx): Promise<{ briefId: string | null } | { error: string }> => {

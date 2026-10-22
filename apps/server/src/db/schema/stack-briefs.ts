@@ -8,6 +8,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import type { StackBriefSnapshot } from "../../ai/providers/stack-brief-tools/spec";
 import { repositories } from "./repositories";
 
 const STACK_BRIEF_STATUSES = [
@@ -17,19 +18,6 @@ const STACK_BRIEF_STATUSES = [
   "superseded",
 ] as const satisfies readonly StackBriefStatus[];
 
-/**
- * The whole-stack overview: the arc of a GitHub PR stack, each layer's role,
- * and the order to review it in. One row per stack version — `signature` is
- * a hash of the ordered open layers' `number@headSha` — so a push to any
- * layer leaves the old brief standing (marked stale by the reader) until a
- * new one supersedes it.
- *
- * Content arrives only through the stack-brief MCP tools: `set_layer_role`
- * (phase `L`, one upsert per layer) then `set_arc` (phase `R`, requires every
- * layer), then `complete_stack_brief` validates and the orchestrator
- * (`StackBriefJobs`) flips `status`. Agents never write `status` or
- * `last_completed_phase`, mirroring the walkthrough and recap pipelines.
- */
 export const stackBriefs = sqliteTable(
   "stack_briefs",
   {
@@ -39,20 +27,12 @@ export const stackBriefs = sqliteTable(
       .references(() => repositories.id, { onDelete: "cascade" }),
     stackNumber: integer("stack_number").notNull(),
     signature: text("signature").notNull(),
-    /**
-     * The stack the agent was handed (JSON: base ref plus the layers' number,
-     * title, head and status), captured at job start so a resume briefs the
-     * same stack.
-     */
-    stackSnapshot: text("stack_snapshot").notNull(),
-    /** Orchestrator-only. */
+    stackSnapshot: text("stack_snapshot", { mode: "json" }).$type<StackBriefSnapshot>().notNull(),
     status: text("status", { enum: STACK_BRIEF_STATUSES }).notNull().default("generating"),
-    /** Tool side effect only. */
     lastCompletedPhase: text("last_completed_phase", { enum: ["none", "L", "R"] })
       .notNull()
       .default("none"),
     arc: text("arc").notNull().default(""),
-    /** PR numbers in the recommended review order. */
     reviewOrder: text("review_order", { mode: "json" })
       .$type<number[]>()
       .notNull()
@@ -63,7 +43,6 @@ export const stackBriefs = sqliteTable(
     }),
     errorMessage: text("error_message"),
     modelUsed: text("model_used"),
-    /** The user whose agent settings and token run the job. */
     userId: text("user_id").notNull(),
     createdAt: text("created_at").notNull(),
     completedAt: text("completed_at"),
@@ -76,7 +55,6 @@ export const stackBriefs = sqliteTable(
   ],
 );
 
-/** One layer's line in a brief, keyed on `(brief, position)`. */
 export const stackBriefLayers = sqliteTable(
   "stack_brief_layers",
   {
@@ -88,15 +66,7 @@ export const stackBriefLayers = sqliteTable(
     prNumber: integer("pr_number").notNull(),
     role: text("role").notNull(),
     reviewFocus: text("review_focus").notNull(),
-    /**
-     * The stack's phase this layer belongs to, 1–3 words ("Roles", "Storage").
-     * Consecutive layers sharing one read as a chapter of the stack.
-     */
     chapter: text("chapter").notNull(),
-    /**
-     * The lower layers this one actually builds on, and what it takes from
-     * each, in a short phrase.
-     */
     buildsOn: text("builds_on", { mode: "json" })
       .$type<StackLayerLink[]>()
       .notNull()

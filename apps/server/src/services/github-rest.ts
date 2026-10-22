@@ -23,12 +23,6 @@ export const retryTransient = <A, R>(
 ): Effect.Effect<A, GitHubError, R> =>
   effect.pipe(Effect.retry({ schedule: retrySchedule, while: isTransientGitHubError }));
 
-/**
- * {@link retryTransient} for a query with a lighter shape to fall back on:
- * GitHub's own GraphQL failure (the query timed out on its side) goes
- * straight to the fallback rather than being asked again as is, three times
- * over. Transport failures are still retried.
- */
 export const retryTransientBeforeFallback = <A, R>(
   effect: Effect.Effect<A, GitHubError, R>,
 ): Effect.Effect<A, GitHubError, R> =>
@@ -240,10 +234,6 @@ export function githubFetchStatus(
   );
 }
 
-/**
- * Fetch an image GitHub serves (an avatar) as a `data:` URL, for callers that
- * cache the bytes rather than the URL. No token: avatar hosts don't take one.
- */
 export function githubFetchDataUrl(url: string): Effect.Effect<string, GitHubError> {
   return githubTryPromise({
     try: async () => {
@@ -634,11 +624,6 @@ function isGraphqlServerFailure(message: string): boolean {
   return message.startsWith("Something went wrong while executing your query");
 }
 
-/**
- * The `errors` GitHub answered a GraphQL request with, kept whole as the
- * `cause` of the failure they caused. Reads as `GraphQL: <messages>`, so
- * anything that only prints a cause still sees what it always saw.
- */
 export class GraphqlErrorAnswer {
   constructor(readonly errors: ReadonlyArray<GraphqlError>) {}
 
@@ -647,11 +632,6 @@ export class GraphqlErrorAnswer {
   }
 }
 
-/**
- * The GraphQL `errors` behind a failure: GitHub parsed the query and refused
- * it, or failed running it. Null when GraphQL never answered (HTTP, auth,
- * rate limit, network), which both shapes of a query would meet alike.
- */
 export function graphqlErrorsOf(err: GitHubError): ReadonlyArray<GraphqlError> | null {
   return (err instanceof GitHubApiError || err instanceof GitHubNetworkError) &&
     err.cause instanceof GraphqlErrorAnswer
@@ -804,7 +784,6 @@ export function withSchemaFallback<A, R>(
 > {
   const outdated = (err: GitHubError) => {
     if (!(err instanceof GitHubApiError)) return false;
-    // A refusal raised outside `postGraphql` carries its messages as text.
     const messages = graphqlErrorsOf(err)?.map((e) => e.message) ?? [String(err.cause)];
     return messages.some((message) => modernTokens.some((token) => message.includes(token)));
   };
@@ -833,9 +812,6 @@ export interface GraphqlConnection<N> {
  * `selectConnection` returning nothing means the parent node isn't there (repo
  * or PR not visible to the token) and fails with `notFound()`, rather than
  * passing for an empty list.
- *
- * `stopAfter` ends the walk after a page it says is the last one worth
- * reading (a list ordered newest first has reached what's already known).
  */
 export function paginateGraphql<T, N>(opts: {
   readonly query: string;

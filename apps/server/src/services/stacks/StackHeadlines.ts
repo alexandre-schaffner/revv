@@ -1,13 +1,3 @@
-// ── Stack headlines ─────────────────────────────────────────────────────────
-//
-// What each stack in a repo builds, named for the homepage queue. Read from
-// the DB only (the poll's PR rows, the stack brief), so the homepage never
-// costs GitHub anything. A stack the model hasn't named yet answers a name
-// read off its titles at once, and gets named in the background on the cheap
-// suggestions model; the answer is cached on the titles, so pushes don't ask
-// again, and `stack:updated` tells the homepage to re-read. A naming that
-// fails is not asked again for a while: the titles' name stands meanwhile.
-
 import { createHash } from "node:crypto";
 import { resolveThinkingEffort, type StackHeadline } from "@revv/shared";
 import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
@@ -25,7 +15,6 @@ import { firstSentence, headlineFromTitles } from "./headline";
 
 const CACHE_NS = "stack-headline";
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** After a failed naming, how long the stack keeps its titles' name before asking again. */
 const RETRY_AFTER_MS = 60 * 60 * 1000;
 
 interface NamedStack {
@@ -36,7 +25,6 @@ interface NamedStack {
 interface StackMembers {
   readonly stackNumber: number;
   readonly base: string;
-  /** Base first. */
   readonly layers: ReadonlyArray<{ number: number; title: string; body: string | null }>;
 }
 
@@ -55,7 +43,6 @@ export class StackHeadlineService extends Context.Tag("StackHeadlineService")<
   }
 >() {}
 
-/** The titles a name is cached on: a push doesn't change what the stack builds. */
 function namingKey(repositoryId: string, stack: StackMembers): string {
   const digest = createHash("sha256")
     .update(stack.base)
@@ -73,11 +60,8 @@ export const StackHeadlineServiceLive = Layer.effect(
     const settings = yield* SettingsService;
     const broadcaster = yield* Broadcaster;
 
-    // One naming at a time: the homepage can show many unnamed stacks at once,
-    // and each is a model turn. Reconstructible caches; a restart asks again.
     const naming = yield* Effect.makeSemaphore(1);
     const inflight = new Set<string>();
-    /** Naming key → when a failed naming may be retried. */
     const failedUntil = new Map<string, number>();
 
     const readStacks = (repositoryId: string) =>
@@ -104,7 +88,6 @@ export const StackHeadlineServiceLive = Layer.effect(
           const byStack = Map.groupBy(rows, (r) => r.stackNumber ?? 0);
           const stacks: StackMembers[] = [];
           for (const [stackNumber, members] of byStack) {
-            // A stack of one is just a PR; the homepage draws it as a row.
             if (members.length < 2) continue;
             const ordered = members.toSorted(
               (a, b) => (a.stackPosition ?? 0) - (b.stackPosition ?? 0),
@@ -120,7 +103,6 @@ export const StackHeadlineServiceLive = Layer.effect(
         catch: (cause) => new DbError({ message: "stack headline read failed", cause }),
       });
 
-    /** The opening sentence of the stack's latest complete brief, if any. */
     const briefGist = (repositoryId: string, stackNumber: number) =>
       Effect.try({
         try: () => {
@@ -151,7 +133,7 @@ export const StackHeadlineServiceLive = Layer.effect(
         const named = yield* Effect.promise(() =>
           generateStackHeadline({
             base: stack.base,
-            layers: stack.layers,
+            layersBaseFirst: stack.layers,
             acpAgentId: agent,
             cwd: process.cwd(),
             model,

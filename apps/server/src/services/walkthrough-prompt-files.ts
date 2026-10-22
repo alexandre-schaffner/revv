@@ -36,9 +36,7 @@ interface PromptFilesContext {
   readonly files: ReadonlyArray<PromptFile>;
   readonly generationMode: WalkthroughGenerationMode;
   readonly baseHeadSha: string | null;
-  /** The GitHub stack the PR is a layer of, captured at job start. */
   readonly stack?: WalkthroughStackSnapshot | null;
-  /** The parent review's fingerprint of the layer's own changes, if recorded. */
   readonly parentFingerprint?: DiffFingerprint | null;
 }
 
@@ -53,21 +51,8 @@ export interface PromptFilesResult {
   readonly diffSource: PromptDiffSource;
 }
 
-/**
- * Status of a file the parent review read that the layer no longer changes:
- * its own change was reverted, so there is no patch left to show.
- */
 export const REVERTED_FILE_STATUS = "reverted";
 
-/**
- * A stacked layer's current patches, kept to the files whose own changes
- * differ from what the parent review read. After a rebase onto a moved
- * layer, `git diff oldHead newHead` is mostly the lower layer's churn; the
- * layer's three-dot file list, filtered by fingerprint, is only its own.
- * A file the parent review read that the layer no longer touches comes
- * last, as a patchless `reverted` entry, so the agent can retire what it
- * said about it.
- */
 export function stackLayerDeltaFiles(
   files: ReadonlyArray<PromptFile>,
   parentFingerprint: DiffFingerprint,

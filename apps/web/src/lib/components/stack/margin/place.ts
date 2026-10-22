@@ -1,6 +1,3 @@
-// The open PR's place in its stack, read off the stores. Called from a
-// component's `$derived`, so it re-reads when the stack or its headline does.
-
 import { getPrById } from "$lib/stores/prs.svelte";
 import { getStackHeadline } from "$lib/stores/stack-headlines.svelte";
 import { getStack } from "$lib/stores/stacks.svelte";

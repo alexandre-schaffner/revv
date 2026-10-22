@@ -152,9 +152,9 @@ export class PullRequestService extends Context.Service<
      *     zeroes that must not overwrite real numbers from a detail fetch.
      *     Real stats arrive via `DiffCacheService.cacheFiles`, which derives
      *     them from the changed-file list alongside the cached diff.
-     *   - `stack_number` / `stack_position` are only taken from a row that
-     *     carries `stack` (see {@link ObservedPr}): a source that couldn't see
-     *     stacks leaves the stored ones be. A fresh insert takes `stack ?? null`.
+     *   - `stack_number` / `stack_position` are only taken from a row whose
+     *     `stack` is `seen` (see `StackSighting`): an `unseen` one leaves the
+     *     stored ones be. A fresh insert of an `unseen` row starts unstacked.
      */
     readonly upsertPrs: (
       prs: readonly ObservedPr[],
@@ -208,6 +208,10 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
+    ) => Effect.Effect<void, ValidationError, DbService>;
+    readonly setPrDraft: (
+      id: string,
+      isDraft: boolean,
     ) => Effect.Effect<void, ValidationError, DbService>;
     /**
      * Read the high-water-mark for review-comment sync. Used as the `?since=`
@@ -358,8 +362,6 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       const bodyMentionsByPrId = new Map<string, string[]>();
       yield* Effect.try({
         try: () => {
-          // Rows that saw their stack and rows that didn't take different
-          // conflict `set`s, so one statement each.
           const withStack: (typeof pullRequests.$inferInsert)[] = [];
           const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
           for (const pr of prs) {
@@ -393,13 +395,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             if (pr.headSha !== null) base.headSha = pr.headSha;
             if (pr.baseSha !== null) base.baseSha = pr.baseSha;
             if (pr.closedAt !== null) base.closedAt = pr.closedAt;
-            if (pr.stack) {
-              base.stackNumber = pr.stack.number;
-              base.stackPosition = pr.stack.position;
+            if (pr.stack.kind === "seen" && pr.stack.place) {
+              base.stackNumber = pr.stack.place.number;
+              base.stackPosition = pr.stack.place.position;
             }
-            (pr.stack === undefined ? withoutStack : withStack).push(base);
+            (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
           }
-          const upsert = (values: (typeof pullRequests.$inferInsert)[], stackSeen: boolean) =>
+          const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
             db
               .insert(pullRequests)
               .values(values)
@@ -447,10 +449,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   // body mentions AND mentions found in review comments (see
                   // `appendMentionedUsers`). Assigning the body-only set here
                   // erased the comment-sourced half on every poll tick.
-                  //
-                  // `stack_number` / `stack_position` likewise, unless the
-                  // row saw its stack: see the interface doc.
-                  ...(stackSeen
+                  ...(takeStack
                     ? {
                         stackNumber: sql`excluded.stack_number`,
                         stackPosition: sql`excluded.stack_position`,
@@ -773,6 +772,15 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             };
           });
         },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+    }),
+
+  setPrDraft: (id, isDraft) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      yield* Effect.try({
+        try: () => db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
     }),

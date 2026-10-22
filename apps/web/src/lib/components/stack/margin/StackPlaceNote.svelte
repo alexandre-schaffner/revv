@@ -1,10 +1,4 @@
 <script lang="ts">
-/*
- * "In the stack", in the rail beside the page title: where this layer sits,
- * what it does for the stack, what it stands on and what stands on it, and
- * where the stack goes next. Hangs beside the title without claiming any of
- * the main column's height.
- */
 import StackSimple from "phosphor-svelte/lib/StackSimple";
 import BriefAction from "./BriefAction.svelte";
 import Joined from "./Joined.svelte";
@@ -20,7 +14,6 @@ interface Props {
 let { place }: Props = $props();
 
 const roleParts = $derived(place.role ? richText(place.role, place.stack.layers) : []);
-// A layer the role line already cites needs no second mention.
 const buildsOn = $derived.by(() => {
   const cited = new Set(roleParts.flatMap((p) => (p.kind === "layer" ? [p.layer.number] : [])));
   return place.buildsOn.filter((l) => !cited.has(l.layer.number));

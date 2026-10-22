@@ -1,63 +1,64 @@
-// ── Who asked GitHub ────────────────────────────────────────────────────────
-//
-// Every GitHub request the ledger records carries the origin that caused it:
-// the HTTP route a client hit, or the background loop that woke up. An origin
-// is one *run* (a request, a poll cycle) so the analyzer can tell a waterfall
-// inside one page load from two page loads that happened to overlap.
-//
-// Two carriers. `AsyncLocalStorage` holds the ambient origin: the request
-// hook sets it, and it follows the work through awaits and Effect fibers
-// alike. But ALS can only be scoped around a callback, so a loop that wants
-// to name its own run partway through an Effect (`withGitHubOrigin`) puts the
-// origin in the Effect's Context instead, which forked fibers inherit.
-// `githubTryPromise` reconciles the two where the promise that talks to
-// GitHub starts: a named run wins, else the ambient origin stands.
-
 import { AsyncLocalStorage } from "node:async_hooks";
 import { type Cause, Context, Effect } from "effect";
 
 export type OriginKind = "request" | "background" | "boot";
 
-export interface Origin {
-  /** `GET /api/prs/:id/conversation`, `poll:sync:periodic`, `boot`. */
+interface Run {
   label: string;
   readonly kind: OriginKind;
-  /** One request or one loop iteration. */
   readonly runId: string;
 }
+
+export type Origin = Readonly<Run>;
 
 let nextRun = 1;
 const runId = () => `r${(nextRun++).toString(36)}`;
 
-export function newOrigin(label: string, kind: OriginKind): Origin {
+function newRun(label: string, kind: OriginKind): Run {
   return { label, kind, runId: runId() };
 }
 
-/** A run an Effect named for itself; null defers to the ambient origin. */
-export class GitHubOrigin extends Context.Reference<GitHubOrigin>()("GitHubOrigin", {
-  defaultValue: (): Origin | null => null,
+class GitHubOrigin extends Context.Reference<GitHubOrigin>()("GitHubOrigin", {
+  defaultValue: (): Run | null => null,
 }) {}
 
-export const originStore = new AsyncLocalStorage<Origin>();
+const ambientOrigin = new AsyncLocalStorage<Run>();
 
-/** Run `effect` as a fresh run of `label`; GitHub calls inside are attributed to it. */
+export function enterOrigin(label: string, kind: OriginKind): void {
+  ambientOrigin.enterWith(newRun(label, kind));
+}
+
+export function relabelOrigin(label: string): void {
+  const run = ambientOrigin.getStore();
+  if (run) run.label = label;
+}
+
+export function currentOrigin(): Origin | undefined {
+  return ambientOrigin.getStore();
+}
+
+/**
+ * For runtime entry points: `effect` runs as the caller's ambient origin, read
+ * now. Inside it, the Context is the only origin GitHub calls see.
+ */
+export function seedOriginFromAmbient<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.provideService(effect, GitHubOrigin, ambientOrigin.getStore() ?? null);
+}
+
 export const withGitHubOrigin =
   (label: string, kind: OriginKind = "background") =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-    Effect.suspend(() => Effect.provideService(effect, GitHubOrigin, newOrigin(label, kind)));
+    Effect.suspend(() => Effect.provideService(effect, GitHubOrigin, newRun(label, kind)));
 
-/** Run `thunk` with the fiber's origin in ALS, so every `await` inside it keeps it. */
 const underOrigin =
-  <A>(origin: Origin | null, thunk: (signal: AbortSignal) => PromiseLike<A>) =>
-  (signal: AbortSignal): Promise<A> =>
-    origin
-      ? originStore.run(origin, () => Promise.resolve(thunk(signal)))
-      : Promise.resolve(thunk(signal));
+  <A>(origin: Run | null, thunk: (signal: AbortSignal) => PromiseLike<A>) =>
+  (signal: AbortSignal): Promise<A> => {
+    const start = () => Promise.resolve(thunk(signal));
+    return origin ? ambientOrigin.run(origin, start) : ambientOrigin.exit(start);
+  };
 
-/**
- * `Effect.tryPromise` for a promise that talks to GitHub: the fiber's origin
- * rides into the promise (and every `await` inside it) through ALS.
- */
 export function githubTryPromise<A>(
   thunk: (signal: AbortSignal) => PromiseLike<A>,
 ): Effect.Effect<A, Cause.UnknownException>;
@@ -82,7 +83,6 @@ export function githubTryPromise<A, E>(
   );
 }
 
-/** `Effect.promise` for a GitHub promise that can't fail. */
 export function githubPromise<A>(thunk: (signal: AbortSignal) => PromiseLike<A>): Effect.Effect<A> {
   return Effect.flatMap(GitHubOrigin, (origin) => Effect.promise(underOrigin(origin, thunk)));
 }

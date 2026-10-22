@@ -23,7 +23,6 @@ type OwnerGroup = {
 
 const repos = $derived(getRepositories());
 const activeRepoId = $derived(getSelectedRepoId());
-// `/` is the all-repos feed — the rail's only destination that isn't a repo.
 const isHome = $derived(page.url.pathname === "/");
 
 async function handleHome(): Promise<void> {
@@ -58,8 +57,6 @@ function handleAddRepo(): void {
 </script>
 
 <aside class="rail" aria-label="Projects">
-	<!-- Home is pinned above the scrollable folder list (Discord-style) so
-	     the way back to the feed never scrolls out of reach. -->
 	<div class="rail-home">
 		<Tooltip.Root>
 			<Tooltip.Trigger>
@@ -450,10 +447,6 @@ function handleAddRepo(): void {
 		box-shadow: 0 0 0 2px var(--color-accent, var(--color-text-primary));
 	}
 
-	/* Pinned home destination. Lives outside the scrollable .rail-top, so
-	   flex-shrink: 0 keeps it from collapsing when the folder list
-	   overflows. Horizontal padding matches .rail-top's inset so the home
-	   button and the repo tiles share one vertical axis. */
 	.rail-home {
 		display: flex;
 		flex-direction: column;
@@ -467,9 +460,6 @@ function handleAddRepo(): void {
 		position: relative;
 	}
 
-	/* Active idiom mirrors .repo-button--active: the accent bar at the
-	   button's left edge. The icon's fill weight (set inline) is the
-	   second half of the on/off signal. */
 	.home-button--active {
 		background: var(--color-bg-elevated);
 		color: var(--color-text-primary);
@@ -486,8 +476,6 @@ function handleAddRepo(): void {
 		background: var(--color-accent, var(--color-text-primary));
 	}
 
-	/* Hairline separating the pinned home button from the folder list —
-	   same job as the divider under Discord's DM button. */
 	.rail-divider {
 		width: 24px;
 		height: 1px;

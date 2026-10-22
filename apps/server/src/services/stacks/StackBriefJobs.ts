@@ -1,27 +1,13 @@
-// ── StackBriefJobs ──────────────────────────────────────────────────────────
-// Durable orchestrator for stack briefs, the agent-written arc of a GitHub PR
-// stack. Shaped like ProjectRecapJobs, smaller still: one brief per stack
-// version (`signature`), no worktree, no live stream, one job at a time.
-//
-// The row is the journal (CLAUDE.md invariant 1): the stack the agent briefs
-// is snapshotted onto it at creation, so a resume needs neither GitHub nor
-// memory. Content arrives only through the `/mcp/stack-brief` tool handlers
-// (invariant 2); this service is the only writer of `status`, and it
-// broadcasts `stack-brief:status-changed` after each transition commits
-// (invariants 8 and 11).
-
 import { randomUUID } from "node:crypto";
 import { isOpenLayer, resolveThinkingEffort, type StackBriefStatus } from "@revv/shared";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Cause, Context, Effect, Fiber, Layer, Ref } from "effect";
 import { isAcpAgentAvailable } from "../../ai/acp/presets";
-import { recoverMissedGate } from "../../ai/providers/mcp-agent-acp";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
-  completeStackBriefHandler,
-  parseStackBriefSnapshot,
   type StackBriefSnapshot,
   type StackBriefToolContext,
+  stackBriefCompletionBlocker,
 } from "../../ai/providers/stack-brief-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { pullRequests } from "../../db/schema/pull-requests";
@@ -41,22 +27,18 @@ import { stackSignature } from "./fingerprint";
 import type { GitHubStack } from "./map";
 import { type StackError, StackService } from "./StackService";
 
-/** One brief at a time: it's a background nicety, never worth a walkthrough's slot. */
 const MAX_CONCURRENT_BRIEF_JOBS = 1;
 
-/** Boot resumes before the row goes to 'error'. */
 export const STACK_BRIEF_MAX_RESUME_ATTEMPTS = 3;
 
 const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS + 5 * 60_000;
 
-/** A layer's description, as much as the agent needs to tell what it's for. */
 const BODY_EXCERPT_CHARS = 1200;
 
 interface ActiveBriefJob {
   readonly briefId: string;
   readonly abortController: AbortController;
   fiber: Fiber.RuntimeFiber<void, never> | null;
-  /** Set when a newer brief superseded this one: the run's end is nobody's error. */
   superseded: boolean;
   validated: boolean;
 }
@@ -75,14 +57,11 @@ export class StackBriefJobs extends Context.Tag("StackBriefJobs")<
       userId: string,
       accountId?: string,
     ) => Effect.Effect<string | null, StackError>;
-    /** Re-launch rows a prior process left 'generating'. */
     readonly resumePending: () => Effect.Effect<void>;
-    /** The tool context a `/mcp/stack-brief` bearer token was issued for. */
     readonly resolveSessionToken: (token: string) => Effect.Effect<StackBriefToolContext | null>;
   }
 >() {}
 
-/** The stack the agent will brief, frozen onto the row. */
 export function buildStackBriefSnapshot(
   stack: GitHubStack,
   tracked: ReadonlyMap<number, { readonly id: string; readonly body: string | null }>,
@@ -152,11 +131,6 @@ export const StackBriefJobsLive = Layer.effect(
         Effect.catchAll(() => Effect.void),
       );
 
-    /**
-     * The one lifecycle chokepoint after creation. Only a 'generating' row
-     * moves: a brief superseded mid-run stays superseded whatever its run
-     * ends with.
-     */
     const finish = (
       briefId: string,
       status: "complete" | "error",
@@ -202,15 +176,12 @@ export const StackBriefJobsLive = Layer.effect(
           db.select().from(stackBriefs).where(eq(stackBriefs.id, job.briefId)).get(),
         );
         if (row?.status !== "generating") return;
-        const snapshot = parseStackBriefSnapshot(row.stackSnapshot);
-        if (!snapshot || snapshot.layers.length === 0) {
-          yield* finish(job.briefId, "error", { errorMessage: "The stack snapshot is unreadable" });
+        const snapshot = row.stackSnapshot;
+        if (snapshot.layers.length === 0) {
+          yield* finish(job.briefId, "error", { errorMessage: "The stack snapshot has no layers" });
           return;
         }
 
-        // The user's walkthrough agent and model, resolved the way a
-        // walkthrough resolves them: the brief is written by the same hand as
-        // the layers' walkthroughs it summarises.
         const settings = yield* settingsService
           .getSettings()
           .pipe(Effect.orElseSucceed(() => null));
@@ -235,10 +206,13 @@ export const StackBriefJobsLive = Layer.effect(
           Effect.orElseSucceed(() => null),
         );
 
+        let calledAnyTool = false;
         const ctx: StackBriefToolContext = {
           db,
           briefId: job.briefId,
-          toolCalls: new Set<string>(),
+          onToolCall: () => {
+            calledAnyTool = true;
+          },
           onCompleted: () => {
             job.validated = true;
             if (!job.abortController.signal.aborted) {
@@ -260,6 +234,7 @@ export const StackBriefJobsLive = Layer.effect(
                 thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
                 workingDir: repo?.clonePath ?? process.cwd(),
                 abortController: job.abortController,
+                calledAnyTool: () => calledAnyTool,
                 isValidated: () => job.validated,
               }),
             ),
@@ -267,21 +242,12 @@ export const StackBriefJobsLive = Layer.effect(
         );
 
         if (job.superseded) return;
-        if (outcome.validated) {
-          yield* finish(job.briefId, "complete", { modelUsed });
-          return;
-        }
-
-        const recovered = yield* Effect.promise(() =>
-          recoverMissedGate({
-            toolCalls: ctx.toolCalls,
-            stateTool: "get_stack_brief_state",
-            gate: () => completeStackBriefHandler(ctx, {}),
-            debugLabel: "stack-brief",
-            what: `stack brief ${job.briefId}`,
-          }),
-        );
-        if (recovered.recovered) {
+        const blocker = outcome.validated
+          ? null
+          : yield* dbTry("stack brief completion check failed", () =>
+              stackBriefCompletionBlocker(db, job.briefId),
+            );
+        if (blocker === null) {
           yield* finish(job.briefId, "complete", { modelUsed });
           return;
         }
@@ -289,7 +255,6 @@ export const StackBriefJobsLive = Layer.effect(
           modelUsed,
           errorMessage:
             outcome.error ??
-            recovered.error ??
             "The agent stopped before complete_stack_brief; the brief is unfinished",
         });
       });
@@ -311,7 +276,6 @@ export const StackBriefJobsLive = Layer.effect(
         const body = runJob(job).pipe(
           semaphore.withPermits(1),
           Effect.catchAllCause((cause) => {
-            // A shutdown interrupt leaves the row for resume-on-boot.
             if (
               analyzeJobFailure(cause, { cancelledByUser: job.superseded }) === "leave-for-resume"
             ) {
@@ -329,7 +293,6 @@ export const StackBriefJobsLive = Layer.effect(
         job.fiber = yield* Effect.forkDaemon(body);
       });
 
-    /** Stop a superseded brief's run, if it has one. */
     const stopRun = (briefId: string): Effect.Effect<void> =>
       Effect.gen(function* () {
         const job = (yield* Ref.get(registry)).get(briefId);
@@ -341,8 +304,6 @@ export const StackBriefJobsLive = Layer.effect(
         if (job.fiber) yield* Fiber.interruptFork(job.fiber);
         yield* sessions.clearWhere((c) => c.briefId === briefId);
       });
-
-    // ── Public API ───────────────────────────────────────────────────────
 
     const ensure = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
@@ -376,8 +337,6 @@ export const StackBriefJobsLive = Layer.effect(
             );
             const current = active.find((b) => b.signature === signature && b.status !== "error");
             if (current) {
-              // A generating row with no live run (its process died before
-              // boot resumed it) picks up where its tools left off.
               if (current.status === "generating") yield* launch(current.id);
               return current.id;
             }
@@ -410,8 +369,6 @@ export const StackBriefJobsLive = Layer.effect(
             const retired = active.map((b) => b.id);
             yield* dbTry("stack brief create failed", () =>
               db.transaction(() => {
-                // Retire first: the active-signature unique index admits one
-                // non-superseded row per version.
                 if (retired.length > 0) {
                   db.update(stackBriefs)
                     .set({ status: "superseded", supersededBy: briefId })
@@ -424,7 +381,7 @@ export const StackBriefJobsLive = Layer.effect(
                     repositoryId,
                     stackNumber: stack.number,
                     signature,
-                    stackSnapshot: JSON.stringify(snapshot),
+                    stackSnapshot: snapshot,
                     status: "generating",
                     userId,
                     createdAt: new Date().toISOString(),
@@ -455,6 +412,13 @@ export const StackBriefJobsLive = Layer.effect(
         );
         debug("stack-brief", `resumePending: ${rows.length} row(s)`);
         for (const row of rows) {
+          const blocker = yield* dbTry("stack brief completion check failed", () =>
+            stackBriefCompletionBlocker(db, row.id),
+          );
+          if (blocker === null) {
+            yield* finish(row.id, "complete");
+            continue;
+          }
           const attempts = row.attempts + 1;
           yield* dbTry("stack brief resume count failed", () =>
             db

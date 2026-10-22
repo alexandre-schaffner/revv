@@ -32,25 +32,16 @@ import MergePickerRow from "./MergePickerRow.svelte";
 import MergeProgressRow from "./MergeProgressRow.svelte";
 import StackLayerList from "./StackLayerList.svelte";
 
-// "Merge this stack through layer N." The layers read bottom-up toward the
-// base branch, like the stack list; the list is also the picker for how far
-// to go. Once confirmed, the same rows turn into the run's live progress,
-// fed by `stack-merge:progress`. Mounted once in AppShell; opened by
-// `openStackMergeSheet` from anywhere that offers the action.
-
 const prId = $derived(getStackMergeSheetPrId());
 const request = $derived(getStackMergePlan());
 const plan = $derived<StackMergePlan | null>(request.status === "ok" ? request.data : null);
 
 let through = $state<number | null>(null);
 let method = $state<MergeMethod>("merge");
-/** The last start, cancel or continue; its refusal shows until the next one. */
 let action = $state<RequestState<StackMergeRun>>(RequestState.idle());
 const submitting = $derived(action.status === "loading");
 const actionError = $derived(action.status === "error" ? action.error : null);
-/** A stopped run the user started over from: the picker shows in its place. */
 let setAside = $state<string | null>(null);
-/** When the sheet opened: a run that finished before it isn't news. */
 let openedAt = 0;
 
 const METHOD_LABEL: Record<MergeMethod, string> = {
@@ -59,9 +50,8 @@ const METHOD_LABEL: Record<MergeMethod, string> = {
   rebase: "Rebase",
 };
 
-/** The merge method that keeps the layers above clean: a merge commit, when allowed. */
 function recommendedMethod(allowed: readonly MergeMethod[]): MergeMethod {
-  if (allowed.length === 0 || allowed.includes("merge")) return "merge";
+  if (allowed.includes("merge")) return "merge";
   return allowed[0] ?? "merge";
 }
 
@@ -84,8 +74,6 @@ $effect(() => {
   });
 });
 
-// ── The run ───────────────────────────────────────────────────────────────
-
 const run = $derived.by<StackMergeRun | null>(() => {
   if (!plan) return null;
   const latest = getMergeRun(plan.repositoryId, plan.stackNumber);
@@ -98,7 +86,6 @@ const run = $derived.by<StackMergeRun | null>(() => {
 const runLive = $derived(run?.status === "running" || run?.status === "waiting");
 const runStopped = $derived(run?.status === "failed" || run?.status === "expired");
 
-// A run that just ended moved the stack; re-read it so the rows say so.
 let wasLive = false;
 $effect(() => {
   const live = runLive;
@@ -110,15 +97,9 @@ $effect(() => {
   });
 });
 
-// ── The picker ────────────────────────────────────────────────────────────
-
 const bottomUp = $derived(plan ? [...plan.layers].sort((a, b) => a.position - b.position) : []);
 const topFirst = $derived([...bottomUp].reverse());
 
-/**
- * Why a layer can't be the target: merged already, or something at or below
- * it is blocked. Null when it can.
- */
 const pickRefusal = $derived.by(() => {
   const refusals = new Map<number, string>();
   let blocker: StackMergePlanLayer | null = null;
@@ -150,10 +131,12 @@ const targetLayer = $derived(bottomUp.find((l) => l.position === target) ?? null
 const methodOptions = $derived.by<SegmentedOption<MergeMethod>[]>(() => {
   const allowed = plan?.allowedMethods ?? [];
   const all: MergeMethod[] = ["merge", "squash", "rebase"];
-  return (allowed.length === 0 ? all : all.filter((m) => allowed.includes(m))).map((m) => ({
-    value: m,
-    label: METHOD_LABEL[m],
-  }));
+  return all
+    .filter((m) => allowed.includes(m))
+    .map((m) => ({
+      value: m,
+      label: METHOD_LABEL[m],
+    }));
 });
 const mergeCommitAllowed = $derived(methodOptions.some((o) => o.value === "merge"));
 
@@ -165,9 +148,6 @@ const methodHint = $derived.by(() => {
   return "This repository doesn't allow merge commits, so the layers above may need a rebase.";
 });
 
-// ── Actions ───────────────────────────────────────────────────────────────
-
-/** Run one call at a time; its answer becomes `action`. Null when one is already running. */
 async function act(call: () => Promise<StackMergeAnswer>): Promise<StackMergeAnswer | null> {
   if (submitting) return null;
   action = RequestState.loading();
@@ -184,7 +164,6 @@ async function confirm(): Promise<void> {
   const result = await act(() =>
     startStackMerge(id, { throughPosition, method, expectedHeads: heads }),
   );
-  // The refusal usually means GitHub moved; show the stack as it is now.
   if (result && !result.ok) void loadStackMergePlan(id, true);
 }
 
@@ -198,7 +177,6 @@ function continueRun(): void {
   if (runId) void act(() => continueStackMerge(runId));
 }
 
-/** Leave the stopped run where it stopped and pick again from the stack as it is now. */
 function startOver(): void {
   if (!run || !prId) return;
   setAside = run.id;
@@ -492,7 +470,6 @@ function onOpenChange(open: boolean): void {
 		color: var(--color-text-primary);
 	}
 
-	/* The two kinds of row, the picker's and the run's, share one frame and type. */
 	:global(.stack-merge-sheet .layer-row) {
 		display: flex;
 		align-items: flex-start;

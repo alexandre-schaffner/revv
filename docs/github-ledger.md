@@ -58,13 +58,17 @@ clients"; GraphQL costs vary per query, so its deltas can't be.
 
 `apps/server/src/observability/github-ledger/`:
 
-- `record.ts` wraps `globalThis.fetch`, so no call site can slip past.
-- `origin.ts` carries the origin. The request hook in `index.ts` puts one in
-  `AsyncLocalStorage`, and it follows the work through awaits and Effect fibers.
-  A loop names its own runs with `withGitHubOrigin("poll:...")`, which uses the
-  Effect Context because ALS can't be re-scoped partway through an Effect.
-  `githubTryPromise` (used for every GitHub call in `github-rest.ts` and
-  `GitHub.ts`) reconciles the two.
+- `record.ts` wraps `globalThis.fetch`, so no call site can slip past. Besides
+  github.com, it records the Enterprise hosts named in `GITHUB_HOST`,
+  `user_settings` and `repositories`.
+- `origin.ts` carries the origin, one carrier per world. In promise code it is
+  `AsyncLocalStorage`: the request hook in `index.ts` enters one with
+  `enterOrigin`. Inside Effect it is the Effect Context only, because a fiber
+  woken by another fiber resumes in the waker's ALS context. `AppRuntime`
+  copies the caller's ALS origin into the Context once, at entry. A loop names
+  its own runs with `withGitHubOrigin("poll:...")`. `githubTryPromise` (used
+  for every GitHub call in `github-rest.ts` and `GitHub.ts`) hands the fiber's
+  origin to the promise; with none, the call is `unattributed`.
 - `analyze.ts` is pure: records in, report out.
 
 A new background loop that calls GitHub should wrap each iteration in

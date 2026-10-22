@@ -105,8 +105,7 @@ export const TokenProviderLive = Layer.effect(
 
     // De-dupe concurrent refreshes of the same account — PollScheduler fans
     // out per-repo and would otherwise fire N parallel refresh grants, each
-    // invalidating the previous one's rotated refresh token. Holds the
-    // in-flight grant per account so followers await the leader's outcome.
+    // invalidating the previous one's rotated refresh token.
     const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError>();
 
     /** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */

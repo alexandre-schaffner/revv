@@ -1,8 +1,3 @@
-// ── Repo activity ───────────────────────────────────────────────────────────
-//
-// A year of a repository's commit history, as GitHub's repo statistics
-// endpoints report it. Drives the activity heatmap on the repo homepage.
-
 /** One week of activity. Weeks open on Sunday 00:00 UTC, as GitHub counts them. */
 export interface RepoActivityWeek {
   /** The week's Sunday as `YYYY-MM-DD` (UTC). */
@@ -28,11 +23,6 @@ export type RepoActivity =
       fetchedAt: string;
     };
 
-/**
- * How pull requests moved through the repo lately, from GitHub's search API.
- * Live-ish (cached for minutes, not hours) and independent of the commit
- * statistics above, which GitHub may still be computing.
- */
 export interface RepoPrFlow {
   mergedLast7d: number;
   mergedPrev7d: number;

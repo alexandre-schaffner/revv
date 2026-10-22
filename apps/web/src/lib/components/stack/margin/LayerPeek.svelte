@@ -1,10 +1,4 @@
 <script lang="ts">
-/*
- * One layer of the stack, previewed where the reader's pointer already is:
- * what it is, what it contributes, where its review stands. Hangs from the
- * margin note its chip sits in, above the note when there's room so it
- * never covers the sentence that cited it.
- */
 import type { StackLayer } from "@revv/shared";
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import Warning from "phosphor-svelte/lib/Warning";
@@ -16,7 +10,6 @@ import { layerHint, plainTitle, richText, type StackPlace } from "./stack-margin
 interface Props {
   layer: StackLayer;
   place: StackPlace;
-  /** Offsets inside the positioned note. */
   x: number;
   y: number;
   /** Which edge `y` names: the card stands above it, or hangs below it. */

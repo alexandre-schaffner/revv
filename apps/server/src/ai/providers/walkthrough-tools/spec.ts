@@ -159,12 +159,6 @@ const getRepoContextSchema = z.object({
  */
 const getCommitHistorySchema = z.object({});
 
-/**
- * Read-only: the GitHub stack this PR is a layer of, as captured at job
- * start, plus what Revv knows about the other layers right now — the lower
- * layers' review takeaways and open issues, the upper layers' descriptions
- * and changed files. Empty inputs: the stack is on the walkthrough row.
- */
 const getStackContextSchema = z.object({});
 
 const setOverviewSchema = z.object({

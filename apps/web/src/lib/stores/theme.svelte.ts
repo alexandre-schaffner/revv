@@ -37,13 +37,6 @@ const SWAP_CLASS = "theme-switching";
  *  strand it on (each swap re-arms rather than stacking add/remove pairs). */
 let swapRelease: number | null = null;
 
-/** Switch themes as a crossfade of the whole page (`crossfadeDocument`):
- *  the old rendering is snapshotted, the swap runs and Svelte flushes inside
- *  the transition, and the old image fades out over the new page. Everything
- *  turns at one pace — chrome, Pierre's shadow DOM, xterm canvases, artifact
- *  iframes, the repo hero's plate — because the fade is of the rendering,
- *  not of thousands of element styles. Reduced motion keeps the cut.
- */
 function applyAnimated(pref: ThemePreference): void {
   void crossfadeDocument(async () => {
     apply(pref);
@@ -65,10 +58,6 @@ function applyAnimated(pref: ThemePreference): void {
  *  Suppression, not a shared duration. Giving every component the same
  *  transition was tried and rejected — see the app.css block for why it is
  *  uniform on paper but not smooth in practice.
- *
- *  Inside a crossfade (see `applyAnimated`) that suppression still matters:
- *  the new page is live under the fading snapshot, and staggered element
- *  transitions would play out underneath it.
  *
  *  Note also: do NOT drive the *native* window theme from here
  *  (`getCurrentWindow().setTheme(...)`). It looks like the missing piece — the

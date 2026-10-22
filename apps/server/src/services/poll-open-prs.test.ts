@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema/auth";
 import { GitHubRateLimitError } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
+import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
@@ -89,21 +89,15 @@ function seedAccount(db: Db): void {
 interface Fakes {
   readonly log: string[];
   listOpen: (updatedSince: string | null) => Effect.Effect<PullRequest[], GitHubRateLimitError>;
-  /** PR numbers closed since; null when they didn't fit. */
   listClosedSince: () => Effect.Effect<number[] | null>;
   listOpenRest: () => Effect.Effect<PullRequest[]>;
   probe: () => Effect.Effect<Map<string, OpenPrListSignature>>;
-  /**
-   * What the GraphQL list got when it asked for stacks: `listed` (the
-   * default) keeps each PR's `stack`; `refused` and `unsupported` drop it.
-   */
   stacks?: "listed" | "refused" | "unsupported";
-  /** Every `upsertPrs` call. */
   readonly upserts: Array<{ rows: readonly ObservedPr[] }>;
 }
 
-/** A PR as a read that couldn't see stacks has it. */
-const unseenStack = ({ stack: _stack, ...rest }: PullRequest): ObservedPr => rest;
+const unseenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: STACK_UNSEEN });
+const seenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: stackSeen(pr.stack) });
 
 function makeDeps(db: Db, fakes: Fakes): PollDeps {
   const deps = {
@@ -117,7 +111,7 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
     },
     remoteUserService: { upsert: () => Effect.void },
     stackService: {
-      invalidate: (repositoryId: string, stackNumber: number) =>
+      markStale: (repositoryId: string, stackNumber: number) =>
         Effect.sync(() => {
           fakes.log.push(`stack:${repositoryId}:${stackNumber}`);
         }),
@@ -142,7 +136,7 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
             Effect.map((prs): OpenPrList => {
               const stacks = withStacks ? (fakes.stacks ?? "listed") : "refused";
               return {
-                prs: stacks === "listed" ? prs : prs.map(unseenStack),
+                prs: prs.map(stacks === "listed" ? seenStack : unseenStack),
                 hostPredatesStacks: stacks === "unsupported",
               };
             }),
@@ -168,12 +162,6 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
           );
         },
       },
-    },
-    diffCache: {
-      invalidateFilesForPrs: (ids: string[]) =>
-        Effect.sync(() => {
-          fakes.log.push(`invalidate:${ids.join(",")}`);
-        }),
     },
     prService: {
       upsertPrs: (rows: readonly ObservedPr[]) =>
@@ -230,27 +218,6 @@ function context(existing: PullRequest[], overrides: Partial<RepoListingContext>
 }
 
 describe("syncRepoOpenPrs", () => {
-  it("drops a moved PR's cached diff before its new head lands", async () => {
-    const { db, deps, log, openCycle } = setup({
-      listOpen: () =>
-        Effect.succeed([pr(1, { headSha: "new", updatedAt: "2026-01-02T00:00:00Z" })]),
-    });
-
-    const result = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openCycle();
-          return yield* syncRepoOpenPrs(deps, cycle, context([pr(1, { headSha: "old" })]), REPO);
-        }),
-      ),
-    );
-
-    expect(result?.listed).toBe(true);
-    expect(log.indexOf("invalidate:repo-1:1")).toBeGreaterThan(-1);
-    expect(log.indexOf("invalidate:repo-1:1")).toBeLessThan(log.indexOf("upsert:new"));
-  });
-
   it("falls back to the REST list when the GraphQL budget runs out", async () => {
     const { db, deps, log, openCycle } = setup({
       listOpen: () =>
@@ -396,7 +363,10 @@ describe("syncRepoOpenPrs stack membership", () => {
     await sync(env, [pr(1), pr(2, { stack: STACKED })]);
 
     expect(env.upserts).toHaveLength(1);
-    expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([STACKED, null]);
+    expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([
+      stackSeen(STACKED),
+      stackSeen(null),
+    ]);
   });
 
   it("announces a stack a member joined, left, or moved in", async () => {
@@ -407,7 +377,6 @@ describe("syncRepoOpenPrs stack membership", () => {
 
     await sync(env, [pr(1), pr(2, { stack: { number: 9, position: 1 } })]);
 
-    // #1 joined stack 4; stack 9 didn't move, so nothing re-reads it.
     expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
   });
 
@@ -417,14 +386,10 @@ describe("syncRepoOpenPrs stack membership", () => {
 
     const result = await sync(env, [stored]);
 
-    // Written without a stack, so `upsertPrs` leaves the stored one be.
-    expect(env.upserts[0]?.rows[0]).not.toHaveProperty("stack");
-    // Downstream (the broadcast) sees what SQLite holds.
+    expect(env.upserts[0]?.rows[0]?.stack).toEqual(STACK_UNSEEN);
     expect(result?.prs[0]?.stack).toEqual(STACKED);
   });
 
-  // Regression: a list that couldn't see stacks must not read as every stack
-  // dissolving.
   it("announces no stack when the list couldn't see them", async () => {
     const stored = [pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })];
     const env = setup({ listOpen: () => Effect.succeed([pr(1), pr(2)]), stacks: "refused" });
@@ -451,7 +416,7 @@ describe("syncRepoOpenPrs stack membership", () => {
 
     const result = await sync(env, [stored]);
 
-    expect(env.upserts[0]?.rows[0]).not.toHaveProperty("stack");
+    expect(env.upserts[0]?.rows[0]?.stack).toEqual(STACK_UNSEEN);
     expect(result?.prs[0]?.stack).toEqual(STACKED);
   });
 
@@ -464,7 +429,6 @@ describe("syncRepoOpenPrs stack membership", () => {
     const [key] = ctx.stacklessUntil.keys();
     if (key === undefined) throw new Error("refusal not remembered");
     expect(key.startsWith("acc-1")).toBe(true);
-    // Once the recheck window lapses, the list asks again.
     ctx.stacklessUntil.set(key, Date.now() - 1);
     await sync(env, [], ctx);
 
@@ -565,7 +529,6 @@ describe("reading only what moved", () => {
       listOpen: (since) => Effect.succeed(since ? [] : [pr(1, { updatedAt: OLD })]),
     });
 
-    // One PR vanished without a close this read could see (deleted, transferred).
     const { result } = await run(env, { count: 1, latestUpdatedAt: OLD });
 
     expect(env.log).toContain("list:graphql");
@@ -577,7 +540,6 @@ describe("reading only what moved", () => {
       listOpen: (since) => Effect.succeed(since ? [pr(2, { updatedAt: NEW })] : stored),
     });
 
-    // GitHub has far more open PRs than the stored list could ever hold.
     const { result } = await run(env, { count: 5801, latestUpdatedAt: NEW }, stored, true);
 
     expect(env.log.filter((l) => l.startsWith("list:graphql"))).toEqual([
@@ -676,7 +638,6 @@ describe("probeRepos", () => {
   });
 
   it("a manual sync probes, but proves nothing unchanged", async () => {
-    // Big enough that reading what moved beats listing it all.
     const big = { ...signature, count: 250 };
     const { db, deps, openCycle } = setup({
       probe: () => Effect.succeed(new Map([["octo/repo", big]])),
@@ -790,7 +751,6 @@ describe("decideListing", () => {
     expect(decideListing(listed(40), { count: 40, latestUpdatedAt: OLD }, NOW, false)).toBe("full");
   });
 
-  // Reading what moved is two requests; a list that fits in two pages is no dearer.
   it("lists a small repo in full, and reads a big one by what moved", () => {
     expect(decideListing(listed(40), moved(41), NOW, true)).toBe("full");
     expect(decideListing(listed(200), moved(200), NOW, true)).toBe("full");
@@ -830,7 +790,6 @@ describe("change detection", () => {
     const existing = new Map([["repo-1:1", pr(1)]]);
     expect(openListMoved([pr(1)], existing)).toBe(false);
     expect(openListMoved([pr(1, { isDraft: true })], existing)).toBe(true);
-    // The homepage groups by stack, so joining one must reach the clients.
     expect(openListMoved([pr(1, { stack: { number: 4, position: 1 } })], existing)).toBe(true);
     expect(openListMoved([pr(1), pr(2)], existing)).toBe(true);
   });

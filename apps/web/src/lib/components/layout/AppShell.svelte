@@ -94,12 +94,8 @@ function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
 }
 
-// How far a page travels when it arrives from a direction (moving through a
-// PR stack): up the stack it drops in from above, down it rises from below.
 const PAGE_TRAVEL_PX = 14;
 
-// The page slot's entrance. A navigation that declared a direction slides
-// in from it; anything else keeps the plain crossfade. Read once per mount.
 function pageEnter(node: Element) {
   const direction = takeNavigationIntent();
   if (!direction) return gsapFade(node, { duration: tokens.quick });

@@ -33,6 +33,13 @@ export {
   normalizeToolName,
 } from "./activity";
 export type {
+  AgentProgressFrame,
+  BaseConflictFrame,
+  BaseConflictStrategy,
+  BaseConflictsCheck,
+} from "./base-conflicts";
+export { BASE_CONFLICT_STRATEGIES, DEFAULT_BASE_CONFLICT_STRATEGY } from "./base-conflicts";
+export type {
   CacheSigningMode,
   GeneratedBy,
   GenerationProviderConfig,
@@ -219,6 +226,7 @@ export type { SettingsUpdate } from "./settings-update";
 export { mergeSettingsUpdate } from "./settings-update";
 export type {
   GitHubStackLayerFields,
+  LayerMergeState,
   PrStackDetail,
   RestackVerdict,
   StackBrief,
@@ -242,7 +250,12 @@ export type {
   StackReviewStarted,
   WalkthroughStackSnapshot,
 } from "./stacks";
-export { isOpenLayer, MERGEABLE_STATES, stackKey } from "./stacks";
+export {
+  classifyLayerMergeState,
+  isOpenLayer,
+  MERGEABLE_STATES,
+  stackKey,
+} from "./stacks";
 export type {
   AuthorRole,
   CloneStatus,

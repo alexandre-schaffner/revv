@@ -2,7 +2,7 @@ import type { MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv
 import { Context, Effect, Result, Layer } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
+import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
 import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
@@ -70,7 +70,6 @@ function parseRepoFullName(
   return Effect.succeed({ owner, repo });
 }
 
-/** REST has no stacks, so the row leaves `stack` out: see {@link ObservedPr}. */
 function mapPr(raw: Record<string, unknown>, repositoryId: string): ObservedPr {
   const user = raw.user as Record<string, unknown>;
   const head = raw.head as Record<string, unknown>;
@@ -106,6 +105,7 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): ObservedPr {
     updatedAt: raw.updated_at as string,
     fetchedAt: new Date().toISOString(),
     closedAt: (raw.closed_at as string | null) ?? null,
+    stack: STACK_UNSEEN,
   };
 }
 
@@ -219,8 +219,7 @@ export interface GitHubGatewayService {
      * Diff sizes are left at 0/0/0, as the REST list did; `prs.diffStats`
      * fills them in for the PRs whose head moved. Stack membership comes along
      * unless `withStacks` is false or GitHub won't give it, when each PR's
-     * `stack` is left out (see `ObservedPr`).
-     * `updatedSince` narrows it to the PRs updated at or after that time.
+     * `stack` is `STACK_UNSEEN` (see `StackSighting`).
      */
     readonly listOpen: (
       repoFullName: string,
@@ -417,7 +416,6 @@ export interface GitHubGatewayService {
       apiBase?: string,
       options?: { readonly sha?: string },
     ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /** Point a PR at a different base branch (`PATCH /pulls/:n {base}`). */
     readonly updateBase: (
       repoFullName: string,
       prNumber: number,
@@ -1081,8 +1079,8 @@ const prsGateway: GitHubGatewayService["prs"] = {
       // on an unknown field — so on a GitHub Enterprise release that predates
       // them, asking for them would cost the caller `canMerge` too and the merge
       // pill would vanish rather than degrade. Ask once with them; on a schema
-      // complaint, ask again without and let `allowedMethods` come back empty,
-      // which the UI already reads as "offer all three".
+      // complaint, ask again without, and an unreported method counts as
+      // allowed.
       // `viewerCanMergeAsAdmin` is newer still and gets the same treatment on
       // its own, so a host that knows the merge methods but not it keeps
       // them; without it, an ADMIN permission stands in for the answer.

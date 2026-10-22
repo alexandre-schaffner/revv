@@ -1,7 +1,3 @@
-// ── Across the wire ─────────────────────────────────────────────────────────
-//
-// Small shapers for what goes to and comes back from the API client.
-
 /**
  * Eden revives ISO strings into `Date`s on the way in; the shared types say
  * `string`, and SSE delivers strings. A JSON round trip puts them back, so
@@ -11,7 +7,6 @@ export function plain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/** A thrown value's message, for a request that never got an answer. */
 export function thrownMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

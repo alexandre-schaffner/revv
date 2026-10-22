@@ -157,18 +157,12 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       return handleAppError(e, ctx);
     }
   })
-  // The repo homepage's activity section: a year of commits for the heatmap,
-  // and recent PR flow for its KPIs. `commits` answers `{ status:
-  // "computing" }` while GitHub builds the statistics; the client retries.
   .get("/:id/activity", async (ctx) => {
     try {
       return await AppRuntime.runPromise(
         Effect.gen(function* () {
           const repoSvc = yield* RepositoryService;
           const identity = yield* Identity;
-          // The homepage lists every account's repos, so the request's own
-          // account (keyed on the default host) may not be this repo's. Use
-          // the viewer's account on the repo's host, and only if it owns it.
           const repo = yield* repoSvc.getRepoById(ctx.params.id);
           const owner = yield* repoSvc.getAccountIdForRepo(repo.id);
           const account = yield* identity.resolveAccount(ctx.session.user.id, repo.githubHost);

@@ -1,11 +1,3 @@
-// Per-repo activity for the repo homepage: the commit heatmap and PR flow.
-//
-// GitHub computes repo statistics lazily: the first ask for a cold repo
-// answers "computing" and the numbers land a few seconds later. The PR flow
-// doesn't wait on that, so the first response is stored as soon as it lands
-// (KPIs render) and the commits keep being asked for on a backoff until they
-// arrive or the budget runs out.
-
 import type { RepoActivity, RepoActivityResponse, RepoPrFlow } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { RequestState } from "$lib/stores/_types";
@@ -13,14 +5,11 @@ import { RequestState } from "$lib/stores/_types";
 export type ReadyRepoActivity = Extract<RepoActivity, { status: "ready" }>;
 
 export interface RepoActivityData {
-  /** Null until GitHub has computed the statistics. */
   commits: ReadyRepoActivity | null;
-  /** True while commits are still being asked for. */
   commitsPending: boolean;
   flow: RepoPrFlow | null;
 }
 
-/** Delays between "computing" answers before giving up — about a minute in total. */
 const COMPUTING_RETRY_MS = [2_000, 4_000, 8_000, 15_000, 30_000];
 
 let activityByRepo = $state<Map<string, RequestState<RepoActivityData>>>(new Map());
@@ -47,10 +36,6 @@ async function fetchActivity(repoId: string): Promise<RepoActivityResponse | str
   }
 }
 
-/**
- * Load once per repo per session; a no-op while loaded or in flight. Call
- * again after an error, or after the commits gave up, to retry.
- */
 export async function loadRepoActivity(repoId: string): Promise<void> {
   const current = getRepoActivity(repoId);
   if (current.status === "loading") return;
@@ -60,8 +45,6 @@ export async function loadRepoActivity(repoId: string): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     const answer = await fetchActivity(repoId);
     if (typeof answer === "string") {
-      // A miss while asking after the commits keeps what is already on screen;
-      // the commits just stop being asked for, as if the budget ran out.
       const shown = getRepoActivity(repoId);
       setEntry(
         repoId,

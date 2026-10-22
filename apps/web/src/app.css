@@ -633,7 +633,6 @@
   /* Motion — easings
        --ease-soft     : in/out, used for exits and bidirectional state
        --ease-out-expo : enter, slight overshoot, default for "appearance"
-       --ease-out-quart: enter without the snap, for motion followed end to end
        --ease-standard : Material standard, used by walkthrough chapters
        --ease-anticipate : playful overshoot, reserve for delight moments */
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
@@ -646,9 +645,8 @@
   --stagger-tight: 25ms;
   --stagger-default: 40ms;
   --stagger-loose: 80ms;
-  /* …and total budgets, spread across a stack's cards as it folds */
-  --stagger-deal: 90ms;
-  --stagger-gather: 40ms;
+  --stagger-deal-total: 90ms;
+  --stagger-gather-total: 40ms;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -677,13 +675,6 @@
   animation: motion-essential-spin 1s linear infinite;
 }
 
-/* ── Skeleton ─────────────────────────────────────────────────────────────
-   A placeholder block with a faint highlight sweeping across it. Size it at
-   the call site. `skeleton-sweep` is a compositor-only translate, the same
-   reasoning as the spinner above; SVG placeholders reuse the keyframe on a
-   gradient rect (`transform-box: fill-box`) masked to their shapes.
-   Consumers: sidebar/AddRepoForm, repo/RepoActivitySection,
-   repo/RepoActivityChart. */
 .skeleton {
   position: relative;
   overflow: hidden;
@@ -1060,20 +1051,12 @@ diffs-container {
   pointer-events: auto;
 }
 
-/* The document crossfade (`$lib/motion/crossfade.ts`) that theme switches
-   play through: the browser's own root View Transition fade, retimed to
-   the ceremonial tier. */
 :root.document-crossfade::view-transition-old(root),
 :root.document-crossfade::view-transition-new(root) {
   animation-duration: var(--duration-ceremonial-medium);
   animation-timing-function: var(--ease-soft);
 }
 
-/* Glass during that crossfade: a solid fill instead of a live blur, which
-   the transition's snapshots can't reproduce (see `crossfade.ts`). Every
-   glass surface carries `data-glass`; the crossfade computes its fill and
-   adds `.glass-frozen`. `!important` has to outrank each surface's own
-   background and filter. */
 :root.document-crossfade .glass-frozen {
   /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
   backdrop-filter: none !important;
@@ -1101,10 +1084,7 @@ diffs-container {
    4 dropped frames against 1 for the cut, and the parts CSS cannot
    interpolate — the Pierre diff canvas and file tree (shadow DOM),
    xterm terminals (canvas), artifact iframes — cut at 0ms anyway,
-   so the chrome ends up fading behind them. So the swap itself
-   stays a cut, and the fade the user sees is the document
-   crossfade above: one snapshot of the whole rendering fading out
-   over the new page, which no transition here would interrupt.
+   so the chrome ends up fading behind them.
 
    Not a motion token and not subject to the reduced-motion
    contract: this suppresses animation rather than defining any.

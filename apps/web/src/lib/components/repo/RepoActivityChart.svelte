@@ -1,28 +1,10 @@
 <script lang="ts">
-/*
- * RepoActivityChart — a year of the repo's commits as a calendar heatmap,
- * with weekly code churn on the same week columns underneath.
- *
- * The heatmap is one sequential ramp of the repo's ink (`repoInkRamp`), so it
- * prints in the same colour as the hero engraving above it. Churn shares the
- * heatmap's x axis on purpose: a dark week in the grid and a tall bar under
- * it are the same week, no second axis to read. Additions rise in the ink,
- * deletions hang below in neutral grey; position carries the sign, the legend
- * names it.
- *
- * Bars cap at four times the year's median week rather than its maximum, so
- * one vendored-dependency week doesn't flatten the rest to slivers. A capped
- * bar is drawn full height and the tooltip carries its real value.
- */
-
 import type { RepoActivityWeek } from "@revv/shared";
 
 interface Props {
   /** The year to draw, oldest week first; null draws an empty placeholder grid. */
   weeks: RepoActivityWeek[] | null;
-  /** The year is still on its way: sweep a skeleton highlight over the placeholder. */
   loading: boolean;
-  /** Four steps of the repo's ink, faint to full. */
   ramp: string[];
 }
 
@@ -57,7 +39,6 @@ const DAY = new Intl.DateTimeFormat("en-US", {
 const WEEK = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 const FULL = new Intl.NumberFormat("en-US");
 
-/** Placeholder year while loading or on error, so the card holds its shape. */
 const EMPTY_WEEKS: RepoActivityWeek[] = Array.from({ length: 52 }, (_, i) => ({
   weekStart: new Date(Date.now() - (51 - i) * 7 * DAY_MS).toISOString().slice(0, 10),
   days: [0, 0, 0, 0, 0, 0, 0],
@@ -98,10 +79,6 @@ const cells = $derived.by(() => {
   return out;
 });
 
-/**
- * Quartile thresholds over the year's non-zero days, so a quiet repo and a
- * busy one both use the whole ramp. GitHub does the same on profiles.
- */
 const thresholds = $derived.by(() => {
   const counts = cells
     .map((c) => c.count)
@@ -130,7 +107,6 @@ const months = $derived.by(() => {
     const month = d.getUTCMonth();
     if (month !== lastMonth) {
       lastMonth = month;
-      // A label needs three columns of room or it collides with the next one.
       if (col - lastCol >= 3 && col <= weeks.length - 2) {
         out.push({ key: week.weekStart, x: GUTTER + col * STEP, label: MONTH.format(d) });
         lastCol = col;
@@ -142,13 +118,6 @@ const months = $derived.by(() => {
 
 const hasChurn = $derived(weeks.some((w) => w.additions !== null));
 
-/*
- * A week's bar is scaled against four times the year's median non-zero week.
- * Generated code and vendored dependencies make churn heavy-tailed: scaled
- * to the maximum, one lockfile week flattens every other bar to a sliver.
- * Bars past the cap draw full height with a notch cut near the end, and the
- * tooltip keeps the real number.
- */
 const churnCap = $derived.by(() => {
   const values = weeks
     .flatMap((w) => [w.additions ?? 0, w.deletions ?? 0])
@@ -168,18 +137,10 @@ const gridHeight = MONTH_ROW + 7 * STEP - GAP;
 const churnTop = gridHeight + CHURN_GAP;
 const svgHeight = $derived(hasChurn ? churnTop + CHURN_HEIGHT : gridHeight);
 
-// ── Hover ────────────────────────────────────────────────────────────────
-
 let tip = $state<{ key: string; x: number; y: number; title: string; detail: string } | null>(null);
 
 const cellByPosition = $derived(new Map(cells.map((c) => [`${c.x}:${c.y}`, c])));
 
-/**
- * One hit test for the whole plot rather than a listener per cell: map the
- * pointer into viewBox units, then to a week column and a day row (or the
- * churn strip under them). Gaps count toward the nearest cell so the tooltip
- * doesn't flicker off between squares.
- */
 function onPointerMove(event: PointerEvent) {
   const svg = (event.currentTarget as HTMLElement).querySelector("svg");
   if (!svg || !ready) return;
@@ -268,8 +229,6 @@ const summary = $derived.by(() => {
 			{/each}
 
 			{#if skeleton}
-				<!-- One highlight crossing the whole year, clipped to the squares. The
-				     band is a third of the grid so it reads at this width. -->
 				<defs>
 					<clipPath id="{uid}-cells">
 						{#each cells as cell (cell.key)}
@@ -374,7 +333,6 @@ const summary = $derived.by(() => {
 		fill: var(--activity-empty);
 	}
 
-	/* The shared `.skeleton` sweep (app.css), drawn in SVG. */
 	.sweep {
 		transform-box: fill-box;
 		transform: translateX(-100%);
@@ -406,7 +364,6 @@ const summary = $derived.by(() => {
 		stroke-width: 1;
 	}
 
-	/* The surface showing through: "this bar runs off the scale". */
 	.notch {
 		fill: var(--color-bg-primary);
 	}

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { isOpenLayer, loginsMatch, type MergeEligibility, type MergeMethod } from "@revv/shared";
+import { isOpenLayer, loginsMatch, type MergeMethod } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
@@ -20,7 +20,9 @@ import { isChatStreaming } from "$lib/stores/chat.svelte";
 import { getConversation } from "$lib/stores/conversation.svelte";
 import {
   askMergeEligibility,
-  getMergeEligibilityRequest,
+  getMergeAnswer,
+  type MergeQuestion,
+  mergeQuestionFor,
 } from "$lib/stores/merge-eligibility.svelte";
 import {
   closePr,
@@ -80,12 +82,9 @@ async function runOwnerAction(action: OwnerAction): Promise<void> {
 
 let mergeSubmitting = $state<string | null>(null);
 let mergeMenuOpen = $state(false);
-/** The strategy a reviewer picked, waiting on their confirmation. */
 let mergeToConfirm = $state<MergeOption | null>(null);
 let mergeConfirmOpen = $state(false);
 
-// The viewer's own standing verdict, from the Conversation tab's snapshot. A
-// later "request changes" or a stale-review dismissal brings Approve back.
 const conversation = $derived.by(() => {
   const request = pr ? getConversation(pr.id).request : null;
   return request?.status === "ok" ? request.data : null;
@@ -99,45 +98,29 @@ const viewerApproved = $derived(
   ) ?? false,
 );
 
-// Mergeability moves with a new head, the review decision, and CI, so a
-// change in any of them asks again. The ask is keyed on these primitives
-// only: the PR and conversation objects are replaced by every store update
-// (a CI poll, an SSE refresh, the cached snapshot then the fresh read), and
-// depending on them, or on when the conversation was read, re-asked GitHub on
-// each one.
 const mergeAskPrId = $derived(pr?.id ?? null);
 const mergeAskHeadSha = $derived(pr?.headSha ?? null);
 const mayMerge = $derived(isPrOwner || viewerApproved);
-// Asked once the conversation has answered (its cached snapshot is
-// near-instant), so its review decision and CI arriving don't re-ask straight
-// after. A failed read counts: the merge pill mustn't hinge on it.
 const conversationKnown = $derived.by(() => {
   const status = pr ? getConversation(pr.id).request.status : "idle";
   return status === "ok" || status === "error";
 });
 const conversationReviewDecision = $derived(conversation?.reviewDecision ?? null);
 const conversationCiState = $derived(conversation?.ci?.state ?? null);
-const mergeAskKey = $derived(
+const mergeQuestion = $derived<MergeQuestion | null>(
   mergeAskPrId && mayMerge && conversationKnown
-    ? `${mergeAskHeadSha} ${conversationReviewDecision} ${conversationCiState}`
+    ? mergeQuestionFor(mergeAskPrId, mergeAskHeadSha, conversation)
     : null,
 );
 $effect(() => {
-  const prId = mergeAskPrId;
-  const key = mergeAskKey;
-  if (prId && key !== null) untrack(() => askMergeEligibility(prId, key));
+  const question = mergeQuestion;
+  if (question) untrack(() => askMergeEligibility(question));
 });
-const mergeEligibility = $derived.by((): MergeEligibility | null => {
-  if (!mergeAskPrId || mergeAskKey === null) return null;
-  const request = getMergeEligibilityRequest(mergeAskPrId);
-  return request.status === "ok" ? request.data : null;
-});
+const mergeEligibility = $derived(getMergeAnswer(mergeQuestion));
 
 // Repos disable merge strategies freely (squash-only is common); GitHub
 // answers a disabled strategy with a 405, so the pill offers exactly what
-// `allowedMethods` reports, in GitHub's own order of preference. An empty
-// list can only mean a stale/failed eligibility read — fall back to all three
-// rather than stranding the author with no merge button.
+// `allowedMethods` reports, in GitHub's own order of preference.
 interface MergeOption {
   method: MergeMethod;
   label: string;
@@ -157,15 +140,10 @@ const MERGE_METHOD_OPTIONS: MergeOption[] = [
 
 const mergeOptions = $derived.by(() => {
   const allowed = mergeEligibility?.allowedMethods ?? [];
-  if (allowed.length === 0) return MERGE_METHOD_OPTIONS;
   return MERGE_METHOD_OPTIONS.filter((m) => allowed.includes(m.method));
 });
 const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
 
-// A stacked PR targets the branch of the layer below it, so merging it alone
-// while that layer is open lands it there, not in the stack's base. Such a
-// layer only offers "Merge through #N…", which merges the stack bottom-up.
-// The review page reads the stack.
 const stackLayer = $derived(pr ? getLayer(pr.id) : null);
 const stack = $derived(pr ? getStack(pr.id) : null);
 const openBelow = $derived(
@@ -183,9 +161,6 @@ const mergeThroughTitle = $derived(
     ? `This PR targets ${stackLayer.baseRef}, the layer below it. Merging it alone would land it there, not in ${stack.baseRefName}; merge the stack through here instead.`
     : "",
 );
-// Until the stack read lands, or when it fails, a layer above the bottom
-// can't tell whether the ones below it are still open, so it isn't offered a
-// plain merge. The bottom layer sits on the base and may merge alone.
 const stackUnknownReason = $derived.by(() => {
   if (!pr?.stack || pr.stack.position <= 1 || stackLayer) return null;
   return getStackRequest(pr.id).status === "error"
@@ -204,17 +179,11 @@ const mergeGateNow = $derived.by((): MergeGate => {
   });
 });
 const mergeBlockedReason = $derived(mergeGateNow.kind === "blocked" ? mergeGateNow.reason : null);
-/** The branch-protection rule this merge would bypass, or null. */
 const bypassRule = $derived(mergeGateNow.kind === "bypass" ? mergeGateNow.rule : null);
 const mergeDisabled = $derived(
   ownerSubmitting !== null || mergeSubmitting !== null || mergeBlockedReason !== null,
 );
 
-/**
- * The author merges their own PR straight away. Anyone else confirms first:
- * merging someone else's work is never a single press. Neither is merging past
- * branch protections, the author's own PR included.
- */
 function requestMerge(option: MergeOption): void {
   mergeMenuOpen = false;
   if (isPrOwner && bypassRule === null) {
@@ -258,8 +227,6 @@ async function runMerge(method: MergeMethod): Promise<void> {
         Merge through #{stackLayer.number}…
       </GlassPill>
     {:else}
-    <!-- GitHub would refuse the merge: keep the pill in place, disabled,
-         with the reason on hover rather than letting a click fail. -->
     <div
       class="glass-pill glass-pill--success merge-pill"
       data-glass
@@ -424,9 +391,6 @@ async function runMerge(method: MergeMethod): Promise<void> {
         <ArrowUp size={16} />
         {rcSubmitting !== null ? "Submitting…" : "Submit review"}
       </GlassPill>
-      <!-- Once your approval stands, Approve stays put as a spent "Approved"
-           and merging, when you're allowed to, is its own pill beside it,
-           behind a confirmation: a second press on Approve never merges. -->
       {#if viewerApproved}
         <GlassPill variant="success" disabled title="You approved this pull request">
           <Check size={16} />
@@ -525,8 +489,6 @@ async function runMerge(method: MergeMethod): Promise<void> {
     background: color-mix(in srgb, var(--color-tab-active-bg) 80%, var(--color-tab-track-bg));
   }
 
-  /* The wrapper's `.is-disabled` already dims the pill; dimming the buttons
-     too would compound to near-invisible. */
   .merge-pill-main:disabled,
   .merge-pill-chevron:disabled {
     cursor: not-allowed;

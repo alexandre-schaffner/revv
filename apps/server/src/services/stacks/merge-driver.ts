@@ -1,11 +1,3 @@
-// ── Stack merge: the step loop ──────────────────────────────────────────────
-//
-// Advances one run until it completes, fails, or is cancelled. Every step
-// starts from a fresh read of GitHub, so a step is idempotent: a run picks up
-// wherever GitHub says it is, whoever moved it there. Everything outward
-// (GitHub, the DB, the clock) comes through `MergeDriverPort`, which keeps the
-// loop testable against a scripted GitHub.
-
 import type {
   MergeMethod,
   StackMergeRun,
@@ -29,23 +21,21 @@ import {
   type StepDecision,
   withinBudget,
 } from "./merge-plan";
+import type { Contradiction } from "./unverified-github";
 
-/** Between reads while GitHub retargets or recomputes a layer. */
 export const STEP_POLL_MS = 3_000;
-/** Between reads while checks run or auto-merge holds a layer: minutes, not seconds. */
 export const SLOW_POLL_MS = 10_000;
-/** Consecutive failed reads of GitHub before the run stops. */
 export const MAX_READ_FAILURES = 5;
 
+/** `ended`: the row left `running`/`waiting` (the user cancelled); the loop stops. */
+export type RunLiveness = "live" | "ended";
+
 export interface SaveEffects {
-  /** PR numbers this step merged (or saw merged), for the local PR rows. */
   readonly merged: readonly number[];
-  /** The stack's shape moved: a merge or a retarget. */
   readonly stackMoved: boolean;
 }
 
 export interface MergeDriverPort {
-  /** The stack as GitHub has it now; null when GitHub no longer reports it. */
   readonly read: (run: StackMergeRun) => Effect.Effect<StackRead | null, GitHubError>;
   readonly merge: (
     number: number,
@@ -58,23 +48,13 @@ export interface MergeDriverPort {
     method: MergeMethod,
     sha: string,
   ) => Effect.Effect<void, GitHubError>;
-  /**
-   * Rebase every open layer of `stack` onto the one below it and push them,
-   * unless `proceed` says no once the rebase is replayed. Answers the layers
-   * it moved, or why it couldn't, in the reader's terms.
-   */
   readonly rebase: (
     stack: GitHubStack,
     proceed: Effect.Effect<boolean>,
   ) => Effect.Effect<StackRebaseResult["rebased"], string>;
-  /**
-   * Commit the run, then announce it. False when the row has left
-   * `running`/`waiting` (the user cancelled): the loop stops without
-   * touching GitHub again.
-   */
-  readonly save: (run: StackMergeRun, effects: SaveEffects) => Effect.Effect<boolean, DbError>;
-  /** Still `running`/`waiting` in the DB; checked when a step changes nothing. */
+  readonly save: (run: StackMergeRun, effects: SaveEffects) => Effect.Effect<RunLiveness, DbError>;
   readonly isActive: (runId: string) => Effect.Effect<boolean, DbError>;
+  readonly reportContradiction: (contradiction: Contradiction) => Effect.Effect<void>;
   readonly now: () => number;
   readonly sleep: (ms: number) => Effect.Effect<void>;
 }
@@ -102,7 +82,6 @@ const sameRun = (a: StackMergeRun, b: StackMergeRun) =>
   a.error === b.error &&
   JSON.stringify(a.layers) === JSON.stringify(b.layers);
 
-/** What a GitHub write failing means for the run. */
 function writeFailure(decision: StepDecision, e: GitHubError): string {
   const n = "number" in decision ? decision.number : 0;
   if (decision.kind === "merge" && e instanceof GitHubApiError) {
@@ -117,30 +96,24 @@ function writeFailure(decision: StepDecision, e: GitHubError): string {
   return `Couldn't merge #${n}: ${describe(e)}`;
 }
 
-/**
- * Step `initial` to a terminal state. Fails only on a DB error; everything
- * GitHub does wrong ends the run as `failed` with a message the user reads.
- */
 export function driveRun(
   initial: StackMergeRun,
   port: MergeDriverPort,
 ): Effect.Effect<StackMergeRun, DbError> {
   return Effect.gen(function* () {
     let run = initial;
-    /** The wait the run is in, and since when: a budget runs per layer and reason. */
     const waiting: { key: string | null; since: number } = { key: null, since: 0 };
     let readFailures = 0;
 
-    /** Commit a new state of the run; false when it's no longer ours to drive. */
     const commit = (next: StackMergeRun, effects: SaveEffects) =>
       Effect.gen(function* () {
         if (sameRun(run, next) && effects.merged.length === 0 && !effects.stackMoved) {
-          return yield* port.isActive(run.id);
+          return (yield* port.isActive(run.id)) ? "live" : "ended";
         }
         const stamped = { ...next, updatedAt: new Date(port.now()).toISOString() };
-        const kept = yield* port.save(stamped, effects);
-        if (kept) run = stamped;
-        return kept;
+        const liveness = yield* port.save(stamped, effects);
+        if (liveness === "live") run = stamped;
+        return liveness;
       });
 
     const stop = (number: number | null, message: string) =>
@@ -212,18 +185,24 @@ export function driveRun(
           return run;
         }
         case "fail": {
+          if (decision.contradicts) {
+            yield* port.reportContradiction({
+              behaviour: decision.contradicts,
+              number: decision.number,
+              runId: run.id,
+            });
+          }
           yield* commit({ ...stepped, status: "failed", error: decision.message }, moved);
           return run;
         }
         case "wait": {
-          if (!(yield* commit({ ...stepped, status: "waiting" }, moved))) return run;
+          if ((yield* commit({ ...stepped, status: "waiting" }, moved)) === "ended") return run;
           const slow = decision.reason === "checks" || decision.reason === "auto_merge";
           yield* port.sleep(slow ? SLOW_POLL_MS : STEP_POLL_MS);
           continue;
         }
         case "rebase": {
-          if (!(yield* commit({ ...stepped, status: "running" }, moved))) return run;
-          // A cancel that lands while git replays must still stop the push.
+          if ((yield* commit({ ...stepped, status: "running" }, moved)) === "ended") return run;
           const stillOurs = port.isActive(run.id).pipe(Effect.orElseSucceed(() => false));
           const done = yield* Effect.either(port.rebase(stackRead.stack, stillOurs));
           if (done._tag === "Left") {
@@ -232,17 +211,12 @@ export function driveRun(
           }
           const pushed = new Map(done.right.map((l) => [l.number, l]));
           if (!pushed.has(decision.number)) {
-            // Git found nothing to replay, yet GitHub won't take it as is.
             yield* stop(
               decision.number,
               `#${decision.number} needs a rebase onto ${stackRead.stack.baseRefName}`,
             );
             return run;
           }
-          // The rebased heads are Revv's own, made from the ones the user
-          // confirmed: the run merges those instead. Only the layer this
-          // rebase was for has spent its rebase; the ones above get theirs
-          // when a merge below leaves them behind again.
           const rebased = run.layers.map((l): StackMergeRunLayer => {
             const moved = pushed.get(l.number);
             if (!moved) return l;
@@ -259,7 +233,10 @@ export function driveRun(
                 : {}),
             };
           });
-          if (!(yield* commit({ ...run, layers: rebased }, { merged: [], stackMoved: true }))) {
+          if (
+            (yield* commit({ ...run, layers: rebased }, { merged: [], stackMoved: true })) ===
+            "ended"
+          ) {
             return run;
           }
           yield* port.sleep(STEP_POLL_MS);
@@ -268,8 +245,7 @@ export function driveRun(
         case "retarget":
         case "merge":
         case "auto_merge": {
-          // Committed before the write: a cancel that landed first wins.
-          if (!(yield* commit({ ...stepped, status: "running" }, moved))) return run;
+          if ((yield* commit({ ...stepped, status: "running" }, moved)) === "ended") return run;
           const write =
             decision.kind === "retarget"
               ? port.retarget(decision.number, decision.base)
@@ -287,14 +263,13 @@ export function driveRun(
               message: null,
             });
             if (
-              !(yield* commit(
+              (yield* commit(
                 { ...run, layers: merged },
                 { merged: [decision.number], stackMoved: true },
-              ))
+              )) === "ended"
             ) {
               return run;
             }
-            // GitHub needs a moment to retarget the next layer anyway.
             yield* port.sleep(STEP_POLL_MS);
           } else if (decision.kind === "retarget") {
             yield* commit(run, { merged: [], stackMoved: true });

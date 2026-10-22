@@ -2,7 +2,6 @@
  * Svelte 5 use-directives.
  *
  *   <button use:gsapPress>           — press-down scale feedback
- *   <li use:gsapHover={{ prop }}>    — eases a 0–1 CSS variable on hover/focus
  *   <div use:bitsAnim={{ inPreset }}> — drives a bits-ui content surface from
  *                                       its data-state attribute
  *   <div use:heroMorph>              — scroll-driven big-hero → sidebar-hero
@@ -73,25 +72,10 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (node
   };
 };
 
-/* ───────────────────────── gsapHover ───────────────────────── */
-
 interface GsapHoverParams {
-  /** A custom property the element's CSS reads as a 0–1 amount, e.g. `--lift`. */
   prop: `--${string}`;
 }
 
-/**
- * Eases `prop` to 1 while the pointer is over the element or focus is inside
- * it, and back to 0 after. The CSS decides what the amount means, so one
- * action serves any hover that is a matter of degree. Keep what it drives
- * on the compositor (opacity, `translate`): an amount that drives a blur
- * radius or a border colour repaints every frame and stutters.
- *
- * It never writes `transform` itself, so a hover can't fight a layout
- * animation running on the same element. Settles faster than it rises, the
- * way an exit should. Under reduced motion the state still changes, just
- * without the ease.
- */
 export const gsapHover: Action<HTMLElement, GsapHoverParams> = (node, params) => {
   let current = params;
   let tween: gsap.core.Tween | null = null;

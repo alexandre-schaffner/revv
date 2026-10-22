@@ -13,19 +13,16 @@ let activeOrg = $state<string | null>(
 );
 
 export function initForUser(userId: string): void {
-  // Another user's orgs are no answer for this one.
   if (userId !== currentUserId) orgsLoadedAt = 0;
   currentUserId = userId;
   const stored = typeof localStorage !== "undefined" ? localStorage.getItem(storageKey()) : null;
   activeOrg = stored;
 }
 
-/** Orgs barely move; the session boot and the top bar both ask on every load. */
 const ORGS_FRESH_FOR_MS = 5 * 60 * 1000;
 let orgsInflight: Promise<void> | null = null;
 let orgsLoadedAt = 0;
 
-/** Read the user's orgs, unless a fresh read is on hand; concurrent calls share one. */
 export function fetchOrgs(): Promise<void> {
   if (Date.now() - orgsLoadedAt < ORGS_FRESH_FOR_MS) return Promise.resolve();
   orgsInflight ??= readOrgs().finally(() => {

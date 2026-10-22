@@ -72,7 +72,6 @@ describe("planStackRebase", () => {
     const plan = planOf(stackOf([layer(1, { status: "merged" }), layer(2), layer(3)]));
     expect(plan.steps[0]).toMatchObject({ number: 102, onto: { kind: "base" }, upstreams: ["h1"] });
     expect(plan.steps[1]).toMatchObject({ onto: { kind: "layer", number: 102 } });
-    // Still targeting the merged branch: point it at the stack base.
     expect(plan.retarget).toBe(102);
   });
 

@@ -14,10 +14,11 @@ import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
+import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
+import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
 import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
-import StackMarginNote from "$lib/components/stack/walkthrough/StackMarginNote.svelte";
 import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
 import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
@@ -725,8 +726,6 @@ $effect(() => {
 // which is what the chat agent reads when the user says "chapter N".
 const totalChapters = $derived(visibleSemanticSteps.length);
 
-// The stack this PR sits in: the restack banner, the margin notes, the
-// handoff card, and `#N (layer k)` citations turned into chips.
 const stack = new WalkthroughStack(
   () => prId,
   () => ({
@@ -1088,8 +1087,17 @@ function handleResume(): void {
 	<FirstPassRibbon rows={firstPass.rows} />
 {/snippet}
 
-{#snippet stackMargin(index: number)}
-	<StackMarginNote {stack} {index} />
+{#snippet reliedOnMargin()}
+	{#if stack.notes && stack.place}
+		<ReliedOnNote links={stack.notes.reliedOn} place={stack.place} />
+	{/if}
+{/snippet}
+
+{#snippet changedAboveMargin(index: number)}
+	{@const note = stack.notes?.chapters.get(index)}
+	{#if note && stack.place}
+		<ChangedAboveNote {note} place={stack.place} />
+	{/if}
 {/snippet}
 
 <div class="walkthrough" use:stackCitations={stack.place}>
@@ -1355,7 +1363,7 @@ function handleResume(): void {
 				{selectedIssueSeverity}
 				chapterNumber={null}
 				chapterCount={totalChapters}
-				margin={stack.notes && stack.notes.reliedOn.length > 0 ? stackMargin : undefined}
+				margin={stack.notes && stack.notes.reliedOn.length > 0 ? reliedOnMargin : undefined}
 			/>
 			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
 				<WalkthroughSection
@@ -1367,7 +1375,7 @@ function handleResume(): void {
 					{selectedIssueSeverity}
 					chapterNumber={sectionIdx + 1}
 					chapterCount={totalChapters}
-					margin={stack.notes?.chapters.has(section.semanticStepIndex) ? stackMargin : undefined}
+					margin={stack.notes?.chapters.has(section.semanticStepIndex) ? changedAboveMargin : undefined}
 				/>
 			{/each}
 
@@ -1482,9 +1490,6 @@ function handleResume(): void {
 
 <style>
 	.walkthrough {
-		/* The 6-col grid every row of the walkthrough lands on; see
-		   `.walkthrough-content` for the tracks. A custom property, so a
-		   `%` in it resolves against the grid that uses it. */
 		--walkthrough-columns:
 			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
 			48px
@@ -1603,8 +1608,6 @@ function handleResume(): void {
 		pointer-events: auto;
 	}
 
-	/* A stacked PR may have a restack banner above, and a pane-centred
-	   message would land on top of it: the empty state follows it in the flow. */
 	.walkthrough-empty--in-flow {
 		position: static;
 		inset: auto;

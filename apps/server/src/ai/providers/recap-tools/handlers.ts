@@ -11,6 +11,8 @@
 import { randomUUID } from "node:crypto";
 import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { Effect } from "effect";
+import type { Db } from "../../../db";
 import {
   projectRecaps,
   pullRequests,
@@ -118,7 +120,7 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
       4. Call list_open_prs and, for each OPEN PR worth surfacing as active work, call add_pr_entry. Reuse the same theme labels as shipped entries when relevant — the UI renders open entries as an "In progress" subgroup inside the matching theme chapter.
       5. add_pr_entry arguments: pr_id, position (your render order, starting at 0, archived entries first), theme (short reusable lowercase noun), verb (past tense for shipped, present tense for open), description (one sentence in matching tense, may use \`backticks\` for code/file paths, NO other markdown), lines_added, lines_removed. The server records whether the PR was archived or open from the source bundle — you don't pass that.
       6. After all add_pr_entry calls, call set_theme_summary ONCE per distinct theme you used — a 1–2 sentence chapter lede that frames what landed in that area. Reuse the same lowercase theme label you passed to add_pr_entry. Keep summaries short (≤ ~35 words) and human; backtick-wrapped code spans are allowed but no other markdown.
-      7. Call complete_recap to finalize. The orchestrator stamps summary_stats, source_pr_ids, totals from your entries and transitions status.
+      7. Call complete_recap to finalize. The orchestrator then transitions status.
 
       Do NOT emit visible prose between tool calls — there is no streaming text buffer in this pipeline. All content flows through tool arguments.` +
       rerunInstructions,
@@ -310,40 +312,44 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   // Upsert on (recap_id, pr_id), returning the canonical row in one round-trip.
   // The original `id` is preserved on conflict; the generated one is only used
   // when this is a fresh insert.
-  const [persisted] = ctx.db
-    .insert(recapPrEntries)
-    .values({
-      id: randomUUID(),
-      recapId: ctx.recapId,
-      prId: input.pr_id,
-      position: input.position,
-      theme,
-      verb,
-      prTitle: prRow?.title ?? "",
-      prExternalId: prRow?.externalId ?? 0,
-      prAuthorLogin: prRow?.authorLogin ?? "",
-      description: input.description.trim(),
-      linesAdded: input.lines_added,
-      linesRemoved: input.lines_removed,
-      prState,
-    })
-    .onConflictDoUpdate({
-      target: [recapPrEntries.recapId, recapPrEntries.prId],
-      set: {
-        position: sql`excluded.position`,
-        theme: sql`excluded.theme`,
-        verb: sql`excluded.verb`,
-        prTitle: sql`excluded.pr_title`,
-        prExternalId: sql`excluded.pr_external_id`,
-        prAuthorLogin: sql`excluded.pr_author_login`,
-        description: sql`excluded.description`,
-        linesAdded: sql`excluded.lines_added`,
-        linesRemoved: sql`excluded.lines_removed`,
-        prState: sql`excluded.pr_state`,
-      },
-    })
-    .returning()
-    .all();
+  const persisted = ctx.db.transaction(() => {
+    const [row] = ctx.db
+      .insert(recapPrEntries)
+      .values({
+        id: randomUUID(),
+        recapId: ctx.recapId,
+        prId: input.pr_id,
+        position: input.position,
+        theme,
+        verb,
+        prTitle: prRow?.title ?? "",
+        prExternalId: prRow?.externalId ?? 0,
+        prAuthorLogin: prRow?.authorLogin ?? "",
+        description: input.description.trim(),
+        linesAdded: input.lines_added,
+        linesRemoved: input.lines_removed,
+        prState,
+      })
+      .onConflictDoUpdate({
+        target: [recapPrEntries.recapId, recapPrEntries.prId],
+        set: {
+          position: sql`excluded.position`,
+          theme: sql`excluded.theme`,
+          verb: sql`excluded.verb`,
+          prTitle: sql`excluded.pr_title`,
+          prExternalId: sql`excluded.pr_external_id`,
+          prAuthorLogin: sql`excluded.pr_author_login`,
+          description: sql`excluded.description`,
+          linesAdded: sql`excluded.lines_added`,
+          linesRemoved: sql`excluded.lines_removed`,
+          prState: sql`excluded.pr_state`,
+        },
+      })
+      .returning()
+      .all();
+    restampDerivedFields(ctx);
+    return row;
+  });
 
   if (persisted) {
     const avatarRow = persisted.prAuthorLogin
@@ -377,6 +383,28 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   const role = prState === "open" ? "active work" : "shipped";
   return ok(`Entry stored for PR ${input.pr_id} as ${role} under theme "${theme}".`);
 };
+
+function restampDerivedFields(ctx: RecapToolContext): void {
+  const sourcePrIds = ctx.db
+    .select({ prId: recapPrEntries.prId })
+    .from(recapPrEntries)
+    .where(eq(recapPrEntries.recapId, ctx.recapId))
+    .all()
+    .map((e) => e.prId);
+  const included = new Set(sourcePrIds);
+  const sourceWalkthroughIds = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs].flatMap(
+    (p) => (p.walkthrough && included.has(p.id) ? [p.walkthrough.id] : []),
+  );
+  ctx.db
+    .update(projectRecaps)
+    .set({
+      summaryStats: JSON.stringify(ctx.sourceBundle.stats),
+      sourcePrIds: JSON.stringify(sourcePrIds),
+      sourceWalkthroughIds: JSON.stringify(sourceWalkthroughIds),
+    })
+    .where(eq(projectRecaps.id, ctx.recapId))
+    .run();
+}
 
 export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = async (
   ctx,
@@ -431,55 +459,37 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
 
 // ── Validation gate ──────────────────────────────────────────────────────────
 
-export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
-  const guard = requireGenerating(ctx, "complete_recap");
-  if (guard) return guard;
-
-  const ledeRow = ctx.db
-    .select({ lede: projectRecaps.lede })
+/**
+ * Why recap `recapId` can't complete yet, or null when its journal passes.
+ * `complete_recap` and the orchestrator both decide on this check.
+ */
+export function recapCompletionBlocker(db: Db, recapId: string): string | null {
+  const row = db
+    .select({ status: projectRecaps.status, lede: projectRecaps.lede })
     .from(projectRecaps)
-    .where(eq(projectRecaps.id, ctx.recapId))
+    .where(eq(projectRecaps.id, recapId))
     .get();
-  if (!ledeRow?.lede || ledeRow.lede.trim().length === 0) {
-    return err(
-      "Error: lede is empty. Call set_lede before complete_recap with a 1–3 sentence editorial summary.",
-    );
+  if (row?.status !== "generating") {
+    return `Recap is no longer generating (status=${row?.status ?? "unknown"}). Aborting complete_recap.`;
   }
-
-  const entries = ctx.db
-    .select({ prId: recapPrEntries.prId })
+  if (row.lede.trim().length === 0) {
+    return "Error: lede is empty. Call set_lede before complete_recap with a 1–3 sentence editorial summary.";
+  }
+  const entry = db
+    .select({ id: recapPrEntries.id })
     .from(recapPrEntries)
-    .where(eq(recapPrEntries.recapId, ctx.recapId))
-    .all();
-
-  if (entries.length === 0) {
-    return err(
-      "Error: no PR entries have been added. Call add_pr_entry once per PR you want in the recap before complete_recap.",
-    );
+    .where(eq(recapPrEntries.recapId, recapId))
+    .limit(1)
+    .get();
+  if (!entry) {
+    return "Error: no PR entries have been added. Call add_pr_entry once per PR you want in the recap before complete_recap.";
   }
+  return null;
+}
 
-  const sourcePrIds = entries.map((e) => e.prId);
-
-  // Best-effort walkthrough provenance: any walkthrough attached to the
-  // entry PRs in the source bundle counts as "incorporated". Audit only —
-  // not used for correctness.
-  const allBundlePrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
-  const sourceWalkthroughIds = allBundlePrs
-    .filter(
-      (p): p is typeof p & Record<"walkthrough", NonNullable<typeof p.walkthrough>> =>
-        sourcePrIds.includes(p.id) && !!p.walkthrough,
-    )
-    .map((p) => p.walkthrough.id);
-
-  ctx.db
-    .update(projectRecaps)
-    .set({
-      summaryStats: JSON.stringify(ctx.sourceBundle.stats),
-      sourcePrIds: JSON.stringify(sourcePrIds),
-      sourceWalkthroughIds: JSON.stringify(sourceWalkthroughIds),
-    })
-    .where(eq(projectRecaps.id, ctx.recapId))
-    .run();
+export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
+  const blocker = recapCompletionBlocker(ctx.db, ctx.recapId);
+  if (blocker) return err(blocker);
 
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
 
@@ -514,7 +524,7 @@ export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, in
 
   let diff: RecapSourcePrDiff | null;
   try {
-    diff = await ctx.getPrDiff(input.pr_id);
+    diff = await Effect.runPromise(ctx.getPrDiff(input.pr_id));
   } catch (e) {
     return err(
       `Diff fetch failed for ${input.pr_id}: ${e instanceof Error ? e.message : String(e)}`,

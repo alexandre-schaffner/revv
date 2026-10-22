@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughStackSnapshot } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles, pullRequests, walkthroughIssues, walkthroughs } from "../../../db/schema";
 import { TOOL_SPECS } from "./index";
@@ -85,7 +86,7 @@ function wt(db: Db, id: string, prId: string, extra: Partial<typeof walkthroughs
     .run();
 }
 
-function seed(stackContext: string | null): Db {
+function seed(stackContext: WalkthroughStackSnapshot | null): Db {
   const db = createDb(":memory:");
   (db as unknown as Client).session.client.run("PRAGMA foreign_keys = OFF");
   pr(db, "pr-120", 120, "Add the store");
@@ -117,6 +118,10 @@ function seed(stackContext: string | null): Db {
       .values({ id: `pr-122\0${path}`, prId: "pr-122", path, status: "modified", fetchedAt: NOW })
       .run();
   }
+  db.update(pullRequests)
+    .set({ headSha: "c", diffFilesHeadSha: "c" })
+    .where(eq(pullRequests.id, "pr-122"))
+    .run();
   return db;
 }
 
@@ -148,7 +153,7 @@ describe("get_stack_context", () => {
   });
 
   it("joins the captured stack with the other layers' live state", async () => {
-    const out = await read(seed(JSON.stringify(STACK)));
+    const out = await read(seed(STACK));
     expect(out.stack.number).toBe(7);
 
     expect(out.lowerLayers).toHaveLength(1);
@@ -171,6 +176,15 @@ describe("get_stack_context", () => {
       tracked: false,
       files: null,
     });
+  });
+
+  it("reads a tracked upper layer whose diff Revv hasn't fetched as files: null", async () => {
+    const db = seed(STACK);
+    db.delete(prDiffFiles).run();
+    const [above] = (await read(db)).upperLayers;
+    expect(above.tracked).toBe(true);
+    expect(above.files).toBeNull();
+    expect(above.fileCount).toBeNull();
   });
 
   it("says so when the PR isn't stacked", async () => {

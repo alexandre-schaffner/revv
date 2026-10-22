@@ -188,17 +188,51 @@ export class CloneInProgressError extends Data.TaggedError("CloneInProgressError
 }> {}
 
 /**
- * A stack merge or rebase Revv won't carry out as asked; nothing was merged or
- * pushed. The message is the user's to read. `conflict`: GitHub moved under
- * the request (a layer got new commits, a run is already going) or a layer
- * doesn't replay cleanly (`files` says where); `moved`: a layer moved while
- * Revv rebased; `invalid`: the request can't be met as the stack stands (a
- * blocked layer, a method the repo forbids); `failed`: git or the push failed.
+ * Why Revv won't carry out a stack merge or rebase as asked; nothing was
+ * merged or pushed.
+ *
+ *   stale           — a layer got new commits since the user looked.
+ *   busy            — another merge run or rebase holds the stack, or the run
+ *                     isn't in a state the ask applies to.
+ *   replay-conflict — a layer doesn't replay cleanly; `files` says where.
+ *   lease-lost      — a layer moved while Revv rebased; the leased push was refused.
+ *   invalid         — the ask can't be met as the stack stands.
+ *   failed          — git or the push failed.
  */
+export type StackRejection =
+  | { readonly reason: "stale" }
+  | { readonly reason: "busy" }
+  | { readonly reason: "replay-conflict"; readonly files: readonly string[] }
+  | { readonly reason: "lease-lost" }
+  | { readonly reason: "invalid" }
+  | { readonly reason: "failed" };
+
+/** A stack merge or rebase refused; `message` is the user's to read. */
 export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
   readonly message: string;
-  readonly reason: "conflict" | "moved" | "invalid" | "failed";
-  readonly files?: readonly string[];
+  readonly rejection: StackRejection;
+}> {}
+
+/** Another push (a chat push or a base sync) already holds the PR's push lock. */
+export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
+  readonly prId: string;
+}> {}
+
+/**
+ * Why bringing a PR up to date with its base was refused:
+ *   busy        — another push or base sync holds the PR.
+ *   stale       — the PR head moved since the user looked.
+ *   invalid     — the ask can't be met as the PR stands (closed, a fork,
+ *                 unpushed agent commits a rebase would strand).
+ *   unavailable — the clone or the history isn't there to work with.
+ *   failed      — git failed.
+ */
+export type BaseConflictsRejection = "busy" | "stale" | "invalid" | "unavailable" | "failed";
+
+/** A base-conflict resolve refused before the agent ran; `message` is the user's to read. */
+export class BaseConflictsRejectedError extends Data.TaggedError("BaseConflictsRejectedError")<{
+  readonly message: string;
+  readonly reason: BaseConflictsRejection;
 }> {}
 
 /**

@@ -1,12 +1,4 @@
 <script lang="ts">
-/*
- * The thumb index: the stack as notches on the page's edge, beside the
- * title, the way a dictionary shows where you are in it. One notch per
- * layer, top of the stack at the top, chapters set apart by a gap; this
- * layer's notch reaches toward the title. A notch lights while a margin
- * chip anywhere on the page points at its layer. Pressing it opens the
- * whole stack, grouped by chapter, to move to another layer.
- */
 import type { StackLayer } from "@revv/shared";
 import {
   Content as PopoverContent,
@@ -28,14 +20,11 @@ let { place }: Props = $props();
 let open = $state(false);
 let sheet: HTMLElement | null = $state(null);
 
-// Top of the stack first, the way every stack list draws it.
 const groups = $derived(
   [...place.chapters].reverse().map((c) => ({ name: c.name, layers: [...c.layers].reverse() })),
 );
-// Notches tighten as the stack grows so a tall stack still fits by the title.
 const pitch = $derived(Math.max(3, Math.min(7, 80 / place.total)));
 const hovered = $derived(getHoveredLayer());
-// What "Review stack" would queue: open, tracked layers owed a review.
 const toReview = $derived(open ? remainingLayers(place.stack).length : 0);
 const label = $derived(
   `Layer ${place.here.position} of ${place.total}${place.headline ? ` in ${place.headline}` : ""}, show the stack`,
@@ -166,7 +155,6 @@ function choose(layer: StackLayer): void {
 		border-radius: 3px;
 	}
 
-	/* Chapters are set apart by a skipped notch's worth of page edge. */
 	.notches,
 	.chapter {
 		display: flex;
@@ -193,8 +181,6 @@ function choose(layer: StackLayer): void {
 		scale: calc(1 + var(--h) * 0.3) 1;
 	}
 
-	/* A chip elsewhere on the page names this layer: an accent copy laid over
-	   the notch, held for as long as the pointer is on the chip. */
 	.notch::after {
 		content: "";
 		position: absolute;
@@ -224,7 +210,6 @@ function choose(layer: StackLayer): void {
 		--tone: var(--color-merged);
 	}
 
-	/* This layer reaches out toward the title. */
 	.notch--current {
 		--tone: var(--color-accent);
 		width: 20px;
@@ -244,7 +229,6 @@ function choose(layer: StackLayer): void {
 		color: var(--color-accent);
 	}
 
-	/* ── The whole stack, on demand ───────────────────────────────── */
 	.sheet {
 		max-height: min(78vh, 760px);
 		overflow-y: auto;

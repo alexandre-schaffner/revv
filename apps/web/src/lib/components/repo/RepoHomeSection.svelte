@@ -13,10 +13,6 @@
  * the section is one entry in a stack; it doesn't on the page it already is.
  * The hero scrolls with its section in both, deliberately: a header that
  * pinned itself to the top of the feed was tried and read as chrome.
- *
- * The hero (`RepoHero`) is printed in one ink taken from the owner's avatar,
- * and the activity heatmap under it in the same ink, so the section reads as
- * one piece rather than a banner stacked on a dashboard.
  */
 
 import type { Repository } from "@revv/shared";
@@ -99,8 +95,6 @@ function mountWhenNear(onNear: () => void): Attachment<HTMLElement> {
 		min-width: 0;
 	}
 
-	/* Holds the chart's place while it waits to mount, so the queue below
-	   doesn't jump when it arrives. */
 	.activity-slot {
 		height: 300px;
 	}

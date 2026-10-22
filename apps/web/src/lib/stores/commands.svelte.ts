@@ -25,12 +25,10 @@ export interface Command {
   category?: string;
   shortcut?: string;
   keywords?: string[];
-  /** Offered only while this holds (read reactively). Always offered when absent. */
   available?: () => boolean;
   action: () => void;
 }
 
-/** The open PR is a layer of a loaded stack. */
 const inStack = (): boolean => getStackView() !== null;
 
 const STACK_COMMANDS: Command[] = [

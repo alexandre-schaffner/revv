@@ -1,13 +1,3 @@
-// ── stack headline ─────────────────────────────────────────────────────────
-//
-// One-shot, no-tools provider naming the feature a GitHub PR stack builds,
-// for the homepage queue: a short headline ("Stacked-PR review") and a one-
-// line gist. Same shape as `suggestions.ts`: a fresh ACP session with no MCP
-// servers on the cheap suggestions model, one prompt, JSON back. It is a
-// label over PR titles, not review content, so it never goes near the agent
-// pipelines' MCP surface. Null on any failure; the caller falls back to a
-// label derived from the titles.
-
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { promptOnce } from "./prompt-once";
@@ -19,8 +9,7 @@ const MAX_BODY_CHARS = 400;
 
 export interface StackHeadlineInput {
   readonly base: string;
-  /** Base first. */
-  readonly layers: ReadonlyArray<{
+  readonly layersBaseFirst: ReadonlyArray<{
     readonly number: number;
     readonly title: string;
     readonly body: string | null;
@@ -52,7 +41,7 @@ end to end, concrete, no praise, no hedging.
 Return JSON only, exactly this shape: {"headline": "…", "gist": "…"}`;
 
 function buildUserMessage(input: StackHeadlineInput): string {
-  const layers = input.layers.map((l, i) => {
+  const layers = input.layersBaseFirst.map((l, i) => {
     const body = (l.body ?? "").trim();
     const excerpt = body.length > MAX_BODY_CHARS ? `${body.slice(0, MAX_BODY_CHARS)}…` : body;
     return [`Layer ${i + 1} (#${l.number}): ${l.title}`, excerpt ? excerpt : null]
@@ -72,7 +61,6 @@ function clean(value: unknown, max: number): string | null {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
-/** The first JSON object in the model's text, fences and preamble tolerated. */
 export function parseStackHeadline(raw: string): GeneratedStackHeadline | null {
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return null;
@@ -106,7 +94,10 @@ export async function generateStackHeadline(
 ): Promise<GeneratedStackHeadline | null> {
   try {
     const result = await generateViaAcp(input);
-    debug("stack-headline", `named a ${input.layers.length}-layer stack via ${input.model}`);
+    debug(
+      "stack-headline",
+      `named a ${input.layersBaseFirst.length}-layer stack via ${input.model}`,
+    );
     return result;
   } catch (err) {
     logError("stack-headline", "falling back to titles:", err instanceof Error ? err.message : err);

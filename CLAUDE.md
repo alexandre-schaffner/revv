@@ -331,7 +331,9 @@ agent and model. Content arrives only through `/mcp/stack-brief`, in two phases:
 **L** (`set_layer_role`, one upsert per layer keyed on `(brief_id, position)`; the phase
 advances when every snapshot layer has a row) then **R** (`set_arc`, refused until every
 layer has a role). `get_stack_brief_state` comes first on every run; `get_stack_layers`
-reads the evidence; `complete_stack_brief` is the validation gate. `status` is
+reads the evidence; `complete_stack_brief` is the validation gate. The gate and the
+orchestrator decide on one pure journal check (`stackBriefCompletionBlocker`): a run whose
+journal passes it completes even if the agent never called the gate. `status` is
 orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
 it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
 through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once

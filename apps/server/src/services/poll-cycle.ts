@@ -55,11 +55,7 @@ export const broadcastToAccount = (
 ): Effect.Effect<void> =>
   deps.broadcaster.broadcastToAccount(accountId, msg).pipe(Effect.orElseSucceed(() => undefined));
 
-/**
- * Tell the account a stack moved: drop the cached GitHub read of it first, so
- * the re-read the signal prompts sees GitHub's current answer. Best-effort.
- */
-export const announceStacks = (
+export const markStaleAndAnnounceStacks = (
   deps: PollDeps,
   accountId: string,
   repositoryId: string,
@@ -68,7 +64,7 @@ export const announceStacks = (
   Effect.forEach(
     new Set(stackNumbers),
     (stackNumber) =>
-      withDb(deps.db, deps.stackService.invalidate(repositoryId, stackNumber)).pipe(
+      withDb(deps.db, deps.stackService.markStale(repositoryId, stackNumber)).pipe(
         Effect.orElseSucceed(() => undefined),
         Effect.andThen(
           broadcastToAccount(deps, accountId, {

@@ -78,7 +78,6 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
           const github = yield* GitHubGateway;
           const cache = yield* CacheService;
           const token = ctx.account.accessToken;
-          // Every app launch asks again, and an org's teams rarely move.
           return yield* cache.getOrFetch(
             "github-teams",
             `${ctx.account.accountId}:${ctx.params.org.toLowerCase()}`,

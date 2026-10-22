@@ -12,6 +12,7 @@ import {
 } from "../../domain/errors";
 import { extractHostFromProviderId } from "../../domain/provider-id";
 import { debug } from "../../logger";
+import { githubTryPromise } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
 import { SettingsService } from "../Settings";
 import { PubkeyCache } from "./pubkey-cache";
@@ -134,7 +135,6 @@ export const SshSignerLive = Layer.effect(
     const pubkeyCache = new PubkeyCache();
 
     // Invalidate pubkey cache whenever settings change (host set may change).
-    // Scoped to the layer: a plain fork here died with its construction.
     yield* Effect.forkScoped(
       settingsSvc
         .settingsChanges()
@@ -174,7 +174,7 @@ export const SshSignerLive = Layer.effect(
           let autoDetected: string | undefined;
 
           if (!keyPath) {
-            const detected = yield* Effect.tryPromise({
+            const detected = yield* githubTryPromise({
               try: () => autoDetectKeyPath(acct.login, acct.host, pubkeyCache),
               catch: () => new SshSigningUnavailable({ message: "key auto-detection failed" }),
             });
@@ -221,7 +221,7 @@ export const SshSignerLive = Layer.effect(
 
       verify: (message, signature, signerHost, signerLogin) =>
         Effect.gen(function* () {
-          const publicKeys = yield* Effect.tryPromise({
+          const publicKeys = yield* githubTryPromise({
             try: () => pubkeyCache.getKeys(signerHost, signerLogin),
             catch: (e) => {
               if (e instanceof SshKeysFetchFailed) return e;

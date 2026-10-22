@@ -1,28 +1,16 @@
 <script lang="ts">
-/*
- * RepoHero — the head of a repo's homepage, printed as a plate: the repo's
- * own engraved landscape, in one ink taken from the owner's avatar hue, by
- * day in the light theme and by night in the dark one, with the title
- * printed over the sky.
- *
- * The heading level and whether the title links back to the repo's own page
- * follow the caller: it does in the `/` feed, where the section is one entry
- * in a stack; it doesn't on the page it already is.
- */
-
 import type { Repository } from "@revv/shared";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
-import RepoEngraving, { PLATE_TURN, plateTurns } from "$lib/components/repo/RepoEngraving.svelte";
+import RepoEngraving from "$lib/components/repo/RepoEngraving.svelte";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import { Button } from "$lib/components/ui/button";
-import { afterPaint, gsap } from "$lib/motion";
+import { gsap, turnLook } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import type { OwnerPalette } from "$lib/utils/avatarPalette";
 import { repoInk } from "$lib/utils/repo-ink";
 
 interface Props {
   repo: Repository;
-  /** The owner's palette, which the activity heatmap under the hero shares. */
   palette: OwnerPalette;
   /** `<h2>` linking to the repo's page, rather than a plain `<h1>`. */
   linked: boolean;
@@ -31,42 +19,27 @@ interface Props {
 let { repo, palette, linked }: Props = $props();
 
 const ink = $derived(repoInk(palette, getResolvedTheme()));
-/** The light theme gets the day plate, the dark theme the night one. */
 const time = $derived(getResolvedTheme() === "light" ? "day" : "night");
 const sky = $derived(time === "day" ? ink.paper : ink.ink);
 const mark = $derived(time === "day" ? ink.ink : ink.paper);
 
-/*
- * The hero's sky and marking colours. Set once, then tweened on change at the
- * pace the plate itself turns (`RepoEngraving`), so the title and button
- * turn with the sky instead of flipping ahead of it.
- */
 let heroEl = $state<HTMLElement | null>(null);
-let shownColours: { sky: string; mark: string } | null = null;
+let shown = false;
 
 $effect(() => {
   const el = heroEl;
-  const next = { sky, mark };
   if (!el) return;
-  const prev = shownColours;
-  shownColours = next;
-  const same = prev?.sky === next.sky && prev.mark === next.mark;
-  if (!prev || same || !plateTurns()) {
-    gsap.set(el, { "--plate-sky": next.sky, "--plate-mark": next.mark });
+  const colours = { "--plate-sky": sky, "--plate-mark": mark };
+  if (!shown) {
+    shown = true;
+    gsap.set(el, colours);
     return;
   }
-  // From whatever is on screen, so a switch mid-fade turns back smoothly.
-  return afterPaint(() => {
-    gsap.to(el, {
-      "--plate-sky": next.sky,
-      "--plate-mark": next.mark,
-      ...PLATE_TURN,
-      overwrite: "auto",
-    });
-  });
+  const turn = turnLook(el, colours);
+  return () => turn.land();
 });
 
-let textWidth = $state(0);
+let textWidth = $state<number | null>(null);
 </script>
 
 <div class="hero" bind:this={heroEl}>
@@ -91,7 +64,7 @@ let textWidth = $state(0);
 				<p class="hero-owner">{repo.owner}/{repo.name}</p>
 			</div>
 		</div>
-		<Button href="/repo/{repo.id}/recaps" variant="outline" size="sm" class="tagged-hero-action" data-glass>
+		<Button href="/repo/{repo.id}/recaps" variant="outline" size="sm" class="tagged-hero-action transition-none" data-glass>
 			<CalendarDots size={13} />
 			Recaps
 		</Button>
@@ -99,11 +72,6 @@ let textWidth = $state(0);
 </div>
 
 <style>
-	/* The plate. Its height is the composition's: the engraving keeps the top
-	   ~40% as open sky for the title, so this can't shrink much before the
-	   ridges climb into the text. `--plate-sky` is the sky's colour and
-	   `--plate-mark` whatever is printed on it: ink sky and paper marks by
-	   night, the reverse by day. */
 	.hero {
 		position: relative;
 		height: 232px;
@@ -175,12 +143,8 @@ let textWidth = $state(0);
 		font-family: var(--font-mono, monospace);
 	}
 
-	/* An outline button printed in the plate's marking colour, so it belongs to it. */
-	/* No CSS transition: the Button base's `transition-all` would chase every
-	   frame of the hero's colour tween and trail the sky by its duration. */
 	.hero :global(.tagged-hero-action) {
 		flex-shrink: 0;
-		transition: none;
 		background: color-mix(in oklab, var(--plate-sky) 70%, transparent);
 		border-color: color-mix(in oklab, var(--plate-mark) 45%, transparent);
 		color: var(--plate-mark);

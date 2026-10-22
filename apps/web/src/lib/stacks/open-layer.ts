@@ -1,27 +1,14 @@
-// ── Opening another layer of the stack ─────────────────────────────────────
-//
-// Every walkthrough-side stack surface (the overview's layer list, the handoff
-// card, the restack banner, a `#N (layer k)` citation) moves the reader the
-// same way: a layer Revv tracks opens directly, anything else (a merged base,
-// a layer the poll hasn't reached) goes through the deep-link resolver, which
-// fetches it from GitHub and opens it here. Never leaves the app.
-
 import { buildPullRequestDeepLink, type PrStackEntry } from "@revv/shared";
 import { setNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import { getPrById, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
 import { getLayer } from "$lib/stores/stacks.svelte";
 
-/** A stack member, with Revv's id for it when the stack read knew one. */
 type Layer = Pick<PrStackEntry, "number"> & {
   readonly prId?: string | null;
   readonly position?: number;
 };
 
-/**
- * Open `layer`, a member of the stack `fromPrId` sits in. The page slides
- * the way the stack goes: up toward the top layer, down toward the base.
- */
 export function openStackLayer(fromPrId: string, layer: Layer): void {
   const from = getPrById(fromPrId);
   const here = getLayer(fromPrId)?.position ?? from?.stack?.position;

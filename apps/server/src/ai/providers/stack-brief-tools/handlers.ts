@@ -1,16 +1,9 @@
-// ─── stack-brief-tools/handlers ──────────────────────────────────────────────
-//
-// Shared handlers behind `/mcp/stack-brief`. Every write is one synchronous
-// transaction keyed on a deterministic identity, so a replay is a no-op
-// (CLAUDE.md invariant 3) and an out-of-order call fails with an error the
-// agent can act on, before the row is touched (invariant 5).
-
 import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
 import { isCompleteReview, readBriefLayers } from "../../../services/stacks/reads";
 import {
@@ -21,7 +14,6 @@ import {
   type GetStackBriefStateInput,
   type GetStackLayersInput,
   LAYER_LINE_MAX_CHARS,
-  parseStackBriefSnapshot,
   type SetArcInput,
   type SetLayerRoleInput,
   type StackBriefSnapshot,
@@ -31,7 +23,6 @@ import {
   USES_MAX_CHARS,
 } from "./spec";
 
-/** File paths listed per layer: enough to see its shape, bounded for big layers. */
 const LAYER_FILES_MAX = 80;
 const ISSUE_TITLES_MAX = 6;
 const SENTIMENT_EXCERPT_CHARS = 400;
@@ -54,7 +45,6 @@ interface LoadedBrief {
   readonly snapshot: StackBriefSnapshot;
 }
 
-/** The brief row, or the tool error to answer with instead. */
 function loadBrief(db: Db, briefId: string, action: string): LoadedBrief | StackBriefToolResult {
   const row = db
     .select({
@@ -67,17 +57,13 @@ function loadBrief(db: Db, briefId: string, action: string): LoadedBrief | Stack
     .from(stackBriefs)
     .where(eq(stackBriefs.id, briefId))
     .get();
-  if (!row) return err(`Stack brief ${briefId} not found. Aborting ${action}.`);
-  const snapshot = parseStackBriefSnapshot(row.snapshot);
-  if (!snapshot) return err(`Stack brief ${briefId} has no readable snapshot. Aborting ${action}.`);
-  return { ...row, snapshot };
+  return row ?? err(`Stack brief ${briefId} not found. Aborting ${action}.`);
 }
 
 function isToolResult(v: LoadedBrief | StackBriefToolResult): v is StackBriefToolResult {
   return "content" in v;
 }
 
-/** Writes need a brief that is still generating: a superseded one is somebody else's. */
 function loadGenerating(
   db: Db,
   briefId: string,
@@ -91,7 +77,6 @@ function loadGenerating(
   return brief;
 }
 
-/** Snapshot layers without a role yet, as `#N (position P)` labels. */
 function missingLayers(db: Db, briefId: string, snapshot: StackBriefSnapshot): string[] {
   const written = new Set(readBriefLayers(db, briefId).map((l) => l.position));
   return snapshot.layers
@@ -99,7 +84,6 @@ function missingLayers(db: Db, briefId: string, snapshot: StackBriefSnapshot): s
     .map((l) => `#${l.number} (position ${l.position})`);
 }
 
-/** One line of prose: trimmed, single-spaced, or the reason it isn't. */
 function oneLine(
   raw: string,
   field: string,
@@ -118,11 +102,6 @@ function oneLine(
   return { value };
 }
 
-/**
- * The links a layer declares, checked against the stack: each a layer below
- * it (open or merged), once, at most {@link BUILDS_ON_MAX}. Order is kept so
- * a replay of the same call stores the same JSON.
- */
 function checkBuildsOn(
   links: ReadonlyArray<{ number: number; uses: string }>,
   layer: { position: number; number: number },
@@ -153,8 +132,6 @@ function checkBuildsOn(
   }
   return { value };
 }
-
-// ── Read tools ───────────────────────────────────────────────────────────────
 
 export const getStackBriefStateHandler: StackBriefToolHandler<GetStackBriefStateInput> = async (
   ctx,
@@ -192,19 +169,7 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
 
   const prIds = brief.snapshot.layers.map((l) => l.prId).filter((id): id is string => id !== null);
 
-  const filesByPr = new Map<string, string[]>();
-  if (prIds.length > 0) {
-    for (const f of ctx.db
-      .select({ prId: prDiffFiles.prId, path: prDiffFiles.path })
-      .from(prDiffFiles)
-      .where(inArray(prDiffFiles.prId, prIds))
-      .orderBy(prDiffFiles.path)
-      .all()) {
-      const list = filesByPr.get(f.prId) ?? [];
-      list.push(f.path);
-      filesByPr.set(f.prId, list);
-    }
-  }
+  const filesByPr = readCurrentHeadFiles(ctx.db, prIds);
 
   const reviews =
     prIds.length === 0
@@ -228,10 +193,13 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
           .filter(isCompleteReview);
 
   const layers = brief.snapshot.layers.map((layer) => {
-    const files = layer.prId ? (filesByPr.get(layer.prId) ?? []) : [];
+    const files = layer.prId
+      ? (filesByPr
+          .get(layer.prId)
+          ?.map((f) => f.path)
+          .toSorted() ?? null)
+      : null;
     const forPr = reviews.filter((w) => w.prId === layer.prId);
-    // The review at this head when there is one, else the latest: an older
-    // review still says what the layer is for.
     const review = forPr.find((w) => w.prHeadSha === layer.headSha) ?? forPr[0];
     let walkthrough = null;
     if (review) {
@@ -269,8 +237,8 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
       deletions: layer.deletions,
       changedFiles: layer.changedFiles,
       bodyExcerpt: layer.body,
-      files: files.slice(0, LAYER_FILES_MAX),
-      filesTruncated: files.length > LAYER_FILES_MAX,
+      files: files?.slice(0, LAYER_FILES_MAX) ?? null,
+      filesTruncated: (files?.length ?? 0) > LAYER_FILES_MAX,
       walkthrough,
     };
   });
@@ -281,12 +249,10 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
       layers,
       merged: brief.snapshot.merged,
       instructions:
-        "Layers are bottom first: each one's diff is against the layer below. `walkthrough` is Revv's review of the layer (null when none exists); `current: false` means it read an older head. An empty `files` list means Revv hasn't fetched that layer's diff, not that it changes nothing. Describe only what this data shows.",
+        "Layers are bottom first: each one's diff is against the layer below. `walkthrough` is Revv's review of the layer (null when none exists); `current: false` means it read an older head. `files: null` means Revv hasn't fetched that layer's diff. Describe only what this data shows.",
     }),
   );
 };
-
-// ── Phase L ──────────────────────────────────────────────────────────────────
 
 export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = async (ctx, input) => {
   const role = oneLine(input.role, "role");
@@ -326,7 +292,6 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
         ),
       )
       .get();
-    // A replay of the same line writes nothing, not even `updated_at`.
     if (
       !existing ||
       existing.role !== role.value ||
@@ -377,8 +342,6 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
   });
 };
 
-// ── Phase R ──────────────────────────────────────────────────────────────────
-
 export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, input) => {
   const arc = input.arc_markdown.trim();
   if (arc.length === 0) return err("Error: arc_markdown is empty.");
@@ -426,18 +389,19 @@ export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, inp
   });
 };
 
-// ── Validation gate ──────────────────────────────────────────────────────────
-
-/** Why the brief can't complete yet, or null when it can. */
-function completionBlocker(db: Db, briefId: string): StackBriefToolResult | null {
+/**
+ * Why brief `briefId` can't complete yet, or null when its journal is complete.
+ * `complete_stack_brief` and the orchestrator both decide on this check.
+ */
+export function stackBriefCompletionBlocker(db: Db, briefId: string): string | null {
   const brief = loadGenerating(db, briefId, "complete_stack_brief");
-  if (isToolResult(brief)) return brief;
+  if (isToolResult(brief)) return brief.content.map((c) => c.text).join("\n");
   const missing = missingLayers(db, briefId, brief.snapshot);
   if (missing.length > 0) {
-    return err(`Error: layers without a role: ${missing.join(", ")}. Call set_layer_role first.`);
+    return `Error: layers without a role: ${missing.join(", ")}. Call set_layer_role first.`;
   }
   if (brief.phase !== "R" || brief.arc.trim().length === 0) {
-    return err("Error: the arc isn't written. Call set_arc before complete_stack_brief.");
+    return "Error: the arc isn't written. Call set_arc before complete_stack_brief.";
   }
   return null;
 }
@@ -445,9 +409,8 @@ function completionBlocker(db: Db, briefId: string): StackBriefToolResult | null
 export const completeStackBriefHandler: StackBriefToolHandler<CompleteStackBriefInput> = async (
   ctx,
 ) => {
-  const blocker = completionBlocker(ctx.db, ctx.briefId);
-  if (blocker) return blocker;
-  // The orchestrator transitions status; the agent never does (invariant 11).
+  const blocker = stackBriefCompletionBlocker(ctx.db, ctx.briefId);
+  if (blocker) return err(blocker);
   ctx.onCompleted();
   return ok("Stack brief complete. The orchestrator will finalize it. You may stop.");
 };

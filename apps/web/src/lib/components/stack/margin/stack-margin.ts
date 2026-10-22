@@ -1,22 +1,7 @@
-// ── The stack, woven into a layer's walkthrough margin ─────────────────────
-//
-// What the review page says about the rest of the stack, beside the content
-// it concerns: where this layer sits (the thumb index and the "In the stack"
-// note by the title), what above leans on it ("Relied on above", by the
-// Overview), and where an upper layer changes the same file again ("Changed
-// again above", by the issue or chapter about that file).
-//
-// Everything here is derived from the stack read and the walkthrough on
-// screen; nothing is fetched. A note only exists where the data supports
-// it: no brief means no roles, no chapters from the brief and no "Relied on
-// above"; no file overlaps means no "Changed again above".
-
 import type { PrStackDetail, StackBrief, StackBriefLayer, StackLayer } from "@revv/shared";
-import { layerAt, layerOf } from "$lib/stacks/locate";
+import { layerOf, neighbourOf } from "$lib/stacks/locate";
 import { RISK_LABEL, readableBrief } from "$lib/stacks/stack-layer-facts";
 import { plural } from "$lib/utils/plural";
-
-// ── Wording ─────────────────────────────────────────────────────────────────
 
 const ORDINALS = [
   "First",
@@ -62,12 +47,10 @@ export function conventionalScope(title: string): string | null {
   return scope ? scope : null;
 }
 
-/** The last path segment, which is what a margin has room for. */
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-/** Prose with `code` spans and `#N` citations of stack layers pulled out. */
 export type RichPart =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "code"; readonly text: string }
@@ -95,9 +78,6 @@ export function richText(text: string, layers: readonly StackLayer[]): RichPart[
   return parts;
 }
 
-// ── The layer's place ───────────────────────────────────────────────────────
-
-/** A run of consecutive layers in one phase of the stack, base first. */
 export interface StackChapter {
   /** The brief's chapter, else the shared conventional-commit scope; null for neither. */
   readonly name: string | null;
@@ -124,21 +104,13 @@ export function stackChapters(
   return out;
 }
 
-/** A layer leaning on another, with what it takes from it. */
 export interface LayerLink {
   readonly layer: StackLayer;
   /** A noun phrase ("the explicit role model"); may carry `code` spans. */
   readonly uses: string;
 }
 
-export type BriefState =
-  /** No brief for this version of the stack (or the last one failed). */
-  | "none"
-  /** The first brief for this version is being written. */
-  | "writing"
-  /** Written for an older version of the stack. */
-  | "stale"
-  | "current";
+export type BriefState = "none" | "failed" | "writing" | "stale" | "current";
 
 export interface StackPlace {
   readonly prId: string;
@@ -150,9 +122,7 @@ export interface StackPlace {
   /** The brief to read from, null when there is none worth reading. */
   readonly brief: StackBrief | null;
   readonly briefState: BriefState;
-  /** The brief's one line for this layer. */
   readonly role: string | null;
-  /** Lower layers this one stands on. */
   readonly buildsOn: readonly LayerLink[];
   /** Upper layers that stand on this one, nearest first. */
   readonly usedBy: readonly LayerLink[];
@@ -162,7 +132,8 @@ export interface StackPlace {
 }
 
 function briefStateOf(brief: StackBrief | null): BriefState {
-  if (!brief || brief.status === "error") return "none";
+  if (!brief) return "none";
+  if (brief.status === "error") return "failed";
   if (brief.status === "generating") return "writing";
   return brief.stale || brief.status === "superseded" ? "stale" : "current";
 }
@@ -209,14 +180,11 @@ export function stackPlace(
     role: briefLayer(brief, here.number)?.role.trim() || null,
     buildsOn: (briefLayer(brief, here.number)?.buildsOn ?? []).flatMap(link),
     usedBy,
-    next: layerAt(stack, here, 1),
+    next: neighbourOf(stack, here, "up"),
     chapters: stackChapters(stack.layers, brief),
   };
 }
 
-// ── Margin notes ────────────────────────────────────────────────────────────
-
-/** Upper layers changing a file this layer changes, for one spot on the page. */
 export interface ChangedAbove {
   /** Nearest first. */
   readonly layers: readonly StackLayer[];
@@ -229,11 +197,9 @@ export interface MarginNotes {
   readonly issues: ReadonlyMap<string, ChangedAbove>;
   /** Beside the chapter header, by semantic step index. */
   readonly chapters: ReadonlyMap<number, ChangedAbove>;
-  /** Beside the Overview: upper layers whose brief says they stand on this one. */
   readonly reliedOn: readonly LayerLink[];
 }
 
-/** Each upper layer's shared files, nearest first. */
 function overlapsAbove(place: StackPlace): { layer: StackLayer; files: Set<string> }[] {
   const byNumber = new Map(place.stack.layers.map((l) => [l.number, l]));
   return place.stack.overlaps
@@ -293,12 +259,6 @@ export function marginNotes(
   return { issues: issueNotes, chapters: chapterNotes, reliedOn: place.usedBy };
 }
 
-// ── The popover's words for a layer ─────────────────────────────────────────
-
-/**
- * What a layer's row in the stack list says on its right: only the states
- * that tell the reader something. An unreviewed draft is the default.
- */
 export function layerHint(layer: StackLayer, here: StackLayer): string {
   if (layer.number === here.number) return "This layer";
   if (layer.status === "merged") return "Landed";

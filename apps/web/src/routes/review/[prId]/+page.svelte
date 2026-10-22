@@ -53,14 +53,16 @@ import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
 
-// Ask for the conversation the moment the route names the PR. The tab would
-// ask once it mounts, but that waits on the session check and the PR list;
-// the route needs neither, and the tab's own ask then finds this one.
 const routePrId = $derived(page.params.prId ?? null);
 const signedIn = $derived(getToken() !== null);
 $effect(() => {
   const id = routePrId;
   if (id && signedIn) untrack(() => void loadConversation(id));
+});
+const threadSyncPrId = $derived(pr && pr.id === page.params.prId ? pr.id : null);
+$effect(() => {
+  const id = threadSyncPrId;
+  if (id) untrack(() => requestThreadSync(id));
 });
 // Review lens is derived from identity (author vs. signed-in user) — see
 // `getReviewModeForPr`. No manual override; the file fetch + session load
@@ -110,21 +112,15 @@ $effect(() => {
   untrack(() => void ensureHunkScan(prId, headSha));
 });
 
-// The stack this PR sits in, for the walkthrough's stack surfaces, the merge
-// pill and the ⌥⌘↑/↓ keys; then, once the page has settled, the server warms
-// the neighbouring layers' diffs so the next move doesn't wait on GitHub.
-// Keyed on primitives, the PR id and its stack number (a rebuilt stack is a
-// new one to read): the PR object is replaced on every `prs:updated` and
-// refocus, and the store's map changes on every stack refresh; `untrack`
-// keeps the latter out. Either would re-read and warm again.
 const stackPrId = $derived(pr?.stack ? pr.id : null);
 const stackNumber = $derived(pr?.stack?.number ?? null);
 $effect(() => {
   const prId = stackPrId;
-  if (!prId || stackNumber === null) return;
+  const number = stackNumber;
+  if (!prId || number === null) return;
   let live = true;
   let cancelIdle: (() => void) | null = null;
-  void untrack(() => ensureStack(prId)).then(() => {
+  void untrack(() => ensureStack(prId, number)).then(() => {
     if (live) cancelIdle = whenIdle(() => warmNeighbours(prId));
   });
   return () => {
@@ -133,10 +129,6 @@ $effect(() => {
   };
 });
 
-// Where this layer sits, beside the title: the thumb index in the gutter, the
-// "In the stack" note in the walkthrough's rail. Walkthrough tab only; the
-// Conversation tab has its own stack list. Null for an unstacked PR, which
-// keeps the title block exactly as it was. The headline names the stack.
 const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
 const stackRepositoryId = $derived(pr?.stack ? pr.repositoryId : null);
 $effect(() => {
@@ -295,7 +287,6 @@ $effect(() => {
 
     setSelectedPrId(prId);
     switchPrViewState(prId);
-    requestThreadSync(prId);
 
     // Short-circuit: same PR, recent load, files still in memory —
     // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)
@@ -535,7 +526,7 @@ onDestroy(() => {
 	.page-title-section {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		row-gap: 4px;
 		padding: 76px 32px 16px;
 		flex-shrink: 0;
 	}
@@ -576,11 +567,6 @@ onDestroy(() => {
 		grid-column: 3;
 	}
 
-	/* The stack, beside the title. The thumb index (gutter) and the note
-	   (rail) sit on the title's row with no height of their own, so they hang
-	   down beside the title block without opening it up; positioned so the
-	   walkthrough that follows, which paints a background, doesn't cover what
-	   hangs below. The one-line summary only shows when there's no rail. */
 	.page-title-section--narrow > .title-stack-thumb,
 	.page-title-section--narrow > .title-stack-note {
 		grid-row: 1;
@@ -597,14 +583,8 @@ onDestroy(() => {
 		padding: 9px 14px 0 0;
 	}
 
-	/* The section's `gap: 4px` also opens 4px between this grid's columns,
-	   which the walkthrough grids below don't have: col 3 comes out 20px
-	   narrower and col 5 starts 4px left of the walkthrough's rail. The
-	   margin puts the note back on the rail's line, so its hairline lines up
-	   with the notes further down. */
 	.page-title-section--narrow > .title-stack-note {
 		grid-column: 5;
-		margin: 0 -4px 0 4px;
 		padding-top: 9px;
 	}
 
@@ -614,9 +594,6 @@ onDestroy(() => {
 	}
 
 	@container (max-width: 1335px) {
-		/* No rail: the thumb index moves into the 72px gutter (the same spot,
-		   14px clear of the title), the note becomes the line under the
-		   subtitle. */
 		.page-title-section--narrow > .title-stack-thumb {
 			grid-column: 1;
 		}

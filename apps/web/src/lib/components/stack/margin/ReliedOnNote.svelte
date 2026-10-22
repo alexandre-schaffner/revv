@@ -1,8 +1,4 @@
 <script lang="ts">
-/*
- * "Relied on above": the upper layers the stack brief says stand on this
- * one, each with what it takes from it. What a change here would reach.
- */
 import ArrowLineUp from "phosphor-svelte/lib/ArrowLineUp";
 import LayerChip from "./LayerChip.svelte";
 import MarginNote from "./MarginNote.svelte";

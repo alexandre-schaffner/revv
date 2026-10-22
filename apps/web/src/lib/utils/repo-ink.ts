@@ -1,20 +1,10 @@
-// A repo's ink: the one hue its homepage is printed in.
-//
-// The hero engraving and the activity heatmap share it, so a repo's section
-// reads as one plate. The hue comes from the owner's avatar (see
-// `avatarPalette.ts`); lightness and chroma are fixed here, which is what
-// keeps every hue legible as ink on paper — a yellow owner prints as ochre,
-// not as a highlighter.
-
 import type { OwnerPalette } from "$lib/utils/avatarPalette";
 import type { EngravingInk } from "$lib/utils/engraving";
 
 type Theme = "light" | "dark";
 
-/** Warm, unbleached paper. The same in both themes, dimmed a step for dark. */
 const PAPER = { light: [0.95, 0.028, 85], dark: [0.86, 0.03, 85] } as const;
 
-/** OKLCH → sRGB hex, gamut-clipped. Canvas can't be trusted to parse `oklch()` everywhere. */
 export function oklchToHex(l: number, c: number, h: number): string {
   const hr = (h * Math.PI) / 180;
   const a = c * Math.cos(hr);
@@ -37,7 +27,6 @@ export function oklchToHex(l: number, c: number, h: number): string {
     .join("")}`;
 }
 
-/** Hue and chroma scale for an owner: a grey owner prints in near-neutral charcoal. */
 function hueOf(palette: OwnerPalette): { hue: number; chroma: number } {
   return palette.kind === "color" ? { hue: palette.hue, chroma: 1 } : { hue: 260, chroma: 0.15 };
 }
@@ -54,11 +43,6 @@ export function repoInk(palette: OwnerPalette, theme: Theme): EngravingInk {
   };
 }
 
-/**
- * Four sequential steps of the repo's ink for the heatmap, faint to full.
- * Light mode darkens toward the ink; dark mode brightens away from the
- * surface, so "more" always means "more contrast with the page".
- */
 export function repoInkRamp(palette: OwnerPalette, theme: Theme): string[] {
   const { hue, chroma } = hueOf(palette);
   const steps =

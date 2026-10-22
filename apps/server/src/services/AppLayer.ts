@@ -3,6 +3,7 @@ import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
 import { AgentLoginServiceLive } from "./AgentLogin";
 import { AiServiceLive } from "./Ai";
 import { BroadcasterLive } from "./Broadcaster";
+import { BaseConflictsServiceLive } from "./base-conflicts/BaseConflicts";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
@@ -26,6 +27,7 @@ import { PrContextServiceLive } from "./PrContext";
 import { PrConversationServiceLive } from "./PrConversation";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
+import { PrPushLockServiceLive } from "./PrPushLock";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RecapSchedulerLive } from "./RecapScheduler";
 import { RemoteUserServiceLive } from "./RemoteUser";
@@ -103,6 +105,7 @@ const BaseLayers = Layer.mergeAll(
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
+  PrPushLockServiceLive,
   ExternalIntegrationsWithDeps,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
   // publishers yet; CacheStats is ready for per-namespace registrations as
@@ -120,14 +123,10 @@ const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
-// StackService joins a PR's GitHub stack with Revv's per-layer state: PrContext
-// for repo + token, the kv cache and Db from BaseLayers.
 const StackServiceWithDeps = StackServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
-// StackHeadlineService names each stack for the homepage queue: Db, cache, settings
-// and Broadcaster, all from BaseLayers.
 const StackHeadlineServiceWithDeps = StackHeadlineServiceLive.pipe(Layer.provide(BaseLayers));
 
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
@@ -214,9 +213,6 @@ const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
 );
 
-// StackBriefJobs writes the stack brief: StackService for the stack, PrContext
-// for repo + token, the rest from BaseLayers. StackReview queues a stack's
-// walkthroughs through WalkthroughJobs, then asks StackBriefJobs for the brief.
 const StackBriefJobsWithDeps = StackBriefJobsLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
 );
@@ -231,15 +227,10 @@ const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
   ),
 );
 
-// StackRebase rebases a stack in the repo's clone and pushes it: StackService
-// for fresh reads, PrContext for repo + token, the gateway and Broadcaster.
 const StackRebaseServiceWithDeps = StackRebaseServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
 );
 
-// StackMerge merges a stack bottom-up: StackService for fresh reads, PrContext
-// for repo + token, StackRebase for a layer that fell behind, the GitHub
-// gateway, PR rows and Broadcaster from BaseLayers.
 const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -255,6 +246,12 @@ const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, realtime broadcaster, pr service, etag cache).
 const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
+);
+
+// BaseConflicts shares the per-PR push lock with ChatChangesPush through
+// BaseLayers, and runs the same one-shot conflict-resolve agent.
+const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
 );
 
@@ -279,6 +276,7 @@ export const AppLayer = Layer.mergeAll(
   StackRebaseServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
+  BaseConflictsServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so
   // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)
   // can resolve them directly.

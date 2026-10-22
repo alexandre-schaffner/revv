@@ -3,6 +3,8 @@ import { Elysia, status } from "elysia";
 import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
+  BaseConflictsRejectedError,
+  type BaseConflictsRejection,
   CloneError,
   CloneInProgressError,
   CloneNotReadyError,
@@ -18,6 +20,7 @@ import {
   NotFoundError,
   RepoNotAccessibleError,
   StackRejectedError,
+  type StackRejection,
   SyncError,
   ValidationError,
 } from "../domain/errors";
@@ -129,7 +132,22 @@ export function unwrapEffectError(e: unknown): unknown {
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
-const STACK_REJECTION_STATUS = { conflict: 409, moved: 409, invalid: 400, failed: 422 } as const;
+const STACK_REJECTION_STATUS = {
+  stale: 409,
+  busy: 409,
+  "replay-conflict": 409,
+  "lease-lost": 409,
+  invalid: 400,
+  failed: 422,
+} as const satisfies Record<StackRejection["reason"], number>;
+
+const BASE_CONFLICTS_REJECTION_STATUS = {
+  busy: 409,
+  stale: 409,
+  invalid: 422,
+  unavailable: 503,
+  failed: 500,
+} as const satisfies Record<BaseConflictsRejection, number>;
 
 /**
  * Maps tagged Effect domain errors to HTTP responses.
@@ -183,10 +201,17 @@ export function handleAppError(
     return { error: e.message };
   }
 
-  // A refusal is the user's to read ("#122 got new commits…").
   if (e instanceof StackRejectedError) {
-    ctx.set.status = STACK_REJECTION_STATUS[e.reason];
-    return e.files === undefined ? { error: e.message } : { error: e.message, files: e.files };
+    const { rejection } = e;
+    ctx.set.status = STACK_REJECTION_STATUS[rejection.reason];
+    return rejection.reason === "replay-conflict"
+      ? { error: e.message, files: rejection.files }
+      : { error: e.message };
+  }
+
+  if (e instanceof BaseConflictsRejectedError) {
+    ctx.set.status = BASE_CONFLICTS_REJECTION_STATUS[e.reason];
+    return { error: e.message };
   }
 
   if (e instanceof ExternalIntegrationError) {
@@ -293,6 +318,12 @@ export function mapErrorToSSEResponse(raw: unknown): Response {
   }
   if (isReviewError(e)) {
     return jsonResponse({ code: "REVIEW_ERROR", message: e.message }, 500);
+  }
+  if (e instanceof BaseConflictsRejectedError) {
+    return jsonResponse(
+      { code: e.reason.toUpperCase(), message: e.message },
+      BASE_CONFLICTS_REJECTION_STATUS[e.reason],
+    );
   }
 
   const message = e instanceof Error ? e.message : "Internal server error";

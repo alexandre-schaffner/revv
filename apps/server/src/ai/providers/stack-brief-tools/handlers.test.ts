@@ -3,6 +3,7 @@ import type { StackBriefStatus } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles } from "../../../db/schema/pr-diff-files";
+import { pullRequests } from "../../../db/schema/pull-requests";
 import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
@@ -12,6 +13,7 @@ import {
   getStackLayersHandler,
   setArcHandler,
   setLayerRoleHandler,
+  stackBriefCompletionBlocker,
 } from "./handlers";
 import type { StackBriefSnapshot, StackBriefToolContext } from "./spec";
 
@@ -52,7 +54,6 @@ const SNAPSHOT: StackBriefSnapshot = {
 
 function seed(status: StackBriefStatus = "generating"): Db {
   const db = createDb(":memory:");
-  // The brief's repository parent is irrelevant to the tools.
   (db as unknown as { session: { client: { run: (sql: string) => void } } }).session.client.run(
     "PRAGMA foreign_keys = OFF",
   );
@@ -62,7 +63,7 @@ function seed(status: StackBriefStatus = "generating"): Db {
       repositoryId: "repo-1",
       stackNumber: 7,
       signature: "sig",
-      stackSnapshot: JSON.stringify(SNAPSHOT),
+      stackSnapshot: SNAPSHOT,
       status,
       userId: "u",
       createdAt: new Date().toISOString(),
@@ -78,6 +79,7 @@ function ctxFor(db: Db, completed: { count: number } = { count: 0 }): StackBrief
     onCompleted: () => {
       completed.count++;
     },
+    onToolCall: () => {},
   };
 }
 
@@ -274,6 +276,19 @@ describe("complete_stack_brief", () => {
     expect(completed.count).toBe(1);
     expect(brief(db).status).toBe("generating");
   });
+
+  it("reads a fully written journal as complete without the gate being called", async () => {
+    const db = seed();
+    const ctx = ctxFor(db);
+    await setLayerRoleHandler(ctx, role(2));
+    expect(stackBriefCompletionBlocker(db, BRIEF)).toContain("#122");
+    await setLayerRoleHandler(ctx, role(3));
+    await setArcHandler(ctx, { arc_markdown: "The arc.", review_order: [121, 122] });
+    expect(stackBriefCompletionBlocker(db, BRIEF)).toBeNull();
+    expect(stackBriefCompletionBlocker(seed("superseded"), BRIEF)).toContain(
+      "no longer generating",
+    );
+  });
 });
 
 describe("get_stack_brief_state", () => {
@@ -293,6 +308,23 @@ describe("get_stack_layers", () => {
   it("joins each tracked layer's files and latest walkthrough, bounded", async () => {
     const db = seed();
     const now = new Date().toISOString();
+    db.insert(pullRequests)
+      .values({
+        id: "repo-1:121",
+        externalId: 121,
+        repositoryId: "repo-1",
+        title: "Schema",
+        authorLogin: "a",
+        sourceBranch: "schema",
+        targetBranch: "main",
+        url: "https://github.com/o/r/pull/121",
+        headSha: "aaa",
+        diffFilesHeadSha: "aaa",
+        createdAt: now,
+        updatedAt: now,
+        fetchedAt: now,
+      })
+      .run();
     for (let i = 0; i < 85; i++) {
       db.insert(prDiffFiles)
         .values({
@@ -343,7 +375,7 @@ describe("get_stack_layers", () => {
     expect(schema.walkthrough.openIssues).toBe(8);
     expect(schema.walkthrough.openIssueTitles).toHaveLength(6);
     expect(route.tracked).toBe(false);
-    expect(route.files).toEqual([]);
+    expect(route.files).toBeNull();
     expect(route.walkthrough).toBeNull();
     expect(route.bodyExcerpt).toBe("Serves it.");
   });

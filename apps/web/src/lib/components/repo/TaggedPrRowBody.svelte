@@ -1,13 +1,5 @@
 <script lang="ts">
 /*
- * What a queue row says about one PR: the anchor and everything in it.
- *
- * The `<li>` around it belongs to whoever lays the row out — `TaggedPrRow`
- * for a PR on its own, `TaggedPrStack` for a card in a stack — so each owns
- * its own box, paint and motion, and this owns the content. The anchor
- * stretches over its owner (see `.link::after`), which therefore has to be
- * positioned.
- *
  * Anatomy is GitHub's, because that is the one PR row every reviewer already
  * knows how to read: state icon, then the bold title on its own line, then a
  * metadata sentence — `#num · who · when` — underneath. Nothing invented sits
@@ -25,8 +17,7 @@
  *   on a second glyph. One icon vocabulary per row.
  * - The branch shows only when it is information (`showBranch`). A stacked
  *   PR's base is; the source branch of a PR targeting `main` is a restatement
- *   of the title. Inside a drawn stack it drops again: the stack's foot names
- *   the branch the whole stack lands on.
+ *   of the title.
  * - The row carries a diffstat, which GitHub's list omits. Size is half of
  *   triage, and otherwise the only way to learn it is to open the PR.
  */
@@ -43,9 +34,7 @@ import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 interface Props {
   row: TaggedRow;
-  /** The owner's, which tints its box by it too. */
   visit: VisitState;
-  /** Whether to spell out `source → target`. */
   showBranch: boolean;
 }
 

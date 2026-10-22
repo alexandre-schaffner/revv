@@ -129,12 +129,6 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+Option+Up / Cmd+Option+Down → the layer above / below in the PR's
-  // stack. Above means toward the stack's top, as the stack rail draws it.
-  //
-  // `e.code` for the same reason as Cmd+Option+B. Review route and stacked
-  // PRs only; anywhere else the keys keep whatever meaning they had. Left to
-  // text fields, where Cmd+arrows move the caret.
   if (!e.shiftKey && e.altKey && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
     if (!window.location.pathname.startsWith("/review/") || !getStackView()) return;
     const target = e.target;

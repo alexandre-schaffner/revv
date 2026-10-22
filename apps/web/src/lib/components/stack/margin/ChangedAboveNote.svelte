@@ -1,9 +1,4 @@
 <script lang="ts">
-/*
- * "Changed again above": upper layers of the stack change the file this
- * issue or chapter is about. A fix asked for here lands under their changes,
- * so the reader should look at them first.
- */
 import PencilLine from "phosphor-svelte/lib/PencilLine";
 import { plural } from "$lib/utils/plural";
 import Joined from "./Joined.svelte";
@@ -14,13 +9,11 @@ import { baseName, type ChangedAbove, type StackPlace } from "./stack-margin";
 interface Props {
   note: ChangedAbove;
   place: StackPlace;
-  /** Beside an issue: the note says what that means for a fix. */
   forIssue?: boolean;
 }
 
 let { note, place, forIssue = false }: Props = $props();
 
-/** Room for two names; the rest are counted. */
 const SHOWN_FILES = 2;
 type FileItem = { kind: "file"; path: string } | { kind: "more"; count: number };
 

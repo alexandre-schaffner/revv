@@ -10,10 +10,6 @@ import { GitHubEtagCache } from "../services/GitHubEtagCache";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { jsonResponse, withAuth } from "./middleware";
 
-/**
- * Dev-only inspection endpoints.
- * Gated on DEV mode or REVV_DEBUG=1 environment variable.
- */
 export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
   .use(withAuth)
   .onBeforeHandle(() => {
@@ -75,8 +71,6 @@ export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
       summary: summarizeSpans(),
     };
   })
-  // The GitHub calls still in memory. `since` (seconds, or an ISO time) and
-  // `origin` (substring) narrow them; `bun run github:audit` does the analysis.
   .get("/github", ({ query }) => ({
     calls: selectCalls(readCalls(), {
       since: typeof query.since === "string" ? query.since : null,

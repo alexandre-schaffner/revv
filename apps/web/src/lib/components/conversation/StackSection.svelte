@@ -13,7 +13,6 @@ import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebas
 // last, the way GitHub draws it: you read down toward what lands first.
 
 interface Props {
-  /** The stack store's read, which every layer of a stack shares. */
   stack: PrStackDetail;
   /** The PR on screen. */
   number: number;
@@ -34,8 +33,6 @@ const entries = $derived(stack.layers);
 const baseRefName = $derived(stack.baseRefName);
 const topFirst = $derived([...entries].reverse());
 
-// GitHub's merge box offers "Rebase stack" once the stack lost its linear
-// history; so does this list, with the layer that lost it.
 const need = $derived(rebaseNeed(stack));
 const rebase = $derived(getStackRebase(stack));
 const rebasing = $derived(rebase.status === "loading");
@@ -56,7 +53,6 @@ const needText = $derived.by(() => {
   }
 });
 
-/** Open a stacked PR in Revv; one it doesn't hold yet comes through the deep-link resolver. */
 function open(entry: StackLayer): void {
   if (!selectedId) return;
   openStackLayer(selectedId, entry);

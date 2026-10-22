@@ -1,23 +1,3 @@
-// Engraved landscapes for the repo homepage hero.
-//
-// Each repo gets its own plate: a sky in solid ink, mountain ranges cut in
-// contour hatching, snow on the tallest summits, and a foreground with a
-// subject in it: a plain with a track, a fence, a lone tree, a cabin; or a
-// moonlit sea with a sailboat and a lighthouse on its headland (the props
-// live in `engraving-land.ts` and `engraving-sea.ts`, the sky in
-// `engraving-sky.ts`). Two colours only, ink and paper, like a
-// single-plate etching.
-// Everything is drawn from a PRNG seeded on the repo's full name, so a repo's
-// landscape is the same every time it is drawn, at any width.
-//
-// Marks are filled shapes wherever they are small. A hairline stroke under
-// one device pixel antialiases into a grey smear, which is what made the
-// first grass read as pixel noise; a tapered blade filled as a polygon keeps
-// a clean edge at any scale and gets the engraver's swell for free.
-//
-// Pure canvas work: no DOM reads, no animation. `RepoEngraving.svelte` owns
-// sizing and redraws.
-
 import { hashString } from "$lib/utils/avatarPalette";
 import {
   drawCabin,
@@ -45,38 +25,21 @@ import { drawDistantSail, drawHeadland, drawSailboat, drawSeaRock } from "$lib/u
 import { drawDaySky, drawNightSky } from "$lib/utils/engraving-sky";
 
 export interface EngravingInk {
-  /** The plate's one ink: the sky, the hatching, the grass. */
   ink: string;
-  /** The paper the ink is printed on: the ground and the mountain faces. */
   paper: string;
 }
 
 export interface EngravingOptions extends EngravingInk {
   seed: string;
-  /** CSS pixels. */
   width: number;
   height: number;
-  /**
-   * How much of the width, from the left, the hero's text sits over. The
-   * moon, stars, clouds and birds stay out of it.
-   */
   textWidth: number;
-  /**
-   * `night`: a solid ink sky with a moon or sun, stars, paper clouds.
-   * `day`: a paper sky in fine stipple, a sun, clouds left bare.
-   * The land is the same plate either way.
-   */
   time: "day" | "night";
 }
 
-// ── Ranges ────────────────────────────────────────────────────────────────
-
 interface Ridge {
-  /** Ridge height (canvas y) at x. */
   at: (x: number) => number;
-  /** The lowest point the ridge reaches; hatching stops a little past it. */
   depth: number;
-  /** 0 for the farthest range, rising toward the viewer. */
   nearness: number;
 }
 
@@ -90,8 +53,6 @@ function makeRidge(
   nearness: number,
 ): Ridge {
   const noise = makeNoise1d(rng);
-  // One or two summits per range, so the skyline has a subject rather than
-  // being uniform noise. Kept to the right, clear of the hero's title.
   const peaks = Array.from({ length: 1 + Math.floor(rng() * 2) }, () => ({
     x: width * (0.4 + rng() * 0.6),
     h: amplitude * (0.35 + rng() * 0.55),
@@ -103,7 +64,6 @@ function makeRidge(
       const d = (x - p.x) / p.w;
       y -= p.h * Math.exp(-d * d);
     }
-    // Ease summits under the ceiling rather than shearing them flat.
     const ceiling = height * 0.3;
     return y < ceiling ? ceiling - (ceiling - y) * 0.25 : y;
   };
@@ -116,19 +76,6 @@ function sampleRidge(ridge: Ridge, width: number): number[] {
   return ys;
 }
 
-/**
- * Engrave one mountain range the way a wood engraver cuts hillside: long
- * contour lines that wrap the range's form, their width carrying the tone —
- * hairlines that break up where the light falls, swelling into heavy
- * strokes in shade — so there's no outline; a range separates from the one
- * behind it by contrast.
- *
- * The light comes low from the left. What it lights is a terrain built from
- * the ridge profile plus ridged 2D noise, which breaks the face into
- * diagonal spurs, each with a lit side and a shaded side. Summits throw cast
- * shadows down the slope behind them. Near the summits the contour lines
- * wrinkle round the rock's relief, relaxing toward flat bands lower down.
- */
 function engraveRange(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -148,11 +95,6 @@ function engraveRange(
   ctx.fillStyle = paper;
   ctx.fill();
 
-  // Cast shadow. The light is low (about 23° up) from the left, so a summit
-  // throws its shadow down the slope behind it. Sweep left to right keeping
-  // the lowest light line any ridge point to the left allows; where the
-  // ridge sits below it, that stretch is in a summit's shadow, and the
-  // shadow reaches further down the face the deeper the ridge sits.
   const lightRise = 0.42;
   const cols = Math.ceil(width / step) + 2;
   const castDepth = new Float32Array(cols);
@@ -164,10 +106,6 @@ function engraveRange(
   }
   const shadowReach = (x: number) => (castDepth[Math.round(x / step)] ?? 0) * 2.6;
 
-  // Terrain. Spurs run down the face, fanning out from the summit: on its
-  // left they fall away to the left, on its right to the right, so they read
-  // as the mountain's structure rather than texture. Each is a ridged-noise
-  // spine with a lit side and a shaded side. Far ranges get finer spurs.
   const summitX = (() => {
     let best = 0;
     let bestY = Number.POSITIVE_INFINITY;
@@ -191,30 +129,20 @@ function engraveRange(
     const n = fbm(spurNoise, u, 2);
     return 1 - Math.abs(n - 0.5) * 2;
   };
-  /** How much ink a point carries, 0 (bare paper) to 1 (solid). */
   const tone = (x: number, y: number) => {
     const d = y - ridge.at(x);
-    // The main face: slopes falling away to the right face away from the light.
     const slope = (ridge.at(x + 3) - ridge.at(x - 3)) / 6;
     const face = Math.max(-0.3, Math.min(0.3, slope * 1.2)) * Math.exp(-d / 26);
-    // The spurs: the side of each spine facing right is in shade, and the
-    // shade is deepest in the fold between spines.
     const sd = spur(x - 2, y) - spur(x + 2, y);
-    // Each spur's shadow is a wedge, starting and fading at its own height.
     const wedge = 0.35 + grainNoise(x / 45 + 50, d / 18) * 0.9;
     const spurShade = (sd > 0 ? Math.min(0.55, sd * 5) : Math.max(-0.2, sd * 2)) * wedge;
     const cast = d < shadowReach(x) ? 0.3 : 0;
     const grain = (grainNoise(x / 7, y / 3) - 0.5) * 0.2;
-    // A thin lit strip along the crest separates a range from the one behind.
     const crest = Math.min(1, d / (3 + ridge.nearness * 3));
     const t = (0.32 + face + spurShade * Math.min(1, d / 10) + cast + grain) * crest;
-    // Air between the viewer and the far ranges lightens them.
     return clamp01(t) * (0.75 + ridge.nearness * 0.25);
   };
 
-  // The terrain's relief, which bends the contour lines near the summits.
-  // Smooth in depth as well as across, so neighbouring lines bend together
-  // into bulges and strata instead of crossing.
   const rock = (x: number, y: number) =>
     rockNoise(x / 18, y / 15) * 0.75 + rockNoise(x / 7, y / 8) * 0.25;
 
@@ -224,15 +152,6 @@ function engraveRange(
   ctx.strokeStyle = ink;
   ctx.lineCap = "butt";
 
-  // Contour lines. Each one runs the width of the range, wrapping its form:
-  // line k sits a fraction k/N of the way from the ridge down to the range's
-  // foot, so lines follow the profile near the top and flatten toward the
-  // base, and crowd together on the low flanks, where the slope is steep in
-  // the picture. Where they'd crowd tighter than a line's width, lines taper
-  // away by rank, the way engraved lines merge.
-  //
-  // Tone is the line's width, continuously: a ribbon that swells in shade
-  // and thins toward the light until it breaks.
   const weight = 0.75 + ridge.nearness * 0.3;
   const gap = 1.9 + ridge.nearness * 0.5;
   const top = Math.min(...sampleRidge(ridge, width));
@@ -243,7 +162,6 @@ function engraveRange(
   ctx.beginPath();
   for (let k = 1; k < lines; k++) {
     const f = k / lines;
-    // A line's rank: how many times 2 divides it. Higher ranks survive crowding.
     let rank = 0;
     while (rank < 6 && (k >> rank) % 2 === 0) rank++;
     let upper: [number, number][] = [];
@@ -262,19 +180,12 @@ function engraveRange(
     for (let x = 0; x <= width + step; x += step) {
       const ridgeY = ridge.at(x);
       const span = base - ridgeY;
-      // Where lines crowd, they taper away in order of rank (odd lines
-      // first, then every second, and so on), smoothly rather than at a
-      // step, so there's no seam where the count changes.
       const spacing = span / lines;
       const fadeRank = clamp01((spacing * 2 ** (rank + 1) - gap) / gap);
       let w = 0;
       let y = 0;
       if (fadeRank > 0.05 && x <= width) {
         const d = span * f;
-        // Relief: near the top of high ground the lines wrinkle round the
-        // rock, and the wrinkling relaxes continuously with depth until the
-        // lines lie almost flat at the range's foot. One set of lines all the
-        // way down, so there's no seam between summit and slope.
         const height01 = clamp01((base - ridgeY) / (base - top));
         const relax = Math.exp(-d / (6 + span * 0.28));
         const amp = (1.2 + height01 * 7) * relax;
@@ -299,7 +210,6 @@ function engraveRange(
   ctx.restore();
 }
 
-/** A stand of pines along a ridge, each one a stack of tapered boughs. */
 function plantPines(ctx: CanvasRenderingContext2D, rng: Rng, ridge: Ridge, opts: EngravingOptions) {
   const { width, ink } = opts;
   const stands = 1 + Math.floor(rng() * 2);
@@ -314,9 +224,7 @@ function plantPines(ctx: CanvasRenderingContext2D, rng: Rng, ridge: Ridge, opts:
       const h = 9 + rng() * 11 + ridge.nearness * 6;
       ctx.globalAlpha = 0.75 + ridge.nearness * 0.25;
       ctx.beginPath();
-      // Trunk.
       ctx.rect(x - 0.45, y - h * 0.3, 0.9, h * 0.3 + 1);
-      // Boughs: tiers that narrow toward the tip, each a pair of drooping blades.
       const tiers = 5 + Math.floor(h / 4);
       for (let t = 0; t < tiers; t++) {
         const f = t / tiers;
@@ -332,14 +240,6 @@ function plantPines(ctx: CanvasRenderingContext2D, rng: Rng, ridge: Ridge, opts:
   ctx.globalAlpha = 1;
 }
 
-// ── Foregrounds ──────────────────────────────────────────────────────────
-
-/**
- * The plain in front of the ranges: perspective rows of dashes, then a
- * subject — a lone tree, a cabin, or both — with a track winding in from the
- * horizon, perhaps fenced, a few boulders, and grass, all painted far to near
- * so nearer things overlap farther ones.
- */
 function engravePlain(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -351,16 +251,11 @@ function engravePlain(
   const { horizon, depth } = ground;
   const patchNoise = makeNoise1d(rng);
 
-  // The ground: dotted rows in perspective, the way the plate stipples open
-  // earth, with short dashes now and then and handwritten sprigs of grass
-  // between them. Slow noise opens bare patches and darkens others, like
-  // cloud shadow over the plain.
   ctx.fillStyle = ink;
   const rowCount = Math.round(depth / 2.6);
   for (let i = 0; i < rowCount; i++) {
-    // Rows bunch up toward the horizon, open out toward the viewer.
     const t = (i + 0.5) / rowCount;
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     const dot = 0.55 + t * 0.6;
     ctx.globalAlpha = 0.45 + t * 0.4;
     ctx.beginPath();
@@ -389,7 +284,7 @@ function engravePlain(
     ctx.lineWidth = 0.5 + t * 0.6;
     ctx.globalAlpha = 0.55 + t * 0.35;
     ctx.beginPath();
-    drawSprig(ctx, rng, x, ground.y(0.05 + t * 0.95), 1.5 + t * 5);
+    drawSprig(ctx, rng, x, ground.yAtDepth(0.05 + t * 0.95), 1.5 + t * 5);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
@@ -398,10 +293,9 @@ function engravePlain(
   if (track) drawTrack(ctx, rng, track, ground, inks);
 
   const props: Prop[] = [];
-  // Subjects claim a stretch of x so two of them never stand in one spot.
   const taken: [number, number][] = [];
   const placeX = (t: number, w: number): number | null => {
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     for (let i = 0; i < 16; i++) {
       const x = width * (0.08 + rng() * 0.86);
       if (track && [x - w / 2, x, x + w / 2].some((px) => track.covers(px, y, 6))) continue;
@@ -413,7 +307,7 @@ function engravePlain(
   };
   const stand = (t: number, w: number, draw: (x: number, y: number) => void) => {
     const x = placeX(t, w);
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     if (x !== null) props.push({ y, draw: () => draw(x, y) });
   };
 
@@ -437,9 +331,6 @@ function engravePlain(
     stand(t, w * 1.6, (x, y) => drawRock(ctx, rng, x, y, w, inks));
   }
 
-  // Grass in depth bands: a jittered grid per band, so tufts spread evenly
-  // instead of clumping, and grow (and thin out) toward the viewer. None on
-  // the track itself; a fringe along its verges instead.
   const bands = 6;
   for (let b = 0; b < bands; b++) {
     const t = (b + 0.5) / bands;
@@ -453,7 +344,6 @@ function engravePlain(
       if (track?.covers(x, y)) continue;
       const tuft = size * (0.7 + rng() * 0.6);
       props.push({ y, draw: () => drawTuft(ctx, rng, x, y, tuft, inks, t) });
-      // Grass grows in clumps: now and then a smaller neighbour alongside.
       if (rng() < 0.2) {
         const nx = x + (rng() < 0.5 ? -1 : 1) * tuft * (0.7 + rng() * 0.4);
         const ny = y + (rng() - 0.5) * 1.5;
@@ -469,12 +359,11 @@ function engravePlain(
       if (rng() < 0.35) continue;
       const side = rng() < 0.5 ? -1 : 1;
       const x = track.centre(t) + side * (track.half(t) + 1 + rng() * 3);
-      const y = ground.y(t);
+      const y = ground.yAtDepth(t);
       const tuft = 2 + t * 12;
       props.push({ y, draw: () => drawTuft(ctx, rng, x, y, tuft, inks, t) });
     }
   }
-  // A few big tufts cropped by the plate's edge put the viewer in the field.
   const near = 1 + Math.floor(rng() * 3);
   for (let i = 0; i < near; i++) {
     const x = rng() * width;
@@ -485,16 +374,6 @@ function engravePlain(
   paintProps(props);
 }
 
-/**
- * Open water as a woodcut sea: long swell lines that rise and dip across the
- * plate. Every line follows one swell field, so neighbouring lines move
- * together like the bands of a woodcut sea rather than wobbling apart.
- * Tone lives in the line's weight: a face turned from the light (falling to
- * the right) swells the line into a thick dark stroke, a lit face thins it
- * until it breaks. Lines tighten and flatten toward the horizon, run
- * heavier under the shore range where its reflection darkens the water, and
- * break in a column under the sun or moon.
- */
 function engraveSea(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -512,22 +391,18 @@ function engraveSea(
   const ripple = makeNoise1d(rng);
   const glintEdge = makeNoise1d(rng);
   const glintHalf = (y: number) => {
-    const t = ground.t(y);
+    const t = ground.depthAtY(y);
     return (7 + t * 70) * (0.6 + glintEdge(y * 0.9) * 0.8);
   };
   const inGlint = (x: number, y: number) => Math.abs(x - glintX) < glintHalf(y);
 
   ctx.fillStyle = ink;
 
-  // The swell lines.
   const step = 1.5;
   ctx.beginPath();
   let t = 0.02;
   while (t < 1.06) {
-    const base = ground.y(t);
-    // Swells shrink with distance; each line samples its own slice of the
-    // field so lines a little apart drift out of phase instead of lining up
-    // into bands that fan from the vanishing point.
+    const base = ground.yAtDepth(t);
     const scale = 26 + t * 70;
     const z = t * 11;
     const amp = 0.4 + t * 6.5;
@@ -540,7 +415,6 @@ function engraveSea(
         (swellNoise(u * 2.3 + 9, z * 1.7) - 0.5) * amp * 0.45
       );
     };
-    // Walk the line, collecting ribbon pieces where it's in shade.
     let top: [number, number][] = [];
     let bottom: [number, number][] = [];
     const flush = () => {
@@ -558,9 +432,6 @@ function engraveSea(
     for (let x = 0; x <= width + step; x += step) {
       const y = lineY(x);
       const slope = (y - prevY) / step;
-      // Falling to the right = facing away from the upper-left light.
-      // The shore range's reflection: under high ground the water is dark,
-      // so the lines there run heavier, fading with distance from the shore.
       const reach = shore ? (horizon - shore.at(x)) * 0.75 : 0;
       const mirror = reach > 0 && y - horizon < reach ? (1 - (y - horizon) / reach) * 0.45 : 0;
       const shade = clamp01(
@@ -582,11 +453,6 @@ function engraveSea(
   ctx.fill();
 }
 
-/**
- * What's on the water: sails on the horizon, perhaps a lighthouse on a
- * headland, a sloop (sometimes sailing right through the moon's glint), and
- * a few rocks in the surf.
- */
 function furnishSea(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -601,7 +467,7 @@ function furnishSea(
     drawDistantSail(
       ctx,
       width * (0.1 + rng() * 0.8),
-      ground.y(0.08 + rng() * 0.08),
+      ground.yAtDepth(0.08 + rng() * 0.08),
       3.5 + rng() * 2.5,
       ink,
     );
@@ -625,7 +491,7 @@ function furnishSea(
     const h = 22 + t * 34;
     const inGlint = rng() < 0.35 && clear(glintX, h);
     const x = inGlint ? glintX : freeX(h);
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     if (x !== null) props.push({ y, draw: () => drawSailboat(ctx, x, y, h, inks) });
   }
   const rocks = rng() < 0.5 ? 1 + Math.floor(rng() * 2) : 0;
@@ -633,13 +499,12 @@ function furnishSea(
     const t = 0.4 + rng() * 0.55;
     const w = 6 + t * 16;
     const x = freeX(w * 2);
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     if (x !== null) props.push({ y, draw: () => drawSeaRock(ctx, rng, x, y, w, inks) });
   }
   paintProps(props);
 }
 
-/** Fine speckle in both colours over everything, so no area reads as flat fill. */
 function grain(ctx: CanvasRenderingContext2D, rng: Rng, opts: EngravingOptions) {
   const { width, height, ink, paper } = opts;
   const count = Math.round((width * height) / 30);
@@ -661,13 +526,32 @@ function grain(ctx: CanvasRenderingContext2D, rng: Rng, opts: EngravingOptions) 
 
 type Foreground = "plain" | "sea";
 
-/**
- * Draw the plate into `ctx`, which must already be scaled so one unit is one
- * CSS pixel.
- */
-export function drawEngraving(ctx: CanvasRenderingContext2D, opts: EngravingOptions): void {
+const SKY_STREAM_SALT = 0x5bd1e995;
+
+function landStream(seed: string): Rng {
+  return makeRng(hashString(seed) || 1);
+}
+
+function skyStream(seed: string): Rng {
+  return makeRng((hashString(seed) ^ SKY_STREAM_SALT) >>> 0 || 2);
+}
+
+export function drawEngraving(
+  canvas: HTMLCanvasElement,
+  opts: EngravingOptions,
+  devicePixelRatio: number,
+): void {
+  canvas.width = Math.round(opts.width * devicePixelRatio);
+  canvas.height = Math.round(opts.height * devicePixelRatio);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  engrave(ctx, opts);
+}
+
+function engrave(ctx: CanvasRenderingContext2D, opts: EngravingOptions): void {
   const { width, height, ink } = opts;
-  const rng = makeRng(hashString(opts.seed) || 1);
+  const rng = landStream(opts.seed);
   const foreground = pick<Foreground>(rng, ["plain", "plain", "sea"]);
   const pines = rng() < 0.45;
 
@@ -676,7 +560,6 @@ export function drawEngraving(ctx: CanvasRenderingContext2D, opts: EngravingOpti
   ctx.fillStyle = day ? opts.paper : ink;
   ctx.fillRect(0, 0, width, height);
 
-  // Over water the near range would sit in the sea; two ranges, set back.
   const ranges: Ridge[] =
     foreground === "sea"
       ? [
@@ -690,14 +573,12 @@ export function drawEngraving(ctx: CanvasRenderingContext2D, opts: EngravingOpti
         ];
   const skyline = Math.min(...ranges.flatMap((r) => sampleRidge(r, width)));
 
-  // The sky draws from its own stream, so day and night share one landscape.
-  const skyRng = makeRng((hashString(opts.seed) ^ 0x5bd1e995) >>> 0 || 2);
+  const skyRng = skyStream(opts.seed);
   const body = day
     ? drawDaySky(ctx, skyRng, skyline, opts)
     : drawNightSky(ctx, skyRng, skyline, ranges[0]?.at, opts);
   for (const [i, range] of ranges.entries()) {
     engraveRange(ctx, rng, range, opts);
-    // Paper against a paper sky needs its edge drawn; by night the sky does it.
     if (day && i === 0) {
       ctx.strokeStyle = ink;
       ctx.lineWidth = 0.9;

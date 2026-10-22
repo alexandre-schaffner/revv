@@ -1,17 +1,13 @@
 import { Effect, Fiber, Ref, type Scope } from "effect";
 
 /**
- * A background loop a service starts, stops and restarts on demand.
- *
  * The fiber is forked into the scope of whoever made the handle — a
  * `Layer.scoped` service's own scope, which lasts as long as the runtime and
  * interrupts the loop on shutdown. Forked under `start()`'s caller instead, it
  * would be interrupted the moment `start()` returned, before its first tick.
  */
 export interface RestartableLoop {
-  /** Fork `loop` unless one is already running. */
   readonly start: (loop: Effect.Effect<unknown>) => Effect.Effect<void>;
-  /** Interrupt the running loop, if any. */
   readonly stop: Effect.Effect<void>;
   readonly isRunning: Effect.Effect<boolean>;
 }

@@ -1,11 +1,3 @@
-// ── GitHub PR stacks, as the review page sees them ──────────────────────────
-//
-// GitHub owns a stack's shape (which PRs, in what order, merged or not);
-// Revv owns what it knows about each layer (is it tracked here, has it been
-// reviewed, did the layer below move since). `PrStackDetail` is both, joined:
-// the GitHub half comes from one GraphQL read cached briefly on the server,
-// the Revv half is recomputed from the DB on every read.
-
 import type {
   CiRollupState,
   PrStackEntry,
@@ -16,20 +8,16 @@ import type {
 import type { MergeMethod } from "./types";
 import type { RiskLevel } from "./walkthrough";
 
-/** The client's key for one stack: stack numbers are unique per repository. */
 export function stackKey(repositoryId: string, stackNumber: number): string {
   return `${repositoryId}:${stackNumber}`;
 }
 
-/** A layer that can still change or merge: neither merged nor closed. */
 export function isOpenLayer(layer: { readonly status: string }): boolean {
   return layer.status !== "merged" && layer.status !== "closed";
 }
 
-/** GitHub `mergeStateStatus` values under which a PR can merge right now. */
 export const MERGEABLE_STATES: ReadonlySet<string> = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
 
-/** What Revv's walkthroughs know about one layer at its current head. */
 export type StackLayerReview =
   | { readonly kind: "none" }
   | { readonly kind: "generating"; readonly walkthroughId: string }
@@ -72,14 +60,12 @@ export type RestackVerdict =
   | { readonly kind: "needs-rebase" }
   | { readonly kind: "unknown" };
 
-/** One layer as GitHub reports it: the half of `StackLayer` the server caches. */
 export interface GitHubStackLayerFields extends PrStackEntry {
   readonly headSha: string | null;
   /** The branch this layer targets: the layer below's head, or the stack base. */
   readonly baseRef: string;
   readonly mergeStateStatus: string | null;
   readonly reviewDecision: ReviewDecision | null;
-  /** The viewer's own latest verdict on this layer. */
   readonly viewerReview: ReviewVerdict | null;
   readonly checks: CiRollupState | null;
   readonly additions: number;
@@ -97,6 +83,38 @@ export interface GitHubStackLayerFields extends PrStackEntry {
   readonly behindBy: number | null;
 }
 
+/**
+ * A layer's GitHub merge state in the terms Revv acts on. The merge plan, the
+ * merge driver, the restack verdict and the rebase offer all branch on this.
+ *
+ *   mergeable — GitHub would merge it now.
+ *   behind    — its base has commits it lacks (BEHIND, or a compare said so).
+ *               A stack only merges a linear history, so it needs a rebase.
+ *   conflicts — DIRTY. A rebase of the stack may clear it (a squash-merged
+ *               layer below) or may not.
+ *   blocked   — BLOCKED: reviews, checks, protection, or the layers below.
+ *   unknown   — GitHub is still computing it.
+ *   unmodeled — any other state.
+ */
+export type LayerMergeState =
+  | "mergeable"
+  | "behind"
+  | "conflicts"
+  | "blocked"
+  | "unknown"
+  | "unmodeled";
+
+export function classifyLayerMergeState(
+  layer: Pick<GitHubStackLayerFields, "mergeStateStatus" | "behindBy">,
+): LayerMergeState {
+  const state = layer.mergeStateStatus ?? "UNKNOWN";
+  if (state === "DIRTY") return "conflicts";
+  if (state === "BEHIND" || (layer.behindBy ?? 0) > 0) return "behind";
+  if (MERGEABLE_STATES.has(state)) return "mergeable";
+  if (state === "BLOCKED") return "blocked";
+  return state === "UNKNOWN" ? "unknown" : "unmodeled";
+}
+
 export interface StackLayer extends GitHubStackLayerFields {
   /** Revv's row for this PR, or null when Revv doesn't track it (yet). */
   readonly prId: string | null;
@@ -107,7 +125,6 @@ export interface StackLayer extends GitHubStackLayerFields {
 export interface PrStackDetail {
   readonly repositoryId: string;
   readonly number: number;
-  /** The branch the bottom of the stack targets. */
   readonly baseRefName: string;
   /** Ordered by position, base first. */
   readonly layers: readonly StackLayer[];
@@ -116,7 +133,6 @@ export interface PrStackDetail {
   readonly autoMergeAllowed: boolean;
   /** Merge methods the repository permits, in GitHub's order of preference. */
   readonly allowedMethods: readonly MergeMethod[];
-  /** The viewer may push to the repository, so Revv can rebase the stack for them. */
   readonly viewerCanPush: boolean;
   readonly brief: StackBrief | null;
   /** Open layers sharing files with the viewer's layer, nearest first. */
@@ -125,8 +141,6 @@ export interface PrStackDetail {
   /** GitHub couldn't be reached; the GitHub half is the last good answer. */
   readonly stale: boolean;
 }
-
-// ── Stack brief ─────────────────────────────────────────────────────────────
 
 export type StackBriefStatus = "generating" | "complete" | "error" | "superseded";
 
@@ -143,7 +157,6 @@ export interface StackBriefLayer {
   readonly buildsOn: readonly StackLayerLink[];
 }
 
-/** One layer leaning on another below it. */
 export interface StackLayerLink {
   readonly number: number;
   /** A phrase: what the upper layer takes from it ("the explicit role model"). */
@@ -163,7 +176,6 @@ export interface StackFileOverlap {
   readonly files: readonly string[];
 }
 
-/** The agent-written whole-stack overview, one per stack version. */
 export interface StackBrief {
   readonly id: string;
   readonly status: StackBriefStatus;
@@ -177,8 +189,6 @@ export interface StackBrief {
   readonly completedAt: string | null;
 }
 
-// ── Stack review ────────────────────────────────────────────────────────────
-
 /** `remaining`: layers without a current walkthrough. `all`: every open layer. */
 export type StackReviewScope = "remaining" | "all";
 
@@ -188,8 +198,6 @@ export interface StackReviewStarted {
   /** Open layers Revv can't review because it doesn't track them. */
   readonly untracked: readonly number[];
 }
-
-// ── Stack merge ─────────────────────────────────────────────────────────────
 
 /**
  * `auto`: Revv merges what it can now and hands the rest to GitHub's
@@ -206,7 +214,6 @@ export interface StackMergePlanLayer {
   readonly title: string;
   readonly prId: string | null;
   readonly headSha: string | null;
-  /** GitHub's own label for the layer, for the same glyph the stack list draws. */
   readonly status: StackEntryStatus;
   readonly readiness: StackMergeReadiness;
   /**
@@ -225,12 +232,8 @@ export interface StackMergePlan {
   readonly defaultThrough: number | null;
   readonly allowedMethods: readonly MergeMethod[];
   readonly mode: StackMergeMode;
-  /**
-   * The stack's latest run while it's live (`running` / `waiting`) or stopped
-   * with a Continue (`failed` / `expired`); null once it completed or was
-   * cancelled. Only a live run blocks starting another.
-   */
-  readonly activeRun: StackMergeRun | null;
+  /** The stack's most recent merge run, whatever its status; null when it never had one. */
+  readonly latestRun: StackMergeRun | null;
 }
 
 export type StackMergeRunStatus =
@@ -284,8 +287,6 @@ export interface StackMergeRun {
   readonly updatedAt: string;
 }
 
-// ── Stack rebase ────────────────────────────────────────────────────────────
-
 /**
  * What `POST /api/prs/:id/stack/rebase` did: every open layer replayed onto
  * the one below it (the bottom onto the stack base), pushed in one atomic
@@ -301,13 +302,6 @@ export interface StackRebaseResult {
   readonly retargeted: readonly number[];
 }
 
-// ── Walkthrough stack snapshot ──────────────────────────────────────────────
-
-/**
- * The stack as a walkthrough's agent saw it, captured at job start and kept
- * on the walkthrough row: a resume prompts with the same stack, and a later
- * read can tell which layers moved since.
- */
 export interface WalkthroughStackSnapshot {
   readonly number: number;
   readonly baseRefName: string;
@@ -323,8 +317,6 @@ export interface WalkthroughStackSnapshot {
   }>;
   readonly capturedAt: string;
 }
-
-// ── Stack headline ──────────────────────────────────────────────────────────
 
 /**
  * What a stack builds, named for the homepage queue. `brief`: the gist is the

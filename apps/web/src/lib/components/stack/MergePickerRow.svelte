@@ -3,15 +3,10 @@ import type { StackMergePlanLayer } from "@revv/shared";
 import { gsapFade, tokens } from "$lib/motion";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
-// One layer of the merge sheet's "merge through" picker: a radio that picks
-// how far up the stack to merge. The row's frame and type (`.layer-row`,
-// `.layer-text`, …) are the sheet's, shared with the run's rows.
-
 interface Props {
   layer: StackMergePlanLayer;
   /** Why this layer can't be the target; null when it can. */
   refusal: string | null;
-  /** At or below the target: part of the merge. */
   inRange: boolean;
   isTarget: boolean;
   onpick: () => void;

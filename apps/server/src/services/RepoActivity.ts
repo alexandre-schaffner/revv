@@ -18,7 +18,6 @@ import type {
 import { apiBaseForHost } from "./github-rest";
 
 const REPO_ACTIVITY_NS = "repo-activity";
-/** GitHub refreshes its repo statistics about daily; a few hours is plenty fresh. */
 const REPO_ACTIVITY_TTL_MS = 6 * 60 * 60 * 1000;
 /**
  * Code frequency can sit on 202 for minutes after commit activity is ready.
@@ -28,16 +27,12 @@ const REPO_ACTIVITY_TTL_MS = 6 * 60 * 60 * 1000;
 const PARTIAL_ACTIVITY_TTL_MS = 2 * 60 * 1000;
 
 const REPO_PR_FLOW_NS = "repo-pr-flow";
-/** PR flow moves faster than commit statistics; it's also two Search API calls. */
 const REPO_PR_FLOW_TTL_MS = 30 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * Join GitHub's commit activity (the last 52 weeks, daily) with its code
- * frequency (the whole history, weekly) on their shared week key.
- *
  * Code frequency is optional: GitHub refuses it for repos with 10,000+
  * commits, can still be computing it, and the heatmap stands on its own
  * without it.
@@ -85,11 +80,6 @@ function padToYear(weeks: RepoActivityWeek[], now: Date): RepoActivityWeek[] {
   }));
 }
 
-/**
- * The repo's activity year, from cache when fresh. A `computing` answer
- * (commit activity not ready yet) is passed through uncached so the client's
- * retry reaches GitHub again.
- */
 const getRepoActivity = (repo: Repository, token: string) =>
   Effect.gen(function* () {
     const cache = yield* CacheService;
@@ -133,12 +123,6 @@ function median(values: number[]): number | null {
     : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
-/**
- * Summarise two PR searches: everything merged in the last 28 days, and
- * everything opened in the last 14. Each page holds at most 100 matches;
- * when a search matched more, the counts it can't see whole come from
- * `exactCounts` instead (see {@link getRepoPrFlow}).
- */
 export function buildPrFlow(
   merged: PrSearchPage,
   opened: PrSearchPage,
@@ -174,12 +158,6 @@ export function buildPrFlow(
   };
 }
 
-/**
- * The repo's recent PR flow. Two searches cover the common case; a repo busy
- * enough to overflow a 100-result page gets exact weekly counts from narrower
- * count-only searches, and its median and author count are taken over the
- * 100 most recently opened of its merges (`medianSample` says how many).
- */
 const getRepoPrFlow = (repo: Repository, token: string) =>
   Effect.gen(function* () {
     const cache = yield* CacheService;
@@ -232,11 +210,6 @@ const getRepoPrFlow = (repo: Repository, token: string) =>
     return flow;
   });
 
-/**
- * Everything the repo homepage's activity section shows. The PR flow is
- * best-effort: the Search API has its own, much tighter rate limit, and the
- * heatmap shouldn't go down with it.
- */
 export const getRepoActivityResponse = (repo: Repository, token: string) =>
   Effect.gen(function* () {
     const [commits, flow] = yield* Effect.all(

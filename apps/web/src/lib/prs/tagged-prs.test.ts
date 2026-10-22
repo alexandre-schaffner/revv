@@ -309,8 +309,6 @@ describe("isStackOpen", () => {
     expect(isStackOpen(STACK_FOLD_AT - 1, undefined)).toBe(true);
   });
 
-  // An unfolded stack that loses a member below the threshold must not fold
-  // itself, which a "toggled against the default" flag did.
   it("keeps what the reader chose across the threshold", () => {
     expect(isStackOpen(STACK_FOLD_AT - 1, true)).toBe(true);
     expect(isStackOpen(STACK_FOLD_AT + 1, true)).toBe(true);

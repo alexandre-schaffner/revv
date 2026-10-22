@@ -3,8 +3,7 @@
  */
 
 export * from "./actions";
-export { crossfadeDocument, isDocumentCrossfading } from "./crossfade";
-export { afterPaint } from "./frames";
+export { crossfadeDocument, turnLook } from "./crossfade";
 export { gsap, initGsap } from "./gsap";
 export * from "./presets";
 export { prefersReducedMotion } from "./reduced-motion";

@@ -1,12 +1,6 @@
 <script lang="ts" generics="T extends { readonly number: number }">
 import type { Snippet } from "svelte";
 
-// A stack drawn the way GitHub draws it: top layer first, the base branch
-// last, every layer hung on one spine that ends in the base's ring. Rows are
-// the caller's; a row marks its glyph with `stack-layer-glyph` so the glyph
-// sits on the spine. `--stack-layer-gap` spaces the rows and
-// `--stack-spine-bottom` sets where the spine stops above the list's foot.
-
 interface Props {
   /** Top of the stack first. */
   layers: readonly T[];
@@ -40,7 +34,6 @@ let { layers, baseRefName, row, role, "aria-label": ariaLabel }: Props = $props(
 		list-style: none;
 	}
 
-	/* The spine the layers hang on, base at the bottom. */
 	.stack-layer-list::before {
 		content: "";
 		position: absolute;

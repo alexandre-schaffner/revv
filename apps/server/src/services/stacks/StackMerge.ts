@@ -1,22 +1,11 @@
-// ── Stack merge service ─────────────────────────────────────────────────────
-//
-// "Merge this stack through layer N": the plan (what can merge, how far), the
-// run (persisted in `stack_merge_runs`, then advanced by a daemon fiber), and
-// its lifecycle (cancel, continue, expire on boot). The decisions live in
-// `merge-plan.ts` and the step loop in `merge-driver.ts`; this file is their
-// I/O: GitHub reads and writes, the run row, and the broadcasts.
-//
-// The row is the journal. A fiber's memory is never authoritative: it
-// re-reads GitHub every step, and stops as soon as its row has left
-// `running`/`waiting`. A run a restart cut off is never resumed by itself.
-
-import type { StackMergePlan, StackMergeRun, StackMergeRunStatus } from "@revv/shared";
+import type { StackMergePlan, StackMergeRun } from "@revv/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer } from "effect";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackMergeRuns } from "../../db/schema/stack-merge-runs";
 import { DbError, type GitHubError, NotFoundError, StackRejectedError } from "../../domain/errors";
 import { logError } from "../../logger";
+import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { Broadcaster } from "../Broadcaster";
 import { DbService } from "../Db";
 import { GitHubGateway } from "../GitHub";
@@ -34,6 +23,7 @@ import {
   planLayers,
   type StackRead,
   type StartRequest,
+  stackAskOrder,
   startRefusal,
 } from "./merge-plan";
 import { PR_STATE_QUERY, type RawPrState } from "./queries";
@@ -47,19 +37,15 @@ import {
   toRun,
   updateLiveRun,
 } from "./stack-merge-runs";
+import { logContradiction } from "./unverified-github";
 
-/** A run this long past its last step was abandoned, not interrupted mid-step. */
 const STALE_RUN_MS = 30 * 60_000;
-
-/** The plan offers these back to the user: in flight, or stopped with a Continue. */
-const SHOWN_STATUSES: readonly StackMergeRunStatus[] = [...LIVE_RUN_STATUSES, "failed", "expired"];
 
 export type StackMergeError = StackError | StackRejectedError | NotFoundError;
 
 export class StackMergeService extends Context.Tag("StackMergeService")<
   StackMergeService,
   {
-    /** What can merge in this PR's stack, read fresh from GitHub. */
     readonly plan: (
       prId: string,
       userId: string,
@@ -80,7 +66,6 @@ export class StackMergeService extends Context.Tag("StackMergeService")<
       runId: string,
       accountId: string,
     ) => Effect.Effect<StackMergeRun, StackMergeError>;
-    /** Pick a failed or expired run up from wherever GitHub is now. */
     readonly continueRun: (
       runId: string,
       accountId: string,
@@ -90,13 +75,10 @@ export class StackMergeService extends Context.Tag("StackMergeService")<
   }
 >() {}
 
-/** The context, asking GitHub about another PR of the same repo. */
 const asPr = (ctx: PrContextBasic, number: number): PrContextBasic => ({
   ...ctx,
   pr: { ...ctx.pr, externalId: number },
 });
-
-// ── Live ────────────────────────────────────────────────────────────────────
 
 export const StackMergeServiceLive = Layer.effect(
   StackMergeService,
@@ -111,9 +93,7 @@ export const StackMergeServiceLive = Layer.effect(
     const broadcaster = yield* Broadcaster;
     const rebaser = yield* StackRebaseService;
 
-    /** Runs this process is stepping, so a double Continue can't fork twice. */
     const driving = new Set<string>();
-    /** Rows this process wrote are never a previous process's leftovers. */
     const bootedAt = new Date().toISOString();
 
     const dbTry = <A>(message: string, f: () => A) =>
@@ -134,7 +114,7 @@ export const StackMergeServiceLive = Layer.effect(
             : Effect.fail(new NotFoundError({ resource: "stack_merge_run", id: runId })),
       );
 
-    const latestShownRun = (repositoryId: string, stackNumber: number) =>
+    const latestRun = (repositoryId: string, stackNumber: number) =>
       dbTry("stack merge run read failed", () => {
         const row = db
           .select()
@@ -147,7 +127,7 @@ export const StackMergeServiceLive = Layer.effect(
           )
           .orderBy(desc(stackMergeRuns.createdAt))
           .get();
-        return row && SHOWN_STATUSES.includes(row.status) ? toRun(row) : null;
+        return row ? toRun(row) : null;
       });
 
     const prIdsFor = (repositoryId: string, numbers: readonly number[]) =>
@@ -169,7 +149,6 @@ export const StackMergeServiceLive = Layer.effect(
     const announce = (accountId: string, run: StackMergeRun) =>
       broadcaster.broadcastToAccount(accountId, { type: "stack-merge:progress", data: run });
 
-    /** The PR rows GitHub just merged, the way a single-PR merge updates them. */
     const markMerged = (accountId: string, repositoryId: string, numbers: readonly number[]) =>
       Effect.gen(function* () {
         const ids = yield* prIdsFor(repositoryId, numbers);
@@ -186,21 +165,10 @@ export const StackMergeServiceLive = Layer.effect(
         yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
       });
 
-    // ── Reading the stack for a step ──────────────────────────────────────
-
-    /**
-     * The stack, asked through its open layers from the top down: whether
-     * GitHub keeps merged layers in a stack (and so whether a merged PR still
-     * answers for it) is unverified, and the top of a run stays open longest.
-     */
     const readStack = (ctx: PrContextBasic, run: StackMergeRun) =>
       Effect.gen(function* () {
-        const order = [...run.layers].sort(
-          (a, b) =>
-            Number(a.state === "merged") - Number(b.state === "merged") || b.position - a.position,
-        );
         let stack: GitHubStack | null = null;
-        for (const layer of order) {
+        for (const layer of stackAskOrder(run.layers)) {
           const found = yield* stacks.fetchFresh(asPr(ctx, layer.number));
           if (found?.number === run.stackNumber) {
             stack = found;
@@ -209,7 +177,7 @@ export const StackMergeServiceLive = Layer.effect(
         }
         if (!stack) return null;
         const listed = new Set(stack.layers.map((l) => l.number));
-        const mergedOutside = new Set<number>();
+        const mergedUnlisted = new Set<number>();
         const [owner, repo] = ctx.repo.fullName.split("/");
         for (const layer of run.layers) {
           if (listed.has(layer.number) || layer.state === "merged" || !owner || !repo) continue;
@@ -219,18 +187,11 @@ export const StackMergeServiceLive = Layer.effect(
             ctx.token,
             ctx.apiBase,
           );
-          if (answer.repository?.pullRequest?.state === "MERGED") mergedOutside.add(layer.number);
+          if (answer.repository?.pullRequest?.state === "MERGED") mergedUnlisted.add(layer.number);
         }
-        return { stack, mergedOutside } satisfies StackRead;
+        return { stack, mergedUnlisted } satisfies StackRead;
       });
 
-    // ── The port the step loop runs against ───────────────────────────────
-
-    /**
-     * The port a run steps against. A run outlives an access token (checks and
-     * auto-merge waits run to the better part of an hour per layer), so every
-     * GitHub call asks for the account's current one.
-     */
     const portFor = (
       ctx: PrContextBasic,
       accountId: string,
@@ -281,13 +242,12 @@ export const StackMergeServiceLive = Layer.effect(
             const kept = yield* dbTry("stack merge run write failed", () =>
               updateLiveRun(db, run.id, {
                 status: run.status,
-                layers: [...run.layers],
+                layersBaseFirst: [...run.layers],
                 error: run.error,
                 updatedAt: run.updatedAt,
               }),
             );
-            if (!kept) return false;
-            // Commit first; everything after is best-effort.
+            if (!kept) return "ended";
             yield* announce(accountId, run);
             if (effects.merged.length > 0) {
               yield* provided(markMerged(accountId, run.repositoryId, effects.merged)).pipe(
@@ -298,14 +258,14 @@ export const StackMergeServiceLive = Layer.effect(
             }
             if (effects.stackMoved) {
               yield* stacks
-                .invalidate(run.repositoryId, run.stackNumber)
+                .markStale(run.repositoryId, run.stackNumber)
                 .pipe(Effect.catchAll(() => Effect.void));
               yield* broadcaster.broadcastToAccount(accountId, {
                 type: "stack:updated",
                 data: { repositoryId: run.repositoryId, stackNumber: run.stackNumber },
               });
             }
-            return true;
+            return "live";
           }),
         isActive: (runId) =>
           dbTry("stack merge run read failed", () => {
@@ -316,16 +276,15 @@ export const StackMergeServiceLive = Layer.effect(
               .get();
             return row !== undefined && isLiveStatus(row.status);
           }),
+        reportContradiction: (c) => Effect.sync(() => logContradiction("stack-merge", c)),
         now: () => Date.now(),
         sleep: (ms) => Effect.sleep(ms),
       };
     };
 
-    /** Fork the step loop for a run whose row is already live. */
     const launch = (ctx: PrContextBasic, run: StackMergeRun, accountId: string) =>
       Effect.gen(function* () {
         if (driving.has(run.id)) return;
-        // The account `ctx.token` came from: the repo's owner.
         const tokenAccountId = yield* prContext.getAccountIdForRepo(ctx.repo.id);
         driving.add(run.id);
         yield* Effect.forkDaemon(
@@ -345,28 +304,26 @@ export const StackMergeServiceLive = Layer.effect(
               }).pipe(Effect.catchAll(() => Effect.void)),
             ),
             Effect.ensuring(Effect.sync(() => driving.delete(run.id))),
+            withGitHubOrigin("stack:merge"),
           ),
         );
       });
 
-    /** A PR Revv tracks in the run's stack, to borrow its repo and token. */
     const contextForRun = (row: RunRow) =>
       Effect.gen(function* () {
-        const numbers = row.layers.map((l) => l.number);
+        const numbers = row.layersBaseFirst.map((l) => l.number);
         const ids = yield* prIdsFor(row.repositoryId, numbers);
         const prId = ids.values().next().value;
         if (prId === undefined) {
           return yield* Effect.fail(
             new StackRejectedError({
               message: "Revv no longer tracks any PR in this stack",
-              reason: "invalid",
+              rejection: { reason: "invalid" },
             }),
           );
         }
         return yield* prContext.resolveBasic(prId, row.userId, row.accountId);
       });
-
-    // ── Public API ────────────────────────────────────────────────────────
 
     const freshStack = (ctx: PrContextBasic) =>
       Effect.flatMap(stacks.fetchFresh(ctx), (stack) =>
@@ -375,7 +332,6 @@ export const StackMergeServiceLive = Layer.effect(
           : Effect.fail(new NotFoundError({ resource: "stack", id: ctx.pr.id })),
       );
 
-    /** The stack fresh from GitHub, and what of it can merge. */
     const readPlan = (prId: string, userId: string, accountId: string) =>
       Effect.gen(function* () {
         const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
@@ -398,7 +354,7 @@ export const StackMergeServiceLive = Layer.effect(
           defaultThrough: defaultThrough(layers),
           allowedMethods: stack.allowedMethods,
           mode: mergeModeOf(stack),
-          activeRun: yield* latestShownRun(ctx.repo.id, stack.number),
+          latestRun: yield* latestRun(ctx.repo.id, stack.number),
         } satisfies StackMergePlan;
       }).pipe(Effect.provide(context));
 
@@ -406,7 +362,14 @@ export const StackMergeServiceLive = Layer.effect(
       Effect.gen(function* () {
         const { ctx, stack, layers } = yield* readPlan(prId, userId, accountId);
         const refusal = startRefusal(stack, layers, request);
-        if (refusal) return yield* Effect.fail(new StackRejectedError(refusal));
+        if (refusal) {
+          return yield* Effect.fail(
+            new StackRejectedError({
+              message: refusal.message,
+              rejection: { reason: refusal.reason },
+            }),
+          );
+        }
         const now = new Date().toISOString();
         const run: StackMergeRun = {
           id: crypto.randomUUID(),
@@ -421,8 +384,6 @@ export const StackMergeServiceLive = Layer.effect(
           createdAt: now,
           updatedAt: now,
         };
-        // Check and insert in one transaction: two confirms racing must not
-        // both start a run on the same stack.
         const inserted = yield* dbTry("stack merge run insert failed", () =>
           db.transaction((tx) => {
             if (liveRunFor(tx, run.repositoryId, run.stackNumber)) return false;
@@ -435,7 +396,7 @@ export const StackMergeServiceLive = Layer.effect(
                 method: run.method,
                 mode: run.mode,
                 status: run.status,
-                layers: [...run.layers],
+                layersBaseFirst: [...run.layers],
                 error: null,
                 accountId,
                 userId,
@@ -450,7 +411,7 @@ export const StackMergeServiceLive = Layer.effect(
           return yield* Effect.fail(
             new StackRejectedError({
               message: "This stack is already being merged",
-              reason: "conflict",
+              rejection: { reason: "busy" },
             }),
           );
         }
@@ -463,7 +424,7 @@ export const StackMergeServiceLive = Layer.effect(
       Effect.gen(function* () {
         const row = yield* loadRun(runId, accountId);
         if (!isLiveStatus(row.status)) return toRun(row);
-        const handedOver = row.layers.filter((l) => l.state === "auto_merge");
+        const handedOver = row.layersBaseFirst.filter((l) => l.state === "auto_merge");
         const error =
           handedOver.length > 0
             ? `Cancelled. GitHub auto-merge is still on for ${handedOver.map((l) => `#${l.number}`).join(", ")}`
@@ -475,7 +436,6 @@ export const StackMergeServiceLive = Layer.effect(
             updatedAt: new Date().toISOString(),
           }),
         );
-        // A step finished the run between the read and the write.
         const run = toRun(updated ?? (yield* loadRun(runId, accountId)));
         yield* announce(accountId, run);
         return run;
@@ -488,21 +448,19 @@ export const StackMergeServiceLive = Layer.effect(
           return yield* Effect.fail(
             new StackRejectedError({
               message: "Only a stopped merge can be continued",
-              reason: "conflict",
+              rejection: { reason: "busy" },
             }),
           );
         }
         const ctx = yield* contextForRun(row);
-        // Failed layers go back to pending; the first step re-reads GitHub
-        // and takes each from wherever it is now, heads still pinned.
-        const layers = row.layers.map((l) =>
+        const layers = row.layersBaseFirst.map((l) =>
           l.state === "merged" ? l : { ...l, state: "pending" as const, message: null },
         );
         const now = new Date().toISOString();
         const updated = yield* dbTry("stack merge run write failed", () =>
           db
             .update(stackMergeRuns)
-            .set({ status: "running", error: null, layers, updatedAt: now })
+            .set({ status: "running", error: null, layersBaseFirst: layers, updatedAt: now })
             .where(
               and(
                 eq(stackMergeRuns.id, runId),
@@ -516,7 +474,7 @@ export const StackMergeServiceLive = Layer.effect(
           return yield* Effect.fail(
             new StackRejectedError({
               message: "This merge is already running",
-              reason: "conflict",
+              rejection: { reason: "busy" },
             }),
           );
         }
@@ -530,28 +488,23 @@ export const StackMergeServiceLive = Layer.effect(
       dbTry("stack merge run expiry failed", () => {
         const now = Date.now();
         const cutoff = new Date(now - STALE_RUN_MS).toISOString();
-        return (
-          db
-            .update(stackMergeRuns)
-            .set({
-              status: "expired",
-              // A young one was cut off by the restart itself.
-              error: sql`case when ${stackMergeRuns.updatedAt} < ${cutoff}
+        return db
+          .update(stackMergeRuns)
+          .set({
+            status: "expired",
+            error: sql`case when ${stackMergeRuns.updatedAt} < ${cutoff}
               then 'This merge stopped a while ago — Continue to pick up where GitHub is'
               else 'Revv restarted mid-merge — Continue to pick up where GitHub is' end`,
-              updatedAt: new Date(now).toISOString(),
-            })
-            // Only rows a previous process left: a run started since boot,
-            // before this ran, is this process's own.
-            .where(
-              and(
-                inArray(stackMergeRuns.status, [...LIVE_RUN_STATUSES]),
-                lt(stackMergeRuns.updatedAt, bootedAt),
-              ),
-            )
-            .returning({ id: stackMergeRuns.id })
-            .all().length
-        );
+            updatedAt: new Date(now).toISOString(),
+          })
+          .where(
+            and(
+              inArray(stackMergeRuns.status, [...LIVE_RUN_STATUSES]),
+              lt(stackMergeRuns.updatedAt, bootedAt),
+            ),
+          )
+          .returning({ id: stackMergeRuns.id })
+          .all().length;
       });
 
     return { plan, start, cancel, continueRun, expireStale };

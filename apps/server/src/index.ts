@@ -2,14 +2,14 @@ import { cors } from "@elysiajs/cors";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
-import { auth } from "./auth";
+import { auth, db } from "./auth";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
 import { isLoopbackAddress } from "./net";
-import { githubLedgerPath } from "./observability/github-ledger/config";
-import { newOrigin, originStore } from "./observability/github-ledger/origin";
+import { configuredGitHubHosts, githubLedgerPath } from "./observability/github-ledger/config";
+import { enterOrigin, relabelOrigin } from "./observability/github-ledger/origin";
 import { installGitHubLedger } from "./observability/github-ledger/record";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
@@ -25,6 +25,7 @@ import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
+import { prBaseConflictsRoutes } from "./routes/prs-base-conflicts";
 import { prConversationRoutes } from "./routes/prs-conversation";
 import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
@@ -60,12 +61,11 @@ const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.cha
 
 logError("server", `starting on port ${port}`);
 
-// Record every GitHub request with the route or loop that caused it; see
-// docs/github-ledger.md. Off unless dev or REVV_GITHUB_LEDGER asks for it.
 const ledgerPath = githubLedgerPath();
-if (ledgerPath !== null) installGitHubLedger({ path: ledgerPath });
+if (ledgerPath !== null) {
+  installGitHubLedger({ path: ledgerPath, enterpriseHosts: () => configuredGitHubHosts(db) });
+}
 
-/** `/api/prs/acme:42/conversation` → `/api/prs/:id/conversation`, when no route matched. */
 const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");
 
 const app = new Elysia()
@@ -92,13 +92,11 @@ const app = new Elysia()
   .onRequest((ctx) => {
     // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
-    // Everything this request asks GitHub is attributed to it.
     const { pathname } = new URL(ctx.request.url);
-    originStore.enterWith(newOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request"));
+    enterOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request");
   })
   .onTransform({ as: "global" }, ({ request, route }) => {
-    const origin = originStore.getStore();
-    if (origin && route) origin.label = `${request.method} ${route}`;
+    if (route) relabelOrigin(`${request.method} ${route}`);
   })
   .onAfterHandle(({ request, store, set }) => {
     const startMs = (store as { _revvStartMs?: number })._revvStartMs;
@@ -136,6 +134,7 @@ const app = new Elysia()
   .use(githubRoutes)
   .use(prRoutes)
   .use(prConversationRoutes)
+  .use(prBaseConflictsRoutes)
   .use(stackRoutes)
   .use(repoStackRoutes)
   .use(stackReviewRoutes)
@@ -176,8 +175,7 @@ const app = new Elysia()
 
 logError("server", `listening on http://${serverEnv.host}:${port}`);
 
-// Whatever the boot tasks below set off is theirs, until a loop names itself.
-originStore.enterWith(newOrigin("boot", "boot"));
+enterOrigin("boot", "boot");
 
 // Migrate any plaintext GitHub tokens left in the `account` table into the OS
 // secure store, then null the columns. Awaited before the sync scheduler boots
@@ -284,18 +282,12 @@ AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePend
     logError("recap-jobs", "resumePending failed on boot:", err);
   });
 
-// Resume stack briefs left 'generating' by a previous run, bounded by
-// `resume_attempts`. Independent of the recap and walkthrough resumes: a
-// brief reads only its own row's snapshot and the DB.
 AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
   (err) => {
     logError("stack-brief", "resumePending failed on boot:", err);
   },
 );
 
-// Stack merges are outward and destructive, so a run a previous process left
-// live is never resumed by itself: it becomes `expired`, and the user's
-// Continue picks it up from wherever GitHub is.
 AppRuntime.runPromise(Effect.flatMap(StackMergeService, (svc) => svc.expireStale())).catch(
   (err) => {
     logError("stack-merge", "expireStale failed on boot:", err);

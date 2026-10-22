@@ -1,7 +1,3 @@
-// The engraved plate's sky, by night and by day (`engraving.ts` picks one
-// per theme). Each draws from the sky's own random stream, never the
-// landscape's, so a plate's day and night share one landscape.
-
 import type { EngravingOptions } from "$lib/utils/engraving";
 import { blade, makeNoise1d, makeNoise2d, type Rng } from "$lib/utils/engraving-marks";
 
@@ -10,16 +6,13 @@ interface SkyBody {
   y: number;
 }
 
-/** Where a sky's moon or sun and its birds may go, and where they mustn't. */
 interface SkyFrame {
   left: number;
   right: number;
-  /** The moon's or sun's x. */
   cx: number;
   clearOfText: (x: number, y: number) => boolean;
 }
 
-/** The band between the hero's text on the left and its action button on the right. */
 function skyFrame(rng: Rng, opts: EngravingOptions): SkyFrame {
   const { width, height, textWidth } = opts;
   const left = Math.min(textWidth, width * 0.6);
@@ -29,7 +22,6 @@ function skyFrame(rng: Rng, opts: EngravingOptions): SkyFrame {
   return { left, right, cx, clearOfText };
 }
 
-/** A few birds crossing, as ticks in whatever stroke is set. */
 function drawBirds(ctx: CanvasRenderingContext2D, rng: Rng, frame: SkyFrame, height: number) {
   const { left, right, clearOfText } = frame;
   const fx = left + 56 + rng() * Math.max(0, right - left - 56);
@@ -48,12 +40,10 @@ function drawBirds(ctx: CanvasRenderingContext2D, rng: Rng, frame: SkyFrame, hei
   ctx.stroke();
 }
 
-/** The night sky: a crescent moon with a scatter of stars. The sun is the day sky's. */
 export function drawNightSky(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
   skyline: number,
-  /** The far range's ridge line, where the horizon glow gathers; the skyline without one. */
   farRidge: ((x: number) => number) | undefined,
   opts: EngravingOptions,
 ): SkyBody {
@@ -62,8 +52,6 @@ export function drawNightSky(
   const { left, right, cx, clearOfText } = frame;
   const cy = Math.max(height * 0.14, Math.min(skyline - 24, height * (0.16 + rng() * 0.16)));
 
-  // Horizon glow: paper stipple that thickens toward the ranges, the way an
-  // aquatint sky lightens at the skyline.
   ctx.fillStyle = paper;
   const glow = Math.round(width * 1.1);
   for (let i = 0; i < glow; i++) {
@@ -76,7 +64,6 @@ export function drawNightSky(
     ctx.fill();
   }
 
-  // Cloud bands: short runs of tapered paper lines, stacked loosely.
   const bands = 2 + Math.floor(rng() * 3);
   ctx.strokeStyle = paper;
   ctx.lineCap = "round";
@@ -99,7 +86,6 @@ export function drawNightSky(
   }
   ctx.globalAlpha = 1;
 
-  // Stars, then the crescent moon.
   const stars = Math.round(width / 24);
   ctx.fillStyle = paper;
   for (let i = 0; i < stars; i++) {
@@ -122,7 +108,6 @@ export function drawNightSky(
   ctx.arc(cx + r * 0.45, cy - r * 0.3, r * 0.9, 0, Math.PI * 2);
   ctx.fill();
 
-  // Sometimes a shooting star, its tail a long tapered blade of paper.
   if (rng() < 0.35) {
     const sx = left + 60 + rng() * Math.max(0, right - left - 120);
     const sy = height * (0.08 + rng() * 0.12);
@@ -139,7 +124,6 @@ export function drawNightSky(
     }
   }
 
-  // Now and then, a few birds crossing.
   if (rng() < 0.6) {
     ctx.strokeStyle = paper;
     ctx.lineWidth = 1;
@@ -151,13 +135,6 @@ export function drawNightSky(
   return { x: cx, y: cy };
 }
 
-/**
- * A daytime sky in stipple: paper dotted like an aquatint, densest at the
- * top of the plate and thinning toward the horizon, left bare where the sun
- * and clouds are and around the hero's title, so it sits on clear paper. Clouds are cumulus heaps with
- * scalloped ink tops and hatched undersides; the sun is a ringed disc with
- * short rays.
- */
 export function drawDaySky(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -171,9 +148,6 @@ export function drawDaySky(
   const sunR = 11 + rng() * 5;
   const edge = makeNoise1d(rng);
 
-  // Clouds: drifts of lumps on a flat base, their tops ragged with noise.
-  // A cloud is simply where the stipple stops; no outline, which would make
-  // it a cartoon.
   interface Lump {
     x: number;
     y: number;
@@ -207,9 +181,6 @@ export function drawDaySky(
         }),
     );
 
-  // The stippled sky: an aquatint of dots, densest at the top of the plate
-  // and thinning to bare paper at the horizon, mottled so it never reads as
-  // a flat screen. Clouds, the sun and the title are where it stays bare.
   ctx.fillStyle = ink;
   ctx.beginPath();
   const mottle = makeNoise2d(rng);
@@ -231,7 +202,6 @@ export function drawDaySky(
   }
   ctx.fill();
 
-  // The sun: a fine ring in its clearing, the lower half engraved.
   ctx.strokeStyle = ink;
   ctx.lineCap = "round";
   ctx.lineWidth = 0.7;
@@ -244,7 +214,6 @@ export function drawDaySky(
   }
   ctx.stroke();
 
-  // Birds, in ink by day.
   if (rng() < 0.6) {
     ctx.lineWidth = 0.9;
     drawBirds(ctx, rng, frame, height);

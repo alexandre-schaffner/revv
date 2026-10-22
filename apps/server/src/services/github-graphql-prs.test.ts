@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
+import { STACK_UNSEEN } from "../domain/observed-pr";
 import {
   getPrsViaGraphql,
   listClosedPrNumbersSince,
@@ -11,7 +12,6 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-/** Serve `pages` in order, newest first, as GitHub's cursor walk would. */
 function stubPages(pages: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>): string[] {
   const asked: string[] = [];
   globalThis.fetch = Object.assign(
@@ -172,7 +172,6 @@ describe("getPrsViaGraphql", () => {
       additions: 3,
       changedFiles: 2,
     });
-    // The batch doesn't ask for stacks, so it can't say a PR isn't stacked.
-    expect(prs.get(7)).not.toHaveProperty("stack");
+    expect(prs.get(7)?.stack).toEqual(STACK_UNSEEN);
   });
 });

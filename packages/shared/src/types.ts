@@ -1,4 +1,5 @@
 import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
+import type { BaseConflictStrategy } from "./base-conflicts";
 import type { UpdateChannel } from "./constants";
 import type { JevSettings } from "./jev-settings";
 
@@ -74,7 +75,6 @@ export interface PullRequest {
   stack: PrStackPlace | null;
 }
 
-/** A PR's place in one of GitHub's native stacks. */
 export interface PrStackPlace {
   /** The stack's number, unique within the repo. */
   number: number;
@@ -82,7 +82,6 @@ export interface PrStackPlace {
   position: number;
 }
 
-/** Whether two PRs sit at the same place in the same stack (or both in none). */
 export function sameStack(a: PrStackPlace | null, b: PrStackPlace | null): boolean {
   return a?.number === b?.number && a?.position === b?.position;
 }
@@ -265,6 +264,8 @@ export interface UserSettings {
    * they're notified of new builds instantly.
    */
   updateChannel: UpdateChannel;
+  /** How "Resolve with agent" brings a conflicting PR up to date with its base. */
+  baseConflictStrategy: BaseConflictStrategy;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

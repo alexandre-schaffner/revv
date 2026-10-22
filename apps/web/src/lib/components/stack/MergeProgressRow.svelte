@@ -10,17 +10,11 @@ import { Shimmer } from "$lib/components/ai/shimmer";
 import { gsapFade, tokens } from "$lib/motion";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
-// One layer of a merge run in the merge sheet: where the run has it, live.
-// The row's frame and type (`.layer-row`, `.layer-text`, …) are the sheet's,
-// shared with the picker's rows.
-
 interface Props {
   layer: StackMergePlanLayer;
   /** The run's state for this layer; null when the run doesn't reach it. */
   progress: { readonly state: StackMergeLayerState; readonly message: string | null } | null;
-  /** The run is running or waiting, not stopped or done. */
   live: boolean;
-  /** The run is waiting on GitHub. */
   waiting: boolean;
   baseRefName: string;
 }

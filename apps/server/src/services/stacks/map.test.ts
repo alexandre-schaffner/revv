@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { classifyLayerMergeState } from "@revv/shared";
 import {
-  agreesWithMirror,
-  classifyLayerMergeState,
   type GitHubStack,
   type MirroredLayer,
+  membershipSupersededByPoll,
   stackFromMirror,
   stackStatus,
 } from "./map";
+import { chooseStackSource } from "./StackService";
 
 const POLLED = "2026-10-19T10:00:00.000Z";
 
@@ -31,7 +32,6 @@ function row(number: number, position: number, over: Partial<MirroredLayer> = {}
   };
 }
 
-/** The 18-layer stack before it was rebuilt: #3923 sat on two merged layers. */
 function oldStack(fetchedAt: string): GitHubStack {
   const stack = stackFromMirror(
     3966,
@@ -47,21 +47,85 @@ function oldStack(fetchedAt: string): GitHubStack {
   return stack;
 }
 
-describe("agreesWithMirror", () => {
-  // The rebuild re-created the stack with #4112 underneath #3923.
-  const rebuilt = [row(4112, 1), row(3923, 2), row(3925, 3)];
+const rebuilt = [row(4112, 1), row(3923, 2), row(3925, 3)];
+const same = [row(3923, 3), row(3925, 4)];
 
-  test("an older read that disagrees with the poll on the open layers is refused", () => {
-    expect(agreesWithMirror(oldStack("2026-10-19T05:00:00.000Z"), rebuilt)).toBe(false);
+describe("membershipSupersededByPoll", () => {
+  test("an older read the poll since saw with different open layers is superseded", () => {
+    expect(membershipSupersededByPoll(oldStack("2026-10-19T05:00:00.000Z"), rebuilt)).toBe(true);
   });
 
-  test("an older read with the same open layers at the same places is fine", () => {
-    const same = [row(3923, 3), row(3925, 4)];
-    expect(agreesWithMirror(oldStack("2026-10-19T05:00:00.000Z"), same)).toBe(true);
+  test("an older read with the same open layers at the same places stands", () => {
+    expect(membershipSupersededByPoll(oldStack("2026-10-19T05:00:00.000Z"), same)).toBe(false);
   });
 
-  test("a read taken after the poll's last listing wins", () => {
-    expect(agreesWithMirror(oldStack("2026-10-19T11:00:00.000Z"), rebuilt)).toBe(true);
+  test("a read taken after the poll's last listing stands", () => {
+    expect(membershipSupersededByPoll(oldStack("2026-10-19T11:00:00.000Z"), rebuilt)).toBe(false);
+  });
+});
+
+describe("chooseStackSource", () => {
+  const at = (iso: string) => Date.parse(iso);
+
+  test("a young read that stands is served from the cache", () => {
+    const cached = oldStack("2026-10-19T11:00:00.000Z");
+    const source = chooseStackSource({
+      cached,
+      mirror: rebuilt,
+      stackNumber: 3966,
+      now: at("2026-10-19T11:00:10.000Z"),
+      revalidateFor: null,
+    });
+    expect(source).toEqual({ kind: "fresh-cache", stack: cached });
+  });
+
+  test("an older read that stands is answered now and re-read for the asking page", () => {
+    const cached = oldStack("2026-10-19T05:00:00.000Z");
+    const source = chooseStackSource({
+      cached,
+      mirror: same,
+      stackNumber: 3966,
+      now: at("2026-10-19T12:00:00.000Z"),
+      revalidateFor: "acct",
+    });
+    expect(source).toEqual({ kind: "cache-then-revalidate", stack: cached, accountId: "acct" });
+  });
+
+  test("without a page asking, an older read is only the fallback for an unreachable GitHub", () => {
+    const cached = oldStack("2026-10-19T05:00:00.000Z");
+    const source = chooseStackSource({
+      cached,
+      mirror: same,
+      stackNumber: 3966,
+      now: at("2026-10-19T12:00:00.000Z"),
+      revalidateFor: null,
+    });
+    expect(source).toEqual({ kind: "github", ifUnreachable: cached });
+  });
+
+  test("a superseded read is never served: the fallback is the poll's rebuild", () => {
+    const source = chooseStackSource({
+      cached: oldStack("2026-10-19T05:00:00.000Z"),
+      mirror: rebuilt,
+      stackNumber: 4113,
+      now: at("2026-10-19T12:00:00.000Z"),
+      revalidateFor: "acct",
+    });
+    expect(source.kind).toBe("github");
+    if (source.kind !== "github") return;
+    expect(source.ifUnreachable?.number).toBe(4113);
+    expect(source.ifUnreachable?.layers.map((l) => l.number)).toEqual([4112, 3923, 3925]);
+  });
+
+  test("with no cache and no stack in the poll's rows there is nothing to fall back on", () => {
+    const source = chooseStackSource({
+      cached: null,
+      mirror: [row(4112, 1)],
+      stackNumber: 4113,
+      now: at("2026-10-19T12:00:00.000Z"),
+      revalidateFor: "acct",
+    });
+    expect(source).toEqual({ kind: "github", ifUnreachable: null });
   });
 });
 

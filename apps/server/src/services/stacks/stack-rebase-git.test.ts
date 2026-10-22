@@ -15,11 +15,6 @@ import { join } from "node:path";
 import type { RebaseStep } from "./rebase-plan";
 import { cleanupReplay, pushStack, type ReplayInput, replayStack } from "./stack-rebase-git";
 
-// A real "origin", a developer checkout that builds the stack, and Revv's
-// shallow clone that rebases it. The code under test inherits the
-// developer's ~/.gitconfig, so Revv's clone pins what would otherwise vary
-// (identity, signing, hooks) in its own local config.
-
 const FIXTURE_ENV: Record<string, string> = {
   ...process.env,
   GIT_CONFIG_GLOBAL: "/dev/null",
@@ -49,7 +44,6 @@ let origin: string;
 let dev: string;
 let revv: string;
 
-/** The stack as the plan would hand it over: #1 on main, #2 on #1, #3 on #2. */
 let tips: { a: string; b: string; c: string };
 
 function stepsFor(over: { mergedBottom?: boolean } = {}): RebaseStep[] {
@@ -86,7 +80,6 @@ function inputFor(steps: RebaseStep[]): ReplayInput {
   };
 }
 
-/** What a branch on origin holds: its file contents and its commit subjects, newest first. */
 function onOrigin(branch: string) {
   const log = git(origin, ["log", "--format=%s", branch]).split("\n");
   const show = (file: string) => {
@@ -135,7 +128,6 @@ beforeEach(() => {
   git(dev, ["push", "-q", "origin", "feat-1", "feat-2", "feat-3"]);
   tips = { a, b, c };
 
-  // Revv's clone is shallow, as RepoClone makes it.
   execFileSync("git", ["clone", "-q", "--depth=1", `file://${origin}`, revv], {
     env: FIXTURE_ENV,
   });
@@ -163,7 +155,6 @@ describe("stack rebase in Revv's clone", () => {
     expect(onOrigin("feat-2").log).toEqual(["two", "one", "trunk moved", "base"]);
     expect(onOrigin("feat-3").log).toEqual(["three", "two", "one", "trunk moved", "base"]);
     expect(onOrigin("feat-3").show("trunk.txt")).toBe("trunk");
-    // Nothing left behind in the clone.
     expect(existsSync(join(root, "scratch"))).toBe(false);
   });
 
@@ -178,7 +169,6 @@ describe("stack rebase in Revv's clone", () => {
   });
 
   it("keeps a squash-merged layer's commits out of the layers above", async () => {
-    // #1 squash-merged: its change lands on main as a different commit.
     git(dev, ["checkout", "-q", "main"]);
     commit(dev, "one.txt", "one\n", "squashed #1");
     git(dev, ["push", "-q", "origin", "main"]);
@@ -212,7 +202,6 @@ describe("stack rebase in Revv's clone", () => {
       expect(replay.kind).toBe("replayed");
       if (replay.kind !== "replayed") return;
 
-      // The author pushes to #2 while Revv is about to push.
       git(dev, ["checkout", "-q", "feat-2"]);
       commit(dev, "two.txt", "two, amended\n", "two again");
       git(dev, ["push", "-q", "origin", "feat-2"]);
@@ -224,7 +213,6 @@ describe("stack rebase in Revv's clone", () => {
       }));
       const push = await pushStack(revv, input.remoteUrl, moved);
       expect(push.kind).toBe("moved");
-      // Atomic: #1 and #3 didn't move either.
       expect(git(origin, ["rev-parse", "feat-1"])).toBe(tips.a);
       expect(git(origin, ["rev-parse", "feat-3"])).toBe(tips.c);
       expect(readFileSync(join(dev, "two.txt"), "utf8")).toBe("two, amended\n");

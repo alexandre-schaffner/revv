@@ -1,10 +1,3 @@
-// ─── Stack brief prompts ─────────────────────────────────────────────────────
-//
-// System + user prompt for the stack brief: the arc of a GitHub PR stack,
-// each layer's role, and the order to review it in. The agent reads the
-// stack through MCP tools and writes only through them; visible text is
-// discarded.
-
 import type { StackBriefSnapshot } from "../providers/stack-brief-tools";
 
 export const STACK_BRIEF_SYSTEM_PROMPT = `You write the brief for a stack of pull requests: a few lines a reviewer reads before opening any layer, so they know what the whole stack is for, what each layer adds, and where to look hardest.
@@ -44,7 +37,6 @@ Voice. Crisp and editorial, like a walkthrough's takeaway line: a senior enginee
 
 Merged layers are context only. They take no role and no place in the review order; mention one in the arc only when an open layer depends on what it landed.`;
 
-/** The per-run message: the stack at a glance, so the agent knows its scope before reading. */
 export function buildStackBriefUserMessage(snapshot: StackBriefSnapshot): string {
   const layers = snapshot.layers
     .map((l) => `- #${l.number} (position ${l.position}, ${l.status}): ${l.title}`)

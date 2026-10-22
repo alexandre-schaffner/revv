@@ -6,10 +6,6 @@ import GitMerge from "phosphor-svelte/lib/GitMerge";
 import MinusCircle from "phosphor-svelte/lib/MinusCircle";
 import XCircle from "phosphor-svelte/lib/XCircle";
 
-// A stack layer's GitHub state as one glyph, the same mapping the
-// Conversation sidebar's stack list uses, so a layer reads the same wherever
-// the stack is drawn. Shape carries the state as well as colour.
-
 interface Props {
   status: StackEntryStatus;
   size?: number;

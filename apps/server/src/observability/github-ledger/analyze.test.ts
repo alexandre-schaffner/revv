@@ -220,7 +220,6 @@ describe("analyze", () => {
         rate: rate(105),
         origin: { label: "page", kind: "request", runId: "q" },
       }),
-      // A new hour: its first answer sets the baseline, the next one is charged.
       call({
         start: 300,
         durationMs: 10,
@@ -249,7 +248,6 @@ describe("analyze", () => {
       limit: 5000,
       reset: 1000,
     });
-    // Concurrent pages: GitHub counted 101..106, the answers landed shuffled.
     const report = analyze(
       [103, 101, 106, 102, 105, 104].map((used, i) =>
         call({ start: i, durationMs: 10, rate: rate(used) }),

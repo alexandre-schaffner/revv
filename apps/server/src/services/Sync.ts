@@ -52,6 +52,7 @@ export class SyncService extends Context.Service<
     readonly pushThreadStatus: (
       threadId: string,
     ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+    /** One pull per PR at a time: a call while one is in flight for the same PR joins it. */
     readonly pullComments: (
       prId: string,
     ) => Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
@@ -317,7 +318,7 @@ export const SyncServiceLive = Layer.effect(
         return summary;
       }).pipe(Effect.mapError(toSyncError()));
 
-    const pullComments = (
+    const pullCommentsFromGitHub = (
       prId: string,
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
@@ -571,55 +572,18 @@ export const SyncServiceLive = Layer.effect(
         return { newThreads, newMessages, statusChanges, edits, changed };
       }).pipe(Effect.mapError(toSyncError()));
 
-    /**
-     * Pulls in flight, and the last one each PR finished: opening a PR asks
-     * for a thread sync from the page and again from the event stream's
-     * reconcile, at the same moment or a few ms apart. A second caller joins
-     * the first pull, or takes one that finished moments ago, instead of
-     * asking GitHub again. In-memory and per process: losing it costs one
-     * duplicate pull.
-     */
     const pullOnce = keyedSingleFlight<string, PullResult, SyncError>();
-    const lastPulled = new Map<string, number>();
-    const PULL_REUSE_MS = 5_000;
-    const NOTHING_NEW: PullResult = {
-      newThreads: 0,
-      newMessages: 0,
-      statusChanges: 0,
-      edits: 0,
-      changed: false,
-    };
-    const pullCommentsOnce = (
+    const pullComments = (
       prId: string,
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
-      pullOnce(
-        prId,
-        Effect.suspend(() => {
-          // What the last pull found was its caller's news; this one hears nothing moved.
-          const pulledAt = lastPulled.get(prId);
-          if (pulledAt !== undefined && Date.now() - pulledAt < PULL_REUSE_MS) {
-            return Effect.succeed(NOTHING_NEW);
-          }
-          return pullComments(prId).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                const now = Date.now();
-                for (const [id, at] of lastPulled) {
-                  if (now - at >= PULL_REUSE_MS) lastPulled.delete(id);
-                }
-                lastPulled.set(prId, now);
-              }),
-            ),
-          );
-        }),
-      );
+      pullOnce(prId, pullCommentsFromGitHub(prId));
 
     const syncThreads = (
       prId: string,
       opts?: { readonly force?: boolean },
     ): Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
-        const pulled = yield* pullCommentsOnce(prId);
+        const pulled = yield* pullComments(prId);
         const summary = yield* getThreadSummary(prId, null);
         // The background sweep visits every open PR on every tick. Announcing
         // an unchanged summary for each one costs an SSE message per PR and two

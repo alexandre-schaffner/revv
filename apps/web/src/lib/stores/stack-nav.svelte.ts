@@ -1,12 +1,3 @@
-// ── Moving through a PR stack ───────────────────────────────────────────────
-//
-// What the ⌥⌘↑/↓ shortcuts, the palette and the walkthrough's stack surfaces
-// share: where the open PR sits in its stack and how to move to another layer.
-//
-// Direction follows the stack, not the screen: "up" is toward the top layer
-// (higher positions, landing later), "down" toward the base, the way the
-// stack lists draw it.
-
 import { isOpenLayer, type PrStackDetail, type StackLayer } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { openStackLayer } from "$lib/stacks/open-layer";
@@ -19,11 +10,9 @@ import { getLayer, getNeighbour, getStack, startStackReview } from "./stacks.sve
 export interface StackView {
   readonly prId: string;
   readonly stack: PrStackDetail;
-  /** The open PR's layer. */
   readonly here: StackLayer;
 }
 
-/** The open PR's place in its stack, once the stack is loaded; null when unstacked. */
 export function getStackView(): StackView | null {
   const pr = getSelectedPr();
   if (!pr?.stack) return null;
@@ -33,32 +22,23 @@ export function getStackView(): StackView | null {
   return here ? { prId: pr.id, stack, here } : null;
 }
 
-/** An open layer without a review of its current head (and none on the way). */
 function layerNeedsReview(layer: StackLayer): boolean {
   return isOpenLayer(layer) && needsReview(layer);
 }
 
-// ── Moving ──────────────────────────────────────────────────────────────────
-
-/** Open another layer of the open PR's stack, the page sliding the way the stack goes. */
 export function openLayer(layer: StackLayer): void {
   const view = getStackView();
   if (!view || layer.position === view.here.position) return;
   openStackLayer(view.prId, layer);
 }
 
-/** Move one layer up or down; nothing at either end. */
 export function moveInStack(direction: NavigationDirection): void {
   const view = getStackView();
   if (!view) return;
-  const target = getNeighbour(view.prId, direction === "up" ? 1 : -1);
+  const target = getNeighbour(view.prId, direction);
   if (target) openLayer(target);
 }
 
-/**
- * The nearest layer still owed a review: the ones above first (reviewing goes
- * bottom-up), then from the base. Null when every open layer is covered.
- */
 function nextUnreviewedLayer(view: StackView): StackLayer | null {
   const candidates = view.stack.layers.filter(
     (l) => l.position !== view.here.position && layerNeedsReview(l),
@@ -78,9 +58,6 @@ export function openNextUnreviewedLayer(): void {
   else toast("Every open layer has a current review.");
 }
 
-// ── Whole-stack actions ─────────────────────────────────────────────────────
-
-/** Layers "Review stack" would queue: open, tracked, and owed a review. */
 export function remainingLayers(stack: PrStackDetail): StackLayer[] {
   return stack.layers.filter((l) => l.prId !== null && layerNeedsReview(l));
 }

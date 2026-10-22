@@ -1,11 +1,5 @@
-// The engraver's tools: seeded randomness, smooth noise, and the two marks
-// every part of a plate is built from — the broken line and the tapered
-// blade. Shared by the landscape (`engraving.ts`) and the props that stand
-// in it (`engraving-props.ts`).
-
 export type Rng = () => number;
 
-/** mulberry32: small, fast, and good enough for scattering ink. */
 export function makeRng(seed: number): Rng {
   let a = seed >>> 0;
   return () => {
@@ -20,7 +14,6 @@ export function pick<T>(rng: Rng, options: readonly T[]): T {
   return options[Math.floor(rng() * options.length)] as T;
 }
 
-/** Smooth 1D value noise over [0, ∞), roughly in [0, 1]. */
 export function makeNoise1d(rng: Rng): (x: number) => number {
   const lattice = Array.from({ length: 512 }, rng);
   return (x) => {
@@ -33,7 +26,6 @@ export function makeNoise1d(rng: Rng): (x: number) => number {
   };
 }
 
-/** Smooth 2D value noise, roughly in [0, 1]. */
 export function makeNoise2d(rng: Rng): (x: number, y: number) => number {
   const size = 256;
   const perm = Array.from({ length: size }, (_, i) => i);
@@ -58,7 +50,6 @@ export function makeNoise2d(rng: Rng): (x: number, y: number) => number {
   };
 }
 
-/** Fractal sum of `octaves` noise layers, normalised to [0, 1]. */
 export function fbm(noise: (x: number) => number, x: number, octaves: number): number {
   let sum = 0;
   let amp = 1;
@@ -75,7 +66,6 @@ export function fbm(noise: (x: number) => number, x: number, octaves: number): n
 
 export const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-/** Draw a run of points as broken strokes: `on(x)` decides which stretches get ink. */
 export function brokenLine(
   ctx: CanvasRenderingContext2D,
   from: number,
@@ -95,11 +85,6 @@ export function brokenLine(
   ctx.stroke();
 }
 
-/**
- * A tapered blade from (x, y) toward `angle` (0 = straight up), filled so it
- * swells at the base and closes to a point, bending as it rises. Adds to the
- * current path; the caller fills.
- */
 export function blade(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -121,7 +106,6 @@ export function blade(
   ctx.closePath();
 }
 
-/** Parallel lines at `angle` through whatever clip is active, `gap` apart. */
 export function hatchClip(
   ctx: CanvasRenderingContext2D,
   x: number,

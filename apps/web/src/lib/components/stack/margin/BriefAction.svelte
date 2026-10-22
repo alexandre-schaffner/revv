@@ -1,9 +1,4 @@
 <script lang="ts">
-/*
- * The stack brief's one quiet affordance in the margin: write it when the
- * stack has none, refresh it when the stack moved past it. Never a button
- * that competes with the review; a line of muted text that does one thing.
- */
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import PencilSimpleLine from "phosphor-svelte/lib/PencilSimpleLine";
 import { toast } from "svelte-sonner";
@@ -13,13 +8,11 @@ import type { StackPlace } from "./stack-margin";
 
 interface Props {
   place: StackPlace;
-  /** One line, no lead-in: for the narrow layout's inline summary. */
   compact?: boolean;
 }
 
 let { place, compact = false }: Props = $props();
 
-// Between the press and the stack read that shows the brief being written.
 let askedFor = $state<string | null>(null);
 const asking = $derived(askedFor === place.stack.brief?.id || askedFor === "none");
 
@@ -40,6 +33,13 @@ async function ask(): Promise<void> {
 		{#if !compact}<span class="lead">Written for an earlier version of the stack.</span>{/if}
 		<button type="button" class="act" onclick={ask}>
 			<ArrowsClockwise size={12} weight="bold" aria-hidden="true" />Refresh
+		</button>
+	</span>
+{:else if place.briefState === 'failed'}
+	<span class="brief">
+		{#if !compact}<span class="lead">The stack brief couldn't be written.</span>{/if}
+		<button type="button" class="act" onclick={ask}>
+			<ArrowsClockwise size={12} weight="bold" aria-hidden="true" />Try again
 		</button>
 	</span>
 {:else if place.briefState === 'none'}

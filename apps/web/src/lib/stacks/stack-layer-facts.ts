@@ -1,10 +1,3 @@
-// ── What the walkthrough's stack surfaces say about one layer ──────────────
-//
-// The overview's rows and the handoff card describe a layer with the same
-// words: its role in the stack, its risk, its open issues, the viewer's own
-// verdict, and anything the restack check found. One place decides them, so
-// a layer never reads two ways on one page.
-
 import {
   isOpenLayer,
   type ReviewVerdict,
@@ -20,7 +13,6 @@ export const RISK_LABEL: Record<RiskLevel, string> = {
   high: "High risk",
 };
 
-/** The viewer's own latest review, in their voice. */
 export const REVIEW_VERDICT_LABEL: Record<ReviewVerdict, string> = {
   approved: "You approved",
   changes_requested: "You requested changes",
@@ -40,11 +32,6 @@ export type LayerFact =
     }
   | { readonly kind: "text"; readonly key: string; readonly tone: Tone; readonly label: string };
 
-/**
- * The layer has no review of its current head (and none on the way). A
- * review carried over a restack counts: the layer's own changes are the
- * ones it read.
- */
 export function needsReview(layer: StackLayer): boolean {
   const { review } = layer;
   if (review.kind === "generating") return false;
@@ -57,13 +44,11 @@ export function needsReview(layer: StackLayer): boolean {
   );
 }
 
-/** The stack's brief, when it has one worth reading: written, even if for an older version. */
 export function readableBrief(brief: StackBrief | null): StackBrief | null {
   if (!brief) return null;
   return brief.status === "complete" || brief.status === "superseded" ? brief : null;
 }
 
-/** What the layer contributes: the brief's one line for it, else its walkthrough's takeaway. */
 export function layerRole(layer: StackLayer, brief: StackBrief | null): string | null {
   const fromBrief = brief?.layers.find((l) => l.prNumber === layer.number)?.role.trim();
   if (fromBrief) return fromBrief;
@@ -71,7 +56,6 @@ export function layerRole(layer: StackLayer, brief: StackBrief | null): string |
   return null;
 }
 
-/** What landed is the stack's history: its review's findings no longer ask anything. */
 export function layerFacts(layer: StackLayer): LayerFact[] {
   const facts: LayerFact[] = [];
   if (!isOpenLayer(layer)) return facts;

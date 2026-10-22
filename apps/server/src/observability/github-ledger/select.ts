@@ -1,15 +1,12 @@
 import type { GitHubCall } from "./record";
 
 export interface Selection {
-  /** Seconds back from now (`90`, `5m`, `2h`), or an ISO time. */
   readonly since?: string | null;
-  /** Keep calls whose origin label contains this. */
   readonly origin?: string | null;
 }
 
 const UNITS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };
 
-/** The epoch ms `since` names, or null when it names nothing. */
 export function sinceMs(since: string, now = Date.now()): number | null {
   const relative = since.trim().match(/^(\d+(?:\.\d+)?)([smh]?)$/);
   if (relative) return now - Number(relative[1]) * (UNITS[relative[2] || "s"] ?? 1000);

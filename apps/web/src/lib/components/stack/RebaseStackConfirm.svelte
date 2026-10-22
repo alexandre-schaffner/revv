@@ -1,10 +1,4 @@
 <script lang="ts">
-/*
- * The second step before "Rebase stack". The rebase force-pushes every open
- * layer's branch, often branches other people own, so it never fires on one
- * click: this names each branch it will rewrite, and whose it is when it
- * isn't the viewer's, and the push happens from here.
- */
 import { isOpenLayer, loginsMatch, type PrStackDetail } from "@revv/shared";
 import { AlertDialog } from "bits-ui";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
@@ -24,7 +18,6 @@ interface Props {
 let { open, stack, onOpenChange, onConfirm }: Props = $props();
 
 const viewer = $derived(getCurrentUserLogin());
-/** What gets force-pushed, top of the stack first like the stack list. */
 const pushed = $derived(stack.layers.filter(isOpenLayer).reverse());
 const othersOwn = $derived(
   pushed.some((l) => l.authorLogin !== null && !loginsMatch(l.authorLogin, viewer)),

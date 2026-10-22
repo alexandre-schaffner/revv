@@ -1,14 +1,4 @@
 <script lang="ts">
-/*
- * The end of a layer's walkthrough hands the reader to the next layer up:
- * what it adds, how risky it read, where its review stands, and one press to
- * go on. At the top of a fully reviewed stack the author gets the stack's
- * merge instead.
- *
- * The parent mounts this only once the walkthrough on screen is complete;
- * a handoff in the middle of reading would be an interruption.
- */
-
 import { isOpenLayer, loginsMatch } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
@@ -39,7 +29,7 @@ let { prId }: Props = $props();
 
 const stack = $derived(getStack(prId));
 const here = $derived(getLayer(prId));
-const next = $derived(getNeighbour(prId, 1));
+const next = $derived(getNeighbour(prId, "up"));
 const brief = $derived(readableBrief(stack?.brief ?? null));
 const nextRole = $derived(next ? layerRole(next, brief) : null);
 const nextFacts = $derived(next ? layerFacts(next) : []);
@@ -116,7 +106,6 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 {/if}
 
 <style>
-	/* Hairline and paper, no lift: the handoff belongs to the page it ends. */
 	.handoff {
 		margin-top: 1.5rem;
 		padding: 0.875rem 1rem 1rem;
@@ -125,8 +114,6 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		background: var(--color-bg-primary);
 	}
 
-	/* The chapters' italic serif eyebrow, so the handoff speaks in the
-	   walkthrough's own voice. */
 	.eyebrow {
 		margin: 0 0 0.5rem;
 		font-family: 'Newsreader', Georgia, serif;
@@ -260,7 +247,6 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		align-self: center;
 	}
 
-	/* The shortcut rides inside the button, quieter than its label. */
 	.kbd {
 		margin-left: 0.25rem;
 		padding: 0 0.3125rem;

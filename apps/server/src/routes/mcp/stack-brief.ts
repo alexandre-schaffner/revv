@@ -1,9 +1,3 @@
-// ── /mcp/stack-brief ────────────────────────────────────────────────────────
-//
-// HTTP transport for the stack-brief MCP tools, mirroring `/mcp/recap`. Each
-// bearer token is scoped to one brief; JSON-RPC dispatch is the shared
-// gateway binder's.
-
 import { Effect } from "effect";
 import type { StackBriefToolContext } from "../../ai/providers/stack-brief-tools";
 import { STACK_BRIEF_TOOL_BUNDLE } from "../../ai/providers/stack-brief-tools";
@@ -41,9 +35,7 @@ export const mcpStackBriefRoute = bindHttp({
   bundle: STACK_BRIEF_TOOL_BUNDLE,
   resolveContext,
   logInbound: true,
-  beforeToolCall: ({ toolName, ctx }) => {
-    ctx.toolCalls?.add(toolName);
-  },
+  beforeToolCall: ({ toolName, ctx }) => ctx.onToolCall(toolName),
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), briefId=${meta.briefId}`,
 });

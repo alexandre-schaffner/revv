@@ -1,8 +1,4 @@
 <script lang="ts" generics="T">
-/*
- * "A, B and C", inline in a margin note's prose: each item rendered by the
- * caller, joined the way a sentence lists things. Adds no element of its own.
- */
 import type { Snippet } from "svelte";
 
 interface Props {

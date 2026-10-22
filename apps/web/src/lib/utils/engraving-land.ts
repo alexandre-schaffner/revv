@@ -1,16 +1,6 @@
-// What stands on dry land in an engraved landscape: grass, a path and its
-// fence, a lone tree, a cabin, boulders. The ground they stand on is
-// `engraving-props.ts`.
-
 import { blade, clamp01, hatchClip, makeNoise1d, type Rng } from "$lib/utils/engraving-marks";
 import { type Ground, groundShadow, type Inks, type Prop } from "$lib/utils/engraving-props";
 
-// ── Grass ────────────────────────────────────────────────────────────────
-
-/**
- * A blade that curls at its tip: a tapered body bent along a quadratic, the
- * last stretch hooking over. Adds to the current path; the caller fills.
- */
 function curledBlade(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -20,7 +10,6 @@ function curledBlade(
   baseWidth: number,
   curl: number,
 ) {
-  // Spine: from the root, rising along `angle`, then bending by `curl`.
   const steps = 7;
   const spine: [number, number][] = [];
   let a = angle;
@@ -52,14 +41,6 @@ function curledBlade(
   ctx.closePath();
 }
 
-/**
- * A tussock drawn the way an engraver cuts one, in two colours that work
- * against each other: blades crowd up out of the root so densely that their
- * thick lower halves merge into one ink mass, then thin, part and curl over
- * at the top; paper blades are cut back up through the mass, and a few ink
- * blades are laid over the cuts, so the clump has light inside its dark
- * rather than being a flat silhouette.
- */
 export function drawTuft(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -72,16 +53,13 @@ export function drawTuft(
   const lean = (rng() - 0.5) * 0.5;
   const weight = Math.max(0.85, size * 0.075);
   const spread = size * (0.75 + rng() * 0.35);
-  // Roots crowd the middle of the clump.
   const rootX = () => x + (rng() + rng() + rng() - 1.5) * spread * 0.32;
-  // Pure two colours, like the plate: no half-tones from overlapping alpha.
   const alpha = near < 0.25 ? 0.9 : 1;
 
   const inkBlades = (count: number, lenScale: number, widthScale: number, rise: number) => {
     for (let b = 0; b < count; b++) {
       const bx = rootX();
       const side = (bx - x) / spread;
-      // Mostly upright; the outer blades lean out further and curl over.
       const angle = lean + side * 1.6 + (rng() - 0.5) * 0.45;
       const tall = 1 - Math.min(1, Math.abs(side) * 1.6);
       const len = size * lenScale * (0.5 + tall * 0.5) * (0.75 + rng() * 0.5);
@@ -91,18 +69,15 @@ export function drawTuft(
     }
   };
 
-  // Back blades, then the body of the clump.
   ctx.globalAlpha = alpha;
   ctx.fillStyle = ink;
   ctx.beginPath();
   inkBlades(10 + Math.floor(near * 14), 1, 0.9, 0);
   inkBlades(12 + Math.floor(near * 18), 0.68, 1.35, -0.4);
-  // The root, buried: a low mound joining the blades' feet.
   ctx.ellipse(x, y, spread * 0.36, Math.max(0.8, size * 0.09), 0, Math.PI, 0);
   ctx.fill();
 
   if (size > 5) {
-    // Paper cuts rising from inside the mass.
     ctx.globalAlpha = 1;
     ctx.fillStyle = paper;
     ctx.beginPath();
@@ -123,8 +98,6 @@ export function drawTuft(
     }
     ctx.fill();
 
-    // A few ink blades in front of the cuts, so the light sits between
-    // blades rather than on top of them.
     ctx.globalAlpha = alpha;
     ctx.fillStyle = ink;
     ctx.beginPath();
@@ -134,10 +107,6 @@ export function drawTuft(
   ctx.globalAlpha = 1;
 }
 
-/**
- * A sprig: the grass between the tufts jotted the way a hand would, two to
- * four little hooks leaning together like a scrawled word.
- */
 export function drawSprig(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -164,16 +133,12 @@ export function drawSprig(
   }
 }
 
-// ── Path and fence ───────────────────────────────────────────────────────
-
 export interface Track {
   centre: (t: number) => number;
   half: (t: number) => number;
-  /** Whether (x, y) is on the track, with `margin` px to spare. */
   covers: (x: number, y: number, margin?: number) => boolean;
 }
 
-/** A dirt track winding from the horizon down to the viewer's feet. */
 export function makeTrack(rng: Rng, ground: Ground): Track {
   const { width } = ground;
   const vanish = width * (0.45 + rng() * 0.4);
@@ -187,7 +152,7 @@ export function makeTrack(rng: Rng, ground: Ground): Track {
     centre,
     half,
     covers: (x, y, margin = 2) => {
-      const t = ground.t(y);
+      const t = ground.depthAtY(y);
       return Math.abs(x - centre(t)) < half(t) + margin;
     },
   };
@@ -204,21 +169,19 @@ export function drawTrack(
   const ts = Array.from({ length: steps + 1 }, (_, i) => (i / steps) * 1.08);
   const edge = (t: number, side: -1 | 1) => track.centre(t) + side * track.half(t);
 
-  // Bare earth: clear the plain's rows where the track runs.
   ctx.fillStyle = paper;
   ctx.beginPath();
   for (const [i, t] of ts.entries()) {
-    if (i === 0) ctx.moveTo(edge(t, -1), ground.y(t));
-    else ctx.lineTo(edge(t, -1), ground.y(t));
+    if (i === 0) ctx.moveTo(edge(t, -1), ground.yAtDepth(t));
+    else ctx.lineTo(edge(t, -1), ground.yAtDepth(t));
   }
-  for (const t of [...ts].reverse()) ctx.lineTo(edge(t, 1), ground.y(t));
+  for (const t of [...ts].reverse()) ctx.lineTo(edge(t, 1), ground.yAtDepth(t));
   ctx.closePath();
   ctx.fill();
 
   const noise = makeNoise1d(rng);
   ctx.strokeStyle = ink;
   ctx.lineCap = "round";
-  // Wheel ruts, then the verges.
   for (const [offset, alpha, weight] of [
     [-0.45, 0.6, 0.6],
     [0.45, 0.6, 0.6],
@@ -231,7 +194,7 @@ export function drawTrack(
       if (t < 0.06) continue;
       const on = noise(t * 30 + offset * 7) > (offset === -1 || offset === 1 ? 0.18 : 0.32);
       const x = track.centre(t) + offset * track.half(t);
-      const y = ground.y(t);
+      const y = ground.yAtDepth(t);
       ctx.lineWidth = weight * (0.6 + t * 1.1);
       if (on && !drawing) {
         ctx.beginPath();
@@ -245,14 +208,13 @@ export function drawTrack(
       drawing = on;
     }
   }
-  // A few stones and dashes on the surface.
   ctx.globalAlpha = 0.45;
   ctx.lineWidth = 0.8;
   ctx.beginPath();
   for (let i = 0; i < 40; i++) {
     const t = 0.15 + rng() * 0.9;
     const x = track.centre(t) + (rng() - 0.5) * track.half(t) * 1.4;
-    const y = ground.y(t);
+    const y = ground.yAtDepth(t);
     const len = 1 + t * 5 * rng();
     ctx.moveTo(x, y);
     ctx.lineTo(x + len, y);
@@ -261,7 +223,6 @@ export function drawTrack(
   ctx.globalAlpha = 1;
 }
 
-/** Fence posts down one verge of the track, strung with two sagging wires. */
 export function fenceProps(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -274,7 +235,7 @@ export function fenceProps(
   for (let t = 0.1 + rng() * 0.05; t < 1.15; t *= 1.22) {
     posts.push({
       x: track.centre(t) + side * (track.half(t) + 4 + t * 18),
-      y: ground.y(t),
+      y: ground.yAtDepth(t),
       h: 2.5 + t * 22,
       w: 0.7 + t * 2.2,
     });
@@ -313,9 +274,6 @@ export function fenceProps(
   }));
 }
 
-// ── Tree, cabin, rocks ───────────────────────────────────────────────────
-
-/** A lone broadleaf: tapered trunk, a crown of massed lumps lit from the upper left. */
 export function drawTree(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -327,8 +285,6 @@ export function drawTree(
   const lean = (rng() - 0.5) * h * 0.1;
   const crownY = y - h * 0.58;
   const bw = Math.max(1.6, h * 0.06);
-  // The low light throws the trunk's shadow out along the ground and the
-  // crown's after it, a pool beyond a thin stem.
   const th = Math.max(2.5, h * 0.1);
   groundShadow(ctx, rng, x, y, h * 1.1, bw * 2.2, ink, () => {
     ctx.moveTo(x - bw, y - 0.4);
@@ -350,7 +306,6 @@ export function drawTree(
   blade(ctx, x + lean * 0.6, y - h * 0.44, h * 0.2, 0.8, bw * 0.7, 0);
   ctx.fill();
 
-  // Bark: a couple of paper grooves up the trunk's lit side.
   ctx.strokeStyle = paper;
   ctx.lineCap = "round";
   ctx.lineWidth = Math.max(0.5, h * 0.01);
@@ -364,8 +319,6 @@ export function drawTree(
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // The crown: foliage masses with serrated, leafy edges, a few stray clumps
-  // breaking the silhouette.
   const cx = x + lean;
   const cy = crownY - h * 0.1;
   const rx = h * 0.38;
@@ -407,9 +360,6 @@ export function drawTree(
   }
   ctx.fill();
 
-  // Leaf texture cut in paper: each mass gets a thin rim of light along its
-  // upper-left edge (so the masses separate), then flicks inside it,
-  // crowded where the crown faces the light and sparse in its shade.
   ctx.strokeStyle = paper;
   ctx.lineWidth = Math.max(0.5, h * 0.01);
   for (const l of lumps) {
@@ -434,7 +384,6 @@ export function drawTree(
   ctx.globalAlpha = 1;
 }
 
-/** A gabled cabin, front wall lit, side wall hatched, smoke from the chimney. */
 export function drawCabin(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -453,8 +402,6 @@ export function drawCabin(
   const ridgeY = eaveY - roofH;
   const line = Math.max(0.6, s * 0.025);
 
-  // The shadow of the house falls off its side wall onto the ground: the
-  // wall's foot projected right, roof and all.
   const fall = wh * 2.6;
   const drop = wh * 0.45;
   groundShadow(ctx, rng, x + fw, y, sw + fall, fw * 0.8, ink, () => {
@@ -482,7 +429,6 @@ export function drawCabin(
     }
   };
 
-  // Side wall, in shadow: vertical hatching through a clip.
   const side: [number, number][] = [
     [x + fw, y],
     [x + fw + sw, y - skew],
@@ -498,7 +444,6 @@ export function drawCabin(
   hatchClip(ctx, x + fw, eaveY - skew, sw, wh + skew, Math.max(1.2, s * 0.05), Math.PI / 2);
   ctx.restore();
   ctx.globalAlpha = 1;
-  // Window on the side wall.
   const winX = x + fw + sw * 0.38;
   const winY = y - skew * 0.4 - wh * 0.75;
   const win = Math.max(1.6, s * 0.11);
@@ -508,7 +453,6 @@ export function drawCabin(
   ctx.lineWidth = line;
   ctx.strokeRect(winX, winY, win, win);
 
-  // Front wall and gable, lit.
   poly(
     [
       [x, y],
@@ -522,7 +466,6 @@ export function drawCabin(
   ctx.fillStyle = ink;
   ctx.fillRect(x + fw * 0.38, y - wh * 0.62, fw * 0.24, wh * 0.62);
 
-  // Roof plane receding to the right: solid ink with pale shingle rows.
   poly(
     [
       [ridgeX, ridgeY],
@@ -544,8 +487,6 @@ export function drawCabin(
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // Chimney, and smoke drifting off it as a few wavering lines that thin
-  // and part as they rise.
   const chX = ridgeX + sw * 0.62;
   const chTop = ridgeY - skew * 0.62 - s * 0.12;
   ctx.fillStyle = ink;
@@ -569,7 +510,6 @@ export function drawCabin(
   ctx.globalAlpha = 1;
 }
 
-/** A boulder: a rounded dome lit on top, hatched low on the right, a shadow at its foot. */
 export function drawRock(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -586,8 +526,6 @@ export function drawRock(
       ctx.ellipse(x + w * 0.6, y + w * 0.08, w * 0.8, w * 0.2, 0, 0, Math.PI * 2);
     });
   }
-  // Points round a low, uneven mound, then a smooth curve through their
-  // midpoints; the summit sits off-centre so no two read as domes.
   const peak = (rng() - 0.5) * 0.6;
   const pts = Array.from({ length: 9 }, (_, i) => {
     const a = Math.PI - (i / 8) * Math.PI + peak * Math.sin((i / 8) * Math.PI);

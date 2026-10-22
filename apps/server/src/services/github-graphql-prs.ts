@@ -4,10 +4,15 @@
  *
  * Split out of `GitHub.ts`, which exposes both through `GitHubGateway.prs`.
  */
-import type { PullRequest } from "@revv/shared";
+import type { PrStackPlace, PullRequest } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
+import {
+  type ObservedPr,
+  STACK_UNSEEN,
+  type StackSighting,
+  stackSeen,
+} from "../domain/observed-pr";
 import {
   type GraphqlConnection,
   githubGraphqlPartial,
@@ -24,16 +29,10 @@ import {
  */
 const OPEN_PRS_MAX_PAGES = 50;
 
-/** PRs per page of the open list: one request, and one GraphQL point. */
 export const OPEN_PRS_PAGE_SIZE = 100;
 
-/** The most open PRs a list holds; a repo with more is listed newest first, up to it. */
 export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * OPEN_PRS_PAGE_SIZE;
 
-/**
- * What an older GitHub Enterprise says when it predates stacks. Quoted, since
- * bare `stack` is too common a word to match on.
- */
 const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
 
 // Exactly the fields `mapPrNode` reads. `additions`/`deletions`/`changedFiles`
@@ -89,7 +88,6 @@ interface GqlOpenPr {
   readonly headRefOid: string;
   readonly baseRefOid: string;
   readonly author: GqlActor | null;
-  /** Absent when asked without stacks; null when the PR isn't stacked. */
   readonly stack?: { readonly number: number } | null;
   readonly stackEntry?: { readonly position: number } | null;
   readonly reviewRequests: {
@@ -117,11 +115,13 @@ function restLogin(actor: GqlActor): string | null {
   return actor.__typename === "Bot" ? `${actor.login}[bot]` : actor.login;
 }
 
-/**
- * Map an `openPrsQuery` node to the same row `mapPr` builds from REST. `stack`
- * is set only when the node was asked for it.
- */
-function mapPrNode(node: GqlOpenPr, repositoryId: string): ObservedPr {
+function stackPlaceOf(node: GqlOpenPr): PrStackPlace | null {
+  return node.stack && node.stackEntry
+    ? { number: node.stack.number, position: node.stackEntry.position }
+    : null;
+}
+
+function mapPrNode(node: GqlOpenPr, repositoryId: string, stack: StackSighting): ObservedPr {
   const requestedReviewers = node.reviewRequests.nodes.flatMap((n) => {
     // Team requests have no login; REST lists them separately too.
     const login = n?.requestedReviewer ? restLogin(n.requestedReviewer) : null;
@@ -155,33 +155,15 @@ function mapPrNode(node: GqlOpenPr, repositoryId: string): ObservedPr {
     updatedAt: node.updatedAt,
     fetchedAt: new Date().toISOString(),
     closedAt: node.closedAt,
-    ...(node.stack === undefined
-      ? {}
-      : {
-          stack:
-            node.stack && node.stackEntry
-              ? { number: node.stack.number, position: node.stackEntry.position }
-              : null,
-        }),
+    stack,
   };
 }
 
-/**
- * A repo's open PRs. Each one's `stack` is set when the list saw stacks, and
- * absent when they weren't asked for or GitHub refused them.
- */
 export interface OpenPrList {
   readonly prs: ObservedPr[];
-  /** GitHub refused the stack fields as unknown: the host predates stacks. */
   readonly hostPredatesStacks: boolean;
 }
 
-/**
- * Every open PR of `owner/repo`, most recently updated first. With
- * `updatedSince`, only those updated at or after it: the list is ordered by
- * `updatedAt`, so the walk stops at the first page that reaches older ones,
- * and a busy repo costs the pages that moved rather than all of them.
- */
 export function listOpenPrsViaGraphql(
   owner: string,
   repo: string,
@@ -204,7 +186,17 @@ export function listOpenPrsViaGraphql(
       notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
       stopAfter: (page) => page.some((node) => !recent(node)),
     }).pipe(
-      Effect.map((nodes) => nodes.filter(recent).map((node) => mapPrNode(node, repositoryId))),
+      Effect.map((nodes) =>
+        nodes
+          .filter(recent)
+          .map((node) =>
+            mapPrNode(
+              node,
+              repositoryId,
+              withStacks ? stackSeen(stackPlaceOf(node)) : STACK_UNSEEN,
+            ),
+          ),
+      ),
     );
 
   if (!withStacks) {
@@ -247,7 +239,6 @@ interface ClosedPrsResp {
   readonly repository: { readonly pullRequests: GraphqlConnection<ClosedPrNode> } | null;
 }
 
-/** Closing a PR is an update, so a few pages always reach back far enough. */
 const CLOSED_SINCE_MAX_PAGES = 5;
 
 /**
@@ -282,18 +273,12 @@ export function listClosedPrNumbersSince(
   );
 }
 
-// ── Aliased batches ─────────────────────────────────────────────────────────
-//
 // Many PRs of one repo, or many repos, in one request: one aliased field per
 // item. GitHub answers an alias it can't resolve (PR deleted, repo renamed,
 // access revoked) with `null` plus an `errors` entry, which must not cost the
 // other aliases theirs; such an item is absent from the result, which callers
 // read as "unknown", never as "none".
 
-/**
- * `selection` of each PR in `numbers`, one request per `chunkSize`, keyed by
- * PR number.
- */
 function prsByNumber<N>(
   operation: string,
   owner: string,
@@ -341,7 +326,6 @@ ${fields}
  */
 const REPO_CHUNK_SIZE = 80;
 
-/** `selection` of each repo in `repoFullNames` (`owner/name`), keyed by full name. */
 export function reposByName<N>(
   operation: string,
   repoFullNames: readonly string[],
@@ -381,7 +365,6 @@ export function reposByName<N>(
   });
 }
 
-/** The fields of one PR the archive needs, closed ones included. */
 const PR_DETAIL_FIELDS = `${PR_NODE_FIELDS}
   mergedAt state additions deletions changedFiles`;
 
@@ -393,14 +376,8 @@ interface GqlPrDetail extends GqlOpenPr {
   readonly changedFiles: number;
 }
 
-/** Each alias carries a body, so fewer per request than the size-only batches. */
 const PR_DETAIL_CHUNK = 50;
 
-/**
- * Many PRs of one repo by number, as the rows a REST detail fetch would have
- * built — one request per {@link PR_DETAIL_CHUNK} instead of one each. A PR
- * GitHub can't resolve is absent from the map; the others still answer.
- */
 export function getPrsViaGraphql(
   owner: string,
   repo: string,
@@ -425,7 +402,7 @@ export function getPrsViaGraphql(
           [...nodes].map(([n, node]): [number, ObservedPr] => [
             n,
             {
-              ...mapPrNode(node, repositoryId),
+              ...mapPrNode(node, repositoryId, STACK_UNSEEN),
               status:
                 node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
               additions: node.additions,
@@ -438,20 +415,14 @@ export function getPrsViaGraphql(
   );
 }
 
-/** Per-PR diff size. */
 export interface PrDiffStats {
   readonly additions: number;
   readonly deletions: number;
   readonly changedFiles: number;
 }
 
-/** Each alias is 3 scalar fields; 100 also keeps the request body comfortable on GHE. */
 const DIFF_STATS_CHUNK = 100;
 
-/**
- * Diff size for many PRs of one repo, keyed by PR number: one aliased request
- * per {@link DIFF_STATS_CHUNK}, where a REST detail fetch was one each.
- */
 export function listPrDiffStatsViaGraphql(
   owner: string,
   repo: string,

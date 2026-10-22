@@ -1,5 +1,4 @@
 <script lang="ts">
-/* A brief line as prose: `code` spans set in mono, `#N` layers as chips. */
 import LayerChip from "./LayerChip.svelte";
 import type { RichPart, StackPlace } from "./stack-margin";
 

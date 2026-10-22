@@ -1,11 +1,3 @@
-// ── Stack rebase: the git half ──────────────────────────────────────────────
-//
-// Carries out a `RebasePlan` in the repo's clone, the way `gh stack rebase`
-// does it locally: one scratch worktree on a detached HEAD, every layer
-// replayed with `git rebase --onto`, then a single `push --atomic` with a
-// lease per branch, so either every layer moves or none does and a branch
-// that moved meanwhile is never overwritten.
-//
 // Nothing here names a local branch: the clone shares refs with the PR
 // worktrees (and, for linked repos, with the user's own checkouts), so the
 // rebase works on SHAs and the push maps them straight onto the remote
@@ -31,20 +23,15 @@ import {
 } from "../GitOps";
 import type { RebaseStep } from "./rebase-plan";
 
-/** One layer's rebase can replay many commits across a large tree. */
 const REBASE_TIMEOUT_MS = 5 * 60_000;
 const FETCH_TIMEOUT_MS = 3 * 60_000;
-/** How much history to ask for when the clone is too shallow to find a merge base. */
 const DEEPEN_BY = 1_000;
 
 export interface ReplayInput {
   readonly clonePath: string;
-  /** A path the scratch worktree may own outright; anything there is removed. */
   readonly scratchPath: string;
-  /** `https://x-access-token:…@host/owner/repo.git`, or any URL git can fetch from. */
   readonly remoteUrl: string;
   readonly baseRefName: string;
-  /** Namespaces the temporary ref, so two stacks never share one. */
   readonly stackNumber: number;
   readonly steps: readonly RebaseStep[];
 }
@@ -52,7 +39,6 @@ export interface ReplayInput {
 export type ReplayOutcome =
   | {
       readonly kind: "replayed";
-      /** Every step's head after the rebase; equal to `tip` where nothing moved. */
       readonly heads: ReadonlyMap<number, string>;
     }
   | {
@@ -75,7 +61,6 @@ const firstLine = (stderr: string) =>
 
 const baseRef = (stackNumber: number) => `refs/revv/stack-rebase/${stackNumber}/base`;
 
-/** Drop the scratch worktree, whatever state a previous run left it in. */
 async function clearScratch(input: ReplayInput): Promise<void> {
   if (existsSync(input.scratchPath)) await abortDetachedRebase(input.scratchPath);
   await removeWorktree(input.clonePath, input.scratchPath);
@@ -85,16 +70,11 @@ async function clearScratch(input: ReplayInput): Promise<void> {
   }
 }
 
-/** Drop the scratch worktree and the temporary ref. */
 export async function cleanupReplay(input: ReplayInput): Promise<void> {
   await clearScratch(input);
   await deleteRef(input.clonePath, baseRef(input.stackNumber));
 }
 
-/**
- * Bring in the stack base's tip and every layer's head. The clone is shallow,
- * so a merge base may still be missing afterwards; `deepen` asks for more.
- */
 async function fetchStack(input: ReplayInput, deepen: boolean): Promise<string | null> {
   const r = await fetchForRebase(
     input.clonePath,
@@ -108,7 +88,6 @@ async function fetchStack(input: ReplayInput, deepen: boolean): Promise<string |
   return r.ok ? null : firstLine(r.stderr);
 }
 
-/** Where `step`'s own commits begin: a candidate it descends from, else the merge base. */
 async function upstreamOf(
   cwd: string,
   step: RebaseStep,
@@ -160,7 +139,6 @@ export async function replayStack(input: ReplayInput): Promise<ReplayOutcome> {
         message: `Couldn't work out where #${step.number}'s own commits start — rebase it locally`,
       };
     }
-    // Already sitting on what it would be rebased onto.
     if (upstream === onto) {
       heads.set(step.number, step.tip);
       continue;
@@ -186,10 +164,6 @@ export async function replayStack(input: ReplayInput): Promise<ReplayOutcome> {
   return { kind: "replayed", heads };
 }
 
-/**
- * Push every moved layer in one atomic push, each leased on the head the
- * rebase started from.
- */
 export async function pushStack(
   clonePath: string,
   remoteUrl: string,

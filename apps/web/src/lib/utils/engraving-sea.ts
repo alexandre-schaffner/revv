@@ -1,12 +1,7 @@
-// What stands on the water in an engraved landscape: sailboats, rocks in
-// the swell, a lighthouse on its headland. The ground they stand on is
-// `engraving-props.ts`.
-
 import { drawCabin, drawRock } from "$lib/utils/engraving-land";
 import { blade, hatchClip, makeNoise1d, type Rng } from "$lib/utils/engraving-marks";
 import { type Ground, groundShadow, type Inks } from "$lib/utils/engraving-props";
 
-/** A sloop under sail, with its hull's reflection broken in the swell. */
 export function drawSailboat(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -18,8 +13,6 @@ export function drawSailboat(
   const mastX = x - hw * 0.05;
   const line = Math.max(0.6, h * 0.025);
 
-  // Reflection first, so the hull sits on it: short vertical strokes hanging
-  // under the hull and mast, broken by the swell.
   ctx.fillStyle = ink;
   ctx.beginPath();
   const streaks = Math.round(hw / 1.6);
@@ -67,7 +60,6 @@ export function drawSailboat(
     hatchClip(ctx, x - hw, y - h, hw * 2, h, shaded ? 1.3 : 3, shaded ? 1.2 : 0.15);
     ctx.restore();
     ctx.globalAlpha = 1;
-    // The path is the hatching now, not the sail: rebuild it to outline.
     outline();
     ctx.strokeStyle = ink;
     ctx.lineWidth = line;
@@ -91,7 +83,6 @@ export function drawSailboat(
   );
 }
 
-/** A far-off sail on the horizon: a sliver of ink. */
 export function drawDistantSail(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -109,7 +100,6 @@ export function drawDistantSail(
   ctx.fill();
 }
 
-/** Foam at a rock's waterline: short curls either side. */
 function foam(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -147,11 +137,6 @@ export function drawSeaRock(
   foam(ctx, rng, x, y, w, inks.ink);
 }
 
-/**
- * A rocky headland running in from one edge of the plate, a striped
- * lighthouse on its shoulder throwing beams into the sky. Returns the x range
- * it covers so other props keep off it.
- */
 export function drawHeadland(
   ctx: CanvasRenderingContext2D,
   rng: Rng,
@@ -162,19 +147,17 @@ export function drawHeadland(
   const fromLeft = rng() < 0.5;
   const reach = width * (0.16 + rng() * 0.08);
   const noise = makeNoise1d(rng);
-  // u = 0 at the plate's edge, 1 at the headland's seaward tip.
-  const X = (u: number) => (fromLeft ? u * reach : width - u * reach);
+  const xFromEdge = (towardTip: number) =>
+    fromLeft ? towardTip * reach : width - towardTip * reach;
   const top = (u: number) => horizon - 10 + u ** 1.8 * depth * 0.5 + (noise(u * 9) - 0.5) * 4;
   const tipY = top(1);
 
   ctx.beginPath();
-  ctx.moveTo(X(0), height);
-  for (let u = 0; u <= 1.001; u += 0.02) ctx.lineTo(X(u), top(u));
-  // The seaward face falls to the water as a rough scree slope, spreading
-  // out toward the viewer rather than dropping in a straight seam.
+  ctx.moveTo(xFromEdge(0), height);
+  for (let u = 0; u <= 1.001; u += 0.02) ctx.lineTo(xFromEdge(u), top(u));
   for (let v = 0; v <= 1.001; v += 0.05) {
     const spread = v ** 0.7 * reach * 0.35 + (noise(v * 9 + 3) - 0.4) * 7 * v;
-    ctx.lineTo(X(1) + (fromLeft ? 1 : -1) * spread, tipY + (height - tipY) * v);
+    ctx.lineTo(xFromEdge(1) + (fromLeft ? 1 : -1) * spread, tipY + (height - tipY) * v);
   }
   ctx.closePath();
   ctx.fillStyle = paper;
@@ -185,13 +168,12 @@ export function drawHeadland(
   ctx.lineCap = "round";
   ctx.lineWidth = 0.75;
   ctx.globalAlpha = 0.8;
-  // Strata following the top, broken; denser toward the sea, where the face is in shadow.
   for (let r = 1; r < 26; r++) {
     ctx.beginPath();
     let drawing = false;
     for (let u = 0; u <= 1.45; u += 0.015) {
       const on = noise(u * 14 + r * 1.7) < 0.35 + u * 0.45;
-      const px = X(u);
+      const px = xFromEdge(u);
       const py = top(u) + r * 2.4;
       if (on && !drawing) ctx.moveTo(px, py);
       else if (on) ctx.lineTo(px, py);
@@ -205,16 +187,15 @@ export function drawHeadland(
   ctx.lineWidth = 1.1;
   ctx.beginPath();
   for (let u = 0; u <= 1.001; u += 0.02) {
-    if (u === 0) ctx.moveTo(X(u), top(u));
-    else ctx.lineTo(X(u), top(u));
+    if (u === 0) ctx.moveTo(xFromEdge(u), top(u));
+    else ctx.lineTo(xFromEdge(u), top(u));
   }
   ctx.stroke();
-  foam(ctx, rng, X(1) + (fromLeft ? 1 : -1) * reach * 0.33, height - 4, 10, ink);
-  foam(ctx, rng, X(0.95), tipY + (height - tipY) * 0.5, 8, ink);
+  foam(ctx, rng, xFromEdge(1) + (fromLeft ? 1 : -1) * reach * 0.33, height - 4, 10, ink);
+  foam(ctx, rng, xFromEdge(0.95), tipY + (height - tipY) * 0.5, 8, ink);
 
-  // The lighthouse on the headland's shoulder.
   const lu = 0.3 + rng() * 0.15;
-  const lx = X(lu);
+  const lx = xFromEdge(lu);
   const ly = top(lu) + 1;
   const lh = height * 0.2;
   const bw = lh * 0.2;
@@ -222,8 +203,6 @@ export function drawHeadland(
   const towerTop = ly - lh;
   const xAt = (f: number, side: -1 | 1) => lx + side * (bw / 2 + (tw / 2 - bw / 2) * f);
 
-  // Beams first: fans of fine paper lines either side of the lantern,
-  // fading as they spread, the way an engraver draws light.
   const lampY = towerTop - lh * 0.12;
   ctx.strokeStyle = paper;
   ctx.lineCap = "round";
@@ -284,7 +263,6 @@ export function drawHeadland(
   ctx.lineTo(xAt(1, 1), towerTop);
   ctx.stroke();
 
-  // Gallery, lantern, cap.
   ctx.fillStyle = ink;
   ctx.fillRect(lx - tw / 2 - 2, towerTop - 1.6, tw + 4, 1.6);
   const lampH = lh * 0.16;
@@ -303,7 +281,6 @@ export function drawHeadland(
   ctx.fill();
   ctx.fillRect(lx - 0.4, towerTop - 1.6 - lampH - tw / 2 - 3, 0.8, 3);
 
-  // Rays: short paper strokes around the lamp.
   ctx.strokeStyle = paper;
   ctx.lineWidth = 0.8;
   ctx.globalAlpha = 0.8;
@@ -318,7 +295,6 @@ export function drawHeadland(
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // The keeper's cottage at the foot of the tower, toward the plate's edge.
   drawCabin(ctx, rng, lx + (fromLeft ? -lh * 0.55 : lh * 0.12), ly + 1, lh * 0.45, { ink, paper });
 
   const foot = reach * 1.35 + 12;

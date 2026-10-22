@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
-import type { ObservedPr } from "../domain/observed-pr";
+import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { DiffCacheService, DiffCacheServiceLive } from "./DiffCache";
 import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
@@ -166,7 +166,6 @@ describe("listArchivedPrs author filter", () => {
 // prior values must survive that.
 
 /** A PR as it arrives from the *list* endpoint: real metadata, zeroed stats. */
-/** A list row: no `stack` unless a test gives it one, as a list that saw stacks would. */
 function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
   return {
     id: "pr-open-alice",
@@ -194,6 +193,7 @@ function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
     updatedAt: "2026-02-01T00:00:00Z",
     fetchedAt: "2026-02-01T00:00:00Z",
     closedAt: null,
+    stack: STACK_UNSEEN,
     ...overrides,
   };
 }
@@ -232,7 +232,7 @@ function seedDiffStats(
     Effect.gen(function* () {
       const svc = yield* DiffCacheService;
       yield* svc.cacheFiles(
-        prId,
+        readRow(db, prId),
         files.map((f) => ({
           path: f.path,
           oldPath: null,
@@ -490,7 +490,11 @@ describe("upsertPrs stack membership", () => {
     seed(db);
     await runSvc(db, (svc) =>
       svc.upsertPrs([
-        listSourcedPr({ id: "pr-stacked", externalId: 98, stack: { number: 7, position: 2 } }),
+        listSourcedPr({
+          id: "pr-stacked",
+          externalId: 98,
+          stack: stackSeen({ number: 7, position: 2 }),
+        }),
       ]),
     );
     const row = readRow(db, "pr-stacked");
@@ -498,7 +502,6 @@ describe("upsertPrs stack membership", () => {
     expect(row.stackPosition).toBe(2);
   });
 
-  // REST and the detail batch have no stacks, so their rows leave `stack` out.
   it("never erases a stored stack on conflict from a source that didn't see stacks", async () => {
     const db = createDb(":memory:");
     seed(db);
@@ -518,13 +521,11 @@ describe("upsertPrs stack membership", () => {
     seed(db);
     seedStacked(db);
 
-    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr({ stack })]));
+    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr({ stack: stackSeen(stack) })]));
 
     expect(storedStack(db)).toEqual(want);
   });
 
-  // Regression: a REST detail (`prs.get`) or detail batch (`prs.getMany`) of a
-  // stacked PR came back with `stack: null` and, written as is, unstacked it.
   describe("through the gateway", () => {
     const realFetch = globalThis.fetch;
     afterEach(() => {
@@ -620,11 +621,30 @@ describe("upsertPrs stack membership", () => {
     await runSvc(db, (svc) =>
       svc.upsertPrs([
         listSourcedPr(),
-        listSourcedPr({ id: "pr-new", externalId: 97, stack: { number: 2, position: 1 } }),
+        listSourcedPr({
+          id: "pr-new",
+          externalId: 97,
+          stack: stackSeen({ number: 2, position: 1 }),
+        }),
       ]),
     );
 
     expect(storedStack(db)).toEqual({ number: 7, position: 3 });
     expect(readRow(db, "pr-new").stackNumber).toBe(2);
+  });
+});
+
+describe("setPrDraft", () => {
+  it("flips only the targeted row's draft flag", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+
+    await runSvc(db, (svc) => svc.setPrDraft("pr-open-alice", true));
+    expect(readRow(db, "pr-open-alice").isDraft).toBe(true);
+    expect(readRow(db, "pr-open-alice").status).toBe("open");
+    expect(readRow(db, "pr-merged-bob").isDraft).toBe(false);
+
+    await runSvc(db, (svc) => svc.setPrDraft("pr-open-alice", false));
+    expect(readRow(db, "pr-open-alice").isDraft).toBe(false);
   });
 });

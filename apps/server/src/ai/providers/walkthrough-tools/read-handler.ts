@@ -11,7 +11,6 @@ import type {
   WalkthroughState,
 } from "@revv/shared";
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
-import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -19,8 +18,8 @@ import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
+import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
-import { parseStackSnapshot } from "../../../services/stacks/snapshot";
 import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
 import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
 import type {
@@ -494,16 +493,6 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
   };
 };
 
-// ── Handler: get_stack_context ───────────────────────────────────────────────
-//
-// Read-only. The stack the orchestrator captured at job start, plus what Revv
-// knows about the other layers now. Lower layers come as their review's
-// takeaway and open issues (what this layer builds on, as judged); upper
-// layers as their description and file list (what may fill an absence here).
-// DB-only and bounded, so a tall stack can't flood the agent's context. The
-// sibling data is live, not snapshotted: in a stack review, a lower layer's
-// takeaway can land while this layer is still being written.
-
 const STACK_ISSUES_PER_LAYER = 8;
 const STACK_BODY_EXCERPT_CHARS = 600;
 const STACK_FILES_PER_LAYER = 60;
@@ -513,7 +502,7 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
   if (!row) {
     return errorResult(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
   }
-  const stack = parseStackSnapshot(row.stackContext);
+  const stack = row.stackContext;
   const repo = ctx.db
     .select({ repositoryId: pullRequests.repositoryId })
     .from(pullRequests)
@@ -609,13 +598,11 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
       const base = { position: l.position, number: l.number, status: l.status };
       if (!pr) return { ...base, title: l.title, tracked: false, files: null };
       const body = pr.body?.trim() ?? "";
-      const files = ctx.db
-        .select({ path: prDiffFiles.path })
-        .from(prDiffFiles)
-        .where(eq(prDiffFiles.prId, pr.id))
-        .orderBy(asc(prDiffFiles.path))
-        .all()
-        .map((f) => f.path);
+      const files =
+        readCurrentHeadFiles(ctx.db, [pr.id])
+          .get(pr.id)
+          ?.map((f) => f.path)
+          .toSorted() ?? null;
       return {
         ...base,
         title: pr.title,
@@ -624,9 +611,8 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           body.length > STACK_BODY_EXCERPT_CHARS
             ? `${body.slice(0, STACK_BODY_EXCERPT_CHARS)}…`
             : body,
-        // Empty until Revv has fetched that layer's diff; not "changes nothing".
-        files: files.slice(0, STACK_FILES_PER_LAYER),
-        fileCount: files.length,
+        files: files?.slice(0, STACK_FILES_PER_LAYER) ?? null,
+        fileCount: files?.length ?? null,
       };
     });
 
@@ -639,7 +625,7 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           lowerLayers,
           upperLayers,
           instructions:
-            "Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as `#N (layer k)`. An upper layer with an empty file list just hasn't been fetched by Revv yet.",
+            "Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as `#N (layer k)`. An upper layer with `files: null` hasn't been fetched by Revv yet.",
         }),
       },
     ],

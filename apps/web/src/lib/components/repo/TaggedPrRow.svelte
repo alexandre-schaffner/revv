@@ -1,10 +1,4 @@
 <script lang="ts">
-/*
- * A PR on its own in the repo homepage's queue: a flat row at the level of
- * the page, parted from the next by a hairline. What it says is
- * `TaggedPrRowBody`'s; a PR in a stack is a card instead (`TaggedPrStack`).
- */
-
 import TaggedPrRowBody from "$lib/components/repo/TaggedPrRowBody.svelte";
 import type { TaggedRow } from "$lib/prs/tagged-prs";
 import { getVisitState } from "$lib/stores/pr-visits.svelte";
@@ -71,7 +65,6 @@ const visit = $derived(getVisitState(row.pr.id, row.pr.headSha));
 		background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 	}
 
-	/* The anchor inside is the focus target; the ring goes round the row. */
 	.row:has(:global(:focus-visible)) {
 		outline: 2px solid var(--color-accent);
 		outline-offset: 1px;

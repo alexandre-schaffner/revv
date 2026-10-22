@@ -15,8 +15,6 @@ const featureRoots = [
   /^apps\/server\/src\/ai\/providers\/stack-brief(?:-|\/)/,
 ];
 
-// Modules are named by repo path without extension; imports are resolved to
-// the same form before comparing, whatever depth they are written from.
 const forbiddenImports = new Set([
   "apps/server/src/services/GitHub",
   "apps/server/src/services/Repository",
@@ -66,7 +64,6 @@ function listTsFiles(dir: string): string[] {
   return files;
 }
 
-/** The repo path a relative import names, without extension; null for a package. */
 function resolveImport(importerRel: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
   return join(dirname(importerRel), specifier)

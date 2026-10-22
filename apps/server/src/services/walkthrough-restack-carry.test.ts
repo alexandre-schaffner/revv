@@ -50,7 +50,6 @@ function insertRow(db: Db, row: Partial<typeof walkthroughs.$inferInsert> & { id
     .run();
 }
 
-/** A finished review at head-1, retired by the push that restacked the layer. */
 function seedSource(db: Db): void {
   (db as unknown as Client).session.client.run("PRAGMA foreign_keys = OFF");
   insertRow(db, {
@@ -60,7 +59,7 @@ function seedSource(db: Db): void {
     completedAt: NOW,
     summary: "Adds a limiter.",
     sentiment: "Ship it.",
-    diffFingerprint: JSON.stringify(fingerprintFiles(FILES)),
+    diffFingerprint: fingerprintFiles(FILES),
   });
   db.insert(walkthroughSemanticSteps)
     .values({
@@ -216,8 +215,8 @@ describe("tryCarryRestackedWalkthrough", () => {
     expect(row?.prHeadSha).toBe("head-2");
     expect(row?.carriedFromWalkthroughId).toBe("wt-old");
     expect(row?.summary).toBe("Adds a limiter.");
-    expect(JSON.parse(row?.stackContext ?? "null")).toEqual(STACK);
-    expect(JSON.parse(row?.diffFingerprint ?? "null")).toEqual(fingerprintFiles(FILES));
+    expect(row?.stackContext).toEqual(STACK);
+    expect(row?.diffFingerprint).toEqual(fingerprintFiles(FILES));
 
     const issues = db
       .select({ title: walkthroughIssues.title })
@@ -284,9 +283,6 @@ describe("resolveStackInputs", () => {
       }),
     );
 
-  // A carry the request accepted must be the carry the job runs: an
-  // incremental request answered by a full review imports it, rather than
-  // skipping the job-start plan and paying for an agent run with no files.
   it("plans the carry an incremental request accepts from a full review", async () => {
     const db = createDb(":memory:");
     seedSource(db);

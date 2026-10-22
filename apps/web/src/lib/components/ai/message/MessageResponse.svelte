@@ -26,7 +26,7 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 	import { mentionReferences } from "$lib/actions/mention-references.svelte";
 	import { getReviewFiles } from "$lib/stores/review.svelte";
 	import { cn } from "$lib/utils.js";
-	import { renderMarkdown } from "$lib/utils/markdown.js";
+	import { renderMarkdownBlocks } from "$lib/utils/markdown.js";
 	import { MESSAGE_CTX_KEY, type MessageContext } from "./context.js";
 
 	let {
@@ -50,7 +50,7 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		return md;
 	}
 
-	let html = $derived(renderMarkdown(fixIncomplete(content)));
+	let blocks = $derived(renderMarkdownBlocks(fixIncomplete(content)));
 </script>
 
 <div
@@ -63,12 +63,16 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		// it can't be narrower than its min-content. `break-words` doesn't lower
 		// min-content; `wrap-anywhere` does, so a long file path wraps instead
 		// of widening the bubble past the pane and clipping its left edge.
-		ctx?.role === "user" && "rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
+		// Tables and code blocks set their own min-content (`max-content`,
+		// `white-space: pre`), so the bubble also caps at its column and
+		// lets them scroll inside it. Important, because prose.css's unlayered
+		// `.prose { max-width: none }` outranks a layered utility.
+		ctx?.role === "user" && "max-w-full! rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
 		className,
 	)}
 	{...restProps}
 >
-	{@html html}
+	{#each blocks as block}{@html block}{/each}
 </div>
 
 <style>

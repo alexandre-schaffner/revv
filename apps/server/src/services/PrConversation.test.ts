@@ -3,13 +3,13 @@ import { Effect, Layer } from "effect";
 import { createDb } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { NotFoundError } from "../domain/errors";
-import { BroadcasterLive } from "./Broadcaster";
+import { Broadcaster, BroadcasterLive } from "./Broadcaster";
 import { CacheServiceLive } from "./Cache";
 import { DbService } from "./Db";
 import { DiffCacheServiceLive } from "./DiffCache";
 import { GitHubGatewayLive } from "./GitHub";
 import { type GitHubEtagCache, GitHubEtagCacheLive } from "./GitHubEtagCache";
-import { PrContextServiceLive } from "./PrContext";
+import { PrContextService, PrContextServiceLive } from "./PrContext";
 import { PrConversationService, PrConversationServiceLive } from "./PrConversation";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RemoteUserServiceLive } from "./RemoteUser";
@@ -94,9 +94,13 @@ function fixture() {
   const context = PrContextServiceLive.pipe(
     Layer.provide(Layer.merge(base, TokenProviderLive.pipe(Layer.provide(base)))),
   );
-  const layer = PrConversationServiceLive.pipe(Layer.provide(Layer.merge(base, context)));
+  const layer = PrConversationServiceLive.pipe(Layer.provideMerge(Layer.merge(base, context)));
   const run = <A, E>(
-    effect: Effect.Effect<A, E, PrConversationService | DbService | GitHubEtagCache>,
+    effect: Effect.Effect<
+      A,
+      E,
+      PrConversationService | PrContextService | Broadcaster | DbService | GitHubEtagCache
+    >,
   ) =>
     Effect.runPromise(
       effect.pipe(
@@ -192,6 +196,44 @@ describe("conversation account isolation", () => {
           expect(checkReads).toBe(2);
         }),
       );
+    } finally {
+      db.$client.close();
+    }
+  });
+
+  it("announces a write made elsewhere to its account even when GitHub can't be re-read", async () => {
+    const { db, run } = fixture();
+    globalThis.fetch = Object.assign(
+      async () => {
+        throw new TypeError("network down");
+      },
+      { preconnect: realFetch.preconnect },
+    );
+    const writer = (sent: unknown[]) => ({
+      send: (event: unknown) => sent.push(event) > 0,
+      isClosed: () => false,
+    });
+    const owner: unknown[] = [];
+    const other: unknown[] = [];
+    try {
+      const result = await run(
+        Effect.gen(function* () {
+          const broadcaster = yield* Broadcaster;
+          yield* broadcaster.register("b-account", writer(owner));
+          yield* broadcaster.register("a-account", writer(other));
+          const ctx = yield* Effect.flatMap(PrContextService, (c) =>
+            c.resolveBasic("b-pr", "b", "b-account"),
+          );
+          return yield* Effect.flatMap(PrConversationService, (s) =>
+            s.afterWrite(ctx, "b-account"),
+          );
+        }),
+      );
+      expect(result).toEqual({ conversation: null });
+      expect(owner).toEqual([
+        { type: "pr:conversation-updated", data: { prId: "b-pr", fetchedAt: null } },
+      ]);
+      expect(other).toEqual([]);
     } finally {
       db.$client.close();
     }

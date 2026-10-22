@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { buildPrFlow, buildRepoActivity } from "./RepoActivity";
 
 const NOW = new Date("2026-10-16T12:00:00Z");
-// Sunday 2026-10-11 and the Sunday before it, in Unix seconds.
 const W1 = Date.UTC(2026, 9, 4) / 1000;
 const W2 = Date.UTC(2026, 9, 11) / 1000;
 
@@ -51,9 +50,9 @@ describe("buildPrFlow", () => {
       {
         total: 3,
         items: [
-          { number: 1, authorLogin: "a", createdAt: ago(3), mergedAt: ago(2) }, // 24h
-          { number: 2, authorLogin: "A", createdAt: ago(10), mergedAt: ago(9) }, // 24h
-          { number: 3, authorLogin: "b", createdAt: ago(26), mergedAt: ago(22) }, // 96h
+          { number: 1, authorLogin: "a", createdAt: ago(3), mergedAt: ago(2) },
+          { number: 2, authorLogin: "A", createdAt: ago(10), mergedAt: ago(9) },
+          { number: 3, authorLogin: "b", createdAt: ago(26), mergedAt: ago(22) },
         ],
       },
       {

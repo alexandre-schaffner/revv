@@ -1,20 +1,9 @@
 <script lang="ts">
-/*
- * A note in the walkthrough's margin about the rest of the stack, beside the
- * content it concerns. Deliberately not the agent's annotation card: no box,
- * a smaller voice, a hairline over it that continues the section rule, so
- * the reader can tell the agent's remarks on this diff from the stack's
- * remarks on its neighbours.
- *
- * In the narrow layout (no rail) the same note reads inline, under the thing
- * it annotates: the hairline becomes a short rule at the start of a line.
- */
 import type { Component, Snippet } from "svelte";
 
 interface Props {
   icon: Component<{ size?: number; weight?: "regular" | "bold" | "fill" }>;
   label: string;
-  /** Right of the label, e.g. the layer's place. */
   aside?: string | undefined;
   children: Snippet;
   foot?: Snippet | undefined;
@@ -109,9 +98,6 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 		border-top-color: var(--color-border);
 	}
 
-	/* No rail: the note reads inline under what it annotates, as one quiet
-	   run of text led by its label. The hairline shortens to a tick so it
-	   still reads as the same kind of thing as the rail's notes. */
 	@container (max-width: 1335px) {
 		.note {
 			display: flex;

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import type { PullRequest, Repository } from "@revv/shared";
+import type { Repository } from "@revv/shared";
 import { Effect } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
+import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
 import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
@@ -52,7 +53,6 @@ function seed(db: Db): void {
       accountId: "acc-1",
     })
     .run();
-  // Already archived by an earlier backfill.
   db.insert(pullRequests)
     .values({
       id: "repo-1:7",
@@ -95,7 +95,12 @@ describe("backfillArchive", () => {
               return new Map(
                 numbers.map((n) => [
                   n,
-                  { id: `${repositoryId}:${n}`, externalId: n, status: "merged" } as PullRequest,
+                  {
+                    id: `${repositoryId}:${n}`,
+                    externalId: n,
+                    status: "merged",
+                    stack: STACK_UNSEEN,
+                  } as ObservedPr,
                 ]),
               );
             }),

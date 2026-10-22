@@ -1,9 +1,4 @@
 <script lang="ts">
-/*
- * "In the stack", when the pane is too narrow for a rail: one line under the
- * page subtitle that says where this layer sits and where the stack goes
- * next. The thumb index in the gutter still holds the whole stack.
- */
 import StackSimple from "phosphor-svelte/lib/StackSimple";
 import BriefAction from "./BriefAction.svelte";
 import LayerChip from "./LayerChip.svelte";

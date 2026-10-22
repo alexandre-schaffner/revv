@@ -1,7 +1,7 @@
 import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
 import { Effect, Option } from "effect";
 import type { GitHubError, ValidationError } from "../domain/errors";
-import { type ObservedPr, withStoredStack } from "../domain/observed-pr";
+import { asStored, type ObservedPr } from "../domain/observed-pr";
 
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
   readonly findRepository: (
@@ -55,7 +55,9 @@ export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
     const remote = yield* operations.fetchPullRequest(repository, locator.number);
     const local = remapPullRequestToLocalRepository(remote, repository.id);
     yield* operations.upsertPullRequest(local);
-    // Not cached, so nothing was stored before: the row holds what `local` saw.
-    return { status: "resolved", pullRequest: withStoredStack(local, undefined) } as const;
+    return {
+      status: "resolved",
+      pullRequest: asStored(local, Option.getOrUndefined(cached)),
+    } as const;
   }).pipe(Effect.withSpan("resolvePullRequestLink"));
 }

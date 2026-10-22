@@ -1,9 +1,3 @@
-// ─── stack-brief-tools ───────────────────────────────────────────────────────
-//
-// Public surface for the stack-brief MCP tools, bundled for the HTTP route at
-// `/mcp/stack-brief` (the one transport every ACP agent reaches; see
-// `stack-brief-acp.ts`). The handlers in `handlers.ts` are transport-agnostic.
-
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   completeStackBriefHandler,
@@ -11,6 +5,7 @@ import {
   getStackLayersHandler,
   setArcHandler,
   setLayerRoleHandler,
+  stackBriefCompletionBlocker,
 } from "./handlers";
 import {
   completeStackBriefSchema,
@@ -24,13 +19,13 @@ import {
 } from "./spec";
 
 export type { StackBriefSnapshot, StackBriefToolContext, StackBriefToolResult } from "./spec";
-export { parseStackBriefSnapshot } from "./spec";
 export {
   completeStackBriefHandler,
   getStackBriefStateHandler,
   getStackLayersHandler,
   setArcHandler,
   setLayerRoleHandler,
+  stackBriefCompletionBlocker,
 };
 
 const STACK_BRIEF_TOOL_SPECS: StackBriefToolSpecRecord[] = [

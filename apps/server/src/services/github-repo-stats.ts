@@ -1,8 +1,3 @@
-/**
- * Repo-level reads behind the repo homepage's activity charts: GitHub's
- * `/stats/*` statistics and PR search counts. Exposed through
- * `GitHubGateway.repos`; `RepoActivity.ts` is the caller.
- */
 import { Effect } from "effect";
 import type { GitHubError } from "../domain/errors";
 import { githubFetch, githubFetchStatus, retryTransient } from "./github-rest";
@@ -18,17 +13,14 @@ export type RepoStat<T> =
   | { readonly kind: "computing" }
   | { readonly kind: "unavailable" };
 
-/** One week of `/stats/commit_activity`: `week` is its Sunday, in Unix seconds. */
 export interface CommitActivityWeek {
   readonly week: number;
-  /** Commits per day, Sunday first. */
   readonly days: readonly number[];
 }
 
 /** One week of `/stats/code_frequency`: Sunday (Unix seconds), additions, deletions (negative). */
 export type CodeFrequencyWeek = readonly [week: number, additions: number, deletions: number];
 
-/** One page of PR search: GitHub's total match count, and up to 100 of the matches. */
 export interface PrSearchPage {
   readonly total: number;
   readonly items: ReadonlyArray<{
@@ -39,10 +31,6 @@ export interface PrSearchPage {
   }>;
 }
 
-/**
- * GET a `/stats/*` endpoint. Bypasses the ETag cache on purpose: a 202 has no
- * body worth replaying, and callers cache the computed result themselves.
- */
 function fetchRepoStat<W>(
   path: string,
   token: string,
@@ -59,7 +47,6 @@ function fetchRepoStat<W>(
   );
 }
 
-/** Commits per day over the last 52 weeks (`GET /repos/{repo}/stats/commit_activity`). */
 export function getCommitActivity(
   fullName: string,
   token: string,
@@ -72,7 +59,6 @@ export function getCommitActivity(
   );
 }
 
-/** Weekly additions and deletions over the repo's history (`GET /repos/{repo}/stats/code_frequency`). */
 export function getCodeFrequency(
   fullName: string,
   token: string,
@@ -85,11 +71,6 @@ export function getCodeFrequency(
   );
 }
 
-/**
- * The first 100 PRs matching `qualifiers` in one repo (`is:pr` is implied),
- * newest first, plus the total match count. One Search API call: callers
- * that need more than the total should narrow the query, not page.
- */
 export function searchPullRequests(
   fullName: string,
   qualifiers: string,

@@ -10,8 +10,7 @@ import {
   type SaveEffects,
 } from "./merge-driver";
 import { RETARGET_WAIT_MS } from "./merge-plan";
-
-// ── A scripted GitHub ───────────────────────────────────────────────────────
+import type { Contradiction } from "./unverified-github";
 
 function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubStackLayer {
   return {
@@ -41,22 +40,16 @@ function layer(position: number, over: Partial<GitHubStackLayer> = {}): GitHubSt
 }
 
 interface WorldOptions {
-  /** GitHub points the next layer at main itself, after this many reads. */
   readonly retargetAfterReads?: number | null;
-  /** What a retargeted layer's merge state settles to (after one UNKNOWN read). */
   readonly settlesTo?: (number: number) => string;
   readonly mergeError?: (number: number) => GitHubError | null;
   readonly readError?: (read: number) => GitHubError | null;
-  /** GitHub's auto-merge lands a handed-over layer after this many reads. */
   readonly autoMergeAfterReads?: number;
-  /** What a layer's merge state is once its rebased head shows up. */
   readonly afterRebase?: (number: number) => string;
-  /** Why the stack rebase fails, when it does. */
   readonly rebaseFails?: () => string | null;
-  /** Cancel the run (the row leaves `running`) before this many saves. */
   readonly cancelAtSave?: number;
-  /** Cancel the run while git replays the rebase, before the push. */
   readonly cancelDuringRebase?: boolean;
+  readonly retargetDropsLayer?: boolean;
 }
 
 function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
@@ -72,6 +65,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
   const writes: string[] = [];
   let pushes = 0;
   const saves: { run: StackMergeRun; effects: SaveEffects }[] = [];
+  const contradictions: Contradiction[] = [];
 
   const set = (number: number, patch: Partial<GitHubStackLayer>) => {
     const i = state.findIndex((l) => l.number === number);
@@ -118,7 +112,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
             mergeLayer(p.number);
           }
         }
-        return Effect.succeed({ stack: stack(), mergedOutside: new Set<number>() });
+        return Effect.succeed({ stack: stack(), mergedUnlisted: new Set<number>() });
       }),
     merge: (number, method, sha) =>
       Effect.suspend(() => {
@@ -131,6 +125,13 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
     retarget: (number, base) =>
       Effect.sync(() => {
         writes.push(`retarget #${number} -> ${base}`);
+        if (opts.retargetDropsLayer) {
+          state.splice(
+            state.findIndex((l) => l.number === number),
+            1,
+          );
+          return;
+        }
         set(number, { baseRef: base });
         settle(number);
       }),
@@ -147,7 +148,6 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
             ? []
             : [{ number: l.number, from: l.headSha, to: `${l.headSha}r` }],
         );
-        // GitHub reports the old heads for a read, then the rebased ones.
         for (const m of moved) {
           pending.push({ number: m.number, dueAt: reads + 2, kind: "rebased" });
         }
@@ -170,11 +170,15 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
         if (opts.cancelAtSave !== undefined && saves.length + 1 >= opts.cancelAtSave) {
           cancelled = true;
         }
-        if (cancelled) return false;
+        if (cancelled) return "ended" as const;
         saves.push({ run, effects });
-        return true;
+        return "live" as const;
       }),
     isActive: () => Effect.sync(() => !cancelled),
+    reportContradiction: (c) =>
+      Effect.sync(() => {
+        contradictions.push(c);
+      }),
     now: () => now,
     sleep: (ms) =>
       Effect.sync(() => {
@@ -197,7 +201,7 @@ function world(layers: GitHubStackLayer[], opts: WorldOptions = {}) {
     }
   }
 
-  return { port, writes, saves, elapsed: () => now, pushes: () => pushes };
+  return { port, writes, saves, contradictions, elapsed: () => now, pushes: () => pushes };
 }
 
 function runOf(count: number, mode: StackMergeMode = "driven"): StackMergeRun {
@@ -224,8 +228,6 @@ function runOf(count: number, mode: StackMergeMode = "driven"): StackMergeRun {
 
 const drive = (run: StackMergeRun, port: MergeDriverPort) => Effect.runPromise(driveRun(run, port));
 
-// ── Scenarios ───────────────────────────────────────────────────────────────
-
 describe("driveRun", () => {
   test("merges bottom-up, each pinned, as GitHub retargets the next layer", async () => {
     const gh = world([layer(1), layer(2), layer(3)]);
@@ -237,7 +239,6 @@ describe("driveRun", () => {
       "merge #103 merge @h3",
     ]);
     expect(run.layers.map((l) => l.state)).toEqual(["merged", "merged", "merged"]);
-    // Every merge is announced as moving the stack, for the local PR rows.
     expect(gh.saves.flatMap((s) => s.effects.merged)).toEqual([101, 102, 103]);
     expect(gh.saves.at(-1)?.run.status).toBe("complete");
   });
@@ -265,7 +266,6 @@ describe("driveRun", () => {
       "merge #103 merge @h3r",
     ]);
     expect(run.layers[1]).toMatchObject({ expectedHeadSha: "h2r", rebasedFrom: "h2" });
-    // The step that rebased was announced as moving the stack.
     expect(gh.saves.some((s) => s.run.layers[1]?.state === "rebasing")).toBe(true);
   });
 
@@ -340,6 +340,23 @@ describe("driveRun", () => {
     ]);
     expect(gh.elapsed()).toBeGreaterThanOrEqual(RETARGET_WAIT_MS);
     expect(gh.saves.some((s) => s.run.layers[1]?.state === "retargeting")).toBe(true);
+  });
+
+  test("reports a layer that left the stack when its base moved, and stops", async () => {
+    const gh = world([layer(1), layer(2)], { retargetAfterReads: null, retargetDropsLayer: true });
+    const run = await drive(runOf(2), gh.port);
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("#102 is no longer in this stack");
+    expect(gh.contradictions).toEqual([
+      { behaviour: "base-change-keeps-membership", number: 102, runId: "run-1" },
+    ]);
+  });
+
+  test("a layer missing before any base move stops the run without a contradiction", async () => {
+    const gh = world([layer(2, { baseRef: "main", mergeStateStatus: "CLEAN" })]);
+    const run = await drive(runOf(2), gh.port);
+    expect(run.error).toBe("#101 is no longer in this stack");
+    expect(gh.contradictions).toEqual([]);
   });
 
   test("auto mode hands a layer waiting on checks to GitHub, then carries on", async () => {

@@ -173,6 +173,9 @@ describe("stackPlace", () => {
     expect(writing?.role).toBeNull();
     expect(writing?.usedBy).toEqual([]);
     expect(stackPlace(stack({ brief: null }), "pr-11", 11, null)?.briefState).toBe("none");
+    const failed = stackPlace(stack({ brief: brief({ status: "error" }) }), "pr-11", 11, null);
+    expect(failed?.briefState).toBe("failed");
+    expect(failed?.role).toBeNull();
     expect(
       stackPlace(stack({ brief: brief({ stale: true }) }), "pr-11", 11, null)?.briefState,
     ).toBe("stale");

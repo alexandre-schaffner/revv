@@ -214,7 +214,6 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
             .pipe(Effect.orElseSucceed(() => null));
           const host = settings?.githubHost?.trim() || undefined;
           const token = yield* identityService.tokenForUser(userId, host);
-          // Asked on every app launch; orgs rarely move. Only answers are kept.
           const cache = yield* CacheService;
           return yield* cache.getOrFetch(
             "github-orgs",

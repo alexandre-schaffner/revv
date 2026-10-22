@@ -206,7 +206,7 @@ export const refreshAccountIdentities = (
   );
 
 /**
- * Re-fill the cached diffs the list phase dropped when their PR's range moved.
+ * Re-fill the cached diffs of PRs whose range moved.
  * Sequential, to avoid rate-limit bursts.
  */
 export const refetchDiffs = (
@@ -254,7 +254,7 @@ export const refetchDiffs = (
 
         yield* Effect.annotateCurrentSpan("files", files.length);
         // `cacheFiles` also records the PR's real diff size from this list.
-        yield* withDb(deps.db, deps.diffCache.cacheFiles(prId, files)).pipe(
+        yield* withDb(deps.db, deps.diffCache.cacheFiles(pr, files)).pipe(
           Effect.orElseSucceed(() => undefined),
         );
       }).pipe(
@@ -287,9 +287,6 @@ export const backfillArchive = (
     ).toISOString();
     const backfillUntilIso = new Date().toISOString();
 
-    // Every PR the mirror already holds, open or not. Reading only the open
-    // ones made each archived PR look missing, so every hour re-fetched up to
-    // the per-repo cap of PRs already in the archive.
     const knownRows = yield* Effect.try({
       try: () =>
         repos.length === 0
@@ -317,7 +314,6 @@ export const backfillArchive = (
         }),
       ),
     );
-    // Without the mirror's answer, every PR would look missing: skip a round.
     if (knownRows === null) return false;
     const existingExternalIdsByRepo = new Map<string, Set<number>>();
     for (const row of knownRows) {
@@ -356,9 +352,6 @@ export const backfillArchive = (
             .filter((s) => !known.has(s.number))
             .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
           if (missing.length === 0) return;
-          // One batched GraphQL read for them all (50 a request), a different
-          // budget from search: a PR detail fetch each cost a REST point and a
-          // round trip per PR.
           const detailLive = cycle.liveAccountForRepo(repo.id, "graphql");
           if (!detailLive) return;
 

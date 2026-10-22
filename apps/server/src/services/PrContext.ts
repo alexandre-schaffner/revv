@@ -6,7 +6,12 @@ import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain
 import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { DiffCacheService, hasCompleteCachedFiles, toCachedDiffFiles } from "./DiffCache";
+import {
+  DiffCacheService,
+  type FetchedFor,
+  hasCompleteCachedFiles,
+  toCachedDiffFiles,
+} from "./DiffCache";
 import { GitHubGateway, type PrCommit, type PrFileMeta, type PrMeta } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost } from "./github-rest";
@@ -101,11 +106,6 @@ export class PrContextService extends Context.Service<
       token: string,
       apiBase?: string,
     ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Full PRs by number, batched (one GraphQL request per 50), keyed by
-     * number. Thin forward to the GitHub gateway. Used by the recap backfill
-     * path to hydrate PRs that never landed in the local mirror.
-     */
     readonly fetchPrs: (
       repoFullName: string,
       repositoryId: string,
@@ -199,7 +199,7 @@ export const PrContextServiceLive = Layer.effect(
     // leaking GitHubGateway / DiffCacheService into the returned Effect's
     // context requirements.
     const cacheOrFetchFiles = (
-      prId: string,
+      pr: FetchedFor,
       repoFullName: string,
       prExternalId: number,
       token: string,
@@ -208,14 +208,14 @@ export const PrContextServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const { db } = yield* DbService;
-        const cached = yield* withDb(db, diffCache.getCachedFiles(prId));
+        const cached = yield* withDb(db, diffCache.getCachedFiles(pr.id));
         if (cached !== null) {
-          const cachedCount = yield* withDb(db, diffCache.getCachedFileCount(prId));
+          const cachedCount = yield* withDb(db, diffCache.getCachedFileCount(pr.id));
           if (hasCompleteCachedFiles(cached, expectedChangedFiles, cachedCount)) return cached;
         }
         const fileList = yield* github.prs.files(repoFullName, prExternalId, token, apiBase);
         const fresh = toCachedDiffFiles(fileList);
-        yield* withDb(db, diffCache.cacheFiles(prId, fresh));
+        yield* withDb(db, diffCache.cacheFiles(pr, fresh));
         return fresh;
       });
 
@@ -229,7 +229,7 @@ export const PrContextServiceLive = Layer.effect(
           basic.apiBase,
         );
         const cachedFiles = yield* cacheOrFetchFiles(
-          basic.pr.id,
+          basic.pr,
           basic.repo.fullName,
           basic.pr.externalId,
           basic.token,

@@ -124,8 +124,6 @@ export const RemoteUserServiceLive = Layer.effect(
               .get(),
           );
 
-          // Determine if we need to fetch the avatar: never fetched, past its
-          // TTL, or a different image (see `avatarIdentity`).
           const targetAvatarUrl = params.avatarUrl ? sizedAvatarUrl(params.avatarUrl) : null;
           const shouldFetch =
             targetAvatarUrl &&
@@ -133,7 +131,6 @@ export const RemoteUserServiceLive = Layer.effect(
               now.getTime() - existing.lastFetchedAt.getTime() > AVATAR_TTL_MS ||
               avatarIdentity(existing.lastAvatarUrl) !== avatarIdentity(targetAvatarUrl));
 
-          // Keep the existing cached avatar if the fetch fails.
           const fetched =
             shouldFetch && targetAvatarUrl
               ? yield* githubFetchDataUrl(targetAvatarUrl).pipe(Effect.orElseSucceed(() => null))

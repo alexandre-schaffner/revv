@@ -104,8 +104,6 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 		   would leave a row of bare numbers that mean nothing. */
 		flex-wrap: wrap;
 		gap: 0.25rem 0.5rem;
-		/* Inset so the first filter's label starts on the rows' glyph column
-		   (its own 0.5rem padding plus this lands on the 12px row inset). */
 		padding: 0 0.25rem 0.375rem;
 		border-bottom: 1px solid var(--color-border-subtle);
 	}

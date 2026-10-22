@@ -1,11 +1,3 @@
-// ── What the ledger says is slow or wasted ──────────────────────────────────
-//
-// Pure: a list of recorded GitHub calls in, a report out. Every finding is
-// ranked by `cost`, an estimate of the milliseconds it puts on someone's
-// screen (background work counts a quarter: it competes for the same rate
-// budget and connections, but nobody is staring at it). The estimates are
-// upper bounds meant for ordering the list, not promises.
-
 import type { GitHubCall } from "./record";
 
 export type FindingKind =
@@ -22,7 +14,6 @@ export type FindingKind =
 
 export interface Finding {
   readonly kind: FindingKind;
-  /** Estimated ms of waiting it causes over the window; the sort key. */
   readonly cost: number;
   readonly title: string;
   readonly evidence: readonly string[];
@@ -34,7 +25,6 @@ export interface OriginRow {
   readonly kind: string;
   readonly runs: number;
   readonly calls: number;
-  /** GitHub wall time of one run: first call start to last call end. */
   readonly p50RunMs: number;
   readonly p95RunMs: number;
   readonly maxRunMs: number;
@@ -46,11 +36,9 @@ export interface OpRow {
   readonly p50Ms: number;
   readonly p95Ms: number;
   readonly maxMs: number;
-  /** Share answered 304 (free on the REST budget). */
   readonly notModified: number;
   readonly avgBytes: number;
   readonly errors: number;
-  /** Rate-limit points it burned (deltas of `x-ratelimit-used`, so approximate). */
   readonly points: number;
   readonly origins: readonly string[];
 }
@@ -83,9 +71,7 @@ export interface Report {
 }
 
 export interface AnalyzeOptions {
-  /** Two identical reads this close together: the second was avoidable. */
   readonly repeatWindowMs?: number;
-  /** A user-facing op this slow at p95 is worth a look. */
   readonly slowMs?: number;
 }
 
@@ -123,7 +109,6 @@ function top<T>(items: Iterable<T>, n: number): string[] {
     .map(([k, v]) => (v > 1 ? `${k} ×${v}` : k));
 }
 
-/** The union of the calls' intervals: how long the run actually waited on GitHub. */
 function wallOf(calls: readonly GitHubCall[]): number {
   const sorted = [...calls].sort((a, b) => a.start - b.start);
   let wall = 0;
@@ -136,8 +121,6 @@ function wallOf(calls: readonly GitHubCall[]): number {
   }
   return wall;
 }
-
-// ── Detectors ───────────────────────────────────────────────────────────────
 
 function duplicates(calls: readonly GitHubCall[], windowMs: number): Finding[] {
   const reads = calls.filter((c) => !c.write);
@@ -197,7 +180,6 @@ function duplicates(calls: readonly GitHubCall[], windowMs: number): Finding[] {
   return findings;
 }
 
-/** All the pages of one ask, as one interval. */
 interface Read {
   readonly op: string;
   readonly start: number;
@@ -238,7 +220,6 @@ function perRun(calls: readonly GitHubCall[]): Finding[] {
     const t0 = Math.min(...run.map((c) => c.start));
     const reads = readsOf(run);
 
-    // Stages: a read that starts only after every read before it finished.
     let stages = 0;
     let frontier = Number.NEGATIVE_INFINITY;
     for (const r of reads) {
@@ -278,7 +259,6 @@ function perRun(calls: readonly GitHubCall[]): Finding[] {
       pagination.set(key, entry);
     }
 
-    // One endpoint asked about many different things in a run.
     for (const [op, same] of groupBy(reads, (r) => r.op)) {
       if (same.length < 5) continue;
       const key = `${label}  ${op}`;

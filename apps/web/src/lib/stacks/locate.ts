@@ -1,15 +1,8 @@
-// ── Where a PR sits in its stack ────────────────────────────────────────────
-//
-// Every stack surface (the thumb index, the handoff card, the restack banner,
-// the merge bar, ⌥⌘↑/↓) finds the open PR's layer and its neighbours the same
-// way, so they never disagree about which layer is "here" or "next".
-
 import type { PrStackDetail, StackLayer } from "@revv/shared";
+import type { NavigationDirection } from "$lib/stores/navigation-intent.svelte";
 
-/**
- * The layer `prId` occupies. By Revv's id first; by PR number when the stack
- * read didn't know the id (the layer was untracked when it was read).
- */
+const POSITION_STEP: Record<NavigationDirection, number> = { up: 1, down: -1 };
+
 export function layerOf(
   stack: PrStackDetail,
   prId: string,
@@ -22,7 +15,11 @@ export function layerOf(
   );
 }
 
-/** The layer `offset` positions from `from` (+1 is up, toward the top), or null at an end. */
-export function layerAt(stack: PrStackDetail, from: StackLayer, offset: number): StackLayer | null {
-  return stack.layers.find((l) => l.position === from.position + offset) ?? null;
+export function neighbourOf(
+  stack: PrStackDetail,
+  from: StackLayer,
+  direction: NavigationDirection,
+): StackLayer | null {
+  const position = from.position + POSITION_STEP[direction];
+  return stack.layers.find((l) => l.position === position) ?? null;
 }

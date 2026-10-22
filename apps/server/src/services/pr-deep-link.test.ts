@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Repository } from "@revv/shared";
 import { Effect, Option } from "effect";
 import { GitHubAccessDeniedError, GitHubNetworkError, GitHubNotFoundError } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
+import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { resolvePullRequestLink } from "./pr-deep-link";
 
 const repository: Repository = {
@@ -21,7 +21,6 @@ const repository: Repository = {
   githubHost: "github.com",
 };
 
-// A REST detail read: it can't see stacks, so `stack` is absent.
 const remotePr: ObservedPr = {
   id: "owner/repo:42",
   externalId: 42,
@@ -48,6 +47,7 @@ const remotePr: ObservedPr = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   fetchedAt: "2026-01-01T00:00:00.000Z",
   closedAt: null,
+  stack: STACK_UNSEEN,
 };
 
 const locator = { githubHost: "github.com", repositoryFullName: "owner/repo", number: 42 };
@@ -102,8 +102,7 @@ describe("resolvePullRequestLink", () => {
     );
     expect(result.status).toBe("resolved");
     expect(written).toMatchObject({ id: "local-repo-id:42", repositoryId: "local-repo-id" });
-    expect(written).not.toHaveProperty("stack");
-    // Clients get what the fresh row holds: no stack seen, none stored.
+    expect(written).toMatchObject({ stack: STACK_UNSEEN });
     expect(result.pullRequest?.stack).toBeNull();
   });
 

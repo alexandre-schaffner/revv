@@ -1,17 +1,4 @@
 <script lang="ts">
-/*
- * RepoActivitySection — the repo homepage's numbers: a row of KPIs over the
- * last week, then the year-long commit heatmap.
- *
- * The KPIs mix three sources on purpose, each where it is honest:
- *   - PR flow (merged, opened, time to merge) from GitHub search, because
- *     Revv's own mirror only reaches back to when the repo was added;
- *   - "waiting on you" from the live PR store, which is always current;
- *   - commits from the same statistics the heatmap draws.
- * Each tile renders on its own; a source still loading shows a skeleton and
- * one that failed shows a dash, never a zero that would read as a fact.
- */
-
 import { loginsMatch } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowDownRight from "phosphor-svelte/lib/ArrowDownRight";
@@ -27,13 +14,11 @@ import { repoInkRamp } from "$lib/utils/repo-ink";
 
 interface Props {
   repoId: string;
-  /** The owner's palette, which the hero above prints in. */
   palette: OwnerPalette;
 }
 
 let { repoId, palette }: Props = $props();
 
-/** Four steps of the repo's ink, faint to full. */
 const ramp = $derived(repoInkRamp(palette, getResolvedTheme()));
 
 $effect(() => {
@@ -51,8 +36,6 @@ const commitsLoading = $derived(flowLoading || data?.commitsPending === true);
 const FULL = new Intl.NumberFormat("en-US");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// ── Waiting on you ───────────────────────────────────────────────────────
-
 const waiting = $derived.by(() => {
   const login = getCurrentUserLogin();
   if (!login) return null;
@@ -66,8 +49,6 @@ const oldestWaitDays = $derived.by(() => {
   const oldest = Math.min(...waiting.map((pr) => Date.parse(pr.createdAt)));
   return Math.floor((Date.now() - oldest) / DAY_MS);
 });
-
-// ── Commits this week, from the heatmap's own numbers ────────────────────
 
 const commitWeeks = $derived.by(() => {
   if (!commits) return null;
@@ -95,12 +76,9 @@ interface Tile {
   key: string;
   label: string;
   value: string | null;
-  /** The tile's source is still in flight: draw a skeleton, not a dash. */
   loading: boolean;
-  /** Signed change against the prior period, when the tile has one. */
   delta?: number | null;
   note: string;
-  /** Hover detail for the whole tile. */
   title?: string;
   bars?: number[];
 }
@@ -262,8 +240,6 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		cursor: pointer;
 	}
 
-	/* Stat tiles share hairlines rather than sitting in boxes: five numbers
-	   read as one row of facts, not five cards. */
 	.tiles {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
@@ -305,7 +281,6 @@ const commitsGaveUp = $derived(data !== null && data.commits === null && !data.c
 		color: var(--color-text-primary);
 	}
 
-	/* Cap height of the 22px figures, so the row doesn't move when they land. */
 	.value-skeleton {
 		align-self: center;
 		width: 44px;

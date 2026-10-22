@@ -1,9 +1,3 @@
-// ── The report as text ──────────────────────────────────────────────────────
-//
-// What `bun run github:audit` prints and `/api/_debug/github?format=text`
-// answers: findings first (the to-do list), then the tables they came from,
-// then optionally a timeline of the calls themselves.
-
 import type { Report } from "./analyze";
 import type { GitHubCall } from "./record";
 
@@ -95,7 +89,6 @@ export function formatReport(report: Report, options: { findings?: number } = {}
   return out.join("\n");
 }
 
-/** One bar per call, on a shared time axis: where the page load actually waits. */
 export function formatTimeline(calls: readonly GitHubCall[], width = 60): string {
   if (calls.length === 0) return "no calls";
   const sorted = [...calls].sort((a, b) => a.start - b.start);

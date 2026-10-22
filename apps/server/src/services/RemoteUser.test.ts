@@ -38,7 +38,6 @@ describe("RemoteUserService.upsert", () => {
 
     await run(
       Effect.gen(function* () {
-        // GraphQL's form, REST's form, then an Enterprise re-signing.
         yield* upsert("https://avatars.githubusercontent.com/u/42?u=abc123&v=4");
         yield* upsert("https://avatars.githubusercontent.com/u/42?v=4");
         yield* upsert("https://avatars.githubusercontent.com/u/42?v=4&token=fresh-signature");

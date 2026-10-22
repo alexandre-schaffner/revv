@@ -1,31 +1,20 @@
+import { afterPaint } from "./frames";
+import { gsap } from "./gsap";
 import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
 
-let crossfading = false;
-/** Bumped by every crossfade, so only the latest of overlapping ones cleans up. */
-let generation = 0;
+/** The crossfade holding the page (root class, frozen glass). A newer one takes it over. */
+let holder: symbol | null = null;
 
-/** On <html> for the length of a crossfade: retimes the fade and freezes glass (app.css). */
 const CROSSFADE = "document-crossfade";
 
-/** Whether a whole-document crossfade is mid-flight. */
-export function isDocumentCrossfading(): boolean {
-  return crossfading;
-}
-
-// ── Glass ────────────────────────────────────────────────────────────────
-//
 // `backdrop-filter` blurs whatever is painted behind an element. Inside a
 // View Transition snapshot the engine may hand it nothing to blur, and glass
-// goes transparent for the length of the fade. So for the fade only, each
-// glass surface trades its live blur for a solid fill: its own tint laid over
-// the page background, which is roughly what the blur shows anyway. Both
-// snapshots then hold a plain opaque surface that crossfades cleanly.
-
+// goes transparent for the length of the fade.
 const FROZEN = "glass-frozen";
 
 let probe: CanvasRenderingContext2D | null = null;
 
-/** `color` composited over `under`, as an opaque `rgb()`. Canvas parses any CSS colour syntax. */
 function solidOver(color: string, under: string): string {
   if (!probe) {
     const canvas = document.createElement("canvas");
@@ -43,26 +32,24 @@ function solidOver(color: string, under: string): string {
   return `rgb(${r} ${g} ${b})`;
 }
 
-/**
- * Freeze the page's glass to solid fills. A glass surface is marked with
- * `data-glass`, on the element that carries the backdrop filter, so finding
- * them is one query rather than a walk of every stylesheet. `before` runs
- * between reading and writing: anything that invalidates styles (the
- * crossfade's root class) has to come after the reads, or the first read
- * pays for a whole-document recalc inside the click.
- */
-function freezeGlass(before?: () => void): void {
+interface GlassReading {
+  readonly page: string;
+  readonly surfaces: readonly (readonly [HTMLElement, string])[];
+}
+
+function readGlass(): GlassReading {
   const page = getComputedStyle(document.body).backgroundColor;
-  const glass: [HTMLElement, string][] = [];
+  const surfaces: [HTMLElement, string][] = [];
   for (const el of document.querySelectorAll<HTMLElement>("[data-glass]")) {
-    // Marked glass whose blur a caller took away (a dialog with its own chrome) stays as it is.
     const style = getComputedStyle(el);
     const filter = style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter");
-    if (filter && filter !== "none") glass.push([el, style.backgroundColor]);
+    if (filter && filter !== "none") surfaces.push([el, style.backgroundColor]);
   }
-  // Read everything, then write, so the scan costs one style recalc.
-  before?.();
-  for (const [el, background] of glass) {
+  return { page, surfaces };
+}
+
+function freezeGlass({ page, surfaces }: GlassReading): void {
+  for (const [el, background] of surfaces) {
     el.style.setProperty("--glass-fill", solidOver(background, page));
     el.classList.add(FROZEN);
   }
@@ -75,24 +62,11 @@ function thawGlass(): void {
   }
 }
 
-/**
- * Crossfade the whole document from its current rendering to whatever
- * `update` produces, over `--duration-ceremonial-medium`.
- *
- * Built on a root View Transition: the browser snapshots the page as one
- * image, runs `update`, and fades the old image out over the live new page.
- * That's the only way a change that touches everything (a theme switch) can
- * fade as one piece: canvases, shadow DOM and iframes are part of the
- * snapshot, so nothing cuts ahead of the rest, and it's one composited layer
- * rather than thousands of per-element transitions. Glass surfaces are
- * frozen to solid fills for the length of the fade (see above).
- *
- * Components with motion of their own for the same change (the repo hero's
- * sky) should check {@link isDocumentCrossfading} and swap instantly, or the
- * change plays twice. Under reduced motion, where View Transitions aren't
- * supported, or while the window is hidden (the engine would skip the
- * transition anyway), `update` simply runs.
- */
+function releasePage(): void {
+  thawGlass();
+  document.documentElement.classList.remove(CROSSFADE);
+}
+
 export async function crossfadeDocument(update: () => void | Promise<void>): Promise<void> {
   if (
     prefersReducedMotion() ||
@@ -102,34 +76,73 @@ export async function crossfadeDocument(update: () => void | Promise<void>): Pro
     await update();
     return;
   }
-  const root = document.documentElement;
-  const mine = ++generation;
-  // A crossfade still running is skipped by this one. Its frozen glass would
-  // read back as the fill it was frozen to, so thaw it before reading.
-  if (crossfading) {
-    thawGlass();
-    root.classList.remove(CROSSFADE);
-  }
-  crossfading = true;
-  freezeGlass(() => root.classList.add(CROSSFADE));
+  const me = Symbol("crossfade");
+  if (holder) releasePage();
+  holder = me;
+  const glass = readGlass();
+  document.documentElement.classList.add(CROSSFADE);
+  freezeGlass(glass);
   try {
     await document.startViewTransition(async () => {
       await update();
-      if (mine !== generation) return;
-      // The new page's glass, in the new colours: thaw to read them, refreeze.
+      if (holder !== me) return;
       thawGlass();
-      freezeGlass();
+      freezeGlass(readGlass());
     }).finished;
-  } catch {
-    // Skipped by a newer transition, or the update threw — either way the
-    // page is in its new state; there's nothing left to fade.
   } finally {
-    // Only the latest crossfade puts the page back: one it skipped settles
-    // while the latest is still fading, with its glass still frozen.
-    if (mine === generation) {
-      thawGlass();
-      crossfading = false;
-      root.classList.remove(CROSSFADE);
+    if (holder === me) {
+      releasePage();
+      holder = null;
     }
   }
+}
+
+type Look = Readonly<Record<string, string | number>>;
+
+/** A look change on its way in. */
+interface Turn {
+  /** Put the end state up now, started or not. Idempotent. */
+  land(): void;
+}
+
+/**
+ * Turn `target` to `to` after the next paint, at the pace the document crossfade runs at
+ * (`ceremonialMedium`, `easeSoft`). Cuts to `to` at once under reduced motion, or while a
+ * document crossfade holds the page and already fades this change. `onLanded` runs exactly once,
+ * however the end state got up.
+ */
+export function turnLook(
+  target: HTMLElement,
+  to: Look,
+  options: { readonly from?: Look; readonly onLanded?: () => void } = {},
+): Turn {
+  let landed = false;
+  let tween: gsap.core.Tween | null = null;
+  let cancelStart = () => {};
+  const finish = () => {
+    if (landed) return;
+    landed = true;
+    options.onLanded?.();
+  };
+  const land = () => {
+    if (landed) return;
+    cancelStart();
+    tween?.kill();
+    gsap.set(target, { ...to, overwrite: true });
+    finish();
+  };
+  if (prefersReducedMotion() || holder !== null) {
+    land();
+    return { land };
+  }
+  const pace = {
+    ...to,
+    duration: tokens.ceremonialMedium,
+    ease: tokens.easeSoft,
+    onComplete: finish,
+  };
+  cancelStart = afterPaint(() => {
+    tween = options.from ? gsap.fromTo(target, options.from, pace) : gsap.to(target, pace);
+  });
+  return { land };
 }

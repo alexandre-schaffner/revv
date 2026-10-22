@@ -1,11 +1,3 @@
-// ── GitHub: one PR's stack ──────────────────────────────────────────────────
-//
-// The stack detail the review page and the stack flows read: every layer with
-// enough of its state to say where it stands (merge readiness, reviews, CI,
-// auto-merge), plus the repository's merge settings. Hosts that predate
-// stacks reject the `stack` field; see `STACK_SCHEMA_TOKENS`.
-
-/** Fragments of GitHub's complaint when the host has no stacks. */
 export const STACK_SCHEMA_TOKENS = [
   "PullRequestStack",
   "Field 'stack'",
@@ -109,8 +101,6 @@ export interface RawPrStackAnswer {
   } | null;
 }
 
-// ── One PR's state, for a layer the stack stopped listing ───────────────────
-
 export const PR_STATE_QUERY = `
   query PrMergeState($owner: String!, $repo: String!, $number: Int!) {
     repository(owner: $owner, name: $repo) {
@@ -123,15 +113,12 @@ export interface RawPrState {
   readonly repository: { readonly pullRequest: { readonly state: string } | null } | null;
 }
 
-// ── How far each layer is behind its base ───────────────────────────────────
-//
 // The stack query can't say whether a layer still sits on its base's tip:
 // `mergeStateStatus` reports BEHIND only under strict branch protection, and
 // `viewerCanUpdateBranch` is false on stacked PRs. `Ref.compare` answers it,
 // one alias per open layer in a single query. A ref GitHub can't resolve (a
 // deleted branch) comes back null rather than failing the query.
 
-/** One layer to compare: its base branch against its head branch. */
 export interface LayerComparison {
   readonly number: number;
   readonly baseRef: string;

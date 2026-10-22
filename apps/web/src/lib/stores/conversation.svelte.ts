@@ -372,6 +372,16 @@ function bumpGeneration(prId: string): void {
 }
 
 /**
+ * Show what a landed write left behind: the server's re-read, or, when it had
+ * none, the optimistic copy until a forced reload catches up.
+ */
+export function acceptWriteResult(prId: string, result: ConversationWriteResult): void {
+  bumpGeneration(prId);
+  if (result.conversation) accept(prId, received(result.conversation), false);
+  else void loadConversation(prId, { force: true });
+}
+
+/**
  * Apply a write, showing `patch` right away. On failure the patch is undone
  * against whatever the conversation reads by then, and a re-read reconciles
  * a write that only partly landed. Resolves true once GitHub took the write;
@@ -386,6 +396,7 @@ async function applyWrite(
   bumpGeneration(prId);
 
   const fail = (message: string, denied: boolean) => {
+    bumpGeneration(prId);
     if (patch) updateData(prId, patch.undo);
     if (denied) {
       updateEntry(prId, (entry) => ({
@@ -401,7 +412,6 @@ async function applyWrite(
   let result: ConversationWriteResult;
   try {
     const { data, error } = await api.api.prs({ id: prId }).conversation.writes.post(write);
-    bumpGeneration(prId);
     if (error || !data || !("conversation" in data)) {
       // Eden types only the statuses the route declares; handleAppError
       // answers GitHub's refusal with a 403 the schema doesn't list.
@@ -416,17 +426,10 @@ async function applyWrite(
     }
     result = data;
   } catch (e) {
-    bumpGeneration(prId);
     return fail(e instanceof Error ? e.message : "GitHub couldn't be reached.", false);
   }
 
-  if (result.conversation) {
-    accept(prId, received(result.conversation), false);
-  } else {
-    // The write landed but the server couldn't re-read it: keep the
-    // optimistic copy and catch up.
-    void loadConversation(prId, { force: true });
-  }
+  acceptWriteResult(prId, result);
   if (capabilityOf(write) === "rerun") {
     // Reruns get new check IDs; existing IDs still describe their original runs.
     updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: true }));
