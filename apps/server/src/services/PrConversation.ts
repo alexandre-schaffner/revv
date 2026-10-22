@@ -31,6 +31,7 @@ import {
   GitHubRateLimitError,
 } from "../domain/errors";
 import { logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import {
@@ -182,7 +183,7 @@ export const PrConversationServiceLive = Layer.effect(
         ([login, avatarUrl]) =>
           remoteUsers.upsert({ provider: "github", providerUserId: "", login, avatarUrl }),
         { concurrency: 4, discard: true },
-      ).pipe(Effect.forkDetach, Effect.asVoid);
+      ).pipe(withGitHubOrigin("conversation:avatars"), Effect.forkDetach, Effect.asVoid);
 
     const codeownersFor = (ctx: PrContextBasic, ref: RepoRef) =>
       cache.getOrFetch(

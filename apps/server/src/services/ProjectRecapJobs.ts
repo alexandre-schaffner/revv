@@ -35,6 +35,7 @@ import { DbError, type RecapError, ValidationError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
@@ -971,7 +972,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* scopedBody.pipe(Effect.forkDetach);
+          const fiber = yield* scopedBody.pipe(withGitHubOrigin("recap:job"), Effect.forkDetach);
           job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );
