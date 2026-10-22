@@ -8,6 +8,7 @@ import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-p
 import { GitHubGateway } from "../services/GitHub";
 import { apiBaseForHost } from "../services/github-rest";
 import { Identity } from "../services/Identity";
+import { IssuesService } from "../services/Issues";
 import { PollScheduler } from "../services/PollScheduler";
 import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepoCloneService } from "../services/RepoClone";
@@ -205,6 +206,28 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
       );
     } catch (e) {
       return handleAppError(e, ctx);
+    }
+  })
+  .get("/:id/issues", async (ctx) => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const repoSvc = yield* RepositoryService;
+          const identity = yield* Identity;
+          const issues = yield* IssuesService;
+          const repo = yield* repoSvc.getRepoById(ctx.params.id);
+          const account = yield* identity.resolveAccount(ctx.session.user.id, repo.githubHost);
+          if (!account.githubLogin) return [];
+          return yield* issues.listForRepo(
+            repo.id,
+            account.githubLogin,
+            account.accountId,
+            account.accessToken,
+          );
+        }),
+      );
+    } catch (error) {
+      return handleAppError(error, ctx);
     }
   })
   .delete("/:id", async (ctx) => {

@@ -20,6 +20,7 @@ import type { Attachment } from "svelte/attachments";
 import { ownerPalette } from "$lib/components/repo/owner-palette.svelte";
 import RepoActivitySection from "$lib/components/repo/RepoActivitySection.svelte";
 import RepoHero from "$lib/components/repo/RepoHero.svelte";
+import RepoOpenIssues from "$lib/components/repo/RepoOpenIssues.svelte";
 import RepoRecapCard from "$lib/components/repo/RepoRecapCard.svelte";
 import RepoTaggedPrs from "$lib/components/repo/RepoTaggedPrs.svelte";
 
@@ -79,6 +80,10 @@ function mountWhenNear(onNear: () => void): Attachment<HTMLElement> {
 	{/if}
 
 	<RepoTaggedPrs repoId={repo.id} defaultBranch={repo.defaultBranch} />
+
+	{#if !isFeed}
+		<RepoOpenIssues repoId={repo.id} />
+	{/if}
 
 	{#if !isFeed || recapMounted}
 		<RepoRecapCard repoId={repo.id} />

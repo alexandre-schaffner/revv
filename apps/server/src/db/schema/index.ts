@@ -11,6 +11,7 @@ export { commentThreads } from "./comment-threads";
 export { externalIntegrations } from "./external-integrations";
 export { fileContentCache } from "./file-content-cache";
 export { githubEtagCache } from "./github-etag-cache";
+export { githubIssues } from "./github-issues";
 export { hunkDecisions } from "./hunk-decisions";
 export { hunkScanRows, hunkScans } from "./hunk-scans";
 export { kvCache } from "./kv-cache";

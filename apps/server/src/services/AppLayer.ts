@@ -19,6 +19,7 @@ import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { HunkScanServiceLive } from "./HunkScan";
 import { IdentityLive } from "./Identity";
+import { IssuesServiceLive } from "./Issues";
 import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
 import { PollSchedulerLive } from "./PollScheduler";
@@ -87,6 +88,7 @@ const BaseLayers = Layer.mergeAll(
   GitHubGatewayWithDeps,
   BroadcasterLive,
   RepositoryServiceLive,
+  IssuesServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,
   RemoteUserServiceWithDeps,

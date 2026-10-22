@@ -1,4 +1,4 @@
-import type { MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
+import type { Issue, MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
 import { Context, Effect, Layer, Result } from "effect";
 import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
@@ -106,6 +106,42 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): ObservedPr {
     fetchedAt: new Date().toISOString(),
     closedAt: (raw.closed_at as string | null) ?? null,
     stack: STACK_UNSEEN,
+  };
+}
+
+function mapIssue(
+  raw: Record<string, unknown>,
+  repositoryId: string,
+): Omit<Issue, "assignedToViewer"> {
+  const user = raw.user as Record<string, unknown> | null;
+  const rawAssignees = raw.assignees as Array<Record<string, unknown>> | undefined;
+  const assigneeLogins = (rawAssignees ?? []).map((a) => a.login as string);
+  const rawLabels = raw.labels as Array<Record<string, unknown>> | undefined;
+  const labels = (rawLabels ?? [])
+    .filter((l) => typeof l.name === "string")
+    .map((l) => ({
+      name: l.name as string,
+      color: typeof l.color === "string" ? (l.color as string) : "",
+      description: typeof l.description === "string" ? (l.description as string) : null,
+    }));
+  return {
+    id: `${repositoryId}:${raw.number}`,
+    externalId: raw.number as number,
+    nodeId: (raw.node_id as string | undefined) ?? "",
+    repositoryId,
+    title: raw.title as string,
+    body: (raw.body as string | null) ?? null,
+    state: (raw.state as string) === "closed" ? "closed" : "open",
+    authorLogin: (user?.login as string | undefined) ?? "",
+    authorAvatarUrl: (user?.avatar_url as string | null) ?? null,
+    assigneeLogins,
+    labels,
+    commentCount: (raw.comments as number | undefined) ?? 0,
+    url: raw.html_url as string,
+    createdAt: raw.created_at as string,
+    updatedAt: raw.updated_at as string,
+    closedAt: (raw.closed_at as string | null) ?? null,
+    fetchedAt: new Date().toISOString(),
   };
 }
 
@@ -584,6 +620,16 @@ export interface GitHubGatewayService {
     ) => Effect.Effect<void, GitHubError, SettingsService>;
   };
   readonly repos: {
+    readonly listOpenIssues: (
+      repoFullName: string,
+      repositoryId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      ReadonlyArray<Omit<Issue, "assignedToViewer">>,
+      GitHubError,
+      SettingsService
+    >;
     readonly get: (
       fullName: string,
       token: string,
@@ -1437,6 +1483,21 @@ const reviewsGateway: GitHubGatewayService["reviews"] = {
 };
 
 const reposGateway: GitHubGatewayService["repos"] = {
+  listOpenIssues: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/issues?state=open&sort=updated&direction=desc&per_page=100`,
+        token,
+        3,
+        apiBase,
+      );
+      return (data as Record<string, unknown>[])
+        .filter((raw) => raw.pull_request === undefined)
+        .map((raw) => mapIssue(raw, repositoryId));
+    }).pipe(retryTransient),
+
   get: (fullName, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);

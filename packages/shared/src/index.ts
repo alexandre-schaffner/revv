@@ -250,6 +250,8 @@ export type {
   HunkDecision,
   HunkDecisionType,
   InstallEvent,
+  Issue,
+  IssueState,
   LoginEvent,
   MergeEligibility,
   MergeMethod,
