@@ -6,6 +6,10 @@ import { api } from "$lib/api/client";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
+import { readStackPlace } from "$lib/components/stack/margin/place";
+import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
+import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
+import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
@@ -32,6 +36,8 @@ import {
   switchPrViewState,
 } from "$lib/stores/review.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
+import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
+import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
 import {
   deactivate as deactivateWalkthrough,
@@ -96,6 +102,39 @@ $effect(() => {
   if (!prId || !headSha || !jevEnabled) return;
   untrack(() => void ensureHunkScan(prId, headSha));
 });
+
+const stackPrId = $derived(pr?.stack ? pr.id : null);
+const stackNumber = $derived(pr?.stack?.number ?? null);
+$effect(() => {
+  const prId = stackPrId;
+  const number = stackNumber;
+  if (!prId || number === null) return;
+  let live = true;
+  let cancelIdle: (() => void) | null = null;
+  void untrack(() => ensureStack(prId, number)).then(() => {
+    if (live) cancelIdle = whenIdle(() => warmNeighbours(prId));
+  });
+  return () => {
+    live = false;
+    cancelIdle?.();
+  };
+});
+
+const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
+const stackRepositoryId = $derived(pr?.stack ? pr.repositoryId : null);
+$effect(() => {
+  const repositoryId = stackRepositoryId;
+  if (repositoryId) untrack(() => ensureStackHeadlines(repositoryId));
+});
+
+function whenIdle(run: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const handle = window.requestIdleCallback(run, { timeout: 2000 });
+    return () => window.cancelIdleCallback(handle);
+  }
+  const handle = setTimeout(run, 400);
+  return () => clearTimeout(handle);
+}
 
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
@@ -389,6 +428,9 @@ onDestroy(() => {
 			>
 				<h1 class="page-title">{pr.title}</h1>
 				<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+				{#if stackPlace}
+					<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+				{/if}
 				{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 					<Badge
 						variant="outline"
@@ -397,6 +439,10 @@ onDestroy(() => {
 					>
 						{walkthroughRiskLevel} risk
 					</Badge>
+				{/if}
+				{#if stackPlace}
+					<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
+					<div class="title-stack-note"><StackPlaceNote place={stackPlace} /></div>
 				{/if}
 			</div>
 
@@ -471,7 +517,7 @@ onDestroy(() => {
 	.page-title-section {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		row-gap: 4px;
 		padding: 76px 32px 16px;
 		flex-shrink: 0;
 	}
@@ -510,6 +556,46 @@ onDestroy(() => {
 	   of the title column), which is the "misplaced" symptom. */
 	.page-title-section--narrow > :global(*) {
 		grid-column: 3;
+	}
+
+	.page-title-section--narrow > .title-stack-thumb,
+	.page-title-section--narrow > .title-stack-note {
+		grid-row: 1;
+		align-self: start;
+		position: relative;
+		z-index: 3;
+		height: 0;
+	}
+
+	.page-title-section--narrow > .title-stack-thumb {
+		grid-column: 2;
+		display: flex;
+		justify-content: flex-end;
+		padding: 9px 14px 0 0;
+	}
+
+	.page-title-section--narrow > .title-stack-note {
+		grid-column: 5;
+		padding-top: 9px;
+	}
+
+	.page-title-section--narrow > .title-stack-line {
+		display: none;
+		min-width: 0;
+	}
+
+	@container (max-width: 1335px) {
+		.page-title-section--narrow > .title-stack-thumb {
+			grid-column: 1;
+		}
+
+		.page-title-section--narrow > .title-stack-note {
+			display: none;
+		}
+
+		.page-title-section--narrow > .title-stack-line {
+			display: block;
+		}
 	}
 
 	@container (max-width: 1335px) {

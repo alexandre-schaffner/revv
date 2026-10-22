@@ -258,6 +258,11 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    a new walkthrough row, and the old is marked `'superseded'` with a `superseded_by`
    back-reference.
 
+   The snapshot importer that hydrates team-cache hits also carries a review over a pure
+   restack: when a stacked layer's new head has a fingerprint identical to a finished review's
+   (`walkthroughs.diff_fingerprint`), the orchestrator imports that review into the new head's
+   row (`carried_from_walkthrough_id`) with no agent run. The old row is never touched.
+
    **Carve-out: chat-edit is the single authorized post-completion mutation path.** After
    `status='complete'`, the chat agent's edit MCP tools (`update_overview`, `add_block`,
    `update_block`, `delete_block`, `add_semantic_step`, `update_semantic_step`,
@@ -312,6 +317,27 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     only — invoked when `jobEnded()` observes the daemon is no longer needed and the
     settings-change handler hasn't already torn it down. Their credentials and bound
     port are ephemeral and never persisted.
+
+### Stack briefs
+
+The stack brief (the arc of a GitHub PR stack, each open layer's role, and a review
+order) is a third agent pipeline under the same invariants. `StackBriefJobs`
+(`services/stacks/StackBriefJobs.ts`) is its orchestrator: one `stack_briefs` row per
+stack version (`signature`, the ordered open layers' `number@headSha`), with the stack
+snapshotted onto the row at creation so a resume needs neither GitHub nor memory. A new
+version supersedes the stack's older briefs (`superseded_by`). Concurrency 1, resume
+budget 3 (`resume_attempts`), resume-on-boot, no worktree; it runs the user's walkthrough
+agent and model. Content arrives only through `/mcp/stack-brief`, in two phases:
+**L** (`set_layer_role`, one upsert per layer keyed on `(brief_id, position)`; the phase
+advances when every snapshot layer has a row) then **R** (`set_arc`, refused until every
+layer has a role). `get_stack_brief_state` comes first on every run; `get_stack_layers`
+reads the evidence; `complete_stack_brief` is the validation gate. The gate and the
+orchestrator decide on one pure journal check (`stackBriefCompletionBlocker`): a run whose
+journal passes it completes even if the agent never called the gate. `status` is
+orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
+it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
+through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once
+they settle; it owns no lifecycle.
 
 ### Implications for new agent features (e.g., PRD-05)
 

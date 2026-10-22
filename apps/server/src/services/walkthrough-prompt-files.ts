@@ -1,4 +1,4 @@
-import type { WalkthroughGenerationMode } from "@revv/shared";
+import type { WalkthroughGenerationMode, WalkthroughStackSnapshot } from "@revv/shared";
 import { Effect } from "effect";
 import { logError } from "../logger";
 import {
@@ -16,6 +16,7 @@ import {
   parseNumstat,
   resolveCounts,
 } from "./incremental-diff";
+import { changedFiles, type DiffFingerprint, fingerprintFiles } from "./stacks/fingerprint";
 
 export interface PromptFile {
   readonly filename: string;
@@ -35,11 +36,42 @@ interface PromptFilesContext {
   readonly files: ReadonlyArray<PromptFile>;
   readonly generationMode: WalkthroughGenerationMode;
   readonly baseHeadSha: string | null;
+  readonly stack?: WalkthroughStackSnapshot | null;
+  readonly parentFingerprint?: DiffFingerprint | null;
 }
+
+export type PromptDiffSource =
+  | "full_pr"
+  | "incremental_range"
+  | "full_pr_fallback"
+  | "stack_layer_delta";
 
 export interface PromptFilesResult {
   readonly files: ReadonlyArray<PromptFile>;
-  readonly diffSource: "full_pr" | "incremental_range" | "full_pr_fallback";
+  readonly diffSource: PromptDiffSource;
+}
+
+export const REVERTED_FILE_STATUS = "reverted";
+
+export function stackLayerDeltaFiles(
+  files: ReadonlyArray<PromptFile>,
+  parentFingerprint: DiffFingerprint,
+): PromptFile[] {
+  const changed = new Set(changedFiles(parentFingerprint, fingerprintFiles(files)));
+  const current = new Set(files.map((f) => f.filename));
+  const reverted = [...changed]
+    .filter((filename) => !current.has(filename))
+    .map(
+      (filename): PromptFile => ({
+        filename,
+        previousFilename: null,
+        status: REVERTED_FILE_STATUS,
+        additions: 0,
+        deletions: 0,
+        patch: null,
+      }),
+    );
+  return [...files.filter((f) => changed.has(f.filename)), ...reverted];
 }
 
 function authedRepoUrl(ctx: PromptFilesContext): string {
@@ -52,6 +84,12 @@ export function resolveIncrementalPromptFiles(
 ): Effect.Effect<PromptFilesResult> {
   if (ctx.generationMode !== "incremental" || !ctx.baseHeadSha) {
     return Effect.succeed({ files: ctx.files, diffSource: "full_pr" });
+  }
+  if (ctx.stack && ctx.parentFingerprint) {
+    return Effect.succeed({
+      files: stackLayerDeltaFiles(ctx.files, ctx.parentFingerprint),
+      diffSource: "stack_layer_delta",
+    });
   }
   const baseHeadSha = ctx.baseHeadSha;
 

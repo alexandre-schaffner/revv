@@ -48,7 +48,6 @@ function conversation(overrides: Partial<PrConversation> = {}): PrConversation {
     reviewers: [],
     milestone: null,
     linkedIssues: [],
-    stack: null,
     codeowners: null,
     participants: [actor("me")],
     timeline: [comment(1, "one"), comment(2, "two"), comment(3, "three")],

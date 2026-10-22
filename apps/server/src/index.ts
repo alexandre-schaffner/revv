@@ -21,6 +21,7 @@ import { externalIntegrationRoutes } from "./routes/integrations";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
 import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
 import { mcpRecapRoute } from "./routes/mcp/recap";
+import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
@@ -30,6 +31,8 @@ import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
+import { stackReviewRoutes } from "./routes/stack-review";
+import { repoStackRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
@@ -43,6 +46,7 @@ import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
+import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -128,6 +132,9 @@ const app = new Elysia()
   .use(githubRoutes)
   .use(prRoutes)
   .use(prConversationRoutes)
+  .use(stackRoutes)
+  .use(repoStackRoutes)
+  .use(stackReviewRoutes)
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
@@ -142,6 +149,7 @@ const app = new Elysia()
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)
+  .use(mcpStackBriefRoute)
   .use(mcpChatContextRoute)
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
@@ -268,6 +276,12 @@ AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePend
   .catch((err) => {
     logError("recap-jobs", "resumePending failed on boot:", err);
   });
+
+AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
+  (err) => {
+    logError("stack-brief", "resumePending failed on boot:", err);
+  },
+);
 
 // Resume any repos with cloneStatus 'pending' or 'error' on boot so that
 // repos that failed to clone (e.g. due to a server restart mid-clone) are

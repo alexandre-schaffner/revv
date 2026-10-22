@@ -7,6 +7,12 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "./sidebar.svelte";
+import {
+  getStackView,
+  moveInStack,
+  openNextUnreviewedLayer,
+  reviewRemainingLayers,
+} from "./stack-nav.svelte";
 import { setDiffThemePreference, setThemePreference } from "./theme.svelte";
 
 // Re-export so existing consumers (CommandPalette) keep importing from here.
@@ -18,8 +24,48 @@ export interface Command {
   category?: string;
   shortcut?: string;
   keywords?: string[];
+  available?: () => boolean;
   action: () => void;
 }
+
+const inStack = (): boolean => getStackView() !== null;
+
+const STACK_COMMANDS: Command[] = [
+  {
+    id: "stack:next",
+    label: "Stack: Next Layer",
+    category: "Stack",
+    shortcut: "\u2325\u2318\u2191",
+    keywords: ["up", "above", "layer", "stacked"],
+    available: inStack,
+    action: () => moveInStack("up"),
+  },
+  {
+    id: "stack:previous",
+    label: "Stack: Previous Layer",
+    category: "Stack",
+    shortcut: "\u2325\u2318\u2193",
+    keywords: ["down", "below", "layer", "stacked"],
+    available: inStack,
+    action: () => moveInStack("down"),
+  },
+  {
+    id: "stack:next-unreviewed",
+    label: "Stack: Next Unreviewed Layer",
+    category: "Stack",
+    keywords: ["review", "walkthrough", "remaining", "todo"],
+    available: inStack,
+    action: () => openNextUnreviewedLayer(),
+  },
+  {
+    id: "stack:review-all",
+    label: "Stack: Review Whole Stack",
+    category: "Stack",
+    keywords: ["walkthrough", "generate", "remaining", "queue"],
+    available: inStack,
+    action: () => void reviewRemainingLayers(),
+  },
+];
 
 const commands = $state<Command[]>([
   {
@@ -124,6 +170,7 @@ const commands = $state<Command[]>([
     keywords: ["repos", "tracked", "remove"],
     action: () => openSettings("repositories"),
   },
+  ...STACK_COMMANDS,
 ]);
 
 let query = $state("");
@@ -149,10 +196,11 @@ function scoreCommand(cmd: Command, q: string): number {
 }
 
 const filteredCommands = $derived.by(() => {
+  const offered = commands.filter((cmd) => cmd.available?.() ?? true);
   const q = query.trim();
-  if (q.length === 0) return commands;
+  if (q.length === 0) return offered;
 
-  return commands
+  return offered
     .map((cmd) => ({ cmd, score: scoreCommand(cmd, q) }))
     .filter((r) => r.score >= 0)
     .sort((a, b) => b.score - a.score)

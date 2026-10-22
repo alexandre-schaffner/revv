@@ -24,6 +24,7 @@ import {
   broadcastToAccount,
   type GitHubInfra,
   type LiveAccount,
+  markStaleAndAnnounceStacks,
   type PollDeps,
   type SyncCycle,
 } from "./poll-cycle";
@@ -318,6 +319,24 @@ const listOpenPrsDelta = (
     return { ...open, kept };
   });
 
+export function movedStackNumbers(
+  prs: readonly PullRequest[],
+  existingMap: ReadonlyMap<string, PullRequest>,
+): Set<number> {
+  const moved = new Set<number>();
+  for (const pr of prs) {
+    const existing = existingMap.get(pr.id);
+    const placeMoved = !sameStack(existing?.stack ?? null, pr.stack);
+    const rangeMoved =
+      existing !== undefined &&
+      (existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha);
+    if (!placeMoved && !rangeMoved) continue;
+    if (pr.stack) moved.add(pr.stack.number);
+    if (placeMoved && existing?.stack) moved.add(existing.stack.number);
+  }
+  return moved;
+}
+
 export interface RepoListing {
   /** The repo's open PRs as they now stand in SQLite. */
   readonly prs: PullRequest[];
@@ -466,6 +485,14 @@ export const syncRepoOpenPrs = (
 
     const landed = rows.map((pr) => asStored(pr, ctx.existingMap.get(pr.id)));
 
+    if (upserted) {
+      const accountId = cycle.repoToAccountId.get(repo.id);
+      const stacks = movedStackNumbers(landed, ctx.existingMap);
+      if (accountId && stacks.size > 0) {
+        yield* markStaleAndAnnounceStacks(deps, accountId, repo.id, stacks);
+      }
+    }
+
     if (upserted && diffStats !== null) {
       yield* Effect.try({
         try: () =>
@@ -604,6 +631,22 @@ export const archiveClosedPrs = (
         { concurrency: 3, discard: true },
       ),
     );
+
+    const stacksByRepo = Map.groupBy(
+      closedPrs.flatMap((pr) => (pr.stack ? [{ repoId: pr.repositoryId, stack: pr.stack }] : [])),
+      (entry) => entry.repoId,
+    );
+    for (const [repoId, entries] of stacksByRepo) {
+      const accountId = cycle.repoToAccountId.get(repoId);
+      if (accountId) {
+        yield* markStaleAndAnnounceStacks(
+          deps,
+          accountId,
+          repoId,
+          entries.map((entry) => entry.stack.number),
+        );
+      }
+    }
 
     // Targeted `pr:archived` envelopes for each transition. The full PR set
     // still goes out via the cycle's `prs:updated` broadcast; this gives

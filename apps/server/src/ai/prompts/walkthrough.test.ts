@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { WalkthroughLead } from "@revv/shared";
+import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
 import { buildWalkthroughPrompt } from "./walkthrough";
 
@@ -103,5 +103,120 @@ describe("buildWalkthroughPrompt first-pass leads", () => {
   it("leaves the section out when there are no leads", () => {
     expect(buildWalkthroughPrompt(BASE)).not.toContain("First-pass leads");
     expect(buildWalkthroughPrompt({ ...BASE, hunkLeads: [] })).not.toContain("First-pass leads");
+  });
+});
+
+describe("buildWalkthroughPrompt stack block", () => {
+  const stack: WalkthroughStackSnapshot = {
+    number: 7,
+    baseRefName: "main",
+    position: 2,
+    layers: [
+      {
+        position: 3,
+        number: 122,
+        title: "Wire the limiter",
+        headSha: "c",
+        baseRef: "b",
+        status: "draft",
+      },
+      {
+        position: 1,
+        number: 120,
+        title: "Add the store",
+        headSha: "a",
+        baseRef: "main",
+        status: "merged",
+      },
+      {
+        position: 2,
+        number: 121,
+        title: "Add a rate limiter",
+        headSha: "b",
+        baseRef: "a",
+        status: "not_ready",
+      },
+    ],
+    capturedAt: "2026-10-16T00:00:00Z",
+  };
+
+  it("places the layer in its stack, after the description and before the principles", () => {
+    const prompt = buildWalkthroughPrompt({
+      ...BASE,
+      pr: { ...BASE.pr, body: "Limits requests per token." },
+      stack,
+    });
+    const block = prompt.slice(
+      prompt.indexOf("### Stack"),
+      prompt.indexOf("\n\n", prompt.indexOf("- A split")),
+    );
+    expect(block).toBe(
+      [
+        "### Stack",
+        "This pull request is layer 2 of 3 in stack #7, onto `main`.",
+        "",
+        '- Layer 1: #120 "Add the store" — merged',
+        '- Layer 2: #121 "Add a rate limiter" — not ready ← this PR',
+        '- Layer 3: #122 "Wire the limiter" — draft',
+        "",
+        "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
+        "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
+        "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
+        "- Cite another layer as `#N (layer k)`.",
+        "- Place this layer in the stack in one sentence of the overview's Context part.",
+        "- A split recommendation, if there is one, concerns this layer alone.",
+      ].join("\n"),
+    );
+    expect(prompt.indexOf("### Description")).toBeLessThan(prompt.indexOf("### Stack"));
+    expect(prompt.indexOf("### Stack")).toBeLessThan(prompt.indexOf("### Changed Files"));
+  });
+
+  it("asks for the stack context right after the state, and renumbers what follows", () => {
+    const prompt = buildWalkthroughPrompt({ ...BASE, stack, splitRecommendation: { pieces: 2 } });
+    expect(prompt).toContain("1. Call `get_walkthrough_state`");
+    expect(prompt).toContain("2. Call `get_stack_context` once during Phase A.");
+    expect(prompt).toContain("3. Call `get_repo_context`");
+    expect(prompt).toContain("5. This pull request has been judged to carry 2");
+  });
+
+  it("leaves an unstacked PR's prompt as it was", () => {
+    const prompt = buildWalkthroughPrompt({ ...BASE, splitRecommendation: { pieces: 2 } });
+    expect(prompt).not.toContain("### Stack");
+    expect(prompt).not.toContain("get_stack_context");
+    expect(prompt).toContain("2. Call `get_repo_context`");
+    expect(prompt).toContain("4. This pull request has been judged to carry 2");
+  });
+
+  it("frames a stacked incremental run as the layer's own changed files", () => {
+    const prompt = buildWalkthroughPrompt({
+      ...BASE,
+      stack,
+      reviewMode: {
+        mode: "incremental",
+        parentWalkthroughId: "wt-0",
+        baseHeadSha: "old",
+        headSha: "new",
+        diffSource: "stack_layer_delta",
+      },
+    });
+    expect(prompt).toContain("lower-layer churn excluded");
+    expect(prompt).toContain("### Changed Files Since the Prior Review");
+  });
+
+  it("tells the agent a layer reverted its change to a file", () => {
+    const prompt = buildWalkthroughPrompt({
+      ...BASE,
+      stack,
+      files: [{ ...file("src/gone.ts", ""), status: "reverted", additions: 0, deletions: 0 }],
+      reviewMode: {
+        mode: "incremental",
+        parentWalkthroughId: "wt-0",
+        baseHeadSha: "old",
+        headSha: "new",
+        diffSource: "stack_layer_delta",
+      },
+    });
+    expect(prompt).toContain("#### src/gone.ts (reverted, +0 -0)");
+    expect(prompt).toContain("[Change reverted — this layer no longer touches this file]");
   });
 });

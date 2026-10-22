@@ -13,6 +13,7 @@ import type { Db } from "../db/index";
 import { account } from "../db/schema/auth";
 import { GitHubAccessDeniedError, GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
 import { extractHostFromProviderId } from "../domain/provider-id";
+import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import type { Broadcaster } from "./Broadcaster";
 import type { DbService } from "./Db";
@@ -25,6 +26,7 @@ import type { RemoteUserService } from "./RemoteUser";
 import type { RepoCloneService } from "./RepoClone";
 import type { RepositoryService } from "./Repository";
 import type { SettingsService } from "./Settings";
+import type { StackService } from "./stacks/StackService";
 import type { TokenProvider } from "./TokenProvider";
 import type { WalkthroughService } from "./Walkthrough";
 import type { WalkthroughJobs } from "./WalkthroughJobs";
@@ -42,6 +44,7 @@ export interface PollDeps {
   readonly walkthroughService: Context.Service.Shape<typeof WalkthroughService>;
   readonly repoClone: Context.Service.Shape<typeof RepoCloneService>;
   readonly tokenProvider: Context.Service.Shape<typeof TokenProvider>;
+  readonly stackService: Context.Service.Shape<typeof StackService>;
 }
 
 /** Best-effort account-scoped broadcast; a failed emit never fails the cycle. */
@@ -51,6 +54,27 @@ export const broadcastToAccount = (
   msg: ServerEventMessage,
 ): Effect.Effect<void> =>
   deps.broadcaster.broadcastToAccount(accountId, msg).pipe(Effect.orElseSucceed(() => undefined));
+
+export const markStaleAndAnnounceStacks = (
+  deps: PollDeps,
+  accountId: string,
+  repositoryId: string,
+  stackNumbers: Iterable<number>,
+): Effect.Effect<void> =>
+  Effect.forEach(
+    new Set(stackNumbers),
+    (stackNumber) =>
+      withDb(deps.db, deps.stackService.markStale(repositoryId, stackNumber)).pipe(
+        Effect.orElseSucceed(() => undefined),
+        Effect.andThen(
+          broadcastToAccount(deps, accountId, {
+            type: "stack:updated",
+            data: { repositoryId, stackNumber },
+          }),
+        ),
+      ),
+    { discard: true },
+  );
 
 /**
  * GitHub's separate primary rate-limit budgets, as named by

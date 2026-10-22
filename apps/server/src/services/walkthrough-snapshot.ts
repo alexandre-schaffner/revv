@@ -163,8 +163,10 @@ function parseProviderConfig(raw: string | null, modelUsed: string): GenerationP
 /**
  * Build a `WalkthroughSnapshotV2` from a completed walkthrough row.
  *
- * Pre-conditions checked by the caller (`RemoteWalkthroughCache.push`):
- *   • `status='complete'` (avoids exporting half-generated rows)
+ * Pre-conditions checked by the caller:
+ *   • `status='complete'` (`RemoteWalkthroughCache.push`), or `'superseded'`
+ *     with `completedAt` set (a restack carry, `findRestackSource`): never a
+ *     half-generated row
  *   • `lastCompletedPhase='D'`
  *   • summary non-empty, sentiment non-empty
  *   • ≥1 diff block, all 9 axes rated

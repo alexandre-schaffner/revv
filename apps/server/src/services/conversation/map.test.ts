@@ -3,7 +3,6 @@ import {
   checkBucket,
   collectAvatarUrls,
   mapConversation,
-  mapStack,
   type RawConversation,
   type RawTimelineNode,
 } from "./map";
@@ -329,58 +328,5 @@ describe("checkBucket", () => {
     ["status", "EXPECTED", null, "pending"],
   ] as const)("%s %s %s → %s", (source, status, conclusion, bucket) => {
     expect(checkBucket(source, status, conclusion)).toBe(bucket);
-  });
-});
-
-describe("mapStack", () => {
-  const entry = (
-    position: number,
-    number: number,
-    state: string,
-    mergeStateStatus: string,
-    isDraft = false,
-  ) => ({
-    position,
-    pullRequest: {
-      number,
-      title: `PR ${number}`,
-      url: `https://x/${number}`,
-      state,
-      isDraft,
-      headRefName: `branch-${number}`,
-      mergeStateStatus,
-    },
-  });
-
-  test("orders entries base first and reads each one's status", () => {
-    const stack = mapStack({
-      number: 3686,
-      baseRefName: "main",
-      entries: {
-        nodes: [
-          entry(3, 3638, "OPEN", "BLOCKED"),
-          entry(1, 3683, "MERGED", "UNKNOWN"),
-          entry(2, 3684, "OPEN", "CLEAN"),
-          entry(4, 3690, "OPEN", "CLEAN", true),
-        ],
-      },
-    });
-    expect(stack?.entries.map((e) => [e.number, e.status])).toEqual([
-      [3683, "merged"],
-      [3684, "ready"],
-      [3638, "not_ready"],
-      [3690, "draft"],
-    ]);
-  });
-
-  test("treats a stack of one as no stack", () => {
-    expect(
-      mapStack({
-        number: 1,
-        baseRefName: "main",
-        entries: { nodes: [entry(1, 1, "OPEN", "CLEAN")] },
-      }),
-    ).toBeNull();
-    expect(mapStack(null)).toBeNull();
   });
 });
