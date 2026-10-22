@@ -782,7 +782,7 @@ function activitiesForTurn(
 						<MessageContent>
 							<div class="flex max-w-full flex-col items-end gap-1.5">
 								{#if item.content}
-									<MessageResponse content={item.content} mentionPills class="prose-on-accent rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-primary-foreground" />
+									<MessageResponse content={item.content} mentionPills class="prose-user-bubble rounded-[14px] rounded-br-[4px] border border-user-bubble-border bg-user-bubble px-3 py-2" />
 								{/if}
 								{#if item.attachments && item.attachments.length > 0}
 									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">

@@ -168,18 +168,23 @@
   --revv-tooltip-border: rgba(42, 40, 37, 0.12);
   --revv-tooltip-item-bg: rgba(42, 40, 37, 0.04);
 
-  /* On-accent chip — a file pill rendered *inside* the accent bubble (user
-     chat message). The bubble's own foreground is --color-primary-foreground;
-     the chip needs a surface that separates from the bubble and carries the
-     per-extension file glyph, whose colors resolve through `light-dark()`
-     against the document color-scheme. So the chip tracks the theme rather
-     than being pinned light: a light chip in light mode, a deep-teal chip in
-     dark mode, each matching the scheme its glyphs resolve under. */
+  /* Accent chip — a teal-tinted control surface with its own foreground
+     (the recap button's primary state). The accent flips from dark teal to
+     light teal between themes, so the chip tracks the theme rather than being
+     pinned light: a light chip in light mode, a deep-teal chip in dark mode. */
   --revv-accent-chip-bg: oklch(96% 0.012 195);
   --revv-accent-chip-fg: oklch(32% 0.03 195);
   --revv-accent-chip-border: oklch(88% 0.02 195);
   --revv-accent-chip-bg-hover: oklch(92% 0.022 195);
   --revv-accent-chip-border-hover: oklch(80% 0.04 195);
+
+  /* User chat bubble — paper tinted toward the brand teal, with ink text. A
+     filled accent bubble put a long pasted message on the screen as a slab of
+     teal; the tint keeps "this is you" at the low frequency the accent is
+     rationed to. `chip` backs inline code (and file pills) inside it. */
+  --revv-user-bubble: color-mix(in oklch, var(--revv-accent) 7%, var(--revv-bg-primary));
+  --revv-user-bubble-border: color-mix(in oklch, var(--revv-accent) 18%, var(--revv-bg-primary));
+  --revv-user-bubble-chip: color-mix(in oklch, var(--revv-accent) 11%, transparent);
 
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
@@ -360,15 +365,17 @@
   --revv-tooltip-border: rgba(255, 255, 255, 0.08);
   --revv-tooltip-item-bg: rgba(255, 255, 255, 0.04);
 
-  /* On-accent chip (dark). The dark bubble is luminous teal, so the chip goes
-     *down* rather than up: 5.3:1 against the bubble, 10.8:1 for its label, and
-     a dark color-scheme under which the file glyphs resolve to their bright
-     variants — the same relationship the light chip has in light mode. */
+  /* Accent chip (dark): deep teal under a near-white label (10.8:1). */
   --revv-accent-chip-bg: oklch(32% 0.045 195);
   --revv-accent-chip-fg: oklch(95% 0.012 195);
   --revv-accent-chip-border: oklch(44% 0.05 195);
   --revv-accent-chip-bg-hover: oklch(38% 0.055 195);
   --revv-accent-chip-border-hover: oklch(52% 0.06 195);
+
+  /* User chat bubble (dark). Tinted off the tertiary surface, not the canvas:
+     the dark canvas sits below the panel, so a tint over it vanishes. */
+  --revv-user-bubble: color-mix(in oklch, var(--revv-accent) 9%, var(--revv-bg-tertiary));
+  --revv-user-bubble-border: color-mix(in oklch, var(--revv-accent) 18%, var(--revv-bg-tertiary));
 
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
@@ -548,12 +555,17 @@
   --color-tooltip-border: var(--revv-tooltip-border);
   --color-tooltip-item-bg: var(--revv-tooltip-item-bg);
 
-  /* On-accent chip */
+  /* Accent chip */
   --color-accent-chip-bg: var(--revv-accent-chip-bg);
   --color-accent-chip-fg: var(--revv-accent-chip-fg);
   --color-accent-chip-border: var(--revv-accent-chip-border);
   --color-accent-chip-bg-hover: var(--revv-accent-chip-bg-hover);
   --color-accent-chip-border-hover: var(--revv-accent-chip-border-hover);
+
+  /* User chat bubble */
+  --color-user-bubble: var(--revv-user-bubble);
+  --color-user-bubble-border: var(--revv-user-bubble-border);
+  --color-user-bubble-chip: var(--revv-user-bubble-chip);
 
   /* Scorecard */
   --color-score-pass-bg: var(--revv-score-pass-bg);
