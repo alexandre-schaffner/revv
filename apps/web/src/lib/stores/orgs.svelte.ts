@@ -13,15 +13,29 @@ let activeOrg = $state<string | null>(
 );
 
 export function initForUser(userId: string): void {
+  if (userId !== currentUserId) orgsLoadedAt = 0;
   currentUserId = userId;
   const stored = typeof localStorage !== "undefined" ? localStorage.getItem(storageKey()) : null;
   activeOrg = stored;
 }
 
-export async function fetchOrgs(): Promise<void> {
+const ORGS_FRESH_FOR_MS = 5 * 60 * 1000;
+let orgsInflight: Promise<void> | null = null;
+let orgsLoadedAt = 0;
+
+export function fetchOrgs(): Promise<void> {
+  if (Date.now() - orgsLoadedAt < ORGS_FRESH_FOR_MS) return Promise.resolve();
+  orgsInflight ??= readOrgs().finally(() => {
+    orgsInflight = null;
+  });
+  return orgsInflight;
+}
+
+async function readOrgs(): Promise<void> {
   try {
     const { data } = await api.api.user.orgs.get();
     if (data && "orgs" in data) {
+      orgsLoadedAt = Date.now();
       availableOrgs = data.orgs as Org[];
       const valid = activeOrg && availableOrgs.some((o) => o.login === activeOrg);
       if (!valid) {
@@ -43,6 +57,7 @@ function setActiveOrg(login: string | null): void {
 }
 
 export function reset(): void {
+  orgsLoadedAt = 0;
   availableOrgs = [];
   activeOrg = null;
   currentUserId = null;

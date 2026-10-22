@@ -35,7 +35,9 @@ function fadeTransform(node: Element, params: FadeParams = {}): TransitionConfig
     easing: easeOutExpo,
     tick: (t, u) => {
       el.style.opacity = String(t);
-      if (yPx) el.style.transform = `translateY(${u * yPx}px)`;
+      // Dropped once settled: a leftover `translateY(0px)` would keep the
+      // element a containing block for every `position: fixed` descendant.
+      if (yPx) el.style.transform = t >= 1 ? "" : `translateY(${u * yPx}px)`;
     },
   };
 }

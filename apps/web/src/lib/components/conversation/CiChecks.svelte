@@ -308,6 +308,7 @@ async function rerunAll(): Promise<void> {
 
 <style>
 	.checks {
+		overflow: clip;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-card);
 		background: var(--color-bg-primary);
@@ -388,13 +389,6 @@ async function rerunAll(): Promise<void> {
 		display: flex;
 		align-items: center;
 		padding-right: 8px;
-	}
-
-	/* The last row's hover fill follows the card's rounded corner. */
-	.check-list > li:last-child .check-row,
-	.check-list > li:last-child > button,
-	.check-settled li:last-child .check-row {
-		border-radius: 0 0 var(--radius-card) var(--radius-card);
 	}
 
 	.check-row:has(> button.check-summary:hover),

@@ -26,7 +26,7 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 	import { mentionReferences } from "$lib/actions/mention-references.svelte";
 	import { getReviewFiles } from "$lib/stores/review.svelte";
 	import { cn } from "$lib/utils.js";
-	import { renderMarkdown } from "$lib/utils/markdown.js";
+	import { renderMarkdownBlocks } from "$lib/utils/markdown.js";
 	import { MESSAGE_CTX_KEY, type MessageContext } from "./context.js";
 
 	let {
@@ -50,7 +50,7 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		return md;
 	}
 
-	let html = $derived(renderMarkdown(fixIncomplete(content)));
+	let blocks = $derived(renderMarkdownBlocks(fixIncomplete(content)));
 </script>
 
 <div
@@ -63,12 +63,16 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		// it can't be narrower than its min-content. `break-words` doesn't lower
 		// min-content; `wrap-anywhere` does, so a long file path wraps instead
 		// of widening the bubble past the pane and clipping its left edge.
-		ctx?.role === "user" && "rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
+		// Tables and code blocks set their own min-content (`max-content`,
+		// `white-space: pre`), so the bubble also caps at its column and
+		// lets them scroll inside it. Important, because prose.css's unlayered
+		// `.prose { max-width: none }` outranks a layered utility.
+		ctx?.role === "user" && "max-w-full! rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
 		className,
 	)}
 	{...restProps}
 >
-	{@html html}
+	{#each blocks as block}{@html block}{/each}
 </div>
 
 <style>
@@ -115,26 +119,11 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 		height: 0.9em;
 		flex-shrink: 0;
 	}
-	/* On the teal accent bubble a translucent chip leaves its text below AA and
-	   muddies the file glyph's color, so the chip becomes a solid brand-tinted
-	   surface instead — label at ~11:1, chip separated from the bubble at
-	   ~5.3:1, glyph on a surface bright enough to carry it. Tinted toward the
-	   brand hue (195), never raw #fff, per the design system.
-
-	   The chip tokens invert with the theme rather than being pinned light: the
-	   accent fill itself inverts (48% L in light, 72% L in dark), so a light
-	   chip that separates cleanly from the light bubble all but merges with the
-	   dark one. The glyph colors come back from @pierre/trees as `light-dark()`
-	   values resolved against the document color-scheme, so pinning the chip
-	   light also stranded dark-mode's bright glyph variants on a near-white
-	   surface. See --revv-accent-chip-* in app.css. */
-	:global([data-slot='message-response'].prose-on-accent .mention-ref) {
-		border-color: var(--color-accent-chip-border);
-		background: var(--color-accent-chip-bg);
-		color: var(--color-accent-chip-fg);
-	}
-	:global([data-slot='message-response'].prose-on-accent .mention-ref[data-mention-path]:hover) {
-		border-color: var(--color-accent-chip-border-hover);
-		background: var(--color-accent-chip-bg-hover);
+	/* Inside the teal-tinted user bubble a pill takes the bubble's own chip
+	   tint, so it doesn't read as a warm patch on a cool surface. Hover still
+	   goes to the accent (the hover rule above is more specific). */
+	:global([data-slot='message-response'].prose-user-bubble .mention-ref) {
+		border-color: var(--color-user-bubble-border);
+		background: var(--color-user-bubble-chip);
 	}
 </style>

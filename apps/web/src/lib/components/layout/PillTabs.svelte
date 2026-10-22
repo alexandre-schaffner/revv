@@ -186,7 +186,7 @@ $effect(() => {
 </script>
 
 <div class="tabs-wrapper" bind:this={wrapperEl}>
-	<div class="pill" bind:this={pillEl}>
+	<div class="pill" data-glass bind:this={pillEl}>
 		<span
 			class="pill-indicator"
 			bind:this={indicatorEl}

@@ -45,7 +45,7 @@ function close(): void {
 </script>
 
 {#if menu}
-	<span class="glass-surface glass-split" class:glass-split--disabled={disabled}>
+	<span class="glass-surface glass-split" class:glass-split--disabled={disabled} data-glass>
 		<button type="button" class="glass-split__main" {disabled} {title} {onclick}>
 			{@render children()}
 		</button>

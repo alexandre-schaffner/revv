@@ -1,5 +1,6 @@
 import type { ThemePreference } from "@revv/shared";
-import { untrack } from "svelte";
+import { tick, untrack } from "svelte";
+import { crossfadeDocument } from "$lib/motion";
 
 export type { ThemePreference };
 
@@ -36,6 +37,13 @@ const SWAP_CLASS = "theme-switching";
  *  strand it on (each swap re-arms rather than stacking add/remove pairs). */
 let swapRelease: number | null = null;
 
+function applyAnimated(pref: ThemePreference): void {
+  void crossfadeDocument(async () => {
+    apply(pref);
+    await tick();
+  });
+}
+
 /** Toggle .dark on <html> and set colorScheme. Synchronous — the browser
  *  batches both writes into a single style recalc, so there is no flash.
  *
@@ -50,10 +58,6 @@ let swapRelease: number | null = null;
  *  Suppression, not a shared duration. Giving every component the same
  *  transition was tried and rejected — see the app.css block for why it is
  *  uniform on paper but not smooth in practice.
- *
- *  Note: we intentionally avoid the View Transition API here. Its overlay
- *  compositing layers break backdrop-filter on glass elements (they lose
- *  their blur and go transparent during the transition).
  *
  *  Note also: do NOT drive the *native* window theme from here
  *  (`getCurrentWindow().setTheme(...)`). It looks like the missing piece — the
@@ -121,7 +125,7 @@ export function initTheme(): () => void {
   const onChange = () =>
     untrack(() => {
       if (preference === "system") {
-        apply("system");
+        applyAnimated("system");
       }
     });
   mq.addEventListener("change", onChange);
@@ -139,7 +143,7 @@ export function getResolvedTheme(): "light" | "dark" {
 export function setThemePreference(pref: ThemePreference): void {
   preference = pref;
   localStorage.setItem(THEME_KEY, pref);
-  apply(pref);
+  applyAnimated(pref);
 }
 
 export function getDiffThemePreference(): DiffThemePreference {

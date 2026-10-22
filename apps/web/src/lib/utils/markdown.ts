@@ -2,7 +2,7 @@ import { isPrLensFenceLang } from "@revv/shared";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import remend from "remend";
-import { highlightCode } from "./code-highlight.svelte";
+import { highlightCode, isHighlighterReady } from "./code-highlight.svelte";
 
 marked.setOptions({
   breaks: true,
@@ -58,6 +58,47 @@ export function renderMarkdown(source: string): string {
   return DOMPurify.sanitize(raw, {
     ADD_ATTR: ["style", "class", "tabindex"],
   });
+}
+
+// Rendered HTML per top-level block, keyed on the block's markdown source.
+// Insertion-ordered, so the oldest entry is evicted first once full.
+const blockHtmlCache = new Map<string, string>();
+const BLOCK_CACHE_LIMIT = 2000;
+
+function renderBlock(raw: string): string {
+  const cached = blockHtmlCache.get(raw);
+  if (cached !== undefined) return cached;
+  const html = renderMarkdown(raw);
+  // A block rendered before Shiki loaded holds plain `<pre>`; don't pin it.
+  if (isHighlighterReady()) {
+    if (blockHtmlCache.size >= BLOCK_CACHE_LIMIT) {
+      const oldest = blockHtmlCache.keys().next().value;
+      if (oldest !== undefined) blockHtmlCache.delete(oldest);
+    }
+    blockHtmlCache.set(raw, html);
+  }
+  return html;
+}
+
+/**
+ * {@link renderMarkdown}, split into top-level blocks that each render on
+ * their own. A streamed message only ever grows its last block, so the
+ * earlier ones come back from the cache unchanged and a `{@html}` per block
+ * leaves their DOM alone: a chunk costs one block's parse, highlight and
+ * sanitize, not the whole message's.
+ *
+ * Two constructs reach across blocks and only survive as one parse: a raw
+ * HTML block opening an element a later block closes (`<details>` around
+ * markdown), and a `[ref]: url` definition serving another block's link. A
+ * message holding either renders as a single block.
+ */
+export function renderMarkdownBlocks(source: string): string[] {
+  const normalized = source.replace(/\\n/g, "\n");
+  const tokens = marked.lexer(normalized);
+  const crossBlock =
+    Object.keys(tokens.links).length > 0 || tokens.some((token) => token.type === "html");
+  if (crossBlock) return [renderMarkdown(normalized)];
+  return tokens.filter((token) => token.type !== "space").map((token) => renderBlock(token.raw));
 }
 
 /** Declarations Shiki's highlighting writes: colors, nothing that can move or cover. */

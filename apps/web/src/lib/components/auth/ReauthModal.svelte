@@ -77,6 +77,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 {#if reauth}
 	<div
 		class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-6 supports-backdrop-filter:backdrop-blur-sm"
+		data-glass
 		in:gsapFade={{ duration: tokens.smooth }}
 		role="dialog"
 		aria-modal="true"
