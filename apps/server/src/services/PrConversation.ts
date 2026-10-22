@@ -108,6 +108,16 @@ export class PrConversationService extends Context.Service<
       accountId: string,
       write: ConversationWrite,
     ) => Effect.Effect<ConversationWriteResult, ConversationError, Deps>;
+    /**
+     * A write made outside `write` (a review submitted to GitHub) changed the
+     * conversation: re-read it and announce `pr:conversation-updated`. The
+     * conversation is null when the re-read failed; the write still stands,
+     * so this never fails.
+     */
+    readonly afterWrite: (
+      ctx: PrContextBasic,
+      accountId: string,
+    ) => Effect.Effect<ConversationWriteResult, never, Deps>;
     readonly labelOptions: (
       prId: string,
       userId: string,
@@ -277,10 +287,9 @@ export const PrConversationServiceLive = Layer.effect(
         return details;
       });
 
-    const write = (prId: string, userId: string, accountId: string, w: ConversationWrite) =>
+    const afterWrite = (ctx: PrContextBasic, accountId: string) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
-        yield* runWrite(yield* repoRef(ctx), ctx.pr.externalId, w, ctx.token, ctx.apiBase);
+        const prId = ctx.pr.id;
         // GitHub took the write; failing to re-read it (rate limit, network)
         // must not read as the write failing, or the client rolls back a
         // change that landed and a retry duplicates it.
@@ -297,6 +306,13 @@ export const PrConversationServiceLive = Layer.effect(
           data: { prId, fetchedAt: conversation?.fetchedAt ?? null },
         });
         return { conversation } satisfies ConversationWriteResult;
+      });
+
+    const write = (prId: string, userId: string, accountId: string, w: ConversationWrite) =>
+      Effect.gen(function* () {
+        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
+        yield* runWrite(yield* repoRef(ctx), ctx.pr.externalId, w, ctx.token, ctx.apiBase);
+        return yield* afterWrite(ctx, accountId);
       });
 
     const labelOptions = (prId: string, userId: string, accountId: string) =>
@@ -353,6 +369,7 @@ export const PrConversationServiceLive = Layer.effect(
       checks,
       checkDetails,
       write,
+      afterWrite,
       labelOptions,
       assigneeOptions,
       reviewerOptions,

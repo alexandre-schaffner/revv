@@ -17,8 +17,9 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
 }> {}
 
 /**
- * Transport-level failure: DNS, TLS, connection reset, request timeout, or a
- * 5xx/408 from GitHub. **Retryable** — `retryTransient` in `github-rest.ts`
+ * Transport-level failure: DNS, TLS, connection reset, request timeout, a
+ * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
+ * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `github-rest.ts`
  * only retries this class, so nothing else may be mapped to it.
  */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
@@ -27,7 +28,8 @@ export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
 
 /**
  * GitHub understood the request and rejected it: a 4xx that isn't
- * 401/403/404/429, or a GraphQL response carrying an `errors` array.
+ * 401/403/404/429, or a GraphQL response carrying an `errors` array (other
+ * than GitHub's own failure, above).
  * **Not retryable** — replaying it produces the same rejection, so retrying
  * only burns the backoff budget (2s + 4s + 8s per call) and stalls the
  * sequential sync loops.

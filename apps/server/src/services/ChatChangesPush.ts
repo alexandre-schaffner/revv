@@ -55,6 +55,7 @@ import {
   type GitHubError,
   type NotFoundError,
 } from "../domain/errors";
+import { STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
@@ -714,6 +715,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             .upsertPrs([
               {
                 ...fresh,
+                stack: STACK_UNSEEN,
                 headSha,
                 updatedAt,
                 fetchedAt: now,

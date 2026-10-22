@@ -134,7 +134,7 @@ export const SshSignerLive = Layer.effect(
     const pubkeyCache = new PubkeyCache();
 
     // Invalidate pubkey cache whenever settings change (host set may change).
-    yield* Effect.forkChild(
+    yield* Effect.forkScoped(
       settingsSvc
         .settingsChanges()
         .pipe(Stream.runForEach(() => Effect.sync(() => pubkeyCache.invalidate()))),

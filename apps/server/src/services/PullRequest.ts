@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-or
 import { Context, Effect, Layer } from "effect";
 import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
 import { NotFoundError, ValidationError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import type { SyncWatermark } from "./sync-engine/watermark";
@@ -37,6 +38,10 @@ function rowToPr(
     updatedAt: row.updatedAt,
     fetchedAt: row.fetchedAt,
     closedAt: row.closedAt ?? null,
+    stack:
+      row.stackNumber !== null && row.stackPosition !== null
+        ? { number: row.stackNumber, position: row.stackPosition }
+        : null,
   };
 }
 
@@ -147,8 +152,13 @@ export class PullRequestService extends Context.Service<
      *     zeroes that must not overwrite real numbers from a detail fetch.
      *     Real stats arrive via `DiffCacheService.cacheFiles`, which derives
      *     them from the changed-file list alongside the cached diff.
+     *   - `stack_number` / `stack_position` are only taken from a row whose
+     *     `stack` is `seen` (see `StackSighting`): an `unseen` one leaves the
+     *     stored ones be. A fresh insert of an `unseen` row starts unstacked.
      */
-    readonly upsertPrs: (prs: PullRequest[]) => Effect.Effect<void, ValidationError, DbService>;
+    readonly upsertPrs: (
+      prs: readonly ObservedPr[],
+    ) => Effect.Effect<void, ValidationError, DbService>;
     readonly deletePrs: (ids: string[]) => Effect.Effect<void, ValidationError, DbService>;
     /**
      * Windowed read of archived (closed/merged) PRs. Supports:
@@ -198,6 +208,10 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ArchivedPrWithWalkthrough>, ValidationError, DbService>;
     readonly markPrsClosed: (
       updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }>,
+    ) => Effect.Effect<void, ValidationError, DbService>;
+    readonly setPrDraft: (
+      id: string,
+      isDraft: boolean,
     ) => Effect.Effect<void, ValidationError, DbService>;
     /**
      * Read the high-water-mark for review-comment sync. Used as the `?since=`
@@ -346,9 +360,11 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
       const { db } = yield* DbService;
       if (prs.length === 0) return;
       const bodyMentionsByPrId = new Map<string, string[]>();
-      yield* Effect.tryPromise({
+      yield* Effect.try({
         try: () => {
-          const values = prs.map((pr) => {
+          const withStack: (typeof pullRequests.$inferInsert)[] = [];
+          const withoutStack: (typeof pullRequests.$inferInsert)[] = [];
+          for (const pr of prs) {
             // Extract @-mentions from the PR body. Used verbatim for a fresh
             // insert; merged (not assigned) into an existing row afterwards.
             const bodyMentions = pr.body ? extractGitHubMentions(pr.body) : [];
@@ -379,9 +395,13 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             if (pr.headSha !== null) base.headSha = pr.headSha;
             if (pr.baseSha !== null) base.baseSha = pr.baseSha;
             if (pr.closedAt !== null) base.closedAt = pr.closedAt;
-            return base;
-          });
-          return Promise.resolve(
+            if (pr.stack.kind === "seen" && pr.stack.place) {
+              base.stackNumber = pr.stack.place.number;
+              base.stackPosition = pr.stack.place.position;
+            }
+            (pr.stack.kind === "seen" ? withStack : withoutStack).push(base);
+          }
+          const upsert = (values: (typeof pullRequests.$inferInsert)[], takeStack: boolean) =>
             db
               .insert(pullRequests)
               .values(values)
@@ -429,10 +449,19 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                   // body mentions AND mentions found in review comments (see
                   // `appendMentionedUsers`). Assigning the body-only set here
                   // erased the comment-sourced half on every poll tick.
+                  ...(takeStack
+                    ? {
+                        stackNumber: sql`excluded.stack_number`,
+                        stackPosition: sql`excluded.stack_position`,
+                      }
+                    : {}),
                 },
               })
-              .run(),
-          );
+              .run();
+          db.transaction(() => {
+            if (withStack.length > 0) upsert(withStack, true);
+            if (withoutStack.length > 0) upsert(withoutStack, false);
+          });
         },
         catch: (e) => new ValidationError({ message: String(e) }),
       });
@@ -743,6 +772,15 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
             };
           });
         },
+        catch: (e) => new ValidationError({ message: String(e) }),
+      });
+    }),
+
+  setPrDraft: (id, isDraft) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      yield* Effect.try({
+        try: () => db.update(pullRequests).set({ isDraft }).where(eq(pullRequests.id, id)).run(),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
     }),

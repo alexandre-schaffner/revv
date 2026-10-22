@@ -32,6 +32,7 @@ import {
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
 import { DbError, type RecapError, ValidationError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withTraceAnchor } from "../observability/span-graft";
@@ -519,37 +520,26 @@ export const ProjectRecapJobsLive = Layer.effect(
           `backfilling ${missing.length} closed PR(s) for ${repoFullName} window ${periodStart}..${periodEnd}`,
         );
 
-        // Fetch full PR data for each missing number. Bounded concurrency
-        // mirrors the diff loader. Failures degrade silently — a missing
-        // backfill row just means that one PR stays absent from the recap.
-        const fetched = yield* Effect.forEach(
-          missing,
-          (m) =>
-            provideGithubDeps(prCtx.fetchPr(repoFullName, m.number, token)).pipe(
-              Effect.catch((err) =>
-                Effect.sync(() => {
-                  debug(
-                    "recap-jobs",
-                    `getPr #${m.number} failed during backfill for ${repoFullName}:`,
-                    err instanceof Error ? err.message : String(err),
-                  );
-                  return null;
-                }),
-              ),
-            ),
-          { concurrency: 3 },
+        const fetched = yield* provideGithubDeps(
+          prCtx.fetchPrs(
+            repoFullName,
+            repoId,
+            missing.map((m) => m.number),
+            token,
+          ),
+        ).pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              debug(
+                "recap-jobs",
+                `PR read failed during backfill for ${repoFullName}:`,
+                err instanceof Error ? err.message : String(err),
+              );
+              return new Map<number, ObservedPr>();
+            }),
+          ),
         );
-
-        // Repoint every fetched row at our local repo id — `getPr` derives
-        // `id` and `repositoryId` from `${owner}/${repo}` because it
-        // doesn't know the local row id (see `mapPr` in GitHub.ts).
-        const upsertable = fetched
-          .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
-          .map((pr) => ({
-            ...pr,
-            id: `${repoId}:${pr.externalId}`,
-            repositoryId: repoId,
-          }));
+        const upsertable = [...fetched.values()];
 
         if (upsertable.length === 0) return { addedCount: 0 };
 
@@ -981,7 +971,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* Effect.forkDetach(scopedBody);
+          const fiber = yield* scopedBody.pipe(Effect.forkDetach);
           job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );

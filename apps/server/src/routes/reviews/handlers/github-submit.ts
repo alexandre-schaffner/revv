@@ -7,6 +7,7 @@ import { DiffCacheService } from "../../../services/DiffCache";
 import { fitAnchorToPatch } from "../../../services/diff-anchors";
 import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
+import { PrConversationService } from "../../../services/PrConversation";
 import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -72,8 +73,10 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       const repoService = yield* RepositoryService;
       const broadcaster = yield* Broadcaster;
       const diffCache = yield* DiffCacheService;
+      const conversations = yield* PrConversationService;
 
-      const { pr, repo, token: ghToken } = yield* prContext.resolveBasic(prId, userId);
+      const ctx = yield* prContext.resolveBasic(prId, userId);
+      const { pr, repo, token: ghToken } = ctx;
       const accountId = yield* repoService.getAccountIdForRepo(repo.id);
 
       const eventMap = {
@@ -284,6 +287,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       const issuesSubmittedAt =
         issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
 
+      const { conversation } = yield* conversations.afterWrite(ctx, accountId);
+
       return {
         id: review.id,
         htmlUrl: review.htmlUrl,
@@ -293,6 +298,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         // left intact so the reviewer can re-anchor or discard them; the UI
         // names them rather than letting them vanish.
         skippedComments,
+        conversation,
       };
     }),
   );

@@ -4,10 +4,23 @@
  *
  * Split out of `GitHub.ts`, which exposes both through `GitHubGateway.prs`.
  */
-import type { PullRequest } from "@revv/shared";
+import type { PrStackPlace, PullRequest } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
-import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
+import {
+  type ObservedPr,
+  STACK_UNSEEN,
+  type StackSighting,
+  stackSeen,
+} from "../domain/observed-pr";
+import {
+  type GraphqlConnection,
+  githubGraphqlPartial,
+  paginateGraphql,
+  retryTransient,
+  retryTransientBeforeFallback,
+  withSchemaFallback,
+} from "./github-rest";
 
 /**
  * A few active repos exceed 1,000 open PRs. Bounded for rate-limit safety, but
@@ -16,28 +29,40 @@ import { githubGraphqlPartial, paginateGraphql } from "./github-rest";
  */
 const OPEN_PRS_MAX_PAGES = 50;
 
+export const OPEN_PRS_PAGE_SIZE = 100;
+
+export const OPEN_PRS_LIST_CAP = OPEN_PRS_MAX_PAGES * OPEN_PRS_PAGE_SIZE;
+
+const STACK_TOKENS = ["PullRequestStack", "Field 'stack'", "Field 'stackEntry'"] as const;
+
 // Exactly the fields `mapPrNode` reads. `additions`/`deletions`/`changedFiles`
-// are left out on purpose: GitHub computes them per PR, which made this query
-// ~20% slower, and `listPrDiffStats` already fetches them for the PRs that
-// actually need them.
-const OPEN_PRS_QUERY = `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
+// are left out on purpose: GitHub computes them per PR, which made the open
+// list ~20% slower, and `listPrDiffStatsViaGraphql` already fetches them for
+// the PRs that actually need them.
+const PR_NODE_FIELDS = `
+  number title body isDraft url createdAt updatedAt closedAt
+  headRefName baseRefName headRefOid baseRefOid
+  author { __typename login avatarUrl }
+  reviewRequests(first: 100) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { login }
+        ... on Bot { login }
+        ... on Mannequin { login }
+      }
+    }
+  }`;
+
+const openPrsQuery = (
+  withStacks: boolean,
+) => `query OpenPullRequests($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
+    pullRequests(states: OPEN, first: ${OPEN_PRS_PAGE_SIZE}, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title body isDraft url createdAt updatedAt closedAt
-        headRefName baseRefName headRefOid baseRefOid
-        author { __typename login avatarUrl }
-        reviewRequests(first: 100) {
-          nodes {
-            requestedReviewer {
-              __typename
-              ... on User { login }
-              ... on Bot { login }
-              ... on Mannequin { login }
-            }
-          }
-        }
+        ${PR_NODE_FIELDS}
+        ${withStacks ? "stack { number } stackEntry { position }" : ""}
       }
     }
   }
@@ -63,6 +88,8 @@ interface GqlOpenPr {
   readonly headRefOid: string;
   readonly baseRefOid: string;
   readonly author: GqlActor | null;
+  readonly stack?: { readonly number: number } | null;
+  readonly stackEntry?: { readonly position: number } | null;
   readonly reviewRequests: {
     readonly nodes: ReadonlyArray<{ readonly requestedReviewer: GqlActor | null } | null>;
   };
@@ -88,8 +115,13 @@ function restLogin(actor: GqlActor): string | null {
   return actor.__typename === "Bot" ? `${actor.login}[bot]` : actor.login;
 }
 
-/** Map an `OPEN_PRS_QUERY` node to the same row `mapPr` builds from REST. */
-function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
+function stackPlaceOf(node: GqlOpenPr): PrStackPlace | null {
+  return node.stack && node.stackEntry
+    ? { number: node.stack.number, position: node.stackEntry.position }
+    : null;
+}
+
+function mapPrNode(node: GqlOpenPr, repositoryId: string, stack: StackSighting): ObservedPr {
   const requestedReviewers = node.reviewRequests.nodes.flatMap((n) => {
     // Team requests have no login; REST lists them separately too.
     const login = n?.requestedReviewer ? restLogin(n.requestedReviewer) : null;
@@ -123,26 +155,291 @@ function mapPrNode(node: GqlOpenPr, repositoryId: string): PullRequest {
     updatedAt: node.updatedAt,
     fetchedAt: new Date().toISOString(),
     closedAt: node.closedAt,
+    stack,
   };
 }
 
-/** Every open PR of `owner/repo`, most recently updated first. */
+export interface OpenPrList {
+  readonly prs: ObservedPr[];
+  readonly hostPredatesStacks: boolean;
+}
+
 export function listOpenPrsViaGraphql(
   owner: string,
   repo: string,
   repositoryId: string,
   token: string,
   apiBase: string,
-): Effect.Effect<PullRequest[], GitHubError> {
-  return paginateGraphql<OpenPrsResp, GqlOpenPr>({
-    query: OPEN_PRS_QUERY,
+  withStacks: boolean,
+  updatedSince: string | null = null,
+): Effect.Effect<OpenPrList, GitHubError> {
+  const recent = (node: { readonly updatedAt: string }) =>
+    updatedSince === null || node.updatedAt >= updatedSince;
+  const list = (withStacks: boolean) =>
+    paginateGraphql<OpenPrsResp, GqlOpenPr>({
+      query: openPrsQuery(withStacks),
+      variables: { owner, name: repo },
+      selectConnection: (data) => data.repository?.pullRequests,
+      maxPages: OPEN_PRS_MAX_PAGES,
+      token,
+      apiBase,
+      notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
+      stopAfter: (page) => page.some((node) => !recent(node)),
+    }).pipe(
+      Effect.map((nodes) =>
+        nodes
+          .filter(recent)
+          .map((node) =>
+            mapPrNode(
+              node,
+              repositoryId,
+              withStacks ? stackSeen(stackPlaceOf(node)) : STACK_UNSEEN,
+            ),
+          ),
+      ),
+    );
+
+  if (!withStacks) {
+    return list(false).pipe(
+      retryTransient,
+      Effect.map((prs): OpenPrList => ({ prs, hostPredatesStacks: false })),
+    );
+  }
+  // Stacks are garnish on the poll's most important request, so any failure
+  // GraphQL answers with earns one ask without them: a host that predates
+  // them, but also a FORBIDDEN on one PR's stack, or a query the stack fields
+  // tipped into a timeout on GitHub's side, which would otherwise stall the
+  // repo's whole list for as long as it lasted. HTTP, auth, rate-limit and
+  // network failures hit both shapes alike and fail as is.
+  return withSchemaFallback(
+    (modern) =>
+      modern ? list(true).pipe(retryTransientBeforeFallback) : list(false).pipe(retryTransient),
+    STACK_TOKENS,
+    { anyGraphqlFailure: true },
+  ).pipe(
+    Effect.map(({ value, outdated }): OpenPrList => ({ prs: value, hostPredatesStacks: outdated })),
+  );
+}
+
+const closedPrsQuery = `query ClosedPullRequestsSince($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [CLOSED, MERGED], first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number updatedAt }
+    }
+  }
+}`;
+
+interface ClosedPrNode {
+  readonly number: number;
+  readonly updatedAt: string;
+}
+
+interface ClosedPrsResp {
+  readonly repository: { readonly pullRequests: GraphqlConnection<ClosedPrNode> } | null;
+}
+
+const CLOSED_SINCE_MAX_PAGES = 5;
+
+/**
+ * The PRs of `owner/repo` that closed or merged at or after `since`: what an
+ * {@link listOpenPrsViaGraphql} read with `updatedSince` can't see, since a
+ * closed PR leaves the open list. Null when they didn't fit in the pages
+ * allowed, which a caller must read as "unknown", never as "none".
+ */
+export function listClosedPrNumbersSince(
+  owner: string,
+  repo: string,
+  token: string,
+  apiBase: string,
+  since: string,
+): Effect.Effect<number[] | null, GitHubError> {
+  const recent = (node: ClosedPrNode) => node.updatedAt >= since;
+  return paginateGraphql<ClosedPrsResp, ClosedPrNode>({
+    query: closedPrsQuery,
     variables: { owner, name: repo },
     selectConnection: (data) => data.repository?.pullRequests,
-    maxPages: OPEN_PRS_MAX_PAGES,
+    maxPages: CLOSED_SINCE_MAX_PAGES,
     token,
     apiBase,
     notFound: () => new GitHubNotFoundError({ resource: "repo", id: `${owner}/${repo}` }),
-  }).pipe(Effect.map((nodes) => nodes.map((node) => mapPrNode(node, repositoryId))));
+    stopAfter: (page) => page.some((node) => !recent(node)),
+  }).pipe(
+    Effect.map((nodes) => {
+      const last = nodes[nodes.length - 1];
+      if (last && recent(last) && nodes.length >= CLOSED_SINCE_MAX_PAGES * 100) return null;
+      return nodes.filter(recent).map((node) => node.number);
+    }),
+  );
+}
+
+// Many PRs of one repo, or many repos, in one request: one aliased field per
+// item. GitHub answers an alias it can't resolve (PR deleted, repo renamed,
+// access revoked) with `null` plus an `errors` entry, which must not cost the
+// other aliases theirs; such an item is absent from the result, which callers
+// read as "unknown", never as "none".
+
+function prsByNumber<N>(
+  operation: string,
+  owner: string,
+  repo: string,
+  numbers: readonly number[],
+  selection: string,
+  chunkSize: number,
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, N>, GitHubError> {
+  return Effect.gen(function* () {
+    const result = new Map<number, N>();
+    for (let start = 0; start < numbers.length; start += chunkSize) {
+      const chunk = numbers.slice(start, start + chunkSize);
+      const argDefs = chunk.map((_, i) => `$n${i}: Int!`).join(", ");
+      const fields = chunk
+        .map((_, i) => `p${i}: pullRequest(number: $n${i}) { ${selection} }`)
+        .join("\n");
+      const variables: Record<string, string | number> = { owner, name: repo };
+      chunk.forEach((n, i) => {
+        variables[`n${i}`] = n;
+      });
+      const data = yield* githubGraphqlPartial<{ repository: Record<string, N | null> | null }>(
+        `query ${operation}($owner: String!, $name: String!, ${argDefs}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`,
+        variables,
+        token,
+        apiBase,
+      );
+      chunk.forEach((n, i) => {
+        const node = data.repository?.[`p${i}`];
+        if (node) result.set(n, node);
+      });
+    }
+    return result;
+  });
+}
+
+/**
+ * Comfortably inside GitHub's per-query node limit (each alias asks for one
+ * node), and small enough that the request body stays modest on GHE.
+ */
+const REPO_CHUNK_SIZE = 80;
+
+export function reposByName<N>(
+  operation: string,
+  repoFullNames: readonly string[],
+  selection: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<string, N>, GitHubError> {
+  return Effect.gen(function* () {
+    const result = new Map<string, N>();
+    for (let start = 0; start < repoFullNames.length; start += REPO_CHUNK_SIZE) {
+      const chunk = repoFullNames.slice(start, start + REPO_CHUNK_SIZE);
+      const argDefs: string[] = [];
+      const fields: string[] = [];
+      const variables: Record<string, string> = {};
+      chunk.forEach((fullName, i) => {
+        const [owner, name] = fullName.split("/");
+        if (!owner || !name) return;
+        argDefs.push(`$o${i}: String!, $n${i}: String!`);
+        fields.push(`r${i}: repository(owner: $o${i}, name: $n${i}) { ${selection} }`);
+        variables[`o${i}`] = owner;
+        variables[`n${i}`] = name;
+      });
+      if (fields.length === 0) continue;
+
+      const data = yield* githubGraphqlPartial<Record<string, N | null>>(
+        `query ${operation}(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
+        variables,
+        token,
+        apiBase,
+      );
+      chunk.forEach((fullName, i) => {
+        const node = data[`r${i}`];
+        if (node) result.set(fullName, node);
+      });
+    }
+    return result;
+  });
+}
+
+const PR_DETAIL_FIELDS = `${PR_NODE_FIELDS}
+  mergedAt state additions deletions changedFiles`;
+
+interface GqlPrDetail extends GqlOpenPr {
+  readonly state: "OPEN" | "CLOSED" | "MERGED";
+  readonly mergedAt: string | null;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
+const PR_DETAIL_CHUNK = 50;
+
+export function getPrsViaGraphql(
+  owner: string,
+  repo: string,
+  repositoryId: string,
+  numbers: readonly number[],
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, ObservedPr>, GitHubError> {
+  return prsByNumber<GqlPrDetail>(
+    "PrDetails",
+    owner,
+    repo,
+    numbers,
+    PR_DETAIL_FIELDS,
+    PR_DETAIL_CHUNK,
+    token,
+    apiBase,
+  ).pipe(
+    Effect.map(
+      (nodes) =>
+        new Map(
+          [...nodes].map(([n, node]): [number, ObservedPr] => [
+            n,
+            {
+              ...mapPrNode(node, repositoryId, STACK_UNSEEN),
+              status:
+                node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
+              additions: node.additions,
+              deletions: node.deletions,
+              changedFiles: node.changedFiles,
+            },
+          ]),
+        ),
+    ),
+  );
+}
+
+export interface PrDiffStats {
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+}
+
+const DIFF_STATS_CHUNK = 100;
+
+export function listPrDiffStatsViaGraphql(
+  owner: string,
+  repo: string,
+  numbers: readonly number[],
+  token: string,
+  apiBase: string,
+): Effect.Effect<Map<number, PrDiffStats>, GitHubError> {
+  return prsByNumber<PrDiffStats>(
+    "PrDiffStats",
+    owner,
+    repo,
+    numbers,
+    "additions deletions changedFiles",
+    DIFF_STATS_CHUNK,
+    token,
+    apiBase,
+  );
 }
 
 /**
@@ -175,12 +472,6 @@ export function sameSignature(a: OpenPrListSignature, b: OpenPrListSignature): b
   return a.count === b.count && a.latestUpdatedAt === b.latestUpdatedAt;
 }
 
-/**
- * Comfortably inside GitHub's per-query node limit (each alias asks for one
- * node), and small enough that the request body stays modest on GHE.
- */
-const SIGNATURE_CHUNK_SIZE = 80;
-
 interface SignatureNode {
   readonly pullRequests: {
     readonly totalCount: number;
@@ -201,40 +492,24 @@ export function probeOpenPrListSignatures(
   token: string,
   apiBase: string,
 ): Effect.Effect<Map<string, OpenPrListSignature>, GitHubError> {
-  return Effect.gen(function* () {
-    const result = new Map<string, OpenPrListSignature>();
-    for (let start = 0; start < repoFullNames.length; start += SIGNATURE_CHUNK_SIZE) {
-      const chunk = repoFullNames.slice(start, start + SIGNATURE_CHUNK_SIZE);
-      const argDefs: string[] = [];
-      const fields: string[] = [];
-      const variables: Record<string, string> = {};
-      chunk.forEach((fullName, i) => {
-        const [owner, name] = fullName.split("/");
-        if (!owner || !name) return;
-        argDefs.push(`$o${i}: String!, $n${i}: String!`);
-        fields.push(
-          `r${i}: repository(owner: $o${i}, name: $n${i}) { pullRequests(states: OPEN, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount nodes { updatedAt } } }`,
-        );
-        variables[`o${i}`] = owner;
-        variables[`n${i}`] = name;
-      });
-      if (fields.length === 0) continue;
-
-      const data = yield* githubGraphqlPartial<Record<string, SignatureNode | null>>(
-        `query OpenPrListSignatures(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
-        variables,
-        token,
-        apiBase,
-      );
-      chunk.forEach((fullName, i) => {
-        const node = data[`r${i}`];
-        if (!node) return;
-        result.set(fullName, {
-          count: node.pullRequests.totalCount,
-          latestUpdatedAt: node.pullRequests.nodes[0]?.updatedAt ?? null,
-        });
-      });
-    }
-    return result;
-  });
+  return reposByName<SignatureNode>(
+    "OpenPrListSignatures",
+    repoFullNames,
+    "pullRequests(states: OPEN, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount nodes { updatedAt } }",
+    token,
+    apiBase,
+  ).pipe(
+    Effect.map(
+      (nodes) =>
+        new Map(
+          [...nodes].map(([fullName, node]): [string, OpenPrListSignature] => [
+            fullName,
+            {
+              count: node.pullRequests.totalCount,
+              latestUpdatedAt: node.pullRequests.nodes[0]?.updatedAt ?? null,
+            },
+          ]),
+        ),
+    ),
+  );
 }
