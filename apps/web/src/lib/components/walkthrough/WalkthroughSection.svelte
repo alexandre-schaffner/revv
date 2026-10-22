@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
+import type { Snippet } from "svelte";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -38,6 +39,7 @@ interface Props {
    * chapter). When omitted, only the per-block step anchors are jump targets.
    */
   id?: string | undefined;
+  margin?: Snippet<[number]> | undefined;
 }
 
 let {
@@ -49,6 +51,7 @@ let {
   chapterNumber,
   chapterCount,
   id = undefined,
+  margin = undefined,
 }: Props = $props();
 
 let collapsed = $state(false);
@@ -71,6 +74,13 @@ const rolledSeverity = $derived.by<Severity | null>(() => {
 });
 
 const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
+
+const MARGIN_ROW_SPAN = { headerOnly: 1, headerAndFirstBlock: 2 } as const;
+
+const firstBlockRailIsFree = $derived(!collapsed && entries[0]?.renderedAnnotation === null);
+const marginRowSpan = $derived(
+  firstBlockRailIsFree ? MARGIN_ROW_SPAN.headerAndFirstBlock : MARGIN_ROW_SPAN.headerOnly,
+);
 
 function toggle(): void {
   collapsed = !collapsed;
@@ -129,6 +139,12 @@ $effect(() => {
 			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
+
+	{#if margin}
+		<div class="section-margin" style:grid-row="span {marginRowSpan}">
+			{@render margin(section.semanticStepIndex)}
+		</div>
+	{/if}
 
 	{#if !collapsed}
 		<div
@@ -311,6 +327,14 @@ $effect(() => {
 		--severity-dot-color: var(--color-danger);
 	}
 
+	.section-margin {
+		grid-column: 5;
+		align-self: start;
+		position: relative;
+		z-index: 2;
+		min-width: 0;
+	}
+
 	/* Density + body tone come from `prose prose-sm prose-dense`; this only
 	   sets the reading measure. */
 	.section-summary {
@@ -475,6 +499,10 @@ $effect(() => {
 			left: -24px;
 			top: 18px;
 			margin: 0;
+		}
+
+		.section-margin {
+			margin: 0 0 18px;
 		}
 	}
 </style>

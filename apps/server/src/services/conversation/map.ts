@@ -10,12 +10,9 @@ import type {
   LinkedIssue,
   PrConversation,
   PrLabel,
-  PrStack,
-  PrStackEntry,
   ReviewDecision,
   ReviewerEntry,
   ReviewVerdict,
-  StackEntryStatus,
   TimelineItem,
 } from "@revv/shared";
 
@@ -234,22 +231,6 @@ export interface RawPullRequest {
     readonly url: string;
     readonly state: string;
   }>;
-  readonly stack?: {
-    readonly number: number;
-    readonly baseRefName: string;
-    readonly entries: RawConnection<{
-      readonly position: number;
-      readonly pullRequest: {
-        readonly number: number;
-        readonly title: string;
-        readonly url: string;
-        readonly state: string;
-        readonly isDraft: boolean;
-        readonly headRefName: string;
-        readonly mergeStateStatus: string | null;
-      } | null;
-    }>;
-  } | null;
   readonly labels: RawConnection<RawLabel> | null;
   readonly assignees: RawConnection<RawActor>;
   readonly participants: RawConnection<RawActor>;
@@ -685,43 +666,6 @@ function mapReviewers(pr: RawPullRequest): ReviewerEntry[] {
   return entries;
 }
 
-/** Merge states GitHub would let through once the PRs below have landed. */
-const READY_MERGE_STATES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
-
-function stackStatus(pr: {
-  readonly state: string;
-  readonly isDraft: boolean;
-  readonly mergeStateStatus: string | null;
-}): StackEntryStatus {
-  if (pr.state === "MERGED") return "merged";
-  if (pr.state === "CLOSED") return "closed";
-  if (pr.isDraft) return "draft";
-  return READY_MERGE_STATES.has(pr.mergeStateStatus ?? "") ? "ready" : "not_ready";
-}
-
-export function mapStack(raw: RawPullRequest["stack"]): PrStack | null {
-  if (!raw) return null;
-  const entries = nodesOf(raw.entries)
-    .flatMap((entry): PrStackEntry[] =>
-      entry.pullRequest
-        ? [
-            {
-              position: entry.position,
-              number: entry.pullRequest.number,
-              title: entry.pullRequest.title,
-              url: entry.pullRequest.url,
-              headRef: entry.pullRequest.headRefName,
-              status: stackStatus(entry.pullRequest),
-            },
-          ]
-        : [],
-    )
-    .sort((a, b) => a.position - b.position);
-  // A stack of one is just a PR.
-  if (entries.length < 2) return null;
-  return { number: raw.number, baseRefName: raw.baseRefName, entries };
-}
-
 const WRITE_PERMISSIONS = new Set(["ADMIN", "MAINTAIN", "WRITE"]);
 
 /**
@@ -779,7 +723,6 @@ export function mapConversation(
         }
       : null,
     linkedIssues,
-    stack: mapStack(pr.stack),
     participants: nodesOf(pr.participants).map(toActor),
     timeline,
     timelineTruncated,

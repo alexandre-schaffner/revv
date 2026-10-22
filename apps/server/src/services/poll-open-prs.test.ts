@@ -10,6 +10,7 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
 import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
 import {
+  archiveClosedPrs,
   decideListing,
   type ListedSignature,
   movedRangePrIds,
@@ -109,6 +110,12 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
       markReauthRequired: () => Effect.void,
     },
     remoteUserService: { upsert: () => Effect.void },
+    stackService: {
+      markStale: (repositoryId: string, stackNumber: number) =>
+        Effect.sync(() => {
+          fakes.log.push(`stack:${repositoryId}:${stackNumber}`);
+        }),
+    },
     github: {
       prs: {
         listOpen: (
@@ -389,6 +396,17 @@ describe("syncRepoOpenPrs stack membership", () => {
     ]);
   });
 
+  it("announces a stack a member joined, left, or moved in", async () => {
+    const env = setup({
+      listOpen: () =>
+        Effect.succeed([pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })]),
+    });
+
+    await sync(env, [pr(1), pr(2, { stack: { number: 9, position: 1 } })]);
+
+    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
+  });
+
   it("keeps the stored stack when GitHub refused the stack fields", async () => {
     const stored = pr(1, { stack: STACKED });
     const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "refused" });
@@ -397,6 +415,16 @@ describe("syncRepoOpenPrs stack membership", () => {
 
     expect(env.upserts[0]?.rows[0]?.stack).toEqual(STACK_UNSEEN);
     expect(result?.prs[0]?.stack).toEqual(STACKED);
+  });
+
+  it("announces no stack when the list couldn't see them", async () => {
+    const stored = [pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })];
+    const env = setup({ listOpen: () => Effect.succeed([pr(1), pr(2)]), stacks: "refused" });
+
+    const result = await sync(env, stored);
+
+    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([]);
+    expect(result?.prs.map((p) => p.stack)).toEqual([STACKED, { number: 9, position: 1 }]);
   });
 
   it("keeps the stored stack across a REST fallback", async () => {
@@ -705,6 +733,30 @@ describe("probeRepos", () => {
 
     expect(unchanged.size).toBe(0);
     expect(log).toEqual([]);
+  });
+});
+
+describe("archiveClosedPrs", () => {
+  it("announces a stack once, however many of its layers closed", async () => {
+    const { db, deps, log, openCycle } = setup();
+    const stacked = (n: number, position: number) => pr(n, { stack: { number: 4, position } });
+
+    await Effect.runPromise(
+      provideInfra(
+        db,
+        Effect.gen(function* () {
+          const cycle = yield* openCycle();
+          yield* archiveClosedPrs(
+            deps,
+            cycle,
+            [stacked(1, 1), stacked(2, 2), pr(3)],
+            new Map([[REPO.id, REPO]]),
+          );
+        }),
+      ),
+    );
+
+    expect(log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
   });
 });
 

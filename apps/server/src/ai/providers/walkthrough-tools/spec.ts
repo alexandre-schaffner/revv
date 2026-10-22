@@ -159,6 +159,8 @@ const getRepoContextSchema = z.object({
  */
 const getCommitHistorySchema = z.object({});
 
+const getStackContextSchema = z.object({});
+
 const setOverviewSchema = z.object({
   summary: z.string().describe(`${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT}`),
   // Optional, not removed: ignored once the orchestrator has assigned the
@@ -535,6 +537,7 @@ const completeWalkthroughSchema = z.object({});
 export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>;
 export type GetCommitHistoryInput = z.infer<typeof getCommitHistorySchema>;
 export type GetRepoContextInput = z.infer<typeof getRepoContextSchema>;
+export type GetStackContextInput = z.infer<typeof getStackContextSchema>;
 export type SetOverviewInput = z.infer<typeof setOverviewSchema>;
 export type AddSemanticStepInput = z.infer<typeof addSemanticStepSchema>;
 export type AddDiffStepInput = z.infer<typeof addDiffStepSchema>;
@@ -555,6 +558,7 @@ export {
   flagIssueSchema,
   getCommitHistorySchema,
   getRepoContextSchema,
+  getStackContextSchema,
   getWalkthroughStateSchema,
   rateAxisSchema,
   resolveLeadSchema,

@@ -6,7 +6,6 @@
  * Fields a GitHub Enterprise release may predate. GraphQL rejects the whole
  * query on one unknown field or enum value, so on a schema complaint naming
  * any of these the query is asked again without them (`withSchemaFallback`).
- * `stack` is too common a word to match bare; GitHub's complaint quotes it.
  */
 export const MODERN_TOKENS = [
   "isRequired",
@@ -16,8 +15,6 @@ export const MODERN_TOKENS = [
   "CONVERT_TO_DRAFT_EVENT",
   "convertToDraft",
   "asCodeOwner",
-  "PullRequestStack",
-  "Field 'stack'",
   "STACK_EVENT",
   "StackEvent",
 ] as const;
@@ -158,6 +155,9 @@ function rollupBlock(modern: boolean): string {
   `;
 }
 
+// No `stack` here: its layers' merge states are computed on demand, and on a
+// tall stack that alone pushes GitHub past its query timeout, which would
+// cost this page its description. The stack store reads it on its own.
 export function conversationQuery(modern: boolean): string {
   return `
     query PrConversation($owner: String!, $repo: String!, $number: Int!, $checkCursor: String) {
@@ -169,19 +169,6 @@ export function conversationQuery(modern: boolean): string {
           author { ${ACTOR} }
           milestone { title url dueOn state }
           ${modern ? "closingIssuesReferences(first: 10) { nodes { number title url state } }" : ""}
-          ${
-            modern
-              ? `stack {
-                   number baseRefName
-                   entries(first: 50) {
-                     nodes {
-                       position
-                       pullRequest { number title url state isDraft headRefName mergeStateStatus }
-                     }
-                   }
-                 }`
-              : ""
-          }
           labels(first: 50) { nodes { name color description } }
           assignees(first: 20) { nodes { login name avatarUrl databaseId } }
           participants(first: 30) { nodes { login name avatarUrl databaseId } }

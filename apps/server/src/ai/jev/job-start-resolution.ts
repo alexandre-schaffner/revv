@@ -1,4 +1,4 @@
-import type { AcpAgentId, UserSettings } from "@revv/shared";
+import type { AcpAgentId, StartJobTrigger, UserSettings } from "@revv/shared";
 import { Effect } from "effect";
 import type { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
@@ -14,7 +14,7 @@ export function resolveJobStart(input: {
   readonly state: JobStartStateInput;
   readonly settings: Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev">;
   readonly agent: AcpAgentId;
-  readonly trigger: "user" | "external_agent" | "resume" | "review_requested";
+  readonly trigger: StartJobTrigger;
   readonly cacheProbe: Effect.Effect<boolean>;
 }): Effect.Effect<
   JobStartPlan & { readonly answers: JobStartAnswers | null },

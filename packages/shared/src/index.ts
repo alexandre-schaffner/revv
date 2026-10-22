@@ -119,7 +119,6 @@ export type {
   PrConversationResponse,
   PrLabel,
   PrMilestone,
-  PrStack,
   PrStackEntry,
   ReviewDecision,
   ReviewerEntry,
@@ -218,6 +217,31 @@ export type {
 } from "./repo-activity";
 export type { SettingsUpdate } from "./settings-update";
 export { mergeSettingsUpdate } from "./settings-update";
+export type {
+  GitHubStackLayerFields,
+  LayerMergeState,
+  PrStackDetail,
+  RestackVerdict,
+  StackBrief,
+  StackBriefLayer,
+  StackBriefStatus,
+  StackFileOverlap,
+  StackHeadline,
+  StackLayer,
+  StackLayerLink,
+  StackLayerReview,
+  StackMergeLayerState,
+  StackMergeRunLayer,
+  StackReviewScope,
+  StackReviewStarted,
+  WalkthroughStackSnapshot,
+} from "./stacks";
+export {
+  classifyLayerMergeState,
+  isOpenLayer,
+  MERGEABLE_STATES,
+  stackKey,
+} from "./stacks";
 export type {
   AuthorRole,
   CloneStatus,

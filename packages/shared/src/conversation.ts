@@ -246,15 +246,6 @@ export interface PrStackEntry {
   readonly status: StackEntryStatus;
 }
 
-/** A GitHub PR stack: the chain of PRs this one belongs to. */
-export interface PrStack {
-  readonly number: number;
-  /** The branch the bottom of the stack targets. */
-  readonly baseRefName: string;
-  /** Ordered by position, base first. */
-  readonly entries: readonly PrStackEntry[];
-}
-
 // ── The whole page ──────────────────────────────────────────────────────────
 
 export interface PrConversation {
@@ -277,8 +268,6 @@ export interface PrConversation {
   readonly reviewers: readonly ReviewerEntry[];
   readonly milestone: PrMilestone | null;
   readonly linkedIssues: readonly LinkedIssue[];
-  /** The stack this PR is part of, when it's stacked (and the host supports stacks). */
-  readonly stack: PrStack | null;
   /**
    * The base branch's CODEOWNERS, parsed. The client matches it against the
    * PR's changed files (it holds the file list). Null when the repo has none

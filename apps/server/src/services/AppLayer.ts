@@ -36,6 +36,10 @@ import { ReviewServiceLive } from "./Review";
 import { SecretStoreLive } from "./SecretStore";
 import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
+import { StackBriefJobsLive } from "./stacks/StackBriefJobs";
+import { StackHeadlineServiceLive } from "./stacks/StackHeadlines";
+import { StackReviewServiceLive } from "./stacks/StackReview";
+import { StackServiceLive } from "./stacks/StackService";
 import { TokenProviderLive } from "./TokenProvider";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
@@ -114,6 +118,12 @@ const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
+const StackServiceWithDeps = StackServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
+
+const StackHeadlineServiceWithDeps = StackHeadlineServiceLive.pipe(Layer.provide(BaseLayers));
+
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
@@ -166,6 +176,7 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RemoteWalkthroughCacheWithDeps,
       WalkthroughSnapshotImporterWithDeps,
       HunkScanServiceWithDeps,
+      StackServiceWithDeps,
     ),
   ),
 );
@@ -179,6 +190,7 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
       SyncServiceWithDeps,
       WalkthroughJobsWithDeps,
       RepoCloneServiceWithDeps,
+      StackServiceWithDeps,
     ),
   ),
 );
@@ -196,6 +208,20 @@ const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
 );
 
+const StackBriefJobsWithDeps = StackBriefJobsLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+);
+const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      StackServiceWithDeps,
+      WalkthroughJobsWithDeps,
+      StackBriefJobsWithDeps,
+    ),
+  ),
+);
+
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, realtime broadcaster, pr service, etag cache).
@@ -208,6 +234,8 @@ export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
   PrConversationServiceWithDeps,
+  StackServiceWithDeps,
+  StackHeadlineServiceWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,
@@ -216,6 +244,8 @@ export const AppLayer = Layer.mergeAll(
   HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,
   RecapSchedulerWithDeps,
+  StackBriefJobsWithDeps,
+  StackReviewServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so

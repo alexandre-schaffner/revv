@@ -50,6 +50,7 @@ import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
+import { StackService } from "./stacks/StackService";
 import { TokenProvider } from "./TokenProvider";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughJobs } from "./WalkthroughJobs";
@@ -179,6 +180,7 @@ export const PollSchedulerLive = Layer.effect(
       walkthroughService: yield* WalkthroughService,
       repoClone: yield* RepoCloneService,
       tokenProvider,
+      stackService: yield* StackService,
     };
 
     // Bad-token and rate-limit pauses, carried from one cycle to the next.

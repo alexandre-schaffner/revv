@@ -1,4 +1,9 @@
-import { REVIEW_MODE, type WalkthroughMode, type WalkthroughStatus } from "@revv/shared";
+import {
+  REVIEW_MODE,
+  type WalkthroughMode,
+  type WalkthroughStackSnapshot,
+  type WalkthroughStatus,
+} from "@revv/shared";
 import { sql } from "drizzle-orm";
 import {
   type AnySQLiteColumn,
@@ -8,6 +13,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import type { DiffFingerprint } from "../../services/stacks/fingerprint";
 import { pullRequests } from "./pull-requests";
 import { reviewSessions } from "./review-sessions";
 
@@ -200,6 +206,9 @@ export const walkthroughs = sqliteTable(
      * the lifetime of the row.
      */
     nextSeq: integer("next_seq").notNull().default(0),
+    stackContext: text("stack_context", { mode: "json" }).$type<WalkthroughStackSnapshot>(),
+    diffFingerprint: text("diff_fingerprint", { mode: "json" }).$type<DiffFingerprint>(),
+    carriedFromWalkthroughId: text("carried_from_walkthrough_id"),
   },
   (t) => ({
     /**

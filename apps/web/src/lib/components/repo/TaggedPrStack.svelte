@@ -2,9 +2,10 @@
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import { tick } from "svelte";
 import TaggedPrRowBody from "$lib/components/repo/TaggedPrRowBody.svelte";
-import { flipStack, gsapHover, gsapPress, snapshotStack } from "$lib/motion";
+import { flipStack, gsapFade, gsapHover, gsapPress, snapshotStack, tokens } from "$lib/motion";
 import { STACK_FOLD_AT, type TaggedEntry } from "$lib/prs/tagged-prs";
 import { getVisitState } from "$lib/stores/pr-visits.svelte";
+import { getStackHeadline } from "$lib/stores/stack-headlines.svelte";
 
 interface Props {
   stack: Extract<TaggedEntry, { kind: "stack" }>;
@@ -20,6 +21,15 @@ const size = $derived(stack.members.length);
 const collapsible = $derived(size >= STACK_FOLD_AT);
 const visits = $derived(stack.members.map((m) => getVisitState(m.pr.id, m.pr.headSha)));
 const hiddenMoved = $derived(open ? 0 : visits.slice(1).filter((v) => v === "moved").length);
+
+const named = $derived(getStackHeadline(stack.members[0].pr.repositoryId, stack.number));
+
+const gistInFoot = $derived(open && named?.gist != null);
+const stackLabel = $derived(
+  named
+    ? `${named.headline}: stack of ${size} pull requests onto ${stack.base}`
+    : `Stack of ${size} pull requests onto ${stack.base}`,
+);
 
 let root = $state<HTMLElement>();
 let cover = $state<HTMLButtonElement>();
@@ -48,8 +58,9 @@ async function toggle(): Promise<void> {
 <li
 	class="stack"
 	class:stack--folded={!open}
+	class:stack--gist={gistInFoot}
 	style:--sheets={open ? 0 : Math.min(size - 1, SHEETS_SHOWN)}
-	aria-label="Stack of {size} pull requests onto {stack.base}"
+	aria-label={stackLabel}
 	bind:this={root}
 	use:gsapHover={{ prop: '--fan' }}
 	use:gsapPress={{ scale: 0.995, disabled: open }}
@@ -75,19 +86,49 @@ async function toggle(): Promise<void> {
 			aria-expanded="false"
 			aria-controls={cardsId}
 			aria-label="Show all {size} pull requests in this stack"
+			aria-describedby={named?.gist ? `${cardsId}-gist` : undefined}
+			title={named?.gist ?? undefined}
 			bind:this={cover}
 			onclick={toggle}
-		></button>
+		>
+			{#if named?.gist}
+				<span class="sr-only" id="{cardsId}-gist">{named.gist}</span>
+			{/if}
+		</button>
 	{/if}
 	<div class="stack-foot" bind:this={foot}>
-		<span class="stack-caption">
-			{size} pull requests onto
-			<code class="stack-base" title={stack.base}>{stack.base}</code>
-		</span>
-		{#if hiddenMoved > 0}
-			<span class="stack-moved">
-				{hiddenMoved} with new commits
+		{#if named}
+			<span class="stack-label">
+				<span class="stack-line">
+					{#key named.headline}
+						<span class="stack-name" in:gsapFade={{ duration: tokens.smooth }}>{named.headline}</span>
+					{/key}
+					<span class="stack-caption stack-caption--led">
+						{size} pull requests onto
+						<code class="stack-base" title={stack.base}>{stack.base}</code>
+					</span>
+					{#if hiddenMoved > 0}
+						<span class="stack-moved">
+							{hiddenMoved} with new commits
+						</span>
+					{/if}
+				</span>
+				{#if open}
+					{#key named.gist}
+						<span class="stack-gist" in:gsapFade={{ duration: tokens.smooth }}>{named.gist ?? ""}</span>
+					{/key}
+				{/if}
 			</span>
+		{:else}
+			<span class="stack-caption">
+				{size} pull requests onto
+				<code class="stack-base" title={stack.base}>{stack.base}</code>
+			</span>
+			{#if hiddenMoved > 0}
+				<span class="stack-moved">
+					{hiddenMoved} with new commits
+				</span>
+			{/if}
 		{/if}
 		{#if collapsible}
 			<span class="stack-chevron">
@@ -344,5 +385,68 @@ async function toggle(): Promise<void> {
 	.stack-foot:has(.stack-fold:hover) .stack-chevron,
 	.stack-cover:hover ~ .stack-foot .stack-chevron {
 		color: var(--color-text-primary);
+	}
+
+	.stack--gist {
+		--foot-h: 3.375rem;
+	}
+
+	.stack--gist .stack-foot {
+		align-items: flex-start;
+	}
+
+	.stack--gist .stack-chevron {
+		align-items: center;
+		height: 1.5rem;
+	}
+
+	.stack-label {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.stack-line {
+		display: flex;
+		align-items: baseline;
+		gap: 0.3125rem;
+		min-width: 0;
+		height: 1.5rem;
+		line-height: 1.5rem;
+		white-space: nowrap;
+	}
+
+	.stack-name {
+		flex: 0 1 auto;
+		min-width: 4rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		letter-spacing: -0.005em;
+		color: var(--color-text-primary);
+	}
+
+	.stack-line .stack-caption {
+		flex-shrink: 0;
+	}
+
+	.stack-caption--led::before {
+		content: "\00b7" / "";
+		margin-right: 0.0625rem;
+		opacity: 0.5;
+	}
+
+	.stack-gist {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.75rem;
+		line-height: 1rem;
+		color: var(--color-text-subtle);
+	}
+
+	.stack-gist:empty {
+		display: none;
 	}
 </style>

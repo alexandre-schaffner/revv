@@ -53,6 +53,7 @@ import {
 import {
   getCommitHistoryHandler,
   getRepoContextHandler,
+  getStackContextHandler,
   getWalkthroughStateHandler,
 } from "./read-handler";
 import {
@@ -64,6 +65,7 @@ import {
   flagIssueSchema,
   getCommitHistorySchema,
   getRepoContextSchema,
+  getStackContextSchema,
   getWalkthroughStateSchema,
   RATING_AXES as RATING_AXES_SPEC,
   type RateAxisInput,
@@ -547,6 +549,13 @@ export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
       "Read-only. Returns the most-recent complete project recaps for this repository (daily and/or weekly summaries of what shipped, themes, risk patterns). Call this once during Phase A to ground your overview in repo-level context. Returns an empty list when no recaps exist yet — proceed without context in that case. Do not pad the overview with repo-context references when none are directly relevant to this PR.",
     inputSchema: getRepoContextSchema,
     handler: getRepoContextHandler,
+  },
+  {
+    name: "get_stack_context",
+    description:
+      "Read-only. For a PR that is one layer of a GitHub stack: the stack as captured at job start (layers base-first, this PR marked), the takeaway and open issue titles of each reviewed lower layer, and the title, description excerpt, and changed files of each upper layer. Call once during Phase A, and before flagging anything as missing — a higher layer may add it. Returns `stack: null` for a PR outside any stack.",
+    inputSchema: getStackContextSchema,
+    handler: getStackContextHandler,
   },
   {
     name: "set_overview",

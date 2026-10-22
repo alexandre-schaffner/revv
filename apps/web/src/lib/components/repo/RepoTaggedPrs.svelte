@@ -37,6 +37,7 @@ import {
 } from "$lib/prs/tagged-prs";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { getTaggedPrs, getTaggedPrsResolved } from "$lib/stores/prs.svelte";
+import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 
 interface Props {
   repoId: string;
@@ -84,6 +85,11 @@ const rows = $derived.by(() => {
 });
 
 const entries = $derived(groupStacks(rows));
+
+const hasStacks = $derived(entries.some((entry) => entry.kind === "stack"));
+$effect(() => {
+  if (hasStacks) ensureStackHeadlines(repoId);
+});
 
 const chosenOpen = new SvelteMap<number, boolean>();
 

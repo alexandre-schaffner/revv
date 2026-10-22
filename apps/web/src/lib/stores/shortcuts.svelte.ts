@@ -3,6 +3,7 @@ import { copySelectedPrLink } from "./pr-link.svelte";
 import { REVIEW_TABS, setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
 import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
+import { getStackView, moveInStack } from "./stack-nav.svelte";
 
 export type PaletteMode = "search" | "command";
 
@@ -125,6 +126,21 @@ function handleKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     e.stopPropagation();
     toggleRightPanel();
+    return;
+  }
+
+  if (!e.shiftKey && e.altKey && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
+    if (!window.location.pathname.startsWith("/review/") || !getStackView()) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat) moveInStack(e.code === "ArrowUp" ? "up" : "down");
     return;
   }
 

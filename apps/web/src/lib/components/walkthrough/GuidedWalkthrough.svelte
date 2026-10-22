@@ -9,14 +9,23 @@ import Warning from "phosphor-svelte/lib/Warning";
 import { onDestroy, onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { stackCitations } from "$lib/actions/stack-citations.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
+import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
+import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
+import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
+import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
+import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
+import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
+import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
+import { openStackLayer } from "$lib/stacks/open-layer";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
 import {
@@ -148,6 +157,7 @@ const selectedMode = $derived(getSelectedMode(prId));
 // keeps answering once the PR moves into the archive.
 const isMerged = $derived(getPrById(prId)?.status === "merged");
 const mergedAt = $derived(getPrById(prId)?.closedAt ?? undefined);
+const walkthroughComplete = $derived(getWalkthroughUiState().kind === "complete");
 const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
 const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
@@ -716,6 +726,19 @@ $effect(() => {
 // which is what the chat agent reads when the user says "chapter N".
 const totalChapters = $derived(visibleSemanticSteps.length);
 
+const stack = new WalkthroughStack(
+  () => prId,
+  () => ({
+    chapters: visibleSemanticSteps.map((s) => ({
+      index: s.semanticStepIndex,
+      files: (blocksBySection.get(s.semanticStepIndex) ?? []).flatMap(({ block }) =>
+        block.type === "code" || block.type === "diff" ? [block.filePath] : [],
+      ),
+    })),
+    issues: issueGroups.flatMap((g) => g.issues.map(({ issue }) => issue)),
+  }),
+);
+
 // Mirror the block-stagger logic for issue cards. Issue cards have their
 // own CSS entrance animation (`issue-card-enter`), so without tracking they
 // replay on every tab revisit the same way blocks used to.
@@ -1064,7 +1087,20 @@ function handleResume(): void {
 	<FirstPassRibbon rows={firstPass.rows} />
 {/snippet}
 
-<div class="walkthrough">
+{#snippet reliedOnMargin()}
+	{#if stack.notes && stack.place}
+		<ReliedOnNote links={stack.notes.reliedOn} place={stack.place} />
+	{/if}
+{/snippet}
+
+{#snippet changedAboveMargin(index: number)}
+	{@const note = stack.notes?.chapters.get(index)}
+	{#if note && stack.place}
+		<ChangedAboveNote {note} place={stack.place} />
+	{/if}
+{/snippet}
+
+<div class="walkthrough" use:stackCitations={stack.place}>
 	{#if isMerged}
 		<!-- Pressed into the top-right of the content column. Its own grid row
 		     (same 6-col template as the stepper header) so it aligns with the
@@ -1073,6 +1109,10 @@ function handleResume(): void {
 		<div class="merged-stamp-row">
 			<MergedStamp {prId} {mergedAt} />
 		</div>
+	{/if}
+
+	{#if stack.isStacked}
+		<StackOverviewRow {prId} />
 	{/if}
 
 
@@ -1102,7 +1142,7 @@ function handleResume(): void {
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
 			{#if explorationSteps.length > 0}
 				<div class="exploration-feed exploration-feed--error">
 					{#each explorationSteps.slice(-6) as step, i (i)}
@@ -1129,7 +1169,7 @@ function handleResume(): void {
 		     error event didn't carry it), we can't address the retry at a
 		     specific repo, so we fall back to a generic Try again that
 		     regenerates the walkthrough. -->
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
 			{#if !cloneRepoId}
 				<Warning size={20} weight="fill" />
 				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
@@ -1157,7 +1197,7 @@ function handleResume(): void {
 				<FirstPassPreview view={firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToDiffLine} />
 			</div>
 		{:else}
-			<div class="walkthrough-empty">
+			<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
 				<p class="loading-text">No walkthrough generated yet for this PR.</p>
 			</div>
 		{/if}
@@ -1224,6 +1264,7 @@ function handleResume(): void {
 					class="issues-section"
 					class:issues-section--no-anim={issuesSectionAnimated}
 					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
+					{@attach stack.notes && stack.notes.issues.size > 1 ? spreadRailNotes : undefined}
 				>
 					<div class="issues-header">
 						<Warning size={13} weight="fill" />
@@ -1249,29 +1290,22 @@ function handleResume(): void {
 										     case jumpToStep would silently no-op and the click would feel
 										     broken. stepN is null whenever the lookup fails, which catches
 										     both a missing targetBlockId and an id that doesn't resolve. -->
-										{#if stepN !== null && targetBlockId}
+										{@const target = stepN !== null ? targetBlockId : null}
+										<IssueStackNote {stack} issueId={issue.id}>
 											<IssueCard
 												{issue}
-												clickable
-												onclick={() => selectIssue(issue.id, targetBlockId)}
-												stepTag={chapterTag ?? `→ Step ${stepN}`}
+												clickable={target !== null}
+												onclick={() => {
+													if (target) selectIssue(issue.id, target);
+												}}
+												stepTag={target ? (chapterTag ?? `→ Step ${stepN}`) : null}
 												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
 												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
 												hideFileBadge={true}
 												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 											/>
-										{:else}
-											<IssueCard
-												{issue}
-												stepTag={null}
-												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-												noAnim={issueDelayById.get(issue.id) === -1}
-												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-												hideFileBadge={true}
-												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
-											/>
-										{/if}
+										</IssueStackNote>
 									{/each}
 								</div>
 							</div>
@@ -1329,6 +1363,7 @@ function handleResume(): void {
 				{selectedIssueSeverity}
 				chapterNumber={null}
 				chapterCount={totalChapters}
+				margin={stack.notes && stack.notes.reliedOn.length > 0 ? reliedOnMargin : undefined}
 			/>
 			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
 				<WalkthroughSection
@@ -1340,6 +1375,7 @@ function handleResume(): void {
 					{selectedIssueSeverity}
 					chapterNumber={sectionIdx + 1}
 					chapterCount={totalChapters}
+					margin={stack.notes?.chapters.has(section.semanticStepIndex) ? changedAboveMargin : undefined}
 				/>
 			{/each}
 
@@ -1441,6 +1477,12 @@ function handleResume(): void {
 					<span>{footerParts.join(" · ")}</span>
 				</footer>
 			{/if}
+
+			{#if stack.isStacked && walkthroughComplete}
+				<div class="stack-handoff-slot">
+					<StackHandoffCard {prId} />
+				</div>
+			{/if}
 		</div>
 
 	{/if}
@@ -1448,6 +1490,13 @@ function handleResume(): void {
 
 <style>
 	.walkthrough {
+		--walkthrough-columns:
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+			48px
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(24px, 1fr);
 		display: flex;
 		flex-direction: column;
 		background: var(--color-bg-primary);
@@ -1488,13 +1537,7 @@ function handleResume(): void {
 		   container-type: inline-size on .review-content) so the collapse
 		   triggers only when a flanking pane has eaten enough room to matter. */
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 28px 0;
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) 60ms both;
 	}
@@ -1507,6 +1550,7 @@ function handleResume(): void {
 	.walkthrough-content > .issues-section,
 	.walkthrough-content > .first-pass-section,
 	.walkthrough-content > .walkthrough-footer,
+	.walkthrough-content > .stack-handoff-slot,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
 	}
@@ -1564,6 +1608,16 @@ function handleResume(): void {
 		pointer-events: auto;
 	}
 
+	.walkthrough-empty--in-flow {
+		position: static;
+		inset: auto;
+		min-height: 40vh;
+	}
+
+	.stack-handoff-slot {
+		min-width: 0;
+	}
+
 	/* Loading and stepper-header use the SAME 6-col grid as
 	   `.walkthrough-content` so their inner content lands in col 3 — the
 	   820 content column — exactly where the streamed walkthrough blocks
@@ -1575,13 +1629,7 @@ function handleResume(): void {
 	   walkthrough content column. */
 	.walkthrough-loading {
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 28px 0;
 		row-gap: 20px;
 	}
@@ -1605,13 +1653,7 @@ function handleResume(): void {
 		   container horizontally). The sub-1336 case is handled by the
 		   `@container` fallback at the bottom of this file, which this row
 		   opts into alongside every other single-column section. */
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 20px 0 0;
 	}
 
@@ -1633,13 +1675,7 @@ function handleResume(): void {
 
 	.walkthrough-stepper-header {
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 24px 0 4px;
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) both;
 	}
@@ -1814,13 +1850,7 @@ function handleResume(): void {
 		   identically to the parent's — no subgrid needed. */
 		display: grid;
 		grid-column: 1 / -1;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		row-gap: 20px;
 		margin-top: 20px;
 		grid-auto-flow: row;

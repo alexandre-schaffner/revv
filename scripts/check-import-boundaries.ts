@@ -11,6 +11,8 @@ const featureRoots = [
   /^apps\/server\/src\/services\/ProjectRecapJobs\.ts$/,
   /^apps\/server\/src\/services\/recap-[^/]+\.ts$/,
   /^apps\/server\/src\/ai\/providers\/recap(?:-|\/)/,
+  /^apps\/server\/src\/services\/stacks\/(?:StackBriefJobs|StackReview)\.ts$/,
+  /^apps\/server\/src\/ai\/providers\/stack-brief(?:-|\/)/,
 ];
 
 const forbiddenImports = new Set([
