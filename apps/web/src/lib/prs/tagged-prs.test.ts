@@ -2,7 +2,10 @@ import { describe, expect, it } from "bun:test";
 import type { PullRequest } from "@revv/shared";
 import {
   compareTaggedRows,
+  groupStacks,
+  isStackOpen,
   reasonFor,
+  STACK_FOLD_AT,
   sortOptionFor,
   TAGGED_SORT_OPTIONS,
   type TaggedRow,
@@ -240,5 +243,75 @@ describe("sortOptionFor", () => {
     // A stale value persisted before an option was renamed must not strand the
     // list with `undefined` as its comparator input.
     expect(sortOptionFor("gone" as never).id).toBe("relevance");
+  });
+});
+
+describe("groupStacks", () => {
+  const stacked = (n: number, position: number, over: Partial<PullRequest> = {}): TaggedRow =>
+    row(
+      {
+        id: `pr-${n}`,
+        externalId: n,
+        stack: { number: 7, position },
+        targetBranch: position === 1 ? "main" : `step-${position - 1}`,
+        ...over,
+      },
+      "yours",
+    );
+  const plain = (n: number): TaggedRow => row({ id: `pr-${n}`, externalId: n }, "yours");
+  const shape = (rows: readonly TaggedRow[]) =>
+    groupStacks(rows).map((e) =>
+      e.kind === "row" ? e.row.pr.externalId : e.members.map((m) => m.pr.externalId),
+    );
+
+  it("leaves an unstacked queue alone", () => {
+    expect(shape([plain(1), plain(2)])).toEqual([1, 2]);
+  });
+
+  it("draws a lone visible member as a plain row", () => {
+    expect(shape([plain(1), stacked(2, 2)])).toEqual([1, 2]);
+  });
+
+  it("places a stack at its highest-ranked member, top of the stack first", () => {
+    const rows = [plain(1), stacked(11, 1), plain(2), stacked(13, 3), stacked(12, 2)];
+    expect(shape(rows)).toEqual([1, [13, 12, 11], 2]);
+  });
+
+  it("lands on what the lowest visible member targets", () => {
+    const [entry] = groupStacks([stacked(13, 3), stacked(12, 2)]);
+    expect(entry?.kind === "stack" && entry.base).toBe("step-1");
+  });
+
+  it("keeps two stacks apart", () => {
+    const rows = [
+      stacked(1, 1),
+      stacked(5, 1, { stack: { number: 8, position: 1 } }),
+      stacked(2, 2),
+      stacked(6, 2, { stack: { number: 8, position: 2 } }),
+    ];
+    expect(shape(rows)).toEqual([
+      [2, 1],
+      [6, 5],
+    ]);
+  });
+  it("draws a stack filtered down to one visible member as a plain row", () => {
+    expect(shape([stacked(12, 2), plain(1)])).toEqual([12, 1]);
+  });
+
+  it("keeps the active sort's order among members sharing a position", () => {
+    expect(shape([stacked(21, 2), stacked(20, 2), stacked(19, 1)])).toEqual([[21, 20, 19]]);
+  });
+});
+
+describe("isStackOpen", () => {
+  it("folds a tall stack and leaves a short one open by default", () => {
+    expect(isStackOpen(STACK_FOLD_AT, undefined)).toBe(false);
+    expect(isStackOpen(STACK_FOLD_AT - 1, undefined)).toBe(true);
+  });
+
+  it("keeps what the reader chose across the threshold", () => {
+    expect(isStackOpen(STACK_FOLD_AT - 1, true)).toBe(true);
+    expect(isStackOpen(STACK_FOLD_AT + 1, true)).toBe(true);
+    expect(isStackOpen(STACK_FOLD_AT - 1, false)).toBe(false);
   });
 });

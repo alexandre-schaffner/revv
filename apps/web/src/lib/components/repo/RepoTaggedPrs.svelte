@@ -8,26 +8,27 @@
  * "Why" over a gutter of glyphs that needed their own legend.
  *
  * So the shape is GitHub's `/pulls` list, which is the one PR list every
- * reviewer can already read: a toolbar strip attached to the frame carries the
- * filters and the sort, and each row below it is `state icon → title → #num ·
- * who · when`. See TaggedPrRow for where the row deliberately improves on
- * GitHub rather than copying it.
- *
- * Frame styling still borrows `.prose-table` (lib/styles/prose.css) — same
- * hairline, same radius, same `bg-secondary` header band, same 6% row hover —
- * so this reads as the same family as the app's other bordered surface.
+ * reviewer can already read: a toolbar carries the filters and the sort, and
+ * each row below it is `state icon → title → #num · who · when`. See
+ * TaggedPrRow for where the row deliberately improves on GitHub rather than
+ * copying it.
  *
  * No entrance motion. This is a surface the user lands on many times a day;
  * a staggered reveal on every render (and on every SSE tick that re-keys a
- * row) is a tax, not polish. Motion here is state only: row hover and the
- * toolbar's press.
+ * row) is a tax, not polish. Motion here is state only: a folded stack
+ * fanning under the pointer, the toolbar's press, and a stack opening or
+ * closing.
  */
 
 import Tray from "phosphor-svelte/lib/Tray";
+import { SvelteMap } from "svelte/reactivity";
 import TaggedPrRow from "$lib/components/repo/TaggedPrRow.svelte";
+import TaggedPrStack from "$lib/components/repo/TaggedPrStack.svelte";
 import TaggedPrToolbar from "$lib/components/repo/TaggedPrToolbar.svelte";
 import {
   compareTaggedRows,
+  groupStacks,
+  isStackOpen,
   REASON_LABEL,
   sortOptionFor,
   type TaggedReason,
@@ -82,6 +83,10 @@ const rows = $derived.by(() => {
   return [...shown].sort((a, b) => compareTaggedRows(a, b, key, dir));
 });
 
+const entries = $derived(groupStacks(rows));
+
+const chosenOpen = new SvelteMap<number, boolean>();
+
 const headline = $derived(
   allRows.length === 1
     ? "1 open pull request involves you"
@@ -125,7 +130,7 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 			</div>
 		</div>
 	{:else}
-		<div class="frame" aria-busy={!resolved}>
+		<div aria-busy={!resolved}>
 			{#if resolved}
 				<TaggedPrToolbar
 					{counts}
@@ -155,8 +160,19 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 				</p>
 			{:else}
 				<ul class="list">
-					{#each rows as row (row.pr.id)}
-						<TaggedPrRow {row} {defaultBranch} />
+					{#each entries as entry (entry.kind === 'row' ? entry.row.pr.id : `stack:${entry.number}`)}
+						{#if entry.kind === 'row'}
+							<TaggedPrRow row={entry.row} {defaultBranch} />
+						{:else}
+							<TaggedPrStack
+								stack={entry}
+								cardsId="{repoId}-stack-{entry.number}"
+								bind:open={
+									() => isStackOpen(entry.members.length, chosenOpen.get(entry.number)),
+									(open) => chosenOpen.set(entry.number, open)
+								}
+							/>
+						{/if}
 					{/each}
 				</ul>
 			{/if}
@@ -188,18 +204,6 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		font-weight: 600;
 		color: var(--color-text-primary);
 		letter-spacing: -0.01em;
-	}
-
-	.frame {
-		border: 1px solid var(--color-border-subtle);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
-		/* Same Small tier as the recap card below it, so the two content cards
-		   on this page sit at one elevation. */
-		box-shadow: var(--color-shadow-sm);
-		/* Clips the toolbar's top corners and each row's hover fill to the
-		   frame's radius, so no child needs a radius of its own. */
-		overflow: hidden;
 	}
 
 	.list {

@@ -12,6 +12,7 @@ import type { Action } from "svelte/action";
 import { gsap } from "./gsap";
 import type { PresetFn } from "./presets";
 import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
 
 /* ───────────────────────── gsapPress ───────────────────────── */
 
@@ -67,6 +68,66 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (node
       node.removeEventListener("pointerup", up);
       node.removeEventListener("pointerleave", up);
       node.removeEventListener("pointercancel", up);
+    },
+  };
+};
+
+interface GsapHoverParams {
+  prop: `--${string}`;
+}
+
+export const gsapHover: Action<HTMLElement, GsapHoverParams> = (node, params) => {
+  let current = params;
+  let tween: gsap.core.Tween | null = null;
+  let pointer = false;
+  let focus = false;
+
+  const sync = () => {
+    const on = pointer || focus;
+    tween?.kill();
+    if (prefersReducedMotion()) {
+      gsap.set(node, { [current.prop]: on ? 1 : 0 });
+      return;
+    }
+    tween = gsap.to(node, {
+      [current.prop]: on ? 1 : 0,
+      duration: on ? tokens.smooth : tokens.quick,
+      ease: on ? tokens.easeOutQuart : tokens.easeSoft,
+    });
+  };
+  const enter = () => {
+    pointer = true;
+    sync();
+  };
+  const leave = () => {
+    pointer = false;
+    sync();
+  };
+  const focusIn = () => {
+    focus = node.matches(":has(:focus-visible)");
+    sync();
+  };
+  const focusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return;
+    focus = false;
+    sync();
+  };
+
+  node.addEventListener("pointerenter", enter);
+  node.addEventListener("pointerleave", leave);
+  node.addEventListener("focusin", focusIn);
+  node.addEventListener("focusout", focusOut);
+
+  return {
+    update(next: GsapHoverParams) {
+      current = next;
+    },
+    destroy() {
+      tween?.kill();
+      node.removeEventListener("pointerenter", enter);
+      node.removeEventListener("pointerleave", leave);
+      node.removeEventListener("focusin", focusIn);
+      node.removeEventListener("focusout", focusOut);
     },
   };
 };

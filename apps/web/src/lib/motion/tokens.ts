@@ -20,9 +20,12 @@ export const tokens = {
 
   // Easings (bare cubic-bezier control points; CustomEase consumes these)
   easeOutExpo: "0.16, 1, 0.3, 1",
+  easeOutQuart: "0.25, 1, 0.5, 1",
   easeSoft: "0.4, 0, 0.2, 1",
 
   stagger: {
     tight: 0.025,
+    dealTotal: 0.09,
+    gatherTotal: 0.04,
   },
 } as const;
