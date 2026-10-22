@@ -15,7 +15,7 @@ import type {
   NewPrSessionStatus,
 } from "./new-pr-session";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
-import type { StackBriefStatus } from "./stacks";
+import type { StackBriefStatus, StackMergeRun } from "./stacks";
 import type {
   CloneStatus,
   CommentThread,
@@ -142,6 +142,12 @@ export interface PrConversationUpdatedEnvelope {
 export interface StackUpdatedEnvelope {
   type: "stack:updated";
   data: { repositoryId: string; stackNumber: number };
+}
+
+/** Full state: a stack merge run after every step it takes. */
+export interface StackMergeProgressEnvelope {
+  type: "stack-merge:progress";
+  data: StackMergeRun;
 }
 
 /**
@@ -378,6 +384,7 @@ export type ServerEventMessage =
   | PrArchivedEnvelope
   | PrConversationUpdatedEnvelope
   | StackUpdatedEnvelope
+  | StackMergeProgressEnvelope
   | StackBriefStatusChangedEnvelope
   | PrsSyncStartedEnvelope
   | PrsSyncCompleteEnvelope

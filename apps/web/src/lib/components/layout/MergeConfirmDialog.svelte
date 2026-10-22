@@ -1,0 +1,193 @@
+<script lang="ts">
+import { AlertDialog } from "bits-ui";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
+import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
+import { buttonVariants } from "$lib/components/ui/button/index.js";
+import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
+import { cn } from "$lib/utils.js";
+
+interface Props {
+  open: boolean;
+  prNumber: number;
+  /** Null when the viewer is merging their own pull request. */
+  authorLogin: string | null;
+  targetBranch: string;
+  methodLabel: string;
+  /** The branch-protection rule this merge bypasses, or null for a plain merge. */
+  bypassRule: string | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}
+
+let {
+  open,
+  prNumber,
+  authorLogin,
+  targetBranch,
+  methodLabel,
+  bypassRule,
+  onOpenChange,
+  onConfirm,
+}: Props = $props();
+
+const whose = $derived(authorLogin === null ? "your" : `${authorLogin}'s`);
+</script>
+
+<AlertDialog.Root {open} {onOpenChange}>
+	<AlertDialog.Portal>
+		<AlertDialog.Overlay class="confirm-overlay" />
+		<AlertDialog.Content>
+			{#snippet child({ props })}
+				<div
+					{...props}
+					class="confirm-content"
+					use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}
+				>
+					<div class="confirm-header">
+						<span class="confirm-icon" class:is-bypass={bypassRule !== null} aria-hidden="true">
+							{#if bypassRule !== null}
+								<ShieldWarning size={16} />
+							{:else}
+								<GitMerge size={16} />
+							{/if}
+						</span>
+						<AlertDialog.Title>
+							{#snippet child({ props: titleProps })}
+								<h2 {...titleProps} class="confirm-title">
+									{bypassRule !== null ? `Bypass rules and merge #${prNumber}?` : `Merge #${prNumber}?`}
+								</h2>
+							{/snippet}
+						</AlertDialog.Title>
+					</div>
+
+					<AlertDialog.Description>
+						{#snippet child({ props: descProps })}
+							<p {...descProps} class="confirm-description">
+								{#if bypassRule !== null}
+									{bypassRule}. This bypasses branch protections and merges {whose} pull request into
+									<code>{targetBranch}</code> anyway ({methodLabel.toLowerCase()}). It can't be
+									undone from Revv.
+								{:else}
+									This merges {whose} pull request into <code>{targetBranch}</code>
+									({methodLabel.toLowerCase()}). It can't be undone from Revv.
+								{/if}
+							</p>
+						{/snippet}
+					</AlertDialog.Description>
+
+					<div class="confirm-actions">
+						<AlertDialog.Cancel class={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+							Cancel
+						</AlertDialog.Cancel>
+						<AlertDialog.Action
+							class={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'confirm-merge')}
+							onclick={onConfirm}
+						>
+							{#if bypassRule !== null}
+								<ShieldWarning size={13} />
+								Bypass rules and merge
+							{:else}
+								<GitMerge size={13} />
+								{methodLabel}
+							{/if}
+						</AlertDialog.Action>
+					</div>
+				</div>
+			{/snippet}
+		</AlertDialog.Content>
+	</AlertDialog.Portal>
+</AlertDialog.Root>
+
+<style>
+	.confirm-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 60;
+		background: rgb(0 0 0 / 0.45);
+		backdrop-filter: blur(2px);
+		-webkit-backdrop-filter: blur(2px);
+	}
+
+	.confirm-content {
+		position: fixed;
+		top: 24%;
+		left: 0;
+		right: 0;
+		z-index: 61;
+		display: flex;
+		width: min(408px, calc(100vw - 32px));
+		margin: 0 auto;
+		flex-direction: column;
+		gap: 10px;
+		border: 1px solid var(--color-glass-border);
+		border-radius: 12px;
+		background: var(--color-glass-bg);
+		padding: 20px;
+		color: var(--color-text-primary);
+		backdrop-filter: blur(20px) saturate(1.4);
+		-webkit-backdrop-filter: blur(20px) saturate(1.4);
+		box-shadow:
+			var(--color-shadow-xl),
+			inset 0 0.5px 0 0 var(--color-glass-highlight);
+		outline: none;
+	}
+
+	.confirm-header {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.confirm-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		flex-shrink: 0;
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-success) 12%, transparent);
+		color: var(--color-success);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-success) 22%, transparent);
+	}
+
+	.confirm-icon.is-bypass {
+		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+		color: var(--color-warning);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 22%, transparent);
+	}
+
+	.confirm-title {
+		margin: 0;
+		min-width: 0;
+		color: var(--color-text-primary);
+		font-size: 15px;
+		font-weight: 600;
+		line-height: 1.3;
+		letter-spacing: -0.01em;
+	}
+
+	.confirm-description {
+		margin: 0;
+		color: var(--color-text-secondary);
+		font-size: 13px;
+		line-height: 1.55;
+		overflow-wrap: anywhere;
+	}
+
+	.confirm-description code {
+		font-family: var(--font-mono);
+		font-size: 0.92em;
+	}
+
+	.confirm-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		margin-top: 4px;
+	}
+
+	.confirm-content :global(.confirm-merge) {
+		gap: 6px;
+	}
+</style>

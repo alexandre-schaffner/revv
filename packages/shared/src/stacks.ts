@@ -1,4 +1,10 @@
-import type { CiRollupState, PrStackEntry, ReviewDecision, ReviewVerdict } from "./conversation";
+import type {
+  CiRollupState,
+  PrStackEntry,
+  ReviewDecision,
+  ReviewVerdict,
+  StackEntryStatus,
+} from "./conversation";
 import type { MergeMethod } from "./types";
 import type { RiskLevel } from "./walkthrough";
 
@@ -193,6 +199,51 @@ export interface StackReviewStarted {
   readonly untracked: readonly number[];
 }
 
+/**
+ * `auto`: Revv merges what it can now and hands the rest to GitHub's
+ * auto-merge, which finishes even with Revv closed. `driven`: Revv merges
+ * each layer itself, bottom-up, and has to stay open until it's done.
+ */
+export type StackMergeMode = "auto" | "driven";
+
+export type StackMergeReadiness = "merged" | "ready" | "blocked";
+
+export interface StackMergePlanLayer {
+  readonly position: number;
+  readonly number: number;
+  readonly title: string;
+  readonly prId: string | null;
+  readonly headSha: string | null;
+  readonly status: StackEntryStatus;
+  readonly readiness: StackMergeReadiness;
+  /**
+   * Why a blocked layer can't merge, in the reader's terms. A ready layer may
+   * carry one too: what it's still waiting on (checks auto-merge will wait out).
+   */
+  readonly reasons: readonly string[];
+}
+
+export interface StackMergePlan {
+  readonly repositoryId: string;
+  readonly stackNumber: number;
+  readonly baseRefName: string;
+  readonly layers: readonly StackMergePlanLayer[];
+  /** Highest position reachable through contiguous ready layers, or null. */
+  readonly defaultThrough: number | null;
+  readonly allowedMethods: readonly MergeMethod[];
+  readonly mode: StackMergeMode;
+  /** The stack's most recent merge run, whatever its status; null when it never had one. */
+  readonly latestRun: StackMergeRun | null;
+}
+
+export type StackMergeRunStatus =
+  | "running"
+  | "waiting"
+  | "complete"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
 export type StackMergeLayerState =
   | "pending"
   | "retargeting"
@@ -220,6 +271,35 @@ export interface StackMergeRunLayer {
    * that needs a hand, not another rebase.
    */
   readonly rebasedToMerge?: boolean;
+}
+
+export interface StackMergeRun {
+  readonly id: string;
+  readonly repositoryId: string;
+  readonly stackNumber: number;
+  readonly throughPosition: number;
+  readonly method: MergeMethod;
+  readonly mode: StackMergeMode;
+  readonly status: StackMergeRunStatus;
+  readonly layers: readonly StackMergeRunLayer[];
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * What `POST /api/prs/:id/stack/rebase` did: every open layer replayed onto
+ * the one below it (the bottom onto the stack base), pushed in one atomic
+ * push. `rebased` is empty when the stack was already linear.
+ */
+export interface StackRebaseResult {
+  readonly rebased: ReadonlyArray<{
+    readonly number: number;
+    readonly from: string;
+    readonly to: string;
+  }>;
+  /** Layers pointed at the stack base because the layer below had merged. */
+  readonly retargeted: readonly number[];
 }
 
 export interface WalkthroughStackSnapshot {

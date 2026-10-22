@@ -4,6 +4,7 @@ import { openStackLayer } from "$lib/stacks/open-layer";
 import { needsReview } from "$lib/stacks/stack-layer-facts";
 import type { NavigationDirection } from "./navigation-intent.svelte";
 import { getSelectedPr } from "./prs.svelte";
+import { openStackMergeSheet } from "./stack-merge.svelte";
 import { getLayer, getNeighbour, getStack, startStackReview } from "./stacks.svelte";
 
 export interface StackView {
@@ -87,4 +88,9 @@ export async function reviewRemainingLayers(): Promise<void> {
   const order = queued.length > 1 ? `${numbers(queued)}, bottom-up.` : null;
   const description = [order, skipped].filter(Boolean).join(" ");
   toast.success(title, description ? { description } : {});
+}
+
+export function mergeOpenStack(): void {
+  const view = getStackView();
+  if (view) openStackMergeSheet(view.prId);
 }

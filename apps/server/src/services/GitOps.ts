@@ -681,3 +681,137 @@ export function classifyPushFailure(stderr: string): PushFailureKind {
 
   return "rejected";
 }
+
+// The clone may be the user's own repo, so every command that would run a
+// hook or sign a commit runs with `UNATTENDED`: the user's hooks (husky's
+// post-checkout, a pre-push test run) are theirs to run, and a signing
+// prompt nobody sees would hang the rebase until it times out.
+
+const UNATTENDED = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] as const;
+
+export interface GitAttempt {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}
+
+async function attempt(cwd: string, args: string[], timeoutMs: number): Promise<GitAttempt> {
+  const r = await spawnGit(args, { cwd, timeoutMs, captureStdout: true });
+  return {
+    ok: r.exitCode === 0 && !r.timedOut,
+    stdout: r.stdout.trim(),
+    stderr: r.stderrTail,
+    timedOut: r.timedOut,
+  };
+}
+
+export async function isAncestor(cwd: string, ancestor: string, of: string): Promise<boolean> {
+  return (await attempt(cwd, ["merge-base", "--is-ancestor", ancestor, of], 30_000)).ok;
+}
+
+export async function mergeBase(cwd: string, a: string, b: string): Promise<string | null> {
+  const r = await attempt(cwd, ["merge-base", a, b], 30_000);
+  return r.ok && r.stdout.length > 0 ? r.stdout : null;
+}
+
+export async function resolveRef(cwd: string, ref: string): Promise<string | null> {
+  const r = await attempt(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], 10_000);
+  return r.ok && r.stdout.length > 0 ? r.stdout : null;
+}
+
+export async function fetchForRebase(
+  cwd: string,
+  authedUrl: string,
+  refspecs: readonly string[],
+  opts: { readonly deepen?: number; readonly timeoutMs: number },
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      "fetch",
+      "--no-tags",
+      ...(opts.deepen !== undefined ? [`--deepen=${opts.deepen}`] : []),
+      authedUrl,
+      ...refspecs,
+    ],
+    opts.timeoutMs,
+  );
+}
+
+export async function addDetachedWorktree(
+  clonePath: string,
+  path: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(clonePath, [...UNATTENDED, "worktree", "add", "--detach", path, sha], timeoutMs);
+}
+
+/**
+ * Best-effort: remove a worktree git may or may not still know about. Never
+ * a `worktree prune`: in the user's repo that drops their own worktrees on a
+ * drive that isn't mounted.
+ */
+export async function removeWorktree(clonePath: string, path: string): Promise<void> {
+  await runGitBestEffort(["worktree", "remove", "--force", path], clonePath);
+}
+
+export async function abortDetachedRebase(cwd: string): Promise<boolean> {
+  return (await attempt(cwd, [...UNATTENDED, "rebase", "--abort"], 30_000)).ok;
+}
+
+export async function deleteRef(cwd: string, ref: string): Promise<void> {
+  await runGitBestEffort(["update-ref", "-d", ref], cwd);
+}
+
+/**
+ * `git rebase --onto onto upstream sha`, leaving HEAD detached at the result.
+ * The clone's refs belong to other worktrees, so the rebase is told never to
+ * move one, whatever the user's own config says.
+ */
+export async function rebaseDetached(
+  cwd: string,
+  onto: string,
+  upstream: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      ...UNATTENDED,
+      "-c",
+      "rebase.updateRefs=false",
+      "-c",
+      "rebase.autoStash=false",
+      "rebase",
+      "--no-autosquash",
+      "--onto",
+      onto,
+      upstream,
+      sha,
+    ],
+    timeoutMs,
+  );
+}
+
+export async function pushAtomicWithLeases(
+  cwd: string,
+  authedUrl: string,
+  updates: ReadonlyArray<{ readonly branch: string; readonly from: string; readonly to: string }>,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [
+      ...UNATTENDED,
+      "push",
+      "--atomic",
+      ...updates.map((u) => `--force-with-lease=refs/heads/${u.branch}:${u.from}`),
+      authedUrl,
+      ...updates.map((u) => `${u.to}:refs/heads/${u.branch}`),
+    ],
+    timeoutMs,
+  );
+}

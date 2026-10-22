@@ -38,6 +38,8 @@ import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
 import { StackBriefJobsLive } from "./stacks/StackBriefJobs";
 import { StackHeadlineServiceLive } from "./stacks/StackHeadlines";
+import { StackMergeServiceLive } from "./stacks/StackMerge";
+import { StackRebaseServiceLive } from "./stacks/StackRebase";
 import { StackReviewServiceLive } from "./stacks/StackReview";
 import { StackServiceLive } from "./stacks/StackService";
 import { TokenProviderLive } from "./TokenProvider";
@@ -222,6 +224,21 @@ const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
   ),
 );
 
+const StackRebaseServiceWithDeps = StackRebaseServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+);
+
+const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      StackServiceWithDeps,
+      StackRebaseServiceWithDeps,
+    ),
+  ),
+);
+
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
 // chat sessions, realtime broadcaster, pr service, etag cache).
@@ -246,6 +263,8 @@ export const AppLayer = Layer.mergeAll(
   RecapSchedulerWithDeps,
   StackBriefJobsWithDeps,
   StackReviewServiceWithDeps,
+  StackMergeServiceWithDeps,
+  StackRebaseServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so
