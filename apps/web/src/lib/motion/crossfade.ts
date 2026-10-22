@@ -1,4 +1,7 @@
+import { afterPaint } from "./frames";
+import { gsap } from "./gsap";
 import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
 
 /** The crossfade holding the page (root class, frozen glass). A newer one takes it over. */
 let holder: symbol | null = null;
@@ -92,4 +95,54 @@ export async function crossfadeDocument(update: () => void | Promise<void>): Pro
       holder = null;
     }
   }
+}
+
+type Look = Readonly<Record<string, string | number>>;
+
+/** A look change on its way in. */
+interface Turn {
+  /** Put the end state up now, started or not. Idempotent. */
+  land(): void;
+}
+
+/**
+ * Turn `target` to `to` after the next paint, at the pace the document crossfade runs at
+ * (`ceremonialMedium`, `easeSoft`). Cuts to `to` at once under reduced motion, or while a
+ * document crossfade holds the page and already fades this change. `onLanded` runs exactly once,
+ * however the end state got up.
+ */
+export function turnLook(
+  target: HTMLElement,
+  to: Look,
+  options: { readonly from?: Look; readonly onLanded?: () => void } = {},
+): Turn {
+  let landed = false;
+  let tween: gsap.core.Tween | null = null;
+  let cancelStart = () => {};
+  const finish = () => {
+    if (landed) return;
+    landed = true;
+    options.onLanded?.();
+  };
+  const land = () => {
+    if (landed) return;
+    cancelStart();
+    tween?.kill();
+    gsap.set(target, { ...to, overwrite: true });
+    finish();
+  };
+  if (prefersReducedMotion() || holder !== null) {
+    land();
+    return { land };
+  }
+  const pace = {
+    ...to,
+    duration: tokens.ceremonialMedium,
+    ease: tokens.easeSoft,
+    onComplete: finish,
+  };
+  cancelStart = afterPaint(() => {
+    tween = options.from ? gsap.fromTo(target, options.from, pace) : gsap.to(target, pace);
+  });
+  return { land };
 }
