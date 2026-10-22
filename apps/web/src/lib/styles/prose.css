@@ -70,38 +70,21 @@
   border-radius: 4px;
 }
 
-/* User chat bubble renders markdown on the teal accent fill — remap the prose
-   tokens to the on-accent foreground so every element stays legible.
-
-   That foreground is `--color-primary-foreground`, NOT white: the accent
-   inverts between themes (tidewater teal at 48% L in light, phosphor teal at
-   72% L in dark), so a fixed white reads 6.3:1 on the light bubble but 2.4:1
-   on the dark one. The token carries white in light and near-black ink in
-   dark, holding the bubble above AA in both. The code scrim stays a black
-   wash in both themes — it darkens the fill either way, which raises contrast
-   for white ink and for dark ink alike. */
-.prose-on-accent {
-  --tw-prose-body: var(--color-primary-foreground);
-  --tw-prose-headings: var(--color-primary-foreground);
-  --tw-prose-lead: var(--color-primary-foreground);
-  --tw-prose-links: var(--color-primary-foreground);
-  --tw-prose-bold: var(--color-primary-foreground);
-  --tw-prose-counters: color-mix(in srgb, var(--color-primary-foreground) 75%, transparent);
-  --tw-prose-bullets: color-mix(in srgb, var(--color-primary-foreground) 70%, transparent);
-  --tw-prose-hr: color-mix(in srgb, var(--color-primary-foreground) 30%, transparent);
-  --tw-prose-quotes: color-mix(in srgb, var(--color-primary-foreground) 85%, transparent);
-  --tw-prose-quote-borders: color-mix(in srgb, var(--color-primary-foreground) 40%, transparent);
-  --tw-prose-code: var(--color-primary-foreground);
-  --tw-prose-pre-code: var(--color-primary-foreground);
-  --tw-prose-pre-bg: rgb(0 0 0 / 0.2);
+/* User chat bubble — its surface is the teal-tinted paper of
+   `--color-user-bubble` (set on the bubble itself), and its text keeps the
+   prose ink tokens. Only the inner surfaces that would read warm against the
+   tint follow it: inline code, and a table's frame and header. */
+.prose-user-bubble :where(code):not(:where(pre code, .shiki code)),
+.prose-user-bubble .prose-table code {
+  background: var(--color-user-bubble-chip);
 }
-.prose-on-accent :where(code):not(:where(pre code, .shiki code)) {
-  background: rgb(0 0 0 / 0.2);
-  color: var(--color-primary-foreground);
+.prose-user-bubble .prose-table {
+  background: transparent;
+  border-color: var(--color-user-bubble-border);
 }
-/* `.prose-on-accent a` lives at the END of the link section below, not here —
-   it must follow `.prose a` (equal specificity) to win on source order, else
-   links in the accent bubble fall back to `--color-accent` (the bubble bg). */
+.prose-user-bubble .prose-table thead {
+  background: color-mix(in oklch, var(--color-user-bubble-chip) 50%, transparent);
+}
 
 /* ──────────────────────────────────────────────────────────
    Prose tables — global styling for GFM tables rendered by
@@ -316,16 +299,4 @@
 .prose a:hover {
   color: var(--color-accent-hover);
   text-decoration-color: var(--color-accent-hover);
-}
-
-/* On-accent links — the user chat bubble renders prose on the accent fill, so a
-   link colored `--color-accent` would vanish into the background. These must sit
-   after `.prose a` / `.prose a:hover` (equal specificity) to win on source order. */
-.prose-on-accent a {
-  color: var(--color-primary-foreground);
-  text-decoration-color: color-mix(in srgb, var(--color-primary-foreground) 50%, transparent);
-}
-.prose-on-accent a:hover {
-  color: var(--color-primary-foreground);
-  text-decoration-color: var(--color-primary-foreground);
 }

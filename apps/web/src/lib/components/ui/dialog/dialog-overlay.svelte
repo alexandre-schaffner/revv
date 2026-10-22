@@ -16,6 +16,7 @@ let {
 			bind:this={ref}
 			{...props}
 			data-slot="dialog-overlay"
+			data-glass
 			class={cn("bg-black/40 supports-backdrop-filter:backdrop-blur-sm fixed inset-0 isolate z-50", className)}
 			use:bitsAnim={{ inPreset: overlayFadeIn, outPreset: overlayFadeOut }}
 		></div>

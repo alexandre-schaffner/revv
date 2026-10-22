@@ -196,6 +196,7 @@ const primaryMerge = $derived(mergeOptions[0] ?? MERGE_COMMIT);
         >
         <div
           class="glass-pill glass-pill--success merge-pill"
+          data-glass
           class:is-disabled={ownerSubmitting !== null || mergeSubmitting !== null}
         >
           <button
