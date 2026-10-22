@@ -20,7 +20,8 @@ timelines (right-panel slide + vignette crossfade).
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
 | `actions.ts` | `gsapPress` (button feedback) and `bitsAnim` (drives bits-ui content from `data-state`). |
 | `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapPop`, `gsapRise`, `gsapSlide`). |
-| `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). |
+| `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). `turnLook` — turn one element to a new look at the same pace, cutting instead while a page crossfade already fades it. |
+| `frames.ts` | `afterPaint` — internal to `crossfade.ts`: `turnLook` starts once the heavy frame that caused it has been drawn. |
 | `index.ts` | Public surface — `from "$lib/motion"`. |
 
 ## How to use
@@ -77,6 +78,9 @@ Kept off GSAP by design — moving them would be a regression:
 - **`text-shimmer-sweep`** — continuous `background-position` sweep on streamed
   AI text. Per-glyph GSAP would not be cheaper.
 - **`indeterminate-progress`** — single element, low cost, runs only when active.
+- **`skeleton-sweep`** — the `.skeleton` placeholder highlight (and its SVG
+  twin on the repo activity heatmap). Compositor-only translate, the spinner's
+  reasoning; under reduced motion it plays once and leaves a still block.
 - **`sd-char-in` / `.sd-char-new`** — per-character fade on markdown injected
   via `{@html}`. No Svelte handle for `use:`, so a keyframe is the right tool.
 - **Dotmatrix variants** — three animation kinds with their own reduced-motion

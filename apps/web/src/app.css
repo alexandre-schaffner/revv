@@ -684,6 +684,33 @@
   animation: motion-essential-spin 1s linear infinite;
 }
 
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--color-glass-active-bg);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: skeleton-sweep var(--duration-pulse) var(--ease-soft) infinite;
+}
+
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
 /* ── Text shimmer (ported from OpenCode UI) ──────────────────────────────
    Two-layer stacked grid: a base text layer and a shimmer layer with a
    moving gradient clipped to text glyphs. The 360% background-size gives

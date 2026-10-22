@@ -18,6 +18,7 @@ import {
   probeOpenPrListSignatures,
   reposByName,
 } from "./github-graphql-prs";
+import { getCodeFrequency, getCommitActivity, searchPullRequests } from "./github-repo-stats";
 import {
   apiBaseForHost,
   assertGitHubOk,
@@ -651,6 +652,9 @@ export interface GitHubGatewayService {
       repo: string,
       username: string,
     ) => Effect.Effect<(typeof COLLABORATOR_ROLES)[number], GitHubError>;
+    readonly commitActivity: typeof getCommitActivity;
+    readonly codeFrequency: typeof getCodeFrequency;
+    readonly searchPullRequests: typeof searchPullRequests;
   };
   readonly files: {
     readonly content: (
@@ -1608,6 +1612,10 @@ const reposGateway: GitHubGatewayService["repos"] = {
         return COLLABORATOR_ROLES.find((role) => role === roleName) ?? "none";
       }),
     ),
+
+  commitActivity: getCommitActivity,
+  codeFrequency: getCodeFrequency,
+  searchPullRequests: searchPullRequests,
 };
 
 const filesGateway: GitHubGatewayService["files"] = {
