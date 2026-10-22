@@ -1,7 +1,11 @@
 <script lang="ts">
 import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import type { Snippet } from "svelte";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
+import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
 import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
@@ -20,9 +24,13 @@ interface Props {
   blockIssueSeverity: Map<string, Severity>;
   selectedIssueBlockId: string | null;
   selectedIssueSeverity: Severity | null;
-  /** Index of this section (1-based) shown in the chapter eyebrow. */
-  chapterNumber: number;
-  /** Total chapter count for the "Chapter N / M" eyebrow. */
+  /**
+   * Number shown in the "Chapter N / M" eyebrow, or null for the Overview —
+   * chapter 0, which carries no eyebrow so the printed numbers match what
+   * the chat agent reads as `chapterNumber` (see `chapterNumbersByIndex`).
+   */
+  chapterNumber: number | null;
+  /** Total Phase B chapter count for the "Chapter N / M" eyebrow. */
   chapterCount: number;
   /**
    * Optional DOM id placed on the section header so the chapters stepper
@@ -31,6 +39,7 @@ interface Props {
    * chapter). When omitted, only the per-block step anchors are jump targets.
    */
   id?: string | undefined;
+  margin?: Snippet<[number]> | undefined;
 }
 
 let {
@@ -42,6 +51,7 @@ let {
   chapterNumber,
   chapterCount,
   id = undefined,
+  margin = undefined,
 }: Props = $props();
 
 let collapsed = $state(false);
@@ -64,6 +74,13 @@ const rolledSeverity = $derived.by<Severity | null>(() => {
 });
 
 const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
+
+const MARGIN_ROW_SPAN = { headerOnly: 1, headerAndFirstBlock: 2 } as const;
+
+const firstBlockRailIsFree = $derived(!collapsed && entries[0]?.renderedAnnotation === null);
+const marginRowSpan = $derived(
+  firstBlockRailIsFree ? MARGIN_ROW_SPAN.headerAndFirstBlock : MARGIN_ROW_SPAN.headerOnly,
+);
 
 function toggle(): void {
   collapsed = !collapsed;
@@ -96,12 +113,14 @@ $effect(() => {
 		onclick={toggle}
 	>
 		<div class="section-header-rail">
-			<span class="section-eyebrow">
-				Chapter {String(chapterNumber).padStart(2, '0')}
-				<span class="section-eyebrow-of">/ {String(chapterCount).padStart(2, '0')}</span>
-			</span>
+			{#if chapterNumber !== null}
+				<span class="section-eyebrow">
+					Chapter {String(chapterNumber).padStart(2, '0')}
+					<span class="section-eyebrow-of">/ {String(chapterCount).padStart(2, '0')}</span>
+				</span>
+			{/if}
 			<span class="section-toggle" aria-hidden="true">
-				<ChevronDown size={14} />
+				<CaretDown size={14} />
 			</span>
 		</div>
 		<div class="section-title-row">
@@ -117,9 +136,15 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if renderedSummary}
-			<div class="section-summary">{@html renderedSummary}</div>
+			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
 		{/if}
 	</button>
+
+	{#if margin}
+		<div class="section-margin" style:grid-row="span {marginRowSpan}">
+			{@render margin(section.semanticStepIndex)}
+		</div>
+	{/if}
 
 	{#if !collapsed}
 		<div
@@ -143,6 +168,7 @@ $effect(() => {
 					<div
 						id="step-{block.id}"
 						class="block-wrapper"
+						data-prlens-breakout={hasAnnotation ? "" : undefined}
 						class:block-wrapper--no-anim={delay === -1}
 						class:block-wrapper--selected-info={selectedIssueBlockId === block.id && selectedIssueSeverity === 'info'}
 						class:block-wrapper--selected-warning={selectedIssueBlockId === block.id && selectedIssueSeverity === 'warning'}
@@ -155,17 +181,20 @@ $effect(() => {
 							<WalkthroughCodeBlock {block} hideAnnotation />
 						{:else if block.type === 'diff'}
 							<WalkthroughDiffBlock {block} hideAnnotation />
+						{:else if block.type === 'artifact'}
+							<WalkthroughArtifactBlock {block} />
 						{/if}
 					</div>
 
 					{#if hasAnnotation}
 						<aside
 							class="block-annotation"
+							data-prlens-breakout=""
 							class:block-annotation--no-anim={delay === -1}
 							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
 						>
-							<div class="block-annotation-inner">
+							<div class="block-annotation-inner prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 								{@html renderedAnnotation}
 							</div>
 						</aside>
@@ -235,7 +264,10 @@ $effect(() => {
 		margin-left: 4px;
 	}
 
+	/* `margin-left: auto` keeps the chevron right-aligned on the Overview,
+	   which has no eyebrow to its left. */
 	.section-toggle {
+		margin-left: auto;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -295,29 +327,22 @@ $effect(() => {
 		--severity-dot-color: var(--color-danger);
 	}
 
+	.section-margin {
+		grid-column: 5;
+		align-self: start;
+		position: relative;
+		z-index: 2;
+		min-width: 0;
+	}
+
+	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	   sets the reading measure. */
 	.section-summary {
-		font-size: 13px;
-		line-height: 1.55;
-		color: var(--color-text-secondary);
 		max-width: 720px;
 	}
 
-	.section-summary :global(p) {
-		margin: 0;
-	}
-
-	.section-summary :global(code) {
-		font-family: var(--font-mono);
-		font-size: 11.5px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.section-summary :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.section-summary` only owns the reading measure. */
 
 	/* `display: contents` lets the per-block grid items (block-step-dot
 	   in col 2, block-wrapper in col 3, block-annotation in col 5)
@@ -367,12 +392,16 @@ $effect(() => {
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
 	}
 
+	/* `backwards`, not `both`, and no `will-change`: either one keeps every
+	   block (and annotation) on its own compositing layer after the entrance
+	   ends — `both` by holding `filter: blur(0)` + an identity transform. A
+	   long walkthrough then runs WKWebView out of layer budget and the page
+	   flickers as tiles are dropped and repainted deep into the scroll. */
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
-		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
 		border-radius: 8px;
 		outline: 2px solid transparent;
@@ -400,7 +429,7 @@ $effect(() => {
 	.block-annotation {
 		align-self: start;
 		padding: 4px 0;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 
@@ -422,26 +451,8 @@ $effect(() => {
 		overflow-wrap: anywhere;
 	}
 
-	.block-annotation-inner :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.block-annotation-inner :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.block-annotation-inner :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.block-annotation-inner :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	@keyframes block-slide-up {
 		from {
@@ -462,6 +473,36 @@ $effect(() => {
 		.section-toggle {
 			animation-duration: 0.01ms !important;
 			transition: none !important;
+		}
+	}
+
+	/* Narrow layout — mirrors the @container block in GuidedWalkthrough, which
+	   flips the parent `.blocks` from grid to `display: block` below 1336px.
+	   Svelte scopes that rule to GuidedWalkthrough's own elements, so the
+	   per-block placement declared here has to be unwound on this side too.
+
+	   `.block-group` is `display: contents`, so once `.blocks` stops being a
+	   grid the dot stops being a grid item and falls back to `display: inline`
+	   — width/height no longer apply and its 3px shadow spread paints as a thin
+	   vertical bar next to the block (visible whenever the left sidebar is
+	   expanded). Give the group a box and hang the dot in the stacked layout's
+	   72px left gutter: still a dot, still costs no vertical space, and the 16px
+	   gap to the content edge matches the wide layout's margin-right. */
+	@container (max-width: 1335px) {
+		.block-group {
+			display: block;
+			position: relative;
+		}
+
+		.block-step-dot {
+			position: absolute;
+			left: -24px;
+			top: 18px;
+			margin: 0;
+		}
+
+		.section-margin {
+			margin: 0 0 18px;
 		}
 	}
 </style>

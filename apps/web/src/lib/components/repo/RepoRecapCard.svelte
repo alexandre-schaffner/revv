@@ -1,9 +1,10 @@
 <script lang="ts">
 import type { ProjectRecap, ProjectRecapSummary } from "@revv/shared";
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
+import CaretRight from "phosphor-svelte/lib/CaretRight";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
+import { pickLatestByWindow } from "$lib/components/recaps/period-window";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
 import {
   fetchRecapsForRepo,
@@ -13,7 +14,6 @@ import {
   getRecapsForRepo,
   loadRecap,
 } from "$lib/stores/recaps.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 
 interface Props {
   repoId: string;
@@ -32,10 +32,9 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 
-// Most recent non-superseded recap regardless of period.
-const latest = $derived<ProjectRecapSummary | null>(
-  recaps.find((r) => r.status !== "superseded") ?? null,
-);
+// Most recent non-superseded recap regardless of period — by *window*, not
+// by generation time, so a historical backfill doesn't take over this card.
+const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps));
 const latestId = $derived(latest?.id ?? null);
 
 // Hydrate the full markdown for the latest recap.
@@ -75,34 +74,43 @@ function periodWindow(r: ProjectRecapSummary): string {
   return `${DAY_MONTH.format(start)} → ${DAY_MONTH.format(lastDay)}`;
 }
 
-let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overview) : "");
+// Allowlist sanitize the lede (matches RecapBody — only <strong>/<em>).
+let ledeHtml = $derived.by(() => {
+  const raw = latestDetail?.lede ?? "";
+  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return escaped
+    .replace(/&lt;strong&gt;/gi, "<strong>")
+    .replace(/&lt;\/strong&gt;/gi, "</strong>")
+    .replace(/&lt;em&gt;/gi, "<em>")
+    .replace(/&lt;\/em&gt;/gi, "</em>");
+});
 </script>
 
 <section class="recap-card-section">
 	<header class="recap-card-header">
-		<Sparkles size={14} weight="fill" class="recap-card-icon" />
+		<CalendarDots size={14} class="recap-card-icon" />
 		<h2 class="recap-card-title">Latest recap</h2>
 	</header>
 
 	{#if listLoading && recaps.length === 0}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+			<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recaps…</span>
 		</div>
 	{:else if !latest}
 		<div class="recap-card-empty">
-			<Sparkles size={16} weight="fill" aria-hidden="true" />
+			<CalendarDots size={16} aria-hidden="true" />
 			<div class="recap-card-empty-body">
 				<p>No recaps yet for this repo.</p>
 				<a href="/repo/{repoId}/recaps" class="recap-card-empty-link">
 					Generate a recap
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</div>
 		</div>
 	{:else if detailLoading && !latestDetail}
 		<div class="recap-card-loading">
-			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+			<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 			<span>Loading recap…</span>
 		</div>
 	{:else if latestDetail && latestDetail.status === "generating"}
@@ -112,7 +120,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 				<span class="recap-card-window">{periodWindow(latest)}</span>
 			</header>
 			<div class="recap-card-generating">
-				<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+				<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
 				<p>Generating recap…</p>
 				<p class="hint">This page will update when the recap finishes.</p>
 			</div>
@@ -128,14 +136,14 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 				<RecapStats stats={latestDetail.summaryStats} />
 			</div>
 
-			<article class="recap-card-prose">
-				{@html html}
+			<article class="recap-card-prose prose prose-sm">
+				{@html ledeHtml}
 			</article>
 
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</footer>
 		</div>
@@ -149,7 +157,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 			<footer class="recap-card-paper-footer">
 				<a href="/repo/{repoId}/recaps" class="recap-card-view-all">
 					View all recaps
-					<ChevronRight size={12} weight="fill" />
+					<CaretRight size={12} />
 				</a>
 			</footer>
 		</div>
@@ -169,7 +177,7 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 		gap: 0.5rem;
 	}
 
-	.recap-card-icon {
+	:global(.recap-card-icon) {
 		color: var(--color-accent);
 		flex-shrink: 0;
 	}
@@ -236,10 +244,11 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 		padding: 1.25rem;
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border-subtle);
-		border-radius: 10px;
-		box-shadow:
-			0 1px 2px rgba(0, 0, 0, 0.04),
-			0 1px 3px rgba(0, 0, 0, 0.06);
+		border-radius: var(--radius-card);
+		/* The system's Small tier. The hand-rolled `rgba(0, 0, 0, 0.04/0.06)`
+		   this replaces was near-invisible on the midnight canvas; the token
+		   carries its own dark-theme value. */
+		box-shadow: var(--color-shadow-sm);
 		max-height: 640px;
 		overflow-y: auto;
 	}
@@ -290,48 +299,19 @@ let html = $derived(latestDetail?.overview ? renderMarkdown(latestDetail.overvie
 		color: var(--color-text-muted);
 	}
 
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css). The recap lede reads as primary-weight body
+	   text rather than the muted prose default, and headings get a touch of
+	   negative tracking to match the card's display type. */
 	.recap-card-prose {
-		font-size: 0.875rem;
-		line-height: 1.6;
-		color: var(--color-text-primary);
+		--tw-prose-body: var(--color-text-primary);
+		/* The page container is wider than a reading measure now that the queue
+		   table drives its width; keep the lede at a readable line length. */
+		max-width: 70ch;
 	}
 
-	.recap-card-prose :global(h1),
-	.recap-card-prose :global(h2),
-	.recap-card-prose :global(h3) {
-		margin: 1.25em 0 0.5em;
-		font-weight: 600;
+	.recap-card-prose :global(:is(h1, h2, h3)) {
 		letter-spacing: -0.015em;
-	}
-
-	.recap-card-prose :global(h1) {
-		font-size: 1.25em;
-	}
-
-	.recap-card-prose :global(h2) {
-		font-size: 1.1em;
-	}
-
-	.recap-card-prose :global(p) {
-		margin: 0.625em 0;
-	}
-
-	.recap-card-prose :global(ul),
-	.recap-card-prose :global(ol) {
-		margin: 0.5em 0;
-		padding-left: 1.25em;
-	}
-
-	.recap-card-prose :global(li) {
-		margin: 0.25em 0;
-	}
-
-	.recap-card-prose :global(code) {
-		font-family: var(--font-mono, monospace);
-		font-size: 0.85em;
-		padding: 0.125em 0.375em;
-		background: var(--color-bg-secondary);
-		border-radius: 0.25em;
 	}
 
 	.recap-card-no-content {

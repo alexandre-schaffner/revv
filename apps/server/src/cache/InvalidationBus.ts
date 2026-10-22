@@ -7,12 +7,12 @@ import { Context, Effect, Layer, PubSub, Stream } from "effect";
  * domain events; subscribers translate those events into:
  *
  *   1. Cross-namespace cache drops (cache-cascade subscriber).
- *   2. `cache:invalidated` WebSocket fan-out to clients.
+ *   2. `cache:invalidated` realtime fan-out to clients.
  *   3. A short-window ring buffer that powers `/api/cache/stats`
  *      ("invalidationsLastHour").
  *
  * The bus itself is transport-neutral — it doesn't know about caches or
- * WebSockets. That's intentional: adding a new subscriber is a layer-only
+ * transports. That's intentional: adding a new subscriber is a layer-only
  * concern, no publisher has to change.
  *
  * ### Event taxonomy
@@ -77,14 +77,13 @@ export interface RecentEvent {
   readonly at: string;
 }
 
-export class InvalidationBus extends Context.Tag("InvalidationBus")<
-  InvalidationBus,
-  InvalidationBusService
->() {}
+export class InvalidationBus extends Context.Service<InvalidationBus, InvalidationBusService>()(
+  "InvalidationBus",
+) {}
 
 const HOUR_MS = 60 * 60 * 1000;
 
-export const InvalidationBusLive = Layer.scoped(
+export const InvalidationBusLive = Layer.effect(
   InvalidationBus,
   Effect.gen(function* () {
     const pubsub = yield* PubSub.unbounded<InvalidationEvent>();
@@ -101,7 +100,7 @@ export const InvalidationBusLive = Layer.scoped(
         while (recentBuf.length > 0 && now - Date.parse(recentBuf[0]!.at) > HOUR_MS) {
           recentBuf.shift();
         }
-        yield* pubsub.publish(event);
+        yield* PubSub.publish(pubsub, event);
       });
 
     const stream = () => Stream.fromPubSub(pubsub);

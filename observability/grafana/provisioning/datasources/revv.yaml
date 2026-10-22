@@ -1,0 +1,12 @@
+apiVersion: 1
+prune: true
+datasources:
+  - name: Revv sessions
+    uid: revv-sessions
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    isDefault: true
+    jsonData:
+      auth_method: none
+      allowedHosts:
+        - http://host.docker.internal:45680

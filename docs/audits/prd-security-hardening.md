@@ -26,16 +26,17 @@ The 2026-05-20 security audit uncovered 2 critical vulnerabilities, 7 high-sever
 - [ ] `make typecheck` passes.
 - [ ] Manual test: `curl -H "Origin: https://evil.localhost.attacker.com" -I http://localhost:45678/api/prs` returns **no** `Access-Control-Allow-Origin` header.
 
-### US-002: Move WebSocket token out of query string
+### US-002: Keep the session bearer token out of the SSE URL
 
 **Description:** As a user, I want my bearer token to stay out of server access logs and browser history, so that a log breach does not compromise my session.
 
-**Acceptance Criteria:**
+**Context:** The global realtime channel is SSE, not WebSocket. `apps/server/src/routes/events.ts` (`GET /api/events`) authenticates via a `?token=<bearer>` query param because the browser `EventSource` API cannot set custom headers, so the long-lived bearer lands in access logs and history. SSE is unidirectional, so the old "send the token in a post-handshake message" fix is impossible — the bearer must be removed from the URL another way.
 
-- [ ] `apps/web/src/lib/stores/ws.svelte.ts` no longer appends `?token=` to the WebSocket URL.
-- [ ] Client sends token in the first WebSocket message after handshake: `{ type: "auth", token }`.
-- [ ] `apps/server/src/routes/ws.ts` accepts the initial `auth` message and validates the token there; rejects connection if token is missing or invalid.
-- [ ] Existing `?token=` query-param path is removed or returns `4001` close code.
+**Acceptance Criteria (pick one approach):**
+
+- [ ] **Cookie approach (preferred, pairs with US-008):** session lives in an `httpOnly` cookie; client opens `new EventSource(url, { withCredentials: true })` and `events.ts` reads the cookie instead of `query.token`. No token in the URL at all.
+- [ ] **Ticket approach:** client first POSTs (with `Authorization: Bearer`) to mint a short-TTL, single-use SSE ticket, then opens `EventSource?ticket=…`. The ticket is rejected after first use / expiry, so a logged URL is worthless.
+- [ ] Either way, the reusable bearer token no longer appears in `GET /api/events` request URLs.
 - [ ] `make typecheck` passes.
 
 ### US-003: Validate `githubHost` to prevent SSRF
@@ -60,15 +61,17 @@ The 2026-05-20 security audit uncovered 2 critical vulnerabilities, 7 high-sever
 - [ ] Invalid paths return a tagged `CloneError` before `Bun.spawn` is invoked.
 - [ ] `make typecheck` and `biome check` pass.
 
-### US-005: Close WebSocket on unresolved account
+### US-005: Reject unresolved-account SSE connections (or keep them provably inert)
 
-**Description:** As an operator, I want WebSocket connections with invalid tokens to be closed immediately, so that unauthenticated clients cannot trigger expensive sync operations.
+**Description:** As an operator, I want SSE connections that can't be scoped to an account handled safely, so that they neither consume resources nor receive another account's data.
+
+**Context:** `apps/server/src/routes/events.ts` already rejects a missing or invalid token with `401` before registering any writer. The remaining edge is a *valid* session whose account can't be resolved: today it opens an observer-only connection with `accountId = "unresolved"` that receives no scoped broadcasts. Because SSE is server→client only — there is no inbound command channel; sync is triggered solely via REST `POST /api/prs/sync` — an observer connection cannot trigger work, so the original "expensive sync operations" threat no longer applies. This is now low severity.
 
 **Acceptance Criteria:**
 
-- [ ] `apps/server/src/routes/ws.ts` closes the connection with code `4001` and reason `"Unauthorized"` when `TokenProvider.resolveAccount` throws.
-- [ ] `accountId = "unresolved"` fallback is removed.
-- [ ] Client receives a clear close event and stops retrying with the same token.
+- [ ] Decide the policy for an authenticated-but-unresolvable account: either return `401` / close the stream, or keep the inert `"unresolved"` observer connection and document why it's safe (no scoped data, no inbound commands).
+- [ ] If closing: `events.ts` returns `401` when `Identity.resolveAccount` throws, and the client stops retrying with the same token.
+- [ ] Missing/invalid token continues to return `401` before `Broadcaster.register`.
 - [ ] `make typecheck` passes.
 
 ### US-006: Sanitize error responses in `handleAppError`
@@ -110,10 +113,10 @@ The 2026-05-20 security audit uncovered 2 critical vulnerabilities, 7 high-sever
 ## Functional Requirements
 
 - FR-1: CORS `origin` must be an explicit allowlist; no regex matching.
-- FR-2: WebSocket auth must happen post-handshake, not via query param.
+- FR-2: The SSE stream must not carry a reusable bearer token in its URL — use an `httpOnly` cookie or a short-lived single-use ticket (`EventSource` cannot send custom headers).
 - FR-3: All user-configurable hostnames/URLs must be validated against strict patterns.
 - FR-4: All filesystem-bound user inputs must be path-traversal-checked.
-- FR-5: Unauthenticated WebSocket connections must be rejected before any message handling.
+- FR-5: Unauthenticated SSE connections must be rejected (`401`) before the writer is registered with the `Broadcaster`.
 - FR-6: Server error responses must never include raw exception messages.
 - FR-7: `bun audit` must report zero high-severity vulnerabilities.
 - FR-8: Session token storage must use `httpOnly` cookies.

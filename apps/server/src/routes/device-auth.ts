@@ -1,34 +1,51 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db, GITHUB_CLIENT_ID, GITHUB_CLIENT_ID_PUBLIC } from "../auth";
+import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
+import {
+  clientIdForHost,
+  clientIdIsGitHubApp,
+  InvalidGitHubClientIdError,
+  isPublicGitHub,
+  MissingGitHubClientIdError,
+  tokenUrlForHost,
+} from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { withAuth } from "./middleware";
 
-// The device-code flow needs `client_id` only — no client_secret. If the
-// bundled id is missing (someone replaced it with a placeholder), warn early
-// so sign-in failures are easy to diagnose.
-if (
-  !GITHUB_CLIENT_ID ||
-  GITHUB_CLIENT_ID.startsWith("BUNDLED_") ||
-  GITHUB_CLIENT_ID.startsWith("REPLACE_")
-) {
+// The device-code flow needs `client_id` only — no client_secret. An empty
+// `GITHUB_CLIENT_ID` is now normal: GHE hosts supply their client ID during
+// onboarding (stored in settings), and the env var is only an override for a
+// fixed self-hosted deployment. We warn only if it's been set to an obvious
+// placeholder, and otherwise diagnose missing-client-id at request time (see
+// `clientIdForHost`).
+if (GITHUB_CLIENT_ID.startsWith("BUNDLED_") || GITHUB_CLIENT_ID.startsWith("REPLACE_")) {
   logError(
     "device-auth",
-    "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail for GHE. " +
-      "Override with the GITHUB_CLIENT_ID env var or fix the bundled value in apps/server/src/config.ts",
+    "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. " +
+      "Set GITHUB_CLIENT_ID to a real client ID or leave it empty and configure the host during onboarding.",
   );
 }
-// GITHUB_CLIENT_ID_PUBLIC being empty is fine if the user never picks github.com —
-// we warn at request time instead of boot time (see resolveGithubUrls).
 
+// Classic OAuth App device-flow scope. GitHub App sign-in (bundled Pro, or a
+// user-registered GitHub App on a GHE host) sends no scope — its permissions
+// are fixed at registration/install, not requested at login — so this applies
+// only to OAuth-App client IDs. See `clientIdIsGitHubApp` in github-oauth.ts.
 const DEVICE_FLOW_SCOPE = "repo read:org user:email";
+
+/** Scope persisted on the account row, and sent at device-code request, keyed
+ * on the resolved client ID. `null` for the GitHub App path (no scope concept,
+ * detected from the `Iv…` prefix). */
+function deviceFlowScopeFor(clientId: string): string | null {
+  return clientIdIsGitHubApp(clientId) ? null : DEVICE_FLOW_SCOPE;
+}
 
 /**
  * Resolve the GitHub host at request time from user settings (set during
@@ -38,7 +55,10 @@ const DEVICE_FLOW_SCOPE = "repo read:org user:email";
  * `api.github.com` is the public github API hostname; GHE uses `api.<host>`.
  * Mirrors the derivation in {@link serverEnv}.
  */
-async function resolveGithubUrls(hostOverride?: string): Promise<{
+async function resolveGithubUrls(
+  hostOverride?: string,
+  clientIdOverride?: string,
+): Promise<{
   host: string;
   clientId: string;
   deviceCodeUrl: string;
@@ -50,32 +70,89 @@ async function resolveGithubUrls(hostOverride?: string): Promise<{
     Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.orElseSucceed(() => null)),
   );
   const host = hostOverride?.trim() || settings?.githubHost?.trim() || serverEnv.githubHost;
-  const isPublicGitHub = host === "github.com";
-  // Use the public client_id when targeting github.com; fail fast if it is
-  // not configured so the user gets a clear error instead of a confusing
-  // "invalid client" response from GitHub.
-  let clientId: string;
-  if (isPublicGitHub) {
-    if (!GITHUB_CLIENT_ID_PUBLIC) {
-      throw new Error(
-        "Public GitHub sign-in requires GITHUB_CLIENT_ID_PUBLIC to be set. " +
-          "Register an OAuth App on github.com and add GITHUB_CLIENT_ID_PUBLIC=<id> to your .env file.",
-      );
-    }
-    clientId = GITHUB_CLIENT_ID_PUBLIC;
-  } else {
-    clientId = GITHUB_CLIENT_ID;
-  }
   const githubBase = `https://${host}`;
-  const apiBase = isPublicGitHub ? "https://api.github.com" : `https://api.${host}`;
+  const apiBase = isPublicGitHub(host) ? "https://api.github.com" : `https://api.${host}`;
+  // The BYO client ID applies only to the host it was saved with. github.com
+  // ignores it regardless (see `clientIdForHost`), so no github.com-specific
+  // guard is needed here.
+  const customClientId =
+    clientIdOverride?.trim() ||
+    (settings?.githubHost?.trim() === host ? settings?.githubClientId : null);
   return {
     host,
-    clientId,
+    clientId: clientIdForHost(host, customClientId),
     deviceCodeUrl: `${githubBase}/login/device/code`,
-    tokenUrl: `${githubBase}/login/oauth/access_token`,
+    tokenUrl: tokenUrlForHost(host),
     userUrl: `${apiBase}/user`,
     emailsUrl: `${apiBase}/user/emails`,
   };
+}
+
+type GitHubClientIdErrorCode =
+  | MissingGitHubClientIdError["code"]
+  | InvalidGitHubClientIdError["code"];
+
+function isGitHubClientIdError(
+  e: unknown,
+): e is MissingGitHubClientIdError | InvalidGitHubClientIdError {
+  return e instanceof MissingGitHubClientIdError || e instanceof InvalidGitHubClientIdError;
+}
+
+function githubClientIdErrorBody(e: MissingGitHubClientIdError | InvalidGitHubClientIdError): {
+  error: string;
+  code: GitHubClientIdErrorCode;
+  host: string;
+} {
+  return { error: e.message, code: e.code, host: e.host };
+}
+
+async function resolveGithubUrlsForDeviceAuth(
+  hostOverride: string | undefined,
+  clientIdOverride: string | undefined,
+  status: (
+    code: 400,
+    body: { error: string; code: GitHubClientIdErrorCode; host: string },
+  ) => unknown,
+): Promise<
+  | { ok: true; urls: Awaited<ReturnType<typeof resolveGithubUrls>> }
+  | { ok: false; response: unknown }
+> {
+  try {
+    return { ok: true, urls: await resolveGithubUrls(hostOverride, clientIdOverride) };
+  } catch (e) {
+    if (isGitHubClientIdError(e)) {
+      return { ok: false, response: status(400, githubClientIdErrorBody(e)) };
+    }
+    throw e;
+  }
+}
+
+function rejectedClientIdBody(host: string): {
+  error: string;
+  code: InvalidGitHubClientIdError["code"];
+  host: string;
+} {
+  return {
+    error: `GitHub rejected the client ID for ${host}. Check that it was copied from the GitHub App or OAuth App registered on that host.`,
+    code: "invalid_github_client_id",
+    host,
+  };
+}
+
+function githubDeviceFlowErrorMessage(host: string, res: Response, bodyText: string): string {
+  let detail = bodyText.trim();
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: string; error_description?: string };
+    detail = parsed.error_description ?? parsed.error ?? detail;
+  } catch {
+    // Keep the raw text below.
+  }
+
+  const suffix = detail ? `: ${detail.slice(0, 300)}` : "";
+  return (
+    `GitHub device flow failed for ${host} (${res.status} ${res.statusText}${suffix}). ` +
+    "Check that the client ID belongs to this GitHub host and that Device Flow is enabled."
+  );
 }
 
 interface GitHubDeviceCodeResponse {
@@ -88,8 +165,45 @@ interface GitHubDeviceCodeResponse {
 
 interface GitHubTokenResponse {
   access_token?: string;
+  /**
+   * Present only when the OAuth App has "Expire user authorization tokens"
+   * enabled (common on GitHub Enterprise). When present, `access_token`
+   * expires in `expires_in` seconds and is renewable with this refresh token
+   * until `refresh_token_expires_in` seconds elapse.
+   */
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
   error?: string;
   interval?: number;
+}
+
+interface ResolvedTokens {
+  accessToken: string;
+  refreshToken: string | null;
+  accessTokenExpiresAt: Date | null;
+  refreshTokenExpiresAt: Date | null;
+}
+
+function resolveTokens(data: GitHubTokenResponse, now: Date): ResolvedTokens {
+  return {
+    accessToken: data.access_token ?? "",
+    refreshToken: data.refresh_token ?? null,
+    accessTokenExpiresAt: data.expires_in ? new Date(now.getTime() + data.expires_in * 1000) : null,
+    refreshTokenExpiresAt: data.refresh_token_expires_in
+      ? new Date(now.getTime() + data.refresh_token_expires_in * 1000)
+      : null,
+  };
+}
+
+async function persistTokens(
+  accountRowId: string,
+  host: string,
+  tokens: { accessToken: string | null; refreshToken: string | null },
+): Promise<void> {
+  await AppRuntime.runPromise(
+    Effect.flatMap(Identity, (identity) => identity.storeAccountTokens(accountRowId, host, tokens)),
+  );
 }
 
 interface GitHubUser {
@@ -167,9 +281,10 @@ async function retryFetch<T>(
 }
 
 async function upsertUserAndSession(
-  accessToken: string,
-  urls: { host: string; userUrl: string; emailsUrl: string },
+  tokens: ResolvedTokens,
+  urls: { host: string; clientId: string; userUrl: string; emailsUrl: string },
 ): Promise<string> {
+  const { accessToken } = tokens;
   const githubUser = await retryFetch(() => fetchGitHubUser(accessToken, urls), 2, 1000);
   const primaryEmail = await fetchPrimaryEmail(accessToken, urls);
   const email = primaryEmail ?? githubUser.email;
@@ -237,36 +352,47 @@ async function upsertUserAndSession(
     });
   }
 
-  // Upsert account by providerId + accountId
+  // Upsert account by providerId + accountId. Token bytes go to the secure
+  // store keyed on the account row id — never the DB columns. Expiry
+  // timestamps and the cleared `reauthRequiredAt` flag stay on the row.
   const providerId = `github:${urls.host}`;
   const existingAccounts = await db.select().from(account).where(eq(account.accountId, accountId));
   const existingAccount = existingAccounts.find((a) => a.providerId === providerId);
+  const accountRowId = existingAccount?.id ?? crypto.randomUUID();
 
   if (existingAccount) {
     await db
       .update(account)
       .set({
-        accessToken,
         updatedAt: now,
         userId,
         githubLogin: githubUser.login,
         avatarUrl: githubUser.avatar_url,
+        accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+        reauthRequiredAt: null,
       })
-      .where(eq(account.id, existingAccount.id));
+      .where(eq(account.id, accountRowId));
   } else {
     await db.insert(account).values({
-      id: crypto.randomUUID(),
+      id: accountRowId,
       accountId,
       providerId,
       userId,
-      accessToken,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
-      scope: DEVICE_FLOW_SCOPE,
+      scope: deviceFlowScopeFor(urls.clientId),
+      accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
       updatedAt: now,
     });
   }
+
+  await persistTokens(accountRowId, urls.host, {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+  });
 
   // Create new session
   const sessionToken = generateSecureToken();
@@ -285,11 +411,11 @@ async function upsertUserAndSession(
 }
 
 async function upsertAccountForUser(
-  accessToken: string,
-  urls: { host: string; userUrl: string },
+  tokens: ResolvedTokens,
+  urls: { host: string; clientId: string; userUrl: string },
   userId: string,
 ): Promise<void> {
-  const githubUser = await retryFetch(() => fetchGitHubUser(accessToken, urls), 2, 1000);
+  const githubUser = await retryFetch(() => fetchGitHubUser(tokens.accessToken, urls), 2, 1000);
   const providerId = `github:${urls.host}`;
   const accountId = githubUser.id.toString();
   const now = new Date();
@@ -299,34 +425,46 @@ async function upsertAccountForUser(
     .from(account)
     .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
     .then((r) => r[0] ?? null);
+  const accountRowId = existing?.id ?? crypto.randomUUID();
 
   if (existing) {
     await db
       .update(account)
       .set({
-        accessToken,
         githubLogin: githubUser.login,
         avatarUrl: githubUser.avatar_url,
         updatedAt: now,
+        accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
+        reauthRequiredAt: null,
       })
-      .where(eq(account.id, existing.id));
+      .where(eq(account.id, accountRowId));
   } else {
     await db.insert(account).values({
-      id: crypto.randomUUID(),
+      id: accountRowId,
       accountId,
       providerId,
       userId,
-      accessToken,
       githubLogin: githubUser.login,
       avatarUrl: githubUser.avatar_url,
-      scope: DEVICE_FLOW_SCOPE,
+      scope: deviceFlowScopeFor(urls.clientId),
+      accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+      refreshTokenExpiresAt: tokens.refreshTokenExpiresAt,
       createdAt: now,
       updatedAt: now,
     });
   }
+
+  await persistTokens(accountRowId, urls.host, {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+  });
 }
 
-const KNOWN_HOSTS = ["nocturlab.ghe.com", "github.com"] as const;
+// Hosts Revv ships a bundled client ID for. Always offered in the connected-
+// accounts list even when not yet connected. User-added GitHub Enterprise
+// hosts are discovered from the account rows themselves.
+const BUNDLED_HOSTS = ["github.com"] as const;
 
 // Public routes — no session required
 const publicAuthRoutes = new Elysia()
@@ -432,11 +570,18 @@ const publicAuthRoutes = new Elysia()
   .post(
     "/api/auth/device/init",
     async ({ body, status }) => {
-      const urls = await resolveGithubUrls(body?.host);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body?.host, body?.client_id, status);
+      if (!resolved.ok) return resolved.response;
+      const { urls } = resolved;
       const res = await fetch(urls.deviceCodeUrl, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: urls.clientId, scope: DEVICE_FLOW_SCOPE }),
+        body: JSON.stringify({
+          client_id: urls.clientId,
+          // GitHub App device-code requests send no scope (permissions are
+          // fixed at registration/install). OAuth Apps request the scope.
+          ...(clientIdIsGitHubApp(urls.clientId) ? {} : { scope: DEVICE_FLOW_SCOPE }),
+        }),
       });
 
       if (!res.ok) {
@@ -446,7 +591,10 @@ const publicAuthRoutes = new Elysia()
           `GitHub device code request failed: ${res.status} ${res.statusText}`,
           text,
         );
-        return status(502, { error: "Failed to initiate device flow" });
+        if (res.status === 400 || res.status === 401) {
+          return status(400, rejectedClientIdBody(urls.host));
+        }
+        return status(502, { error: githubDeviceFlowErrorMessage(urls.host, res, text) });
       }
 
       const data = (await res.json()) as GitHubDeviceCodeResponse;
@@ -458,7 +606,11 @@ const publicAuthRoutes = new Elysia()
         interval: data.interval,
       };
     },
-    { body: t.Optional(t.Object({ host: t.Optional(t.String()) })) },
+    {
+      body: t.Optional(
+        t.Object({ host: t.Optional(t.String()), client_id: t.Optional(t.String()) }),
+      ),
+    },
   )
   .post(
     "/api/auth/device/poll",
@@ -477,7 +629,9 @@ const publicAuthRoutes = new Elysia()
         }
       }
 
-      const urls = await resolveGithubUrls(body.host);
+      const resolved = await resolveGithubUrlsForDeviceAuth(body.host, body.client_id, status);
+      if (!resolved.ok) return resolved.response;
+      const { urls } = resolved;
       // Per GitHub's docs, device-flow token exchange does not take a
       // client_secret — only client_id, device_code, and grant_type.
       const res = await fetch(urls.tokenUrl, {
@@ -493,9 +647,12 @@ const publicAuthRoutes = new Elysia()
       const data = (await res.json()) as GitHubTokenResponse;
 
       if (data.access_token && existingUserId) {
-        // Link path: user is already signed in — only upsert the account row
+        // Link path: user is already signed in — only upsert the account row.
+        // Also the re-auth path: re-signing-in the active account lands here
+        // (the client sends its session_token), refreshing the stored token
+        // and clearing `reauthRequiredAt` on the existing row.
         try {
-          await upsertAccountForUser(data.access_token, urls, existingUserId);
+          await upsertAccountForUser(resolveTokens(data, new Date()), urls, existingUserId);
           return { status: "linked" as const };
         } catch (e) {
           logError("device-auth", "account link failed:", e);
@@ -506,7 +663,7 @@ const publicAuthRoutes = new Elysia()
 
       if (data.access_token) {
         try {
-          const token = await upsertUserAndSession(data.access_token, urls);
+          const token = await upsertUserAndSession(resolveTokens(data, new Date()), urls);
           return { status: "success" as const, token };
         } catch (e) {
           logError("device-auth", "session creation failed:", e);
@@ -528,6 +685,7 @@ const publicAuthRoutes = new Elysia()
       body: t.Object({
         device_code: t.String(),
         host: t.Optional(t.String()),
+        client_id: t.Optional(t.String()),
         session_token: t.Optional(t.String()),
       }),
     },
@@ -538,62 +696,67 @@ const protectedAuthRoutes = new Elysia()
   .use(withAuth)
   .get("/api/auth/accounts", async (ctx) => {
     const userId = ctx.session.user.id;
-    return Promise.all(
-      KNOWN_HOSTS.map(async (host) => {
-        const providerId = `github:${host}`;
-        const accountRow = await db
-          .select()
-          .from(account)
-          .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
-          .then((r) => r[0] ?? null);
-        return {
-          host,
-          connected: accountRow !== null,
-          githubLogin: accountRow?.githubLogin ?? null,
-          avatarUrl: accountRow?.avatarUrl ?? null,
-        };
-      }),
-    );
+
+    // Derive the connected hosts from the user's actual account rows rather
+    // than a fixed list, so a user-added GitHub Enterprise host shows up
+    // alongside the bundled ones. The bundled hosts are always listed (as
+    // connected:false when absent) so the UI can offer them to connect.
+    const rows = await db
+      .select({
+        providerId: account.providerId,
+        githubLogin: account.githubLogin,
+        avatarUrl: account.avatarUrl,
+      })
+      .from(account)
+      .where(eq(account.userId, userId));
+
+    const byHost = new Map<string, { githubLogin: string | null; avatarUrl: string | null }>();
+    for (const r of rows) {
+      const host = r.providerId.split(":")[1];
+      if (!host) continue;
+      byHost.set(host, { githubLogin: r.githubLogin ?? null, avatarUrl: r.avatarUrl ?? null });
+    }
+
+    const hosts = new Set<string>([...BUNDLED_HOSTS, ...byHost.keys()]);
+    return [...hosts].map((host) => {
+      const connected = byHost.get(host);
+      return {
+        host,
+        connected: connected !== undefined,
+        githubLogin: connected?.githubLogin ?? null,
+        avatarUrl: connected?.avatarUrl ?? null,
+      };
+    });
   })
   .post(
     "/api/auth/accounts/disconnect",
     async (ctx) => {
       const { host } = ctx.body;
-      if (!KNOWN_HOSTS.includes(host as (typeof KNOWN_HOSTS)[number])) {
-        return ctx.status(400, { error: `Unknown host: ${host}` });
-      }
       const providerId = `github:${host}`;
       const userId = ctx.session.user.id;
 
-      // Fetch the account row to attempt token revocation before deletion
+      // We cannot revoke the grant on GitHub's side: the only OAuth flow Revv
+      // uses is the device-code flow, which never collects a client secret
+      // (see auth.ts), and GitHub's `DELETE /applications/{id}/token`
+      // endpoint requires HTTP Basic auth with that secret. Attempting it would
+      // just send an empty secret and silently 401. So disconnect is a local
+      // operation: delete the account row and wipe its stored tokens. Users who
+      // want to revoke the grant upstream do so from their GitHub app
+      // connections page (linked from the settings UI).
       const accountRow = await db
-        .select({ accessToken: account.accessToken })
+        .select({ id: account.id })
         .from(account)
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
         .then((r) => r[0] ?? null);
 
-      if (accountRow?.accessToken) {
-        const isPublic = host === "github.com";
-        const clientId = isPublic ? (GITHUB_CLIENT_ID_PUBLIC ?? "") : GITHUB_CLIENT_ID;
-        const apiBase = isPublic ? "https://api.github.com" : `https://api.${host}`;
-        const clientSecret = process.env.GITHUB_CLIENT_SECRET ?? "";
-        try {
-          await fetch(`${apiBase}/applications/${clientId}/token`, {
-            method: "DELETE",
-            headers: {
-              Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-              Accept: "application/vnd.github+json",
-            },
-            body: JSON.stringify({ access_token: accountRow.accessToken }),
-          });
-        } catch {
-          // Best-effort — proceed with local deletion regardless
-        }
-      }
-
       await db
         .delete(account)
         .where(and(eq(account.providerId, providerId), eq(account.userId, userId)));
+      if (accountRow) {
+        await AppRuntime.runPromise(
+          Effect.flatMap(Identity, (identity) => identity.deleteAccountTokens(accountRow.id)),
+        );
+      }
       return { ok: true };
     },
     { body: t.Object({ host: t.String() }) },

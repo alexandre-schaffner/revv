@@ -4,7 +4,7 @@
 // comparison, result constructors, JSON unwrapping, DB row loading, and
 // comment-pairing validation.
 
-import type { WalkthroughPipelinePhase } from "@revv/shared";
+import type { IssueSeverity, WalkthroughPipelinePhase } from "@revv/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { commentThreads } from "../../../db/schema/comment-threads";
@@ -95,7 +95,7 @@ export function blockIdFor(
 
 // ── Comment-pairing validation ───────────────────────────────────────────────
 //
-// Single source of truth for the "warning/critical line-anchored issues must
+// Single source of truth for the "every line-anchored concern must
 // have ≥1 inline comment" rule (doctrine invariant #12). Both
 // `complete_walkthrough` (tool-surface gate) and `WalkthroughJobs`
 // (orchestrator gate before transitioning `status='complete'`) call this.
@@ -105,20 +105,19 @@ export function blockIdFor(
 
 export interface MissingInlineComment {
   id: string;
-  severity: "warning" | "critical";
+  severity: IssueSeverity;
   title: string;
   filePath: string;
   startLine: number;
 }
 
 /**
- * Returns the list of warning/critical, line-anchored issues that have no
+ * Returns the list of line-anchored issues that have no
  * inline comment thread yet. Empty array means the comment-pairing
  * invariant holds — `complete_walkthrough` may proceed and the orchestrator
  * may transition `status` to `'complete'`.
  *
  * Exempt by design (returned as "satisfied"):
- *   - severity = 'info'           (nitpicks; reviewers want a clean panel)
  *   - filePath / startLine = null (PR-wide concerns; no anchor possible)
  */
 export function findIssuesMissingInlineComment(
@@ -142,11 +141,8 @@ export function findIssuesMissingInlineComment(
       ): i is typeof i & {
         filePath: string;
         startLine: number;
-        severity: "warning" | "critical";
-      } =>
-        i.filePath !== null &&
-        i.startLine !== null &&
-        (i.severity === "warning" || i.severity === "critical"),
+        severity: IssueSeverity;
+      } => i.filePath !== null && i.startLine !== null,
     );
 
   if (requiresCommentIssues.length === 0) return [];
@@ -183,7 +179,7 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
   const list = uncommented
     .map((i) => `  - id=${i.id} [${i.severity}] (${i.filePath}:${i.startLine}) "${i.title}"`)
     .join("\n");
-  return `Error: ${uncommented.length} flagged issue(s) at severity 'warning' or 'critical' have no inline comment. For each, you MUST also call add_issue_comment with the matching issue_id. Missing:\n${list}\n\nCall add_issue_comment for each, then retry complete_walkthrough. (Severity 'info' issues do not require an inline comment.)`;
+  return `Error: ${uncommented.length} line-anchored concern(s) have no inline comment. For each, you MUST also call add_issue_comment with the matching issue_id. Missing:\n${list}\n\nCall add_issue_comment for each, then retry complete_walkthrough.`;
 }
 
 // ── Journey-chapter validation ───────────────────────────────────────────────
@@ -198,10 +194,10 @@ export function renderMissingInlineCommentError(uncommented: MissingInlineCommen
 // We don't have a structural flag for "this chapter is the journey" — the
 // schema is generic over chapters. Instead, we enforce via a permissive
 // regex on the title/summary text. Keywords mirror the prompt's allowed
-// titles in walkthrough-system.md so an honest agent following the prompt
+// titles in walkthrough-system-reviewer.md so an honest agent following the prompt
 // cannot accidentally trip the gate. Keep the regex and the prompt's
 // keyword list in lockstep — any change here MUST land alongside a matching
-// change to walkthrough-system.md.
+// change to walkthrough-system-reviewer.md.
 export const JOURNEY_CHAPTER_PATTERN =
   /(journey|history|got here|how we|evolution|explor|attempts?|origins?|trajectory|path to|came to|story of|trail)/i;
 

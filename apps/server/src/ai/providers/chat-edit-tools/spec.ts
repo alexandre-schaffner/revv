@@ -8,21 +8,31 @@
 // See CLAUDE.md invariant #7 — these tools are the only authorized
 // post-completion mutation path for a walkthrough. They never touch `status`
 // or `lastCompletedPhase`; they stamp `lastEditedAt` / `lastEditedBy` on the
-// parent row and broadcast `walkthrough:edited` envelopes via WebSocketHub
-// (not the generation SSE stream, which dies on `done`).
+// parent row and broadcast `walkthrough:edited` envelopes via the global SSE bus.
 
-import type { WalkthroughStreamEvent, WsServerMessage } from "@revv/shared";
+import type {
+  ExternalAgentProvider,
+  ThreadEventMessage,
+  WalkthroughStreamEvent,
+} from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
+import {
+  PLAIN_TEXT_FIELD,
+  PROSE_VOICE_CONTRACT,
+  SENTIMENT_CONTRACT,
+  SUMMARY_CONTRACT,
+} from "../../prompts/review-copy-contract";
+import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
 // ── Handler execution context ───────────────────────────────────────────────
 
 /**
- * Actor identifier stamped on `walkthroughs.lastEditedBy`. The two values
- * map to the two transports: the in-process Claude SDK and the HTTP MCP
- * route used by the opencode daemon.
+ * Actor identifier stamped on `walkthroughs.lastEditedBy`. The value records
+ * whether the edit came from in-app chat or, for every external coding agent
+ * Revv integrates with, which agent authored it.
  */
-export type ChatEditActor = "chat:claude" | "chat:opencode";
+export type ChatEditActor = "chat:acp" | ExternalAgentProvider;
 
 export interface ChatWalkthroughEditContext {
   /** Direct DB handle (Bun sqlite + drizzle). */
@@ -43,21 +53,19 @@ export interface ChatWalkthroughEditContext {
    * see an event without a durable row. The walkthroughId is passed at call
    * time (handlers resolve it lazily — see {@link resolveActiveWalkthroughId})
    * because chat sessions outlive any one walkthrough; the route wraps this
-   * to broadcast a `walkthrough:edited` envelope via WebSocketHub.
+   * to broadcast a `walkthrough:edited` envelope.
    */
   readonly emit: (walkthroughId: string, event: WalkthroughStreamEvent) => void;
   /**
-   * General WebSocket broadcast hook for `comment_threads` /
+   * General thread-event broadcast hook for `comment_threads` /
    * `thread_messages` events (mirrors `WalkthroughToolContext`). Used by
    * add_issue_comment / update_issue_comment / delete_issue_comment so any
    * open DiffViewerInner picks up the inline-comment change.
    */
-  readonly broadcastThreadEvent: (msg: WsServerMessage) => void;
+  readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
 }
 
-export interface ChatEditToolResult {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
+export interface ChatEditToolResult extends McpToolResult {
   // MCP SDK's tool() signature uses an open-ended response type with a
   // string index signature. This extra field lets our narrower type unify
   // with that shape when the SDK wraps us; it's never populated.
@@ -69,20 +77,17 @@ export type ChatEditToolHandler<TInput> = (
   input: TInput,
 ) => Promise<ChatEditToolResult>;
 
-export interface ChatEditToolSpec<TShape extends z.ZodRawShape> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodObject<TShape>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly handler: ChatEditToolHandler<any>;
-}
+export type ChatEditToolSpecRecord = GatewayToolSpec<
+  ChatWalkthroughEditContext,
+  ChatEditToolResult
+>;
 
 // ── Shared content sub-schemas (mirror walkthrough-tool-spec.ts shapes) ─────
 
 /**
  * Atomic block content variant. Same shape used by the generation pipeline's
  * `add_diff_step` / `add_semantic_step.initial_block`. Exactly one of
- * `markdown`, `code`, or `diff` must be provided.
+ * `markdown`, `code`, `diff`, or `artifact` must be provided.
  */
 export const blockContentSchema = z
   .object({
@@ -91,13 +96,13 @@ export const blockContentSchema = z
       .nullable()
       .optional()
       .describe(
-        "Use for narrative/explanatory content. Mutually exclusive with `code` and `diff`.",
+        `Use for narrative/explanatory content, budget 150 WORDS. Mutually exclusive with \`code\`, \`diff\`, and \`artifact\`. ${PROSE_VOICE_CONTRACT}`,
       ),
     code: z
       .object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         language: z.string(),
         content: z.string(),
         annotation: z.string().nullable(),
@@ -105,7 +110,9 @@ export const blockContentSchema = z
       })
       .nullable()
       .optional()
-      .describe("Use for source-code excerpts. Mutually exclusive with `markdown` and `diff`."),
+      .describe(
+        "Use for source-code excerpts. Mutually exclusive with `markdown`, `diff`, and `artifact`.",
+      ),
     diff: z
       .object({
         file_path: z.string(),
@@ -115,16 +122,41 @@ export const blockContentSchema = z
       })
       .nullable()
       .optional()
-      .describe("Use for unified-diff hunks. Mutually exclusive with `markdown` and `code`."),
+      .describe(
+        "Use for unified-diff hunks. Mutually exclusive with `markdown`, `code`, and `artifact`.",
+      ),
+    artifact: z
+      .object({
+        html: z
+          .string()
+          .describe(
+            "A complete, self-contained HTML document with inline CSS/JS. Vanilla JS only; no external network/CDN; no localStorage; no timers/randomness. Renders in a sandboxed iframe that auto-sizes. Must carry a live state readout, something the reader can vary, and a verdict — a step-reveal with no changing state is a markdown list, not an artifact. Style with the injected Revv theme variables (`var(--color-*)`, `var(--font-*)`) so it matches the app and follows light/dark — never hardcode colors or font-family; spend the accent on the current state, not on buttons. Keep it under ~320px tall: compact rows, no placeholder rows for content not yet revealed. See 'Interactive artifacts (the craft bar)' in the system prompt for the full contract.",
+          ),
+        annotation: z.string().nullable(),
+        annotation_position: z.enum(["left", "right"]),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "Use for an interactive widget when prose/code/diff fall short. Mutually exclusive with markdown, code, and diff.",
+      ),
   })
   .describe(
-    "REQUIRED. Exactly one of { markdown, code, diff } — the same shape add_diff_step uses.",
+    "REQUIRED. Exactly one of { markdown, code, diff, artifact } — the same shape add_diff_step uses.",
   );
+
+/**
+ * Appended to every `semantic_step_index` that targets an existing chapter.
+ * The user reads "Chapter 2" off the UI; the index behind it is usually 1, or
+ * anything after a delete left a gap.
+ */
+const CHAPTER_INDEX_NOTE =
+  "This is NOT the chapter number the user sees in the UI: map the user's 'chapter N' through `chapterNumber` in get_walkthrough_for_edit (the Overview is chapter 0, the walkthrough summary).";
 
 /** Composite identifier for an existing diff block (matches walkthrough-tool-spec.ts). */
 const blockRefSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z.number().int().nonnegative(),
+  semantic_step_index: z.coerce.number().int().nonnegative(),
+  step_index: z.coerce.number().int().nonnegative(),
 });
 
 /** Rating axis enum, matched against `RATING_AXES`. */
@@ -150,7 +182,7 @@ export const updateOverviewSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "New 2–3 sentence PR summary. Omit (or send null) to leave the existing summary unchanged.",
+      `New PR summary. ${SUMMARY_CONTRACT} ${PROSE_VOICE_CONTRACT} Omit (or send null) to leave the existing summary unchanged.`,
     ),
   risk_level: z
     .enum(["low", "medium", "high"])
@@ -162,14 +194,14 @@ export const updateOverviewSchema = z.object({
 });
 
 export const addSemanticStepEditSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe(
       "Index at which to insert the new chapter. Must NOT already exist — call get_walkthrough_for_edit first to pick a free index. Gaps are allowed (e.g. existing indices 0,1,3 → you can insert 2, 4, 99 etc.).",
     ),
-  title: z.string().min(1).describe("Chapter title (≤ ~60 chars)."),
+  title: z.string().min(1).describe(`Chapter title (≤ ~60 chars). ${PLAIN_TEXT_FIELD}`),
   summary: z
     .string()
     .nullable()
@@ -179,17 +211,17 @@ export const addSemanticStepEditSchema = z.object({
 });
 
 export const updateSemanticStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
-    .describe("Existing chapter to update — must already exist."),
+    .describe(`Existing chapter to update — must already exist. ${CHAPTER_INDEX_NOTE}`),
   title: z
     .string()
     .min(1)
     .nullable()
     .optional()
-    .describe("New chapter title. Omit / null to leave unchanged."),
+    .describe(`New chapter title. Omit / null to leave unchanged. ${PLAIN_TEXT_FIELD}`),
   summary: z
     .string()
     .nullable()
@@ -200,24 +232,24 @@ export const updateSemanticStepSchema = z.object({
 });
 
 export const deleteSemanticStepSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe(
-      "Chapter to remove. Cascades to all blocks inside the chapter. Rejected if any block in the chapter is the only blockId on a warning/critical issue, or if any affected issue has been pushed to GitHub (submittedAt!=null) — delete those issues first.",
+      `Chapter to remove. Cascades to all blocks inside the chapter. Rejected if any block in the chapter is the only blockId on a warning/critical issue, or if any affected issue has been pushed to GitHub (submittedAt!=null) — delete those issues first. ${CHAPTER_INDEX_NOTE}`,
     ),
 });
 
 export const addBlockSchema = z.object({
-  semantic_step_index: z
+  semantic_step_index: z.coerce
     .number()
     .int()
     .nonnegative()
     .describe(
-      "Index of the parent chapter — must already exist. Use update_semantic_step or add_semantic_step first if you need a new chapter.",
+      `Index of the parent chapter — must already exist. Use update_semantic_step or add_semantic_step first if you need a new chapter. ${CHAPTER_INDEX_NOTE}`,
     ),
-  step_index: z
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -230,8 +262,8 @@ export const addBlockSchema = z.object({
 });
 
 export const updateBlockSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z
+  semantic_step_index: z.coerce.number().int().nonnegative().describe(CHAPTER_INDEX_NOTE),
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -240,8 +272,8 @@ export const updateBlockSchema = z.object({
 });
 
 export const deleteBlockSchema = z.object({
-  semantic_step_index: z.number().int().nonnegative(),
-  step_index: z
+  semantic_step_index: z.coerce.number().int().nonnegative(),
+  step_index: z.coerce
     .number()
     .int()
     .nonnegative()
@@ -254,7 +286,7 @@ export const updateSentimentSchema = z.object({
   markdown: z
     .string()
     .describe(
-      "New Overall Sentiment markdown. 2–4 sentences, direct verdict — replaces the current sentiment in full.",
+      `New Overall Sentiment markdown, replacing the current sentiment in full. ${SENTIMENT_CONTRACT} ${PROSE_VOICE_CONTRACT}`,
     ),
 });
 
@@ -276,18 +308,22 @@ export const updateRatingSchema = z.object({
     .string()
     .nullable()
     .optional()
-    .describe("New 1–2 sentence rationale. Omit/null to leave unchanged."),
+    .describe(
+      `New rationale, 1–2 sentences and 35 words. Omit/null to leave unchanged. ${PROSE_VOICE_CONTRACT}`,
+    ),
   details: z
     .string()
     .nullable()
     .optional()
-    .describe("New rich markdown details. Omit/null to leave unchanged."),
+    .describe(
+      `New markdown details, 80 words. Omit/null to leave unchanged. ${PROSE_VOICE_CONTRACT}`,
+    ),
   citations: z
     .array(
       z.object({
         file_path: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
+        start_line: z.coerce.number().int(),
+        end_line: z.coerce.number().int(),
         note: z.string().nullable(),
       }),
     )
@@ -311,10 +347,17 @@ export const deleteRatingSchema = z.object({
   ),
 });
 
+// Mirrors the flag_issue calibration in walkthrough-tools/spec.ts so the chat
+// edit agent and the generation agent score severity identically.
+const SEVERITY_CALIBRATION =
+  "Two decisions, kept separate. (1) WHETHER TO ADD AN ISSUE — a HIGH bar: add only if ALL hold — meaningful impact (accuracy/perf/security/maintainability); discrete & actionable with a clear fix; rigor matching the surrounding codebase; introduced by the reviewed diff (not pre-existing); the author would likely fix it; rests on verifiable facts (no speculation); provably affects specific code (not theoretical); not an intentional design choice. (2) SEVERITY ONCE ADDED — a LOW bar: DEFAULT TO 'warning'; don't hedge a real finding down to 'info'. 'critical' = blocks release / causes an incident (RCE, hardcoded prod secret, auth bypass, unauthenticated privileged endpoint, data-loss path, broken migration, breaking API change without a shim, race on shared state, crash-on-unhandled-error). 'warning' (the common tier) = address before merge / next cycle (SQLi behind auth, stored XSS, sensitive-data IDOR, CSRF on state change, info disclosure, prompt injection behind auth, very-new dependency, missed edge case, missing test for new behavior, unhandled error path, off-by-one). 'info' = RARE genuine nitpick / low-impact hardening the author can defer — most reviews have zero. Security examples are illustrative per tier, not a narrowing.";
+
 export const addIssueEditSchema = z.object({
-  severity: z.enum(["info", "warning", "critical"]),
-  title: z.string(),
-  description: z.string(),
+  severity: z.enum(["info", "warning", "critical"]).describe(SEVERITY_CALIBRATION),
+  title: z.string().describe(`Short title of the concern (10 words max). ${PLAIN_TEXT_FIELD}`),
+  description: z
+    .string()
+    .describe(`One-sentence label for the issues-list card (≤ ~15 words). ${PLAIN_TEXT_FIELD}`),
   block_refs: z
     .array(blockRefSchema)
     .min(1)
@@ -322,19 +365,23 @@ export const addIssueEditSchema = z.object({
       "Composite identifiers of existing diff block(s) the issue is anchored to. Must reference blocks that already exist.",
     ),
   file_path: z.string().nullable(),
-  start_line: z.number().int().nullable(),
-  end_line: z.number().int().nullable(),
+  start_line: z.coerce.number().int().nullable(),
+  end_line: z.coerce.number().int().nullable(),
 });
 
 export const updateIssueSchema = z.object({
   issue_id: z.string().describe("Existing walkthrough_issues.id."),
-  severity: z.enum(["info", "warning", "critical"]).nullable().optional(),
-  title: z.string().nullable().optional(),
-  description: z.string().nullable().optional(),
+  severity: z
+    .enum(["info", "warning", "critical"])
+    .describe(SEVERITY_CALIBRATION)
+    .nullable()
+    .optional(),
+  title: z.string().nullable().optional().describe(`New title. ${PLAIN_TEXT_FIELD}`),
+  description: z.string().nullable().optional().describe(`New description. ${PLAIN_TEXT_FIELD}`),
   block_refs: z.array(blockRefSchema).nullable().optional(),
   file_path: z.string().nullable().optional(),
-  start_line: z.number().int().nullable().optional(),
-  end_line: z.number().int().nullable().optional(),
+  start_line: z.coerce.number().int().nullable().optional(),
+  end_line: z.coerce.number().int().nullable().optional(),
 });
 
 export const deleteIssueSchema = z.object({
@@ -348,15 +395,15 @@ export const deleteIssueSchema = z.object({
 export const addIssueCommentEditSchema = z.object({
   issue_id: z.string(),
   file_path: z.string(),
-  start_line: z.number().int(),
-  end_line: z.number().int(),
+  start_line: z.coerce.number().int(),
+  end_line: z.coerce.number().int(),
   diff_side: z.enum(["old", "new"]).default("new"),
   body: z.string(),
 });
 
 export const updateIssueCommentSchema = z.object({
   thread_message_id: z.string().describe("thread_messages.id of the comment to update."),
-  body: z.string().describe("New markdown body."),
+  body: z.string().describe(`New markdown body. ${PROSE_VOICE_CONTRACT}`),
 });
 
 export const deleteIssueCommentSchema = z.object({
@@ -386,5 +433,3 @@ export type DeleteIssueInput = z.infer<typeof deleteIssueSchema>;
 export type AddIssueCommentEditInput = z.infer<typeof addIssueCommentEditSchema>;
 export type UpdateIssueCommentInput = z.infer<typeof updateIssueCommentSchema>;
 export type DeleteIssueCommentInput = z.infer<typeof deleteIssueCommentSchema>;
-
-export type BlockContentInput = z.infer<typeof blockContentSchema>;

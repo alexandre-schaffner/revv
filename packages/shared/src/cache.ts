@@ -1,7 +1,7 @@
 // ─── Remote walkthrough cache (GCS-backed) ──────────────────────────────────
 //
 // Wire format for the team-shared walkthrough cache. The local server
-// gzip-encodes a `WalkthroughSnapshotV1` and uploads it to:
+// gzip-encodes a `WalkthroughSnapshotV2` and uploads it to:
 //
 //   gs://<bucket>/<owner>/<repo>/<headSha>.json.gz
 //
@@ -25,18 +25,18 @@ import type {
 } from "./walkthrough";
 
 /** Bump this when the snapshot shape changes. Importers reject mismatches. */
-export const CACHE_SCHEMA_VERSION = 1 as const;
+export const CACHE_SCHEMA_VERSION = 2 as const;
 
 /**
  * Captured atomically at job start so a settings change mid-run doesn't
  * corrupt the recorded config. Travels with the snapshot to the bucket
- * and back, so cache-hit UI can render "claude-opus-4-7 • thinking: high
+ * and back, so cache-hit UI can render "claude-opus-4-8 • thinking: high
  * • 1m context" from the original run rather than the live settings.
  */
 export interface GenerationProviderConfig {
-  provider: "claude-agent-sdk" | "opencode";
+  provider: "claude-agent-sdk" | "opencode" | "codex";
   model: string;
-  /** "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low" | null. */
+  /** A `ThinkingEffort` tier as a raw string, or null. */
   thinkingEffort: string | null;
   /** `"200k"` | `"1m"` | null (null = SDK default). */
   contextWindow: string | null;
@@ -67,7 +67,7 @@ export interface WalkthroughSnapshotBlock {
   semanticStepIndex: number;
   stepIndex: number;
   /** Block type — discriminates the `data` payload. */
-  type: "diff" | "code" | "markdown";
+  type: WalkthroughBlock["type"];
   /** Typed payload — same shape as the on-row JSON. */
   data: WalkthroughBlock;
 }
@@ -115,8 +115,8 @@ export interface WalkthroughSnapshotSemanticStep {
  *   • issues where `submittedAt != null` (per-account GitHub state)
  *   • per-row ids on blocks/issues/ratings (regenerated on import)
  */
-export interface WalkthroughSnapshotV1 {
-  schemaVersion: 1;
+export interface WalkthroughSnapshotV2 {
+  schemaVersion: typeof CACHE_SCHEMA_VERSION;
   /** `"owner/repo"` — pairs with `prHeadSha` to locate the bucket object. */
   repoFullName: string;
   prHeadSha: string;
@@ -163,4 +163,37 @@ export const CACHE_METADATA_KEYS = {
   uploadedByUserId: "uploadedByUserId",
   /** Hex SHA-256 of the gzipped body. Crosschecked on download. */
   contentSha256: "contentSha256",
+  /** SSHSIG armored block produced by the uploader's private key. */
+  signature: "signature",
+  /** GitHub host of the signing account, e.g. `github.com`. */
+  signerHost: "signerHost",
+  /** GitHub login of the signer, e.g. `alice`. */
+  signerLogin: "signerLogin",
+  /** Stable numeric GitHub user id of the signer. Advisory. */
+  signerGithubUserId: "signerGithubUserId",
+  /** SSHSIG namespace — `revv-cache@<signerHost>`. */
+  signatureNamespace: "signatureNamespace",
 } as const;
+
+/**
+ * Signing mode for the team cache. Controls whether blobs must be signed
+ * (`'strict'`), accepted with a warning when signature is missing/invalid
+ * (`'permissive'`), or have signing bypassed entirely (`'off'`).
+ *
+ * Default is `'strict'` — new installs get protection out of the box.
+ */
+export type CacheSigningMode = "off" | "permissive" | "strict";
+
+/**
+ * Build the canonical signing message that is signed on push and
+ * verified on fetch. Binds the signature to the object's identity
+ * (repo + head SHA + content hash) without streaming MB through a child
+ * process — `contentSha256` already covers the body bytes.
+ */
+export function cacheSigningMessage(
+  repoFullName: string,
+  prHeadSha: string,
+  contentSha256: string,
+): string {
+  return `revv-cache:v1\n${repoFullName}\n${prHeadSha}\n${contentSha256}`;
+}

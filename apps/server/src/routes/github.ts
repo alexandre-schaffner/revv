@@ -1,30 +1,26 @@
 import type { Repository } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { serverEnv } from "../config";
 import { REPO_CACHE_TTL_MS } from "../constants";
 import { AppRuntime } from "../runtime";
-import { GitHubService } from "../services/GitHub";
-import { SettingsService } from "../services/Settings";
-import { TokenProvider } from "../services/TokenProvider";
-import { handleAppError, withAuth } from "./middleware";
+import { CacheService } from "../services/Cache";
+import { GitHubGateway } from "../services/GitHub";
+import { handleAppError, withAccount } from "./middleware";
+
+const TEAMS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /** Simple in-memory cache for the user's GitHub repos, keyed by resolved host. */
 let repoCache: { data: Repository[]; fetchedAt: number; host: string } | null = null;
 
 export const githubRoutes = new Elysia({ prefix: "/api/github" })
-  .use(withAuth)
+  .use(withAccount)
   .get("/repos", async (ctx) => {
     const force = ctx.query.force === "true";
 
     try {
       const repos = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const settingsService = yield* SettingsService;
-          const settings = yield* settingsService
-            .getSettings()
-            .pipe(Effect.orElseSucceed(() => null));
-          const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+          const host = ctx.account.host ?? "github.com";
 
           if (
             !force &&
@@ -35,11 +31,10 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
             return repoCache.data;
           }
 
-          const github = yield* GitHubService;
-          const tokenProvider = yield* TokenProvider;
+          const github = yield* GitHubGateway;
 
-          const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, host);
-          const fetched = yield* github.listUserRepos(token);
+          const token = ctx.account.accessToken;
+          const fetched = yield* github.repos.listForUser(token);
 
           repoCache = { data: fetched, fetchedAt: Date.now(), host };
           return fetched;
@@ -59,17 +54,10 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
       try {
         const counts = await AppRuntime.runPromise(
           Effect.gen(function* () {
-            const settingsService = yield* SettingsService;
-            const settings = yield* settingsService
-              .getSettings()
-              .pipe(Effect.orElseSucceed(() => null));
-            const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+            const github = yield* GitHubGateway;
 
-            const github = yield* GitHubService;
-            const tokenProvider = yield* TokenProvider;
-
-            const token = yield* tokenProvider.getGitHubToken(ctx.session.user.id, host);
-            return yield* github.getOpenPrCounts(fullNames, token);
+            const token = ctx.account.accessToken;
+            return yield* github.repos.openPrCounts(fullNames, token);
           }),
         );
 
@@ -82,4 +70,24 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
       }
     },
     { body: t.Object({ fullNames: t.Array(t.String()) }) },
-  );
+  )
+  .get("/teams/:org", async (ctx) => {
+    try {
+      const teams = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const github = yield* GitHubGateway;
+          const cache = yield* CacheService;
+          const token = ctx.account.accessToken;
+          return yield* cache.getOrFetch(
+            "github-teams",
+            `${ctx.account.accountId}:${ctx.params.org.toLowerCase()}`,
+            () => github.repos.teamsForOrg(ctx.params.org, token),
+            { ttlMs: TEAMS_CACHE_TTL_MS },
+          );
+        }),
+      );
+      return { teams };
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });

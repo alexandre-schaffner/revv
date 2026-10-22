@@ -50,6 +50,23 @@ export const dialogSpringOut: PresetFn = (el) =>
     ease: tokens.easeSoft,
   });
 
+/**
+ * Backdrop fade for a dialog/sheet overlay. Timed to match `dialogSpringIn` /
+ * `dialogSpringOut` (same durations + easings) so the scrim and the surface
+ * move together instead of the scrim snapping in ahead of the spring.
+ */
+export const overlayFadeIn: PresetFn = (el) =>
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { autoAlpha: 0 },
+      { autoAlpha: 1, duration: tokens.smooth, ease: tokens.easeOutExpo },
+    );
+
+export const overlayFadeOut: PresetFn = (el) =>
+  gsap.timeline().to(el, { autoAlpha: 0, duration: tokens.quick, ease: tokens.easeSoft });
+
 export const popoverPopIn: PresetFn<{ side?: Side }> = (el, opts) =>
   popInFromSide(el, opts?.side ?? "bottom", 0.96);
 
@@ -71,3 +88,19 @@ export const tooltipPopOut: PresetFn = (el) =>
     duration: tokens.instant,
     ease: tokens.easeSoft,
   });
+
+/**
+ * Background-tint pulse on a settings row that search just landed on. Tweens
+ * `--setting-flash` (0 → 1 → 0); the row's CSS turns it into an accent tint, so
+ * the color stays a theme token instead of a value GSAP has to parse. Callers
+ * skip it entirely under reduced motion — the scroll alone marks the row.
+ */
+export const settingFlash: PresetFn = (el) =>
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { "--setting-flash": 0 },
+      { "--setting-flash": 1, duration: tokens.quick, ease: tokens.easeOutExpo },
+    )
+    .to(el, { "--setting-flash": 0, duration: tokens.pulse, ease: tokens.easeSoft });

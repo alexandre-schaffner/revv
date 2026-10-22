@@ -1,10 +1,9 @@
 // ─── walkthrough-tools ───────────────────────────────────────────────────────
 //
-// Phase-bound MCP tool handlers for the walkthrough pipeline. Consumed by both
-// the Claude Agent SDK (in-process via mcp-walkthrough.ts) and the HTTP MCP
-// route (apps/server/src/routes/mcp/walkthrough.ts). Handler implementations
-// are shared — per doctrine invariant #13 (Agent-path parity), behavior is
-// byte-for-byte identical across transports.
+// Phase-bound MCP tool handlers for the walkthrough pipeline. Consumed by the
+// HTTP MCP route (apps/server/src/routes/mcp/walkthrough.ts) that every ACP
+// agent talks to. Handler implementations are shared — per doctrine invariant
+// #13 (Agent-path parity), behavior is byte-for-byte identical across agents.
 //
 // Each handler:
 //   1. Opens a single db.transaction() covering: phase read, precondition
@@ -17,7 +16,6 @@
 // add_diff_step before set_overview, this module returns a structured error
 // the agent can recover from — the DB row is never touched.
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type {
   RatingCitation,
   RiskLevel,
@@ -29,6 +27,8 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { withContentWriteMetrics } from "../../../observability/walkthrough-metrics";
+import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
   blockIdFor,
   errorResult,
@@ -40,6 +40,11 @@ import {
   unwrapJsonWrappedString,
 } from "./helpers";
 import {
+  findUnresolvedLeads,
+  renderUnresolvedLeadsError,
+  resolveLeadHandler,
+} from "./lead-handler";
+import {
   addDiffStepHandler,
   addIssueCommentHandler,
   addSemanticStepHandler,
@@ -48,6 +53,7 @@ import {
 import {
   getCommitHistoryHandler,
   getRepoContextHandler,
+  getStackContextHandler,
   getWalkthroughStateHandler,
 } from "./read-handler";
 import {
@@ -59,52 +65,44 @@ import {
   flagIssueSchema,
   getCommitHistorySchema,
   getRepoContextSchema,
+  getStackContextSchema,
   getWalkthroughStateSchema,
   RATING_AXES as RATING_AXES_SPEC,
   type RateAxisInput,
   rateAxisSchema,
+  resolveLeadSchema,
   type SetOverviewInput,
   type SetSentimentInput,
   setOverviewSchema,
   setSentimentSchema,
-  type ToolSpec,
   type WalkthroughToolContext,
   type WalkthroughToolHandler,
   type WalkthroughToolResult,
+  type WalkthroughToolSpec,
 } from "./spec";
 
 // ── Re-exports (preserve public API) ────────────────────────────────────────
 
-export type { MissingInlineComment } from "./helpers";
 export {
   blockIdFor,
   findIssuesMissingInlineComment,
-  renderMissingInlineCommentError,
   unwrapJsonWrappedString,
 } from "./helpers";
-export {
-  addDiffStepHandler,
-  addIssueCommentHandler,
-  addSemanticStepHandler,
-  flagIssueHandler,
-} from "./phase-b-handlers";
-export {
-  getCommitHistoryHandler,
-  getRepoContextHandler,
-  getWalkthroughStateHandler,
-} from "./read-handler";
+export type { WalkthroughToolJudgments } from "./spec";
 export { computeAnchorThreadId, computeIssueId } from "./spec";
 
 // ── Handler: set_overview (Phase A) ──────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase === 'none'.
-// Writes: walkthroughs.summary, walkthroughs.risk_level.
+// Writes: walkthroughs.summary, and risk_level only if not already assigned
+//   by the orchestrator (risk_confidence null).
 // Advances: last_completed_phase → 'A'.
 
 export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = async (ctx, input) => {
   const summary = unwrapJsonWrappedString(input.summary, "summary");
 
   let result: WalkthroughToolResult | null = null;
+  let riskLevel: RiskLevel = "low";
   ctx.db.transaction(() => {
     const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
     if (!row) {
@@ -118,11 +116,18 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
       );
       return;
     }
+    // Non-null riskConfidence marks the tier as orchestrator-assigned; its
+    // value wins over the agent's argument, since the agent's issue budget
+    // was already sized to it.
+    const orchestratorAssigned = row.riskConfidence !== null;
+    riskLevel = orchestratorAssigned
+      ? (row.riskLevel as RiskLevel)
+      : ((input.risk_level ?? row.riskLevel) as RiskLevel);
     ctx.db
       .update(walkthroughs)
       .set({
         summary,
-        riskLevel: input.risk_level,
+        riskLevel,
         lastCompletedPhase: "A",
       })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
@@ -134,7 +139,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
     type: "summary",
     data: {
       summary,
-      riskLevel: input.risk_level as RiskLevel,
+      riskLevel,
     },
   });
   ctx.emit({
@@ -195,7 +200,10 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
 
     ctx.db
       .update(walkthroughs)
-      .set({ sentiment: markdown, lastCompletedPhase: "C" })
+      .set({
+        sentiment: markdown,
+        lastCompletedPhase: "C",
+      })
       .where(eq(walkthroughs.id, ctx.walkthroughId))
       .run();
   });
@@ -206,22 +214,22 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
     type: "phase:advanced",
     data: { lastCompletedPhase: "C" },
   });
-  return okResult("Sentiment set. Phase C complete — now rate each of the 9 axes with rate_axis.");
+  return okResult(
+    "Sentiment set. Phase C complete — now rate all 9 axes with rate_axis, as nine parallel calls in one turn.",
+  );
 };
 
 // ── Handler: rate_axis (Phase D) ─────────────────────────────────────────────
 //
 // Phase precondition: last_completed_phase ∈ {'C', 'D'}.
 // Writes: one walkthrough_ratings row (upsert on (walkthroughId, axis)).
-// Advances: last_completed_phase → 'D' on the 9th distinct axis.
+// Advances: last_completed_phase → 'D' once all 9 axes carry a rationale.
+//
+// The agent emits all nine calls in one turn, so they can land in any order.
+// Safe because the whole body is one synchronous transaction: the rated-axis
+// count below sees every prior call's commit, and exactly one call advances.
 
 export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx, input) => {
-  if (input.verdict !== "pass" && input.citations.length === 0) {
-    return errorResult(
-      `Error: verdict='${input.verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
-    );
-  }
-
   let result: WalkthroughToolResult | null = null;
   let ratingEvent: WalkthroughRating | null = null;
   let advanced = false;
@@ -235,6 +243,14 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
     if (phase !== "C" && phase !== "D") {
       result = errorResult(
         `Error: rate_axis requires Phase C complete (sentiment set). Current phase: '${phase}'. Call set_sentiment first.`,
+      );
+      return;
+    }
+
+    const { verdict, confidence } = input;
+    if (verdict !== "pass" && input.citations.length === 0) {
+      result = errorResult(
+        `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
       );
       return;
     }
@@ -290,8 +306,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
         id: crypto.randomUUID(),
         walkthroughId: ctx.walkthroughId,
         axis: input.axis,
-        verdict: input.verdict,
-        confidence: input.confidence,
+        verdict,
+        confidence,
         rationale: input.rationale,
         details: input.details,
         citations: JSON.stringify(citations),
@@ -301,8 +317,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       .onConflictDoUpdate({
         target: [walkthroughRatings.walkthroughId, walkthroughRatings.axis],
         set: {
-          verdict: input.verdict,
-          confidence: input.confidence,
+          verdict,
+          confidence,
           rationale: input.rationale,
           details: input.details,
           citations: JSON.stringify(citations),
@@ -311,13 +327,16 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       })
       .run();
 
-    // Count distinct axes rated; advance phase to 'D' if all 9 present.
+    // Advance to 'D' once every axis has a rationale, not just a row — rows
+    // seeded by the retired Jev verdict pass carry empty prose.
     const ratedRows = ctx.db
-      .select({ axis: walkthroughRatings.axis })
+      .select({ axis: walkthroughRatings.axis, rationale: walkthroughRatings.rationale })
       .from(walkthroughRatings)
       .where(eq(walkthroughRatings.walkthroughId, ctx.walkthroughId))
       .all();
-    const ratedSet = new Set(ratedRows.map((r) => r.axis));
+    const ratedSet = new Set(
+      ratedRows.filter((r) => r.rationale.trim().length > 0).map((r) => r.axis),
+    );
     if (ratedSet.size === RATING_AXES_SPEC.length && row.lastCompletedPhase !== "D") {
       ctx.db
         .update(walkthroughs)
@@ -329,8 +348,8 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
     const rating: WalkthroughRating = {
       axis: input.axis,
-      verdict: input.verdict,
-      confidence: input.confidence,
+      verdict,
+      confidence,
       rationale: input.rationale,
       details: input.details,
       citations,
@@ -358,7 +377,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 // ── Handler: complete_walkthrough (validation gate) ──────────────────────────
 //
 // Phase precondition: last_completed_phase === 'D' AND all 9 axes rated AND
-// sentiment non-empty AND ≥1 diff step. The actual `status='complete'`
+// sentiment non-empty AND ≥1 diff step AND every first-pass lead resolved. The actual `status='complete'`
 // transition is performed by WalkthroughJobs in response to the `done` event —
 // this handler only validates, then emits `done`. Doctrine invariant #11:
 // status transitions are orchestrator-only.
@@ -366,6 +385,9 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthroughInput> = async (
   ctx,
 ) => {
+  // Drain every scheduled relevance judgment before validating, so the gate
+  // never checks an issue set that's about to change. Bounded; see ai/jev/pending.ts.
+  await ctx.jev.awaitIssueJudgments();
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
     return errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
@@ -412,23 +434,25 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
       "Error: complete_walkthrough requires at least one semantic step (chapter). Call add_semantic_step before any add_diff_step.",
     );
   }
-  // Required journey chapter at semantic_step_index 0. The chapter is the
-  // narrative of how the coder reached the state being reviewed; the user
-  // prompt seeds it with a `### Commit history` section, and the system
-  // prompt instructs the agent to open chapter 0 with a journey-flavored
-  // title. We can't tag chapters structurally (no extra column), so we
-  // validate via title/summary keywords — the prompt and the regex are
-  // intentionally kept in lockstep (see JOURNEY_CHAPTER_PATTERN).
-  const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
-  if (!firstChapter) {
-    return errorResult(
-      "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
-    );
-  }
-  if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
-    return errorResult(
-      `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
-    );
+  if (row.mode !== "author") {
+    // Required journey chapter at semantic_step_index 0. The chapter is the
+    // narrative of how the coder reached the state being reviewed; the user
+    // prompt seeds it with a `### Commit history` section, and the system
+    // prompt instructs the agent to open chapter 0 with a journey-flavored
+    // title. We can't tag chapters structurally (no extra column), so we
+    // validate via title/summary keywords — the prompt and the regex are
+    // intentionally kept in lockstep (see JOURNEY_CHAPTER_PATTERN).
+    const firstChapter = semanticRows.find((r) => r.semanticStepIndex === 0);
+    if (!firstChapter) {
+      return errorResult(
+        "Error: complete_walkthrough requires a journey chapter at semantic_step_index 0. Open it with add_semantic_step({ semantic_step_index: 0, title: 'How we got here', initial_block: { markdown: { content: '...' } } }) — see the prompt's 'How we got here' guidance.",
+      );
+    }
+    if (!isJourneyChapterText(firstChapter.title, firstChapter.summary)) {
+      return errorResult(
+        `Error: the chapter at semantic_step_index 0 is required to be the 'How we got here' journey chapter, but its title ('${firstChapter.title}') and summary do not name the journey. Re-call add_semantic_step with semantic_step_index 0 and a title (or summary) that includes one of: 'journey', 'history', 'got here', 'how we', 'evolution', 'explored', 'attempts', 'origins', 'trajectory', 'path to', 'came to', 'story of', 'trail'. The chapter should narrate the commit-history narrative surfaced in the user prompt's Commit history section — not commit-by-commit, but the shape of the work.`,
+      );
+    }
   }
   const knownSections = new Set(semanticRows.map((r) => r.semanticStepIndex));
   const orphanIndices = Array.from(
@@ -466,12 +490,9 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     );
   }
 
-  // Every line-anchored WARNING or CRITICAL issue must have at least one
-  // inline comment. The agent's job is `flag_issue` (sidebar card) +
-  // `add_issue_comment` (inline review comment); a warning/critical with no
-  // inline comment is invisible to the coder at the place that matters.
-  // Exempt: severity='info' (nitpicks — no inline noise expected) and
-  // PR-wide issues (file_path / start_line NULL — no anchor possible).
+  // Every line-anchored concern needs an inline comment: flag_issue writes
+  // the sidebar card, add_issue_comment writes the inline note; without it
+  // the concern is invisible to the coder. Exempt: PR-wide issues (no anchor).
   //
   // Shared with WalkthroughJobs.ts — see findIssuesMissingInlineComment
   // above. Both gates MUST agree, otherwise the orchestrator can mark
@@ -479,6 +500,15 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   const uncommented = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
   if (uncommented.length > 0) {
     return errorResult(renderMissingInlineCommentError(uncommented));
+  }
+
+  // Every first-pass lead owes a verdict. This gate is the tool's alone: the
+  // orchestrator completes a run without one, because a lead is a hint and an
+  // unread hint shouldn't cost the whole review. Refusing here is what makes
+  // the agent finish the job while it still has the context to do it.
+  const unresolved = findUnresolvedLeads(ctx.db, ctx.walkthroughId);
+  if (unresolved.length > 0) {
+    return errorResult(renderUnresolvedLeadsError(unresolved));
   }
 
   // Deliberately NO stream emit here. The AI provider's generator end
@@ -498,8 +528,7 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
  * The full phase-bound tool surface. Both the Claude Agent SDK path and the
  * HTTP MCP route (opencode) consume this array — one source of truth.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const TOOL_SPECS: Array<ToolSpec<any>> = [
+export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
     name: "get_walkthrough_state",
     description:
@@ -510,7 +539,7 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
   {
     name: "get_commit_history",
     description:
-      "Read-only. Returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter) so you can narrate the narrative of the work, course corrections, and abandoned tracks. The response also includes guidance for the single-commit / empty-history edge cases.",
+      "Read-only. Reviewer mode only: returns the PR commit list (sha, first-line message, author, date) in oldest → newest order. Call this once before opening chapter 0 ('How we got here' journey chapter). In author self-review mode, do not call this tool; focus on current-diff preflight review.",
     inputSchema: getCommitHistorySchema,
     handler: getCommitHistoryHandler,
   },
@@ -522,90 +551,90 @@ export const TOOL_SPECS: Array<ToolSpec<any>> = [
     handler: getRepoContextHandler,
   },
   {
+    name: "get_stack_context",
+    description:
+      "Read-only. For a PR that is one layer of a GitHub stack: the stack as captured at job start (layers base-first, this PR marked), the takeaway and open issue titles of each reviewed lower layer, and the title, description excerpt, and changed files of each upper layer. Call once during Phase A, and before flagging anything as missing — a higher layer may add it. Returns `stack: null` for a PR outside any stack.",
+    inputSchema: getStackContextSchema,
+    handler: getStackContextHandler,
+  },
+  {
     name: "set_overview",
     description:
-      "Phase A. Call exactly once, before any other write tool. Sets the PR summary (2-3 sentences) and overall risk level (low/medium/high). Advances phase to A.",
+      "Phase A. Call exactly once, before any other write tool. Sets the PR overview — a six-part briefing (takeaway, Context, Why, What changed, How, Watch) that a stranger to the code can follow — and the overall risk level (low/medium/high). Advances phase to A.",
     inputSchema: setOverviewSchema,
-    handler: setOverviewHandler,
+    handler: withContentWriteMetrics(setOverviewHandler),
   },
   {
     name: "add_semantic_step",
     description:
       "Phase B. Open a chapter AND write its first atomic block in one atomic transaction. Provide a monotonic zero-based semantic_step_index, a short title, an optional summary, and a REQUIRED initial_block (exactly one of markdown/code/diff — same shape as add_diff_step). The first call advances the pipeline from Phase A to Phase B. Subsequent blocks in the same chapter use add_diff_step with step_index starting at 1. Idempotent upsert on (walkthroughId, semantic_step_index) for both the chapter row and its step_index=0 block — retries replace, never duplicate.",
     inputSchema: addSemanticStepSchema,
-    handler: addSemanticStepHandler,
+    handler: withContentWriteMetrics(addSemanticStepHandler),
   },
   {
     name: "add_diff_step",
     description:
       "Phase B. Append one atomic block (markdown, code excerpt, or diff hunk — exactly one of the three) to an already-opened chapter. Required: semantic_step_index (the parent chapter, opened by add_semantic_step), step_index (monotonic zero-based within the chapter — typically 1, 2, 3, ... since step_index=0 is already written by add_semantic_step's initial_block). Retries with the same composite key are idempotent upserts. Each chapter typically holds 2–5 atomic blocks total (1 from add_semantic_step + 1–4 from add_diff_step).",
     inputSchema: addDiffStepSchema,
-    handler: addDiffStepHandler,
+    handler: withContentWriteMetrics(addDiffStepHandler),
   },
   {
     name: "flag_issue",
     description:
       "Phase B. Flag a structured concern (security, correctness, tests, perf, etc.). Must be called AFTER the diff step(s) that explain the concern, and must link to them via block_refs = [{ semantic_step_index, step_index }, ...].",
     inputSchema: flagIssueSchema,
-    handler: flagIssueHandler,
+    handler: withContentWriteMetrics(flagIssueHandler),
   },
   {
     name: "add_issue_comment",
     description:
       "Phase B. Attach a line-anchored comment to a previously flagged issue — appears inline in the diff view like a human review comment. Call AFTER flag_issue, passing its returned issue id. You may call this multiple times per issue to annotate multiple lines (one tool call per anchor). Idempotent per (issue_id, file_path, start_line, end_line, diff_side): a retry replaces the comment body, never duplicates the thread.",
     inputSchema: addIssueCommentSchema,
-    handler: addIssueCommentHandler,
+    handler: withContentWriteMetrics(addIssueCommentHandler),
+  },
+  {
+    name: "resolve_lead",
+    description:
+      "Phase B onward. Record your verdict on one first-pass lead from the prompt (lead_id `L1`, `L2`, …): `confirmed` with the issue_id of the issue you raised for it, or `rejected` with a one-sentence reason. Every lead needs one before complete_walkthrough. Idempotent per lead_id — a later call replaces the verdict. Independent calls can go out in parallel.",
+    inputSchema: resolveLeadSchema,
+    handler: withContentWriteMetrics(resolveLeadHandler),
   },
   {
     name: "set_sentiment",
     description:
       "Phase C. Call exactly once, after all diff steps are persisted. 2–4 sentence overall verdict on the PR. Advances phase to C.",
     inputSchema: setSentimentSchema,
-    handler: setSentimentHandler,
+    handler: withContentWriteMetrics(setSentimentHandler),
   },
   {
     name: "rate_axis",
     description:
-      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description). Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
+      "Phase D. Call exactly once for each of the 9 axes (correctness, scope, tests, clarity, safety, consistency, api_changes, performance, description), sending all nine as parallel tool calls in a single turn. Calls are independent and may land in any order. Idempotent per axis — retries replace the prior rating. The 9th distinct axis advances phase to D.",
     inputSchema: rateAxisSchema,
-    handler: rateAxisHandler,
+    handler: withContentWriteMetrics(rateAxisHandler),
   },
   {
     name: "complete_walkthrough",
     description:
-      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, and ≥1 diff step. The orchestrator observes the emitted `done` event and performs the final status transition.",
+      "Signal that the walkthrough is complete. Fails unless Phase D is reached with all 9 axes rated, summary + sentiment non-empty, ≥1 diff step, every line-anchored issue commented, and every first-pass lead resolved. The orchestrator observes the emitted `done` event and performs the final status transition.",
     inputSchema: completeWalkthroughSchema,
     handler: completeWalkthroughHandler,
   },
 ];
 
-// ── Claude Agent SDK adapter ─────────────────────────────────────────────────
-//
-// Wraps TOOL_SPECS in the shape the Claude Agent SDK expects. The SDK calls
-// tool handlers with just `args`, so we bind the context here (per MCP server
-// creation). The HTTP MCP route binds the context per-request instead.
+export const WALKTHROUGH_TOOL_BUNDLE: ToolSpecBundle<
+  WalkthroughToolContext,
+  WalkthroughToolResult
+> = {
+  name: "revv-walkthrough",
+  version: "2.0.0",
+  specs: TOOL_SPECS,
+};
 
-/**
- * Create an MCP server registration for the Claude Agent SDK, scoped to a
- * specific walkthroughId + emitter.
- */
-export function createWalkthroughMcpServer(
-  ctx: WalkthroughToolContext,
-): ReturnType<typeof createSdkMcpServer> {
-  return createSdkMcpServer({
-    name: "revv-walkthrough",
-    version: "2.0.0",
-    tools: TOOL_SPECS.map((spec) =>
-      tool(
-        spec.name,
-        spec.description,
-        spec.inputSchema.shape,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => spec.handler(ctx, args),
-      ),
-    ),
-  });
-}
+// The walkthrough tool surface is reached exclusively over the HTTP MCP route
+// (`/mcp/walkthrough`), which binds the per-request context via `bindHttp`.
+// The former `createWalkthroughMcpServer` in-process adapter (for the deleted
+// Claude Agent SDK driver) is gone — every agent now runs on the ACP transport.
 
 // ── Back-compat shims ────────────────────────────────────────────────────────
 //

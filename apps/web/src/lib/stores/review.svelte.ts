@@ -2,16 +2,21 @@ import type {
   AuthorRole,
   CommentThread,
   MessageType,
+  ReviewMode,
   ThreadMessage,
   ThreadStatus,
+  WalkthroughMode,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
+import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
-import { getPullRequests } from "$lib/stores/prs.svelte";
-import { invalidateForPull } from "$lib/stores/walkthrough.svelte";
+import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
 
 // --- Review files (shared between sidebar tree + review page) ---
@@ -86,7 +91,7 @@ export function clearRepoFile(): void {
 // --- New-commit-available detection ------------------------------------------
 //
 // Tracks which git SHA the currently-rendered `reviewFiles[]` correspond to,
-// per-PR. When a `prs:updated` WebSocket event swaps in a new `pr.headSha`, the
+// per-PR. When a `prs:updated` SSE event swaps in a new `pr.headSha`, the
 // in-memory PR changes but the on-screen diff still reflects the older SHA.
 // Comparing `pr.headSha` to the stamped value tells the FloatingTabs dot
 // whether to morph into a "Pull" button.
@@ -108,6 +113,7 @@ export function getLoadedHeadSha(prId: string): string | null {
 // racing a second click. Set-reassignment for reactivity, matching the
 // loadedHeadShas pattern above.
 let isPullingCommit = $state(new Set<string>());
+const pullCommitRequests = new Map<string, Promise<boolean>>();
 
 export function getIsPullingCommit(prId: string): boolean {
   return isPullingCommit.has(prId);
@@ -115,23 +121,43 @@ export function getIsPullingCommit(prId: string): boolean {
 
 /**
  * Refetch the PR's diff files against the current `pr.headSha`, restamp
- * the loaded SHA, and regenerate the walkthrough against the new content.
+ * the loaded SHA, and invalidate the walkthrough against the old content.
  * The server's PollScheduler has already invalidated + repopulated its diff
  * cache on SHA change, so the `files.get()` call returns the fresh diff.
- * Coalesces concurrent calls for the same PR.
+ * Coalesces concurrent calls for the same PR and resolves true only when the
+ * fresh diff has been installed successfully.
  */
-export async function pullLatestCommit(prId: string): Promise<void> {
-  if (isPullingCommit.has(prId)) return;
+export function pullLatestCommit(prId: string): Promise<boolean> {
+  const inFlight = pullCommitRequests.get(prId);
+  if (inFlight) return inFlight;
+
   isPullingCommit.add(prId);
   isPullingCommit = new Set(isPullingCommit);
 
+  const request = runPullLatestCommit(prId).finally(() => {
+    pullCommitRequests.delete(prId);
+    setIsLoadingFiles(false);
+    isPullingCommit.delete(prId);
+    isPullingCommit = new Set(isPullingCommit);
+  });
+  pullCommitRequests.set(prId, request);
+  return request;
+}
+
+async function runPullLatestCommit(prId: string): Promise<boolean> {
   try {
     setIsLoadingFiles(true);
     setFilesError(null);
 
-    const { data, error } = await api.api.prs({ id: prId }).files.get();
+    const activePath = getActiveFilePath();
+    const mode = getReviewMode(prId);
+    const { data, error } = await api.api.prs({ id: prId }).files.get({
+      query: activePath === null ? { mode } : { active: activePath, mode },
+    });
     if (error || !Array.isArray(data)) {
-      throw new Error("Failed to refetch files");
+      throw new Error(
+        error ? apiErrorMessage(error, "Failed to refetch files") : "Failed to refetch files",
+      );
     }
 
     const mapped: ReviewFile[] = data.map((f) => ({
@@ -149,17 +175,19 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     // If the user has an active file that's gone in the new diff, fall back
     // to the first file. If the active file still exists, leave it alone so
     // the user's scroll position in the diff tab isn't reset.
-    const activePath = getActiveFilePath();
     const stillExists = activePath !== null && mapped.some((f) => f.path === activePath);
     if (!stillExists && mapped.length > 0) {
       // biome-ignore lint/style/noNonNullAssertion: length > 0 guarantees [0] exists
       setActiveFilePath(mapped[0]!.path);
     }
 
-    // Stamp the current PR head SHA. Read from the live PR list so we pick
+    // Stamp the current PR head SHA. Read from the live PR lists so we pick
     // up whatever `prs:updated` has already merged — even if another
     // `prs:updated` has landed since the UI signalled "new commit available."
-    const pr = getPullRequests().find((p) => p.id === prId);
+    // `getPrById` spans open *and* archived rows: a PR that merged while the
+    // page was open has moved to the archive, and missing it here would leave
+    // the loaded SHA stamped at the old commit forever (pull button stuck on).
+    const pr = getPrById(prId);
     if (pr?.headSha) setLoadedHeadSha(prId, pr.headSha);
 
     // Invalidate the walkthrough so the user sees the "Generate walkthrough"
@@ -167,18 +195,37 @@ export async function pullLatestCommit(prId: string): Promise<void> {
     // and unblocks the page immediately — we no longer await the SSE stream.
     await invalidateForPull(prId);
     invalidateChatHistory(prId);
+    return true;
   } catch (e) {
     setFilesError(e instanceof Error ? e.message : "Failed to pull latest commit");
-  } finally {
-    setIsLoadingFiles(false);
-    isPullingCommit.delete(prId);
-    isPullingCommit = new Set(isPullingCommit);
+    return false;
   }
+}
+
+/**
+ * Pull the current head through the same path as the tab-side Pull button,
+ * then start the incremental walkthrough requested by the superseded toast.
+ */
+export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): Promise<void> {
+  await reviewNewCommits({
+    pull: () => pullLatestCommit(prId),
+    regenerate: () => regenerate(prId, mode, "incremental"),
+  });
 }
 
 // --- Session state ---
 let sessionId = $state<string | null>(null);
-let sessionLoading = $state(false);
+let _sessionLoading = $state(false);
+/**
+ * The review-session lens for a PR. Derived purely from identity (PR author
+ * vs. the signed-in user) via `getReviewModeForPr` — there is no manual
+ * override: comments, threads and the diff are keyed on it. The walkthrough's
+ * perspective is separate and user-picked; see `getSelectedMode` in the
+ * walkthrough store.
+ */
+export function getReviewMode(prId: string): ReviewMode {
+  return getReviewModeForPr(prId);
+}
 
 function clearSession(): void {
   sessionId = null;
@@ -187,7 +234,7 @@ function clearSession(): void {
   threadsVersion++;
   // Reset the short-circuit window too — an explicit clear means callers
   // want a fresh hydration on the next `loadSession` call.
-  lastSessionPrId = null;
+  lastSessionKey = null;
   lastSessionAt = 0;
 }
 
@@ -196,15 +243,24 @@ let loadSessionSeq = 0;
 // Phase 1 stopgap: skip redundant session loads when the same PR was hydrated
 // within the last minute AND we still have a live session id. Phase 3's
 // queryStore replaces this with per-key cache semantics.
-let lastSessionPrId: string | null = null;
+let lastSessionKey: string | null = null;
 let lastSessionAt = 0;
 const SESSION_REFETCH_WINDOW_MS = 60_000;
 
 /** Load (or create) the active review session for a PR, hydrating all state. */
-export async function loadSession(prId: string): Promise<void> {
-  // Short-circuit: same PR, recent hydration, session still live.
+export async function loadSession(
+  prId: string,
+  mode: ReviewMode = getReviewMode(prId),
+  force = false,
+): Promise<void> {
+  const sessionKey = `${prId}:${mode}`;
+  // Short-circuit: same PR, recent hydration, session still live. Callers that
+  // just mutated server state (e.g. submitting a review) pass `force` to skip
+  // it — otherwise stale local rows (missing the externalId stamped on
+  // just-pushed comments) would survive and get re-submitted as duplicates.
   if (
-    prId === lastSessionPrId &&
+    !force &&
+    sessionKey === lastSessionKey &&
     Date.now() - lastSessionAt < SESSION_REFETCH_WINDOW_MS &&
     sessionId !== null
   ) {
@@ -212,9 +268,11 @@ export async function loadSession(prId: string): Promise<void> {
   }
 
   const seq = ++loadSessionSeq;
-  sessionLoading = true;
+  _sessionLoading = true;
   try {
-    const { data, error } = await api.api.reviews.active({ prId }).get();
+    const { data, error } = await api.api.reviews.active({ prId }).get({
+      query: { mode },
+    });
 
     // Discard if a newer call has started
     if (seq !== loadSessionSeq) return;
@@ -227,7 +285,7 @@ export async function loadSession(prId: string): Promise<void> {
 
     // Type-narrow: the response is the full hydration payload
     const payload = data as {
-      session: { id: string };
+      session: { id: string; mode?: ReviewMode };
       threads: CommentThread[];
       messages: Record<string, ThreadMessage[]>;
     };
@@ -243,12 +301,12 @@ export async function loadSession(prId: string): Promise<void> {
     threadMessages = msgs;
 
     threadsVersion++;
-    lastSessionPrId = prId;
+    lastSessionKey = sessionKey;
     lastSessionAt = Date.now();
   } finally {
     // Only clear loading if this is still the active request
     if (seq === loadSessionSeq) {
-      sessionLoading = false;
+      _sessionLoading = false;
     }
   }
 }
@@ -265,8 +323,11 @@ export async function loadSession(prId: string): Promise<void> {
 // `currentPrId`. Scroll positions are write-only persistence — components
 // read them imperatively on mount and write on scroll, no reactivity needed.
 
-type ActiveTab = "walkthrough" | "diff" | "request-changes";
-type ScrollPaneKey = "walkthrough" | "diff" | "requestChanges" | "sidebar";
+/** The review page's tabs, in the order the tab bar shows them (and ⌘1–3 picks them). */
+export const REVIEW_TABS = ["conversation", "walkthrough", "diff"] as const;
+export type ReviewTab = (typeof REVIEW_TABS)[number];
+type ActiveTab = ReviewTab;
+type ScrollPaneKey = "walkthrough" | "diff" | "conversation" | "sidebar";
 
 interface PrViewState {
   activeTab: ActiveTab;
@@ -274,8 +335,46 @@ interface PrViewState {
   scroll: Partial<Record<ScrollPaneKey, number>>;
 }
 
+/** A PR opened for the first time lands here. */
+const FIRST_VISIT_TAB: ActiveTab = "conversation";
+
 function emptyState(): PrViewState {
-  return { activeTab: "walkthrough", activeFilePath: null, scroll: {} };
+  return { activeTab: FIRST_VISIT_TAB, activeFilePath: null, scroll: {} };
+}
+
+// The tab each PR was last left on survives an app restart, so "first
+// visit" means first ever, not first since launch. Capped so the record of
+// long-closed PRs can't grow forever; oldest visits drop first.
+const LAST_TAB_KEY = "revv:pr-last-tab";
+const LAST_TAB_CAP = 300;
+
+function readLastTabs(): Record<string, ActiveTab> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_TAB_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, ActiveTab>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLastTab(prId: string, tab: ActiveTab): void {
+  if (typeof localStorage === "undefined") return;
+  const tabs = readLastTabs();
+  delete tabs[prId];
+  tabs[prId] = tab;
+  const ids = Object.keys(tabs);
+  for (const id of ids.slice(0, Math.max(0, ids.length - LAST_TAB_CAP))) delete tabs[id];
+  try {
+    localStorage.setItem(LAST_TAB_KEY, JSON.stringify(tabs));
+  } catch {
+    // Storage full or unavailable: the in-memory state still holds this session.
+  }
+}
+
+function lastTabFor(prId: string): ActiveTab | null {
+  const tab = readLastTabs()[prId];
+  return REVIEW_TABS.find((known) => known === tab) ?? null;
 }
 
 // Single reactive store for per-PR view state. Follows the walkthrough-store
@@ -297,8 +396,8 @@ function getOrCreate(prId: string): PrViewState {
 }
 
 export function getActiveTab(): ActiveTab {
-  if (store.activePrId === null) return "walkthrough";
-  return store.entries.get(store.activePrId)?.activeTab ?? "walkthrough";
+  if (store.activePrId === null) return FIRST_VISIT_TAB;
+  return store.entries.get(store.activePrId)?.activeTab ?? FIRST_VISIT_TAB;
 }
 
 export function setActiveTab(tab: ActiveTab): void {
@@ -313,6 +412,7 @@ export function setActiveTab(tab: ActiveTab): void {
   if (store.activePrId !== null) {
     getOrCreate(store.activePrId).activeTab = tab;
     store.entries = new Map(store.entries);
+    rememberLastTab(store.activePrId, tab);
   }
 }
 
@@ -341,7 +441,7 @@ export function switchPrViewState(newPrId: string): void {
   store.activePrId = newPrId;
   // Restore saved state, or default for first visit
   const saved = store.entries.get(newPrId);
-  const restoredTab = saved?.activeTab ?? "walkthrough";
+  const restoredTab = saved?.activeTab ?? lastTabFor(newPrId) ?? FIRST_VISIT_TAB;
   const restoredFilePath = saved?.activeFilePath ?? null;
   // Use direct entry mutation to bypass the guard in setActiveTab (no focus reset needed here)
   if (getActiveTab() === "diff" && restoredTab !== "diff") {
@@ -350,6 +450,7 @@ export function switchPrViewState(newPrId: string): void {
   getOrCreate(newPrId).activeTab = restoredTab;
   getOrCreate(newPrId).activeFilePath = restoredFilePath;
   store.entries = new Map(store.entries);
+  rememberLastTab(newPrId, restoredTab);
 }
 
 // --- Diff scroll reset signal -----------------------------------------------
@@ -371,7 +472,7 @@ export function requestDiffScrollReset(): void {
 //
 // Read once on mount (or on the trailing edge of a tab/PR switch); write on
 // every scroll event. Components are responsible for plumbing these into the
-// right scroll container — see +page.svelte (walkthrough/requestChanges),
+// right scroll container — see +page.svelte (walkthrough/conversation),
 // ReviewLayout.svelte (diff), Sidebar.svelte (sidebar), RightPanel.svelte
 // (rightPanel).
 
@@ -454,7 +555,7 @@ export async function addThread(
 
   const result = data as { thread: CommentThread; message: ThreadMessage };
 
-  // Update local state — guard against WS broadcast arriving first
+  // Update local state — guard against SSE broadcast arriving first
   if (!threads.some((t) => t.id === result.thread.id)) {
     threads = [...threads, result.thread];
     threadMessages = {
@@ -498,7 +599,7 @@ export async function addThreadMessage(
 
   const message = data as ThreadMessage;
 
-  // Guard against WS broadcast arriving first
+  // Guard against SSE broadcast arriving first
   const existing = threadMessages[threadId] ?? [];
   if (!existing.some((m) => m.id === message.id)) {
     threadMessages = {
@@ -554,7 +655,7 @@ export async function reopenThread(threadId: string): Promise<void> {
 }
 
 /**
- * Update a thread's status from a WebSocket message (no API call needed).
+ * Update a thread's status from an SSE event (no API call needed).
  */
 export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
   const isResolved = status === "resolved" || status === "wont_fix";
@@ -571,7 +672,7 @@ export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
 }
 
 /**
- * Push a thread and message from a WebSocket broadcast (no API call needed).
+ * Push a thread and message from an SSE broadcast (no API call needed).
  */
 export function onThreadCreated(thread: CommentThread, message: ThreadMessage): void {
   if (!threads.some((t) => t.id === thread.id)) {
@@ -589,7 +690,7 @@ export function onThreadCreated(thread: CommentThread, message: ThreadMessage): 
 }
 
 /**
- * Push a message from a WebSocket broadcast (no API call needed).
+ * Push a message from an SSE broadcast (no API call needed).
  */
 export function onThreadMessage(threadId: string, message: ThreadMessage): void {
   // Avoid duplicates
@@ -606,15 +707,19 @@ export function getThreadsForFile(filePath: string): CommentThread[] {
 }
 
 // --- Diff view mode ---
+// Persisted as `settings.diffViewMode`, so the review toggle and the Settings
+// default are one value. The override only covers the window before settings
+// load, when there is nothing to merge the optimistic write into yet.
 type DiffMode = "unified" | "split";
-let diffMode = $state<DiffMode>("unified");
+let diffModeOverride = $state<DiffMode | null>(null);
 
 export function getDiffMode(): DiffMode {
-  return diffMode;
+  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
 }
 
 export function setDiffMode(mode: DiffMode): void {
-  diffMode = mode;
+  diffModeOverride = getSettings() ? null : mode;
+  void updateSettings({ diffViewMode: mode });
 }
 
 // --- Pending diff jump ---
@@ -639,8 +744,27 @@ export function clearPendingDiffJump(): void {
   pendingDiffJump = null;
 }
 
+/**
+ * Open a changed file in the diff tab, optionally scrolling to a line. Used by
+ * clickable file references in the chat panel: with a line we reuse the
+ * pending-jump scroll machinery; without one we just select the file and switch
+ * tabs. No-ops when the path isn't part of the current review (the file
+ * reference resolver only emits known paths, but a stale render could lag a
+ * fresh pull). Matches against `oldPath` too so a renamed file still resolves.
+ */
+export function openFileInDiff(filePath: string, lineNumber?: number): void {
+  const match = reviewFiles.find((f) => f.path === filePath || f.oldPath === filePath);
+  if (!match) return;
+  if (typeof lineNumber === "number") {
+    jumpToDiffLine(match.path, lineNumber);
+    return;
+  }
+  setActiveFilePath(match.path);
+  setActiveTab("diff");
+}
+
 // --- Pending walkthrough-block jump ---
-// Mirrors the pending-diff-jump pattern: RequestChanges (and potentially other
+// Mirrors the pending-diff-jump pattern: YourReview (and potentially other
 // tabs) can request a scroll to a specific walkthrough block without needing a
 // direct ref to the walkthrough's scroll root. GuidedWalkthrough consumes this
 // when it becomes active and clears it after scrolling.
@@ -683,8 +807,24 @@ export async function deleteThread(threadId: string): Promise<boolean> {
   return true;
 }
 
+/** Push one local draft comment to GitHub under the active account's identity. */
+export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
+  const { error } = await api.api.threads({ id: threadId }).push.post();
+  if (error) {
+    toast.error("Failed to send comment to GitHub");
+    return false;
+  }
+
+  const prId = store.activePrId;
+  if (prId !== null) {
+    await loadSession(prId, undefined, true);
+  }
+  toast.success("Comment sent to GitHub");
+  return true;
+}
+
 /**
- * Remove a thread from local state in response to a WebSocket broadcast.
+ * Remove a thread from local state in response to an SSE broadcast.
  */
 export function onThreadDeleted(threadId: string): void {
   threads = threads.filter((t) => t.id !== threadId);
@@ -694,7 +834,7 @@ export function onThreadDeleted(threadId: string): void {
 }
 
 /**
- * Update a message body from a WebSocket broadcast (no API call needed).
+ * Update a message body from an SSE broadcast (no API call needed).
  */
 export function onThreadMessageEdited(threadId: string, message: ThreadMessage): void {
   threadMessages = {
@@ -704,7 +844,7 @@ export function onThreadMessageEdited(threadId: string, message: ThreadMessage):
 }
 
 /**
- * Remove a message from local state in response to a WebSocket broadcast.
+ * Remove a message from local state in response to an SSE broadcast.
  */
 export function onThreadMessageDeleted(threadId: string, messageId: string): void {
   const existing = threadMessages[threadId];

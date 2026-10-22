@@ -7,19 +7,242 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
+import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
+import { applyAcpAgentOverride, resolveGenerationModel } from "../ai/acp/presets";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
-import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-claude";
+import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import type { ResolvePushFrame } from "../services/ChatChangesPush";
-import { ChatSessionService } from "../services/ChatSession";
+import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
+import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
+import { PrContextService } from "../services/PrContext";
+import { RepoCloneService } from "../services/RepoClone";
+import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * The model half of a chat session's identity key `(prId, agent, model, headSha)`.
+ *
+ * Goes through {@link resolveGenerationModel}, never raw `settings.aiModel`:
+ * that may hold {@link AUTO_SENTINEL}, which chat can't size (no PR sizing
+ * pass), so it resolves to the agent's default instead. Every chat-session
+ * lookup must use this or it misses its own session and starts a fresh one.
+ */
+export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
+  return resolveGenerationModel(agent, aiModel) ?? getAcpAgentDefaultModel(agent);
+}
+
+/**
+ * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
+ * `GET /api/chat/:prId/session-context` menu fetch: PR + repo + token, the
+ * current head SHA (falling back to a live GitHub meta fetch), the resolved
+ * agent/model, and the existing session row.
+ *
+ * Performs NO writes and NO worktree mutation — crucially it does NOT
+ * `acquirePrWorktree` (which fetches + may `reset --hard`), `findOrCreate`,
+ * `newSession`, or `setAgentSessionId`. That keeps the menu fetch — which
+ * fires on every PR selection — free of git side effects and incapable of
+ * racing an in-flight turn writing to the same worktree. The worktree acquire
+ * is the POST turn's job (see `resolveChatTurnContext`).
+ */
+export const resolveChatReadContext = (
+  prId: string,
+  userId: string,
+  opts: { fetchHeadShaFromGithub?: boolean } = {},
+) =>
+  Effect.gen(function* () {
+    const { fetchHeadShaFromGithub = true } = opts;
+    const prCtx = yield* PrContextService;
+    const settingsService = yield* SettingsService;
+    const chatSessions = yield* ChatSessionService;
+
+    const { pr, repo, token } = yield* prCtx.resolveBasic(prId, userId);
+
+    // Resolve current head SHA. When the cached PR row has none, the only way
+    // to learn it is a live GitHub meta fetch — expensive and rate-limited, and
+    // this resolver fires on every PR selection. Read-only callers (the
+    // side-effect-free session-context menu fetch) opt out via
+    // `fetchHeadShaFromGithub: false` and tolerate a null head SHA (→ empty
+    // menus) rather than pay a GitHub call and risk a 500 on mere PR browsing.
+    let headSha: string | null = pr.headSha;
+    if (!headSha && fetchHeadShaFromGithub) {
+      const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
+      headSha = meta.headSha;
+    }
+
+    const settings = yield* settingsService.getSettings();
+    const agent = yield* settingsService.resolveChatAgentId();
+    const model = chatSessionModel(agent, settings.aiModel);
+
+    // No head SHA → no session can match (rows are keyed on it), so skip the
+    // lookup. Otherwise a null row means a fresh start (e.g. the user just
+    // cleared chat) — the POST handler keys its hard-reset off this.
+    const existingSessionRow: ChatSessionRow | null = headSha
+      ? yield* chatSessions.find(pr.id, agent, model, headSha)
+      : null;
+
+    return { pr, repo, token, headSha, settings, agent, model, existingSessionRow };
+  });
+
+/**
+ * The full turn bootstrap for `POST /api/chat`: the read prefix above plus the
+ * per-PR worktree acquire (shared across walkthrough generation and every chat
+ * session for this PR). Only the POST turn mutates the worktree; the
+ * session-context menu fetch uses {@link resolveChatReadContext} instead.
+ */
+export const resolveChatTurnContext = (prId: string, userId: string) =>
+  Effect.gen(function* () {
+    const read = yield* resolveChatReadContext(prId, userId);
+    const { headSha } = read;
+    if (headSha === null) {
+      // Unreachable: the turn path leaves `fetchHeadShaFromGithub` at its
+      // default, so `prMeta` either yields a SHA or fails the Effect above.
+      // The guard narrows the type for the worktree acquire.
+      return yield* Effect.die(new Error("resolveChatTurnContext: head SHA unresolved"));
+    }
+    const repoClone = yield* RepoCloneService;
+
+    const { worktreePath, branchName } = yield* repoClone.acquirePrWorktree({
+      repoId: read.repo.id,
+      prNumber: read.pr.externalId,
+      prHeadSha: headSha,
+      githubToken: read.token,
+    });
+
+    return { ...read, headSha, worktreePath, branchName };
+  });
+
+const EMPTY_SESSION_CONTEXT: ChatSessionContext = {
+  commands: [],
+  promptImage: false,
+  embeddedContext: false,
+  repoFiles: [],
+};
+
+/**
+ * Durable, process-survivable cache of harvested slash commands, keyed by
+ * `agent::repoId`. Slash commands are a property of the agent binary (its own
+ * commands) plus the repo's project commands — they're PR-independent and
+ * change rarely, so the same list is valid across every PR worktree of a repo.
+ *
+ * Without this, the *first* `/` in a session was slow: the side-effect-free
+ * PR-selection fetch (`peek`, no live agent) returned an empty menu, and the
+ * real command list only arrived after the focus-time warm paid a cold agent
+ * spawn + a throwaway-session harvest (up to 8s). With it, once ANY warm run
+ * for an `(agent, repo)` has harvested commands, every subsequent PR-selection
+ * fetch serves them instantly — the slash menu is populated before the user
+ * even types `/`. The warm path still re-harvests live and refreshes the cache,
+ * so a project-command edit self-heals within one warm. The cache is an
+ * ephemeral, reconstructible coordination cache (lost on server restart,
+ * re-harvested on the next warm) — never a source of truth.
+ */
+const slashCommandCache = new Map<string, ReadonlyArray<ChatSessionContext["commands"][number]>>();
+
+/**
+ * Resolve the composer's `@`-mention / `/`-command context for a PR, behind a
+ * single `warm` capability flag instead of re-testing it at each step.
+ *
+ *   - **Default (`warm: false`).** Side-effect-free: no GitHub head-SHA fetch,
+ *     no worktree acquire, no session mutation. Reads an already-warm agent
+ *     (`peekAcpConnection` never cold-spawns) and only the commands a prior
+ *     turn already cached. Fires on every PR selection, so it must stay cheap.
+ *   - **Warm (`warm: true`).** Sent on composer focus (real intent to chat):
+ *     acquires the worktree (deduped against a concurrent first turn inside
+ *     `acquirePrWorktree`), (re)starts the agent via `getAcpConnection`, and
+ *     harvests slash commands through a throwaway, never-persisted session.
+ *
+ * Returns empty context (rather than erroring) whenever the prerequisites for a
+ * given tier are absent — no head SHA, no worktree yet, no warm agent — so the
+ * menus degrade to empty rather than failing the request.
+ */
+export const resolveChatSessionContext = (prId: string, userId: string, warm: boolean) =>
+  Effect.gen(function* () {
+    const read = yield* resolveChatReadContext(prId, userId, { fetchHeadShaFromGithub: warm });
+    const { settings, agent, existingSessionRow } = read;
+
+    // Slash commands are PR-independent (agent + repo project commands), so a
+    // prior warm's harvest is valid here. Resolve the cache key up front so the
+    // early-return tiers below (no head SHA, no worktree yet) can still serve a
+    // populated menu instead of degrading to empty — this is what makes the
+    // first `/` instant before any agent for this PR is warm.
+    const acpAgent = applyAcpAgentOverride(agent);
+    const commandCacheKey = `${acpAgent}::${read.repo.id}`;
+    const cachedCommands = slashCommandCache.get(commandCacheKey) ?? EMPTY_SESSION_CONTEXT.commands;
+
+    // No head SHA → nothing to read (worktree + session rows are keyed on it).
+    if (read.headSha === null) return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands };
+
+    // Resolve the worktree: read the one a prior turn created, or — only when
+    // warming — acquire it now.
+    let worktreePath = existingSessionRow?.worktreePath ?? null;
+    if (warm && !(worktreePath && existsSync(worktreePath))) {
+      const repoClone = yield* RepoCloneService;
+      const acquired = yield* repoClone.acquirePrWorktree({
+        repoId: read.repo.id,
+        prNumber: read.pr.externalId,
+        prHeadSha: read.headSha,
+        githubToken: read.token,
+      });
+      worktreePath = acquired.worktreePath;
+    }
+
+    if (!(worktreePath && existsSync(worktreePath))) {
+      return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands };
+    }
+
+    // Repo files come straight from git — no agent process needed.
+    const repoFiles = yield* Effect.promise(() => listRepoFiles(worktreePath));
+
+    // Capabilities + slash commands from the agent connection.
+    const config = {
+      model: resolveGenerationModel(acpAgent, settings.aiModel),
+      thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+    };
+    const handle = yield* Effect.promise(() =>
+      warm
+        ? getAcpConnection(worktreePath, acpAgent, config)
+        : peekAcpConnection(worktreePath, acpAgent, config),
+    );
+    // No live agent (the non-warm peek before any agent for this repo is warm):
+    // serve commands harvested by a prior warm so the slash menu is ready before
+    // the user types — without paying a cold spawn on mere PR browsing.
+    if (!handle) {
+      return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands, repoFiles };
+    }
+
+    // Slash commands are cached against a live session id, populated as the
+    // agent streams `available_commands_update`; harvest fresh only when warming.
+    const sessionId = existingSessionRow?.sessionId ?? null;
+    let raw = sessionId ? handle.getAvailableCommands(sessionId) : [];
+    if (raw.length === 0 && warm) {
+      raw = yield* Effect.promise(() => handle.listAvailableCommands());
+    }
+    const harvested = raw.map((command) => ({
+      name: command.name,
+      description: command.description,
+    }));
+    // Persist a non-empty harvest so future PR-selection fetches for this
+    // `(agent, repo)` get an instant menu; fall back to the cache when this run
+    // couldn't harvest (e.g. a live connection with no session-scoped commands yet).
+    if (harvested.length > 0) slashCommandCache.set(commandCacheKey, harvested);
+    const commands = harvested.length > 0 ? harvested : cachedCommands;
+
+    return {
+      commands,
+      promptImage: handle.promptImage,
+      embeddedContext: handle.embeddedContext,
+      repoFiles,
+    } satisfies ChatSessionContext;
+  });
 
 /**
  * Best-effort fetch of the latest completed walkthrough's summary, risk,
@@ -106,6 +329,11 @@ export function gitStdout(args: string[], cwd: string, timeoutMs = 10_000): Prom
       reject(err);
     });
   });
+}
+
+export async function listRepoFiles(worktreePath: string): Promise<string[]> {
+  const stdout = await gitStdout(["ls-tree", "-r", "--name-only", "-z", "HEAD"], worktreePath);
+  return stdout.split("\0").filter((path) => path.length > 0);
 }
 
 /**
@@ -278,10 +506,20 @@ export interface ProposedCommit {
  * it passes through, then re-emitted to the SSE encoder unchanged.
  *
  * Persistence rules:
- *   - text frames: lazily begin the assistant message on the FIRST chunk
- *     (so the assistant row's sequence lands AFTER any preceding activities,
- *     matching the "user → activities → assistant" timeline shape). Each
- *     subsequent chunk appends content via SQL `||`.
+ *   - text frames: lazily begin an assistant message on the first chunk of
+ *     each prose run, so its sequence lands after whatever preceded it.
+ *     Subsequent chunks of the same run append content via SQL `||`.
+ *   - any frame that occupies its own slot in the rendered timeline
+ *     (activity, plan, sub-agent start, question) first SEALS the open
+ *     assistant row, so the next prose run opens a fresh one. That's what
+ *     makes the persisted sequence interleave narration and tool calls in
+ *     true chronological order — a single row per turn would force every
+ *     activity to sort either wholly before or wholly after the agent's
+ *     entire narration. Frames that only patch an existing row
+ *     (activity-result / activity-input / subagent-end / question-resolved)
+ *     don't seal: they can land mid-sentence and must not split a paragraph.
+ *     Neither does task-list — it renders in the Queue dock, not in the
+ *     timeline, and its snapshots are frequent enough to shred the prose.
  *   - activity frames: insert a chat_activities row immediately, sequence
  *     allocated atomically against chat_sessions.next_sequence.
  *   - stream end (no error): finalize the assistant message if one exists;
@@ -297,7 +535,7 @@ export interface ProposedCommit {
  */
 export function wrapStreamWithPersistence(
   source: ReadableStream<RawChatStreamFrame>,
-  ctx: { chatSessionId: string; turnId: string; agent: "claude" | "opencode" },
+  ctx: { chatSessionId: string; turnId: string; agent: "acp" },
 ): ReadableStream<ChatStreamFrame> {
   return new ReadableStream<ChatStreamFrame>({
     async start(controller) {
@@ -342,6 +580,26 @@ export function wrapStreamWithPersistence(
         return assistantMessageId;
       };
 
+      /**
+       * Close the open assistant row so the next prose run opens a fresh
+       * one at a later sequence. Called before persisting any frame that
+       * takes its own slot in the timeline.
+       */
+      const sealAssistantMessage = async (): Promise<void> => {
+        const messageId = assistantMessageId;
+        assistantMessageId = null;
+        if (!messageId) return;
+        try {
+          await AppRuntime.runPromise(
+            Effect.flatMap(ChatSessionService, (svc) =>
+              svc.finalizeAssistantMessage({ messageId, error: null }),
+            ),
+          );
+        } catch (err) {
+          logPersistError("finalizeAssistantMessage", err);
+        }
+      };
+
       const finalize = async (errorMessage: string | null): Promise<void> => {
         try {
           if (!assistantMessageId && errorMessage) {
@@ -366,10 +624,11 @@ export function wrapStreamWithPersistence(
               ),
             );
           } else if (assistantMessageId) {
+            const msgId = assistantMessageId;
             await AppRuntime.runPromise(
               Effect.flatMap(ChatSessionService, (svc) =>
                 svc.finalizeAssistantMessage({
-                  messageId: assistantMessageId!,
+                  messageId: msgId,
                   error: errorMessage,
                 }),
               ),
@@ -385,7 +644,22 @@ export function wrapStreamWithPersistence(
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Frames that occupy their own timeline slot close the open prose
+          // run first, so text and tool calls interleave by sequence.
+          if (
+            value.kind === "activity" ||
+            value.kind === "plan-presented" ||
+            value.kind === "subagent-start" ||
+            value.kind === "user-question"
+          ) {
+            await sealAssistantMessage();
+          }
+
           if (value.kind === "text") {
+            if (value.data.length === 0) {
+              controller.enqueue(value);
+              continue;
+            }
             textStreamed = true;
             const id = await ensureAssistantMessage();
             if (id) {
@@ -416,6 +690,7 @@ export function wrapStreamWithPersistence(
                     toolName: value.toolName,
                     summary: value.summary,
                     payload: value.payload,
+                    callId: value.callId ?? null,
                     subagentInvocationId,
                   }),
                 ),
@@ -432,6 +707,47 @@ export function wrapStreamWithPersistence(
               : activityRest;
             controller.enqueue(wireActivity);
             continue;
+          } else if (value.kind === "activity-result") {
+            // Stamp the captured output onto the originating activity row
+            // (matched by provider call id) so it survives reload, then
+            // forward the frame unchanged for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityResult({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    output: value.output,
+                    isError: value.isError,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityResult", err);
+            }
+            controller.enqueue(value);
+            continue;
+          } else if (value.kind === "activity-input") {
+            // Late-arriving tool input — persist the payload onto the activity
+            // row (by call id) so the filename/peek survives reload, then
+            // forward for live patching.
+            try {
+              await AppRuntime.runPromise(
+                Effect.flatMap(ChatSessionService, (svc) =>
+                  svc.updateActivityInput({
+                    chatSessionId: ctx.chatSessionId,
+                    turnId: ctx.turnId,
+                    callId: value.callId,
+                    payload: value.payload,
+                  }),
+                ),
+              );
+            } catch (err) {
+              logPersistError("updateActivityInput", err);
+            }
+            controller.enqueue(value);
+            continue;
           } else if (value.kind === "task-list") {
             try {
               await AppRuntime.runPromise(
@@ -439,7 +755,7 @@ export function wrapStreamWithPersistence(
                   svc.applyTaskListSnapshot({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     tasks: value.tasks,
                   }),
                 ),
@@ -461,7 +777,7 @@ export function wrapStreamWithPersistence(
                   svc.createPlan({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     markdown: value.markdown,
                   }),
                 ),
@@ -488,7 +804,7 @@ export function wrapStreamWithPersistence(
                   svc.startSubagentInvocation({
                     chatSessionId: ctx.chatSessionId,
                     parentTurnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     providerCallId: value.providerCallId,
                     subagentType: value.subagentType,
                     description: value.description,
@@ -543,7 +859,7 @@ export function wrapStreamWithPersistence(
                   svc.createQuestion({
                     chatSessionId: ctx.chatSessionId,
                     turnId: ctx.turnId,
-                    source: value.source,
+                    source: ctx.agent,
                     providerRequestId: value.providerRequestId,
                     providerToolCallId: value.providerToolCallId ?? null,
                     previewFormat: value.previewFormat,
@@ -627,6 +943,11 @@ export async function listProposedCommits(
   const log = await gitStdout(
     [
       "log",
+      // Same traversal as every other proposed-commit enumeration: stay on the
+      // agent branch's first-parent line and skip merges, so a `merge
+      // origin/main` to refresh the branch doesn't surface the entire base
+      // history as bogus proposed commits. See PROPOSED_COMMIT_RANGE_FLAGS.
+      ...PROPOSED_COMMIT_RANGE_FLAGS,
       range,
       // %x09 = tab; we emit one line per commit then a blank line.
       "--pretty=format:%H%x09%s%x09%aI",

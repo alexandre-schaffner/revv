@@ -3,13 +3,13 @@ name: Revv
 description: A desktop watchtower and review surface for GitHub repositories.
 colors:
   # Brand accent (the one distinctive move)
-  deep-naval: "oklch(46% 0.11 225)"
-  deep-naval-hover: "oklch(40% 0.1 225)"
-  deep-naval-muted: "oklch(58% 0.09 225)"
+  tidewater-teal: "oklch(48% 0.08 195)"
+  tidewater-teal-hover: "oklch(42% 0.075 195)"
+  tidewater-teal-muted: "oklch(58% 0.07 195)"
   # Dark accent (lifted for midnight canvas)
-  phosphor-naval: "oklch(71% 0.14 225)"
-  phosphor-naval-hover: "oklch(65% 0.14 225)"
-  phosphor-naval-muted: "oklch(80% 0.11 225)"
+  phosphor-teal: "oklch(72% 0.12 195)"
+  phosphor-teal-hover: "oklch(66% 0.12 195)"
+  phosphor-teal-muted: "oklch(81% 0.09 195)"
 
   # Warm-paper surface stack (light theme)
   warm-paper: "#faf9f6"
@@ -41,9 +41,15 @@ colors:
   midnight-ink-primary: "#e4e4e7"
   midnight-ink-secondary: "#a1a1aa"
   midnight-ink-muted: "#52525b"
-  midnight-accent: "oklch(71% 0.14 225)"
+  midnight-accent: "oklch(72% 0.12 195)"
 
 typography:
+  editorial-display:
+    fontFamily: "Newsreader, Georgia, serif"
+    fontSize: "2.75rem"
+    fontWeight: 500
+    lineHeight: 1.05
+    letterSpacing: "-0.02em"
   display:
     fontFamily: "Inter, system-ui, sans-serif"
     fontSize: "1.5rem"
@@ -90,13 +96,13 @@ spacing:
 
 components:
   button-primary:
-    backgroundColor: "{colors.deep-naval}"
+    backgroundColor: "{colors.tidewater-teal}"
     textColor: "#ffffff"
     rounded: "{rounded.md}"
     padding: "0 10px"
     height: "32px"
   button-primary-hover:
-    backgroundColor: "{colors.deep-naval-hover}"
+    backgroundColor: "{colors.tidewater-teal-hover}"
     textColor: "#ffffff"
     rounded: "{rounded.md}"
   button-outline:
@@ -163,7 +169,7 @@ recedes; code and conversation are the foreground.
 
 The system rejects the noisy SaaS dashboard, the GitHub web UI's marketing chrome, and
 the neon-on-black AI-tool aesthetic in equal measure. Where other code-review tools
-ship stock Tailwind blue, Revv ships Deep Naval at low frequency. Where others stack
+ship stock Tailwind blue, Revv ships Tidewater Teal at low frequency. Where others stack
 shadows for "depth," Revv layers warm tones and reserves shadows for things that
 genuinely float. Where others make AI feel magical with sparkles and gradients, Revv
 makes it feel collaborative with a single streaming character: the cursor.
@@ -171,10 +177,11 @@ makes it feel collaborative with a single streaming character: the cursor.
 **Key Characteristics:**
 
 - Warm-paper background, never neutral gray, never `#fff`.
-- One brand accent (Deep Naval `oklch(46% 0.11 225)`), used on ≤10% of any given screen.
+- One brand accent (Tidewater Teal `oklch(48% 0.08 195)`), used on ≤10% of any given screen.
 - Hybrid elevation: tonal layering for chrome, soft shadows only for floating UI.
 - Refined and restrained components: quiet at rest, precise on interaction.
-- Icons-only iconography (`phosphor-svelte`); emoji prohibited.
+- Icons-only iconography (`phosphor-svelte`, one weight default set app-wide);
+  emoji prohibited; no sparkle-as-AI-marker.
 - Reduced-motion is a contract, not a courtesy.
 
 ## 2. Colors: The Warm-Paper Palette
@@ -185,10 +192,10 @@ so reds and greens read as considered, not alarming.
 
 ### Primary
 
-- **Deep Naval** (`oklch(46% 0.11 225)`): the brand's one distinctive move. Used for the
+- **Tidewater Teal** (`oklch(48% 0.08 195)`): the brand's one distinctive move. Used for the
   streaming AI cursor, active states in the file tree, marker dots on open threads,
   primary CTA fills, focus rings. Restricted to ≤10% of any given screen. Hover and
-  active deepen to `oklch(40% 0.1 225)`. A muted variant (`oklch(58% 0.09 225)`) is
+  active deepen to `oklch(42% 0.075 195)`. A muted variant (`oklch(58% 0.07 195)`) is
   reserved for archival states.
 
 ### Neutral (warm-paper stack, light theme)
@@ -226,17 +233,17 @@ so reds and greens read as considered, not alarming.
 ### Dark Theme
 
 A parallel system on a near-black canvas (`#0a0a0a`) with stone-stack analogues
-(`#111`, `#1a1a1a`, `#222`) and a brand-consistent accent: **Phosphor Naval**
-(`oklch(71% 0.14 225)`). The dark theme keeps the deep-naval lineage and lifts it into
+(`#111`, `#1a1a1a`, `#222`) and a brand-consistent accent: **Phosphor Teal**
+(`oklch(72% 0.12 195)`). The dark theme keeps the tidewater-teal lineage and lifts it into
 a luminous value that reads against `#0a0a0a` without becoming the stock-Tailwind blue
-every other code review tool ships. Hover deepens to `oklch(65% 0.14 225)`; the muted
-variant brightens to `oklch(80% 0.11 225)` for icons. Severity, AI accent, and the
+every other code review tool ships. Hover deepens to `oklch(66% 0.12 195)`; the muted
+variant brightens to `oklch(81% 0.09 195)` for icons. Severity, AI accent, and the
 neutral philosophy all carry over from light theme.
 
 ### Named Rules
 
-**The One Voice Rule.** The brand accent (Deep Naval in light, Phosphor Naval in dark)
-is used on ≤10% of any given screen. Its rarity is the point. If three olive elements
+**The One Voice Rule.** The brand accent (Tidewater Teal in light, Phosphor Teal in dark)
+is used on ≤10% of any given screen. Its rarity is the point. If three teal elements
 are competing on one surface, two are wrong.
 
 **The No-Pure-Black Rule.** `#000` is prohibited in light theme, and the dark theme
@@ -249,35 +256,61 @@ is "considered" rather than "alarming." Stock-bright severity reads as a prototy
 
 ## 3. Typography
 
-**Display + Body Font:** Inter (with `system-ui, sans-serif` fallback)
+**Body + UI Font:** Inter (with `system-ui, sans-serif` fallback)
 **Mono Font:** JetBrains Mono (with `Fira Code, monospace` fallback)
+**Editorial Display Font:** Newsreader (with `Georgia, serif` fallback). Scoped — see
+the Editorial-Display Carve-out below.
 
 **Character:** A single warm humanist sans for the whole interface, paired with a clean
-geometric mono for code and identifiers. Inter is used at restrained weights (400, 500,
-600) and modest sizes. The hierarchy is built from scale and weight contrast, not from
-six display families competing for attention.
+geometric mono for code and identifiers, and one editorial display serif reserved for
+AI-authored long-form moments. Inter is used at restrained weights (400, 500, 600) and
+modest sizes. The hierarchy is built from scale and weight contrast, not from six
+display families competing for attention.
 
 ### Hierarchy
 
-- **Display** (600, 1.5rem, 1.2): rare; reserved for page-level titles when one exists.
-- **Headline** (600, 1.125rem, 1.3): panel headers, walkthrough section titles.
-- **Title** (600, 0.9375rem, 1.4): card titles, PR titles in the list.
-- **Body** (400, 0.875rem, 1.5): all running text. Body line length caps at 70ch in
-  prose contexts (walkthrough markdown, recap text).
-- **Label** (500, 0.75rem, 0.01em letter-spacing): inline labels, metadata, tab text.
-  Never uppercase by default; case is meaningful, not decorative.
-- **Mono** (400, 0.8125rem, JetBrains Mono): code in diffs, identifiers in prose,
+- **Editorial Display** (Newsreader, 500, 2.25–2.75rem, 1.05): scoped to AI-authored
+  long-form heroes. Reading-room voice. See carve-out below.
+- **Display** (Inter, 600, 1.5rem, 1.2): rare; reserved for page-level titles when one
+  exists.
+- **Headline** (Inter, 600, 1.125rem, 1.3): panel headers.
+- **Title** (Inter, 600, 0.9375rem, 1.4): card titles, PR titles in the list.
+- **Body** (Inter, 400, 0.875rem, 1.5): all running text. Body line length caps at 70ch
+  in prose contexts (walkthrough markdown, recap text).
+- **Label** (Inter, 500, 0.75rem, 0.01em letter-spacing): inline labels, metadata, tab
+  text. Never uppercase by default; case is meaningful, not decorative.
+- **Mono** (JetBrains Mono, 400, 0.8125rem): code in diffs, identifiers in prose,
   filenames in lists.
 
 ### Named Rules
 
-**The Single-Family Rule.** Inter is the only sans in the system; JetBrains Mono is
-the only mono. No display serif, no condensed sans, no second body family. Variety
-comes from weight (400/500/600) and scale, not from font-mixing.
+**The Two-and-a-Half-Family Rule.** Inter is the only sans for UI and body. JetBrains
+Mono is the only mono for code and identifiers. Newsreader is the only editorial
+display serif, and only on AI-authored long-form heroes (see carve-out). No condensed
+sans, no second body family, no display sans, no decorative serif elsewhere. The
+half-family is half because Newsreader appears at most once per screen and never below
+1.875rem.
+
+**The Editorial-Display Carve-out.** Newsreader is permitted only on hero titles of
+AI-authored long-form surfaces:
+
+- Recap hero (`RecapHeroBig.date`, `RecapSidebar.date`).
+- Walkthrough section heads (`GuidedWalkthrough`, `WalkthroughSection`).
+- Onboarding hero copy (the welcome / agent / sign-in / repo / host / done step
+  titles, plus the onboarding shell's frame headings).
+- Settings page section titles where they carry a reading-room voice.
+
+These are the surfaces where an agent is talking *to* the reader at length, so the
+serif earns the reading-room association the brand wants. Newsreader is never used
+for product chrome (buttons, tabs, sidebars, dialogs), never for body prose, and never
+below 1.875rem. If a new surface wants Newsreader, ask whether it's AI-authored
+long-form first; if not, use Inter.
 
 **The Earned-Uppercase Rule.** Uppercase is prohibited as a decorative style. Use
 sentence case for everything except technical identifiers that are uppercase by
-convention (HTTP verbs, env var names, type names).
+convention (HTTP verbs, env var names, type names). The mono eyebrow pattern
+(0.6875rem mono, 0.18em letter-spacing, uppercase) is exempt — it's a structural
+section marker, not decoration.
 
 **The 65–75ch Rule.** Body prose in walkthrough markdown, recap content, and chat
 messages caps at 70ch (`max-w-prose` in Tailwind). The diff is exempt; code wraps to
@@ -330,7 +363,7 @@ Refined and restrained at rest, tactile on press. Six variants
 
 - **Shape:** rounded (`rounded-lg`, 8px). Small variants use a `min(--radius-md, 10–12px)`
   clamp so they don't out-radius the height.
-- **Default (Primary):** Deep Naval fill (`oklch(46% 0.11 225)`), white text, no border. Height
+- **Default (Primary):** Tidewater Teal fill (`oklch(48% 0.08 195)`), white text, no border. Height
   32px, horizontal padding 10px, font-size 0.875rem, weight 500.
 - **Outline:** warm-paper background, ink-primary text, paper-edge border (1px).
   Hover lifts to warm-stone.
@@ -339,13 +372,13 @@ Refined and restrained at rest, tactile on press. Six variants
 - **Secondary:** warm-stone fill, ink-primary text. Hover deepens 20%.
 - **Destructive:** Considered Red at 10% alpha, Considered Red text. Hover lifts to
   20% alpha. Never a solid red fill: the warning is in the color, not in the volume.
-- **Link:** Deep Naval text, no fill, underline on hover.
+- **Link:** Tidewater Teal text, no fill, underline on hover.
 
 **The Tactile Press.** All buttons translate down 1px on `:active` (excluding popover
 triggers). The 1px press is deliberate; it makes interaction feel tangible against the
 paper canvas.
 
-**Focus:** 3px outer ring at `var(--ring)` (Deep Naval in light, Phosphor Naval in
+**Focus:** 3px outer ring at `var(--ring)` (Tidewater Teal in light, Phosphor Teal in
 dark). Border shifts in on aria-invalid.
 
 ### Inputs / Fields
@@ -392,8 +425,8 @@ it only for floating chrome on the canvas, never for content surfaces.
 - **Style:** transparent at rest, ink-secondary text, mono font for filenames at
   0.8125rem.
 - **Hover:** warm-ash fill.
-- **Active:** Deep Naval at 10% alpha fill, deeper Deep Naval text
-  (`oklch(40% 0.1 225)`). The brand accent is *tinted* into the active state, not used
+- **Active:** Tidewater Teal at 10% alpha fill, deeper Tidewater Teal text
+  (`oklch(42% 0.075 195)`). The brand accent is *tinted* into the active state, not used
   directly: the row is whispering the brand, not shouting it.
 
 ### Diff Canvas
@@ -404,13 +437,13 @@ deletion / context states with hover variants. Additions and deletions use deepe
 severity greens and reds at low alpha (4–8%) so the diff reads as a calm document, not
 a Tailwind-tutorial color explosion.
 
-- **Selection:** Deep Naval at 8% alpha. The same accent appears in the file tree's
+- **Selection:** Tidewater Teal at 8% alpha. The same accent appears in the file tree's
   active state and the marker dots; selection feels like "I'm working here" in the
   brand voice.
 
 ### Streaming AI Cursor
 
-A 1ch-wide vertical bar in Deep Naval that blinks while the AI is producing tokens.
+A 1ch-wide vertical bar in Tidewater Teal that blinks while the AI is producing tokens.
 Single character. Its glow uses the Indicator shadow at low alpha. The cursor is
 opt-back-in to motion under `prefers-reduced-motion` via `.motion-essential-blink`: if
 motion is disabled globally, the cursor still blinks so the user can tell the system
@@ -420,18 +453,24 @@ is alive.
 
 ### Do:
 
-- **Do** use Deep Naval sparingly. ≤10% of any given screen. The streaming cursor,
+- **Do** use Tidewater Teal sparingly. ≤10% of any given screen. The streaming cursor,
   the active file row, the primary CTA, the focus ring. Not all four at once on the
   same surface.
 - **Do** use warm-paper as the canvas in light theme and warm-stone as the secondary
   surface. Tone steps carry chrome elevation.
-- **Do** use `phosphor-svelte` for every icon. Inline SVG only when no phosphor
-  equivalent fits.
+- **Do** use `phosphor-svelte` for every icon, imported deep and never aliased.
+  Inline SVG only for brand/octicon marks, or when no phosphor equivalent fits.
+- **Do** let `weight` carry information, never decoration. `regular` is the default
+  (set once via `<IconContext>` in the root layout); `weight="fill"` means the
+  on/active/selected state of a toggle, or a severity marker where solidity is the
+  signal. See [conventions §5.3](docs/conventions.md#motion-icon-only).
 - **Do** deepen severity colors one step from stock Tailwind (700 weight rather than
   500) so reds and greens read as considered, not bright.
 - **Do** translate buttons 1px down on `:active`. The press is tactile and on
   purpose.
 - **Do** cap body prose at 70ch (Tailwind's `max-w-prose`). The diff is exempt.
+- **Do** reach for Newsreader on AI-authored long-form hero titles (recap hero,
+  walkthrough section heads, onboarding hero copy). Inter everywhere else.
 - **Do** honor `prefers-reduced-motion` as a contract. Opt back in only for motion
   that carries meaning, using `.motion-essential-*` classes.
 - **Do** use motion tokens from the `@theme` block: `duration-snap`,
@@ -442,8 +481,13 @@ is alive.
 
 - **Don't** use emoji in rendered UI, ever. Not in buttons, not in fallback avatars,
   not in toast messages, not in placeholders. Use a phosphor icon or nothing.
+- **Don't** use a sparkle (`Sparkle`, `StarFour`, `MagicWand`) to mean "AI". It is the
+  generic-AI-product tell PRODUCT.md's anti-references call out. Name the thing
+  instead: `PenNib` for "the agent writes this", `CalendarDots` for recaps, `Robot`
+  for agent identity, `Brain` for reasoning effort. AI presence is carried by
+  Considered Violet and the streaming cursor, not by a glyph.
 - **Don't** use stock Tailwind blue (`blue-500`, `#3b82f6`) as a brand accent in light
-  theme. That is the color every other dashboard ships. Deep Naval is the move.
+  theme. That is the color every other dashboard ships. Tidewater Teal is the move.
 - **Don't** use side-stripe borders (`border-left > 1px` as a colored accent on cards,
   list items, callouts). Use a full hairline border, a background tint, or a leading
   icon instead.
@@ -457,6 +501,9 @@ is alive.
   weight or content, the grid is the lazy answer.
 - **Don't** reach for a modal as the first thought. Inline expansion, progressive
   disclosure, and side panels exhaust before a modal is justified.
+- **Don't** use Newsreader for product chrome, body prose, or any heading below
+  1.875rem. The serif is reserved for AI-authored long-form heroes; using it anywhere
+  else dilutes the carve-out into a decorative second body family.
 - **Don't** animate CSS layout properties. Translate, scale, opacity, and color only.
 - **Don't** use heavy purple gradients or neon accents to signal "AI." Revv's AI
   surfaces are warm paper with a single Considered Violet accent and a streaming

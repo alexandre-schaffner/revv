@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "deep-link:default",
+    "dialog:default",
     "opener:default",
     "core:window:allow-start-dragging",
     "core:window:allow-show",
@@ -13,6 +14,7 @@
     "core:window:allow-unminimize",
     "mcp-bridge:default",
     "autostart:default",
-    "updater:default"
+    "updater:default",
+    "process:allow-restart"
   ]
 }

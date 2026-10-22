@@ -10,6 +10,12 @@ const RIGHT_PANEL_WIDTH_DEFAULT = 340;
 const RIGHT_PANEL_WIDTH_MIN = 280;
 const RIGHT_PANEL_WIDTH_MAX = 720;
 
+/** Narrowest main pane we're willing to leave behind when the chat panel sits
+    beside it. Below this the diff/walkthrough columns stop being readable, so
+    the chat switches to the stacked presentation (covers the main pane, back
+    button in its header) — the same trade Slack makes with thread view. */
+const MAIN_MIN_WIDTH = 520;
+
 const RAIL_COLLAPSED_OWNERS_KEY = "revv:rail-collapsed-owners";
 
 function clampWidth(w: number): number {
@@ -54,29 +60,21 @@ function loadCollapsedOwners(): Set<string> {
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
-let collapseAllSignal = $state(0);
+let _collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 let rightPanelWidth = $state(loadPersistedRightPanelWidth());
+
+// Live viewport width — the input to the side-by-side ⇄ stacked decision for
+// the chat panel. Kept here (not in a component) so the layout math and the
+// floating-chrome bounds below read from one source. `ssr = false`, so
+// touching `window` at module scope is safe.
+let viewportWidth = $state(window.innerWidth);
 
 // Collapsed owner-folders in the project rail. Owners are stored
 // lowercase. Default: every owner is expanded — owners only land here
 // after the user explicitly collapses their folder. Persisted so the
 // expand/collapse pattern survives reloads.
 let collapsedOwners = $state<Set<string>>(loadCollapsedOwners());
-
-// Transient "peek" state: true while the cursor is over a project avatar in
-// the rail or anywhere inside the sidebar. Used to reveal the sidebar while
-// `sidebarCollapsed` is true without changing the persistent toggle. A short
-// close delay covers the gap when the cursor transits between the avatar
-// and the sidebar, or between two avatars.
-//
-// `sidebarPeekRepoId` tracks which repo is currently being previewed — set
-// by the avatar's mouseenter and held across transit into the sidebar so
-// the panel shows that repo's PRs (not the URL-selected one) until the
-// peek closes.
-let sidebarPeekHovering = $state(false);
-let sidebarPeekRepoId = $state<string | null>(null);
-let peekCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
 // Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
 // selected PR's head SHA). Transient — not persisted across reloads. Resets to
@@ -100,6 +98,13 @@ $effect.root(() => {
   $effect(() => {
     localStorage.setItem(RAIL_COLLAPSED_OWNERS_KEY, JSON.stringify([...collapsedOwners]));
   });
+  $effect(() => {
+    const onResize = (): void => {
+      viewportWidth = window.innerWidth;
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  });
 });
 
 // ── Sidebar ──────────────────────────────────────────────
@@ -119,36 +124,6 @@ export function getSidebarCollapsed(): boolean {
 
 export function toggleSidebar(): void {
   sidebarCollapsed = !sidebarCollapsed;
-}
-
-// ── Sidebar peek (hover-to-reveal) ──────────────────────
-
-export function getSidebarPeekHovering(): boolean {
-  return sidebarPeekHovering;
-}
-
-export function setSidebarPeekHovering(v: boolean): void {
-  if (peekCloseTimer !== undefined) {
-    clearTimeout(peekCloseTimer);
-    peekCloseTimer = undefined;
-  }
-  if (v) {
-    sidebarPeekHovering = true;
-  } else {
-    peekCloseTimer = setTimeout(() => {
-      sidebarPeekHovering = false;
-      sidebarPeekRepoId = null;
-      peekCloseTimer = undefined;
-    }, 200);
-  }
-}
-
-export function getSidebarPeekRepoId(): string | null {
-  return sidebarPeekRepoId;
-}
-
-export function setSidebarPeekRepoId(id: string | null): void {
-  sidebarPeekRepoId = id;
 }
 
 // ── Sidebar width ────────────────────────────────────────
@@ -179,14 +154,47 @@ export function toggleRightPanel(): void {
   rightPanelOpen = !rightPanelOpen;
 }
 
+// ── Right panel presentation (side-by-side ⇄ stacked) ────
+
+/** Width owed to the left chrome (rail + sidebar, if expanded). */
+function chromeWidth(): number {
+  return RAIL_WIDTH + (sidebarCollapsed ? 0 : sidebarWidth);
+}
+
+/** True when the window is too narrow to show the chat beside the main pane.
+    In that case the chat presents *over* the main pane with a back button in
+    its header instead of alongside it. Purely a presentation switch —
+    `rightPanelOpen` is unchanged, so growing the window restores the
+    side-by-side layout with the conversation still open.
+
+    Measured against the panel's *minimum* width, not the user's preferred
+    one: a wide stored preference should make the panel give width back
+    (see `getRightPanelWidth`), not collapse the layout into one pane. */
+export function getChatStacked(): boolean {
+  return viewportWidth - chromeWidth() - RIGHT_PANEL_WIDTH_MIN < MAIN_MIN_WIDTH;
+}
+
 // ── Right panel width ───────────────────────────────────
 
+/** Widest the panel may actually render: whatever still leaves a usable main
+    pane. Floored at the panel's own minimum, which only binds while stacked
+    (where the width is unused anyway). */
+function rightPanelWidthCap(): number {
+  return Math.max(RIGHT_PANEL_WIDTH_MIN, viewportWidth - chromeWidth() - MAIN_MIN_WIDTH);
+}
+
+/** The width the panel renders at — the stored preference, given back to the
+    main pane when the window can't afford it. `rightPanelWidth` keeps the
+    preference untouched, so re-widening the window restores it. */
 export function getRightPanelWidth(): number {
-  return rightPanelWidth;
+  return Math.min(rightPanelWidth, rightPanelWidthCap());
 }
 
 export function setRightPanelWidth(w: number): void {
-  rightPanelWidth = clampRightPanelWidth(w);
+  // The same cap applies to the drag, so resizing can never tip the layout
+  // into stacked mode mid-drag (which would yank the resize handle out from
+  // under the captured pointer). Only a window resize crosses that line.
+  rightPanelWidth = Math.min(clampRightPanelWidth(w), rightPanelWidthCap());
 }
 
 export function resetRightPanelWidth(): void {
@@ -208,7 +216,7 @@ export function openAddRepoDialog(): void {
 }
 
 export function collapseAllRepoGroups(): void {
-  collapseAllSignal++;
+  _collapseAllSignal++;
 }
 
 // ── Sidebar view (PR list ⇄ file tree) ──────────────────
@@ -259,9 +267,21 @@ export function toggleOwnerCollapsed(owner: string): void {
     (e.g. pill tabs) should use to stay aligned with the visible main area.
     Mirrors the grid math in AppShell.svelte. */
 export function getMainAreaBounds(): { left: number; right: number } {
-  const effectiveCollapsed = sidebarCollapsed && !sidebarPeekHovering;
   return {
-    left: RAIL_WIDTH + (effectiveCollapsed ? 0 : sidebarWidth),
-    right: rightPanelOpen ? rightPanelWidth : 0,
+    left: chromeWidth(),
+    // A stacked chat covers the main pane rather than shrinking it, so the
+    // main area keeps its full width underneath.
+    right: rightPanelOpen && !getChatStacked() ? getRightPanelWidth() : 0,
   };
+}
+
+/** Inline `style=` string for a floating action bar pinned to the bottom of
+    the visible main area. Sits above the BottomBar with one island of breathing
+    room. Reads `getMainAreaBounds()` so it tracks sidebar/right-panel state. */
+export function getActionsFloatStyle(): string {
+  const bounds = getMainAreaBounds();
+  return (
+    `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
+    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`
+  );
 }

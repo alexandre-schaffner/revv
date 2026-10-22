@@ -1,26 +1,27 @@
 import type { WalkthroughLifecyclePhase, WalkthroughStreamEvent } from "@revv/shared";
 import {
-  WALKTHROUGH_EXPLORATION_STALL_MS,
   WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS,
   WALKTHROUGH_INACTIVITY_TIMEOUT_MS,
 } from "../../constants";
 import { debug } from "../../logger";
+import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
 
 // ── Phase synthesis messages ────────────────────────────────────────────────
 //
 // Cross-agent normalization layer wrapping each provider's generator:
-//   - inactivity + first-event + exploration-stall timeouts,
+//   - inactivity + first-event timeouts,
 //   - synthesizes a terminal `done` / `error` if the inner generator ends
 //     without one,
 //   - optional phase synthesis for providers that don't emit their own.
 //
-// On the opencode path, MCP-tool content (set_overview / add_diff_step / …)
-// runs through the HTTP MCP route and writes commit-first via
-// `WalkthroughJobs.emitEvent`, which ALSO fires a `thinking` event into the
-// provider's activity-notifier (see `WalkthroughJobs.ts:emitEvent`). That
-// notifier pushes into the same queue the guard drains, so non-exploration
-// progress IS visible to the guard — keeping the exploration-stall timer
-// honest without needing a per-path override.
+// Liveness is enforced by two timers only: a first-event timeout and an
+// inactivity timeout that ANY event resets — content, phase heartbeat, or
+// reasoning. A model that reads files for a long time before it produces output
+// is legitimate, so there is no separate exploration-stall gate. Because the
+// phase heartbeat is synthetic, this layer cannot tell a working agent from a
+// stalled-but-connected one; that is `withAgentTurn`'s idle deadline
+// (AGENT_IDLE_TIMEOUT_MS), rearmed only by real agent activity, with
+// CLI_WALKTHROUGH_TIMEOUT_MS as the absolute ceiling behind it.
 
 const PHASE_MESSAGES = {
   exploration: {
@@ -48,21 +49,16 @@ export function guardWalkthroughStream(
   inner: AsyncGenerator<WalkthroughStreamEvent>,
   options?: {
     inactivityTimeoutMs?: number;
-    explorationStallMs?: number;
     synthesizePhases?: boolean;
     label?: string;
     firstEventTimeoutMs?: number;
   },
 ): AsyncGenerator<WalkthroughStreamEvent> {
   const inactivityMs = options?.inactivityTimeoutMs ?? WALKTHROUGH_INACTIVITY_TIMEOUT_MS;
-  const explorationStallMs = options?.explorationStallMs ?? WALKTHROUGH_EXPLORATION_STALL_MS;
   const synthesize = options?.synthesizePhases ?? true;
   const label = options?.label ?? "guard";
   const firstEventMs = options?.firstEventTimeoutMs ?? WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS;
 
-  // Tracks when we last saw a non-exploration event (summary, block, phase, done, error).
-  // Used to detect a model that keeps reading files but never produces walkthrough output.
-  let lastProgressTime = Date.now();
   let isFirstEvent = true;
 
   return (async function* (): AsyncGenerator<WalkthroughStreamEvent> {
@@ -157,28 +153,6 @@ export function guardWalkthroughStream(
 
         yield event;
 
-        // Track exploration-only stalls. Exploration events (tool_use / file reads)
-        // reset the inactivity timer above, so they can prevent it from ever firing.
-        // If the model keeps reading files but never produces meaningful output we
-        // need a separate check: abort if only exploration events have arrived for
-        // longer than explorationStallMs.
-        if (event.type === "exploration") {
-          if (Date.now() - lastProgressTime > explorationStallMs) {
-            debug(label, "Exploration stall — no progress for", explorationStallMs, "ms");
-            yield {
-              type: "error" as const,
-              data: {
-                code: "ExplorationStall",
-                message: `Walkthrough stalled — the model explored files for ${Math.round(explorationStallMs / 60_000)} minutes without producing output. Try regenerating.`,
-              },
-            };
-            return;
-          }
-        } else {
-          // Any non-exploration event counts as meaningful progress
-          lastProgressTime = Date.now();
-        }
-
         // Terminal event received — we're done
         if (event.type === "done" || event.type === "error") {
           return;
@@ -201,12 +175,7 @@ export function guardWalkthroughStream(
             type: "done" as const,
             data: {
               walkthroughId: "",
-              tokenUsage: {
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadInputTokens: 0,
-                cacheCreationInputTokens: 0,
-              },
+              tokenUsage: ZERO_TOKEN_USAGE,
             },
           };
         } else {

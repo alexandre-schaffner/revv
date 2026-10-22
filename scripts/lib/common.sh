@@ -95,6 +95,45 @@ spin_stop() {
   fi
 }
 
+# ── Quiet command runner ──────────────────────────────────────
+# Usage: run_quiet "Label" command [args...]
+#   Default: spinner while running; stdout+stderr captured to a temp log.
+#   REVV_VERBOSE=1: streams output inline with an indented label header.
+# On failure: prints exit code, log path, and last 15 log lines.
+run_quiet() {
+  local label="$1"; shift
+  local _log _rc
+
+  if [[ "${REVV_VERBOSE:-0}" == "1" ]]; then
+    printf "\n  %s%s▸%s  %s\n\n" "$REVV_BOLD" "$REVV_CYAN" "$REVV_RESET" "$label"
+    "$@" 2>&1 | sed 's/^/    /'
+    _rc="${PIPESTATUS[0]}"
+    if [[ "$_rc" -eq 0 ]]; then
+      success "$label"
+      return 0
+    else
+      fail "Command failed (exit $_rc): $*"
+    fi
+  fi
+
+  _log="$(mktemp)"
+  spin_start "$label"
+  if "$@" >"$_log" 2>&1; then
+    spin_stop 1
+    rm -f "$_log"
+    return 0
+  fi
+  _rc=$?
+  spin_stop 0
+  printf "\n  %s✗%s  Command failed (exit %d): %s\n" \
+    "$REVV_RED" "$REVV_RESET" "$_rc" "$*" >&2
+  printf "  %s→%s  Log: %s\n" "$REVV_DIM" "$REVV_RESET" "$_log" >&2
+  printf "  %sLast output:%s\n" "$REVV_DIM" "$REVV_RESET" >&2
+  tail -n 15 "$_log" | sed 's/^/    /' >&2
+  printf "\n" >&2
+  exit 1
+}
+
 # ── TTY-safe input (works under `curl … | bash`) ──────────────
 #
 # Reads from /dev/tty so prompts work even when stdin is the pipe carrying
@@ -128,30 +167,19 @@ check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # ── Platform detection ────────────────────────────────────────
 #
-# Sets globals: PLATFORM (macos|linux), ARCH (raw uname -m),
-# RUST_TARGET (aarch64-apple-darwin, x86_64-unknown-linux-gnu, …).
+# Revv is macOS-only. Sets globals: PLATFORM (always macos), ARCH (raw
+# uname -m), RUST_TARGET (aarch64-apple-darwin | x86_64-apple-darwin).
 detect_platform() {
   local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
-  case "$os" in
-    Darwin) PLATFORM="macos" ;;
-    Linux)  PLATFORM="linux" ;;
-    *)      fail "Unsupported OS: $os" ;;
-  esac
+  [[ "$os" == "Darwin" ]] || fail "Unsupported OS: $os (Revv is macOS-only)"
+  PLATFORM="macos"
   ARCH="$arch"
-  if [[ "$PLATFORM" == "macos" ]]; then
-    if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
-      RUST_TARGET="aarch64-apple-darwin"
-    else
-      RUST_TARGET="x86_64-apple-darwin"
-    fi
+  if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+    RUST_TARGET="aarch64-apple-darwin"
   else
-    if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-      RUST_TARGET="aarch64-unknown-linux-gnu"
-    else
-      RUST_TARGET="x86_64-unknown-linux-gnu"
-    fi
+    RUST_TARGET="x86_64-apple-darwin"
   fi
   export PLATFORM ARCH RUST_TARGET
 }
@@ -171,15 +199,8 @@ revv_paths() {
       REVV_LOG_DIR="${REVV_LOG_DIR:-$HOME/Library/Logs/Revv}"
       REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/com.revv.server.plist}"
       ;;
-    linux)
-      REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/revv}"
-      REVV_LOG_DIR="${REVV_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/revv/logs}"
-      REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-}"
-      ;;
     *)
-      REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/.revv}"
-      REVV_LOG_DIR="${REVV_LOG_DIR:-$HOME/.revv/logs}"
-      REVV_LAUNCH_AGENT_PLIST="${REVV_LAUNCH_AGENT_PLIST:-}"
+      fail "Unsupported platform: $__platform_lc (Revv is macOS-only)"
       ;;
   esac
   REVV_SRC_DIR="${REVV_INSTALL_DIR:-$REVV_SUPPORT_DIR/src}"
@@ -245,10 +266,7 @@ ensure_git() {
     success "git $(git --version | awk '{print $3}')"
     return 0
   fi
-  if [[ "${PLATFORM:-}" == "macos" ]]; then
-    fail "git not found. It should ship with Xcode CLT — re-run 'xcode-select --install'."
-  fi
-  fail "git not found. Install it from https://git-scm.com and re-run."
+  fail "git not found. It should ship with Xcode CLT — re-run 'xcode-select --install'."
 }
 
 ensure_bun() {
@@ -321,6 +339,130 @@ ensure_rust() {
   fi
 }
 
+# ── Release bundle install ────────────────────────────────────
+
+revv_sha256_of() {
+  if check_cmd sha256sum; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+install_release_app() {
+  local release_tag="$1" app_dir="${2:-}" asset_arch release_json bundle_url bundle_sha
+  local sums_file sums_url bundle_filename bundle_file actual_sha mount_point app_source install_dir installed_app tmp_app backup_app
+
+  REVV_INSTALLED_APP=""
+  [[ -n "$release_tag" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) asset_arch="aarch64" ;;
+    x86_64)        asset_arch="x64" ;;
+    *)             return 1 ;;
+  esac
+
+  release_json="$(mktemp)"
+  curl -fsSL \
+    "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/tags/${release_tag}" \
+    -o "$release_json" || { rm -f "$release_json"; return 1; }
+
+  bundle_url="$(sed -n "s/.*\"browser_download_url\": \"\([^\"]*_${asset_arch}\.dmg\)\".*/\1/p" "$release_json" | head -1)"
+  bundle_sha="$(sed -n "/\"name\": \".*_${asset_arch}\.dmg\"/,/\"browser_download_url\"/ s/.*\"digest\": *\"sha256:\([a-fA-F0-9]*\)\".*/\1/p" "$release_json" | head -1)"
+  rm -f "$release_json"
+  [[ -n "$bundle_url" ]] || return 1
+
+  if [[ -z "$bundle_sha" ]]; then
+    sums_url="https://github.com/${REVV_GITHUB_REPO}/releases/download/${release_tag}/SHA256SUMS"
+    sums_file="$(mktemp)"
+    if curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
+      bundle_filename="$(basename "$bundle_url")"
+      bundle_sha="$(awk -v name="$bundle_filename" '$2 == name {print $1}' "$sums_file" | head -1)"
+    fi
+    rm -f "$sums_file"
+  fi
+
+  bundle_file="$(mktemp).dmg"
+  spin_start "Downloading Revv.app from ${release_tag} (${asset_arch})"
+  if ! curl -fsSL "$bundle_url" -o "$bundle_file"; then
+    spin_stop 0
+    rm -f "$bundle_file"
+    return 1
+  fi
+  spin_stop 1
+
+  if [[ -n "$bundle_sha" ]]; then
+    actual_sha="$(revv_sha256_of "$bundle_file")"
+    if [[ "$actual_sha" != "$bundle_sha" ]]; then
+      rm -f "$bundle_file"
+      fail "Downloaded DMG checksum mismatch for ${release_tag}."
+    fi
+  else
+    warn "SHA256SUMS unavailable for ${release_tag}; installing without checksum verification."
+  fi
+
+  mount_point="$(mktemp -d)"
+  hdiutil attach -quiet -nobrowse -mountpoint "$mount_point" "$bundle_file" || {
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  }
+
+  app_source="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$app_source" ]]; then
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  fi
+
+  install_dir="${app_dir:-/Applications}"
+  [[ -w "$install_dir" ]] || install_dir="$HOME/Applications"
+  mkdir -p "$install_dir" || {
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  }
+  installed_app="$install_dir/$(basename "$app_source")"
+  tmp_app="${installed_app}.tmp.$$"
+
+  rm -rf "$tmp_app" || {
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  }
+  if ! cp -R "$app_source" "$tmp_app"; then
+    rm -rf "$tmp_app"
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  fi
+  xattr -cr "$tmp_app" 2>/dev/null || true
+
+  backup_app=""
+  if [[ -e "$installed_app" ]]; then
+    backup_app="${installed_app}.backup.$$"
+    if ! rm -rf "$backup_app" || ! mv "$installed_app" "$backup_app"; then
+      rm -rf "$tmp_app"
+      _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+      return 1
+    fi
+  fi
+  if ! mv "$tmp_app" "$installed_app"; then
+    rm -rf "$tmp_app"
+    if [[ -n "$backup_app" ]]; then
+      mv "$backup_app" "$installed_app" 2>/dev/null || true
+    fi
+    _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+    return 1
+  fi
+  if [[ -n "$backup_app" ]]; then
+    rm -rf "$backup_app" || warn "Installed app, but could not remove backup: $backup_app"
+  fi
+
+  _revv_cleanup_release_app_install "$mount_point" "$bundle_file"
+  REVV_INSTALLED_APP="$installed_app"
+}
+
+_revv_cleanup_release_app_install() {
+  local mount_point="$1" bundle_file="$2"
+  hdiutil detach -quiet "$mount_point" 2>/dev/null || true
+  rm -rf "$mount_point" "$bundle_file"
+}
+
 # ── LaunchAgent plist generator ───────────────────────────────
 #
 # Writes the com.revv.server LaunchAgent plist at $plist_path. Shared between
@@ -386,11 +528,21 @@ write_launch_agent_plist() {
   [[ -d "$project_root" ]] || fail "write_launch_agent_plist: project_root missing: $project_root"
   [[ -n "$log_dir"      ]] || fail "write_launch_agent_plist: log_dir required"
 
-  local claude_bin opencode_bin
+  local claude_bin opencode_bin codex_bin
   claude_bin="$(command -v claude 2>/dev/null || true)"
   opencode_bin="$(command -v opencode 2>/dev/null || true)"
+  codex_bin="$(command -v codex 2>/dev/null || true)"
+  # The Codex desktop app bundles a CLI that shares its ChatGPT session. The
+  # app cannot always install a PATH alias, so persist this known macOS path
+  # when a separately installed CLI is unavailable.
+  if [[ -z "$codex_bin" && -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
+    codex_bin="/Applications/ChatGPT.app/Contents/Resources/codex"
+  elif [[ -z "$codex_bin" && -x "$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
+    codex_bin="$HOME/Applications/ChatGPT.app/Contents/Resources/codex"
+  fi
   [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
   [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
+  [[ -n "$codex_bin"    ]] && info "Detected codex at $codex_bin"
 
   # ── GitHub Enterprise env vars ─────────────────────────────
   # Resolution order (first non-empty value wins):
@@ -467,10 +619,22 @@ write_launch_agent_plist() {
         <string>$HOME/.bun/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>$HOME</string>
+        <key>REVV_CHANNEL</key>
+        <string>prod</string>
+        <key>PORT</key>
+        <string>45678</string>
+        <key>REVV_DB_PATH</key>
+        <string>${REVV_SUPPORT_DIR}/revv.db</string>
         <key>REVV_CLAUDE_BIN</key>
         <string>$claude_bin</string>
         <key>REVV_OPENCODE_BIN</key>
         <string>$opencode_bin</string>
+        <key>REVV_CODEX_BIN</key>
+        <string>$codex_bin</string>
+        <!-- The maintained Codex ACP adapter uses this standard variable to
+             start the user's signed-in desktop/CLI executable. -->
+        <key>CODEX_PATH</key>
+        <string>$codex_bin</string>
 $extra_env_xml    </dict>
 
     <key>RunAtLoad</key>

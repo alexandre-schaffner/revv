@@ -1,6 +1,7 @@
 <script lang="ts">
-import type { AiAgent, ContextWindow } from "@revv/shared";
+import { AUTO_SENTINEL, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
+import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
 import ProviderIcon from "$lib/components/icons/ProviderIcon.svelte";
 import {
@@ -8,45 +9,92 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { getDefaultModel, type ModelOption } from "$lib/constants/models";
 import {
   areModelsLoaded,
   fetchModels,
-  getAvailableModels,
+  getReviewModelOptions,
   getSettings,
+  isAutoModelOffered,
+  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
+import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
+import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
-
-const CONTEXT_WINDOW_OPTIONS: { label: string; value: ContextWindow }[] = [
-  { label: "200K", value: "200k" },
-  { label: "1M", value: "1m" },
-];
 
 let open = $state(false);
 
-let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-// Read models for the *current* agent straight from the cached store.
-// This eliminates the race where a local fetch could resolve with models
-// for an agent the user has already switched away from.
-let fetchedModels = $derived(getAvailableModels(currentAgent));
-let fetchDone = $derived(areModelsLoaded(currentAgent));
+// The model surface follows `aiAgent`; capabilities are the registry's single source of truth.
+let currentId = $derived(resolveChatAgentId(getSettings()));
+let caps = $derived(getAgentCapabilities(currentId));
+// opencode is the only agent whose catalog is fetched live; everything else
+// uses the curated static list baked into the registry.
+let isDynamic = $derived(caps.models === "dynamic");
+let fetchedModels = $derived<ModelOption[]>(getReviewModelOptions(currentId));
+let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
 let currentModel = $derived(getSettings()?.aiModel ?? "");
-let currentLabel = $derived(
-  !fetchDone
-    ? "Loading..."
-    : fetchedModels.length === 0
-      ? "No models"
-      : (fetchedModels.find((m) => m.value === currentModel)?.label ??
-        (currentModel || "Select model")),
+let autoModelOffered = $derived(isAutoModelOffered(currentId));
+let isAuto = $derived(currentModel === AUTO_SENTINEL);
+
+function labelFor(value: string | null): string | null {
+  if (!value) return null;
+  return fetchedModels.find((m) => m.value === value)?.label ?? value;
+}
+
+const selectedSizing = sizingForSelectedPr(() => isAuto && autoModelOffered);
+let sizing = $derived(selectedSizing.sizing);
+
+/**
+ * What Auto resolves to for the PR at its *current* head.
+ *
+ * The preview leads: a finished run's model is stale after a pull, while the
+ * preview is keyed on the current head and shares the server's sizing cache.
+ * Exception: a run in flight is ground truth, even if it launched before a
+ * settings change the preview already reflects. A `ready` preview with a
+ * null model means routing declined, so it falls back to the agent's default.
+ */
+let autoResolvedLabel = $derived.by((): string | null => {
+  if (!isAuto) return null;
+  if (getIsStreaming()) {
+    const running = labelFor(getWalkthroughModelUsed());
+    if (running) return running;
+  }
+  if (sizing?.status !== "ready") return null;
+  return labelFor(sizing.model) ?? labelFor(getDefaultModel(currentId));
+});
+
+/** Whether a sizing is actually outstanding; bare "Auto" when there's no PR to size. */
+let autoSizing = $derived(isAuto && autoResolvedLabel === null && selectedSizing.pending);
+
+let autoTitle = $derived(
+  autoResolvedLabel
+    ? `Auto picked ${autoResolvedLabel} for this pull request, from how intricate its diff looked. It is re-sized when new commits arrive.`
+    : "Revv sizes the pull request and picks a model from how intricate its diff looks.",
 );
 
-// Cache-miss fallback: if the bootstrap prefetch hasn't populated this
-// agent's models yet (e.g. the server was unreachable at app start), kick
-// off a single fetch. `fetchModels` internally de-dupes concurrent calls.
+let currentLabel = $derived(
+  // Checked ahead of loading/empty: Auto is a real selection even mid-fetch,
+  // and without this the trigger would render the raw sentinel string.
+  isAuto
+    ? autoResolvedLabel
+      ? `Auto · ${autoResolvedLabel}`
+      : autoSizing
+        ? "Auto · sizing…"
+        : "Auto"
+    : !fetchDone
+      ? "Loading..."
+      : fetchedModels.length === 0
+        ? "No models"
+        : (fetchedModels.find((m) => m.value === currentModel)?.label ??
+          (currentModel || "Select model")),
+);
+
+// Cache-miss fallback for opencode's dynamic catalog: if the bootstrap prefetch
+// hasn't populated it yet, kick off a single (de-duped) fetch.
 $effect(() => {
-  const agent = currentAgent;
-  if (!areModelsLoaded(agent)) {
-    void fetchModels(agent);
+  if (caps.models === "dynamic" && !areModelsLoaded("opencode")) {
+    void fetchModels("opencode");
   }
 });
 
@@ -76,7 +124,7 @@ type ModelGroup = {
 };
 
 let groupedModels = $derived.by((): ModelGroup[] => {
-  if (currentAgent !== "opencode") return [];
+  if (!isDynamic) return [];
   const map = new SvelteMap<string, { label: string; value: string }[]>();
   for (const m of fetchedModels) {
     const p = getProvider(m.value) ?? "__none__";
@@ -91,29 +139,21 @@ let groupedModels = $derived.by((): ModelGroup[] => {
 });
 
 let currentProvider = $derived(getProvider(currentModel));
-let currentWindow = $derived((getSettings()?.aiContextWindow ?? "200k") as ContextWindow);
 
 function select(value: string) {
   updateSettings({ aiModel: value });
-  // Keep popover open so the user can also pick the context window in one session
-}
-
-function selectWindow(value: ContextWindow) {
-  updateSettings({ aiContextWindow: value });
   open = false;
 }
 </script>
 
 <PopoverRoot bind:open>
 	<PopoverTrigger>
-		<SelectTrigger label={currentLabel}>
+		<SelectTrigger label={currentLabel} title={isAuto ? autoTitle : undefined}>
 			{#snippet icon()}
-				<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
-			{/snippet}
-			{#snippet trailing()}
-				{#if currentAgent === 'claude'}
-					<span class="text-xs text-text-muted">·</span>
-					<span class="text-xs text-text-secondary">{currentWindow === '1m' ? '1M' : '200K'}</span>
+				{#if isAuto}
+					<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				{:else}
+					<ProviderIcon provider={currentProvider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				{/if}
 			{/snippet}
 		</SelectTrigger>
@@ -123,7 +163,28 @@ function selectWindow(value: ContextWindow) {
 		align="start"
 		side="top"
 	>
-		{#if currentAgent === 'opencode'}
+		{#if autoModelOffered}
+			<button
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				onclick={() => select(AUTO_SENTINEL)}
+			>
+				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
+				<span class="min-w-0 flex-1 truncate text-left">
+					Auto
+					{#if autoResolvedLabel || autoSizing}
+						<span class="text-text-muted">
+							· {autoResolvedLabel ?? 'sizing…'}
+						</span>
+					{/if}
+				</span>
+				{#if isAuto}
+					<Check size={12} class="shrink-0 text-accent" />
+				{/if}
+			</button>
+			<div class="my-1 border-t border-border"></div>
+		{/if}
+
+		{#if isDynamic}
 			{#each groupedModels as group, i (group.provider ?? '__none__')}
 				{#if i > 0}
 					<div class="my-1 border-t border-border"></div>
@@ -133,15 +194,14 @@ function selectWindow(value: ContextWindow) {
 						{group.label}
 					</div>
 				{/if}
-				{#each group.models as opt (opt.value)}
-					<button
-						class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-						onclick={() => select(opt.value)}
-					>
-					<ProviderIcon provider={group.provider} size={14} class="shrink-0 opacity-60 text-text-secondary" />
-					<span class="min-w-0 flex-1 truncate text-left">{opt.label}</span>
+			{#each group.models as opt (opt.value)}
+				<button
+					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+					onclick={() => select(opt.value)}
+				>
+					<span class="min-w-0 truncate text-left">{opt.label}</span>
 					{#if currentModel === opt.value}
-						<Check size={12} weight="regular" class="shrink-0 text-accent" />
+						<Check size={12} class="shrink-0 text-accent" />
 					{/if}
 				</button>
 			{/each}
@@ -155,28 +215,11 @@ function selectWindow(value: ContextWindow) {
 				<ProviderIcon provider={getProvider(opt.value)} size={14} class="shrink-0 opacity-60 text-text-secondary" />
 				<span class="min-w-0 flex-1 truncate text-left">{opt.label}</span>
 				{#if currentModel === opt.value}
-					<Check size={12} weight="regular" class="shrink-0 text-accent" />
+					<Check size={12} class="shrink-0 text-accent" />
 				{/if}
 			</button>
 		{/each}
 		{/if}
 
-		{#if currentAgent === 'claude'}
-			<div class="my-1 border-t border-border"></div>
-			<div class="px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
-				Context Window
-			</div>
-			{#each CONTEXT_WINDOW_OPTIONS as opt (opt.value)}
-				<button
-					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
-					onclick={() => selectWindow(opt.value)}
-				>
-					{opt.label}
-					{#if currentWindow === opt.value}
-						<Check size={12} weight="regular" class="shrink-0 text-accent" />
-					{/if}
-				</button>
-			{/each}
-		{/if}
 	</PopoverContent>
 </PopoverRoot>

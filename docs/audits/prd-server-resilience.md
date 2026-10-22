@@ -14,13 +14,15 @@ The server audit uncovered critical error-handling gaps, memory leaks, missing r
 
 ## User Stories
 
-### US-001: Add `.catch()` to walkthrough SSE `emitQueue`
+### US-001: Walkthrough event emit must survive rendering errors
 
-**Description:** As an operator, I want the walkthrough SSE stream to survive rendering errors without crashing the server.
+**Description:** As an operator, I want the walkthrough emit path to survive rendering errors (e.g. `prerenderBlock`) without crashing the server.
+
+**Context:** The per-PR SSE handler (`walkthrough-stream.ts`) was removed when walkthrough events moved to the global SSE bus; events now fan out from `WalkthroughJobs` `emitEvent` through the `Broadcaster`. Any throw on that path (prerender, encode, enqueue) must be caught and logged, not propagated.
 
 **Acceptance Criteria:**
 
-- [ ] `apps/server/src/routes/reviews/handlers/walkthrough-stream.ts:264-291` appends `.catch(err => logError("walkthrough-sse", "emitQueue error:", err))` to the `emitQueue` chain.
+- [ ] The walkthrough emit path (`WalkthroughJobs.ts` `emitEvent`) wraps fallible work in `Effect.catchAll` / `.catch` and logs via `logError` with `walkthroughId` + event type.
 - [ ] A failure in `prerenderBlock` logs the error and continues processing subsequent events.
 - [ ] The server process does not terminate on `prerenderBlock` exceptions.
 - [ ] `make typecheck` passes.
@@ -53,8 +55,7 @@ The server audit uncovered critical error-handling gaps, memory leaks, missing r
 
 **Acceptance Criteria:**
 
-- [ ] `apps/server/src/routes/prs.ts:384-392` (`POST /api/prs/sync`) enforces a minimum 10-second interval per `accountId`.
-- [ ] `apps/server/src/routes/ws.ts:93-94` (`prs:request-sync`) enforces the same 10-second interval.
+- [ ] `apps/server/src/routes/prs.ts` (`POST /api/prs/sync`) enforces a minimum 10-second interval per `accountId`. This is the only sync trigger — the realtime channel is SSE (server→client only), so there is no inbound `prs:request-sync` command to rate-limit separately.
 - [ ] Violations return `429 Too Many Requests` with `Retry-After` header.
 - [ ] Rate-limit state is stored in-memory (acceptable for single-instance server).
 - [ ] `make typecheck` passes.
@@ -137,7 +138,7 @@ The server audit uncovered critical error-handling gaps, memory leaks, missing r
 
 ## Functional Requirements
 
-- FR-1: SSE `emitQueue` must never propagate unhandled rejections.
+- FR-1: The walkthrough event emit path must never propagate unhandled rejections.
 - FR-2: Walkthrough status must transition to `complete` when phase D is reached.
 - FR-3: `limit` query param must be capped at 100.
 - FR-4: Sync endpoints must enforce a 10-second per-account rate limit.

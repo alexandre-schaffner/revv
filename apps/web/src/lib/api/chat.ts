@@ -9,38 +9,36 @@
 // from SQLite on mount instead of starting empty after a desktop reload.
 
 import type {
+  AcpAgentId,
   Activity,
-  ActivityKind,
+  ChatAttachment,
+  ChatAttachmentMetadata,
+  ChatSessionContext,
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
   NormalizedQuestion,
-  NormalizedQuestionOption,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
 import { parseSSEBuffer } from "$lib/utils/sse-parser";
 
 // Re-export activity types used by stores and components.
-export type {
-  Activity,
-  ActivityKind,
-  ChatTask,
-  InteractionMode,
-  NormalizedQuestion,
-  NormalizedQuestionOption,
-};
+export type { Activity, ChatTask, InteractionMode, NormalizedQuestion };
 
 export interface ChatRequestParams {
   prId: string;
   message: string;
   interactionMode?: InteractionMode;
   approvedPlanId?: string;
+  attachments?: ReadonlyArray<ChatAttachment>;
 }
 
 export interface ChatCallbacks {
   onText: (chunk: string) => void;
   onActivity: (activity: Activity & { subagentInvocationId?: string }) => void;
+  onActivityResult: (params: { callId: string; output: string; isError: boolean }) => void;
+  onActivityInput: (params: { callId: string; payload: unknown }) => void;
   onTaskList: (params: { turnId: string; tasks: ReadonlyArray<ChatTask> }) => void;
   onPlanPresented: (params: { planId: string; turnId: string; markdown: string }) => void;
   onSubagentStart: (params: {
@@ -123,6 +121,7 @@ export function streamChatMessage(
     body: JSON.stringify({
       prId: params.prId,
       message: params.message,
+      ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
       ...(params.interactionMode !== undefined ? { interactionMode: params.interactionMode } : {}),
       ...(params.approvedPlanId !== undefined ? { approvedPlanId: params.approvedPlanId } : {}),
     }),
@@ -182,10 +181,19 @@ export function streamChatMessage(
               toolName: frame.toolName,
               summary: frame.summary,
               payload: frame.payload,
+              ...(frame.callId !== undefined ? { callId: frame.callId } : {}),
               ...(frame.subagentInvocationId !== undefined
                 ? { subagentInvocationId: frame.subagentInvocationId }
                 : {}),
             });
+          } else if (frame.kind === "activity-result") {
+            callbacks.onActivityResult({
+              callId: frame.callId,
+              output: frame.output,
+              isError: frame.isError,
+            });
+          } else if (frame.kind === "activity-input") {
+            callbacks.onActivityInput({ callId: frame.callId, payload: frame.payload });
           } else if (frame.kind === "task-list") {
             callbacks.onTaskList({
               turnId: frame.turnId,
@@ -366,8 +374,7 @@ export async function submitQuestionAnswer(
 }
 
 export interface AvailableAgents {
-  agent: "claude" | "opencode";
-  agents: readonly string[];
+  agent: AcpAgentId;
   planAvailable: boolean;
 }
 
@@ -381,6 +388,23 @@ export async function fetchAvailableAgents(): Promise<AvailableAgents> {
   return (await res.json()) as AvailableAgents;
 }
 
+export async function fetchSessionContext(
+  prId: string,
+  opts: { warm?: boolean } = {},
+): Promise<ChatSessionContext> {
+  // `warm=1` opts into the server's eager path (acquire worktree + harvest slash
+  // commands) so the `/`-command menu works on a brand-new chat. The plain fetch
+  // stays side-effect-free.
+  const query = opts.warm ? "?warm=1" : "";
+  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/session-context${query}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to load chat session context: ${res.status}`);
+  }
+  return (await res.json()) as ChatSessionContext;
+}
+
 // ── History reload ────────────────────────────────────────────────────────
 
 export interface PersistedChatMessage {
@@ -389,6 +413,7 @@ export interface PersistedChatMessage {
   chatSessionId: string;
   role: "user" | "assistant";
   content: string;
+  attachments: ReadonlyArray<ChatAttachmentMetadata>;
   isStreaming: boolean;
   sequence: number;
   turnId: string;
@@ -406,6 +431,9 @@ export interface PersistedChatActivity {
   toolName: string | null;
   summary: string;
   payloadJson: string | null;
+  callId: string | null;
+  output: string | null;
+  isError: boolean | null;
   sequence: number;
   subagentInvocationId: string | null;
   createdAt: string;
@@ -425,7 +453,7 @@ export interface PersistedChatPlan {
   turnId: string;
   planMarkdown: string;
   status: "pending" | "approved" | "rejected" | "superseded";
-  source: "claude" | "opencode";
+  source: "acp";
   sequence: number;
   createdAt: string;
   decidedAt: string | null;
@@ -442,7 +470,7 @@ export interface PersistedChatSubagent {
   prompt: string;
   status: "running" | "completed" | "errored";
   result: string | null;
-  source: "claude" | "opencode";
+  source: "acp";
   sequence: number;
   startedAt: string;
   completedAt: string | null;
@@ -453,7 +481,7 @@ export interface PersistedChatQuestion {
   id: string;
   chatSessionId: string;
   turnId: string;
-  source: "claude" | "opencode";
+  source: "acp";
   providerRequestId: string;
   providerToolCallId: string | null;
   previewFormat: "markdown" | "html";
@@ -503,7 +531,8 @@ export interface ProposedCommit {
 
 export interface ProposedChanges {
   branchName: string | null;
-  prHeadSha: string | null;
+  /** Baseline the listed commits are measured from — NOT the PR head. */
+  baseSha: string | null;
   commits: ProposedCommit[];
 }
 

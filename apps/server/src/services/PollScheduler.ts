@@ -1,58 +1,207 @@
-import type { PullRequest, SyncChange } from "@revv/shared";
+import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
-import { eq, inArray } from "drizzle-orm";
-import { Cause, Chunk, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
-import { account, user } from "../db/schema/auth";
+import { pullRequests } from "../db/schema/pull-requests";
+import {
+  DbError,
+  type GitHubAuthError,
+  type GitHubError,
+  type NotFoundError,
+  type ValidationError,
+} from "../domain/errors";
+import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb as withDbHelper } from "../effects/with-db";
-import { logError } from "../logger";
+import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
+import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import { GitHubEtagCache } from "./GitHubEtagCache";
+import { apiBaseForHost } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
+import {
+  broadcastToAccount as broadcastToAccountWith,
+  type GitHubInfra,
+  makeAccountPauses,
+  openSyncCycle,
+  type PollDeps,
+  type SyncCycle,
+} from "./poll-cycle";
+import {
+  backfillArchive,
+  refetchDiffs,
+  refreshAccountIdentities,
+  refreshRepoMetadata,
+} from "./poll-maintenance";
+import { announceSyncChanges, collectSyncChanges } from "./poll-notifications";
+import {
+  archiveClosedPrs,
+  type ListedSignature,
+  movedRangePrIds,
+  openListMoved,
+  probeRepos,
+  syncRepoOpenPrs,
+} from "./poll-open-prs";
+import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
 import { RemoteUserService } from "./RemoteUser";
+import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
 import { SyncService } from "./Sync";
+import { StackService } from "./stacks/StackService";
+import { TokenProvider } from "./TokenProvider";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughJobs } from "./WalkthroughJobs";
-import { WebSocketHub } from "./WebSocketHub";
 
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;
   readonly stop: () => Effect.Effect<void>;
   readonly restart: (intervalMinutes: number) => Effect.Effect<void>;
+  /**
+   * Full sync of every repo on every account. Coalesces onto an in-flight
+   * cycle rather than starting a second one.
+   */
   readonly syncNow: () => Effect.Effect<void>;
+  /**
+   * Bring the PR list up to date because a client is looking at it.
+   *
+   * The same cycle the poll fiber runs — notifications and auto-walkthroughs
+   * included, since a change found here is one the next periodic cycle would
+   * no longer see — skipped when any cycle started in the last
+   * `FRESHEN_MIN_INTERVAL_MS`. Unlike {@link syncNow} it does not force a
+   * `prs:updated`: the caller already holds the DB state.
+   */
+  readonly freshen: () => Effect.Effect<void>;
+  /**
+   * Re-read ONE pull request from GitHub and reconcile it.
+   *
+   * The targeted counterpart to {@link syncNow}: bounded to a couple of
+   * requests instead of a full pass over every repo, so it is what the UI's
+   * per-PR refresh should call. It also uses GitHub's PR *detail* endpoint,
+   * which — unlike the list endpoint the poll runs on — carries
+   * additions/deletions/changed_files, making this the path by which an open PR
+   * acquires real diff stats.
+   */
+  readonly refreshPr: (
+    prId: string,
+  ) => Effect.Effect<void, NotFoundError | ValidationError | GitHubAuthError | GitHubError>;
   readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
 };
 
-export class PollScheduler extends Context.Tag("PollScheduler")<
-  PollScheduler,
-  PollSchedulerService
->() {}
+export class PollScheduler extends Context.Service<PollScheduler, PollSchedulerService>()(
+  "PollScheduler",
+) {}
 
-/** Derive the GitHub REST API base URL from a stored repo host string. */
-function hostToApiBase(host: string): string {
-  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
+const METADATA_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const ARCHIVE_BACKFILL_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * How recently a cycle must have started for `freshen` to skip. Every window
+ * open and focus asks for one, so this is what keeps alt-tabbing (or several
+ * windows) from becoming a cycle per event: at most one extra cycle per
+ * interval, however often clients ask, and none at all while the poll
+ * interval is shorter than this. Each cycle costs at least a GraphQL point
+ * per account, and a full re-list a point per repo.
+ */
+const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
+ * What started a cycle. `manual` is the user's refresh button: it always
+ * re-lists every repo, always answers with a `prs:updated`, and stays quiet
+ * about notifications. `periodic` and `freshen` behave alike once running.
+ */
+type SyncTrigger = "periodic" | "manual" | "freshen";
+
+const THREAD_SWEEP_MAX_PRS = 20;
+
+/**
+ * How often the sweep re-reads a PR whose `updatedAt` hasn't moved but which
+ * still has an unresolved thread. GitHub doesn't bump `updatedAt` on a
+ * resolve/unresolve, so such a PR can only be caught by asking again; opening
+ * the PR syncs its threads on demand, so this only bounds how stale the list's
+ * counts get.
+ */
+const THREAD_RECHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+export interface ThreadSweepMark {
+  readonly updatedAt: string;
+  readonly sweptAt: number;
+}
+
+export function rankThreadSweep<P extends Pick<PullRequest, "id" | "updatedAt">>(
+  openPrs: readonly P[],
+  marks: ReadonlyMap<string, ThreadSweepMark>,
+  now: number,
+): Array<{ readonly pr: P; readonly recheck: boolean }> {
+  const moved: P[] = [];
+  const unseen: P[] = [];
+  const recheck: Array<{ readonly pr: P; readonly sweptAt: number }> = [];
+  for (const pr of openPrs) {
+    const mark = marks.get(pr.id);
+    if (mark === undefined) unseen.push(pr);
+    else if (mark.updatedAt !== pr.updatedAt) moved.push(pr);
+    else if (now - mark.sweptAt >= THREAD_RECHECK_INTERVAL_MS) {
+      recheck.push({ pr, sweptAt: mark.sweptAt });
+    }
+  }
+  recheck.sort((a, b) => a.sweptAt - b.sweptAt);
+  return [
+    ...[...moved, ...unseen].map((pr) => ({ pr, recheck: false })),
+    ...recheck.map(({ pr }) => ({ pr, recheck: true })),
+  ];
 }
 
 export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
     // Capture all dependencies once at layer construction time
-    const hub = yield* WebSocketHub;
-    const github = yield* GitHubService;
+    const broadcaster = yield* Broadcaster;
+    const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
-    const remoteUserService = yield* RemoteUserService;
     const diffCache = yield* DiffCacheService;
     const repoService = yield* RepositoryService;
     const settingsService = yield* SettingsService;
     const syncService = yield* SyncService;
     const etagCache = yield* GitHubEtagCache;
     const walkthroughJobs = yield* WalkthroughJobs;
-    const walkthroughService = yield* WalkthroughService;
+    const tokenProvider = yield* TokenProvider;
     const { db } = yield* DbService;
+    const deps: PollDeps = {
+      db,
+      broadcaster,
+      github,
+      prService,
+      remoteUserService: yield* RemoteUserService,
+      diffCache,
+      repoService,
+      walkthroughJobs,
+      walkthroughService: yield* WalkthroughService,
+      repoClone: yield* RepoCloneService,
+      tokenProvider,
+      stackService: yield* StackService,
+    };
+
+    // Bad-token and rate-limit pauses, carried from one cycle to the next.
+    const accountPauses = makeAccountPauses();
+    // Start at 0 so the first poll runs a metadata refresh immediately: this
+    // re-signs any expired GitHub Enterprise avatar URLs and backfills the
+    // cached avatar bytes (`repositories.avatar_content`) right after boot,
+    // instead of leaving stale/blank icons for up to an hour.
+    let lastMetadataRefreshAt = 0;
+    // Seed to 0 (not `Date.now()`) so the archive backfill runs on the first
+    // poll after boot rather than waiting a full interval. Without this a fresh
+    // mirror shows no closed/merged PRs for the first hour, and in dev — where
+    // the server restarts more often than once an hour — the backfill would
+    // never run at all, leaving the archive populated only by live closures.
+    let lastArchiveBackfillAt = 0;
+    // The signature of each repo's last open-PR list that landed in SQLite,
+    // which lets a cycle skip re-listing repos where nothing moved. A
+    // reconstructible cache: empty after a restart, so the first cycle lists
+    // every repo.
+    const listedSignatures = new Map<string, ListedSignature>();
+    const stacklessUntil = new Map<string, number>();
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -61,9 +210,7 @@ export const PollSchedulerLive = Layer.effect(
     // construction) so effects that transitively call `github.*` REST methods
     // — which now participate in the ETag cache — don't leak those services
     // into the public Tag signatures.
-    const provideInfra = <A, E>(
-      eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
-    ): Effect.Effect<A, E> =>
+    const provideInfra = <A, E>(eff: Effect.Effect<A, E, GitHubInfra>): Effect.Effect<A, E> =>
       eff.pipe(
         Effect.provideService(DbService, { db }),
         Effect.provideService(GitHubEtagCache, etagCache),
@@ -74,841 +221,527 @@ export const PollSchedulerLive = Layer.effect(
     // The first periodic sync is used as baseline — we don't know what
     // changed vs the prior server run, so we skip notifications for it.
     const hasPeriodicSyncedOnceRef = yield* Ref.make(false);
-    // Set to true by syncNow to suppress the summary during manual syncs.
-    const suppressSummaryRef = yield* Ref.make(false);
+    const broadcastGlobal = (msg: ServerEventMessage) =>
+      broadcaster.broadcastAll(msg).pipe(Effect.orElseSucceed(() => undefined));
+    const broadcastToAccount = (accountId: string, msg: ServerEventMessage) =>
+      broadcastToAccountWith(deps, accountId, msg);
 
-    // Fiber ref for the running poll loop — null when stopped
-    const fiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    /**
+     * Fan a data-bearing sync envelope out to every account with repos, one
+     * scoped message each. `prs:sync-started` / `prs:sync-complete` carry an
+     * account's open-PR count, so per `docs/conventions.md` §3 they must not go
+     * out via `broadcastAll` — that leaks one account's numbers to another's
+     * clients.
+     */
+    const broadcastPerAccount = (
+      accountIds: readonly string[],
+      msg: (accountId: string) => ServerEventMessage,
+    ): Effect.Effect<void> =>
+      Effect.forEach(accountIds, (id) => broadcastToAccount(id, msg(id)), {
+        discard: true,
+      });
 
-    // The core sync effect — all services are plain values captured from the closure.
-    // `DbService | GitHubEtagCache | SettingsService` remain in R because `github.*`
-    // methods depend on them internally; the layer that constructs PollScheduler
-    // already has all provided, so the forked fiber inherits them.
-    const syncAllRepos: Effect.Effect<void, never, DbService | GitHubEtagCache | SettingsService> =
+    /**
+     * Broadcast the canonical open-PR DB state per account.
+     *
+     * `prs:updated` is full-state, not a patch — it includes repos whose
+     * GitHub fetch failed this cycle, so a client can always treat it as the
+     * whole truth. That also makes it expensive: the entire PR list per
+     * account, and a whole-array swap in `replacePullRequests` that re-derives
+     * every sidebar filter and sort. So a cycle only sends it when it actually
+     * moved something. A client that misses one still reconciles:
+     * `reconcileOnReconnect` refetches via REST on every SSE (re)connect.
+     */
+    const broadcastOpenPrs = (accountIds: readonly string[]) =>
+      Effect.forEach(
+        accountIds,
+        (accountId) =>
+          Effect.gen(function* () {
+            const accountPrs = yield* withDb(prService.listPrs(accountId));
+            yield* broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+          }),
+        { discard: true },
+      );
+
+    const syncLoop = yield* makeRestartableLoop;
+
+    // ── Cycle phases ──────────────────────────────────────────────────────
+    // Each is one step of `syncAllRepos`, reading the cycle's account context
+    // and reporting back what the next steps need.
+
+    /**
+     * Bring every repo's open PRs in SQLite up to date with GitHub. Repos the
+     * signature probe proves unchanged reuse their DB rows (never on a manual
+     * sync). Returns the cycle's open PRs and the repos GitHub actually listed.
+     */
+    const syncOpenPrLists = (
+      cycle: SyncCycle,
+      allRepos: readonly Repository[],
+      existingPrs: readonly PullRequest[],
+      existingMap: ReadonlyMap<string, PullRequest>,
+      trigger: SyncTrigger,
+    ): Effect.Effect<
+      { readonly allPrs: PullRequest[]; readonly listedRepoIds: ReadonlySet<string> },
+      DbError,
+      GitHubInfra
+    > =>
       Effect.gen(function* () {
-        yield* hub.broadcast({ type: "prs:sync-started" });
+        const diffStatsHeadRows = yield* Effect.try({
+          try: () =>
+            db
+              .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
+              .from(pullRequests)
+              .all(),
+          catch: (cause) =>
+            new DbError({ message: "Failed to read PR diff-stat watermarks", cause }),
+        });
 
-        // Snapshot ETag-cache counters so we can report deltas for this cycle.
-        const etagStatsBefore = etagCache.stats();
-
-        const allRepos = yield* withDb(repoService.listRepos());
-
-        if (allRepos.length === 0) {
-          const etagStatsAfter = etagCache.stats();
-          yield* hub.broadcast({
-            type: "prs:sync-complete",
-            data: {
-              count: 0,
-              timestamp: new Date().toISOString(),
-              cached: etagStatsAfter.hits304 - etagStatsBefore.hits304,
-              refetched: etagStatsAfter.misses200 - etagStatsBefore.misses200,
-            },
-          });
-          return;
+        const liveRepoIds = new Set(allRepos.map((r) => r.id));
+        for (const repoId of listedSignatures.keys()) {
+          if (!liveRepoIds.has(repoId)) listedSignatures.delete(repoId);
         }
-
-        // ── Hydrate per-repo account context ─────────────────────────────────
-        // Each repo is bound to a specific `account.id` (its owning OAuth
-        // connection). We resolve the per-repo account + token here, ONCE,
-        // and use it everywhere below — instead of falling back to
-        // `getGitHubToken("single-user", host)`, which silently picks "first
-        // user in the user table, first account row matching the host" and
-        // therefore mixes up identities the moment two users or two accounts
-        // on the same host coexist on this machine.
-        type AccountCtx = {
-          readonly id: string;
-          readonly userId: string;
-          readonly accessToken: string | null;
-          readonly githubLogin: string | null;
-          readonly avatarUrl: string | null;
-        };
-        const repoRowsForAccount = db
-          .select({ id: repositories.id, accountId: repositories.accountId })
-          .from(repositories)
-          .all();
-        const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
-        const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
-        const accountRows: AccountCtx[] =
-          accountIdSet.length > 0
-            ? db
-                .select({
-                  id: account.id,
-                  userId: account.userId,
-                  accessToken: account.accessToken,
-                  githubLogin: account.githubLogin,
-                  avatarUrl: account.avatarUrl,
-                })
-                .from(account)
-                .where(inArray(account.id, accountIdSet))
-                .all()
-            : [];
-        const accountById = new Map(accountRows.map((a) => [a.id, a]));
-        const accountForRepo = (repoId: string): AccountCtx | null => {
-          const accId = repoToAccountId.get(repoId);
-          if (!accId) return null;
-          return accountById.get(accId) ?? null;
-        };
-
-        // Per-cycle short-circuit: when an account's token returns 401 on the
-        // first GitHub call we attempt, stop trying it for the remainder of
-        // this tick. Without this gate, every repo bound to that account
-        // produces its own 401 + error log — a single signed-out user with
-        // ten repos used to spew ten "search failed" messages and burn ten
-        // round-trips. The next tick re-reads `account.accessToken`, so a
-        // freshly-signed-in user resumes automatically on the following
-        // poll interval.
-        const invalidAccountIds = new Set<string>();
-        const isAuthErr = (e: unknown): boolean =>
-          typeof e === "object" &&
-          e !== null &&
-          (e as { _tag?: string })._tag === "GitHubAuthError";
-        const markAuthFailure = (acc: AccountCtx, where: string): Effect.Effect<void> =>
-          Effect.sync(() => {
-            if (invalidAccountIds.has(acc.id)) return;
-            invalidAccountIds.add(acc.id);
-            logError(
-              "PollScheduler",
-              `GitHub token rejected for account ${acc.id} (${acc.githubLogin ?? "?"}) during ${where}; skipping remaining work for this account this cycle. Next tick will retry with the latest token.`,
-            );
-          });
-        const skipInvalid = (acc: AccountCtx | null): boolean =>
-          acc !== null && invalidAccountIds.has(acc.id);
-
-        // Capture existing SHAs before sync for change detection
-        const existingPrs = yield* withDb(prService.listPrs());
-        const existingShaMap = new Map(
-          existingPrs.map((pr) => [pr.id, { headSha: pr.headSha, baseSha: pr.baseSha }]),
-        );
-
-        // ── Refresh repo metadata (avatar URL, default branch) ────────────────
-        // Bypasses the ETag cache — some GitHub Enterprise instances return
-        // signed `avatar_url`s whose token expires without invalidating the
-        // endpoint's ETag, so a plain `getRepo` would replay the stale body.
-        // Runs before PR sync so the sidebar sees fresh avatars ASAP after
-        // server startup.
-        let anyRepoChanged = false;
-        yield* Effect.forEach(
+        const probed = yield* probeRepos(
+          deps,
+          cycle,
           allRepos,
-          (repo) =>
-            Effect.gen(function* () {
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token || skipInvalid(acc)) return;
-              const repoApiBase = hostToApiBase(repo.githubHost);
-              const fresh = yield* github.getRepoFresh(repo.fullName, token, repoApiBase).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) && acc
-                    ? markAuthFailure(acc, "repo metadata refresh")
-                    : Effect.void,
-                ),
-                Effect.catchAll(() => Effect.succeed(null)),
-              );
-              if (!fresh) return;
-              if (
-                fresh.avatarUrl !== repo.avatarUrl ||
-                fresh.defaultBranch !== repo.defaultBranch
-              ) {
-                yield* withDb(
-                  repoService.updateRepoMetadata(repo.id, {
-                    avatarUrl: fresh.avatarUrl,
-                    defaultBranch: fresh.defaultBranch,
-                  }),
-                ).pipe(Effect.orElseSucceed(() => undefined));
-                anyRepoChanged = true;
-              }
-            }).pipe(Effect.orElseSucceed(() => undefined)),
-          { concurrency: 3 },
+          listedSignatures,
+          trigger !== "manual",
         );
 
-        if (anyRepoChanged) {
-          const refreshedRepos = yield* withDb(repoService.listRepos());
-          // Group by account and broadcast per-account so each connected client
-          // only receives repos for the account it is authenticated against.
-          const reposByAccount = Map.groupBy(
-            refreshedRepos,
-            (r) => repoToAccountId.get(r.id) ?? "unknown",
-          );
-          for (const [accountId, accountRepos] of reposByAccount) {
-            yield* hub.broadcastToAccount(accountId, { type: "repos:updated", data: accountRepos });
-          }
-        }
-
-        // ── Refresh per-account user avatar + githubLogin ────────────────────
-        // Same rationale as the repo-metadata refresh above: GitHub Enterprise
-        // signed `avatar_url`s on the /user endpoint expire without the ETag
-        // changing, so a cached response replays a dead token. Bypassing the
-        // ETag cache keeps the stored avatar URLs fresh so sidebars, comment
-        // headers, and the settings page don't render broken avatars after the
-        // signed URL rotates.
-        //
-        // We refresh PER ACCOUNT (not "the first user") because each account
-        // has its own OAuth identity — github_login + avatar_url live on the
-        // `account` row, and the connected client's WS is account-scoped. The
-        // `user.image` mirror is updated to the avatar of one of the user's
-        // accounts so existing code that reads `user.image` keeps working.
-        yield* Effect.forEach(
-          accountRows,
-          (acc) =>
-            Effect.gen(function* () {
-              if (!acc.accessToken || invalidAccountIds.has(acc.id)) return;
-              const fresh = yield* github.getAuthenticatedUserFresh(acc.accessToken).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) ? markAuthFailure(acc, "account avatar refresh") : Effect.void,
-                ),
-                Effect.catchAll(() => Effect.succeed(null)),
-              );
-              if (!fresh) return;
-
-              const avatarChanged = acc.avatarUrl !== fresh.avatarUrl;
-              const loginChanged = acc.githubLogin !== fresh.login;
-              if (!avatarChanged && !loginChanged) return;
-
-              const now = new Date();
-              yield* Effect.try({
-                try: () =>
-                  db
-                    .update(account)
-                    .set({
-                      avatarUrl: fresh.avatarUrl,
-                      githubLogin: fresh.login,
-                      updatedAt: now,
-                    })
-                    .where(eq(account.id, acc.id))
-                    .run(),
-                catch: (e) => new Error(String(e)),
-              }).pipe(Effect.orElseSucceed(() => undefined));
-
-              // Keep the in-memory map coherent for downstream consumers in
-              // this same sync cycle (e.g. the change-detection loop below).
-              accountById.set(acc.id, {
-                ...acc,
-                avatarUrl: fresh.avatarUrl,
-                githubLogin: fresh.login,
-              });
-
-              // Mirror to the user row so existing code that reads
-              // `user.image` / `user.github_login` keeps working. Only touch
-              // the row if our values actually differ.
-              const userRow = db
-                .select({ id: user.id, name: user.name, email: user.email, image: user.image })
-                .from(user)
-                .where(eq(user.id, acc.userId))
-                .get();
-              if (!userRow) return;
-              const needsUserUpdate = userRow.image !== fresh.avatarUrl || loginChanged === true;
-              if (needsUserUpdate) {
-                yield* Effect.try({
-                  try: () =>
-                    db
-                      .update(user)
-                      .set({
-                        image: fresh.avatarUrl,
-                        githubLogin: fresh.login,
-                        updatedAt: now,
-                      })
-                      .where(eq(user.id, acc.userId))
-                      .run(),
-                  catch: (e) => new Error(String(e)),
-                }).pipe(Effect.orElseSucceed(() => undefined));
-              }
-
-              // Broadcast scoped to this account's WS clients so only the
-              // sessions actually authenticated against `acc` see the avatar
-              // swap. The full broadcast path would leak A's avatar to B.
-              yield* hub.broadcastToAccount(acc.id, {
-                type: "user:updated",
-                data: {
-                  id: userRow.id,
-                  name: userRow.name,
-                  email: userRow.email,
-                  image: fresh.avatarUrl,
-                  githubLogin: fresh.login,
-                },
-              });
-            }).pipe(Effect.orElseSucceed(() => undefined)),
-          { concurrency: 3 },
-        );
-
+        const ctx = {
+          existingMap,
+          existingByRepo: Map.groupBy(existingPrs, (pr) => pr.repositoryId),
+          diffStatsHeadByPrId: new Map(diffStatsHeadRows.map((row) => [row.id, row.headSha])),
+          unchangedRepoIds: probed.unchanged,
+          probedSignatures: probed.signatures,
+          listedSignatures,
+          stacklessUntil,
+        };
         const results = yield* Effect.forEach(
           allRepos,
-          (repo) =>
-            Effect.gen(function* () {
-              // Auth failures must not silently poison the token: log + skip this
-              // repo's PR sync this cycle.
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token) {
-                logError(
-                  "PollScheduler",
-                  `GitHub auth unavailable; skipping PR sync for ${repo.fullName} (account ${
-                    acc?.id ?? repoToAccountId.get(repo.id) ?? "missing"
-                  })`,
-                );
-                return null;
-              }
-              if (skipInvalid(acc)) return null;
-
-              const repoApiBase = hostToApiBase(repo.githubHost);
-              const prs = yield* github.listPrs(repo.fullName, repo.id, token, repoApiBase).pipe(
-                Effect.tapError((err) =>
-                  isAuthErr(err) && acc ? markAuthFailure(acc, "PR sync") : Effect.void,
-                ),
-                Effect.tapError((err) =>
-                  Effect.sync(() => {
-                    if (!isAuthErr(err))
-                      logError("PollScheduler", `listPrs error for ${repo.fullName}:`, err);
-                  }),
-                ),
-                Effect.map((fetched) => fetched as PullRequest[] | null),
-                Effect.catchAll(() => Effect.succeed(null as PullRequest[] | null)),
-              );
-
-              // listPrs failed — leave existing DB rows untouched for this repo
-              if (prs === null) return null;
-
-              // Upsert PR authors into remote_users so their avatars are cached.
-              for (const pr of prs) {
-                yield* remoteUserService.upsert({
-                  provider: "github",
-                  providerUserId: "", // Numeric ID not available from listPrs
-                  login: pr.authorLogin,
-                  avatarUrl: pr.authorAvatarUrl,
-                });
-              }
-
-              yield* withDb(prService.upsertPrs(prs)).pipe(
-                Effect.tapError((err) =>
-                  Effect.sync(() => {
-                    logError("PollScheduler", `upsertPrs error for ${repo.fullName}:`, err);
-                  }),
-                ),
-                Effect.orElseSucceed(() => undefined),
-              );
-
-              return prs;
-            }).pipe(
-              Effect.tapError((err) =>
-                Effect.sync(() => {
-                  logError("PollScheduler", `outer per-repo sync error for ${repo.fullName}:`, err);
-                }),
-              ),
-              Effect.orElseSucceed(() => null as PullRequest[] | null),
-            ),
+          (repo) => syncRepoOpenPrs(deps, cycle, ctx, repo),
           { concurrency: 3 },
         );
 
-        const allPrs = results.flatMap((r) => r ?? []);
+        return {
+          allPrs: results.flatMap((r) => r?.prs ?? []),
+          listedRepoIds: new Set(
+            allRepos.filter((_, i) => results[i]?.listed === true).map((r) => r.id),
+          ),
+        };
+      });
 
-        // Delete PRs that were open before but are gone now (closed/merged on GitHub).
-        // Only consider repos whose sync succeeded (result !== null) — if listPrs failed
-        // for a repo, its existing DB rows are left untouched this cycle.
-        // Cascade deletes their diff cache, review sessions, threads, and walkthroughs.
-        const syncedRepoIds = new Set(
-          allRepos.filter((_, i) => results[i] !== null).map((r) => r.id),
-        );
+    /**
+     * Settle PRs that were open before but are gone now (closed/merged on
+     * GitHub). Only repos GitHub actually listed this cycle count — a repo
+     * whose list failed, or was reused from the DB, keeps its rows. Returns
+     * the ids of the PRs that left the open list.
+     */
+    const closeVanishedPrs = (
+      cycle: SyncCycle,
+      allRepos: readonly Repository[],
+      existingPrs: readonly PullRequest[],
+      allPrs: readonly PullRequest[],
+      listedRepoIds: ReadonlySet<string>,
+    ): Effect.Effect<string[], never, GitHubInfra> =>
+      Effect.gen(function* () {
         const freshPrIdSet = new Set(allPrs.map((pr) => pr.id));
-        const closedPrIds = existingPrs
-          .filter(
-            (pr) =>
-              pr.status === "open" &&
-              syncedRepoIds.has(pr.repositoryId) &&
-              !freshPrIdSet.has(pr.id),
-          )
-          .map((pr) => pr.id);
-        if (closedPrIds.length > 0) {
-          const repoMap = new Map(allRepos.map((r) => [r.id, r]));
-          const closedPrObjects = existingPrs.filter((pr) => closedPrIds.includes(pr.id));
+        const closedPrs = existingPrs.filter(
+          (pr) =>
+            pr.status === "open" && listedRepoIds.has(pr.repositoryId) && !freshPrIdSet.has(pr.id),
+        );
+        if (closedPrs.length > 0) {
+          yield* archiveClosedPrs(deps, cycle, closedPrs, new Map(allRepos.map((r) => [r.id, r])));
+        }
+        return closedPrs.map((pr) => pr.id);
+      });
 
-          const updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }> =
-            yield* Effect.forEach(
-              closedPrObjects,
-              (pr) =>
-                Effect.gen(function* () {
-                  // Cap at 10 API fetches per cycle to avoid hammering GitHub
-                  if (closedPrIds.length > 10) {
-                    return {
-                      id: pr.id,
-                      status: "closed" as const,
-                      closedAt: new Date().toISOString(),
-                    };
-                  }
-                  const repo = repoMap.get(pr.repositoryId);
-                  if (!repo) {
-                    return {
-                      id: pr.id,
-                      status: "closed" as const,
-                      closedAt: new Date().toISOString(),
-                    };
-                  }
-                  const acc = accountForRepo(repo.id);
-                  const token = acc?.accessToken ?? "";
-                  if (!token || skipInvalid(acc)) {
-                    return {
-                      id: pr.id,
-                      status: "closed" as const,
-                      closedAt: new Date().toISOString(),
-                    };
-                  }
-                  const fetched = yield* github.getPr(repo.fullName, pr.externalId, token).pipe(
-                    Effect.tapError((err) =>
-                      isAuthErr(err) && acc ? markAuthFailure(acc, "closed-PR fetch") : Effect.void,
-                    ),
-                    Effect.catchAll(() => Effect.succeed(null)),
-                  );
-                  if (!fetched) {
-                    return {
-                      id: pr.id,
-                      status: "closed" as const,
-                      closedAt: new Date().toISOString(),
-                    };
-                  }
-                  const resolvedStatus = fetched.status === "merged" ? "merged" : "closed";
-                  const closedAt = fetched.closedAt ?? new Date().toISOString();
-                  return { id: pr.id, status: resolvedStatus as "closed" | "merged", closedAt };
-                }),
-              { concurrency: 5 },
-            );
+    /**
+     * Head-SHA change → walkthroughs for this PR pin to the OLD SHA and are now
+     * stale. Per doctrine invariant #7 (walkthroughs are immutable per head
+     * SHA), we mark them 'superseded' rather than mutate or delete. A fresh
+     * walkthrough row is created on the next user-opens-PR flow for the new SHA.
+     *
+     * We pass the NEW headSha as `exceptHeadSha` so a walkthrough the SSE
+     * handler may have just created at that SHA (the user clicked Generate
+     * while this poll was mid-flight) survives — it's by definition not stale,
+     * since "stale" means "pinned to an old SHA we just learned has been
+     * replaced."
+     *
+     * `isTrustedHeadShaMove` gates that on the fresh payload actually being
+     * newer than the row we already have. The list endpoint is cache-fronted
+     * and lags the PR detail endpoint `refreshPr` and the walkthrough job read
+     * from, so "the SHAs differ" does NOT imply "the head moved forward" — and
+     * acting on a stale read here cancelled the walkthrough generating at the
+     * real head and left a contentless 'superseded' row behind.
+     */
+    const supersedeStaleWalkthroughs = (
+      allPrs: readonly PullRequest[],
+      existingMap: ReadonlyMap<string, PullRequest>,
+    ): Effect.Effect<void> =>
+      Effect.forEach(
+        allPrs,
+        (pr) => {
+          const existing = existingMap.get(pr.id);
+          if (existing === undefined || pr.headSha === null) return Effect.void;
+          if (!isTrustedHeadShaMove(existing, pr)) return Effect.void;
+          return walkthroughJobs
+            .supersedeForPr(pr.id, pr.headSha)
+            .pipe(Effect.catch(() => Effect.void));
+        },
+        { discard: true },
+      );
 
-          yield* withDb(prService.markPrsClosed(updates)).pipe(
-            Effect.orElseSucceed(() => undefined),
+    /**
+     * The hourly refresh of repo metadata and account identities. Returns
+     * whether any repo's visible metadata changed.
+     */
+    const refreshMetadataIfDue = (
+      cycle: SyncCycle,
+      allRepos: readonly Repository[],
+    ): Effect.Effect<boolean, never, GitHubInfra> =>
+      Effect.gen(function* () {
+        if (Date.now() - lastMetadataRefreshAt < METADATA_REFRESH_INTERVAL_MS) return false;
+        lastMetadataRefreshAt = Date.now();
+        const reposChanged = yield* refreshRepoMetadata(deps, cycle, allRepos);
+        yield* refreshAccountIdentities(deps, cycle);
+        return reposChanged;
+      });
+
+    /** The hourly archive backfill. Returns whether it added any PR. */
+    const backfillArchiveIfDue = (
+      cycle: SyncCycle,
+      allRepos: readonly Repository[],
+    ): Effect.Effect<boolean, never, GitHubInfra> =>
+      Effect.suspend(() => {
+        if (Date.now() - lastArchiveBackfillAt < ARCHIVE_BACKFILL_INTERVAL_MS) {
+          return Effect.succeed(false);
+        }
+        lastArchiveBackfillAt = Date.now();
+        return backfillArchive(deps, cycle, allRepos);
+      });
+
+    // The core sync effect — all services are plain values captured from the closure.
+    // `GitHubInfra` remains in R because `github.*` methods depend on it
+    // internally; the layer that constructs PollScheduler already has all
+    // provided, so the forked fiber inherits them.
+    const syncAllRepos = (trigger: SyncTrigger): Effect.Effect<void, never, GitHubInfra> =>
+      Effect.withSpan("PollScheduler.syncAllRepos")(
+        Effect.gen(function* () {
+          // Snapshot ETag-cache counters so we can report deltas for this cycle.
+          const etagStatsBefore = etagCache.stats();
+
+          const allRepos = yield* withDb(repoService.listRepos());
+
+          const repoRowsForAccount = db
+            .select({ id: repositories.id, accountId: repositories.accountId })
+            .from(repositories)
+            .all();
+          const repoToAccountId = new Map(repoRowsForAccount.map((r) => [r.id, r.accountId]));
+          const accountIdSet = Array.from(new Set(repoRowsForAccount.map((r) => r.accountId)));
+          yield* broadcastPerAccount(accountIdSet, () => ({ type: "prs:sync-started" }));
+
+          if (allRepos.length === 0) {
+            const etagStatsAfter = etagCache.stats();
+            yield* broadcastPerAccount(accountIdSet, () => ({
+              type: "prs:sync-complete",
+              data: {
+                count: 0,
+                timestamp: new Date().toISOString(),
+                cached: etagStatsAfter.hits304 - etagStatsBefore.hits304,
+                refetched: etagStatsAfter.misses200 - etagStatsBefore.misses200,
+              },
+            }));
+            return;
+          }
+
+          const cycle = yield* openSyncCycle(deps, accountPauses, accountIdSet, repoToAccountId);
+          const isManual = trigger === "manual";
+          const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
+
+          // Pre-sync snapshot, the baseline for every "did this change?"
+          // question below: which diffs to re-fetch, which walkthroughs to
+          // supersede, which notifications to raise, and whether the cycle
+          // produced anything worth broadcasting at all.
+          const existingPrs = yield* withDb(prService.listPrs());
+          const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
+          // Taken before the lists land: the list phase drops the cached diff
+          // of every PR whose range moved, and these are the ones to re-fill.
+          const cachedDiffPrIds = new Set(yield* withDb(diffCache.getPrIdsWithCachedDiffs()));
+
+          const { allPrs, listedRepoIds } = yield* syncOpenPrLists(
+            cycle,
+            allRepos,
+            existingPrs,
+            existingMap,
+            trigger,
           );
+          const closedPrIds = yield* closeVanishedPrs(
+            cycle,
+            allRepos,
+            existingPrs,
+            allPrs,
+            listedRepoIds,
+          );
+          yield* supersedeStaleWalkthroughs(allPrs, existingMap);
 
-          // Targeted `pr:archived` envelopes for each transition. The full
-          // PR set still goes out via the `prs:updated` broadcast below;
-          // this gives clients a low-latency signal they can patch in
-          // place without refetching the archive list. Best-effort — if a
-          // single emit fails, the bulk update still reconciles on the
-          // next `prs:updated` arrival.
-          const closedPrMap = new Map(closedPrObjects.map((pr) => [pr.id, pr]));
-          for (const upd of updates) {
-            const pr = closedPrMap.get(upd.id);
-            if (!pr) continue;
+          // The list goes out as soon as it has landed, ahead of everything
+          // else the cycle does: the PR list is what a client opening the app
+          // is waiting on, and none of the work below changes it. A manual
+          // sync always answers, even with nothing to say: the user pressed a
+          // button and the client is holding a spinner. Same for the first
+          // cycle after boot, which is a client's initial hydration.
+          const listChanged = closedPrIds.length > 0 || openListMoved(allPrs, existingMap);
+          if (listChanged || isManual || !hasPeriodicSyncedOnce) {
+            yield* broadcastOpenPrs(accountIdSet);
+          }
+
+          // Must precede the notification diff: it refreshes the account
+          // logins that diff reads to decide which PRs are "for me".
+          const reposChanged = yield* refreshMetadataIfDue(cycle, allRepos);
+
+          // The first periodic sync is a baseline (we don't know what was new
+          // since the prior server run) and manual syncs are diagnostic —
+          // neither raises notifications or mass-spawns AI jobs.
+          if (!isManual && hasPeriodicSyncedOnce && existingPrs.length > 0) {
+            const outcome = { allRepos, allPrs, existingMap, closedPrIds };
+            const changes = collectSyncChanges(cycle, outcome);
+            if (changes.length > 0) yield* announceSyncChanges(deps, cycle, outcome, changes);
+          }
+
+          yield* refetchDiffs(
+            deps,
+            cycle,
+            movedRangePrIds(allPrs, existingMap).filter((id) => cachedDiffPrIds.has(id)),
+            new Map(allPrs.map((pr) => [pr.id, pr])),
+            new Map(allRepos.map((r) => [r.id, r])),
+          );
+          const archiveChanged = yield* backfillArchiveIfDue(cycle, allRepos);
+
+          // The maintenance passes can move what a client shows (repo avatars,
+          // PRs the backfill pulled into the archive) after the list went out,
+          // so they get a follow-up broadcast of their own.
+          if (reposChanged || archiveChanged) yield* broadcastOpenPrs(accountIdSet);
+
+          yield* Ref.set(hasPeriodicSyncedOnceRef, true);
+
+          // Per-account, and with that account's own PR count: this envelope
+          // carries data, so `broadcastAll` would hand account A's totals to
+          // account B's clients.
+          //
+          // `cached` / `refetched` are process-wide conditional-request counters
+          // sampled around this cycle, so they also include anything the thread
+          // sweep did in the same window. They are a cache-efficiency readout,
+          // not a per-cycle audit — don't derive request counts from them.
+          const etagStatsAfter = etagCache.stats();
+          const syncCompletedAt = new Date().toISOString();
+          const cached = etagStatsAfter.hits304 - etagStatsBefore.hits304;
+          const refetched = etagStatsAfter.misses200 - etagStatsBefore.misses200;
+          const openPrCountByAccount = new Map<string, number>();
+          for (const pr of allPrs) {
             const accountId = repoToAccountId.get(pr.repositoryId);
             if (!accountId) continue;
-            yield* hub
-              .broadcastToAccount(accountId, {
-                type: "pr:archived",
-                data: {
-                  prId: upd.id,
-                  repoId: pr.repositoryId,
-                  status: upd.status,
-                  closedAt: upd.closedAt,
-                },
-              })
-              .pipe(Effect.orElseSucceed(() => undefined));
+            openPrCountByAccount.set(accountId, (openPrCountByAccount.get(accountId) ?? 0) + 1);
           }
-        }
-
-        // ── Archive backfill ─────────────────────────────────────────────────
-        // Catch closed/merged PRs that never made it into the local mirror —
-        // e.g. closed before the user added the repo to Revv, or while the
-        // server was offline for longer than one poll interval. Bounded to
-        // the same 7-day window the DbMaintenance sweep uses for retention,
-        // so the local archive converges on "last week of activity" from
-        // GitHub. Per-repo fetch cap defends against bursty repos. Failures
-        // are non-fatal — we degrade silently to whatever the local mirror
-        // already has.
-        const ARCHIVE_BACKFILL_DAYS = 7;
-        const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 25;
-        const backfillSinceIso = new Date(
-          Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
-        ).toISOString();
-        const backfillUntilIso = new Date().toISOString();
-
-        const existingExternalIdsByRepo = new Map<string, Set<number>>();
-        for (const pr of existingPrs) {
-          let set = existingExternalIdsByRepo.get(pr.repositoryId);
-          if (!set) {
-            set = new Set<number>();
-            existingExternalIdsByRepo.set(pr.repositoryId, set);
-          }
-          set.add(pr.externalId);
-        }
-
-        yield* Effect.forEach(
-          allRepos,
-          (repo) =>
-            Effect.gen(function* () {
-              const acc = accountForRepo(repo.id);
-              const token = acc?.accessToken ?? "";
-              if (!token || skipInvalid(acc)) return;
-
-              const searched = yield* github
-                .searchClosedPrsInWindow(repo.fullName, backfillSinceIso, backfillUntilIso, token)
-                .pipe(
-                  Effect.tapError((err) =>
-                    isAuthErr(err) && acc
-                      ? markAuthFailure(acc, "archive backfill search")
-                      : Effect.void,
-                  ),
-                  Effect.tapError((err) =>
-                    Effect.sync(() => {
-                      if (!isAuthErr(err))
-                        logError(
-                          "PollScheduler",
-                          `archive backfill search failed for ${repo.fullName}:`,
-                          err,
-                        );
-                    }),
-                  ),
-                  Effect.catchAll(() =>
-                    Effect.succeed(
-                      [] as ReadonlyArray<{
-                        readonly number: number;
-                        readonly closedAt: string;
-                        readonly merged: boolean;
-                      }>,
-                    ),
-                  ),
-                );
-              if (searched.length === 0) return;
-
-              const known = existingExternalIdsByRepo.get(repo.id) ?? new Set<number>();
-              const missing = searched
-                .filter((s) => !known.has(s.number))
-                .slice(0, ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO);
-              if (missing.length === 0) return;
-
-              const fetched = yield* Effect.forEach(
-                missing,
-                (m) =>
-                  github.getPr(repo.fullName, m.number, token).pipe(
-                    Effect.tapError((err) =>
-                      isAuthErr(err) && acc
-                        ? markAuthFailure(acc, "archive backfill fetch")
-                        : Effect.void,
-                    ),
-                    Effect.catchAll(() => Effect.succeed(null)),
-                  ),
-                { concurrency: 3 },
-              );
-
-              // Repoint every fetched row at our local repo id — `getPr`
-              // derives `id` and `repositoryId` from `${owner}/${repo}` because
-              // it doesn't know the local row id. Matches the recap-jobs
-              // backfill (see ProjectRecapJobs.backfillMissingPrs).
-              const upsertable = fetched
-                .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
-                .map((pr) => ({
-                  ...pr,
-                  id: `${repo.id}:${pr.externalId}`,
-                  repositoryId: repo.id,
-                }));
-              if (upsertable.length === 0) return;
-
-              yield* withDb(prService.upsertPrs(upsertable)).pipe(
-                Effect.tapError((err) =>
-                  Effect.sync(() => {
-                    logError(
-                      "PollScheduler",
-                      `archive backfill upsert failed for ${repo.fullName}:`,
-                      err,
-                    );
-                  }),
-                ),
-                Effect.orElseSucceed(() => undefined),
-              );
-            }).pipe(Effect.orElseSucceed(() => undefined)),
-          { concurrency: 3 },
-        );
-
-        // Detect PRs whose headSha or baseSha changed since last sync
-        const changedPrIds = allPrs
-          .filter((pr) => {
-            const existing = existingShaMap.get(pr.id);
-            if (!existing) return false; // new PR — no cached diffs yet
-            return existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha;
-          })
-          .map((pr) => pr.id);
-
-        // Head-SHA change → walkthroughs for this PR pin to the OLD SHA and
-        // are now stale. Per doctrine invariant #7 (walkthroughs are immutable
-        // per head SHA), we mark them 'superseded' rather than mutate or
-        // delete. A fresh walkthrough row is created on the next user-opens-PR
-        // flow for the new SHA.
-        //
-        // We pass the NEW headSha as `exceptHeadSha` so a walkthrough the
-        // SSE handler may have just created at that SHA (the user clicked
-        // Generate while this poll was mid-flight) survives — it's by
-        // definition not stale, since "stale" means "pinned to an old
-        // SHA we just learned has been replaced."
-        const headShaChanged = allPrs.flatMap((pr) => {
-          const existing = existingShaMap.get(pr.id);
-          if (existing === undefined || existing.headSha === pr.headSha) {
-            return [];
-          }
-          return [{ prId: pr.id, newHeadSha: pr.headSha ?? undefined }];
-        });
-        for (const { prId, newHeadSha } of headShaChanged) {
-          yield* walkthroughJobs
-            .supersedeForPr(prId, newHeadSha)
-            .pipe(Effect.catchAll(() => Effect.void));
-        }
-
-        // Refresh diffs only for PRs that had SHA changes AND already have cached diffs
-        if (changedPrIds.length > 0) {
-          const cachedPrIds = yield* withDb(diffCache.getPrIdsWithCachedDiffs());
-          const cachedSet = new Set(cachedPrIds);
-          const toRefresh = changedPrIds.filter((id) => cachedSet.has(id));
-
-          if (toRefresh.length > 0) {
-            // Invalidate stale cache entries first
-            yield* withDb(diffCache.invalidateFilesForPrs(toRefresh)).pipe(
-              Effect.orElseSucceed(() => undefined),
-            );
-
-            // Re-fetch diffs sequentially to avoid rate limit bursts
-            yield* Effect.forEach(
-              toRefresh,
-              (prId) =>
-                Effect.gen(function* () {
-                  const pr = allPrs.find((p) => p.id === prId);
-                  if (!pr) return;
-
-                  const repo = allRepos.find((r) => r.id === pr.repositoryId);
-                  if (!repo) return;
-
-                  const acc = accountForRepo(repo.id);
-                  const token = acc?.accessToken ?? "";
-                  if (!token) {
-                    logError(
-                      "PollScheduler",
-                      `GitHub auth unavailable; skipping diff refresh for PR ${prId} (repo ${repo.fullName})`,
-                    );
-                    return;
-                  }
-                  if (skipInvalid(acc)) return;
-
-                  const fileList = yield* github
-                    .getPrFiles(repo.fullName, pr.externalId, token)
-                    .pipe(
-                      Effect.tapError((err) =>
-                        isAuthErr(err) && acc ? markAuthFailure(acc, "diff refresh") : Effect.void,
-                      ),
-                      Effect.orElseSucceed(() => []),
-                    );
-
-                  const files = fileList.map((f) => ({
-                    path: f.filename,
-                    oldPath: f.previousFilename,
-                    status: f.status,
-                    additions: f.additions,
-                    deletions: f.deletions,
-                    patch: f.patch,
-                    fetchedAt: new Date().toISOString(),
-                  }));
-
-                  yield* withDb(diffCache.cacheFiles(prId, files)).pipe(
-                    Effect.orElseSucceed(() => undefined),
-                  );
-                }).pipe(Effect.orElseSucceed(() => undefined)),
-              { concurrency: 1 },
-            );
-          }
-        }
-
-        // Broadcast the canonical open-PR DB state per account. This includes
-        // repos whose GitHub fetch failed this cycle, so clients can safely
-        // treat `prs:updated` as full-state instead of a merge patch.
-        for (const accountId of accountIdSet) {
-          const accountPrs = yield* withDb(prService.listPrs(accountId));
-          yield* hub.broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
-        }
-
-        // ── Sync diff: compute what changed for notifications ────────────────
-        const changes: SyncChange[] = [];
-        const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
-
-        if (existingPrs.length > 0) {
-          for (const pr of allPrs) {
-            const repoFullName =
-              allRepos.find((r) => r.id === pr.repositoryId)?.fullName ?? pr.repositoryId;
-            // The "is this PR for me" check is per-account: each repo is owned
-            // by exactly one OAuth account, and `account.github_login` is that
-            // account's GitHub identity. Using the first user's githubLogin
-            // (the previous behavior) misattributes review requests as soon as
-            // multiple users or multiple accounts on the same host exist.
-            const userLogin = accountForRepo(pr.repositoryId)?.githubLogin ?? null;
-            const existing = existingMap.get(pr.id);
-
-            if (!existing) {
-              if (userLogin && pr.requestedReviewers.includes(userLogin)) {
-                changes.push({
-                  kind: "review_requested",
-                  prId: pr.id,
-                  prTitle: pr.title,
-                  prNumber: pr.externalId,
-                  repoFullName,
-                });
-              } else if (userLogin && pr.authorLogin === userLogin) {
-                changes.push({
-                  kind: "pr_authored",
-                  prId: pr.id,
-                  prTitle: pr.title,
-                  prNumber: pr.externalId,
-                  repoFullName,
-                });
-              }
-            } else {
-              if (existing.headSha !== pr.headSha) {
-                changes.push({
-                  kind: "pr_updated",
-                  prId: pr.id,
-                  prTitle: pr.title,
-                  prNumber: pr.externalId,
-                  repoFullName,
-                });
-              } else if (
-                userLogin &&
-                pr.requestedReviewers.includes(userLogin) &&
-                !existing.requestedReviewers.includes(userLogin)
-              ) {
-                changes.push({
-                  kind: "review_requested",
-                  prId: pr.id,
-                  prTitle: pr.title,
-                  prNumber: pr.externalId,
-                  repoFullName,
-                });
-              }
-            }
-          }
-
-          for (const prId of closedPrIds) {
-            const pr = existingMap.get(prId);
-            if (pr) {
-              const repoFullName =
-                allRepos.find((r) => r.id === pr.repositoryId)?.fullName ?? pr.repositoryId;
-              changes.push({
-                kind: "pr_closed",
-                prId: prId,
-                prTitle: pr.title,
-                prNumber: pr.externalId,
-                repoFullName,
-              });
-            }
-          }
-        }
-
-        const suppressSummary = yield* Ref.get(suppressSummaryRef);
-        const hasPeriodicSyncedOnce = yield* Ref.get(hasPeriodicSyncedOnceRef);
-        if (!suppressSummary && hasPeriodicSyncedOnce && changes.length > 0) {
-          // Group changes by account and broadcast per-account. Closed PRs are
-          // no longer present in `allPrs`, so resolve their account from the
-          // pre-sync row instead of dropping them into an `unknown` bucket.
-          const changeAccountByPrId = new Map<string, string>();
-          for (const pr of allPrs) {
-            const accountId = repoToAccountId.get(pr.repositoryId);
-            if (accountId) changeAccountByPrId.set(pr.id, accountId);
-          }
-          for (const prId of closedPrIds) {
-            const pr = existingMap.get(prId);
-            if (!pr) continue;
-            const accountId = repoToAccountId.get(pr.repositoryId);
-            if (accountId) changeAccountByPrId.set(prId, accountId);
-          }
-
-          const changesByAccount = Map.groupBy(
-            changes,
-            (c) => changeAccountByPrId.get(c.prId) ?? "unknown",
-          );
-          for (const [accountId, accountChanges] of changesByAccount) {
-            yield* hub.broadcastToAccount(accountId, {
-              type: "prs:sync-summary",
-              data: accountChanges,
-            });
-          }
-
-          // Auto-trigger walkthroughs for newly-requested reviews so they're
-          // ready (or already streaming) by the time the user opens the PR.
-          // Gated by the same `!suppressSummary && hasPeriodicSyncedOnce`
-          // condition as the broadcast: the first periodic sync is a baseline
-          // (we don't know what was new since the prior server run) and
-          // manual `syncNow` calls are diagnostic — neither should
-          // mass-spawn AI jobs. Fire-and-forget: the sync loop must not
-          // block on AI work, and `startJob` already daemon-forks the
-          // actual generation fiber.
-          for (const change of changes) {
-            if (change.kind !== "review_requested") continue;
-            const pr = allPrs.find((p) => p.id === change.prId);
-            if (!pr || pr.headSha === null) continue;
-            const cached = yield* withDb(walkthroughService.getCached(pr.id, pr.headSha));
-            if (cached !== null) continue;
-            yield* Effect.forkDaemon(
-              walkthroughJobs
-                .startJob({
-                  prId: pr.id,
-                  userId: "single-user",
-                  trigger: "review_requested",
-                })
-                .pipe(
-                  Effect.catchAllCause((cause) =>
-                    Effect.sync(() => {
-                      logError(
-                        "PollScheduler",
-                        `Auto-walkthrough trigger failed for PR ${pr.id} (${change.repoFullName}#${change.prNumber}):`,
-                        Cause.pretty(cause),
-                      );
-                    }),
-                  ),
-                ),
-            );
-          }
-        }
-        yield* Ref.set(hasPeriodicSyncedOnceRef, true);
-        yield* Ref.set(suppressSummaryRef, false);
-
-        const etagStatsAfter = etagCache.stats();
-        yield* hub.broadcast({
-          type: "prs:sync-complete",
-          data: {
-            count: allPrs.length,
-            timestamp: new Date().toISOString(),
-            cached: etagStatsAfter.hits304 - etagStatsBefore.hits304,
-            refetched: etagStatsAfter.misses200 - etagStatsBefore.misses200,
-          },
-        });
-      }).pipe(
-        Effect.tapErrorCause((cause) =>
+          yield* broadcastPerAccount(accountIdSet, (accountId) => ({
+            type: "prs:sync-complete",
+            data: {
+              count: openPrCountByAccount.get(accountId) ?? 0,
+              timestamp: syncCompletedAt,
+              cached,
+              refetched,
+            },
+          }));
+        }),
+      ).pipe(
+        Effect.tapCause((cause) =>
           Effect.sync(() => {
             logError("PollScheduler", "syncAllRepos top-level failure:", Cause.pretty(cause));
           }),
         ),
-        Effect.catchAllCause((cause) =>
-          hub.broadcast({
+        Effect.catchCause((cause) =>
+          broadcastGlobal({
             type: "error",
             data: { code: "SYNC_ERROR", message: String(cause) },
           }),
         ),
       );
 
-    const stopFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const fiber = yield* Ref.get(fiberRef);
-      if (fiber !== null) {
-        yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-        yield* Ref.set(fiberRef, null);
-      }
-    });
+    // One sync cycle at a time, process-wide.
+    //
+    // `syncNow` used to run `syncAllRepos` inline with no coordination, so a
+    // manual refresh landing mid-cycle started a second full pass concurrently:
+    // double the GitHub cost, both cycles racing the `lastMetadataRefreshAt` /
+    // `lastArchiveBackfillAt` closure vars, and the first one to finish
+    // clearing the client's spinner while the other was still running.
+    //
+    // Concurrent callers coalesce onto the in-flight cycle rather than queue
+    // behind it — queueing would just run the duplicate pass a moment later,
+    // and the in-flight cycle already broadcasts `prs:sync-complete`, so a
+    // waiting client sees its refresh finish either way.
+    //
+    // `lastStartedAt` is `freshen`'s throttle, checked in the same atomic step
+    // that claims the cycle. A coordination cache only: losing it on restart
+    // lets one extra freshen through.
+    const cycleGateRef = yield* Ref.make({ inFlight: false, lastStartedAt: 0 });
+
+    const runSyncOnce = (trigger: SyncTrigger): Effect.Effect<void, never, GitHubInfra> =>
+      Effect.gen(function* () {
+        const claim = yield* Ref.modify(cycleGateRef, (gate) => {
+          const now = Date.now();
+          if (gate.inFlight) return ["in-flight" as const, gate];
+          if (trigger === "freshen" && now - gate.lastStartedAt < FRESHEN_MIN_INTERVAL_MS) {
+            return ["fresh-enough" as const, gate];
+          }
+          return ["claimed" as const, { inFlight: true, lastStartedAt: now }];
+        });
+        if (claim === "in-flight") {
+          debug("PollScheduler", "sync already in flight — coalescing this request");
+          return;
+        }
+        if (claim === "fresh-enough") return;
+        yield* syncAllRepos(trigger).pipe(
+          Effect.ensuring(Ref.update(cycleGateRef, (gate) => ({ ...gate, inFlight: false }))),
+          withGitHubOrigin(`poll:sync:${trigger}`),
+        );
+      });
+
+    /**
+     * Reconcile a single PR against GitHub's PR *detail* endpoint.
+     *
+     * Repeats the poll's follow-through on a head-SHA move — invalidate the
+     * cached diff, supersede walkthroughs pinned to the old SHA — because
+     * without it a refresh would leave the UI showing a new head SHA against
+     * the previous commit's diff.
+     */
+    const refreshPr = (
+      prId: string,
+    ): Effect.Effect<
+      void,
+      NotFoundError | ValidationError | GitHubAuthError | GitHubError,
+      DbService | GitHubEtagCache | SettingsService
+    > =>
+      Effect.gen(function* () {
+        const existing = yield* withDb(prService.getPr(prId));
+        const repo = yield* withDb(repoService.getRepoById(existing.repositoryId));
+        const accountId = yield* withDb(repoService.getAccountIdForRepo(repo.id));
+        const token = yield* tokenProvider.getTokenByAccountId(accountId);
+
+        const fresh = yield* github.prs.get(
+          repo.fullName,
+          existing.externalId,
+          token,
+          apiBaseForHost(repo.githubHost),
+        );
+        // `getPr` derives id/repositoryId from `owner/repo` because it has no
+        // idea what our local row is called. Repoint before writing.
+        // Same stale-read masking as the list poll: a detail read can lag too
+        // (the ETag cache in front of it will replay a body that was already
+        // stale when cached), and writing a regressed head here is what makes
+        // the guard below self-defeating on the next cycle.
+        const row = preserveHeadOnStaleRead(existing, {
+          ...fresh,
+          id: existing.id,
+          repositoryId: existing.repositoryId,
+        });
+        // Same stale-read guard as the list poll: only treat the head as moved
+        // when the detail payload is provably a newer view of the PR than the
+        // row we had. Without it a lagging read cancels the walkthrough
+        // generating at the real head.
+        const headMoved = row.headSha !== null && isTrustedHeadShaMove(existing, row);
+        // Drop the old head's diff before the new head lands, so nothing can
+        // read the new head against it (see `syncRepoOpenPrs`).
+        if (headMoved) yield* withDb(diffCache.invalidateFiles(prId));
+        yield* withDb(prService.upsertPrs([row]));
+        if (headMoved && row.headSha !== null) {
+          yield* walkthroughJobs
+            .supersedeForPr(prId, row.headSha)
+            .pipe(Effect.catch(() => Effect.void));
+        }
+
+        if (row.status !== "open") {
+          yield* broadcastToAccount(accountId, {
+            type: "pr:archived",
+            data: {
+              prId: row.id,
+              repoId: row.repositoryId,
+              status: row.status === "merged" ? "merged" : "closed",
+              closedAt: row.closedAt ?? new Date().toISOString(),
+            },
+          });
+        }
+
+        const accountPrs = yield* withDb(prService.listPrs(accountId));
+        yield* broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+      });
 
     // ── Thread sync loop ──────────────────────────────────────────────────
-    // Separate, lightweight fiber that polls every ~30s to keep threads in
-    // sync with GitHub. Runs in addition to the PR-sync fiber above.
-    const threadFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    // Separate fiber that periodically reconciles threads for open PRs.
+    // Opening a PR triggers an immediate targeted sync, so this background
+    // sweep stays intentionally slow to avoid GitHub rate-limit bursts.
+    const threadLoop = yield* makeRestartableLoop;
+
+    // What each open PR looked like when the sweep last reconciled it. Purely
+    // a cost optimisation and fully reconstructible — losing it on restart just
+    // means one extra sweep per PR.
+    const threadSweepMarks = new Map<string, ThreadSweepMark>();
 
     const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {
       const prs = yield* withDb(prService.listPrs()).pipe(
         Effect.orElseSucceed(() => [] as PullRequest[]),
       );
       const openPrs = prs.filter((p) => p.status === "open");
-      // Sequential is fine: each PR-sync is lightweight (REST + a small
-      // GraphQL call). Running them concurrently would spike rate-limit risk.
+
+      // Narrow to the PRs that can actually have moved.
+      //
+      // GitHub bumps `updated_at` when a review comment is added, edited, or
+      // deleted, so an unchanged `updated_at` means no comment activity. The one
+      // thing it does NOT cover is a resolve/unresolve, which changes thread
+      // state without touching the PR — so a PR that still has an unresolved
+      // local thread is re-read now and then regardless.
+      //
+      // This matters because the reconcile needs a GraphQL call, and GraphQL has
+      // no conditional-request equivalent: unlike the REST half of the sweep,
+      // where a 304 is free, every one of those is billed. Sweeping every open
+      // PR every tick made the GraphQL fan-out scale with the size of the PR
+      // list rather than with the set of PRs anyone is actually reviewing.
+      const now = Date.now();
+      const candidates: PullRequest[] = [];
+      for (const { pr, recheck } of rankThreadSweep(openPrs, threadSweepMarks, now)) {
+        if (candidates.length >= THREAD_SWEEP_MAX_PRS) break;
+        if (recheck) {
+          const summary = yield* withDb(syncService.getThreadSummary(pr.id, null)).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (summary !== null && summary.total === summary.resolved) {
+            threadSweepMarks.set(pr.id, { updatedAt: pr.updatedAt, sweptAt: now });
+            continue;
+          }
+        }
+        candidates.push(pr);
+      }
+
+      if (candidates.length < openPrs.length) {
+        debug(
+          "PollScheduler",
+          `thread sweep: reconciling ${candidates.length}/${openPrs.length} open PRs`,
+        );
+      }
+
       yield* Effect.forEach(
-        openPrs,
+        candidates,
         (pr) =>
           provideInfra(syncService.syncThreads(pr.id)).pipe(
-            Effect.asVoid,
-            Effect.catchAllCause((cause) =>
+            Effect.tap(() =>
               Effect.sync(() => {
+                threadSweepMarks.set(pr.id, { updatedAt: pr.updatedAt, sweptAt: Date.now() });
+              }),
+            ),
+            Effect.asVoid,
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                // Leave the watermark alone on failure so the next sweep retries
+                // this PR instead of assuming it is up to date.
                 logError(
                   "PollScheduler",
                   `Thread sync failed for PR ${pr.id}:`,
@@ -919,84 +752,92 @@ export const PollSchedulerLive = Layer.effect(
           ),
         { concurrency: 1 },
       );
+
+      // Drop watermarks for PRs that are no longer open so the map can't grow
+      // without bound across a long-running process.
+      if (threadSweepMarks.size > openPrs.length) {
+        const openIds = new Set(openPrs.map((p) => p.id));
+        for (const id of threadSweepMarks.keys()) {
+          if (!openIds.has(id)) threadSweepMarks.delete(id);
+        }
+      }
     }).pipe(
-      Effect.catchAllCause((cause) =>
-        hub.broadcast({
+      Effect.catchCause((cause) =>
+        broadcastGlobal({
           type: "error",
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
       ),
+      withGitHubOrigin("poll:threads"),
     );
 
-    const stopThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const fiber = yield* Ref.get(threadFiberRef);
-      if (fiber !== null) {
-        yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-        yield* Ref.set(threadFiberRef, null);
-      }
-    });
-
-    const startThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const schedule = Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS));
-      const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-        syncThreadsForOpenPrs.pipe(Effect.repeat(schedule)),
-      );
-      yield* Ref.set(threadFiberRef, fiber);
-    });
+    // Delay the FIRST background thread sweep by one interval. At boot the
+    // PR-sync fiber already fires immediately (repo metadata + user avatars +
+    // listOpen per repo + archive backfill), and running the thread sweep
+    // concurrently on top of that produces a request burst that trips
+    // GitHub's *secondary* (abuse) rate limit — the "rate limited as soon as I
+    // open Revv" symptom, made worse when an IDE shares the account. Opening a
+    // PR force-syncs its threads on demand, so this delay never affects the PR
+    // the user is actually looking at.
+    const threadSweepLoop = syncThreadsForOpenPrs.pipe(
+      Effect.repeat(Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS))),
+      Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
+    );
 
     const startWithInterval = (intervalMinutes: number): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        if (intervalMinutes <= 0) return;
-        // Run immediately on start, then repeat at the given interval
-        const schedule = Schedule.spaced(Duration.minutes(intervalMinutes));
-        const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-          provideInfra(syncAllRepos.pipe(Effect.repeat(schedule))),
-        );
-        yield* Ref.set(fiberRef, fiber);
-      });
+      intervalMinutes <= 0
+        ? Effect.void
+        : // Run immediately on start, then repeat at the given interval
+          syncLoop.start(
+            provideInfra(
+              runSyncOnce("periodic").pipe(
+                Effect.repeat(Schedule.spaced(Duration.minutes(intervalMinutes))),
+              ),
+            ),
+          );
 
     return {
       start: () =>
         Effect.gen(function* () {
           // Guard: don't start duplicate fibers if already running
-          const existingFiber = yield* Ref.get(threadFiberRef);
-          if (existingFiber !== null) return;
+          if (yield* threadLoop.isRunning) return;
 
           const s = yield* withDb(settingsService.getSettings()).pipe(
             Effect.orElseSucceed(() => ({ autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL })),
           );
           yield* startWithInterval(s.autoFetchInterval);
-          yield* startThreadFiber;
+          yield* threadLoop.start(threadSweepLoop);
         }),
 
       stop: () =>
         Effect.gen(function* () {
-          yield* stopFiber;
-          yield* stopThreadFiber;
+          yield* syncLoop.stop;
+          yield* threadLoop.stop;
         }),
 
       restart: (minutes) =>
         Effect.gen(function* () {
-          yield* stopFiber;
+          yield* syncLoop.stop;
           yield* startWithInterval(minutes);
         }),
 
-      syncNow: () =>
-        provideInfra(
-          Effect.gen(function* () {
-            yield* Ref.set(suppressSummaryRef, true);
-            yield* syncAllRepos;
-          }),
-        ),
+      syncNow: () => provideInfra(runSyncOnce("manual")),
 
+      freshen: () => provideInfra(runSyncOnce("freshen")),
+
+      refreshPr: (prId) => provideInfra(refreshPr(prId)),
+
+      // `force: true` — a user-initiated sync must emit `threads:synced` even
+      // when nothing changed, because that envelope is what clears the client's
+      // per-PR spinner. Only the background sweep stays quiet on no-ops.
       syncThreadsNow: (prId: string) =>
-        provideInfra(syncService.syncThreads(prId)).pipe(
+        provideInfra(syncService.syncThreads(prId, { force: true })).pipe(
           Effect.asVoid,
           Effect.catchIf(
             (e) => (e as { _tag?: string })._tag === "NotFoundError",
             () => Effect.void,
           ),
-          Effect.catchAllCause((cause) => {
+          Effect.catchCause((cause) => {
             // Cause.pretty alone collapses to "An error has occurred"
             // when the failure's wrapper Error has no useful .message.
             // Dig into the typed failure (SyncError carries `.cause`
@@ -1004,7 +845,7 @@ export const PollSchedulerLive = Layer.effect(
             // the pretty cause AND the underlying error's message +
             // stack so we can actually diagnose what broke.
             const pretty = Cause.pretty(cause);
-            const failure = Cause.failureOption(cause);
+            const failure = Cause.findErrorOption(cause);
             const detail = (() => {
               if (failure._tag !== "Some") return null;
               const v = failure.value as {
@@ -1024,7 +865,7 @@ export const PollSchedulerLive = Layer.effect(
               const tid = v.threadId ? ` (thread ${v.threadId})` : "";
               return [tag + tid, msg, inner].filter(Boolean).join(" — ");
             })();
-            const defects = Chunk.toReadonlyArray(Cause.defects(cause));
+            const defects = cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect);
             const defectStr = defects.length
               ? defects
                   .map((d) =>
@@ -1039,12 +880,22 @@ export const PollSchedulerLive = Layer.effect(
               `Manual thread sync failed for PR ${prId}:`,
               [detail, defectStr, pretty].filter(Boolean).join("\n"),
             );
-            return hub.broadcast({
-              type: "threads:sync-error",
-              data: {
-                prId,
-                message: detail ?? defectStr ?? pretty,
-              },
+            const userMessage = detail ?? "Unknown error";
+            return Effect.gen(function* () {
+              const prRow = yield* withDb(prService.getPr(prId)).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (!prRow) return;
+              const accountId = yield* withDb(
+                repoService.getAccountIdForRepo(prRow.repositoryId),
+              ).pipe(Effect.catch(() => Effect.succeed(null)));
+              if (!accountId) return;
+              yield* broadcaster
+                .broadcastToAccount(accountId, {
+                  type: "threads:sync-error",
+                  data: { prId, message: userMessage },
+                })
+                .pipe(Effect.orElseSucceed(() => undefined));
             });
           }),
         ),

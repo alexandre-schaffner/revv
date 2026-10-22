@@ -1,15 +1,17 @@
 <script lang="ts">
-import ChevronLeft from "phosphor-svelte/lib/CaretLeft";
-import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
+import CaretLeft from "phosphor-svelte/lib/CaretLeft";
+import Folder from "phosphor-svelte/lib/Folder";
 import Plus from "phosphor-svelte/lib/Plus";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
+import AuthorFilter from "$lib/components/sidebar/AuthorFilter.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
 import ProjectDraftsList from "$lib/components/sidebar/ProjectDraftsList.svelte";
 import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
 import ProjectPrList from "$lib/components/sidebar/ProjectPrList.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
 import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
+import { gsapFade, tokens } from "$lib/motion";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
   getRepositories,
@@ -21,11 +23,8 @@ import { getPrScrollPosition, setPrScrollPosition } from "$lib/stores/review.sve
 import { getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
   getAddRepoDialogOpen,
-  getSidebarCollapsed,
-  getSidebarPeekRepoId,
   getSidebarView,
   setAddRepoDialogOpen,
-  setSidebarPeekHovering,
   setSidebarView,
 } from "$lib/stores/sidebar.svelte";
 import {
@@ -33,6 +32,7 @@ import {
   handleKey as handleNavKey,
   setFocusedId,
 } from "$lib/stores/sidebar-nav.svelte";
+import { isTextEditingKeyTarget } from "$lib/utils";
 
 interface Props {
   collapsed?: boolean;
@@ -53,27 +53,8 @@ const filesViewRepo = $derived(
 // Active project for the PR-list view header / lists. URL-driven by the
 // +layout effect — single source of truth, so the column tracks the rail
 // and deep-links resolve correctly.
-const activeRepo = $derived(getSelectedRepo());
+const displayRepo = $derived(getSelectedRepo());
 const hasRepos = $derived(getRepositories().length > 0);
-// During a rail-avatar peek, render that repo's PRs in the sidebar
-// instead of the URL-selected one — selecting (clicking) still requires
-// navigation; the hover is read-only preview. Peek-swap only applies when
-// the sidebar is collapsed (the "hover-to-reveal" affordance). When the
-// pane is already extended, the user is intentionally looking at the
-// active repo's PRs, so hovering a different avatar in the rail must not
-// swap the list out from under them.
-const peekRepoId = $derived(getSidebarPeekRepoId());
-const peekRepo = $derived(
-  peekRepoId !== null ? (getRepositories().find((r) => r.id === peekRepoId) ?? null) : null,
-);
-const sidebarCollapsed = $derived(getSidebarCollapsed());
-// "Peek active" means a peek is currently swapping the displayed repo —
-// only true while the sidebar is collapsed. When extended, hovering an
-// avatar still sets peekRepoId (the rail button can't know to suppress
-// it), but it has no display effect, so downstream scroll logic must
-// treat it as inactive.
-const peekActive = $derived(sidebarCollapsed && peekRepoId !== null);
-const displayRepo = $derived(peekActive ? (peekRepo ?? activeRepo) : activeRepo);
 
 // ── Per-PR scroll persistence (left pane) ────────────────────────────────
 //
@@ -93,30 +74,13 @@ function handlePrListScroll(): void {
     return;
   }
   if (!prListEl || !selectedPrId) return;
-  // During an active peek the visible list belongs to the peeked repo,
-  // not the selected PR's repo — saving its scroll under selectedPrId
-  // would corrupt the next restore for that PR. (A peek that is set but
-  // not swapping the display — sidebar extended — is harmless.)
-  if (peekActive) return;
   setPrScrollPosition(selectedPrId, "sidebar", prListEl.scrollTop);
 }
 
 $effect(() => {
-  // Peek and PR-restore share this effect so they don't fight each other:
-  //  - peek active → snap to top of the peeked list every time the peek
-  //    repo changes, so the user sees the head of each repo's PRs
-  //  - peek inactive → restore the selected PR's saved scrollTop
-  const swapping = peekActive;
-  const peekId = peekRepoId;
+  // Restore the selected PR's saved scrollTop whenever it changes.
   const prId = selectedPrId;
   if (!prListEl) return;
-  if (swapping) {
-    // Touch peekId so the snap-to-top fires on every peek-target change.
-    void peekId;
-    suppressNextPrListScroll = true;
-    prListEl.scrollTop = 0;
-    return;
-  }
   if (!prId) return;
   const saved = getPrScrollPosition(prId, "sidebar");
   suppressNextPrListScroll = true;
@@ -155,6 +119,12 @@ function findFirstFileTreeRow(): HTMLElement | null {
   return null;
 }
 
+function eventStartedInSidebar(e: KeyboardEvent): boolean {
+  return e
+    .composedPath()
+    .some((target) => target instanceof HTMLElement && target.classList.contains("sidebar"));
+}
+
 // Switch to the PR list and restore the keyboard cursor to the selected PR.
 // Both panes are always mounted (CSS translate, not unmount), so the PR nav
 // element is queryable even while off-screen. PR nav IDs are
@@ -179,7 +149,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (collapsed) return;
   if (getPaletteOpen()) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (isTextEditingKeyTarget(e)) return;
 
   // '/' is the global "go to search" shortcut. Resolved against the
   // visible pane — PR search in 'prs' view, file search in 'files'
@@ -198,6 +168,7 @@ function handleKeydown(e: KeyboardEvent) {
 
   // Only process sidebar nav keys when the sidebar panel is active
   if (getActivePanel() !== "sidebar") return;
+  if (!eventStartedInSidebar(e)) return;
 
   // In files view we delegate movement to @pierre/trees' built-in
   // keyboard handler, which lives on the row buttons inside the tree's
@@ -324,20 +295,25 @@ function handleKeydown(e: KeyboardEvent) {
 	class="sidebar"
 	role="none"
 	onclick={handleSidebarClick}
-	onmouseenter={() => setSidebarPeekHovering(true)}
-	onmouseleave={() => setSidebarPeekHovering(false)}
 >
 	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
-	     mode. Drops to nothing when collapsed since the column is 0 wide. -->
-	<div class="sidebar-header" class:sidebar-header--hidden={collapsed}>
+	     mode. Drops to nothing when collapsed since the column is 0 wide.
+	     Branches crossfade in sync with the pane slide below. -->
+	<div
+		class="sidebar-header"
+		class:sidebar-header--hidden={collapsed}
+		class:sidebar-header--project={view !== 'files'}
+	>
 		{#if view === 'files'}
 			<button
-				class="files-header"
+				class="files-header header-branch"
 				onclick={() => setSidebarView('prs')}
 				title="Back to PR list (Esc)"
 				aria-label="Back to PR list"
+				in:gsapFade={{ duration: tokens.smooth }}
+				out:gsapFade={{ duration: tokens.snap }}
 			>
-				<ChevronLeft size={14} class="back-chevron" />
+				<CaretLeft size={14} class="back-chevron" />
 				{#if filesViewRepo}
 					<RepoGradientAvatar
 						fullName={filesViewRepo.fullName}
@@ -352,7 +328,13 @@ function handleKeydown(e: KeyboardEvent) {
 				{/if}
 			</button>
 		{:else}
-			<ProjectHeader repo={displayRepo} />
+			<div
+				class="header-branch header-branch--projectheader"
+				in:gsapFade={{ duration: tokens.smooth }}
+				out:gsapFade={{ duration: tokens.snap }}
+			>
+				<ProjectHeader repo={displayRepo} />
+			</div>
 		{/if}
 	</div>
 
@@ -374,7 +356,13 @@ function handleKeydown(e: KeyboardEvent) {
 			class="view-pane view-pane--prs"
 			aria-hidden={view === 'files'}
 		>
-			<SearchFilter />
+			<SearchFilter>
+				{#snippet trailing()}
+					{#if displayRepo}
+						<AuthorFilter repoId={displayRepo.id} />
+					{/if}
+				{/snippet}
+			</SearchFilter>
 
 			<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 				{#if displayRepo}
@@ -383,7 +371,7 @@ function handleKeydown(e: KeyboardEvent) {
 					<ProjectArchiveList repoId={displayRepo.id} />
 				{:else if !hasRepos}
 					<div class="empty-state">
-						<GitPullRequestCreateArrow size={28} class="empty-icon" aria-hidden="true" />
+						<Folder size={28} class="empty-icon" aria-hidden="true" />
 						<p class="empty-text">No repositories added yet</p>
 						<button class="add-link" onclick={() => setAddRepoDialogOpen(true)}>
 							<Plus size={11} aria-hidden="true" />
@@ -423,7 +411,13 @@ function handleKeydown(e: KeyboardEvent) {
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		width: 100%; /* grid column controls actual width */
+		/* Stable internal width — the grid track animates 0 ↔ sidebarWidth
+		   during collapse/expand, but this element stays at full width so
+		   its contents don't reflow per frame. `.sidebar-area`'s
+		   overflow:hidden clips the overflow when the track is narrower.
+		   During a live drag `--sidebar-width` updates per pointer event,
+		   so the contents follow the cursor naturally. */
+		width: var(--sidebar-width, 100%);
 		background: var(--color-bg-secondary);
 		overflow: hidden;
 	}
@@ -439,41 +433,44 @@ function handleKeydown(e: KeyboardEvent) {
 		z-index: 5;
 	}
 
-	/* Header */
+	/* position:relative anchors the two stacked .header-branch children so
+	   they crossfade in place during the view-toggle. No opacity/transform
+	   transition on the collapse toggle — the sidebar stays at full
+	   --sidebar-width and the parent's overflow:hidden does the reveal;
+	   layering a fade on top reads as two competing motions. Visibility is
+	   deferred off so the content lingers through the full collapse, then
+	   drops out for tab focus once the panel is actually closed. */
 	.sidebar-header {
-		display: flex;
-		align-items: stretch;
+		position: relative;
 		min-height: 48px;
 		flex-shrink: 0;
-		opacity: 1;
-		transform: translateX(0);
 		visibility: visible;
-		/* No min-width — must be happy at 0 when collapsed */
-		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
-			transform var(--duration-quick) var(--ease-out-expo) 60ms,
-			min-height var(--duration-quick) var(--ease-out-expo) 60ms,
-			visibility 0s linear 0s;
+		transition: visibility 0s linear 0s;
+	}
+
+	.sidebar-header--project {
+		min-height: 84px;
+	}
+
+	.header-branch {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		min-width: 0;
+	}
+
+	.header-branch--projectheader {
+		align-items: stretch;
+	}
+
+	.header-branch--projectheader :global(.project-header) {
+		width: 100%;
 	}
 
 	.sidebar-header--hidden {
-		min-height: 0;
-		overflow: hidden;
-		opacity: 0;
-		transform: translateX(-12px);
 		visibility: hidden;
-		transition:
-			opacity var(--duration-quick) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft),
-			min-height var(--duration-quick) var(--ease-soft),
-			visibility 0s linear var(--duration-quick);
-	}
-
-	/* In PR-list mode the header is owned by ProjectHeader (its own padding).
-	   In files mode the back-breadcrumb stretches to fill. */
-	.sidebar-header > :global(*) {
-		flex: 1;
-		min-width: 0;
+		transition: visibility 0s linear var(--duration-smooth);
 	}
 
 	/* Files-view breadcrumb back-button. Stretches the full content row
@@ -482,8 +479,6 @@ function handleKeydown(e: KeyboardEvent) {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		flex: 1;
-		min-width: 0;
 		padding: 0 10px;
 		border: none;
 		border-radius: 5px;
@@ -504,14 +499,14 @@ function handleKeydown(e: KeyboardEvent) {
 		color: var(--color-text-muted);
 	}
 
-	.crumb-repo-icon {
+	:global(.crumb-repo-icon) {
 		width: 13px;
 		height: 13px;
 		flex-shrink: 0;
 		color: var(--color-text-muted);
 	}
 
-	.crumb-repo-avatar {
+	:global(.crumb-repo-avatar) {
 		flex-shrink: 0;
 	}
 
@@ -527,32 +522,22 @@ function handleKeydown(e: KeyboardEvent) {
 	/* Body wrapper — provides the positioning context for the two stacked
 	   panes. Each pane is absolutely positioned and animates its own
 	   translateX so we never have to fight flex sizing across a 200%-wide
-	   track. The body's overflow:hidden clips the off-screen pane. */
+	   track. The body's overflow:hidden clips the off-screen pane.
+	   Collapse-toggle handling matches .sidebar-header above. */
 	.sidebar-body {
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
 		position: relative;
 		contain: layout paint;
-		opacity: 1;
 		visibility: visible;
-		transform: translateX(0);
-		will-change: transform, opacity;
-		transition:
-			opacity var(--duration-quick) var(--ease-out-expo) 60ms,
-			transform var(--duration-quick) var(--ease-out-expo) 60ms,
-			visibility 0s linear 0s;
+		transition: visibility 0s linear 0s;
 	}
 
 	.sidebar-body--hidden {
-		opacity: 0;
 		visibility: hidden;
-		transform: translateX(-12px);
 		pointer-events: none;
-		transition:
-			opacity var(--duration-quick) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft),
-			visibility 0s linear var(--duration-quick);
+		transition: visibility 0s linear var(--duration-smooth);
 	}
 
 	.view-pane {

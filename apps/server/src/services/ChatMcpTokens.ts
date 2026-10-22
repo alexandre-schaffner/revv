@@ -22,10 +22,10 @@ import { Context, Effect, Layer, Ref } from "effect";
 /**
  * Source transport that minted this token. Stamped on
  * `walkthroughs.lastEditedBy` when an edit MCP tool fires through this
- * registry's HTTP path. The Claude SDK in-process path doesn't go through
- * this registry — it builds its context directly with `actor: 'chat:claude'`.
+ * registry's HTTP path. All chat edits run on the ACP transport, so the
+ * only actor today is `'chat:acp'`.
  */
-export type ChatTokenActor = "chat:opencode";
+export type ChatTokenActor = "chat:acp";
 
 export interface ChatTokenIssueArgs {
   readonly prId: string;
@@ -45,7 +45,7 @@ interface TokenEntry extends ChatTokenResolved {
   readonly issuedAt: number;
 }
 
-export class ChatMcpTokens extends Context.Tag("ChatMcpTokens")<
+export class ChatMcpTokens extends Context.Service<
   ChatMcpTokens,
   {
     /** Mint a fresh token bound to the supplied identity. Returns the bearer token. */
@@ -55,7 +55,7 @@ export class ChatMcpTokens extends Context.Tag("ChatMcpTokens")<
     /** Revoke a token (best-effort — silent if already gone). */
     readonly clear: (token: string) => Effect.Effect<void>;
   }
->() {}
+>()("ChatMcpTokens") {}
 
 export const ChatMcpTokensLive = Layer.effect(
   ChatMcpTokens,

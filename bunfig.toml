@@ -1,2 +1,9 @@
 [install]
 peer = false
+
+# Supply-chain hardening: refuse package versions published less than 3 days
+# ago. Recent npm worms (Shai-Hulud / Miasma) propagate through freshly
+# published versions and are usually pulled within hours, so a short cooldown
+# blocks the attack window before IOCs are public. Mirrors the Merkl monorepo.
+# See https://bun.com/docs/pm/cli/install#minimum-release-age
+minimumReleaseAge = 259200 # 3 days, in seconds

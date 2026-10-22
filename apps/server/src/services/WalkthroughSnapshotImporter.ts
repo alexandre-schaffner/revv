@@ -22,11 +22,12 @@
 //   • #12 — `complete_walkthrough` validation gate. We replicate the
 //           same checks as a pre-import assertion.
 
-import type { WalkthroughSnapshotV1 } from "@revv/shared";
+import type { WalkthroughSnapshotV2 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
+import { walkthroughLeads } from "../db/schema/walkthrough-leads";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
@@ -35,7 +36,7 @@ import { debug } from "../logger";
 import { DbService } from "./Db";
 import { validateSnapshot } from "./walkthrough-snapshot";
 
-export class WalkthroughSnapshotImporter extends Context.Tag("WalkthroughSnapshotImporter")<
+export class WalkthroughSnapshotImporter extends Context.Service<
   WalkthroughSnapshotImporter,
   {
     /**
@@ -54,10 +55,10 @@ export class WalkthroughSnapshotImporter extends Context.Tag("WalkthroughSnapsho
      */
     readonly import: (params: {
       readonly walkthroughId: string;
-      readonly snapshot: WalkthroughSnapshotV1;
+      readonly snapshot: WalkthroughSnapshotV2;
     }) => Effect.Effect<void, ImportError, DbService>;
   }
->() {}
+>()("WalkthroughSnapshotImporter") {}
 
 export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshotImporter, {
   import: ({ walkthroughId, snapshot }) =>
@@ -111,6 +112,11 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
             db.delete(walkthroughSemanticSteps)
               .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughId))
               .run();
+            // The interrupted run's leads describe a review that never
+            // happened; the imported one carries none.
+            db.delete(walkthroughLeads)
+              .where(eq(walkthroughLeads.walkthroughId, walkthroughId))
+              .run();
 
             // ── Phase A + C: content lives on the row ────────────────────
             // `summary` + `riskLevel` are Phase A outputs; `sentiment` is
@@ -131,6 +137,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 generatedByDisplayName: snapshot.generatedBy.displayName,
                 generatedByAvatarUrl: snapshot.generatedBy.avatarContent,
                 providerConfig: JSON.stringify(snapshot.providerConfig),
+                leadsSelectedAt: null,
               })
               .where(eq(walkthroughs.id, walkthroughId))
               .run();

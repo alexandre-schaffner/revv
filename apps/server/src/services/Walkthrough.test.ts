@@ -1,0 +1,442 @@
+import { describe, expect, it } from "bun:test";
+import { eq } from "drizzle-orm";
+import { type Context, Effect, Layer } from "effect";
+import { createDb, type Db } from "../db/index";
+import { reviewRounds, walkthroughs } from "../db/schema";
+import { DbService } from "./Db";
+import type { PrCommit } from "./GitHub";
+import { __walkthroughTest, WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
+
+function commit(sha: string, message: string): PrCommit {
+  return {
+    sha,
+    message,
+    authorLogin: null,
+    authorAvatarUrl: null,
+    date: null,
+  };
+}
+
+describe("commitsInRoundRange", () => {
+  const commits = [
+    commit("a", "feat: initial"),
+    commit("b", "fix: reviewed base"),
+    commit("c", "feat: add indexes"),
+    commit("d", "test: coverage"),
+    commit("e", "fix: tune range query"),
+  ];
+
+  it("returns commits after fromSha through toSha for a normal forward range", () => {
+    expect(__walkthroughTest.commitsInRoundRange(commits, "b", "d").map((c) => c.sha)).toEqual([
+      "c",
+      "d",
+    ]);
+  });
+
+  it("returns an empty range when fromSha equals toSha", () => {
+    expect(__walkthroughTest.commitsInRoundRange(commits, "c", "c")).toEqual([]);
+  });
+
+  it("returns commits after fromSha when toSha is missing from the snapshot", () => {
+    expect(
+      __walkthroughTest.commitsInRoundRange(commits, "b", "missing").map((c) => c.sha),
+    ).toEqual(["c", "d", "e"]);
+  });
+
+  it("returns all commits when neither boundary is available", () => {
+    expect(
+      __walkthroughTest
+        .commitsInRoundRange(commits, "missing-base", "missing-head")
+        .map((c) => c.sha),
+    ).toEqual(["a", "b", "c", "d", "e"]);
+  });
+});
+
+describe("deriveRoundFocusTitle", () => {
+  it("returns null when persisted commits are unavailable", () => {
+    expect(__walkthroughTest.deriveRoundFocusTitle(null, "b", "d")).toBeNull();
+  });
+
+  it("uses the newest non-low-signal commit in the selected round", () => {
+    const commits = [
+      commit("a", "feat: base"),
+      commit("b", "fix: previous review"),
+      commit("c", "feat(db): add range indexes"),
+      commit("d", "test: add query coverage"),
+    ];
+
+    expect(__walkthroughTest.deriveRoundFocusTitle(JSON.stringify(commits), "b", "d")).toBe(
+      "add range indexes",
+    );
+  });
+});
+
+/**
+ * Insert walkthrough rows for PR `pr-1` without seeding the PR / session rows
+ * they reference (foreign keys off). Each row overrides the defaults.
+ */
+function insertWalkthroughs(
+  db: Db,
+  ...rows: readonly (Partial<typeof walkthroughs.$inferInsert> & { id: string })[]
+): void {
+  const sqlite = (db as unknown as { session: { client: { run: (sql: string) => void } } }).session
+    .client;
+  sqlite.run("PRAGMA foreign_keys = OFF");
+  for (const row of rows) {
+    db.insert(walkthroughs)
+      .values({
+        reviewSessionId: "session-1",
+        pullRequestId: "pr-1",
+        generatedAt: "2026-01-01T00:00:00Z",
+        modelUsed: "test-model",
+        prHeadSha: "head-1",
+        ...row,
+      })
+      .run();
+  }
+}
+
+function seedWalkthroughRound(db: Db): void {
+  insertWalkthroughs(db, { id: "wt-1" });
+  db.insert(reviewRounds)
+    .values({
+      id: "round-1",
+      pullRequestId: "pr-1",
+      reviewSessionId: "session-1",
+      walkthroughId: "wt-1",
+      roundNumber: 1,
+      toSha: "head-1",
+      createdAt: "2026-01-01T00:00:00Z",
+    })
+    .run();
+}
+
+describe("setStatus", () => {
+  it("updates walkthrough and review round status together with one completion timestamp", async () => {
+    const db = createDb(":memory:");
+    seedWalkthroughRound(db);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WalkthroughService;
+        yield* service.setStatus("wt-1", "complete");
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    const walkthrough = db
+      .select({ status: walkthroughs.status, completedAt: walkthroughs.completedAt })
+      .from(walkthroughs)
+      .where(eq(walkthroughs.id, "wt-1"))
+      .get();
+    const round = db
+      .select({ status: reviewRounds.status, completedAt: reviewRounds.completedAt })
+      .from(reviewRounds)
+      .where(eq(reviewRounds.id, "round-1"))
+      .get();
+
+    expect(walkthrough?.status).toBe("complete");
+    expect(round?.status).toBe("complete");
+    expect(walkthrough?.completedAt).toBeTruthy();
+    expect(round?.completedAt).toBe(walkthrough?.completedAt);
+  });
+});
+
+describe("walkthrough risk hydration", () => {
+  it("returns an orchestrator-assigned risk before Phase A has written a summary", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(db, {
+      id: "wt-risk",
+      summary: "",
+      riskLevel: "high",
+      riskConfidence: 0.99,
+      status: "generating",
+      lastCompletedPhase: "none",
+    });
+
+    const partial = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).getPartial("pr-1", "head-1");
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(partial?.summary).toBe("");
+    expect(partial?.riskLevel).toBe("high");
+    expect(partial?.riskConfidence).toBe(0.99);
+  });
+});
+
+// Regression: resuming an incremental walkthrough used to crash with
+// `UNIQUE constraint failed: walkthroughs.id`. `resumePending` didn't pass the
+// row's generationMode, so the resume defaulted to "full", `createPartial`'s
+// dedup keyed on the wrong (prId, headSha, mode, generationMode) tuple, missed
+// the existing incremental row, and tried to INSERT a duplicate id.
+describe("resume incremental walkthrough", () => {
+  function seedIncrementalGenerating(db: Db): void {
+    insertWalkthroughs(db, {
+      id: "wt-inc",
+      prHeadSha: "head-2",
+      status: "generating",
+      mode: "author",
+      generationMode: "incremental",
+      parentWalkthroughId: "wt-parent",
+      baseHeadSha: "head-1",
+    });
+  }
+
+  function seedFullGeneratingAtSameSha(db: Db): void {
+    insertWalkthroughs(db, {
+      id: "wt-full",
+      reviewSessionId: "session-2",
+      generatedAt: "2026-01-01T00:01:00Z",
+      prHeadSha: "head-2",
+      status: "generating",
+      mode: "author",
+      generationMode: "full",
+    });
+  }
+
+  it("listGenerating surfaces generationMode so resume can preserve it", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const rows = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).listGenerating();
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("wt-inc");
+    expect(rows[0]?.generationMode).toBe("incremental");
+  });
+
+  it("findResumable surfaces generationMode for manual resume", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).findResumable("pr-1", "author");
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(row?.id).toBe("wt-inc");
+    expect(row?.generationMode).toBe("incremental");
+  });
+
+  it("getPartial can disambiguate rows by generationMode", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+    seedFullGeneratingAtSameSha(db);
+
+    const partial = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).getPartial(
+          "pr-1",
+          "head-2",
+          "author",
+          "incremental",
+        );
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(partial?.id).toBe("wt-inc");
+    expect(partial?.generationMode).toBe("incremental");
+  });
+
+  it("createPartial reuses the existing row on a same-mode resume (no duplicate-id insert)", async () => {
+    const db = createDb(":memory:");
+    seedIncrementalGenerating(db);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* (yield* WalkthroughService).createPartial({
+          id: "wt-inc",
+          reviewSessionId: "session-1",
+          prId: "pr-1",
+          modelUsed: "test-model",
+          prHeadSha: "head-2",
+          mode: "author",
+          generationMode: "incremental",
+          parentWalkthroughId: "wt-parent",
+          baseHeadSha: "head-1",
+        });
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(result).toBe("wt-inc");
+    const count = db.select({ id: walkthroughs.id }).from(walkthroughs).all().length;
+    expect(count).toBe(1);
+  });
+});
+
+// Regression: Stop followed by Regenerate resumed the abandoned draft instead
+// of starting a fresh one. Stop leaves the row at `status='generating'` (the
+// abort route deliberately does not supersede, so Resume stays available), and
+// the regenerate handler used to sweep with `exceptHeadSha = pr.headSha`, which
+// spared exactly that row. `createPartial`'s dedup then handed it back to the
+// new job, content and all. The handler now sweeps unconditionally.
+describe("regenerate after a stopped generation", () => {
+  function seedStoppedDraft(db: Db): void {
+    insertWalkthroughs(db, {
+      id: "wt-stopped",
+      status: "generating",
+      lastCompletedPhase: "B",
+      mode: "author",
+      generationMode: "full",
+    });
+  }
+
+  const freshRowParams = {
+    reviewSessionId: "session-1",
+    prId: "pr-1",
+    modelUsed: "test-model",
+    prHeadSha: "head-1",
+    mode: "author",
+    generationMode: "full",
+    forceNew: true,
+  } as const;
+
+  it("supersedes the stopped row at the current head so a new row is created", async () => {
+    const db = createDb(":memory:");
+    seedStoppedDraft(db);
+
+    const newId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WalkthroughService;
+        // What regenerateWalkthroughHandler now does: sweep everything.
+        yield* service.supersedeAllForPr("pr-1", undefined, "author");
+        return yield* service.createPartial(freshRowParams);
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    expect(newId).not.toBe("wt-stopped");
+    const stopped = db
+      .select({ status: walkthroughs.status })
+      .from(walkthroughs)
+      .where(eq(walkthroughs.id, "wt-stopped"))
+      .get();
+    expect(stopped?.status).toBe("superseded");
+  });
+
+  it("would hand the stopped row back when the sweep spares the current head", async () => {
+    const db = createDb(":memory:");
+    seedStoppedDraft(db);
+
+    const reusedId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WalkthroughService;
+        // The old behaviour, kept as an executable record of the bug.
+        yield* service.supersedeAllForPr("pr-1", "head-1", "author");
+        return yield* service.createPartial(freshRowParams);
+      }).pipe(
+        Effect.provide(WalkthroughServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+
+    // `forceNew` does not help: createPartial returns any in-flight row first.
+    expect(reusedId).toBe("wt-stopped");
+  });
+});
+
+const runWalkthrough = <A, E>(
+  db: Db,
+  f: (service: Context.Service.Shape<typeof WalkthroughService>) => Effect.Effect<A, E, DbService>,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* f(yield* WalkthroughService);
+    }).pipe(
+      Effect.provide(WalkthroughServiceLive),
+      Effect.provide(Layer.succeed(DbService, { db })),
+    ),
+  );
+
+describe("getLatestMode", () => {
+  const latestMode = (db: Db) => runWalkthrough(db, (s) => s.getLatestMode("pr-1"));
+
+  it("is null when the PR has no walkthrough", async () => {
+    expect(await latestMode(createDb(":memory:"))).toBeNull();
+  });
+
+  it("follows the newest row, whatever its perspective", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(
+      db,
+      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
+      { id: "b", mode: "reviewer", status: "generating", generatedAt: "2026-01-02T00:00:00Z" },
+    );
+    expect(await latestMode(db)).toBe("reviewer");
+  });
+
+  it("counts superseded rows, so a stale walkthrough keeps its perspective", async () => {
+    const db = createDb(":memory:");
+    insertWalkthroughs(
+      db,
+      { id: "a", mode: "author", status: "complete", generatedAt: "2026-01-01T00:00:00Z" },
+      { id: "b", mode: "reviewer", status: "superseded", generatedAt: "2026-01-02T00:00:00Z" },
+    );
+    expect(await latestMode(db)).toBe("reviewer");
+  });
+});
+
+// Only one perspective is active per PR, so a switch retires the other one's
+// walkthrough. Its report must stay readable from the history.
+describe("history across perspectives", () => {
+  function seedSwitch(db: Db): void {
+    insertWalkthroughs(
+      db,
+      {
+        id: "wt-author",
+        mode: "author",
+        status: "superseded",
+        generatedAt: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "wt-reviewer",
+        mode: "reviewer",
+        status: "complete",
+        generatedAt: "2026-01-02T00:00:00Z",
+      },
+    );
+  }
+
+  it("lists rounds from both perspectives, each labelled", async () => {
+    const db = createDb(":memory:");
+    seedSwitch(db);
+    const { rounds } = await runWalkthrough(db, (s) => s.listReviewRounds("pr-1", "head-1"));
+    expect(rounds.map((r) => [r.walkthroughId, r.mode])).toEqual([
+      ["wt-author", "author"],
+      ["wt-reviewer", "reviewer"],
+    ]);
+  });
+
+  it("opens a report in the other perspective", async () => {
+    const db = createDb(":memory:");
+    seedSwitch(db);
+    const report = await runWalkthrough(db, (s) => s.getReport("pr-1", "wt-author"));
+    expect(report?.walkthrough.mode).toBe("author");
+  });
+});

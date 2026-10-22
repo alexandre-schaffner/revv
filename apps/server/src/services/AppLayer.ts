@@ -1,23 +1,30 @@
 import { Layer } from "effect";
 import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
+import { AgentLoginServiceLive } from "./AgentLogin";
 import { AiServiceLive } from "./Ai";
+import { BroadcasterLive } from "./Broadcaster";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
 import { ChatMcpTokensLive } from "./ChatMcpTokens";
 import { ChatSessionServiceLive } from "./ChatSession";
+import { CacheEligibilityLive } from "./cache-eligibility";
+import { SshSignerLive } from "./cache-signing/index";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
-import { EventBusLive } from "./EventBus";
+import { ExternalIntegrationsLive } from "./ExternalIntegrations";
 import { FileContentServiceLive } from "./FileContent";
-import { GitHubServiceLive } from "./GitHub";
+import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { HunkScanServiceLive } from "./HunkScan";
+import { IdentityLive } from "./Identity";
 import { IssuesServiceLive } from "./Issues";
+import { JevServiceLive } from "./Jev";
 import { OnboardingServiceLive } from "./Onboarding";
-import { OpencodeSupervisorLive } from "./OpencodeSupervisor";
 import { PollSchedulerLive } from "./PollScheduler";
 import { PrContextServiceLive } from "./PrContext";
+import { PrConversationServiceLive } from "./PrConversation";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PullRequestServiceLive } from "./PullRequest";
@@ -27,31 +34,34 @@ import { RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
 import { RepoCloneServiceLive } from "./RepoClone";
 import { RepositoryServiceLive } from "./Repository";
 import { ReviewServiceLive } from "./Review";
+import { SecretStoreLive } from "./SecretStore";
 import { SettingsServiceLive } from "./Settings";
 import { SyncServiceLive } from "./Sync";
+import { StackBriefJobsLive } from "./stacks/StackBriefJobs";
+import { StackHeadlineServiceLive } from "./stacks/StackHeadlines";
+import { StackReviewServiceLive } from "./stacks/StackReview";
+import { StackServiceLive } from "./stacks/StackService";
 import { TokenProviderLive } from "./TokenProvider";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
-import { WebSocketHubLive } from "./WebSocketHub";
 
-// TokenProvider now needs DbService
-const TokenProviderWithDeps = TokenProviderLive.pipe(Layer.provide(DbServiceLive));
+// TokenProvider reads token bytes from SecretStore, resolves account rows via
+// DbService, and broadcasts re-auth signals via Broadcaster (token refresh
+// success/failure).
+const TokenProviderWithDeps = TokenProviderLive.pipe(
+  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, BroadcasterLive)),
+);
+
+const IdentityWithDeps = IdentityLive.pipe(Layer.provide(TokenProviderWithDeps));
 
 // SettingsService now reads/writes via DbService instead of JSON file
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
 // GitHub service depends on the etag cache for conditional requests,
 // and on SettingsService to resolve the API base URL dynamically.
-const GitHubServiceWithDeps = GitHubServiceLive.pipe(
+const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
   Layer.provide(Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceWithDeps)),
-);
-
-// OpencodeSupervisor depends on DbService + SettingsService (for detecting
-// agent-changed + resolving the selected agent). It's in BaseLayers because
-// AiService needs it; AiService in turn is consumed by WalkthroughJobs.
-const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
-  Layer.provide(Layer.mergeAll(DbServiceLive, SettingsServiceWithDeps)),
 );
 
 // ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
@@ -59,31 +69,41 @@ const OpencodeSupervisorWithDeps = OpencodeSupervisorLive.pipe(
 // at the same boundary other DB-dependent services do.
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
+const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
+
 const RemoteUserServiceWithDeps = RemoteUserServiceLive.pipe(Layer.provide(DbServiceLive));
+
+// JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
+const JevServiceWithDeps = JevServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
+);
 
 // Base layer: all services that have no deps or only depend on DbService
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
+  SecretStoreLive,
   TokenProviderWithDeps,
+  IdentityWithDeps,
   GitHubEtagCacheLive,
-  GitHubServiceWithDeps,
-  WebSocketHubLive,
-  EventBusLive,
+  GitHubGatewayWithDeps,
+  BroadcasterLive,
   RepositoryServiceLive,
-  PullRequestServiceLive,
   IssuesServiceLive,
+  PullRequestServiceLive,
   ReviewServiceLive,
   RemoteUserServiceWithDeps,
   SettingsServiceWithDeps,
+  JevServiceWithDeps,
   WalkthroughServiceLive,
   ProjectRecapServiceLive,
   DiffCacheServiceLive,
   FileContentServiceLive,
   CacheServiceLive,
   OnboardingServiceLive,
-  OpencodeSupervisorWithDeps,
+  AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
+  ExternalIntegrationsWithDeps,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
   // publishers yet; CacheStats is ready for per-namespace registrations as
   // existing services migrate to adapters in M2.
@@ -94,6 +114,18 @@ const BaseLayers = Layer.mergeAll(
 // PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
 
+// PrConversation serves the Conversation tab: PrContext for repo + token,
+// plus the kv cache, remote-user avatars, and Broadcaster from BaseLayers.
+const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
+
+const StackServiceWithDeps = StackServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
+
+const StackHeadlineServiceWithDeps = StackHeadlineServiceLive.pipe(Layer.provide(BaseLayers));
+
 // SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
@@ -102,7 +134,7 @@ const SyncServiceWithDeps = SyncServiceLive.pipe(
 // AiService depends on DbService + SettingsService (both in BaseLayers)
 const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 
-// RepoCloneService depends on DbService + WebSocketHub (both in BaseLayers)
+// RepoCloneService depends on DbService + Broadcaster (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
 // DbMaintenance only needs DbService (already in BaseLayers)
@@ -110,13 +142,25 @@ const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive
 
 // Team remote walkthrough cache — opt-in GCS-backed snapshot store.
 // GcsBlobStore depends on SettingsService (to read bucket + credentials);
-// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db. The
-// importer is a thin Drizzle wrapper, no external deps beyond DbService.
+// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db +
+// SshSigner + CacheEligibility. The importer is a thin Drizzle wrapper.
 const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
+const SshSignerWithDeps = SshSignerLive.pipe(
+  Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, DbServiceLive)),
+);
+const CacheEligibilityWithDeps = CacheEligibilityLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers)),
+);
 const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
-  Layer.provide(Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps)),
+  Layer.provide(
+    Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps, SshSignerWithDeps, CacheEligibilityWithDeps),
+  ),
 );
 const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
+
+// The first pass, per PR head. One instance: the review page and
+// WalkthroughJobs must share its in-flight map so a head is scanned once.
+const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
 
 // WalkthroughJobs is the central orchestrator for walkthrough generation —
 // it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
@@ -133,6 +177,8 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       RepoCloneServiceWithDeps,
       RemoteWalkthroughCacheWithDeps,
       WalkthroughSnapshotImporterWithDeps,
+      HunkScanServiceWithDeps,
+      StackServiceWithDeps,
     ),
   ),
 );
@@ -140,13 +186,23 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
 // PollScheduler depends on BaseLayers + SyncService (for thread polling) +
 // WalkthroughJobs (for superseding walkthroughs when a new head SHA arrives).
 const PollSchedulerWithDeps = PollSchedulerLive.pipe(
-  Layer.provide(Layer.mergeAll(BaseLayers, SyncServiceWithDeps, WalkthroughJobsWithDeps)),
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      SyncServiceWithDeps,
+      WalkthroughJobsWithDeps,
+      RepoCloneServiceWithDeps,
+      StackServiceWithDeps,
+    ),
+  ),
 );
 
 // ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
 // simpler — no worktree / continuation. Depends on BaseLayers for repo,
-// PR, recap service, settings, and WebSocketHub.
-const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(Layer.provide(BaseLayers));
+// PR, recap service, settings, and Broadcaster.
+const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
+);
 
 // RecapScheduler depends on ProjectRecapJobs (to enqueue) plus BaseLayers
 // for repo/PR/recap reads.
@@ -154,9 +210,23 @@ const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
 );
 
+const StackBriefJobsWithDeps = StackBriefJobsLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, StackServiceWithDeps)),
+);
+const StackReviewServiceWithDeps = StackReviewServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      BaseLayers,
+      StackServiceWithDeps,
+      WalkthroughJobsWithDeps,
+      StackBriefJobsWithDeps,
+    ),
+  ),
+);
+
 // ChatChangesPush depends on PrContext (for resolving repo+token), AiService
 // (for invoking the conflict-resolution agent), and BaseLayers (db, github,
-// chat sessions, ws hub, pr service, etag cache).
+// chat sessions, realtime broadcaster, pr service, etag cache).
 const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
 );
@@ -165,18 +235,27 @@ const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
 export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
+  PrConversationServiceWithDeps,
+  StackServiceWithDeps,
+  StackHeadlineServiceWithDeps,
   SyncServiceWithDeps,
   PollSchedulerWithDeps,
   AiServiceWithDeps,
   RepoCloneServiceWithDeps,
   WalkthroughJobsWithDeps,
+  HunkScanServiceWithDeps,
   ProjectRecapJobsWithDeps,
   RecapSchedulerWithDeps,
+  StackBriefJobsWithDeps,
+  StackReviewServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
-  // Surface the remote-cache + blob primitives in the runtime so HTTP
-  // routes (e.g. GET /api/settings/cache/status) can resolve them directly.
+  // Surface the remote-cache + blob + signing primitives in the runtime so
+  // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)
+  // can resolve them directly.
   GcsBlobStoreWithDeps,
   RemoteWalkthroughCacheWithDeps,
   WalkthroughSnapshotImporterWithDeps,
+  SshSignerWithDeps,
+  CacheEligibilityWithDeps,
 );

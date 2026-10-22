@@ -1,16 +1,16 @@
 <script lang="ts">
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import PenNib from "phosphor-svelte/lib/PenNib";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
-import PreviousRecaps from "$lib/components/recaps/PreviousRecaps.svelte";
+import { recapWindowIsStale, utcDayKey } from "$lib/components/recaps/period-window";
+import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -22,13 +22,13 @@ import {
   generateRecap,
   getRecapDetail,
   getRecapDetailLoading,
-  getRecapLoading,
   getRecapPendingAction,
   getRecapsForRepo,
   loadRecap,
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -43,7 +43,7 @@ $effect(() => {
 });
 
 // Hydrate the repo's recap list so the "Previous recaps" section below
-// has data to render. Cached after the first load — WS reducers in
+// has data to render. Cached after the first load — SSE reducers in
 // recaps.svelte.ts keep it fresh.
 $effect(() => {
   const id = repoId;
@@ -75,43 +75,15 @@ const recap = $derived(getRecapDetail(recapId));
 const loading = $derived(getRecapDetailLoading(recapId));
 const stream = $derived(getRecapStreamEntry(recapId));
 const recaps = $derived(getRecapsForRepo(repoId));
-const listLoading = $derived(getRecapLoading(repoId));
 const pendingAction = $derived(getRecapPendingAction(recapId));
+
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 
 const periodLabelLower = $derived(recap?.period === "weekly" ? "weekly" : "daily");
 const currentPeriodLabel = $derived(recap?.period === "weekly" ? "this week's" : "today's");
 
-function utcDayKey(iso: string | Date): string {
-  const s = typeof iso === "string" ? iso : iso.toISOString();
-  return s.slice(0, 10);
-}
-
-function utcDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function utcMondayKey(d: Date): string {
-  const daysFromMonday = (d.getUTCDay() + 6) % 7;
-  const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
-  return new Date(mondayMs).toISOString().slice(0, 10);
-}
-
-function isClosedFullPeriod(r: NonNullable<typeof recap>): boolean {
-  const start = new Date(r.periodStart).getTime();
-  const end = new Date(r.periodEnd).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  const duration = r.period === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  return end - start === duration;
-}
-
-function recapIsOutOfDate(r: NonNullable<typeof recap>): boolean {
-  if (r.status !== "complete") return false;
-  if (isClosedFullPeriod(r)) return true;
-  if (r.period === "daily") {
-    return utcDayKey(r.periodStart) !== utcDateKey(new Date());
-  }
-  return utcDayKey(r.periodStart) !== utcMondayKey(new Date());
-}
+// Whether this recap still covers the current day/week window.
+const recapIsStale = $derived(recap ? recapWindowIsStale(recap) : false);
 
 type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
 
@@ -121,7 +93,7 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (recap.status === "error") {
     return recap.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (recap.status === "complete") return recapIsOutOfDate(recap) ? "outdated" : "complete";
+  if (recap.status === "complete") return recapIsStale ? "outdated" : "complete";
   return "hidden";
 });
 
@@ -136,12 +108,18 @@ const genActionState = $derived.by((): GenActionState | null => {
       return { kind: "error" };
     case "complete":
       return { kind: "complete" };
+    // Rerunning a past window is only offered here — see RecapPeriodView.
     case "outdated":
       return { kind: "stale", label: "Rerun this recap" };
     default:
       return null;
   }
 });
+
+// Offer a fresh-period CTA whenever this recap covers a past window —
+// whatever its status. A stopped or errored recap from an earlier week
+// otherwise leaves only Resume/Regenerate, which both re-run *that* window.
+const showGenerateFab = $derived(!!recap && recapIsStale && recap.status !== "generating");
 
 function onBack(): void {
   void goto(`/repo/${repoId}/recaps`);
@@ -174,35 +152,34 @@ async function onGenerate(): Promise<void> {
 </script>
 
 <AuthGuard>
-	<div class="recap-page">
+	<div class="recap-route">
 		<div class="page">
-			<div class="container">
-				<RecapDetail
-					{recap}
-					{loading}
-					{onBack}
-					{stream}
-				/>
-				{#if recap}
-					<PreviousRecaps
-						{repoId}
-						period={recap.period}
-						{recaps}
-						loading={listLoading}
-						excludeRecapId={recapId}
-					/>
-				{/if}
-			</div>
+			<RecapDetail
+				{recap}
+				{loading}
+				period={recap?.period}
+				{onBack}
+				{stream}
+				archive={recap ? archivePopover : undefined}
+			/>
 		</div>
 
-		{#if genActionState}
-			<div
-				class="actions-float"
-				in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
-				out:gsapFade={{ duration: tokens.snap }}
-			>
+		{#snippet archivePopover()}
+			{#if recap}
+				<RecapArchivePopover
+					{repoId}
+					period={recap.period}
+					{recaps}
+					activeRecapId={recapId}
+					initialDayKey={utcDayKey(recap.periodStart)}
+				/>
+			{/if}
+		{/snippet}
+
+		{#if showGenerateFab || genActionState}
+			<div class="actions-float" style={actionsFloatStyle}>
 				<div class="actions-row" role="toolbar" aria-label="Recap actions">
-					{#if recapUiKind === "outdated"}
+					{#if showGenerateFab}
 						<GlassPill
 							variant="accent"
 							onclick={onGenerate}
@@ -210,9 +187,9 @@ async function onGenerate(): Promise<void> {
 							title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
 						>
 							{#if generating}
-								<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+								<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
 							{:else}
-								<Sparkles size={16} weight="fill" aria-hidden="true" />
+								<PenNib size={16} aria-hidden="true" />
 							{/if}
 							<Shimmer active={!generating}>
 								{generating
@@ -221,13 +198,15 @@ async function onGenerate(): Promise<void> {
 							</Shimmer>
 						</GlassPill>
 					{/if}
-					<GenActionBar
-						uiState={genActionState}
-						pendingAction={pendingAction}
-						{onStop}
-						onResume={onRegenerate}
-						onRegenerate={onRegenerate}
-					/>
+					{#if genActionState}
+						<GenActionBar
+							uiState={genActionState}
+							pendingAction={pendingAction}
+							{onStop}
+							onResume={onRegenerate}
+							onRegenerate={onRegenerate}
+						/>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -239,7 +218,7 @@ async function onGenerate(): Promise<void> {
 	   .main-area plays for the PR walkthrough actions in AppShell. The
 	   scroll container (.page) lives inside this wrapper so the absolutely
 	   positioned bar is never a descendant of the scroll container. */
-	.recap-page {
+	.recap-route {
 		position: relative;
 		height: 100%;
 		overflow: hidden;
@@ -250,12 +229,4 @@ async function onGenerate(): Promise<void> {
 		overflow-y: auto;
 	}
 
-	.container {
-		display: flex;
-		flex-direction: column;
-		max-width: 56rem;
-		margin: 0 auto;
-		width: 100%;
-		padding: 1rem 1.25rem 4rem;
-	}
 </style>

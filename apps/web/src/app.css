@@ -1,29 +1,44 @@
 @import "tailwindcss";
 @import "./lib/components/ui/dotmatrix/dotmatrix-loader.css";
 @import "./lib/components/ui/glass-pill/glass-pill.css";
+@plugin "@tailwindcss/typography";
+/* prose.css must be imported *after* the typography @plugin: it defines `.prose`
+   overrides that the plugin has to register first, otherwise Tailwind v4 skips
+   generating the prose component styles entirely (no paragraph spacing, no
+   font sizing). This deliberately places an @import after a non-import at-rule.
+   biome-ignore lint/correctness/noInvalidPositionAtImportRule: must follow @plugin */
+@import "./lib/styles/prose.css";
+
+/* Tailwind v4's stock `dark:` variant keys off `prefers-color-scheme`, which is
+   the *OS* preference — it would ignore the app's own light/dark/system setting
+   entirely. The theme store toggles `.dark` on <html>, so point the variant at
+   that class. The app styles from tokens rather than `dark:` utilities, so this
+   currently generates nothing; it's here so the first `dark:` anyone writes
+   tracks the theme toggle instead of silently drifting to the OS. */
+@custom-variant dark (&:where(:root.dark, :root.dark *));
 
 /* ──────────────────────────────────────────────────────────
    Light theme (default)
    ────────────────────────────────────────────────────────── */
 /* ──────────────────────────────────────────────────────────
-   Light theme (default) — "warm paper, deep naval accent"
+   Light theme (default) — "warm paper, tidewater teal accent"
    - Background stays warm off-white (#faf9f6) like the
      onboarding, so the canvas reads as a page rather than
-     a screen. The distinctive move is the deep naval accent
-     (oklch(46% 0.11 225)) replacing the generic Tailwind blue
+     a screen. The distinctive move is the tidewater teal accent
+     (oklch(48% 0.08 195)) replacing the generic Tailwind blue
      every other dashboard ships.
    - Severity colors deepen slightly so reds/greens read as
      considered, not stock-Tailwind-bright.
    ────────────────────────────────────────────────────────── */
 :root {
-  /* shadcn-svelte (HSL triplets — warm paper bg, deep naval primary) */
+  /* shadcn-svelte (HSL triplets — warm paper bg, tidewater teal primary) */
   --background: 36 14% 98%;
   --foreground: 28 12% 12%;
   --card: 36 14% 98%;
   --card-foreground: 28 12% 12%;
   --popover: 36 10% 95%;
   --popover-foreground: 28 12% 12%;
-  --primary: 218 35% 43%; /* oklch(46% 0.11 225) deep naval */
+  --primary: 181 86% 23%; /* oklch(48% 0.08 195) tidewater teal */
   --primary-foreground: 0 0% 100%;
   --secondary: 36 10% 95%;
   --secondary-foreground: 28 10% 15%;
@@ -35,10 +50,10 @@
   --destructive-foreground: 0 0% 100%;
   --border: 36 12% 88%;
   --input: 36 12% 88%;
-  --ring: 218 35% 43%;
+  --ring: 181 86% 23%;
   --radius: 0.5rem;
 
-  /* Revv palette — warm paper surfaces, deep naval accent */
+  /* Revv palette — warm paper surfaces, tidewater teal accent */
   --revv-bg-primary: #faf9f6;
   --revv-bg-secondary: #f4f1eb; /* warm light gray — sidebars, panels */
   --revv-bg-tertiary: #eae6de; /* warm mid gray — tracks, hover */
@@ -47,14 +62,26 @@
   --revv-border-subtle: #ece8e0;
   --revv-text-primary: #2a2825;
   --revv-text-secondary: #5a5650;
+  /* The quiet-but-readable step. `--revv-text-muted` is a decorative grey —
+     2.9:1 on warm-paper, 2.6:1 on midnight — so it is only legitimate on
+     disabled controls and non-informational marks. Any label a user is meant
+     to *read* (weekday headers, footnotes, metadata) belongs here: 5.1:1
+     light / 4.8:1 dark, still clearly subordinate to `--revv-text-secondary`. */
+  --revv-text-subtle: #6f6b64;
   --revv-text-muted: #9a958c;
-  --revv-accent: oklch(46% 0.11 225); /* deep naval — the one distinctive move */
-  --revv-accent-hover: oklch(40% 0.1 225); /* deepened */
-  --revv-accent-muted: oklch(58% 0.09 225); /* muted variant for archival states */
+  --revv-accent: oklch(48% 0.08 195); /* tidewater teal — the one distinctive move */
+  --revv-accent-hover: oklch(42% 0.075 195); /* deepened */
+  --revv-accent-muted: oklch(58% 0.07 195); /* muted variant for archival states */
   --revv-success: #15803d; /* green-700 — slightly deeper than Tailwind 500 */
   --revv-warning: #b45309; /* amber-700 — keep */
   --revv-warning-fg: #ffffff; /* text on warning surfaces */
   --revv-danger: #b91c1c; /* red-700 — slightly deeper */
+  /* Merge state — the "this landed" mark (the walkthrough's merged stamp).
+     Deliberately bluer than `--revv-ai-accent` (#6d28d9, a red-leaning
+     violet): the two would otherwise be the same swatch, and a merged mark
+     must never read as agent output. Deep enough to pass as ink on warm
+     paper rather than as a UI accent. */
+  --revv-merged: oklch(45% 0.19 285);
 
   /* Diff canvas — warm with subtle bias */
   --revv-diff-bg: #f4f1eb;
@@ -80,7 +107,7 @@
   --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 8%, transparent);
 
   /* Gutter markers — open pinned to brand accent */
-  --revv-marker-open: oklch(46% 0.11 225);
+  --revv-marker-open: var(--revv-accent);
   --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 25%, transparent);
   --revv-marker-pending: #b45309;
   --revv-marker-pending-glow: rgba(180, 83, 9, 0.25);
@@ -100,11 +127,11 @@
   /* Context panel */
   --revv-panel-bg: #f4f1eb;
   --revv-panel-header-bg: rgba(244, 241, 235, 0.96);
-  --revv-stream-cursor: oklch(46% 0.11 225);
+  --revv-stream-cursor: var(--revv-accent);
 
   /* File tree */
   --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
-  --revv-tree-active-text: oklch(40% 0.1 225);
+  --revv-tree-active-text: var(--revv-accent-hover);
   --revv-tree-hover-bg: #eae6de;
 
   /* Floating tabs */
@@ -141,6 +168,24 @@
   --revv-tooltip-border: rgba(42, 40, 37, 0.12);
   --revv-tooltip-item-bg: rgba(42, 40, 37, 0.04);
 
+  /* Accent chip — a teal-tinted control surface with its own foreground
+     (the recap button's primary state). The accent flips from dark teal to
+     light teal between themes, so the chip tracks the theme rather than being
+     pinned light: a light chip in light mode, a deep-teal chip in dark mode. */
+  --revv-accent-chip-bg: oklch(96% 0.012 195);
+  --revv-accent-chip-fg: oklch(32% 0.03 195);
+  --revv-accent-chip-border: oklch(88% 0.02 195);
+  --revv-accent-chip-bg-hover: oklch(92% 0.022 195);
+  --revv-accent-chip-border-hover: oklch(80% 0.04 195);
+
+  /* User chat bubble — paper tinted toward the brand teal, with ink text. A
+     filled accent bubble put a long pasted message on the screen as a slab of
+     teal; the tint keeps "this is you" at the low frequency the accent is
+     rationed to. `chip` backs inline code (and file pills) inside it. */
+  --revv-user-bubble: color-mix(in oklch, var(--revv-accent) 7%, var(--revv-bg-primary));
+  --revv-user-bubble-border: color-mix(in oklch, var(--revv-accent) 18%, var(--revv-bg-primary));
+  --revv-user-bubble-chip: color-mix(in oklch, var(--revv-accent) 11%, transparent);
+
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
@@ -168,15 +213,15 @@
   --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 12%, transparent);
   --revv-score-blocker-conf: #b91c1c;
 
-  /* Info — accent-derived palette. Deep naval keeps "info" in the
+  /* Info — accent-derived palette. Tidewater teal keeps "info" in the
        brand family. Darker and less saturated than pass-green so the two
        remain visually distinct in the scorecard context. */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: oklch(46% 0.11 225);
-  --revv-score-info-icon: oklch(40% 0.1 225);
-  --revv-score-info-label: oklch(34% 0.09 225);
+  --revv-score-info-border: var(--revv-accent);
+  --revv-score-info-icon: var(--revv-accent-hover);
+  --revv-score-info-label: oklch(36% 0.065 195);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 12%, transparent);
-  --revv-score-info-conf: oklch(40% 0.1 225);
+  --revv-score-info-conf: var(--revv-accent-hover);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -190,7 +235,7 @@
   --card-foreground: 240 5% 91%;
   --popover: 0 0% 13%;
   --popover-foreground: 240 5% 91%;
-  --primary: 218 52% 67%; /* oklch(71% 0.14 225) phosphor naval, luminous dark accent */
+  --primary: 180 79% 41%; /* oklch(72% 0.12 195) phosphor teal, luminous dark accent */
   --primary-foreground: 0 0% 8%; /* near-black ink on bright accent fill */
   --secondary: 0 0% 13%;
   --secondary-foreground: 240 5% 91%;
@@ -202,13 +247,13 @@
   --destructive-foreground: 0 0% 100%;
   --border: 0 0% 15%;
   --input: 0 0% 15%;
-  --ring: 218 52% 67%;
+  --ring: 180 79% 41%;
 
-  /* Revv palette — Phosphor Naval accent.
-     The dark theme keeps the deep-naval lineage (light: oklch(46% 0.11 225))
-     and lifts it into a luminous oklch(71% 0.14 225) that reads against
+  /* Revv palette — Phosphor Teal accent.
+     The dark theme keeps the tidewater-teal lineage (light: oklch(48% 0.08 195))
+     and lifts it into a luminous oklch(72% 0.12 195) that reads against
      #0a0a0a without becoming the stock-Tailwind-blue every other dashboard
-     ships. The two themes share a story: deep naval is the one distinctive
+     ships. The two themes share a story: tidewater teal is the one distinctive
      move; only the luminance shifts to suit the canvas. */
   --revv-bg-primary: #0a0a0a;
   --revv-bg-secondary: #111111;
@@ -218,14 +263,20 @@
   --revv-border-subtle: #1a1a1a;
   --revv-text-primary: #e4e4e7;
   --revv-text-secondary: #a1a1aa;
+  --revv-text-subtle: #7c7c85; /* see the light-theme note above */
   --revv-text-muted: #52525b;
-  --revv-accent: oklch(71% 0.14 225); /* phosphor naval — luminous dark accent */
-  --revv-accent-hover: oklch(65% 0.14 225); /* deepened press */
-  --revv-accent-muted: oklch(80% 0.11 225); /* muted icon variant */
+  --revv-accent: oklch(72% 0.12 195); /* phosphor teal — luminous dark accent */
+  --revv-accent-hover: oklch(66% 0.12 195); /* deepened press */
+  --revv-accent-muted: oklch(81% 0.09 195); /* muted icon variant */
   --revv-success: #22c55e;
   --revv-warning: #f59e0b;
-  --revv-warning-fg: #ffffff;
+  /* Dark-mode amber is luminous (#f59e0b): white on it is 2.15:1, well under
+     AA. Ink tinted toward the amber hue reads at 9.2:1 and keeps the pill in
+     the palette instead of reading as raw black. */
+  --revv-warning-fg: oklch(20% 0.03 70);
   --revv-danger: #ef4444;
+  /* Lifted for the midnight canvas — see the light-theme note. */
+  --revv-merged: oklch(76% 0.14 285);
 
   /* Diff canvas */
   --revv-diff-bg: #0d0d0d;
@@ -251,7 +302,7 @@
   --revv-diff-selected-bg: color-mix(in srgb, var(--revv-accent) 10%, transparent);
 
   /* Gutter markers */
-  --revv-marker-open: oklch(71% 0.14 225);
+  --revv-marker-open: var(--revv-accent);
   --revv-marker-open-glow: color-mix(in srgb, var(--revv-accent) 35%, transparent);
   --revv-marker-pending: #f59e0b;
   --revv-marker-pending-glow: rgba(245, 158, 11, 0.35);
@@ -271,11 +322,11 @@
   /* Context panel */
   --revv-panel-bg: #0e0e0e;
   --revv-panel-header-bg: rgba(17, 17, 17, 0.95);
-  --revv-stream-cursor: oklch(71% 0.14 225);
+  --revv-stream-cursor: var(--revv-accent);
 
   /* File tree */
   --revv-tree-active-bg: color-mix(in srgb, var(--revv-accent) 12%, transparent);
-  --revv-tree-active-text: oklch(86% 0.08 225);
+  --revv-tree-active-text: var(--revv-accent-muted);
   --revv-tree-hover-bg: #141414;
 
   /* Floating tabs */
@@ -314,6 +365,18 @@
   --revv-tooltip-border: rgba(255, 255, 255, 0.08);
   --revv-tooltip-item-bg: rgba(255, 255, 255, 0.04);
 
+  /* Accent chip (dark): deep teal under a near-white label (10.8:1). */
+  --revv-accent-chip-bg: oklch(32% 0.045 195);
+  --revv-accent-chip-fg: oklch(95% 0.012 195);
+  --revv-accent-chip-border: oklch(44% 0.05 195);
+  --revv-accent-chip-bg-hover: oklch(38% 0.055 195);
+  --revv-accent-chip-border-hover: oklch(52% 0.06 195);
+
+  /* User chat bubble (dark). Tinted off the tertiary surface, not the canvas:
+     the dark canvas sits below the panel, so a tint over it vanishes. */
+  --revv-user-bubble: color-mix(in oklch, var(--revv-accent) 9%, var(--revv-bg-tertiary));
+  --revv-user-bubble-border: color-mix(in oklch, var(--revv-accent) 18%, var(--revv-bg-tertiary));
+
   /* Scorecard — backgrounds mirror the Walkthrough IssueCard palette
        (4% tint of a themed severity color over --revv-bg-secondary) so
        score cards and issue cards read as the same visual family. */
@@ -341,15 +404,15 @@
   --revv-score-blocker-conf-bg: color-mix(in srgb, var(--revv-score-blocker-icon) 25%, transparent);
   --revv-score-blocker-conf: #f87171;
 
-  /* Info — accent-derived palette (dark variant). Phosphor Naval at varying
+  /* Info — accent-derived palette (dark variant). Phosphor Teal at varying
        luminance keeps "info" in the brand family while staying clearly
        distinct from pass-green (yellower) and concern-amber (warmer). */
   --revv-score-info-bg: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-  --revv-score-info-border: oklch(71% 0.14 225);
-  --revv-score-info-icon: oklch(80% 0.11 225);
-  --revv-score-info-label: oklch(86% 0.08 225);
+  --revv-score-info-border: var(--revv-accent);
+  --revv-score-info-icon: var(--revv-accent-muted);
+  --revv-score-info-label: oklch(87% 0.07 195);
   --revv-score-info-conf-bg: color-mix(in srgb, var(--revv-score-info-icon) 25%, transparent);
-  --revv-score-info-conf: oklch(80% 0.11 225);
+  --revv-score-info-conf: var(--revv-accent-muted);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -386,6 +449,7 @@
   --color-border-subtle: var(--revv-border-subtle);
   --color-text-primary: var(--revv-text-primary);
   --color-text-secondary: var(--revv-text-secondary);
+  --color-text-subtle: var(--revv-text-subtle);
   --color-text-muted: var(--revv-text-muted);
   --color-accent: var(--revv-accent);
   --color-accent-hover: var(--revv-accent-hover);
@@ -394,8 +458,19 @@
   --color-warning: var(--revv-warning);
   --color-warning-fg: var(--revv-warning-fg);
   --color-danger: var(--revv-danger);
+  --color-merged: var(--revv-merged);
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  /* Markdown / prose type scale — reusable size + line-height presets.
+     Every markdown surface (walkthrough, chat, recap, review, annotations)
+     reads from these so the app has one reading scale. They also generate
+     `text-prose` / `text-prose-dense` utilities. Tuned to the pre-typography
+     reading sizes; consumed by the prose layer in lib/styles/prose.css. */
+  --text-prose: 0.875rem; /* 14px — default markdown reading size */
+  --text-prose--line-height: 1.7;
+  --text-prose-dense: 0.8125rem; /* 13px — dense side panels & summaries */
+  --text-prose-dense--line-height: 1.55;
 
   /* Diff canvas */
   --color-diff-bg: var(--revv-diff-bg);
@@ -480,6 +555,18 @@
   --color-tooltip-border: var(--revv-tooltip-border);
   --color-tooltip-item-bg: var(--revv-tooltip-item-bg);
 
+  /* Accent chip */
+  --color-accent-chip-bg: var(--revv-accent-chip-bg);
+  --color-accent-chip-fg: var(--revv-accent-chip-fg);
+  --color-accent-chip-border: var(--revv-accent-chip-border);
+  --color-accent-chip-bg-hover: var(--revv-accent-chip-bg-hover);
+  --color-accent-chip-border-hover: var(--revv-accent-chip-border-hover);
+
+  /* User chat bubble */
+  --color-user-bubble: var(--revv-user-bubble);
+  --color-user-bubble-border: var(--revv-user-bubble-border);
+  --color-user-bubble-chip: var(--revv-user-bubble-chip);
+
   /* Scorecard */
   --color-score-pass-bg: var(--revv-score-pass-bg);
   --color-score-pass-border: var(--revv-score-pass-border);
@@ -529,6 +616,17 @@
   --topbar-height: 28px; /* non-Tauri chrome topbar strip */
   --bottombar-height: 28px;
 
+  /* Layout — recap reading column.
+       Global rather than component-local because four surfaces have to
+       agree on the same centre axis: RecapDetail's grid, RecapPeriodView's
+       `.period-hero` + `.aux`, and the permalink route's `.aux`. When they
+       disagree the page visibly jumps sideways between empty and loaded.
+       The rail/gutter values here are the floor; RecapDetail's `@container`
+       bands widen them once the pane can afford it. */
+  --recap-measure: 720px; /* the reading column — centred on the main pane */
+  --recap-rail: 220px; /* sticky marginalia hung in the left margin */
+  --recap-gutter: 2.5rem; /* rail → column */
+
   /* Motion — durations
        Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
   --duration-instant: 80ms; /* hover, focus rings, micro-state */
@@ -551,6 +649,7 @@
        --ease-anticipate : playful overshoot, reserve for delight moments */
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-anticipate: cubic-bezier(0.68, -0.55, 0.27, 1.55);
 
@@ -558,6 +657,8 @@
   --stagger-tight: 25ms;
   --stagger-default: 40ms;
   --stagger-loose: 80ms;
+  --stagger-deal-total: 90ms;
+  --stagger-gather-total: 40ms;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -584,6 +685,33 @@
 
 .motion-essential-spin {
   animation: motion-essential-spin 1s linear infinite;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--color-glass-active-bg);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-text-primary) 6%, transparent),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: skeleton-sweep var(--duration-pulse) var(--ease-soft) infinite;
+}
+
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
 }
 
 /* ── Text shimmer (ported from OpenCode UI) ──────────────────────────────
@@ -759,133 +887,6 @@ body {
   text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 
-/* ──────────────────────────────────────────────────────────
-   Prose tables — global styling for GFM tables rendered by
-   marked. The `.prose-table` wrapper is added by the postprocess
-   hook in src/lib/utils/markdown.ts and provides horizontal
-   scroll for tables wider than their container.
-
-   Lives globally (not in per-component prose styles) because all
-   markdown-rendering surfaces should treat tables identically;
-   keeping it out of each component's `:global(...)` block avoids
-   duplication and drift.
-   ────────────────────────────────────────────────────────── */
-.prose-table {
-  width: 100%;
-  overflow-x: auto;
-  margin: 0 0 var(--spacing-inset);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--color-bg-primary);
-  /* Allow keyboard users to focus and scroll the region. The default browser
-     outline is suppressed only on focus (not focus-visible), so keyboard
-     focus still shows the accent ring; mouse-focus stays clean. */
-  outline: none;
-  transition: box-shadow var(--duration-quick) var(--ease-out-expo);
-}
-.prose-table:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 3px var(--color-input-focus-ring);
-}
-
-.prose-table:last-child {
-  margin-bottom: 0;
-}
-
-.prose-table > table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  line-height: 1.5;
-  /* Keep cells from collapsing to single-character columns; long words
-       still wrap thanks to the wrapper's overflow-x. */
-  min-width: max-content;
-}
-
-.prose-table thead {
-  background: var(--color-bg-secondary);
-}
-
-.prose-table thead th {
-  padding: var(--spacing-island) var(--spacing-inset);
-  text-align: left;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  border-bottom: 1px solid var(--color-border-subtle);
-  white-space: nowrap;
-}
-
-.prose-table tbody td {
-  padding: var(--spacing-island) var(--spacing-inset);
-  color: var(--color-text-secondary);
-  border-top: 1px solid var(--color-border-subtle);
-  vertical-align: top;
-}
-
-.prose-table tbody tr:first-child td {
-  border-top: none;
-}
-
-.prose-table tbody tr:hover td {
-  background: color-mix(in srgb, var(--color-text-muted) 6%, transparent);
-}
-
-/* GFM column-alignment markers (`:---`, `:--:`, `---:`) become `align`
-   attributes on th/td. Honor them. */
-.prose-table th[align="left"],
-.prose-table td[align="left"] {
-  text-align: left;
-}
-.prose-table th[align="center"],
-.prose-table td[align="center"] {
-  text-align: center;
-}
-.prose-table th[align="right"],
-.prose-table td[align="right"] {
-  text-align: right;
-}
-
-/* Inline code inside tables — slightly tighter than free-flowing prose
-   code so cells don't bloat. Component-level `:global(code)` rules win
-   on specificity, so this only kicks in where no override exists. */
-.prose-table code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  background: var(--color-bg-tertiary);
-  padding: 1px 4px;
-  border-radius: 3px;
-  white-space: nowrap;
-}
-
-.prose-table p {
-  margin: 0;
-}
-
-/* ──────────────────────────────────────────────────────────
-   Prose link styles — applied globally so every markdown-
-   rendering surface (recap, walkthrough, chat) gets consistent
-   link appearance. Components use :global(a) inside their own
-   prose containers; this rule covers any surface that uses the
-   `.prose` class directly on a parent.
-   ────────────────────────────────────────────────────────── */
-.prose a {
-  color: var(--color-accent);
-  text-decoration-line: underline;
-  text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-  text-underline-offset: 2px;
-  text-decoration-thickness: 1px;
-  cursor: pointer;
-  transition:
-    color var(--duration-snap) var(--ease-soft),
-    text-decoration-color var(--duration-snap) var(--ease-soft);
-}
-
-.prose a:hover {
-  color: var(--color-accent-hover);
-  text-decoration-color: var(--color-accent-hover);
-}
-
 /* ── Progress bar indeterminate animation ───────────────── */
 @keyframes indeterminate-progress {
   0% {
@@ -909,6 +910,36 @@ body {
    ────────────────────────────────────────────────────────── */
 diffs-container {
   color-scheme: inherit;
+
+  /* Base code-block surface (kills Pierre's #fff / #000 default).
+     light-dark() resolves against color-scheme on this element, so
+     data-diff-theme="light|dark" overrides (which flip color-scheme
+     here) automatically pick the correct palette leg — including the
+     decoupled-diff-theme case (e.g. light diff in dark app). */
+  --diffs-light-bg: #f4f1eb;
+  --diffs-dark-bg: #0d0d0d;
+
+  /* Gutter / line-number column */
+  --diffs-bg-context-number-override: light-dark(#edeae3, #0a0a0a);
+  --diffs-fg-number-override: light-dark(#9a958c, #52525b);
+
+  /* Context-line hover */
+  --diffs-bg-hover-override: light-dark(#eae6de, #131313);
+
+  /* Additions */
+  --diffs-bg-addition-override: light-dark(#e6f4ec, #0d1f0d);
+  --diffs-bg-addition-number-override: light-dark(#ddf0e3, #0e1f0e);
+  --diffs-bg-addition-hover-override: light-dark(#d0ebd9, #112811);
+  --diffs-bg-addition-emphasis-override: light-dark(#a3dab6, #162d16);
+
+  /* Deletions */
+  --diffs-bg-deletion-override: light-dark(#fbe9eb, #1f0d0d);
+  --diffs-bg-deletion-number-override: light-dark(#f7d9dc, #1c0e0e);
+  --diffs-bg-deletion-hover-override: light-dark(#f5d0d4, #281212);
+  --diffs-bg-deletion-emphasis-override: light-dark(#efb4ba, #2d1212);
+
+  /* Line selection (accent-tinted — follows app theme by design) */
+  --diffs-bg-selection-override: var(--color-diff-selected-bg);
 }
 :root[data-diff-theme="light"] diffs-container {
   color-scheme: light;
@@ -1000,6 +1031,10 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
+  /* No left/right transition: the floating bar is pinned to the main-pane
+     bounds (getActionsFloatStyle), so tweening its inset slides it across the
+     main pane while the sidebar/right-panel toggles snap instantly. Snap it
+     too — match the instant pane toggles (see AppShell). */
 }
 .actions-float * {
   pointer-events: auto;
@@ -1011,30 +1046,72 @@ diffs-container {
 }
 
 /* ──────────────────────────────────────────────────────────
-   Floating tabs bar — top-anchored, centred between sidebar
-   and optional right panel.
-   top = topbar height + island margin + pill padding-top (10px).
-   Non-Tauri: 28 + 8 + 10 = 46px.  Tauri: 30 + 8 + 10 = 48px.
+   Floating tabs bar — top-anchored, centred in the main pane.
    ────────────────────────────────────────────────────────── */
 .tabs-float {
-  position: fixed;
-  top: calc(var(--topbar-height) + var(--spacing-island) + 10px);
+  position: absolute;
+  top: 0;
   left: 0;
   right: 0;
   display: flex;
   justify-content: center;
-  z-index: 20;
+  padding: 10px 0 8px;
+  z-index: 10;
   pointer-events: none;
-  /* GPU-composited slide. The inline `transform: translateX(...)` from the
-     route shifts the centre of the pill row to match the visible main area
-     as the sidebar / right panel toggle. Animating `left`/`right` here would
-     force per-frame paint instead. */
-  transition: transform var(--duration-smooth) var(--ease-out-expo);
-  will-change: transform;
 }
 .tabs-float * {
   pointer-events: auto;
 }
-html.tauri .tabs-float {
-  top: calc(22px + var(--spacing-island) * 2 + 10px);
+
+:root.document-crossfade::view-transition-old(root),
+:root.document-crossfade::view-transition-new(root) {
+  animation-duration: var(--duration-ceremonial-medium);
+  animation-timing-function: var(--ease-soft);
+}
+
+:root.document-crossfade .glass-frozen {
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  backdrop-filter: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  -webkit-backdrop-filter: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank each glass surface's own material */
+  background: var(--glass-fill) !important;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Theme swap — flip every surface in the same frame.
+
+   Held on <html> by `apply()` in stores/theme.svelte.ts for the
+   swap, then dropped. A theme change recolors ~450 elements on a
+   typical route, and those carry transitions at four token
+   durations (80/120/160/220ms) plus Tailwind's own 150ms
+   `transition-colors`, while untransitioned elements flip at once.
+   Left alone the app arrives in five waves over 220ms — parts of
+   the UI visibly switching before others.
+
+   Suppression, not a shared duration. Giving every component the
+   same transition was tried and rejected: it is genuinely uniform
+   (all transitions share one start time) but it does not read as
+   smooth. Animating ~2700 concurrent transitions for 160ms costs
+   4 dropped frames against 1 for the cut, and the parts CSS cannot
+   interpolate — the Pierre diff canvas and file tree (shadow DOM),
+   xterm terminals (canvas), artifact iframes — cut at 0ms anyway,
+   so the chrome ends up fading behind them.
+
+   Not a motion token and not subject to the reduced-motion
+   contract: this suppresses animation rather than defining any.
+   Scoped to the swap, so ordinary hover/focus transitions are
+   untouched a frame later.
+
+   `!important` is load-bearing — it has to outrank the inline
+   `transition` styles bits-ui and GSAP leave on elements.
+   ────────────────────────────────────────────────────────── */
+:root.theme-switching,
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank inline transition styles */
+  transition-duration: 0s !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must outrank inline transition styles */
+  transition-delay: 0s !important;
 }

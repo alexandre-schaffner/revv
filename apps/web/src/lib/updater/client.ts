@@ -1,14 +1,9 @@
 // Thin wrapper around `@tauri-apps/plugin-updater` that isolates the rest of
-// the app from the plugin API shape and from the "are we running in Tauri?"
-// guard. Every export here is safe to call from the browser dev build
-// (`make dev-web`) — outside Tauri they either return `null` / a sensible
-// fallback or are no-ops.
+// the app from the plugin API shape.
 //
-// The plugin imports are dynamic so that Vite doesn't try to bundle native
-// Tauri IPC calls into the browser build. Same pattern as
-// `auth.svelte.ts`'s `await import('@tauri-apps/plugin-opener')`.
-
-import { isTauri } from "$lib/utils/platform";
+// The plugin imports are dynamic to keep the native Tauri IPC calls out of the
+// initial bundle. Same pattern as `auth.svelte.ts`'s
+// `await import('@tauri-apps/plugin-opener')`.
 
 /**
  * Normalised view of an available update, returned by {@link checkForUpdate}.
@@ -26,23 +21,37 @@ export type UpdateInfo = {
    */
   publishedAt: string | undefined;
   /**
-   * Downloads the update package, applies it, and relaunches the app.
-   * Throws if any step fails — callers should `try/catch` to surface the
-   * error in a toast.
+   * Downloads the update package and applies it. Throws if either step
+   * fails — callers should `try/catch` to surface the error in a toast.
+   *
+   * Restarting is deliberately *not* part of this: on macOS the installer
+   * leaves the running process alone, so the relaunch is a separate,
+   * separately-failable step the caller owns. Folding it in here made a
+   * failed relaunch look like a failed install and told the user the update
+   * hadn't landed when it had.
    */
   install: () => Promise<void>;
 };
 
 /**
+ * Per-endpoint timeout for the manifest fetch.
+ *
+ * The first configured endpoint is the local API server
+ * (`/api/update-manifest`), which resolves the release channel. A connection
+ * refused there fails instantly, but a wedged server would otherwise hang the
+ * request forever — and `runCheck`'s `inFlight` guard would then suppress
+ * every subsequent check for the life of the process. Bounding it lets the
+ * plugin move on to the GitHub fallback instead.
+ */
+const CHECK_TIMEOUT_MS = 15_000;
+
+/**
  * Returns the available update, or `null` if we're already on the latest
- * version, the updater is unreachable, or we're running outside of Tauri
- * (i.e. the browser dev build).
+ * version or the updater is unreachable.
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
-  if (!isTauri()) return null;
-
   const { check } = await import("@tauri-apps/plugin-updater");
-  const update = await check();
+  const update = await check({ timeout: CHECK_TIMEOUT_MS });
   if (!update) return null;
 
   return {
@@ -51,12 +60,6 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
     publishedAt: update.date,
     install: async () => {
       await update.downloadAndInstall();
-      // On Windows/Linux the plugin's passive install mode exits the
-      // running process; on macOS we must explicitly relaunch so the
-      // user lands back in the new version immediately. Calling
-      // `relaunch()` is a no-op if the process is already exiting.
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
     },
   };
 }

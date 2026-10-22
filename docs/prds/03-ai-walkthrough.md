@@ -74,7 +74,7 @@ Chat-edit tools (post-completion mutation, see `apps/server/src/ai/providers/cha
 
 - `update_overview`, `add_block`, `update_block`, `delete_block`, `add_semantic_step`, `update_semantic_step`, `delete_semantic_step`, `update_sentiment`, `update_rating`, `delete_rating`, `add_issue`, `update_issue`, `delete_issue`, `add_issue_comment`, `update_issue_comment`, `delete_issue_comment`
 
-Edits stamp `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` / `lastCompletedPhase`, and broadcast `walkthrough:edited` envelopes via `WebSocketHub` (not the generation SSE stream — that dies on `done`). GitHub-submitted issues (`submittedAt != null`) are off-limits even here.
+Edits stamp `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` / `lastCompletedPhase`, and broadcast a `walkthrough:event` envelope carrying a `lifecycle:edited` event via `Broadcaster` on the global `GET /api/events` SSE stream. GitHub-submitted issues (`submittedAt != null`) are off-limits even here.
 
 ### Dual agent transport
 
@@ -91,13 +91,18 @@ Supervision via `apps/server/src/services/OpencodeSupervisor.ts`: lazy-starts th
 
 On a new PR head SHA, the old walkthrough is marked `superseded` with a `superseded_by` back-reference and a fresh row begins generating — the 4-phase pipeline never mutates a row for the same head SHA.
 
-### Streaming endpoint (`apps/server/src/routes/reviews/handlers/walkthrough-stream.ts`)
+### Walkthrough endpoints (`apps/server/src/routes/reviews.ts`)
 
-- `GET /api/reviews/:id/walkthrough` — SSE stream of `WalkthroughStreamEvent` envelopes (`apps/server/src/routes/reviews/sse.ts`). Serves from cache when the head SHA matches; otherwise dispatches a job and streams its events.
+Generation and lifecycle events are not carried on a per-PR stream. The legacy `GET /api/reviews/:id/walkthrough` SSE endpoint was deleted when walkthrough events moved to the global `GET /api/events` SSE bus; the endpoints below are REST-only and progress arrives as `walkthrough:event` envelopes over that single global stream.
+
+- `POST /api/reviews/:id/walkthrough/start` — dispatch a generation job (serves from cache when the head SHA matches)
+- `GET /api/reviews/:id/walkthrough/current` — full current state, for hydration / reconcile
+- `GET /api/reviews/:id/walkthrough/cached` — cache check
 - `POST /api/reviews/:id/walkthrough/regenerate` — supersede + restart
 - `POST /api/reviews/:id/walkthrough/resume` — re-attach to an in-flight job
+- `POST /api/reviews/:id/walkthrough/abort` — abort an in-flight job
 
-Commit-first / broadcast-second: every event is emitted from a tool handler **after** the DB transaction commits, so SSE / WebSocket subscribers can always reconcile by re-reading the DB. Post-completion mutations broadcast on the separate `walkthrough:edited` WebSocket channel (the generation SSE stream dies on `done`).
+Commit-first / broadcast-second: every event is emitted from a tool handler **after** the DB transaction commits, so SSE subscribers can always reconcile by re-reading the DB if a broadcast is missed.
 
 ### Frontend (`apps/web/src/lib/`)
 
@@ -112,16 +117,14 @@ Components (`components/walkthrough/`):
 
 Stores (`stores/`):
 
-- `walkthrough.svelte.ts` — reactive walkthrough state hydrated from DB
-- `walkthrough-stream.svelte.ts` — SSE + WebSocket subscription, reconciliation on reconnect
+- `walkthrough.svelte.ts` — reactive walkthrough state hydrated from DB; applies `walkthrough:event` envelopes dispatched from the global SSE bus (`events.svelte.ts`) and reconciles via REST on reconnect
 - `walkthroughNav.svelte.ts` — keyboard navigation between sections
 
 The PR review page (`apps/web/src/routes/review/[prId]/+page.svelte`) and `FloatingTabs.svelte` toggle between the walkthrough and the file-diff view.
 
-### WebSocket envelopes (`packages/shared/src/ws.ts`)
+### SSE event envelopes (`packages/shared/src/events.ts`)
 
-Generation events: `walkthrough:event` (proxies `WalkthroughStreamEvent` after generation SSE ends), plus per-event types defined in `packages/shared/src/walkthrough.ts`.
-Post-completion edits: `walkthrough:edited`.
+All walkthrough traffic rides a single envelope — `walkthrough:event` (`WalkthroughEventEnvelope`, an arm of the `ServerEventMessage` union). Its `data.event` is a `WalkthroughStreamEvent` (`packages/shared/src/walkthrough.ts`): content events (`summary`, `block`, `semantic-step`, `issue`, `rating`, `sentiment`, …) plus the `lifecycle:*` variants (`lifecycle:started`, `lifecycle:complete`, `lifecycle:error`, `lifecycle:cache-hit`, `lifecycle:edited`, `lifecycle:superseded`) that replaced the four standalone WS lifecycle envelopes. Each envelope carries a monotonic per-walkthrough `seq` so the client drops duplicates during reconnect.
 
 ---
 

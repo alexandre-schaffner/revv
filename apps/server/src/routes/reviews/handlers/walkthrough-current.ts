@@ -1,17 +1,19 @@
+import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
-import { GitHubService } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
+import { resolveReviewModeForPr } from "../../../services/review-mode";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
 /**
- * GET /api/reviews/:id/walkthrough/current — full current state for any
- * non-superseded walkthrough at the PR's HEAD SHA.
+ * GET /api/reviews/:id/walkthrough/current — full current state for the PR.
  *
  * Four response shapes:
  *   • `status: 'complete'`   → finished walkthrough; client renders immediately,
- *                              no SSE needed.
+ *                              no SSE needed. May include `stale: true` when
+ *                              it is the latest historical walkthrough rather
+ *                              than a walkthrough for the current PR HEAD.
  *   • `status: 'generating'` → in-flight job; client hydrates partial content
  *                              and opens SSE from `snapshotAt` cursor so only
  *                              race-window events arrive over the wire.
@@ -20,6 +22,13 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *   • `status: 'not_found'`  → no local row; client probes the Generate button.
  *                              (Team cache is probed internally before returning
  *                              not_found, so a cache hit returns `complete`.)
+ *                              Carries the perspective Generate should default to.
+ *
+ * `mode` is optional. Without it the server picks the perspective: the one the
+ * PR's newest walkthrough was written in (the user's last pick, superseded rows
+ * included, so a stale walkthrough keeps its perspective), else the
+ * identity-derived default. Only one perspective is active per PR at a time
+ * (see `WalkthroughJobs.startJobBody`), so this is the walkthrough on screen.
  *
  * The `snapshotAt` field is a cursor anchor: when the client opens the SSE
  * stream with `?snapshotAt=<value>`, the server replays only rows created
@@ -28,20 +37,41 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *
  * `opencodeSessionId` is stripped before returning — it's an orchestrator
  * credential, not something the UI consumes.
+ *
+ * The head SHA is read from the locally-synced PR row (`pr.headSha`), NOT a
+ * live GitHub call. This endpoint serves locally-cached content and must not
+ * depend on GitHub being reachable — a live `prs.meta()` call here meant any
+ * rate-limit (429), expired token (401), or network blip threw before the DB
+ * was even consulted, stranding a perfectly good complete walkthrough behind
+ * the "Generate" empty state on reload. `pr.headSha` is also the exact SHA the
+ * diff view loads against, so the walkthrough stays consistent with the diff;
+ * new-commit detection / superseding is the PollScheduler's job, not this
+ * read path's. (Doctrine: SQLite is authoritative.)
  */
-export function getCurrentWalkthroughHandler(prId: string, userId: string) {
+export function getCurrentWalkthroughHandler(
+  prId: string,
+  userId: string,
+  requestedMode?: WalkthroughMode,
+) {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const prContext = yield* PrContextService;
-      const github = yield* GitHubService;
       const walkthroughService = yield* WalkthroughService;
       const jobs = yield* WalkthroughJobs;
 
-      const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-      const meta = yield* github.getPrMeta(repo.fullName, pr.externalId, token);
+      const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
+      const mode =
+        requestedMode ??
+        (yield* walkthroughService.getLatestMode(pr.id)) ??
+        (yield* resolveReviewModeForPr(pr.id)).mode;
+      const headSha = pr.headSha;
+      // No synced head SHA → nothing to match a walkthrough against. The PR
+      // row hasn't fully synced yet; the client shows the Generate button and
+      // a later `prs:updated` + component-mount re-hydration recovers.
+      if (!headSha) return { status: "not_found" as const, mode };
 
       // 1. Complete walkthrough — best case, no SSE needed.
-      const complete = yield* walkthroughService.getCached(pr.id, meta.headSha);
+      const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
       if (complete) {
         const seqAt = yield* walkthroughService.getSeqAt(complete.id);
         return {
@@ -53,7 +83,7 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
       }
 
       // 2. In-progress or errored walkthrough — hydrate partial state.
-      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha);
+      const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
       if (partial) {
         const { opencodeSessionId: _ignored, ...walkthrough } = partial;
         const seqAt = yield* walkthroughService.getSeqAt(walkthrough.id);
@@ -67,9 +97,9 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
 
       // 3. No local row — probe the team cache. On a hit the cache importer
       //    creates a complete row, so we re-query and return it as complete.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, meta.headSha, repo.fullName);
+      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
       if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha);
+        const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
         if (fromCache) {
           const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
           return {
@@ -81,7 +111,23 @@ export function getCurrentWalkthroughHandler(prId: string, userId: string) {
         }
       }
 
-      return { status: "not_found" as const };
+      // 4. New commits have invalidated the latest generated row, but the
+      //    user has not started the incremental walkthrough yet. Keep the
+      //    last reviewed artifact visible and mark it stale so the action bar
+      //    offers "Review new commits" instead of making the page feel empty.
+      const latest = yield* walkthroughService.getLatestDisplayable(pr.id, mode);
+      if (latest && latest.prHeadSha !== headSha) {
+        const seqAt = yield* walkthroughService.getSeqAt(latest.id);
+        return {
+          status: "complete" as const,
+          walkthrough: latest,
+          snapshotAt: new Date().toISOString(),
+          seqAt,
+          stale: true as const,
+        };
+      }
+
+      return { status: "not_found" as const, mode };
     }),
   );
 }

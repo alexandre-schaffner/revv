@@ -15,8 +15,12 @@
 //   2. Verify the worktree is clean and there's at least one agent commit.
 //   3. Capture the remote tip via `git ls-remote` (used as the lease guard).
 //   4. Fetch the remote source branch.
-//   5. Switch the worktree from `pr-{N}` to a local copy of the source
-//      branch (`git checkout -B {sourceBranch} origin/{sourceBranch}`).
+//   5. Detach the worktree's HEAD onto the fetched source-branch tip
+//      (`git checkout --detach refs/remotes/origin/{sourceBranch}`). No
+//      local `{sourceBranch}` branch is created — the push targets
+//      `HEAD:refs/heads/{sourceBranch}` and creating the branch would
+//      collide with any other worktree (the user's own included) that
+//      already has it checked out.
 //   6. `git merge pr-{N} --no-edit` — fast-forward when possible, real
 //      merge commit otherwise.
 //   7. On conflict: `git merge --abort`, restore worktree to `pr-{N}`,
@@ -41,39 +45,67 @@
 //   - if not, `git merge --abort` so the worktree returns to a clean
 //     `pr-{N}` checkout and the user can decide what to do.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { ACP_AGENT_IDS } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
 import { serverEnv } from "../config";
+import { CHAT_IDLE_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
   GitHubAuthError,
   type GitHubError,
   type NotFoundError,
 } from "../domain/errors";
+import { STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
 import { AiService } from "./Ai";
-import { ChatSessionService } from "./ChatSession";
+import { Broadcaster } from "./Broadcaster";
+import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
+import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
+import { DiffCacheService } from "./DiffCache";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
+  abortCherryPick,
+  abortMerge,
+  abortRebase,
   assertNotFlagLike,
+  checkoutBranch,
+  checkoutBranchBestEffort,
+  checkoutDetachedAt,
+  cherryPick,
+  classifyPushFailure,
+  fetchRefspec,
+  forceBranchTo,
+  forceBranchToBestEffort,
   GitOperationError,
   InvalidBranchNameError,
+  isMergeInProgress,
   isValidSha,
   lsRemoteHead,
+  merge as mergeBranch,
   PushRejectedError,
+  proposedCommitCount,
+  proposedCommitShas,
   pushFastForward,
   pushNewBranch,
   pushWithLease,
   type RefAlreadyExistsError,
+  rebaseOnto,
+  redactGitAuth,
+  resolveProposedBaseSha,
+  revParse,
+  unmergedPaths,
+  unstagedOutsideMerge,
+  workflowPermissionRejection,
+  workingTreeIsClean,
 } from "./GitOps";
-import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { SettingsService } from "./Settings";
-import { WebSocketHub } from "./WebSocketHub";
+
+// The lease a chat turn holds on its worktree, re-exported so the chat route
+// can type the handle this service hands it without reaching past the service.
+export type { ChatStreamLease } from "./chat-stream-leases";
 
 // Re-export the GitOps errors so existing callers that destructured them
 // from this module keep working without import churn.
@@ -83,6 +115,34 @@ export {
   PushRejectedError,
   RefAlreadyExistsError,
 } from "./GitOps";
+
+/**
+ * The message a server-side push rejection carries to the UI, where it lands
+ * in a toast.
+ *
+ * Git's stderr is the right thing to show for most rejections — a pre-receive
+ * hook or a push rule says something only the remote knows. The one rejection
+ * worth translating is the workflow-permission refusal: its wording ("refusing
+ * to allow a GitHub App to create or update workflow `x.yml` without
+ * `workflows` permission") describes GitHub's internals, holds no hint that
+ * this is a standing limit of Revv's credential rather than a transient fault,
+ * and names no way out — so users retry it, which cannot work. Neither auth
+ * path can push CI (see {@link workflowPermissionRejection}), so the two real
+ * ways out go in the message.
+ *
+ * The raw stderr is not lost: `readPushFailure` logs it unconditionally before
+ * this runs.
+ */
+const rejectionMessage = (stderr: string): string => {
+  const workflow = workflowPermissionRejection(stderr);
+  if (!workflow) return stderr || "git push failed";
+  const what = workflow.path ?? "files under .github/workflows/";
+  return (
+    `GitHub won't let Revv's credential change ${what} — pushing CI needs a permission ` +
+    "Revv doesn't hold. Push these commits over SSH from your own checkout, or push only " +
+    "the commits that leave workflow files alone."
+  );
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,7 +253,7 @@ export type ResolvePushFrame =
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
-export class ChatChangesPushService extends Context.Tag("ChatChangesPushService")<
+export class ChatChangesPushService extends Context.Service<
   ChatChangesPushService,
   {
     readonly attemptMergeAndPush: (params: {
@@ -237,46 +297,19 @@ export class ChatChangesPushService extends Context.Tag("ChatChangesPushService"
     >;
 
     readonly isPushing: (prId: string) => boolean;
-    readonly markChatStreaming: (prId: string, streaming: boolean) => void;
-    readonly isChatStreaming: (prId: string) => boolean;
+    /**
+     * Claim the PR's worktree for a chat turn about to stream. The caller owns
+     * the returned lease: `touch()` on every frame, `release()` on every exit
+     * path.
+     */
+    readonly beginChatStream: (prId: string) => ChatStreamLease;
   }
->() {}
+>()("ChatChangesPushService") {}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 //
-// `isValidSha`, `assertNotFlagLike`, `lsRemoteHead`, `pushWithLease`,
-// `pushFastForward`, and `pushNewBranch` live in `./GitOps` and are
-// imported at the top of this module.
-
-// Block the push on any uncommitted *tracked* change — modifications,
-// deletions, staged work, or unmerged conflict state — but ignore untracked
-// files (`??`). Untracked entries are runtime artifacts (e.g. tool-specific
-// scratch dirs like `.opencode/package-lock.json`) that aren't in the
-// user-reviewed proposed-changes diff, can't be lost during the merge, and
-// would otherwise wedge the Push button on perfectly safe state.
-async function workingTreeIsClean(worktreePath: string): Promise<{
-  clean: boolean;
-  output: string;
-}> {
-  const raw = await runGitCapture(["status", "--porcelain=v1"], worktreePath, 15_000);
-  const blocking = raw
-    .split("\n")
-    .filter((line) => line.length > 0 && !line.startsWith("??"))
-    .join("\n");
-  return { clean: blocking.length === 0, output: blocking };
-}
-
-async function listConflictFiles(worktreePath: string): Promise<string[]> {
-  const out = (
-    await runGitCapture(["diff", "--name-only", "--diff-filter=U"], worktreePath, 10_000)
-  ).trim();
-  if (out.length === 0) return [];
-  return out.split("\n").filter((f) => f.length > 0);
-}
-
-function isMergeInProgress(worktreePath: string): boolean {
-  return existsSync(join(worktreePath, ".git", "MERGE_HEAD"));
-}
+// Raw git command shapes live in `./GitOps`; this module owns chat-session
+// orchestration and maps git failures into the chat-push result model.
 
 // ── Live ────────────────────────────────────────────────────────────────────
 
@@ -285,21 +318,85 @@ export const ChatChangesPushServiceLive = Layer.effect(
   Effect.gen(function* () {
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
-    const wsHub = yield* WebSocketHub;
-    const github = yield* GitHubService;
+    const broadcaster = yield* Broadcaster;
     const prService = yield* PullRequestService;
+    const diffCache = yield* DiffCacheService;
     const ai = yield* AiService;
 
     // Per-PR push lock — refuses overlap.
     const inFlight = new Set<string>();
-    const streamingChats = new Set<string>();
+    // Worktree claims held by in-flight chat turns. The expiry is the agent's
+    // own chat idle deadline, deliberately the same constant the chat stream
+    // guard arms itself with: past it the turn has already been killed
+    // upstream, so treating the lease as live could only ever be wrong.
+    const chatStreams = createChatStreamLeases(CHAT_IDLE_TIMEOUT_MS);
+
+    /**
+     * Clear an abandoned merge out of the session's worktree. Returns whether
+     * anything was aborted, so the caller knows to re-read the tree state.
+     *
+     * A merge left in progress here is Revv's own scratch state, never the
+     * user's work: the push flow detaches HEAD onto the source-branch tip and
+     * merges the agent branch into it, and the agent's commits live on
+     * `session.branchName` either way. So when a previous attempt died before
+     * its cleanup ran — process restart mid-merge, an interrupted
+     * resolve-and-push stream, a best-effort `merge --abort` that failed
+     * silently — abort it rather than reporting the leftovers as "uncommitted
+     * changes", which the UI offers no way out of.
+     *
+     * Every caller takes the per-PR push lock (`beginPush`) before preflight,
+     * so a merge in progress with the lock free is abandoned by definition.
+     * `RepoClone.acquirePrWorktree` heals the same state the same way, but the
+     * push paths reuse `session.worktreePath` without re-acquiring it, so that
+     * heal never runs for them.
+     *
+     * Two conditions gate the abort, because `git merge --abort` hard-resets
+     * the working tree and the chat agent edits this same worktree:
+     *
+     *   • there are unmerged paths — the dirt includes a real conflict, rather
+     *     than the tree merely being dirty next to a stale `MERGE_HEAD`;
+     *   • nothing is dirty that the merge cannot account for. Unmerged paths
+     *     alone do NOT prove every dirty path belongs to the merge, which is
+     *     what `unstagedOutsideMerge` checks. When that set is non-empty we
+     *     leave the worktree exactly as found and let preflight report it —
+     *     a blocked push is recoverable, a destroyed uncommitted edit is not.
+     */
+    const healAbandonedMerge = (
+      session: { readonly worktreePath: string; readonly branchName: string },
+      prId: string,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        if (!(yield* Effect.promise(() => isMergeInProgress(session.worktreePath)))) return false;
+        if ((yield* Effect.promise(() => unmergedPaths(session.worktreePath))).length === 0) {
+          return false;
+        }
+        const risky = yield* Effect.promise(() => unstagedOutsideMerge(session.worktreePath));
+        if (risky.length > 0) {
+          logError(
+            "chat-push",
+            `refusing to abort the merge in ${session.worktreePath} (pr=${prId}): ` +
+              `uncommitted changes outside the conflict would be lost — ${risky.join(", ")}`,
+          );
+          return false;
+        }
+        logError(
+          "chat-push",
+          `aborting an abandoned merge in ${session.worktreePath} before push (pr=${prId})`,
+        );
+        yield* Effect.promise(() => abortMerge(session.worktreePath).then(() => undefined));
+        yield* restoreToAgentBranch({
+          worktreePath: session.worktreePath,
+          branchName: session.branchName,
+        });
+        return true;
+      });
 
     // Preflight returns context bound to a chat session and verifies the
     // worktree is in a state where push is meaningful. R surfaces
     // DbService so callers (under AppRuntime) get it for free.
     const preflight = (params: { readonly prId: string; readonly userId: string }) =>
       Effect.gen(function* () {
-        if (streamingChats.has(params.prId)) {
+        if (chatStreams.isLive(params.prId)) {
           return yield* Effect.fail(new ChatStreamingConflictError({ prId: params.prId }));
         }
 
@@ -313,11 +410,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        // Find a chat session for the PR's current head SHA. Try both
-        // agent flavors — pick whichever one has commits.
-        const opencodeSession = yield* chatSessions.find(pr.id, "opencode", pr.headSha);
-        const claudeSession = yield* chatSessions.find(pr.id, "claude", pr.headSha);
-        const session = opencodeSession ?? claudeSession;
+        // Find a chat session for the PR. Prefer the currently-configured
+        // chat agent, then fall back to any other ACP agent that has a
+        // session for this PR (the user may have switched agents after the
+        // conversation was created). Scanning the full registry keeps this in
+        // step with `ACP_AGENT_IDS` instead of a hand-maintained agent list.
+        const settingsService = yield* SettingsService;
+        const configuredAgent = yield* settingsService.resolveChatAgentId();
+        const agentOrder = [
+          configuredAgent,
+          ...ACP_AGENT_IDS.filter((id) => id !== configuredAgent),
+        ];
+        let session: ChatSessionRow | null = null;
+        for (const agent of agentOrder) {
+          session = yield* chatSessions.findLatestForPr(pr.id, agent);
+          if (session) break;
+        }
         if (!session) {
           return yield* Effect.fail(new NoChatSessionError({ prId: params.prId }));
         }
@@ -332,7 +440,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
         assertNotFlagLike(session.branchName, "branchName");
         assertNotFlagLike(pr.sourceBranch, "sourceBranch");
 
-        const cleanCheck = yield* Effect.tryPromise({
+        const checkClean = Effect.tryPromise({
           try: () => workingTreeIsClean(session.worktreePath),
           catch: (err) =>
             new GitOperationError({
@@ -340,6 +448,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
               cause: err,
             }),
         });
+
+        let cleanCheck = yield* checkClean;
+
+        if (!cleanCheck.clean && (yield* healAbandonedMerge(session, params.prId))) {
+          cleanCheck = yield* checkClean;
+        }
+
         if (!cleanCheck.clean) {
           return yield* Effect.fail(
             new DirtyWorktreeError({
@@ -348,13 +463,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
+        // The agent's commits are whatever sits on top of the PR head the
+        // branch is actually built on — NOT necessarily the head the session
+        // was created at, which goes stale as soon as the PR moves. Every
+        // range in this service derives from `baseSha` so the push agrees with
+        // what the proposed-changes strip showed the user.
+        const baseSha = yield* Effect.promise(() =>
+          resolveProposedBaseSha({
+            worktreePath: session.worktreePath,
+            tip: session.branchName,
+            sessionPrHeadSha: session.prHeadSha,
+            prHeadSha: pr.headSha,
+          }),
+        );
+
         const aheadOut = yield* Effect.tryPromise({
-          try: () =>
-            runGitCapture(
-              ["rev-list", "--count", `${session.prHeadSha}..${session.branchName}`],
-              session.worktreePath,
-              10_000,
-            ),
+          try: () => proposedCommitCount(session.worktreePath, `${baseSha}..${session.branchName}`),
           catch: (err) =>
             new GitOperationError({
               message: err instanceof Error ? err.message : String(err),
@@ -366,7 +490,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
         }
 
-        return { pr, repo, token, session, aheadCount };
+        return { pr, repo, token, session, baseSha, aheadCount };
       });
 
     const fetchSourceBranch = (params: {
@@ -375,16 +499,12 @@ export const ChatChangesPushServiceLive = Layer.effect(
       sourceBranch: string;
     }) =>
       Effect.tryPromise({
-        try: async () => {
-          await runGit(
-            [
-              "fetch",
-              params.authedUrl,
-              `+refs/heads/${params.sourceBranch}:refs/remotes/origin/${params.sourceBranch}`,
-            ],
+        try: () =>
+          fetchRefspec(
             params.worktreePath,
-          );
-        },
+            params.authedUrl,
+            `+refs/heads/${params.sourceBranch}:refs/remotes/origin/${params.sourceBranch}`,
+          ),
         catch: (err) =>
           new GitOperationError({
             message: `failed to fetch ${params.sourceBranch}: ${
@@ -410,13 +530,75 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
     const restoreToAgentBranch = (params: { worktreePath: string; branchName: string }) =>
       Effect.promise(async () => {
-        const ok = await runGitBestEffort(
-          ["checkout", params.branchName],
-          params.worktreePath,
-          15_000,
-        );
+        const ok = await checkoutBranchBestEffort(params.worktreePath, params.branchName, 15_000);
         if (!ok) {
           logError("chat-push", `failed to restore worktree to ${params.branchName}`);
+        }
+      });
+
+    /**
+     * What a push failure was, recorded before anyone decides what to do about
+     * it. Every push path in this service starts here — the three that end in
+     * {@link handlePushFailure}, and `pushToNewBranch`, which cannot (it has a
+     * recoverable `ref-exists` outcome and must NOT restore the agent branch).
+     *
+     * Logging unconditionally is the point: every caller either paraphrases
+     * git's text or drops it, and without the raw line a push failure is
+     * undiagnosable after the fact. `stderr` comes back redacted — it reaches a
+     * log line, an error message and the UI, and the push URL it echoes carries
+     * the token.
+     */
+    const readPushFailure = (
+      label: string,
+      rawStderr: string,
+    ): { stderr: string; kind: ReturnType<typeof classifyPushFailure> } => {
+      const stderr = redactGitAuth(rawStderr);
+      logError("chat-push", `${label}: ${stderr}`);
+      return { stderr, kind: classifyPushFailure(stderr) };
+    };
+
+    /**
+     * Interpret a failed `git push` to the PR's source branch: record it, put
+     * the worktree back on the agent branch, and turn git's stderr into the one
+     * outcome that describes it.
+     *
+     * The merge, cherry-pick and conflict-resolve paths all end the same way,
+     * and they were three verbatim copies differing only in the log label.
+     * Lockstep edits across all three (the `redactGitAuth` and
+     * `classifyPushFailure` rollouts touched each one) are exactly the churn a
+     * single handler removes.
+     *
+     * Returns `remote-changed` when the caller should surface "sync and retry";
+     * fails the effect otherwise, because the other two outcomes are not
+     * recoverable in-flow.
+     */
+    const handlePushFailure = (params: {
+      readonly worktreePath: string;
+      readonly branchName: string;
+      readonly sourceBranch: string;
+      readonly label: string;
+      readonly rawStderr: string;
+    }): Effect.Effect<
+      { status: "remote-changed"; branch: string },
+      GitHubAuthError | PushRejectedError
+    > =>
+      Effect.gen(function* () {
+        const { stderr, kind } = readPushFailure(params.label, params.rawStderr);
+        yield* restoreToAgentBranch({
+          worktreePath: params.worktreePath,
+          branchName: params.branchName,
+        });
+        switch (kind) {
+          case "remote-moved":
+            return { status: "remote-changed" as const, branch: params.sourceBranch };
+          case "auth":
+            return yield* Effect.fail(
+              new GitHubAuthError({
+                message: "git push rejected: token expired or insufficient scope",
+              }),
+            );
+          case "rejected":
+            return yield* Effect.fail(new PushRejectedError({ message: rejectionMessage(stderr) }));
         }
       });
 
@@ -427,8 +609,8 @@ export const ChatChangesPushServiceLive = Layer.effect(
     }) =>
       Effect.tryPromise({
         try: async () => {
-          await runGit(["branch", "-f", params.branchName, params.newTip], params.worktreePath);
-          await runGit(["checkout", params.branchName], params.worktreePath);
+          await forceBranchTo(params.worktreePath, params.branchName, params.newTip);
+          await checkoutBranch(params.worktreePath, params.branchName);
         },
         catch: (err) =>
           new GitOperationError({
@@ -453,19 +635,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
         // git rebase --onto <newTip> <cherryPickedSha> <oldAgentTip>
         // replays the range (cherryPickedSha..oldAgentTip] onto newTip,
         // which drops the cherry-picked commit and keeps everything else.
-        const result = await spawnGit(
-          ["rebase", "--onto", params.newTip, params.cherryPickedSha, params.oldAgentTip],
-          { cwd: params.worktreePath, timeoutMs: 60_000, captureStdout: false },
+        const result = await rebaseOnto(
+          params.worktreePath,
+          params.newTip,
+          params.cherryPickedSha,
+          params.oldAgentTip,
         );
 
-        if (result.timedOut || result.exitCode !== 0) {
-          await runGitBestEffort(["rebase", "--abort"], params.worktreePath, 15_000);
-          await runGitBestEffort(
-            ["branch", "-f", params.branchName, params.oldAgentTip],
+        if (!result.ok) {
+          await abortRebase(params.worktreePath);
+          await forceBranchToBestEffort(
             params.worktreePath,
+            params.branchName,
+            params.oldAgentTip,
             5_000,
           );
-          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          await checkoutBranchBestEffort(params.worktreePath, params.branchName, 10_000);
           logError(
             "cherry-pick",
             "rebase of remaining agent commits failed; restored agent branch to pre-cherry-pick tip",
@@ -473,19 +658,15 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return;
         }
 
-        const rebasedTipOut = await runGitCapture(
-          ["rev-parse", "HEAD"],
-          params.worktreePath,
-          5_000,
-        ).catch(() => null);
-        const rebasedTip = rebasedTipOut?.trim();
+        const rebasedTip = await revParse(params.worktreePath, "HEAD", 5_000).catch(() => null);
         if (!rebasedTip || !isValidSha(rebasedTip)) {
-          await runGitBestEffort(
-            ["branch", "-f", params.branchName, params.oldAgentTip],
+          await forceBranchToBestEffort(
             params.worktreePath,
+            params.branchName,
+            params.oldAgentTip,
             5_000,
           );
-          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          await checkoutBranchBestEffort(params.worktreePath, params.branchName, 10_000);
           logError(
             "cherry-pick",
             "could not resolve HEAD after rebase; restored agent branch to pre-cherry-pick tip",
@@ -493,8 +674,8 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return;
         }
 
-        await runGit(["branch", "-f", params.branchName, rebasedTip], params.worktreePath);
-        await runGit(["checkout", params.branchName], params.worktreePath);
+        await forceBranchTo(params.worktreePath, params.branchName, rebasedTip);
+        await checkoutBranch(params.worktreePath, params.branchName);
       });
 
     const finalizeStateAfterPush = (params: {
@@ -510,19 +691,37 @@ export const ChatChangesPushServiceLive = Layer.effect(
           .listPrs()
           .pipe(Effect.map((prs) => prs.find((p) => p.id === params.pr.id) ?? null));
         if (fresh) {
-          const metaOpt = yield* github
-            .getPrMeta(params.repo.fullName, params.prExternalId, params.token)
+          const metaOpt = yield* prCtx
+            .prMeta(params.repo.fullName, params.prExternalId, params.token)
             .pipe(Effect.option);
           const headSha = metaOpt._tag === "Some" ? metaOpt.value.headSha : params.newTip;
+          const now = new Date().toISOString();
+          // Advance `updatedAt` with the head, never one without the other.
+          // `fresh` is the DB row, so its `updatedAt` predates this push; a row
+          // left at `(newHead, oldUpdatedAt)` is exactly the shape
+          // `preserveHeadOnStaleRead` reads as "the incoming payload is newer",
+          // so the next cache-lagged list body would be allowed to rewind
+          // `head_sha` — and `isTrustedHeadShaMove` would then supersede the
+          // walkthrough generating at the real head. GitHub bumped its own
+          // `updated_at` on this push and `PrMeta` doesn't carry it, so stamp
+          // now: at worst a few seconds ahead of GitHub's value, which errs
+          // toward rejecting stale reads rather than accepting them.
+          const updatedAt = headSha === fresh.headSha ? fresh.updatedAt : now;
+          // The cached diff belongs to the old head. Drop it before the new
+          // head lands, or the review page pairs the new head with the old
+          // files until the next poll notices.
+          if (headSha !== fresh.headSha) yield* diffCache.invalidateFiles(params.pr.id);
           yield* prService
             .upsertPrs([
               {
                 ...fresh,
+                stack: STACK_UNSEEN,
                 headSha,
-                fetchedAt: new Date().toISOString(),
+                updatedAt,
+                fetchedAt: now,
               },
             ])
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
         }
 
         yield* chatSessions.updatePrHeadSha({
@@ -530,10 +729,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
           prHeadSha: params.newTip,
         });
 
-        yield* wsHub.broadcast({
+        const pr = yield* prService.getPr(params.pr.id);
+        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
+        const prs = yield* prService.listPrs(accountId);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "prs:updated",
-          data: {},
-        } as never);
+          data: prs,
+        });
       });
 
     const completePush = (params: {
@@ -582,49 +784,24 @@ export const ChatChangesPushServiceLive = Layer.effect(
         });
 
         if (!pushResult.ok) {
-          const stderr = pushResult.stderr.toLowerCase();
-          yield* restoreToAgentBranch({
+          return yield* handlePushFailure({
             worktreePath: params.session.worktreePath,
             branchName: params.session.branchName,
+            sourceBranch: params.pr.sourceBranch,
+            label: `push to ${params.pr.sourceBranch} failed (pr=${params.pr.id})`,
+            rawStderr: pushResult.stderr,
           });
-          if (
-            stderr.includes("stale info") ||
-            stderr.includes("non-fast-forward") ||
-            stderr.includes("rejected") ||
-            stderr.includes("fetch first")
-          ) {
-            return {
-              status: "remote-changed" as const,
-              branch: params.pr.sourceBranch,
-            };
-          }
-          if (
-            stderr.includes("authentication") ||
-            stderr.includes("403") ||
-            stderr.includes("401")
-          ) {
-            return yield* Effect.fail(
-              new GitHubAuthError({
-                message: "git push rejected: token expired or insufficient scope",
-              }),
-            );
-          }
-          return yield* Effect.fail(
-            new PushRejectedError({
-              message: pushResult.stderr || "git push failed",
-            }),
-          );
         }
 
         const newTipOut = yield* Effect.tryPromise({
-          try: () => runGitCapture(["rev-parse", "HEAD"], params.session.worktreePath, 10_000),
+          try: () => revParse(params.session.worktreePath, "HEAD", 10_000),
           catch: (err) =>
             new GitOperationError({
               message: err instanceof Error ? err.message : String(err),
               cause: err,
             }),
         });
-        const newTip = newTipOut.trim();
+        const newTip = newTipOut;
         if (!isValidSha(newTip)) {
           return yield* Effect.fail(
             new GitOperationError({
@@ -678,28 +855,28 @@ export const ChatChangesPushServiceLive = Layer.effect(
     > =>
       Effect.tryPromise({
         try: async () => {
-          await runGit(
-            ["checkout", "-B", params.sourceBranch, `refs/remotes/origin/${params.sourceBranch}`],
+          await checkoutDetachedAt(
             params.worktreePath,
+            `refs/remotes/origin/${params.sourceBranch}`,
           );
 
-          const mergeResult = await spawnGit(["merge", "--no-edit", params.branchName], {
-            cwd: params.worktreePath,
-            timeoutMs: 60_000,
-            captureStdout: false,
-          });
+          const mergeResult = await mergeBranch(
+            params.worktreePath,
+            params.branchName,
+            `Merge branch '${params.branchName}' into ${params.sourceBranch}`,
+          );
 
-          if (!mergeResult.timedOut && mergeResult.exitCode === 0) {
+          if (mergeResult.ok) {
             return { status: "merged" } as const;
           }
 
-          if (!isMergeInProgress(params.worktreePath)) {
-            throw new Error(`git merge failed: ${mergeResult.stderrTail || "unknown error"}`);
+          if (!(await isMergeInProgress(params.worktreePath))) {
+            throw new Error(`git merge failed: ${mergeResult.stderr || "unknown error"}`);
           }
 
-          const files = await listConflictFiles(params.worktreePath);
+          const files = await unmergedPaths(params.worktreePath);
           if (params.abortOnConflict) {
-            await runGitBestEffort(["merge", "--abort"], params.worktreePath, 15_000);
+            await abortMerge(params.worktreePath);
           }
           return { status: "conflict", files } as const;
         },
@@ -716,7 +893,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     // hasn't moved.
     const pushToNewBranchEffect = (params: {
       ctx: {
-        readonly pr: { readonly sourceBranch: string };
+        readonly pr: { readonly id: string; readonly sourceBranch: string };
         readonly session: {
           readonly worktreePath: string;
           readonly branchName: string;
@@ -726,7 +903,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       authedUrl: string;
       newBranchName: string;
       force: boolean;
-    }): Effect.Effect<AttemptPushResult, ChatPushError> =>
+    }): Effect.Effect<AttemptPushResult, ChatPushError, DbService> =>
       Effect.gen(function* () {
         const trimmed = params.newBranchName.trim();
         if (trimmed.length === 0 || /\s/.test(trimmed) || trimmed.includes("..")) {
@@ -780,24 +957,24 @@ export const ChatChangesPushServiceLive = Layer.effect(
         });
 
         if (!pushResult.ok) {
-          const stderr = pushResult.stderr.toLowerCase();
-          if (
-            stderr.includes("authentication") ||
-            stderr.includes("403") ||
-            stderr.includes("401")
-          ) {
+          const { stderr, kind } = readPushFailure(
+            `push to new branch ${trimmed} failed`,
+            pushResult.stderr,
+          );
+          if (kind === "auth") {
             return yield* Effect.fail(
               new GitHubAuthError({
                 message: "git push rejected: token expired or insufficient scope",
               }),
             );
           }
+          // Creating a ref that's already there is the one rejection this
+          // path can recover from (the UI offers to overwrite). Anything the
+          // remote itself declined is not that, however "rejected" it reads —
+          // `classifyPushFailure` keeps the two apart.
           if (
             !params.force &&
-            (stderr.includes("already exists") ||
-              stderr.includes("non-fast-forward") ||
-              stderr.includes("rejected") ||
-              stderr.includes("fetch first"))
+            (stderr.toLowerCase().includes("already exists") || kind === "remote-moved")
           ) {
             return {
               status: "ref-exists" as const,
@@ -806,25 +983,21 @@ export const ChatChangesPushServiceLive = Layer.effect(
           }
           return yield* Effect.fail(
             new PushRejectedError({
-              message: pushResult.stderr || "git push failed",
+              message: rejectionMessage(stderr),
             }),
           );
         }
 
         const newTipOut = yield* Effect.tryPromise({
           try: () =>
-            runGitCapture(
-              ["rev-parse", params.ctx.session.branchName],
-              params.ctx.session.worktreePath,
-              10_000,
-            ),
+            revParse(params.ctx.session.worktreePath, params.ctx.session.branchName, 10_000),
           catch: (err) =>
             new GitOperationError({
               message: err instanceof Error ? err.message : String(err),
               cause: err,
             }),
         });
-        const newTip = newTipOut.trim();
+        const newTip = newTipOut;
         if (!isValidSha(newTip)) {
           return yield* Effect.fail(
             new GitOperationError({
@@ -833,10 +1006,13 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        yield* wsHub.broadcast({
+        const pr = yield* prService.getPr(params.ctx.pr.id);
+        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
+        const prs = yield* prService.listPrs(accountId);
+        yield* broadcaster.broadcastToAccount(accountId, {
           type: "prs:updated",
-          data: {},
-        } as never);
+          data: prs,
+        });
 
         return {
           status: "pushed" as const,
@@ -866,7 +1042,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           if (params.newBranchName !== undefined) {
             return yield* pushToNewBranchEffect({
               ctx: {
-                pr: { sourceBranch: ctx.pr.sourceBranch },
+                pr: { id: ctx.pr.id, sourceBranch: ctx.pr.sourceBranch },
                 session: {
                   worktreePath: ctx.session.worktreePath,
                   branchName: ctx.session.branchName,
@@ -1038,9 +1214,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             Effect.tapError(() =>
               Effect.gen(function* () {
                 yield* Effect.promise(() =>
-                  runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
-                    () => undefined,
-                  ),
+                  abortMerge(ctx.session.worktreePath).then(() => undefined),
                 );
                 yield* restoreToAgentBranch({
                   worktreePath: ctx.session.worktreePath,
@@ -1053,7 +1227,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
         const queue = yield* Queue.unbounded<ResolvePushFrame>();
 
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           Effect.gen(function* () {
             yield* Queue.offer(queue, {
               kind: "status",
@@ -1094,11 +1268,9 @@ export const ChatChangesPushServiceLive = Layer.effect(
               chunk = yield* readNext();
             }
 
-            if (isMergeInProgress(ctx.session.worktreePath)) {
+            if (yield* Effect.promise(() => isMergeInProgress(ctx.session.worktreePath))) {
               yield* Effect.promise(() =>
-                runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
-                  () => undefined,
-                ),
+                abortMerge(ctx.session.worktreePath).then(() => undefined),
               );
               yield* restoreToAgentBranch({
                 worktreePath: ctx.session.worktreePath,
@@ -1118,9 +1290,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             });
             if (!cleanCheck.clean) {
               yield* Effect.promise(() =>
-                runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
-                  () => undefined,
-                ),
+                abortMerge(ctx.session.worktreePath).then(() => undefined),
               );
               yield* restoreToAgentBranch({
                 worktreePath: ctx.session.worktreePath,
@@ -1176,12 +1346,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
               });
             }
           }).pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.gen(function* () {
                 yield* Effect.promise(() =>
-                  runGitBestEffort(["merge", "--abort"], ctx.session.worktreePath, 15_000).then(
-                    () => undefined,
-                  ),
+                  abortMerge(ctx.session.worktreePath).then(() => undefined),
                 );
                 yield* restoreToAgentBranch({
                   worktreePath: ctx.session.worktreePath,
@@ -1196,7 +1364,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             ),
             Effect.ensuring(
               Effect.gen(function* () {
-                yield* Queue.shutdown(queue).pipe(Effect.catchAll(() => Effect.void));
+                yield* Queue.shutdown(queue).pipe(Effect.catch(() => Effect.void));
                 yield* releasePush(params.prId);
               }),
             ),
@@ -1235,14 +1403,14 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
           // Validate SHA exists in worktree
           const fullShaOut = yield* Effect.tryPromise({
-            try: () => runGitCapture(["rev-parse", params.sha], ctx.session.worktreePath, 5_000),
+            try: () => revParse(ctx.session.worktreePath, params.sha, 5_000),
             catch: (err) =>
               new GitOperationError({
                 message: err instanceof Error ? err.message : String(err),
                 cause: err,
               }),
           });
-          const fullSha = fullShaOut.trim();
+          const fullSha = fullShaOut;
           if (!isValidSha(fullSha)) {
             return yield* Effect.fail(
               new GitOperationError({ message: `Cannot resolve SHA: ${params.sha}` }),
@@ -1267,27 +1435,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // Capture the agent branch tip before switching to the source branch,
           // so completePush can rebase the remaining commits onto the new tip.
           const savedAgentTipOut = yield* Effect.tryPromise({
-            try: () =>
-              runGitCapture(["rev-parse", ctx.session.branchName], ctx.session.worktreePath, 5_000),
+            try: () => revParse(ctx.session.worktreePath, ctx.session.branchName, 5_000),
             catch: (err) =>
               new GitOperationError({
                 message: err instanceof Error ? err.message : String(err),
                 cause: err,
               }),
           });
-          const savedAgentTip = savedAgentTipOut.trim();
+          const savedAgentTip = savedAgentTipOut;
 
-          // Checkout source branch locally
+          // Position the worktree at the source-branch tip (detached — see
+          // checkoutDetachedAt) so the cherry-pick lands on top of it.
           yield* Effect.tryPromise({
             try: () =>
-              runGit(
-                [
-                  "checkout",
-                  "-B",
-                  ctx.pr.sourceBranch,
-                  `refs/remotes/origin/${ctx.pr.sourceBranch}`,
-                ],
+              checkoutDetachedAt(
                 ctx.session.worktreePath,
+                `refs/remotes/origin/${ctx.pr.sourceBranch}`,
               ),
             catch: (err) =>
               new GitOperationError({
@@ -1298,12 +1461,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
 
           // Cherry-pick the single commit
           const cpResult = yield* Effect.tryPromise({
-            try: () =>
-              spawnGit(["cherry-pick", fullSha], {
-                cwd: ctx.session.worktreePath,
-                timeoutMs: 60_000,
-                captureStdout: false,
-              }),
+            try: () => cherryPick(ctx.session.worktreePath, fullSha),
             catch: (err) =>
               new GitOperationError({
                 message: err instanceof Error ? err.message : String(err),
@@ -1311,11 +1469,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
               }),
           });
 
-          if (cpResult.timedOut || cpResult.exitCode !== 0) {
+          if (!cpResult.ok) {
             // Abort cherry-pick and restore worktree
             yield* Effect.tryPromise({
-              try: () =>
-                runGitBestEffort(["cherry-pick", "--abort"], ctx.session.worktreePath, 15_000),
+              try: () => abortCherryPick(ctx.session.worktreePath),
               catch: () => new GitOperationError({ message: "cherry-pick --abort failed" }),
             });
             yield* restoreToAgentBranch({
@@ -1323,7 +1480,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
               branchName: ctx.session.branchName,
             });
             return yield* Effect.fail(
-              new GitOperationError({ message: `Cherry-pick failed: ${cpResult.stderrTail}` }),
+              new GitOperationError({ message: `Cherry-pick failed: ${cpResult.stderr}` }),
             );
           }
 
@@ -1345,30 +1502,33 @@ export const ChatChangesPushServiceLive = Layer.effect(
       });
 
     // After cherry-picking N commits, rebuild the agent branch on top of the
-    // new source-branch tip. Using `prHeadSha` (the session baseline) as the
-    // rebase upstream replays every agent commit; git skips the cherry-picked
-    // ones automatically via patch-id detection.
+    // new source-branch tip. Using `baseSha` (the resolved proposed-commit
+    // baseline) as the rebase upstream replays every agent commit; git skips
+    // the cherry-picked ones automatically via patch-id detection.
     const rebaseAgentBranchAfterBatchCherryPick = (params: {
       worktreePath: string;
       branchName: string;
       newTip: string;
-      prHeadSha: string;
+      baseSha: string;
       oldAgentTip: string;
     }) =>
       Effect.promise(async () => {
-        const result = await spawnGit(
-          ["rebase", "--onto", params.newTip, params.prHeadSha, params.oldAgentTip],
-          { cwd: params.worktreePath, timeoutMs: 60_000, captureStdout: false },
+        const result = await rebaseOnto(
+          params.worktreePath,
+          params.newTip,
+          params.baseSha,
+          params.oldAgentTip,
         );
 
-        if (result.timedOut || result.exitCode !== 0) {
-          await runGitBestEffort(["rebase", "--abort"], params.worktreePath, 15_000);
-          await runGitBestEffort(
-            ["branch", "-f", params.branchName, params.oldAgentTip],
+        if (!result.ok) {
+          await abortRebase(params.worktreePath);
+          await forceBranchToBestEffort(
             params.worktreePath,
+            params.branchName,
+            params.oldAgentTip,
             5_000,
           );
-          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          await checkoutBranchBestEffort(params.worktreePath, params.branchName, 10_000);
           logError(
             "batch-cherry-pick",
             "rebase of remaining agent commits failed; restored agent branch to pre-cherry-pick tip",
@@ -1376,19 +1536,15 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return;
         }
 
-        const rebasedTipOut = await runGitCapture(
-          ["rev-parse", "HEAD"],
-          params.worktreePath,
-          5_000,
-        ).catch(() => null);
-        const rebasedTip = rebasedTipOut?.trim();
+        const rebasedTip = await revParse(params.worktreePath, "HEAD", 5_000).catch(() => null);
         if (!rebasedTip || !isValidSha(rebasedTip)) {
-          await runGitBestEffort(
-            ["branch", "-f", params.branchName, params.oldAgentTip],
+          await forceBranchToBestEffort(
             params.worktreePath,
+            params.branchName,
+            params.oldAgentTip,
             5_000,
           );
-          await runGitBestEffort(["checkout", params.branchName], params.worktreePath, 10_000);
+          await checkoutBranchBestEffort(params.worktreePath, params.branchName, 10_000);
           logError(
             "batch-cherry-pick",
             "could not resolve HEAD after rebase; restored agent branch to pre-cherry-pick tip",
@@ -1396,8 +1552,8 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return;
         }
 
-        await runGit(["branch", "-f", params.branchName, rebasedTip], params.worktreePath);
-        await runGit(["checkout", params.branchName], params.worktreePath);
+        await forceBranchTo(params.worktreePath, params.branchName, rebasedTip);
+        await checkoutBranch(params.worktreePath, params.branchName);
       });
 
     const batchCherryPickAndPush = (params: {
@@ -1430,10 +1586,9 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // agent branch.
           const orderedListOut = yield* Effect.tryPromise({
             try: () =>
-              runGitCapture(
-                ["rev-list", "--reverse", `${ctx.session.prHeadSha}..${ctx.session.branchName}`],
+              proposedCommitShas(
                 ctx.session.worktreePath,
-                10_000,
+                `${ctx.baseSha}..${ctx.session.branchName}`,
               ),
             catch: (err) =>
               new GitOperationError({
@@ -1441,25 +1596,21 @@ export const ChatChangesPushServiceLive = Layer.effect(
                 cause: err,
               }),
           });
-          const orderedAll = orderedListOut
-            .trim()
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean);
+          const orderedAll = orderedListOut;
 
           // Map requested SHAs (possibly abbreviated) to full SHAs and
           // intersect with the ordered list to preserve chronological order.
           const requestedFullShas = new Set<string>();
           for (const sha of params.shas) {
             const full = yield* Effect.tryPromise({
-              try: () => runGitCapture(["rev-parse", sha], ctx.session.worktreePath, 5_000),
+              try: () => revParse(ctx.session.worktreePath, sha, 5_000),
               catch: (err) =>
                 new GitOperationError({
                   message: err instanceof Error ? err.message : String(err),
                   cause: err,
                 }),
             });
-            const trimmed = full.trim();
+            const trimmed = full;
             if (!isValidSha(trimmed)) {
               return yield* Effect.fail(
                 new GitOperationError({ message: `Cannot resolve SHA: ${sha}` }),
@@ -1488,27 +1639,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           });
 
           const savedAgentTipOut = yield* Effect.tryPromise({
-            try: () =>
-              runGitCapture(["rev-parse", ctx.session.branchName], ctx.session.worktreePath, 5_000),
+            try: () => revParse(ctx.session.worktreePath, ctx.session.branchName, 5_000),
             catch: (err) =>
               new GitOperationError({
                 message: err instanceof Error ? err.message : String(err),
                 cause: err,
               }),
           });
-          const savedAgentTip = savedAgentTipOut.trim();
+          const savedAgentTip = savedAgentTipOut;
 
-          // Checkout source branch locally so cherry-picks land on it.
+          // Position the worktree at the source-branch tip (detached — see
+          // checkoutDetachedAt) so the cherry-picks land on top of it.
           yield* Effect.tryPromise({
             try: () =>
-              runGit(
-                [
-                  "checkout",
-                  "-B",
-                  ctx.pr.sourceBranch,
-                  `refs/remotes/origin/${ctx.pr.sourceBranch}`,
-                ],
+              checkoutDetachedAt(
                 ctx.session.worktreePath,
+                `refs/remotes/origin/${ctx.pr.sourceBranch}`,
               ),
             catch: (err) =>
               new GitOperationError({
@@ -1520,29 +1666,22 @@ export const ChatChangesPushServiceLive = Layer.effect(
           // Cherry-pick each selected commit in chronological order.
           for (const sha of orderedSelected) {
             const cpResult = yield* Effect.tryPromise({
-              try: () =>
-                spawnGit(["cherry-pick", sha], {
-                  cwd: ctx.session.worktreePath,
-                  timeoutMs: 60_000,
-                  captureStdout: false,
-                }),
+              try: () => cherryPick(ctx.session.worktreePath, sha),
               catch: (err) =>
                 new GitOperationError({
                   message: err instanceof Error ? err.message : String(err),
                   cause: err,
                 }),
             });
-            if (cpResult.timedOut || cpResult.exitCode !== 0) {
-              yield* Effect.promise(() =>
-                runGitBestEffort(["cherry-pick", "--abort"], ctx.session.worktreePath, 15_000),
-              );
+            if (!cpResult.ok) {
+              yield* Effect.promise(() => abortCherryPick(ctx.session.worktreePath));
               yield* restoreToAgentBranch({
                 worktreePath: ctx.session.worktreePath,
                 branchName: ctx.session.branchName,
               });
               return yield* Effect.fail(
                 new GitOperationError({
-                  message: `Cherry-pick failed on ${sha.slice(0, 8)}: ${cpResult.stderrTail}`,
+                  message: `Cherry-pick failed on ${sha.slice(0, 8)}: ${cpResult.stderr}`,
                 }),
               );
             }
@@ -1570,49 +1709,24 @@ export const ChatChangesPushServiceLive = Layer.effect(
           });
 
           if (!pushResult.ok) {
-            const stderr = pushResult.stderr.toLowerCase();
-            yield* restoreToAgentBranch({
+            return yield* handlePushFailure({
               worktreePath: ctx.session.worktreePath,
               branchName: ctx.session.branchName,
+              sourceBranch: ctx.pr.sourceBranch,
+              label: `cherry-pick push to ${ctx.pr.sourceBranch} failed (pr=${ctx.pr.id})`,
+              rawStderr: pushResult.stderr,
             });
-            if (
-              stderr.includes("stale info") ||
-              stderr.includes("non-fast-forward") ||
-              stderr.includes("rejected") ||
-              stderr.includes("fetch first")
-            ) {
-              return {
-                status: "remote-changed" as const,
-                branch: ctx.pr.sourceBranch,
-              };
-            }
-            if (
-              stderr.includes("authentication") ||
-              stderr.includes("403") ||
-              stderr.includes("401")
-            ) {
-              return yield* Effect.fail(
-                new GitHubAuthError({
-                  message: "git push rejected: token expired or insufficient scope",
-                }),
-              );
-            }
-            return yield* Effect.fail(
-              new PushRejectedError({
-                message: pushResult.stderr || "git push failed",
-              }),
-            );
           }
 
           const newTipOut = yield* Effect.tryPromise({
-            try: () => runGitCapture(["rev-parse", "HEAD"], ctx.session.worktreePath, 10_000),
+            try: () => revParse(ctx.session.worktreePath, "HEAD", 10_000),
             catch: (err) =>
               new GitOperationError({
                 message: err instanceof Error ? err.message : String(err),
                 cause: err,
               }),
           });
-          const newTip = newTipOut.trim();
+          const newTip = newTipOut;
           if (!isValidSha(newTip)) {
             return yield* Effect.fail(
               new GitOperationError({
@@ -1625,7 +1739,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
             worktreePath: ctx.session.worktreePath,
             branchName: ctx.session.branchName,
             newTip,
-            prHeadSha: ctx.session.prHeadSha,
+            baseSha: ctx.baseSha,
             oldAgentTip: savedAgentTip,
           });
 
@@ -1653,11 +1767,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       cherryPickAndPush,
       batchCherryPickAndPush,
       isPushing: (prId: string) => inFlight.has(prId),
-      markChatStreaming: (prId: string, streaming: boolean) => {
-        if (streaming) streamingChats.add(prId);
-        else streamingChats.delete(prId);
-      },
-      isChatStreaming: (prId: string) => streamingChats.has(prId),
+      beginChatStream: (prId: string): ChatStreamLease => chatStreams.begin(prId),
     };
   }),
 );

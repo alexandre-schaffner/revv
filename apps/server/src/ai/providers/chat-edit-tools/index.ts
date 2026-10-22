@@ -4,6 +4,7 @@
 // canonical EDIT_TOOL_SPECS array consumed by chat-context.ts,
 // chat-claude.ts, and chat-mcp-tools.ts.
 
+import { SENTIMENT_CONTRACT_SHORT } from "../../prompts/review-copy-contract";
 import {
   addBlockHandler,
   addSemanticStepEditHandler,
@@ -25,7 +26,7 @@ import {
   updateIssueHandler,
   updateRatingHandler,
 } from "./review-handlers";
-import type { ChatEditToolSpec } from "./spec";
+import type { ChatEditToolSpecRecord } from "./spec";
 import {
   addBlockSchema,
   addIssueCommentEditSchema,
@@ -46,13 +47,11 @@ import {
   updateSentimentSchema,
 } from "./spec";
 
-export { resolveActiveWalkthroughId } from "./helpers";
 export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
 
 // ── Canonical spec list ─────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const EDIT_TOOL_SPECS: Array<ChatEditToolSpec<any>> = [
+export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
   {
     name: "get_walkthrough_for_edit",
     description:
@@ -111,7 +110,7 @@ export const EDIT_TOOL_SPECS: Array<ChatEditToolSpec<any>> = [
   },
   {
     name: "update_sentiment",
-    description: "Replace the 'Overall Sentiment' markdown. 2–4 sentences, direct verdict.",
+    description: `Replace the 'Overall Sentiment' markdown. ${SENTIMENT_CONTRACT_SHORT}`,
     inputSchema: updateSentimentSchema,
     handler: updateSentimentHandler,
   },

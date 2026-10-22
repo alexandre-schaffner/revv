@@ -1,21 +1,29 @@
-import { Cause, Option } from "effect";
+import { Cause, Effect, Option } from "effect";
 import { Elysia, status } from "elysia";
-import { auth } from "../auth";
+import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
   CloneError,
   CloneInProgressError,
   CloneNotReadyError,
+  ExternalIntegrationError,
+  externalIntegrationHttpStatus,
+  GitHubAccessDeniedError,
+  GitHubApiError,
   GitHubAuthError,
   GitHubNetworkError,
   GitHubNotFoundError,
   GitHubRateLimitError,
   isReviewError,
   NotFoundError,
+  RepoNotAccessibleError,
   SyncError,
   ValidationError,
 } from "../domain/errors";
 import { debug, logError } from "../logger";
+import { AppRuntime } from "../runtime";
+import { Identity } from "../services/Identity";
+import { SettingsService } from "../services/Settings";
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -25,12 +33,78 @@ import { debug, logError } from "../logger";
  * `session` into typed context for downstream handlers.
  */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const session = await auth.api.getSession({ headers: ctx.request.headers });
+  const session = await AppRuntime.runPromise(
+    Effect.flatMap(Identity, (identity) =>
+      Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
+    ),
+  );
   if (!session) {
     return status(401, { error: "Unauthorized" });
   }
   return { session };
 });
+
+function queryHost(query: Record<string, unknown>): string | undefined {
+  const host = query.host;
+  if (typeof host !== "string") return undefined;
+  const trimmed = host.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+// NOTE: this resolves the session itself rather than chaining `.use(withAuth)`
+// and reading `ctx.session`. Elysia deduplicates named plugins, and the
+// `withAuth` ("with-auth") scoped `derive` is also mounted on other route
+// trees — when deduped, its derived `session` does not propagate into this
+// sibling `derive`, leaving `ctx.session` undefined and 401-ing every
+// account-scoped route. Resolving from headers here (mirroring the events
+// route) keeps `withAccount` self-contained and immune to that ordering.
+export const withAccount = new Elysia({ name: "with-account" }).derive(
+  { as: "scoped" },
+  async (ctx) => {
+    const result = await AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const identity = yield* Identity;
+        const session = yield* Effect.promise(() =>
+          identity.sessionFromHeaders(ctx.request.headers),
+        );
+        if (!session) return { __noSession: true as const };
+
+        const settingsService = yield* SettingsService;
+        const settings = yield* settingsService
+          .getSettings()
+          .pipe(Effect.orElseSucceed(() => null));
+        const host =
+          queryHost(ctx.query as Record<string, unknown>) ??
+          settings?.githubHost?.trim() ??
+          serverEnv.githubHost;
+        const account = yield* identity.resolveAccount(session.user.id, host);
+        return { session, account };
+      }),
+    ).catch((err) => {
+      const unwrapped = unwrapEffectError(err);
+      if (unwrapped instanceof GitHubAuthError) {
+        return { __authError: true as const, error: unwrapped };
+      }
+      logError(
+        "withAccount",
+        "account resolution failed:",
+        unwrapped instanceof Error ? unwrapped.message : String(unwrapped),
+      );
+      return null;
+    });
+
+    if (!result) {
+      return status(401, { error: "Unauthorized" });
+    }
+    if ("__noSession" in result) {
+      return status(401, { error: "Unauthorized" });
+    }
+    if ("__authError" in result) {
+      return status(401, { error: "GitHub token expired or invalid" });
+    }
+    return { session: result.session, account: result.account };
+  },
+);
 
 // ── Effect error unwrapping ─────────────────────────────────────────────────
 
@@ -44,7 +118,7 @@ const FIBER_FAILURE_CAUSE = Symbol.for("effect/Runtime/FiberFailure/Cause");
 export function unwrapEffectError(e: unknown): unknown {
   if (e !== null && typeof e === "object" && FIBER_FAILURE_CAUSE in e) {
     const cause = (e as Record<symbol, unknown>)[FIBER_FAILURE_CAUSE];
-    const opt = Cause.failureOption(cause as Cause.Cause<unknown>);
+    const opt = Cause.findErrorOption(cause as Cause.Cause<unknown>);
     if (Option.isSome(opt)) {
       return opt.value;
     }
@@ -63,7 +137,7 @@ export function unwrapEffectError(e: unknown): unknown {
 export function handleAppError(
   raw: unknown,
   ctx: { set: { status?: number | string } },
-): { error: string } {
+): { error: string; detail?: string; action?: { label: string; url: string } } {
   const e = unwrapEffectError(raw);
 
   if (e instanceof NotFoundError) {
@@ -76,9 +150,19 @@ export function handleAppError(
     return { error: "GitHub token expired or invalid" };
   }
 
+  if (e instanceof RepoNotAccessibleError) {
+    ctx.set.status = 404;
+    return { error: e.message, detail: e.detail, ...(e.action ? { action: e.action } : {}) };
+  }
+
   if (e instanceof GitHubNotFoundError) {
     ctx.set.status = 404;
     return { error: "Not found on GitHub" };
+  }
+
+  if (e instanceof GitHubAccessDeniedError) {
+    ctx.set.status = 403;
+    return { error: e.message };
   }
 
   if (e instanceof AiNotConfiguredError) {
@@ -91,9 +175,18 @@ export function handleAppError(
     return { error: e.message };
   }
 
+  if (e instanceof ExternalIntegrationError) {
+    ctx.set.status = externalIntegrationHttpStatus(e);
+    return { error: e.message };
+  }
+
   if (isReviewError(e)) {
     if (e.code === "NOT_FOUND") {
       ctx.set.status = 404;
+      return { error: e.message };
+    }
+    if (e.code === "FORBIDDEN") {
+      ctx.set.status = 403;
       return { error: e.message };
     }
     ctx.set.status = 500;
@@ -107,6 +200,14 @@ export function handleAppError(
 
   if (e instanceof GitHubNetworkError) {
     ctx.set.status = 502;
+    return { error: `GitHub API error: ${String(e.cause)}` };
+  }
+
+  // GitHub rejected the request on its merits, so this is not a bad-gateway
+  // condition — pass its own 4xx through (clamped, since a mapped 401/403/404
+  // is already handled above by its dedicated error class).
+  if (e instanceof GitHubApiError) {
+    ctx.set.status = e.status >= 400 && e.status < 500 ? e.status : 502;
     return { error: `GitHub API error: ${String(e.cause)}` };
   }
 

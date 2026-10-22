@@ -5,6 +5,8 @@ export {
   type PromptInputStatus,
 } from "./context.js";
 export { default as PromptInput, type PromptInputProps } from "./PromptInput.svelte";
+export { default as PromptInputAttachButton } from "./PromptInputAttachButton.svelte";
+export { default as PromptInputAttachments } from "./PromptInputAttachments.svelte";
 export { default as PromptInputBody, type PromptInputBodyProps } from "./PromptInputBody.svelte";
 export {
   default as PromptInputButton,

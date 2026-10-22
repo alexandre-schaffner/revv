@@ -1,19 +1,28 @@
 import type {
-  AiAgent,
-  ContextWindow,
+  AcpAgentId,
   DiffViewMode,
   RecapAgentChoice,
+  SettingsUpdate,
   ThemePreference,
-  ThinkingEffort,
+  ThinkingEffortSetting,
   UpdateChannel,
   UserSettings,
 } from "@revv/shared";
-import { AUTO_FETCH_DEFAULT_INTERVAL, DEFAULT_UPDATE_CHANNEL, UPDATE_CHANNELS } from "@revv/shared";
+import {
+  AUTO_FETCH_DEFAULT_INTERVAL,
+  DEFAULT_JEV_SETTINGS,
+  DEFAULT_UPDATE_CHANNEL,
+  isAcpAgentId,
+  mergeSettingsUpdate,
+  UPDATE_CHANNELS,
+} from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
+import { applyAcpAgentOverride } from "../ai/acp/presets";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -27,13 +36,13 @@ const DEFAULT_SETTINGS: UserSettings = {
   aiModel: "opencode/big-pickle",
   aiThinkingEffort: "medium",
   aiAgent: "opencode",
-  aiContextWindow: "200k",
   aiSuggestionsModel: "opencode/big-pickle",
   aiMaxTurns: 60,
   theme: "dark",
   diffViewMode: "unified",
   autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
   githubHost: "github.com",
+  githubClientId: "",
   recap: {
     enabled: true,
     dailyEnabled: true,
@@ -43,11 +52,15 @@ const DEFAULT_SETTINGS: UserSettings = {
   cache: {
     enabled: false,
     bucket: "",
-    credentialsJson: "",
-    credentialsPath: "",
     uploadsEnabled: true,
     downloadsEnabled: true,
+    signing: {
+      mode: "strict" as const,
+      keyPath: "",
+      trustedSignerHosts: [],
+    },
   },
+  jev: DEFAULT_JEV_SETTINGS,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
 };
 
@@ -58,7 +71,24 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
     : DEFAULT_SETTINGS.updateChannel;
 }
 
-const VALID_RECAP_AGENTS: ReadonlySet<RecapAgentChoice> = new Set(["auto", "opencode", "claude"]);
+function isRecapAgentChoice(value: unknown): value is RecapAgentChoice {
+  return value === "auto" || (typeof value === "string" && isAcpAgentId(value));
+}
+
+/**
+ * Coerce an agent id out of a raw settings object onto the single ACP registry
+ * id space. Handles the legacy `~/.revv/settings.json` shape: a separate
+ * `chatAgent` (already a registry id) wins, then the legacy `aiAgent: 'claude'`
+ * enum value maps onto `'claude-code'`; anything invalid falls back to default.
+ */
+function coerceAgentId(raw: Record<string, unknown>): AcpAgentId {
+  const chat = raw.chatAgent;
+  if (typeof chat === "string" && isAcpAgentId(chat)) return chat;
+  const ai = raw.aiAgent;
+  if (ai === "claude") return "claude-code";
+  if (typeof ai === "string" && isAcpAgentId(ai)) return ai;
+  return DEFAULT_SETTINGS.aiAgent;
+}
 
 const MIN_MAX_TURNS = 10;
 const MAX_MAX_TURNS = 500;
@@ -98,14 +128,9 @@ function normalize(raw: unknown): UserSettings {
     aiModel: typeof r.aiModel === "string" ? (r.aiModel as string) : DEFAULT_SETTINGS.aiModel,
     aiThinkingEffort:
       typeof r.aiThinkingEffort === "string"
-        ? (r.aiThinkingEffort as ThinkingEffort)
+        ? (r.aiThinkingEffort as ThinkingEffortSetting)
         : DEFAULT_SETTINGS.aiThinkingEffort,
-    aiAgent:
-      r.aiAgent === "opencode" || r.aiAgent === "claude" ? r.aiAgent : DEFAULT_SETTINGS.aiAgent,
-    aiContextWindow:
-      typeof r.aiContextWindow === "string"
-        ? (r.aiContextWindow as ContextWindow)
-        : DEFAULT_SETTINGS.aiContextWindow,
+    aiAgent: coerceAgentId(r),
     aiSuggestionsModel:
       typeof r.aiSuggestionsModel === "string"
         ? (r.aiSuggestionsModel as string)
@@ -124,10 +149,35 @@ function normalize(raw: unknown): UserSettings {
       typeof r.githubHost === "string" && (r.githubHost as string).length > 0
         ? (r.githubHost as string)
         : DEFAULT_SETTINGS.githubHost,
+    githubClientId:
+      typeof r.githubClientId === "string"
+        ? (r.githubClientId as string)
+        : DEFAULT_SETTINGS.githubClientId,
     recap: coerceRecap(r.recap),
     cache: coerceCache(r.cache),
+    jev: coerceJev(r.jev),
     updateChannel: coerceUpdateChannel(r.updateChannel),
   };
+}
+
+const VALID_SIGNING_MODES = new Set(["off", "permissive", "strict"]);
+
+function coerceCacheSigning(value: unknown): UserSettings["cache"]["signing"] {
+  if (value === null || typeof value !== "object") {
+    return { ...DEFAULT_SETTINGS.cache.signing };
+  }
+  const r = value as Record<string, unknown>;
+  const mode =
+    typeof r.mode === "string" && VALID_SIGNING_MODES.has(r.mode)
+      ? (r.mode as "off" | "permissive" | "strict")
+      : DEFAULT_SETTINGS.cache.signing.mode;
+  const keyPath =
+    typeof r.keyPath === "string" ? r.keyPath : DEFAULT_SETTINGS.cache.signing.keyPath;
+  let trustedSignerHosts = DEFAULT_SETTINGS.cache.signing.trustedSignerHosts;
+  if (Array.isArray(r.trustedSignerHosts)) {
+    trustedSignerHosts = r.trustedSignerHosts.filter((h): h is string => typeof h === "string");
+  }
+  return { mode, keyPath, trustedSignerHosts };
 }
 
 function coerceCache(value: unknown): UserSettings["cache"] {
@@ -136,33 +186,56 @@ function coerceCache(value: unknown): UserSettings["cache"] {
   return {
     enabled: r.enabled === true,
     bucket: typeof r.bucket === "string" ? r.bucket : DEFAULT_SETTINGS.cache.bucket,
-    credentialsJson:
-      typeof r.credentialsJson === "string"
-        ? r.credentialsJson
-        : DEFAULT_SETTINGS.cache.credentialsJson,
-    credentialsPath:
-      typeof r.credentialsPath === "string"
-        ? r.credentialsPath
-        : DEFAULT_SETTINGS.cache.credentialsPath,
     uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
     downloadsEnabled:
       r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
+    signing: coerceCacheSigning(r.signing),
   };
 }
 
 function coerceRecap(value: unknown): UserSettings["recap"] {
   if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.recap };
   const r = value as Record<string, unknown>;
-  const agent =
-    typeof r.agent === "string" && VALID_RECAP_AGENTS.has(r.agent as RecapAgentChoice)
-      ? (r.agent as RecapAgentChoice)
-      : DEFAULT_SETTINGS.recap.agent;
+  // Legacy `'claude'` enum value maps onto its registry id.
+  const rawAgent = r.agent === "claude" ? "claude-code" : r.agent;
+  const agent = isRecapAgentChoice(rawAgent) ? rawAgent : DEFAULT_SETTINGS.recap.agent;
   return {
     enabled: r.enabled === false ? false : DEFAULT_SETTINGS.recap.enabled,
     dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
     weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
     agent,
   };
+}
+
+/** `hasApiKey` is always forced `false` here; it's derived from the keyring at the edge (`withJevKeyState`), never from client input. */
+function coerceJev(value: unknown): UserSettings["jev"] {
+  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
+  const r = value as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_SETTINGS.jev.enabled,
+    hasApiKey: false,
+  };
+}
+
+function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AcpAgentId {
+  const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
+  if (isAcpAgentId(agent)) return applyAcpAgentOverride(agent);
+  throw new ValidationError({
+    message: `Unknown aiAgent '${agent}' — expected one of the ACP registry agent ids`,
+    field: "aiAgent",
+  });
+}
+
+function resolveRecapAgentFromSettings(
+  settings: Pick<UserSettings, "aiAgent" | "recap">,
+): AcpAgentId {
+  const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
+  if (choice === "auto") return resolveAgentFromSettings(settings);
+  if (isAcpAgentId(choice)) return applyAcpAgentOverride(choice);
+  throw new ValidationError({
+    message: `Unknown recap.agent '${choice}' — expected "auto" or an ACP registry agent id`,
+    field: "recap.agent",
+  });
 }
 
 // ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
@@ -172,15 +245,15 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     id: row.id,
     aiProvider: row.aiProvider,
     aiModel: row.aiModel,
-    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffort,
-    aiAgent: row.aiAgent as AiAgent,
-    aiContextWindow: row.aiContextWindow as ContextWindow,
+    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffortSetting,
+    aiAgent: row.aiAgent as AcpAgentId,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
     theme: row.theme as ThemePreference,
     diffViewMode: row.diffViewMode as DiffViewMode,
     autoFetchInterval: row.autoFetchInterval,
     githubHost: row.githubHost,
+    githubClientId: row.githubClientId,
     recap: {
       enabled: row.recapEnabled,
       dailyEnabled: row.recapDailyEnabled,
@@ -190,10 +263,26 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
     cache: {
       enabled: row.cacheEnabled,
       bucket: row.cacheBucket,
-      credentialsJson: row.cacheCredentialsJson,
-      credentialsPath: row.cacheCredentialsPath,
       uploadsEnabled: row.cacheUploadsEnabled,
       downloadsEnabled: row.cacheDownloadsEnabled,
+      signing: coerceCacheSigning(
+        (() => {
+          try {
+            return {
+              mode: row.cacheSigningMode,
+              keyPath: row.cacheSigningKeyPath,
+              trustedSignerHosts: JSON.parse(row.cacheTrustedSignerHosts ?? "[]"),
+            };
+          } catch {
+            return null;
+          }
+        })(),
+      ),
+    },
+    jev: {
+      enabled: row.jevEnabled,
+      // Derived from SecretStore, not this table.
+      hasApiKey: false,
     },
     updateChannel: coerceUpdateChannel(row.updateChannel),
   };
@@ -206,24 +295,28 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     aiModel: s.aiModel,
     aiThinkingEffort: s.aiThinkingEffort,
     aiAgent: s.aiAgent,
-    aiContextWindow: s.aiContextWindow,
     aiSuggestionsModel: s.aiSuggestionsModel,
     aiMaxTurns: s.aiMaxTurns,
     theme: s.theme,
     diffViewMode: s.diffViewMode,
     autoFetchInterval: s.autoFetchInterval,
     githubHost: s.githubHost,
+    githubClientId: s.githubClientId,
     recapEnabled: s.recap.enabled,
     recapDailyEnabled: s.recap.dailyEnabled,
     recapWeeklyEnabled: s.recap.weeklyEnabled,
     recapAgent: s.recap.agent,
     cacheEnabled: s.cache.enabled,
     cacheBucket: s.cache.bucket,
-    cacheCredentialsJson: s.cache.credentialsJson,
-    cacheCredentialsPath: s.cache.credentialsPath,
+    cacheCredentialsJson: "",
+    cacheCredentialsPath: "",
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
     updateChannel: s.updateChannel,
+    cacheSigningMode: s.cache.signing.mode,
+    cacheSigningKeyPath: s.cache.signing.keyPath,
+    cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
+    jevEnabled: s.jev.enabled,
     updatedAt: new Date(),
   };
 }
@@ -277,27 +370,24 @@ async function migrateJsonToDb(db: Db): Promise<UserSettings> {
 
 // ── Service definition ────────────────────────────────────────────────────────
 
-/**
- * Shape accepted by `updateSettings`. Top-level fields are individually
- * optional (standard `Partial`), but `recap` and `cache` are recursively
- * partial so callers can patch a single nested field (e.g.
- * `{ recap: { agent: 'opencode' } }`) without spreading the whole
- * sub-object. {@link Settings.ts}'s `updateSettings` deep-merges them
- * against the current value to honour this contract.
- */
-export type SettingsUpdate = Partial<Omit<UserSettings, "id" | "recap" | "cache">> & {
-  recap?: Partial<UserSettings["recap"]>;
-  cache?: Partial<UserSettings["cache"]>;
-};
-
-export class SettingsService extends Context.Tag("SettingsService")<
+export class SettingsService extends Context.Service<
   SettingsService,
   {
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
+    resolveAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
+    resolveRecapAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
+    /**
+     * The ACP registry agent id that drives chat — the persisted `aiAgent`
+     * (with the `REVV_ACP_AGENT` env override). Same as {@link resolveAgent}
+     * but never fails: falls back to the default agent. Used as the chat-session
+     * key so switching agents starts a fresh session instead of resuming a
+     * foreign one.
+     */
+    resolveChatAgentId: () => Effect.Effect<AcpAgentId>;
   }
->() {}
+>()("SettingsService") {}
 
 export const SettingsServiceLive = Layer.effect(
   SettingsService,
@@ -316,24 +406,18 @@ export const SettingsServiceLive = Layer.effect(
 
     return {
       getSettings: () =>
-        settingsRef.get.pipe(Effect.mapError((e) => new ValidationError({ message: String(e) }))),
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+        ),
 
       updateSettings: (partial) =>
         Effect.gen(function* () {
-          const current = yield* settingsRef.get;
-          const mergedRecap =
-            partial.recap !== undefined ? { ...current.recap, ...partial.recap } : current.recap;
-          const mergedCache =
-            partial.cache !== undefined ? { ...current.cache, ...partial.cache } : current.cache;
-          const merged: UserSettings = {
-            ...current,
-            ...partial,
-            recap: mergedRecap,
-            cache: mergedCache,
-            id: "default",
-          };
+          const current = yield* SubscriptionRef.get(settingsRef);
+          const merged = mergeSettingsUpdate(current, partial);
           const next: UserSettings = {
             ...merged,
+            id: "default",
+            jev: { ...merged.jev, hasApiKey: false },
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
             updateChannel: coerceUpdateChannel(merged.updateChannel),
           };
@@ -357,7 +441,30 @@ export const SettingsServiceLive = Layer.effect(
           return next;
         }),
 
-      settingsChanges: () => settingsRef.changes.pipe(Stream.drop(1)),
+      settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
+
+      resolveAgent: () =>
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveAgentFromSettings),
+        ),
+
+      resolveChatAgentId: () =>
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.map(resolveAgentFromSettings),
+          Effect.tapError((e) =>
+            Effect.sync(() => {
+              logError("settings", "resolveChatAgentId failed, defaulting:", String(e));
+            }),
+          ),
+          Effect.orElseSucceed(() => applyAcpAgentOverride(DEFAULT_SETTINGS.aiAgent)),
+        ),
+
+      resolveRecapAgent: () =>
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.mapError((e) => new ValidationError({ message: String(e) })),
+          Effect.map(resolveRecapAgentFromSettings),
+        ),
     };
   }),
 );

@@ -1,307 +1,314 @@
 <script lang="ts">
-import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import User from "phosphor-svelte/lib/User";
-import { untrack } from "svelte";
+/*
+ * RepoTaggedPrs — the repo homepage's queue of PRs that involve the viewer.
+ *
+ * A list with a toolbar, not a data grid. The queue is a handful of rows the
+ * reader triages by eye; a `<thead>` with per-column sort buttons is apparatus
+ * that a spreadsheet needs and a queue does not, and it forced a column named
+ * "Why" over a gutter of glyphs that needed their own legend.
+ *
+ * So the shape is GitHub's `/pulls` list, which is the one PR list every
+ * reviewer can already read: a toolbar carries the filters and the sort, and
+ * each row below it is `state icon → title → #num · who · when`. See
+ * TaggedPrRow for where the row deliberately improves on GitHub rather than
+ * copying it.
+ *
+ * No entrance motion. This is a surface the user lands on many times a day;
+ * a staggered reveal on every render (and on every SSE tick that re-keys a
+ * row) is a tax, not polish. Motion here is state only: a folded stack
+ * fanning under the pointer, the toolbar's press, and a stack opening or
+ * closing.
+ */
+
+import Tray from "phosphor-svelte/lib/Tray";
+import { SvelteMap } from "svelte/reactivity";
+import TaggedPrRow from "$lib/components/repo/TaggedPrRow.svelte";
+import TaggedPrStack from "$lib/components/repo/TaggedPrStack.svelte";
+import TaggedPrToolbar from "$lib/components/repo/TaggedPrToolbar.svelte";
 import {
-  fetchTaggedPrs,
-  getTaggedPrs,
-  getTaggedPrsLoading,
-  selectPr,
-} from "$lib/stores/prs.svelte";
-import { setSidebarView } from "$lib/stores/sidebar.svelte";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
+  compareTaggedRows,
+  groupStacks,
+  isStackOpen,
+  REASON_LABEL,
+  sortOptionFor,
+  type TaggedReason,
+  type TaggedSortId,
+  toTaggedRows,
+} from "$lib/prs/tagged-prs";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getTaggedPrs, getTaggedPrsResolved } from "$lib/stores/prs.svelte";
+import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 
 interface Props {
   repoId: string;
+  /**
+   * The repo's default branch. Lets each row drop the "→ main" that would
+   * otherwise repeat under nearly every title.
+   */
+  defaultBranch: string;
 }
 
-let { repoId }: Props = $props();
+let { repoId, defaultBranch }: Props = $props();
 
-let fetched = false;
-$effect(() => {
-  if (!fetched && repoId) {
-    fetched = true;
-    void untrack(() => fetchTaggedPrs(repoId));
-  }
+// ── State ───────────────────────────────────────────────────────────────────
+// All component-local: nothing else in the app needs the sort or the filter.
+
+/**
+ * The reason to narrow to, or `null` for "All".
+ *
+ * Single-select, not a `Set`: `reasonFor` makes the three reasons mutually
+ * exclusive by construction, so a multi-select over them only ever expressed
+ * "all" in a more expensive way.
+ */
+let activeReason = $state<TaggedReason | null>(null);
+let sortId = $state<TaggedSortId>("relevance");
+// Seeded empty so the region stays silent on first paint and speaks only in
+// response to a user action.
+let srMessage = $state("");
+
+const login = $derived(getCurrentUserLogin());
+const resolved = $derived(getTaggedPrsResolved());
+const allRows = $derived(toTaggedRows(getTaggedPrs(repoId), login));
+
+const counts = $derived.by(() => {
+  const tally: Record<TaggedReason, number> = { review: 0, yours: 0, mentioned: 0 };
+  for (const row of allRows) tally[row.reason] += 1;
+  return tally;
 });
 
-const prs = $derived(getTaggedPrs(repoId));
-const loading = $derived(getTaggedPrsLoading(repoId));
+const rows = $derived.by(() => {
+  const shown = activeReason === null ? allRows : allRows.filter((r) => r.reason === activeReason);
+  const { key, dir } = sortOptionFor(sortId);
+  // Never sort in place: `allRows` may be the array the derived above handed
+  // out, and an in-place sort would mutate it under other readers.
+  return [...shown].sort((a, b) => compareTaggedRows(a, b, key, dir));
+});
 
-function handleClick(prId: string) {
-  selectPr(prId);
-  setSidebarView("files");
+const entries = $derived(groupStacks(rows));
+
+const hasStacks = $derived(entries.some((entry) => entry.kind === "stack"));
+$effect(() => {
+  if (hasStacks) ensureStackHeadlines(repoId);
+});
+
+const chosenOpen = new SvelteMap<number, boolean>();
+
+const headline = $derived(
+  allRows.length === 1
+    ? "1 open pull request involves you"
+    : `${allRows.length} open pull requests involve you`,
+);
+
+function announce(): void {
+  const scope = activeReason === null ? "all" : REASON_LABEL[activeReason].toLowerCase();
+  srMessage = `Showing ${rows.length} of ${allRows.length} pull requests (${scope}), sorted by ${sortOptionFor(sortId).label.toLowerCase()}.`;
 }
+
+function onReasonChange(reason: TaggedReason | null): void {
+  activeReason = reason;
+  announce();
+}
+
+function onSortChange(id: TaggedSortId): void {
+  sortId = id;
+  announce();
+}
+
+const SKELETON_ROWS = [0, 1, 2, 3];
 </script>
 
-<section class="tagged-section">
-	<header class="tagged-header">
-		<GitPullRequest size={14} weight="fill" class="tagged-icon" />
-		<h2 class="tagged-title">
-			{#if loading && prs.length === 0}
-				Loading pull requests…
-			{:else if prs.length === 1}
-				1 pull request needs your attention
-			{:else}
-				{prs.length} pull requests need your attention
-			{/if}
-		</h2>
-	</header>
+<section class="tagged" aria-labelledby="tagged-heading">
+	<h2 class="heading" id="tagged-heading">
+		{resolved ? headline : "Loading pull requests…"}
+	</h2>
 
-	{#if loading && prs.length === 0}
-		<div class="tagged-status">
-			<Loader2 size={16} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-			<span>Loading…</span>
-		</div>
-	{:else if prs.length === 0}
-		<div class="tagged-status">
-			<User size={16} weight="regular" aria-hidden="true" />
-			<span>No pull requests need your attention.</span>
+	<div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{srMessage}</div>
+
+	{#if resolved && allRows.length === 0}
+		<div class="blank">
+			<Tray size={16} aria-hidden="true" />
+			<div class="blank-body">
+				<p class="blank-title">Nothing in this repo involves you.</p>
+				<p class="blank-hint">
+					Pull requests you opened, were asked to review, or were mentioned in show up
+					here.
+				</p>
+			</div>
 		</div>
 	{:else}
-		<ul class="tagged-grid">
-			{#each prs as pr (pr.id)}
-				<li>
-					<button
-						type="button"
-						class="card"
-						class:card--draft={pr.isDraft}
-						onclick={() => handleClick(pr.id)}
-						aria-label="PR #{pr.externalId}: {pr.title}"
-					>
-						{#if pr.authorAvatarContent}
-							<img
-								class="card-avatar"
-								src={pr.authorAvatarContent}
-								alt=""
-								width="28"
-								height="28"
-								loading="lazy"
-							/>
-						{:else}
-							<span class="card-avatar card-avatar--placeholder" aria-hidden="true"></span>
-						{/if}
-						<div class="card-body">
-							<div class="card-head">
-								<span class="card-title">{pr.title}</span>
-								<span class="card-id">#{pr.externalId}</span>
-							</div>
-							<div class="card-meta">
-								<span class="card-author">{pr.authorLogin}</span>
-								<span class="card-meta-sep" aria-hidden="true">·</span>
-								<span class="card-time">{formatRelativeTime(pr.updatedAt)}</span>
-								<span class="card-meta-sep" aria-hidden="true">·</span>
-								<span class="card-diff">
-									<span class="card-diff-add">+{pr.additions}</span>
-									<span class="card-diff-del">−{pr.deletions}</span>
-								</span>
-								{#if pr.isDraft}
-									<span class="card-draft">Draft</span>
-								{/if}
-							</div>
-						</div>
+		<div aria-busy={!resolved}>
+			{#if resolved}
+				<TaggedPrToolbar
+					{counts}
+					total={allRows.length}
+					{activeReason}
+					{onReasonChange}
+					{sortId}
+					{onSortChange}
+				/>
+			{/if}
+
+			{#if !resolved}
+				<ul class="list" aria-hidden="true">
+					{#each SKELETON_ROWS as slot (slot)}
+						<li class="skel-row">
+							<span class="skel-bar skel-bar--title"></span>
+							<span class="skel-bar skel-bar--meta"></span>
+						</li>
+					{/each}
+				</ul>
+			{:else if rows.length === 0}
+				<p class="filtered-blank">
+					<span role="status">No pull requests match this filter.</span>
+					<button type="button" class="link-btn" onclick={() => onReasonChange(null)}>
+						Show all
 					</button>
-				</li>
-			{/each}
-		</ul>
+				</p>
+			{:else}
+				<ul class="list">
+					{#each entries as entry (entry.kind === 'row' ? entry.row.pr.id : `stack:${entry.number}`)}
+						{#if entry.kind === 'row'}
+							<TaggedPrRow row={entry.row} {defaultBranch} />
+						{:else}
+							<TaggedPrStack
+								stack={entry}
+								cardsId="{repoId}-stack-{entry.number}"
+								bind:open={
+									() => isStackOpen(entry.members.length, chosenOpen.get(entry.number)),
+									(open) => chosenOpen.set(entry.number, open)
+								}
+							/>
+						{/if}
+					{/each}
+				</ul>
+			{/if}
+		</div>
 	{/if}
 </section>
 
 <style>
-	.tagged-section {
+	.tagged {
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 0.75rem;
+		/* Collapse is driven by the section's own width, not the viewport: the
+		   main area shrinks whenever the right panel opens or the sidebar is
+		   dragged wider. `width: 100%` is not optional — an inline-size
+		   container reports no intrinsic width and would otherwise collapse
+		   inside the page's flex column. */
+		container-type: inline-size;
+		container-name: tagged;
+		width: 100%;
+		min-width: 0;
 	}
 
-	.tagged-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	:global(.tagged-icon) {
-		color: var(--color-text-secondary);
-		flex-shrink: 0;
-	}
-
-	.tagged-title {
+	/* A clear step above the 0.875rem row titles — a 15px heading over 15px
+	   titles reads as a peer, not a header. */
+	.heading {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		font-weight: 600;
 		color: var(--color-text-primary);
 		letter-spacing: -0.01em;
 	}
 
-	.tagged-status {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 12px 16px;
-		background: var(--color-bg-secondary);
-		border-radius: 8px;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-	}
-
-	/* ─────────────────────── grid ─────────────────────── */
-
-	.tagged-grid {
-		list-style: none;
+	.list {
 		margin: 0;
 		padding: 0;
+		list-style: none;
+	}
+
+	/* ── Loading ────────────────────────────────────────────────────────── */
+
+	/* Deliberately motionless: a static bar preserves the layout, reads as
+	   "loading" on its own, and needs no reduced-motion carve-out. */
+	.skel-row {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 0.5rem;
+		padding: 0.6875rem var(--spacing-inset);
+		border-top: 1px solid var(--color-border-subtle);
 	}
 
-	/* ─────────────────────── card (mirrors RepoOpenIssues) ─────────────────── */
-
-	.card {
-		display: flex;
-		flex-direction: row;
-		align-items: center;
-		gap: 12px;
-		width: 100%;
-		padding: 12px 16px;
-		text-align: left;
-		background: var(--color-bg-secondary);
-		border: 1px solid transparent;
-		border-radius: 10px;
-		color: inherit;
-		font: inherit;
-		cursor: pointer;
-		transition:
-			background var(--duration-quick) var(--ease-out-expo),
-			border-color var(--duration-quick) var(--ease-out-expo),
-			box-shadow var(--duration-quick) var(--ease-out-expo),
-			transform var(--duration-snap) var(--ease-out-expo);
+	.skel-row:first-child {
+		border-top: none;
 	}
 
-	.card:hover {
-		background: var(--color-bg-elevated);
-		box-shadow: var(--revv-shadow-sm);
-		transform: translateY(-1px);
-	}
-
-	.card:active {
-		transform: translateY(0);
-		box-shadow: none;
-		transition-duration: var(--duration-snap);
-	}
-
-	.card:focus-visible {
-		outline: none;
-		box-shadow: 0 0 0 3px var(--revv-input-focus-ring);
-	}
-
-	/* Draft PRs read softer than the room they sit in — a tonal half-step
-	   down from the regular card surface, no extra border. Conveys "not
-	   ready" without competing visually with non-draft cards. */
-	.card--draft {
-		background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
-		opacity: 0.92;
-	}
-
-	.card--draft:hover {
-		opacity: 1;
-	}
-
-	.card-avatar {
-		width: 28px;
-		height: 28px;
-		border-radius: 999px;
-		flex-shrink: 0;
-		object-fit: cover;
+	.skel-bar {
 		display: block;
-		background: var(--color-bg-tertiary);
+		height: 10px;
+		border-radius: 3px;
+		background: color-mix(in srgb, var(--color-text-muted) 22%, transparent);
 	}
 
-	.card-avatar--placeholder {
-		background: var(--color-bg-tertiary);
+	.skel-bar--title {
+		width: 62%;
 	}
 
-	.card-body {
+	.skel-bar--meta {
+		width: 34%;
+		height: 7px;
+	}
+
+	/* ── Empty states ───────────────────────────────────────────────────── */
+
+	.filtered-blank {
+		margin: 0;
+		padding: 1rem var(--spacing-inset);
+		text-align: center;
+		font-size: 0.8125rem;
+		color: var(--color-text-muted);
+	}
+
+	.link-btn {
+		margin-left: 0.5rem;
+		border: none;
+		background: none;
+		padding: 0;
+		color: var(--color-accent);
+		font-family: inherit;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		cursor: pointer;
+	}
+
+	.link-btn:hover {
+		text-decoration: underline;
+	}
+
+	.link-btn:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
+
+	.blank {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		padding: 0.875rem 1rem;
+		background: var(--color-bg-secondary);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: var(--radius-card);
+		color: var(--color-text-muted);
+	}
+
+	.blank-body {
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
-		min-width: 0;
-		flex: 1;
-	}
-
-	.card-head {
-		display: flex;
-		align-items: center;
-		gap: 8px;
+		gap: 0.125rem;
 		min-width: 0;
 	}
 
-	.card-title {
-		font-size: 0.875rem;
-		font-weight: 500;
-		color: var(--color-text-primary);
-		min-width: 0;
-		flex: 1;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		letter-spacing: -0.01em;
-		line-height: 1.35;
-	}
-
-	.card-id {
-		flex-shrink: 0;
-		font-size: 0.75rem;
-		font-feature-settings: "tnum";
-		color: var(--color-text-muted);
-	}
-
-	.card-meta {
-		display: inline-flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 6px;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-		line-height: 1.4;
-	}
-
-	.card-author {
+	.blank-title {
+		margin: 0;
+		font-size: 0.8125rem;
 		color: var(--color-text-secondary);
-		font-weight: 500;
 	}
 
-	.card-meta-sep {
-		opacity: 0.5;
-	}
-
-	.card-time {
-		font-feature-settings: "tnum";
-	}
-
-	.card-diff {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-feature-settings: "tnum";
-	}
-
-	.card-diff-add {
-		color: var(--color-success);
-	}
-
-	.card-diff-del {
-		color: var(--color-danger);
-	}
-
-	.card-draft {
-		margin-left: auto;
-		font-size: 0.6875rem;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-		padding: 1px 7px;
-		border-radius: 999px;
-		background: var(--color-bg-tertiary);
+	.blank-hint {
+		margin: 0;
+		font-size: 0.75rem;
+		line-height: 1.45;
 	}
 </style>

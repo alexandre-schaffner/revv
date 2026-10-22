@@ -4,7 +4,7 @@ import { fileContentCache } from "../db/schema/index";
 import type { GitHubError } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
+import { GitHubGateway } from "./GitHub";
 import type { SettingsService } from "./Settings";
 
 /**
@@ -15,7 +15,7 @@ import type { SettingsService } from "./Settings";
  * Backed by the `file_content_cache` table; the primary key encodes the
  * triple separated by NUL bytes.
  */
-export class FileContentService extends Context.Tag("FileContentService")<
+export class FileContentService extends Context.Service<
   FileContentService,
   {
     /** Returns cached content or null on cache miss. */
@@ -37,11 +37,11 @@ export class FileContentService extends Context.Tag("FileContentService")<
       path: string,
       ref: string,
       token: string,
-    ) => Effect.Effect<string, GitHubError, DbService | GitHubService | SettingsService>;
+    ) => Effect.Effect<string, GitHubError, DbService | GitHubGateway | SettingsService>;
     /** Stats for observability (hit/miss counters since process start). */
     readonly stats: () => { readonly hits: number; readonly misses: number };
   }
->() {}
+>()("FileContentService") {}
 
 /** Encode the composite primary key for the file_content_cache table. */
 function makeKey(repoFullName: string, path: string, ref: string): string {
@@ -84,10 +84,10 @@ export const FileContentServiceLive = Layer.sync(FileContentService, () => {
     path: string,
     ref: string,
     token: string,
-  ): Effect.Effect<string, GitHubError, DbService | GitHubService | SettingsService> =>
+  ): Effect.Effect<string, GitHubError, DbService | GitHubGateway | SettingsService> =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const github = yield* GitHubService;
+      const github = yield* GitHubGateway;
 
       const cached = yield* withDb(db, getCached(repoFullName, path, ref));
       if (cached !== null) {
@@ -96,7 +96,7 @@ export const FileContentServiceLive = Layer.sync(FileContentService, () => {
       }
 
       misses++;
-      const content = yield* github.getFileContent(repoFullName, path, ref, token);
+      const content = yield* github.files.content(repoFullName, path, ref, token);
       yield* withDb(db, cache(repoFullName, path, ref, content));
       return content;
     });

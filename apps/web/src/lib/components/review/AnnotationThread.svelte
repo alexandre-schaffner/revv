@@ -1,7 +1,12 @@
 <script lang="ts">
-import type { CommentThread, ThreadMessage } from "@revv/shared";
-import CornerDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
+import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
+import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
+import CaretUp from "phosphor-svelte/lib/CaretUp";
+import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
+import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
+import type { Attachment } from "svelte/attachments";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
@@ -18,6 +23,7 @@ interface Props {
   onCollapse?: (() => void) | undefined;
   onApplySuggestion?: (suggestion: string) => void;
   onEditMessage?: (messageId: string, body: string) => void;
+  onPush?: (() => void | Promise<void>) | undefined;
   isReplying?: boolean;
   onReplySubmit?: (body: string) => void;
   onReplyDismiss?: () => void;
@@ -35,6 +41,7 @@ let {
   onCollapse,
   onApplySuggestion,
   onEditMessage,
+  onPush,
   isReplying = false,
   onReplySubmit,
   onReplyDismiss,
@@ -42,6 +49,16 @@ let {
 }: Props = $props();
 
 const isResolved = $derived(thread.status === "resolved" || thread.status === "wont_fix");
+const currentUserLogin = $derived(getCurrentUserLogin());
+const firstMessage = $derived(messages[0] ?? null);
+const canDiscardThread = $derived(
+  isPending && firstMessage !== null && canUserModifyComment(firstMessage, currentUserLogin),
+);
+const canPushThread = $derived(canDiscardThread && onPush !== undefined);
+
+function canModifyMessage(message: ThreadMessage): boolean {
+  return canUserModifyComment(message, currentUserLogin);
+}
 
 // ── Pending (unsynced) reply detection ────────────────────────────────────
 // A reply is "pending" once submitted but before the sync loop has pushed it
@@ -54,7 +71,7 @@ const pendingReply = $derived.by((): ThreadMessage | null => {
   if (isPending) return null;
   for (let i = messages.length - 1; i > 0; i--) {
     const m = messages[i];
-    if (m && m.externalId === null) return m;
+    if (m && canModifyMessage(m)) return m;
   }
   return null;
 });
@@ -63,6 +80,7 @@ const pendingReply = $derived.by((): ThreadMessage | null => {
 
 let editingMessageId = $state<string | null>(null);
 let editBody = $state("");
+let isPushing = $state(false);
 
 function startEdit(msg: ThreadMessage): void {
   editingMessageId = msg.id;
@@ -83,10 +101,29 @@ function cancelEdit(): void {
   editingMessageId = null;
 }
 
-function focusOnMount(node: HTMLTextAreaElement) {
-  node.focus();
-  node.setSelectionRange(node.value.length, node.value.length);
+async function pushToGitHub(): Promise<void> {
+  if (!onPush || isPushing) return;
+  isPushing = true;
+  try {
+    await onPush();
+  } finally {
+    isPushing = false;
+  }
 }
+
+const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
+  function resize(): void {
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }
+
+  resize();
+  node.focus({ preventScroll: true });
+  node.setSelectionRange(node.value.length, node.value.length);
+  node.addEventListener("input", resize);
+
+  return () => node.removeEventListener("input", resize);
+};
 </script>
 
 <div
@@ -113,7 +150,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 				<span class="timestamp">{formatRelativeTime(msg.createdAt)}</span>
 			</div>
 
-			{#if isPending && i === 0}
+			{#if canModifyMessage(msg)}
 				{#if editingMessageId === msg.id}
 					<div class="msg-edit">
 						<textarea
@@ -124,7 +161,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 								if (e.key === 'Escape') cancelEdit();
 								else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit();
 							}}
-							use:focusOnMount
+							{@attach autoSizeEditTextarea}
 						></textarea>
 						<div class="edit-actions">
 							<button class="edit-save-btn" onclick={saveEdit} disabled={!editBody.trim()}>Save</button>
@@ -133,7 +170,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					</div>
 				{:else}
 					<div
-						class="msg-body msg-body--editable prose"
+						class="msg-body msg-body--editable prose prose-sm prose-dense"
 						role="button"
 						tabindex="0"
 						title="Click to edit"
@@ -142,22 +179,12 @@ function focusOnMount(node: HTMLTextAreaElement) {
 					>{@html renderMarkdown(msg.body)}</div>
 				{/if}
 			{:else}
-				<div class="msg-body prose">{@html renderMarkdown(msg.body)}</div>
+				<div class="msg-body prose prose-sm prose-dense">{@html renderMarkdown(msg.body)}</div>
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
 					<div class="suggestion-label">
-						<svg
-							width="11"
-							height="11"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-						>
-							<rect width="10" height="10" x="2" y="2" rx="2" />
-							<path d="m7 13 3 3 7-7" />
-						</svg>
+						<CheckSquare size={11} />
 						Code suggestion
 					</div>
 					<pre class="suggestion-code">{msg.codeSuggestion}</pre>
@@ -182,17 +209,27 @@ function focusOnMount(node: HTMLTextAreaElement) {
 	{/if}
 
 	<div class="thread-footer">
+		{#if canPushThread}
+			<button
+				class="footer-link footer-link--send"
+				onclick={pushToGitHub}
+				disabled={isPushing}
+			>
+				<PaperPlaneTilt size={12} aria-hidden="true" />
+				{isPushing ? 'Sending…' : 'Send to GitHub'}
+			</button>
+		{/if}
 		{#if !isResolved && onReply}
 			<button
 				class="footer-link"
 				class:footer-link--active={isReplying}
 				onclick={onReply}
 			>
-				<CornerDownLeft size={12} aria-hidden="true" />
+				<ArrowElbowDownLeft size={12} aria-hidden="true" />
 				{isReplying ? 'Cancel' : 'Add reply...'}
 			</button>
 		{/if}
-		{#if isPending && onDiscard}
+		{#if canDiscardThread && onDiscard}
 			<button
 				class="footer-link footer-link--danger"
 				onclick={onDiscard}
@@ -217,16 +254,7 @@ function focusOnMount(node: HTMLTextAreaElement) {
 				onclick={onCollapse}
 				aria-label="Collapse thread"
 			>
-				<svg
-					width="13"
-					height="13"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-				>
-					<polyline points="18 15 12 9 6 15" />
-				</svg>
+				<CaretUp size={13} />
 			</button>
 		{/if}
 	</div>
@@ -276,67 +304,14 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		margin-left: auto;
 	}
 
+	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	   keeps long unbroken tokens from overflowing the thread column. */
 	.msg-body {
-		font-size: 13px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
 		word-break: break-word;
 	}
 
-	.msg-body :global(p) {
-		margin: 0 0 6px;
-	}
-	.msg-body :global(p:last-child) {
-		margin-bottom: 0;
-	}
-	.msg-body :global(strong) {
-		font-weight: 600;
-		color: var(--color-text-primary);
-	}
-	.msg-body :global(em) {
-		font-style: italic;
-	}
-	.msg-body :global(code) {
-		font-family: var(--font-mono, ui-monospace, monospace);
-		font-size: 0.85em;
-		background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-	.msg-body :global(ul),
-	.msg-body :global(ol) {
-		margin: 4px 0 6px;
-		padding-left: 1.4em;
-	}
-	.msg-body :global(li) {
-		margin-bottom: 2px;
-	}
-	.msg-body :global(pre) {
-		background: var(--color-bg-tertiary);
-		padding: 8px 10px;
-		border-radius: 4px;
-		overflow-x: auto;
-		font-size: 12px;
-		margin: 6px 0;
-	}
-	.msg-body :global(pre code) {
-		background: transparent;
-		padding: 0;
-		font-size: inherit;
-	}
-	.msg-body :global(blockquote) {
-		margin: 4px 0;
-		padding: 6px 10px;
-		border: 1px solid var(--color-border);
-		background: color-mix(in srgb, var(--color-text-muted) 4%, transparent);
-		border-radius: 6px;
-		color: var(--color-text-muted);
-	}
-	.msg-body :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.msg-body` only owns its base text density. */
 
 	.suggestion-block {
 		margin-top: 8px;
@@ -412,6 +387,16 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		text-underline-offset: 2px;
 	}
 
+	.footer-link:disabled {
+		cursor: default;
+		opacity: 0.6;
+		text-decoration: none;
+	}
+
+	.footer-link--send {
+		font-weight: 500;
+	}
+
 	.footer-link--muted {
 		color: var(--color-text-muted);
 	}
@@ -474,7 +459,11 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
 	.msg-body--editable:hover {
-		background: var(--color-bg-tertiary);
+		background: color-mix(
+			in srgb,
+			var(--color-bg-tertiary) 55%,
+			var(--color-thread-bg)
+		);
 	}
 	.msg-edit {
 		display: flex;
@@ -492,7 +481,8 @@ function focusOnMount(node: HTMLTextAreaElement) {
 		font-size: 13px;
 		line-height: 1.6;
 		color: var(--color-text-primary);
-		resize: vertical;
+		resize: none;
+		overflow-y: hidden;
 		outline: none;
 		box-sizing: border-box;
 		transition: box-shadow var(--duration-quick) var(--ease-out-expo);

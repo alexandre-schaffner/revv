@@ -1,18 +1,60 @@
-export type { Activity, ActivityKind } from "./activity";
-export { classifyTool, normalizeToolName } from "./activity";
 export type {
+  AcpAgentCapabilities,
+  AcpAgentDescriptor,
+  AcpAgentIconKey,
+  AcpAgentId,
+  AcpAgentKeychainAuth,
+  AcpAgentModel,
+  AgentStatus,
+  AgentStatusReport,
+  ThinkingEffortSetting,
+} from "./acp-agents";
+export {
+  ACP_AGENT_IDS,
+  ACP_AGENTS,
+  AUTO_SENTINEL,
+  clampThinkingEffort,
+  getAcpAgent,
+  getAcpAgentDefaultModel,
+  getAgentCapabilities,
+  getAgentKeychainAuth,
+  getModelThinkingEfforts,
+  isAcpAgentId,
+  isAutoSentinel,
+  resolveThinkingEffort,
+  THINKING_EFFORT_ORDER,
+} from "./acp-agents";
+export type { Activity, ActivityKind, ActivityResult, ToolDiffOutput } from "./activity";
+export {
+  classifyTool,
+  DIFF_OUTPUT_SENTINEL,
+  decodeToolDiffOutput,
+  encodeToolDiffOutput,
+  normalizeToolName,
+} from "./activity";
+export type {
+  CacheSigningMode,
   GeneratedBy,
   GenerationProviderConfig,
   WalkthroughSnapshotBlock,
   WalkthroughSnapshotIssue,
   WalkthroughSnapshotRating,
   WalkthroughSnapshotSemanticStep,
-  WalkthroughSnapshotV1,
+  WalkthroughSnapshotV2,
 } from "./cache";
-export { CACHE_METADATA_KEYS, CACHE_SCHEMA_VERSION, cacheObjectKey } from "./cache";
+export {
+  CACHE_METADATA_KEYS,
+  CACHE_SCHEMA_VERSION,
+  cacheObjectKey,
+  cacheSigningMessage,
+} from "./cache";
 export type {
+  ChatAttachment,
+  ChatAttachmentMetadata,
   ChatPlan,
   ChatQuestion,
+  ChatSessionCommand,
+  ChatSessionContext,
   ChatStreamFrame,
   ChatSubagentInvocation,
   ChatTask,
@@ -22,19 +64,121 @@ export type {
   NormalizedQuestionOption,
   QuestionStatus,
 } from "./chat";
-export type { UpdateChannel } from "./constants";
+export {
+  attachmentByteSize,
+  attachmentsTotalTooLargeMessage,
+  attachmentTooLargeMessage,
+  formatAttachmentSize,
+  MAX_CHAT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENTS_COUNT,
+  MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
+} from "./chat";
+export type { CodeownersFile, CodeownersRule } from "./codeowners";
+export {
+  CODEOWNERS_PATHS,
+  codeownersFor,
+  codeownersPatternRegex,
+  parseCodeowners,
+} from "./codeowners";
+export {
+  type CommentPermissionMessage,
+  canUserModifyComment,
+  type DraftReviewMessage,
+  isPublishableDraftComment,
+} from "./comment-permissions";
+export type { AppChannel, UpdateChannel } from "./constants";
 export {
   API_BASE_URL,
   API_PORT,
+  APP_CHANNELS,
   AUTO_FETCH_DEFAULT_INTERVAL,
+  COLLECTOR_BASE_URL,
+  COLLECTOR_PORT,
+  DEFAULT_APP_CHANNEL,
   DEFAULT_UPDATE_CHANNEL,
+  DEV_API_PORT,
   THREAD_SYNC_INTERVAL_SECONDS,
   UPDATE_CHANNELS,
   UPDATE_STABLE_COOLDOWN_MS,
 } from "./constants";
+export type {
+  ActorOption,
+  CheckAnnotation,
+  CheckDetails,
+  CheckLogLine,
+  CiAccess,
+  CiCheck,
+  CiCheckBucket,
+  CiRollup,
+  CiRollupState,
+  ConversationActor,
+  ConversationWrite,
+  ConversationWriteResult,
+  LinkedIssue,
+  PrConversation,
+  PrConversationResponse,
+  PrLabel,
+  PrMilestone,
+  PrStackEntry,
+  ReviewDecision,
+  ReviewerEntry,
+  ReviewerOptions,
+  ReviewVerdict,
+  StackEntryStatus,
+  TeamOption,
+  TimelineComment,
+  TimelineCommit,
+  TimelineEvent,
+  TimelineItem,
+  TimelineReview,
+} from "./conversation";
+export { hydrateConversationAvatars } from "./conversation";
 export type { ServerEventMessage, WalkthroughEventEnvelope } from "./events";
+export * from "./events";
+export type {
+  ExternalAgentProvider,
+  ExternalIntegrationConnectResult,
+  ExternalIntegrationStatus,
+} from "./external-integrations";
+export {
+  EXTERNAL_AGENT_PROVIDER_NAMES,
+  EXTERNAL_AGENT_PROVIDERS,
+  isExternalAgentProvider,
+} from "./external-integrations";
+export { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "./github-client-id";
+export type {
+  HunkRange,
+  HunkScanEnsureResult,
+  HunkScanRow,
+  HunkScanSnapshot,
+  HunkScanStatus,
+  HunkSkipReason,
+  HunkSmell,
+  LeadVerdict,
+  WalkthroughLead,
+} from "./hunk-scan";
+export {
+  flaggedHunkSmells,
+  HUNK_SCAN_STATUSES,
+  HUNK_SKIP_REASONS,
+  HUNK_SMELL_FLOORS,
+  HUNK_SMELL_META,
+  HUNK_SMELLS,
+  hunkKey,
+  hunkNewEnd,
+  isHunkRowPending,
+  isHunkScanFinished,
+} from "./hunk-scan";
 export { guessImageContentType, isImagePath } from "./images";
+export type { JevSettings } from "./jev-settings";
+export { DEFAULT_JEV_SETTINGS } from "./jev-settings";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
+export {
+  detectMentionTrigger,
+  extractMentionTokens,
+  MENTION_PATH_PATTERN,
+  type MentionTrigger,
+} from "./mentions";
 export type {
   NewPrCommit,
   NewPrMessage,
@@ -42,42 +186,89 @@ export type {
   NewPrSessionSnapshot,
   NewPrSessionStatus,
 } from "./new-pr-session";
+export type { GitPatchHeaderFile, PrDiffRenderOptions } from "./pierre-diffs";
+export {
+  buildGitPatchHeader,
+  PIERRE_DIFF_PRELOAD_LANGS,
+  PIERRE_THEME,
+  PIERRE_THEMES,
+  PR_DIFF_RENDER_OPTIONS,
+} from "./pierre-diffs";
+export type { PullRequestLocator } from "./pr-deep-link";
+export { buildPullRequestDeepLink, parsePullRequestDeepLink } from "./pr-deep-link";
+export { isPrLensFenceLang, toGraphDocInput } from "./prlens";
 export type {
   ProjectRecap,
   ProjectRecapStatus,
   ProjectRecapSummary,
   RecapPeriod,
+  RecapPrEntry,
   RecapStreamEvent,
   RecapStreamPhase,
   RecapSummaryStats,
+  RecapThemeSummary,
 } from "./recap";
-export { EMPTY_RECAP_STATS } from "./recap";
+export { EMPTY_RECAP_STATS, RECAP_EMPTY_WINDOW_LEDE } from "./recap";
 export type {
-  AgentAvailability,
-  AiAgent,
+  RepoActivity,
+  RepoActivityResponse,
+  RepoActivityWeek,
+  RepoPrFlow,
+} from "./repo-activity";
+export type { SettingsUpdate } from "./settings-update";
+export { mergeSettingsUpdate } from "./settings-update";
+export type {
+  GitHubStackLayerFields,
+  LayerMergeState,
+  PrStackDetail,
+  RestackVerdict,
+  StackBrief,
+  StackBriefLayer,
+  StackBriefStatus,
+  StackFileOverlap,
+  StackHeadline,
+  StackLayer,
+  StackLayerLink,
+  StackLayerReview,
+  StackMergeLayerState,
+  StackMergeRunLayer,
+  StackReviewScope,
+  StackReviewStarted,
+  WalkthroughStackSnapshot,
+} from "./stacks";
+export {
+  classifyLayerMergeState,
+  isOpenLayer,
+  MERGEABLE_STATES,
+  stackKey,
+} from "./stacks";
+export type {
   AuthorRole,
   CloneStatus,
   CommentThread,
-  ContextWindow,
   DiffViewMode,
   HunkDecision,
   HunkDecisionType,
   InstallEvent,
   Issue,
   IssueState,
+  LoginEvent,
   MergeEligibility,
   MergeMethod,
   MessageType,
   Org,
+  PrStackPlace,
   PullRequest,
   PullRequestStatus,
   RecapAgentChoice,
   Repository,
+  ReviewMode,
   ReviewSession,
   ReviewStatus,
   SessionStatus,
   SyncChange,
   SyncChangeKind,
+  Team,
   ThemePreference,
   ThinkingEffort,
   ThreadMessage,
@@ -87,5 +278,5 @@ export type {
   UserRole,
   UserSettings,
 } from "./types";
+export { loginsMatch, REVIEW_MODE, REVIEW_MODES, reviewModeFor, sameStack } from "./types";
 export * from "./walkthrough";
-export type { WsClientMessage, WsServerMessage } from "./ws";

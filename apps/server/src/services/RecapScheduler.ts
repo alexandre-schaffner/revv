@@ -18,9 +18,11 @@
 // transitions go through ProjectRecapJobs (single-writer per invariant #11).
 
 import type { RecapPeriod } from "@revv/shared";
-import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { DbService } from "./Db";
 import { ProjectRecapService } from "./ProjectRecap";
 import { ProjectRecapJobs } from "./ProjectRecapJobs";
@@ -67,6 +69,29 @@ export function startOfUtcIsoWeek(d: Date): Date {
 }
 
 /**
+ * True when `periodStart` names the window that is still open right now —
+ * today for daily, the current ISO week for weekly. The one definition of
+ * "current period" on the server; callers branch on it wherever a live
+ * window and a closed one must behave differently (rolling end boundary,
+ * empty-window handling).
+ *
+ * The web mirror is `isCurrentPeriod` in
+ * `apps/web/src/lib/components/recaps/period-window.ts` — same semantics on
+ * the other side of the wire. Keep the two in step.
+ */
+export function windowIsCurrent(
+  period: RecapPeriod,
+  periodStart: string,
+  now: Date = new Date(),
+): boolean {
+  const start = new Date(periodStart);
+  if (period === "daily") {
+    return startOfUtcDay(start).getTime() === startOfUtcDay(now).getTime();
+  }
+  return startOfUtcIsoWeek(start).getTime() === startOfUtcIsoWeek(now).getTime();
+}
+
+/**
  * Compute the correct period boundaries when regenerating a recap.
  * If the recap's periodStart matches the current rolling window (today /
  * this week), return a rolling window ending at `now`. Otherwise return
@@ -78,21 +103,12 @@ export function canonicalRecapBoundaries(
   now: Date = new Date(),
 ): { periodStart: string; periodEnd: string } {
   const start = new Date(periodStart);
-  if (period === "daily") {
-    const canonicalStart = startOfUtcDay(start);
-    const todayStart = startOfUtcDay(now);
-    if (canonicalStart.getTime() === todayStart.getTime()) {
-      return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
-    }
-    const end = new Date(canonicalStart.getTime() + ONE_DAY_MS);
-    return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
-  }
-  const canonicalStart = startOfUtcIsoWeek(start);
-  const thisWeekStart = startOfUtcIsoWeek(now);
-  if (canonicalStart.getTime() === thisWeekStart.getTime()) {
+  const canonicalStart = period === "daily" ? startOfUtcDay(start) : startOfUtcIsoWeek(start);
+  if (windowIsCurrent(period, periodStart, now)) {
     return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
   }
-  const end = new Date(canonicalStart.getTime() + ONE_WEEK_MS);
+  const span = period === "daily" ? ONE_DAY_MS : ONE_WEEK_MS;
+  const end = new Date(canonicalStart.getTime() + span);
   return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
 }
 
@@ -139,6 +155,24 @@ function enumerateWeeklyPeriods(
   return result;
 }
 
+type ClosedDay = { readonly periodEnd: string };
+
+function isLatestClosedDay(day: ClosedDay, now: Date): boolean {
+  return new Date(day.periodEnd).getTime() === startOfUtcDay(now).getTime();
+}
+
+function writtenBeforeDayClosed(day: ClosedDay, generatedAt: string): boolean {
+  return new Date(generatedAt).getTime() < new Date(day.periodEnd).getTime();
+}
+
+export function latestDayRecapPredatesClose(
+  day: ClosedDay,
+  generatedAt: string,
+  now: Date = new Date(),
+): boolean {
+  return isLatestClosedDay(day, now) && writtenBeforeDayClosed(day, generatedAt);
+}
+
 // ── Service tag ──────────────────────────────────────────────────────────────
 
 type RecapSchedulerService = {
@@ -152,10 +186,9 @@ type RecapSchedulerService = {
   readonly checkNow: (period: RecapPeriod) => Effect.Effect<void>;
 };
 
-export class RecapScheduler extends Context.Tag("RecapScheduler")<
-  RecapScheduler,
-  RecapSchedulerService
->() {}
+export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedulerService>()(
+  "RecapScheduler",
+) {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -172,8 +205,8 @@ export const RecapSchedulerLive = Layer.effect(
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    const dailyFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
-    const weeklyFiberRef = yield* Ref.make<Fiber.RuntimeFiber<number, never> | null>(null);
+    const dailyLoop = yield* makeRestartableLoop;
+    const weeklyLoop = yield* makeRestartableLoop;
 
     // True until the first tick after boot completes. Cold-start backfills
     // use the wider lookback; subsequent ticks only look at the current
@@ -207,19 +240,14 @@ export const RecapSchedulerLive = Layer.effect(
           for (const window of candidates) {
             const existing = yield* provideDb(
               recapService.findActiveForPeriod(repo.id, period, window.periodStart),
-            ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+            ).pipe(Effect.catch(() => Effect.succeed(null)));
 
             // ── Daily stale-check ────────────────────────────────────────
-            // If a daily recap for this window was generated today, it's
-            // fresh — skip. If it was generated before today, it's stale
-            // (new PRs may have merged since) — regenerate.
             if (existing && period === "daily") {
-              const generatedAt = new Date(existing.generatedAt);
-              const todayStart = startOfUtcDay(now);
-              if (generatedAt.getTime() >= todayStart.getTime()) {
+              if (!latestDayRecapPredatesClose(window, existing.generatedAt, now)) {
                 debug(
                   "recap-scheduler",
-                  `skip fresh daily recap for ${repo.fullName} ${window.periodStart}`,
+                  `keep daily recap for ${repo.fullName} ${window.periodStart}`,
                 );
                 continue;
               }
@@ -235,7 +263,7 @@ export const RecapSchedulerLive = Layer.effect(
                   periodEnd: window.periodEnd,
                 })
                 .pipe(
-                  Effect.catchAllCause((cause) =>
+                  Effect.catchCause((cause) =>
                     Effect.sync(() => {
                       logError(
                         "recap-scheduler",
@@ -256,11 +284,13 @@ export const RecapSchedulerLive = Layer.effect(
             // work" recap; only a completely silent repo earns the gap.
             const windowed = yield* provideDb(
               prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
-            ).pipe(Effect.catchAll(() => Effect.succeed([] as never[])));
+            ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
             if (windowed.length === 0) {
-              const openPrs = yield* provideDb(prService.listOpenPrsWithWalkthroughs(repo.id)).pipe(
-                Effect.catchAll(() => Effect.succeed([] as never[])),
-              );
+              // Same window boundary the job will use, so this pre-check and
+              // `buildJobBody`'s empty-window guard agree on "non-empty".
+              const openPrs = yield* provideDb(
+                prService.listOpenPrsAsOfWindow(repo.id, window.periodEnd),
+              ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
               if (openPrs.length === 0) continue;
             }
 
@@ -277,7 +307,7 @@ export const RecapSchedulerLive = Layer.effect(
                 trigger: "scheduler",
               })
               .pipe(
-                Effect.catchAllCause((cause) =>
+                Effect.catchCause((cause) =>
                   Effect.sync(() => {
                     logError(
                       "recap-scheduler",
@@ -292,32 +322,18 @@ export const RecapSchedulerLive = Layer.effect(
 
         yield* Ref.set(backfilledRef, true);
       }).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
             logError("recap-scheduler", `sweep ${period} failed:`, Cause.pretty(cause));
           }),
         ),
       );
 
-    const startFiberFor = (period: RecapPeriod, ref: typeof dailyFiberRef): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const existing = yield* Ref.get(ref);
-        if (existing !== null) return;
-        const schedule = Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES));
-        const fiber: Fiber.RuntimeFiber<number, never> = yield* Effect.fork(
-          sweepPeriod(period).pipe(Effect.repeat(schedule)),
-        );
-        yield* Ref.set(ref, fiber);
-      });
-
-    const stopFiberRef = (ref: typeof dailyFiberRef): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const fiber = yield* Ref.get(ref);
-        if (fiber !== null) {
-          yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-          yield* Ref.set(ref, null);
-        }
-      });
+    const sweepLoop = (period: RecapPeriod) =>
+      sweepPeriod(period).pipe(
+        withGitHubOrigin(`recap:sweep:${period}`),
+        Effect.repeat(Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES))),
+      );
 
     return {
       start: () =>
@@ -330,14 +346,14 @@ export const RecapSchedulerLive = Layer.effect(
             debug("recap-scheduler", "recap disabled — not starting fibers");
             return;
           }
-          if (enabled.daily) yield* startFiberFor("daily", dailyFiberRef);
-          if (enabled.weekly) yield* startFiberFor("weekly", weeklyFiberRef);
+          if (enabled.daily) yield* dailyLoop.start(sweepLoop("daily"));
+          if (enabled.weekly) yield* weeklyLoop.start(sweepLoop("weekly"));
         }),
 
       stop: () =>
         Effect.gen(function* () {
-          yield* stopFiberRef(dailyFiberRef);
-          yield* stopFiberRef(weeklyFiberRef);
+          yield* dailyLoop.stop;
+          yield* weeklyLoop.stop;
         }),
 
       checkNow: (period) => sweepPeriod(period),

@@ -5,10 +5,8 @@
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
-import { resolveAgent } from "../services/Ai";
 import {
   ChatChangesPushService,
   ChatStreamingConflictError,
@@ -21,7 +19,7 @@ import {
   RefAlreadyExistsError,
 } from "../services/ChatChangesPush";
 import { ChatSessionService } from "../services/ChatSession";
-import { DbService } from "../services/Db";
+import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -52,41 +50,34 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const agent = yield* settingsService.resolveChatAgentId();
 
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
-
-            if (!pr.headSha) return null;
-            const row = yield* chatSessions.find(pr.id, agent, pr.headSha);
-            if (!row) return null;
-            return row;
+            return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
         );
 
         if (!result) {
-          return jsonResponse({ branchName: null, prHeadSha: null, commits: [] }, 200);
+          return jsonResponse({ branchName: null, baseSha: null, commits: [] }, 200);
         }
 
-        const commits = await listProposedCommits(result.worktreePath, result.prHeadSha).catch(
-          (err) => {
-            logError(
-              "chat",
-              "listProposedCommits failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-            return [] as ProposedCommit[];
-          },
-        );
+        // One resolved baseline, shared with the push/rebuild/discard paths —
+        // the commits listed here are exactly the ones those paths act on.
+        const { row, baseSha } = result;
+
+        const commits = await listProposedCommits(row.worktreePath, baseSha).catch((err) => {
+          logError(
+            "chat",
+            "listProposedCommits failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+          return [] as ProposedCommit[];
+        });
 
         return jsonResponse(
           {
-            branchName: result.branchName,
-            prHeadSha: result.prHeadSha,
+            branchName: row.branchName,
+            baseSha,
             commits,
           },
           200,
@@ -108,17 +99,10 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const agent = yield* settingsService.resolveChatAgentId();
 
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
-
-            if (!pr.headSha) return null;
-            return yield* chatSessions.find(pr.id, agent, pr.headSha);
+            return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
 
@@ -159,17 +143,10 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const agent = yield* settingsService.resolveChatAgentId();
 
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
-
-            if (!pr.headSha) return null;
-            return yield* chatSessions.find(pr.id, agent, pr.headSha);
+            return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
 
@@ -555,13 +532,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveChatAgentId();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -638,28 +610,28 @@ export const chatProposedChangesRoutes = new Elysia()
       }
 
       try {
-        const row = await AppRuntime.runPromise(
+        const resolved = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
-            return yield* chatSessions.findLatestForPr(pr.id, agent);
+            const agent = yield* settingsService.resolveChatAgentId();
+            return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
         );
 
-        if (!row) {
+        if (!resolved) {
           ctx.set.status = 404;
           return { error: "No chat session found for this PR" };
         }
 
-        const { worktreePath, branchName, prHeadSha } = row;
+        // Rebuild onto the same baseline the display and push enumerations use.
+        // A stale session baseline here is destructive: the rebuild detaches at
+        // it and force-moves the branch, rewinding the agent branch to a PR head
+        // the PR left behind. See `resolveProposedBaseSha`.
+        const { worktreePath, branchName } = resolved.row;
+        const baseSha = resolved.baseSha;
 
         // Resolve full SHAs and build the drop set.
         const dropSet = new Set<string>();
@@ -672,9 +644,13 @@ export const chatProposedChangesRoutes = new Elysia()
           dropSet.add(full.trim());
         }
 
-        // List all proposed commits oldest-first.
+        // List all proposed commits oldest-first. Must mirror the display /
+        // push enumerations (PROPOSED_COMMIT_RANGE_FLAGS): first-parent +
+        // no-merges, so a `merge origin/main` in the worktree doesn't pull the
+        // entire base history into the rebuild (cherry-picking hundreds of
+        // unrelated commits onto the detached PR head).
         const listOut = await gitStdout(
-          ["rev-list", "--reverse", `${prHeadSha}..${branchName}`],
+          ["rev-list", "--reverse", ...PROPOSED_COMMIT_RANGE_FLAGS, `${baseSha}..${branchName}`],
           worktreePath,
           10_000,
         ).catch(() => null);
@@ -703,7 +679,7 @@ export const chatProposedChangesRoutes = new Elysia()
         }
         const savedAgentTip = oldAgentTip.trim();
 
-        // Rebuild the agent branch by checking out the prHeadSha as a detached
+        // Rebuild the agent branch by checking out the resolved baseline as a detached
         // HEAD then cherry-picking each keep commit in order. On any failure
         // we abort and restore the branch ref to its prior tip.
         const restoreOnFailure = async (): Promise<void> => {
@@ -713,7 +689,7 @@ export const chatProposedChangesRoutes = new Elysia()
         };
 
         try {
-          await gitStdout(["checkout", "--detach", prHeadSha], worktreePath, 15_000);
+          await gitStdout(["checkout", "--detach", baseSha], worktreePath, 15_000);
         } catch (err) {
           await restoreOnFailure();
           ctx.set.status = 500;
@@ -784,13 +760,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { db } = yield* DbService;
-
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveChatAgentId();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -851,16 +822,11 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const repoClone = yield* RepoCloneService;
-            const { db } = yield* DbService;
-
             const { pr, repo, token } = yield* prCtx.resolveBasic(
               ctx.params.prId,
               ctx.session.user.id,
             );
-            const settings = yield* withDb(db, settingsService.getSettings()).pipe(
-              Effect.orElseSucceed(() => ({ aiAgent: "opencode" }) as { aiAgent: string | null }),
-            );
-            const agent = resolveAgent(settings);
+            const agent = yield* settingsService.resolveChatAgentId();
 
             const row = yield* chatSessions.findLatestForPr(pr.id, agent);
             if (!row) return;

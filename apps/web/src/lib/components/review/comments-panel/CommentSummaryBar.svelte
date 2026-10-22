@@ -7,11 +7,11 @@
  *
  *   [Expand all] [Only with replies] [Only unselected] [Select all / Clear]
  */
-import ChevronsDownUp from "phosphor-svelte/lib/ArrowsInLineVertical";
-import ChevronsUpDown from "phosphor-svelte/lib/ArrowsOutLineVertical";
-import MessageSquare from "phosphor-svelte/lib/Chat";
+import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVertical";
+import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
+import Chat from "phosphor-svelte/lib/Chat";
 import Circle from "phosphor-svelte/lib/Circle";
-import Filter from "phosphor-svelte/lib/Funnel";
+import Funnel from "phosphor-svelte/lib/Funnel";
 
 interface Counts {
   unresolved: number;
@@ -35,7 +35,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
 <div class="summary-bar">
     <div class="summary-left">
         <span class="spec-icon" aria-hidden="true">
-            <MessageSquare size={14} weight="fill" />
+            <Chat size={14} />
         </span>
         <span class="spec-title">Comments</span>
 
@@ -71,9 +71,9 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
         >
             <span class="ctrl-icon" aria-hidden="true">
                 {#if expandAll === true}
-                    <ChevronsDownUp size={12} weight="fill" />
+                    <ArrowsInLineVertical size={12} />
                 {:else}
-                    <ChevronsUpDown size={12} weight="fill" />
+                    <ArrowsOutLineVertical size={12} />
                 {/if}
             </span>
             <span class="ctrl-label">{expandLabel}</span>
@@ -87,7 +87,7 @@ const expandLabel = $derived(expandAll === true ? "Collapse all" : "Expand all")
             title="Only with replies"
         >
             <span class="ctrl-icon" aria-hidden="true">
-                <Filter size={12} />
+                <Funnel size={12} weight={onlyWithReplies ? "fill" : "regular"} />
             </span>
             <span class="ctrl-label">Only with replies</span>
         </button>

@@ -38,7 +38,7 @@ export const chatPlans = sqliteTable(
     planMarkdown: text("plan_markdown").notNull(),
     // 'pending' | 'approved' | 'rejected' | 'superseded'
     status: text("status").notNull().default("pending"),
-    // 'claude' | 'opencode'
+    // Transport that produced the row: always 'acp'.
     source: text("source").notNull(),
     sequence: integer("sequence").notNull(),
     createdAt: text("created_at").notNull(),

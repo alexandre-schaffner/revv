@@ -9,7 +9,7 @@ import { newPrSessions } from "./new-pr-sessions";
  * `git log {branchName}` is authoritative. This table is a denormalised
  * journal so the UI can:
  *   - Render the commit list without shelling out to git on every refresh.
- *   - Keep `commit-recorded` WS deltas typed and replayable.
+ *   - Keep `commit-recorded` SSE deltas typed and replayable.
  *   - Detect already-committed work on resume (idempotency).
  *
  * `commit_sha` is unique per session — a re-emit of `commit_changes`

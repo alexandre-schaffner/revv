@@ -43,7 +43,6 @@ let cursorSide = $state<"additions" | "deletions" | null>(null);
 
 /** Visual-mode anchor line (start of selection). null outside visual mode. */
 let anchorLineIndex = $state<number | null>(null);
-let anchorSide = $state<"additions" | "deletions" | null>(null);
 
 /**
  * Total rendered line count. Set by DiffViewerInner after each render.
@@ -122,7 +121,6 @@ export function enterLineMode(totalLines: number): void {
     cursorSide = null;
   }
   anchorLineIndex = null;
-  anchorSide = null;
   activePanel = "diff-line";
 }
 
@@ -132,7 +130,6 @@ export function enterLineMode(totalLines: number): void {
  */
 export function enterVisualMode(): void {
   anchorLineIndex = cursorLineIndex;
-  anchorSide = cursorSide;
   activePanel = "diff-visual";
 }
 
@@ -142,7 +139,6 @@ export function enterVisualMode(): void {
  */
 export function exitVisualMode(): void {
   anchorLineIndex = null;
-  anchorSide = null;
   activePanel = "diff-line";
 }
 
@@ -197,5 +193,4 @@ function resetCursorState(): void {
   cursorLineIndex = 1;
   cursorSide = null;
   anchorLineIndex = null;
-  anchorSide = null;
 }

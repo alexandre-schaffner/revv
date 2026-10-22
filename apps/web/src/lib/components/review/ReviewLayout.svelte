@@ -28,7 +28,9 @@ import {
 } from "$lib/stores/review.svelte";
 import { setTopbarSubtitle } from "$lib/stores/topbar.svelte";
 import type { ReviewFile } from "$lib/types/review";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
+import FileFirstPass from "./FileFirstPass.svelte";
 import FileIssues from "./FileIssues.svelte";
 import FileViewer from "./FileViewer.svelte";
 import ImageDiffViewer from "./ImageDiffViewer.svelte";
@@ -240,7 +242,7 @@ function navigateFile(direction: 1 | -1) {
 
 function handleGlobalKeydown(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (isTextEditingKeyTarget(e)) return;
 
   const panel = getActivePanel();
 
@@ -468,7 +470,7 @@ const panel = $derived(getActivePanel());
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="relative flex h-full flex-col overflow-hidden bg-diff-bg">
+<div class="relative flex h-full flex-col overflow-hidden bg-bg-primary">
 	<!-- @pierre/diffs renderer -->
 	<div
 		class="diff-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none"
@@ -480,41 +482,49 @@ const panel = $derived(getActivePanel());
 		bind:this={diffScrollEl}
 		onscroll={handleDiffScroll}
 	>
-		{#if activeFile}
-			<div class="file-title-section" bind:this={fileTitleSectionEl}>
-				<h1 class="file-title">{activeFileName}</h1>
-			</div>
-			<FileIssues filePath={activeFile.path} />
-			{#if activeFileIsImage}
-				<ImageDiffViewer {prId} file={activeFile} />
+		{#if diffScrollEl}
+			{#if activeFile}
+				<div class="file-title-section" bind:this={fileTitleSectionEl}>
+					<h1 class="file-title">{activeFileName}</h1>
+				</div>
+				<FileIssues filePath={activeFile.path} />
+				<FileFirstPass {prId} filePath={activeFile.path} patch={activeFile.patch} />
+				{#if activeFileIsImage}
+					<ImageDiffViewer {prId} file={activeFile} />
+				{:else}
+					<DiffViewer
+						{prId}
+						file={activeFile}
+						onModeChange={(m) => setDiffMode(m)}
+						commentTrigger={pendingCommentTrigger}
+						scrollRoot={diffScrollEl}
+					/>
+				{/if}
+			{:else if showFileViewer && activeFilePath}
+				<!-- Title rendered by the layout (same as the diff path) so the
+				     file viewer fills the pane edge-to-edge — no inner padding,
+				     full-width gutter, identical font / sizing to the diff. -->
+				<div class="file-title-section" bind:this={fileTitleSectionEl}>
+					<h1 class="file-title">{activeFileName}</h1>
+				</div>
+				<FileViewer
+					path={activeFilePath}
+					content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
+					isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
+					size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
+					status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
+					errorMessage={repoFile.status === "error" ? repoFile.error : null}
+					scrollRoot={diffScrollEl}
+				/>
 			{:else}
 				<DiffViewer
-					file={activeFile}
+					{prId}
+					file={null}
 					onModeChange={(m) => setDiffMode(m)}
 					commentTrigger={pendingCommentTrigger}
+					scrollRoot={diffScrollEl}
 				/>
 			{/if}
-		{:else if showFileViewer && activeFilePath}
-			<!-- Title rendered by the layout (same as the diff path) so the
-			     file viewer fills the pane edge-to-edge — no inner padding,
-			     full-width gutter, identical font / sizing to the diff. -->
-			<div class="file-title-section" bind:this={fileTitleSectionEl}>
-				<h1 class="file-title">{activeFileName}</h1>
-			</div>
-			<FileViewer
-				path={activeFilePath}
-				content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
-				isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
-				size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
-				status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
-				errorMessage={repoFile.status === "error" ? repoFile.error : null}
-			/>
-		{:else}
-			<DiffViewer
-				file={null}
-				onModeChange={(m) => setDiffMode(m)}
-				commentTrigger={pendingCommentTrigger}
-			/>
 		{/if}
 	</div>
 
@@ -540,4 +550,3 @@ const panel = $derived(getActivePanel());
 		word-break: break-all;
 	}
 </style>
-

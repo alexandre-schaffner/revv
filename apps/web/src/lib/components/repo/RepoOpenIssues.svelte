@@ -6,7 +6,7 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { fetchOpenIssues, getOpenIssuesState } from "$lib/stores/issues.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { openExternal } from "$lib/utils/links";
+import { openExternal } from "$lib/utils/open-external";
 
 interface Props {
   repoId: string;
@@ -16,12 +16,9 @@ let { repoId }: Props = $props();
 
 const VISIBLE_LIMIT = 10;
 
-let fetched = false;
 $effect(() => {
-  if (!fetched && repoId) {
-    fetched = true;
-    void untrack(() => fetchOpenIssues(repoId));
-  }
+  const currentRepoId = repoId;
+  if (currentRepoId) void untrack(() => fetchOpenIssues(currentRepoId));
 });
 
 const state = $derived(getOpenIssuesState(repoId));

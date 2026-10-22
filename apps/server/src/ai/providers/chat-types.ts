@@ -14,12 +14,11 @@
 // invariant #13: agent-path parity). This file re-exports them for callers
 // that already import from `./chat-types` so the import sites don't churn.
 
-import type { Activity, ActivityKind, ChatTask, NormalizedQuestion } from "@revv/shared";
+import type { Activity, ChatTask, NormalizedQuestion } from "@revv/shared";
 
 // Re-export the canonical wire frame from shared.
 export type { ChatStreamFrame } from "@revv/shared";
-export { classifyTool, normalizeToolName } from "@revv/shared";
-export type { Activity, ActivityKind, NormalizedQuestion };
+export type { Activity, NormalizedQuestion };
 
 /**
  * Internal driver-side frame. Drivers emit these with provider-keyed ids
@@ -38,15 +37,24 @@ export type RawChatStreamFrame =
       readonly subagentProviderCallId?: string;
     } & Activity)
   | {
+      readonly kind: "activity-result";
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }
+  | {
+      readonly kind: "activity-input";
+      readonly callId: string;
+      readonly payload: unknown;
+    }
+  | {
       readonly kind: "task-list";
-      readonly source: "claude" | "opencode";
       readonly tasks: ReadonlyArray<ChatTask>;
     }
   | {
       readonly kind: "plan-presented";
       readonly providerPlanId: string;
       readonly markdown: string;
-      readonly source: "claude" | "opencode";
     }
   | {
       readonly kind: "subagent-start";
@@ -54,27 +62,23 @@ export type RawChatStreamFrame =
       readonly subagentType: string;
       readonly description: string;
       readonly prompt: string;
-      readonly source: "claude" | "opencode";
     }
   | {
       readonly kind: "subagent-end";
       readonly providerCallId: string;
       readonly result: string;
       readonly ok: boolean;
-      readonly source: "claude" | "opencode";
     }
   | {
       readonly kind: "user-question";
       readonly providerRequestId: string;
       readonly questions: ReadonlyArray<NormalizedQuestion>;
       readonly previewFormat: "markdown" | "html";
-      readonly source: "claude" | "opencode";
       readonly providerToolCallId?: string;
     }
   | {
       readonly kind: "user-question-resolved";
       readonly providerRequestId: string;
-      readonly source: "opencode";
       readonly status: "answered" | "rejected";
       readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
     };

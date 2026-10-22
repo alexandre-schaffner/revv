@@ -8,10 +8,7 @@ export {
   default as ToolActivityGroup,
   type ToolActivityGroupProps,
 } from "./ToolActivityGroup.svelte";
-export {
-  default as ToolActivityReveal,
-  type ToolActivityRevealProps,
-} from "./ToolActivityReveal.svelte";
+export { default as ToolCallCard, type ToolCallCardProps } from "./ToolCallCard.svelte";
 export { default as ToolContent, type ToolContentProps } from "./ToolContent.svelte";
 export { default as ToolHeader, type ToolHeaderProps } from "./ToolHeader.svelte";
 export { default as ToolInput, type ToolInputProps } from "./ToolInput.svelte";

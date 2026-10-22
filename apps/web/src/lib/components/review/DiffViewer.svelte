@@ -2,6 +2,7 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import { SvelteMap } from "svelte/reactivity";
 import { getUser } from "$lib/stores/auth.svelte";
+import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import {
   addThread,
   addThreadMessage,
@@ -13,12 +14,14 @@ import {
   getThreadMessages,
   getThreadsForFile,
   getThreadsVersion,
+  pushThreadToGitHub,
   reopenThread,
   resolveThread,
 } from "$lib/stores/review.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
-import type { ThreadMeta, TokenHoverInfo } from "./DiffViewerInner.svelte";
+import type { TokenHoverInfo } from "./DiffViewerInner.svelte";
 import DiffViewerInner from "./DiffViewerInner.svelte";
+import type { ThreadMeta } from "./pierre-diff-adapter";
 
 // ── Re-export for consumers ───────────────────────────────────────────────
 
@@ -34,10 +37,13 @@ export interface LineClickInfo {
 // ── Props ─────────────────────────────────────────────────────────────────
 
 interface Props {
+  /** The PR under review; its first pass marks the gutter. */
+  prId: string;
   file: ReviewFile | null;
   onLineClick?: (info: LineClickInfo) => void;
   onModeChange?: (mode: "unified" | "split") => void;
   onTokenHover?: (info: TokenHoverInfo | null) => void;
+  scrollRoot?: HTMLElement | null;
   /** When set, triggers opening a comment input at the given line range. */
   commentTrigger?: {
     startLine: number;
@@ -47,7 +53,15 @@ interface Props {
   } | null;
 }
 
-let { file, onLineClick, onModeChange, onTokenHover, commentTrigger = null }: Props = $props();
+let {
+  prId,
+  file,
+  onLineClick,
+  onModeChange,
+  onTokenHover,
+  commentTrigger = null,
+  scrollRoot = null,
+}: Props = $props();
 
 // ── Interaction state ─────────────────────────────────────────────────────
 
@@ -67,8 +81,12 @@ const pendingEndLines = new SvelteMap<string, number>();
 
 const mode = $derived(getDiffMode());
 
+const wrap = $derived(getDiffWrap());
+
 // Key changes → Svelte destroys + recreates DiffViewerInner (full lifecycle).
-const viewKey = $derived(file ? `${file.path}::${mode}` : "");
+// Wrap is keyed too: Pierre lays out overflow at render, and a prerendered
+// (scrolling) SSR body can't be re-flowed in place.
+const viewKey = $derived(file ? `${file.path}::${mode}::${wrap ? "wrap" : "scroll"}` : "");
 
 // Build annotations from current thread + pending input state
 const annotations = $derived.by((): DiffLineAnnotation<ThreadMeta>[] => {
@@ -255,13 +273,19 @@ async function handleApplySuggestion(threadId: string, suggestion: string) {
 async function handleEditMessage(threadId: string, messageId: string, body: string) {
   await editThreadMessage(threadId, messageId, body);
 }
+
+async function handlePushThread(threadId: string) {
+  await pushThreadToGitHub(threadId);
+}
 </script>
 
 {#if file}
 	{#key viewKey}
 		<DiffViewerInner
+			{prId}
 			{file}
 			{mode}
+			{wrap}
 			{annotations}
 			{threadMessages}
 			{threadById}
@@ -278,6 +302,8 @@ async function handleEditMessage(threadId: string, messageId: string, body: stri
 			{onTokenHover}
 			onApplySuggestion={handleApplySuggestion}
 			onEditMessage={handleEditMessage}
+			onPushThread={handlePushThread}
+			{scrollRoot}
 		/>
 	{/key}
 {/if}

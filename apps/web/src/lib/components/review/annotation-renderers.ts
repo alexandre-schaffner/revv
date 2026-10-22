@@ -51,6 +51,7 @@ export interface MountThreadArgs {
   onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
   onReplySubmit?: ((threadId: string, body: string) => void) | undefined;
   onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
+  onPushThread?: ((threadId: string) => void | Promise<void>) | undefined;
 }
 
 /**
@@ -74,6 +75,7 @@ export function mountAnnotationThread(host: HTMLElement, args: MountThreadArgs):
     onApplySuggestion,
     onReplySubmit,
     onEditMessage,
+    onPushThread,
   } = args;
 
   mountInto(host, AnnotationThread, {
@@ -91,5 +93,6 @@ export function mountAnnotationThread(host: HTMLElement, args: MountThreadArgs):
     onReplySubmit: (body: string) => onReplySubmit?.(threadId, body),
     onReplyDismiss: () => onReplyToggle?.(threadId),
     onEditMessage: (messageId: string, body: string) => onEditMessage?.(threadId, messageId, body),
+    onPush: onPushThread ? () => onPushThread(threadId) : undefined,
   });
 }

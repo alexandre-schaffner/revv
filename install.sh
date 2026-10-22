@@ -7,9 +7,9 @@
 #   Curl-piped (end user) — use the signed release installer instead:
 #     curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 #
-#   From a checkout (developer):
+#   From a checkout (developer, macOS):
 #     ./install.sh --dev       # toolchain + bun install, stop there
-#     ./install.sh             # full install (build .app, LaunchAgent, CLI)
+#     ./install.sh             # full install (release .app, LaunchAgent, CLI)
 #
 # Flags:
 #   --dev            Install the dev toolchain and project deps, nothing more.
@@ -20,13 +20,13 @@
 # Environment overrides:
 #   REVV_REPO_URL         Git URL (default: https://github.com/alexandre-schaffner/revv.git)
 #   REVV_BRANCH           Branch to clone (default: main)
+#   REVV_RELEASE_TAG      Release tag for the pre-built app bundle (default: latest nightly)
 #   REVV_INSTALL_DIR      Source install dir (default: ~/Library/Application Support/Revv/src)
 #   REVV_APP_DIR          App install dir  (default: /Applications, falls back to ~/Applications)
 #   REVV_AUTO_YES=1       Same as --yes
 #
 # Notes:
-#   • End-user install currently targets macOS only. --dev works on macOS and
-#     Linux (toolchain install + deps).
+#   • Revv is macOS-only; both the end-user install and --dev require macOS.
 #   • No .env prompts. Revv's GitHub OAuth App is bundled; secrets are
 #     generated locally and never leave the machine.
 # ──────────────────────────────────────────────────────────────
@@ -35,9 +35,11 @@ set -euo pipefail
 # ── Defaults ─────────────────────────────────────────────────
 REVV_REPO_URL="${REVV_REPO_URL:-https://github.com/alexandre-schaffner/revv.git}"
 REVV_BRANCH="${REVV_BRANCH:-main}"
+REVV_RELEASE_TAG="${REVV_RELEASE_TAG:-}"
 REVV_APP_DIR="${REVV_APP_DIR:-/Applications}"
 REVV_AUTO_YES="${REVV_AUTO_YES:-0}"
 MODE="user"   # user | dev
+REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
 # ── Parse args ───────────────────────────────────────────────
 for arg in "$@"; do
@@ -76,24 +78,44 @@ _step()    { printf "\n  ${_B}%s${_R}\n" "$*"; }
 
 _check_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+_latest_release_tag() {
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases/latest" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -1)"
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
+
+_latest_nightly_tag() {
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${REVV_GITHUB_REPO}/releases?per_page=30" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(nightly-[^"]*\)".*/\1/p' \
+    | head -1)"
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
+
 # ── Banner ────────────────────────────────────────────────────
-printf "\n"
-printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
-printf "  ${_CYAN}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}\n"
-printf "  ${_CYAN}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}\n"
-printf "  ${_CYAN}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}\n"
-printf "  ${_CYAN}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}\n"
-printf "  ${_CYAN}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}\n"
-printf "\n"
-if [[ "$MODE" == "dev" ]]; then
-  printf "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}\n"
-else
-  printf "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}\n"
+if [[ -z "${REVV_SKIP_BANNER:-}" ]]; then
+  printf "\n"
+  printf "  ${_CYAN}${_B}██████╗ ███████╗██╗   ██╗██╗   ██╗${_R}\n"
+  printf "  ${_CYAN}${_B}██╔══██╗██╔════╝██║   ██║██║   ██║${_R}\n"
+  printf "  ${_CYAN}${_B}██████╔╝█████╗  ██║   ██║██║   ██║${_R}\n"
+  printf "  ${_CYAN}${_B}██╔══██╗██╔══╝  ╚██╗ ██╔╝╚██╗ ██╔╝${_R}\n"
+  printf "  ${_CYAN}${_B}██║  ██║███████╗ ╚████╔╝  ╚████╔╝ ${_R}\n"
+  printf "  ${_CYAN}${_B}╚═╝  ╚═╝╚══════╝  ╚═══╝    ╚═══╝  ${_R}\n"
+  printf "\n"
+  if [[ "$MODE" == "dev" ]]; then
+    printf "  ${_D}AI-powered code review${_R}  ${_B}dev setup${_R}\n"
+  else
+    printf "  ${_D}AI-powered code review${_R}  ${_B}installer${_R}\n"
+  fi
+  printf "\n"
+  printf "  ${_D}"
+  printf '─%.0s' {1..54}
+  printf "${_R}\n\n"
 fi
-printf "\n"
-printf "  ${_D}"
-printf '─%.0s' {1..54}
-printf "${_R}\n\n"
 
 # ── Locate the checkout, cloning if necessary ─────────────────
 #
@@ -119,15 +141,11 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
 fi
 
 if [[ -z "$PROJECT_ROOT" ]]; then
-  # Curl-pipe path. For now we only support macOS bootstrap — Linux users
-  # should `git clone` manually and then run `./install.sh --dev`.
+  # Curl-pipe path. Revv is macOS-only.
   _step "Bootstrapping from curl"
   os="$(uname -s)"
   if [[ "$os" != "Darwin" ]]; then
-    _fail "Curl-piped install currently targets macOS only.
-On $os, clone the repo and run ./install.sh --dev manually:
-  git clone $REVV_REPO_URL
-  cd revv && ./install.sh --dev"
+    _fail "Revv is macOS-only; this installer requires macOS (detected $os)."
   fi
 
   # Xcode CLT (gives us git). Minimal inline copy of ensure_xcode_clt —
@@ -143,22 +161,43 @@ On $os, clone the repo and run ./install.sh --dev manually:
   fi
   _check_cmd git || _fail "git not found after Xcode CLT install."
 
+  clone_ref="$REVV_BRANCH"
+  if [[ "$MODE" == "user" && -z "${REVV_RELEASE_TAG:-}" ]]; then
+    REVV_RELEASE_TAG="$(_latest_nightly_tag || _latest_release_tag || true)"
+  fi
+  if [[ "$MODE" == "user" && -n "${REVV_RELEASE_TAG:-}" ]]; then
+    clone_ref="$REVV_RELEASE_TAG"
+    _info "Using release $REVV_RELEASE_TAG"
+  fi
+
   dest="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
   mkdir -p "$(dirname "$dest")"
   if [[ -d "$dest/.git" ]]; then
     _info "Existing clone at $dest — updating"
+    git -C "$dest" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
     git -C "$dest" fetch --all --prune
-    git -C "$dest" checkout "$REVV_BRANCH"
-    git -C "$dest" reset --hard "origin/$REVV_BRANCH"
+    git -C "$dest" fetch --tags --force
+    git -C "$dest" checkout "$clone_ref"
+    if [[ "$clone_ref" == "$REVV_BRANCH" ]]; then
+      git -C "$dest" reset --hard "origin/$REVV_BRANCH"
+    else
+      git -C "$dest" reset --hard "$clone_ref"
+    fi
   elif [[ -e "$dest" ]]; then
     _fail "$dest exists but is not a git clone. Move it aside and re-run."
   else
     _info "Cloning $REVV_REPO_URL ($REVV_BRANCH) → $dest"
     git clone --branch "$REVV_BRANCH" --depth 50 "$REVV_REPO_URL" "$dest"
+    if [[ "$clone_ref" != "$REVV_BRANCH" ]]; then
+      git -C "$dest" fetch --tags --force
+      git -C "$dest" checkout "$clone_ref"
+      git -C "$dest" reset --hard "$clone_ref"
+    fi
   fi
 
   _info "Re-executing installer from the cloned checkout"
   # Preserve flags for the re-exec — quote heavily, path may contain spaces.
+  unset REVV_SKIP_BANNER
   exec bash "$dest/install.sh" "$@"
 fi
 
@@ -172,61 +211,62 @@ source "$PROJECT_ROOT/scripts/lib/common.sh"
 info "Project root: $PROJECT_ROOT"
 
 # ── 1. Platform detect ────────────────────────────────────────
+# detect_platform fails hard on any non-macOS host — Revv is macOS-only.
 step "Detecting platform"
 detect_platform
 success "Platform: $PLATFORM ($ARCH) → target $RUST_TARGET"
-
-if [[ "$MODE" == "user" && "$PLATFORM" != "macos" ]]; then
-  fail "End-user install currently supports macOS only. On Linux, run:
-  ./install.sh --dev"
-fi
 
 # ── 2. Toolchain ──────────────────────────────────────────────
 step "Checking build toolchain"
 ensure_xcode_clt
 ensure_git
 ensure_bun
-ensure_rust
+if [[ "$MODE" == "dev" ]]; then
+  ensure_rust
+fi
 
 # Pick up bun/cargo in this shell if they were just installed.
 [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
 # shellcheck disable=SC1091
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
-# ── 3. Linux system libs (dev mode) ───────────────────────────
-if [[ "$PLATFORM" == "linux" ]]; then
-  step "Checking Linux system libraries"
-  missing=()
-  check_cmd pkg-config || missing+=("pkg-config")
-  if check_cmd pkg-config; then
-    for lib in webkit2gtk-4.1 gtk+-3.0 openssl; do
-      pkg-config --exists "$lib" 2>/dev/null || missing+=("$lib")
-    done
-  fi
-  if [[ ${#missing[@]} -eq 0 ]]; then
-    success "Tauri system libraries present"
-  else
-    warn "Missing system packages: ${missing[*]}"
-    cat <<'EOT'
-  On Ubuntu/Debian:
-    sudo apt update && sudo apt install -y \
-      build-essential curl wget file \
-      libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-      librsvg2-dev patchelf libayatana-appindicator3-dev
-EOT
-    warn "Install those first, then re-run this script."
-  fi
-fi
-
-# ── 4. Install project deps ───────────────────────────────────
+# ── 3. Install project deps ───────────────────────────────────
 step "Installing project dependencies"
 cd "$PROJECT_ROOT"
-info "Running bun install…"
-bun install
-success "Workspace dependencies installed"
+run_quiet "Installing workspace dependencies" bun install
 
-# ── 5. Dev mode exits here ────────────────────────────────────
+# Verify workspace deps actually landed in node_modules (Bun's workspace
+# hoisting can leave stale trees when the lockfile changes under a warm cache).
+_verify_workspace_deps() {
+  local missing=()
+  # Critical frontend deps that have caused runtime crashes when absent
+  [[ -d "node_modules/gsap" ]] || missing+=("gsap")
+  [[ -d "node_modules/phosphor-svelte" ]] || missing+=("phosphor-svelte")
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    warn "Some workspace dependencies are missing from node_modules: ${missing[*]}"
+    if confirm "Force a clean reinstall (rm -rf node_modules && bun install)?"; then
+      info "Clearing node_modules…"
+      rm -rf node_modules apps/web/node_modules apps/server/node_modules packages/shared/node_modules
+      run_quiet "Reinstalling workspace dependencies" bun install
+    else
+      warn "Continuing with incomplete node_modules — builds may fail"
+    fi
+  fi
+}
+_verify_workspace_deps
+
+# ── 4. Dev mode exits here ────────────────────────────────────
 if [[ "$MODE" == "dev" ]]; then
+  # Warn about stale dev DBs that can crash migrations on first dev-server start.
+  for stale_db in "apps/server/revv-dev.db" "revv-dev.db"; do
+    if [[ -f "$stale_db" ]]; then
+      warn "A dev database already exists at $stale_db."
+      info "If the server crashes with a migration error on startup, run:"
+      info "  make reset-db"
+      break
+    fi
+  done
+
   printf '\n%s%s' "$REVV_BOLD" "$REVV_GREEN"
   printf '  ┌─────────────────────────────────────┐\n'
   printf '  │   ✓  Dev environment ready          │\n'
@@ -234,8 +274,7 @@ if [[ "$MODE" == "dev" ]]; then
   printf '%s\n' "$REVV_RESET"
   printf '  %sStart developing:%s\n' "$REVV_BOLD" "$REVV_RESET"
   printf '    %s$%s make dev             %s# all services (web, server, Tauri)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '    %s$%s make dev-server      %s# API only (port 45678)%s\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
-  printf '    %s$%s make dev-web         %s# frontend only (port 5173)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
+  printf '    %s$%s make dev-server      %s# API only (port 45678)%s\n\n' "$REVV_DIM" "$REVV_RESET" "$REVV_DIM" "$REVV_RESET"
   printf '  On first server start, Revv generates an auth key at:\n'
   printf '    %s\n' "${REVV_AUTH_KEY:-$HOME/Library/Application Support/Revv/auth.key}"
   printf '  No .env file is required for normal use — see .env.example for\n'
@@ -243,62 +282,88 @@ if [[ "$MODE" == "dev" ]]; then
   exit 0
 fi
 
-# ── 6. User install: auth key, build, ship ────────────────────
+# ── 5. User install: auth key, build, ship ────────────────────
 
 step "Ensuring auth key"
 ensure_auth_key
 
-step "Building Revv.app (first run can take several minutes)"
-# We build only the .app, not the .dmg. The .dmg flow (create-dmg) is
-# fragile with paths containing spaces or parentheses and we copy the
-# .app to /Applications directly anyway.
-(
-  cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
-)
-(
-  cd "$PROJECT_ROOT" && bun run build
-)
-(
-  cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app
-)
+_resolve_install_release_tag() {
+  if [[ -n "${REVV_RELEASE_TAG:-}" ]]; then
+    printf '%s' "$REVV_RELEASE_TAG"
+    return 0
+  fi
+  local exact_tag
+  exact_tag="$(git -C "$PROJECT_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  if [[ -n "$exact_tag" ]]; then
+    printf '%s' "$exact_tag"
+    return 0
+  fi
+  return 1
+}
 
-bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
-bundle_app="$(find "$bundle_macos_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-if [[ -z "$bundle_app" ]]; then
-  bundle_app="$(find "$PROJECT_ROOT/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
-fi
-[[ -n "$bundle_app" && -d "$bundle_app" ]] \
-  || fail "Build finished but no .app was found under $bundle_macos_dir"
-app_name="$(basename "$bundle_app")"
-app_process_name="${app_name%.app}"
-success "Built $bundle_app"
+step "Installing pre-built Revv.app"
+release_tag="$(_resolve_install_release_tag || true)"
+if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
+  warn "Could not install a pre-built app bundle; falling back to a local build."
+  ensure_rust
+  step "Building Revv.app (first run can take several minutes)"
+  # We build only the .app, not the .dmg. The .dmg flow (create-dmg) is
+  # fragile with paths containing spaces or parentheses and we copy the
+  # .app to /Applications directly anyway.
+  (
+    cd "$PROJECT_ROOT/packages/shared" && bun run typecheck
+  )
+  (
+    cd "$PROJECT_ROOT" && bun run build
+  )
+  (
+    cd "$PROJECT_ROOT/apps/desktop" && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+  )
 
-step "Installing $app_name"
-# Prefer /Applications; fall back to ~/Applications if unwritable.
-if [[ -w "$REVV_APP_DIR" ]]; then
-  dest_app_dir="$REVV_APP_DIR"
+  bundle_macos_dir="$PROJECT_ROOT/apps/desktop/target/release/bundle/macos"
+  bundle_app="$(find "$bundle_macos_dir" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+  if [[ -z "$bundle_app" ]]; then
+    bundle_app="$(find "$PROJECT_ROOT/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  fi
+  [[ -n "$bundle_app" && -d "$bundle_app" ]] \
+    || fail "Build finished but no .app was found under $bundle_macos_dir"
+  app_name="$(basename "$bundle_app")"
+  app_process_name="${app_name%.app}"
+  success "Built $bundle_app"
+
+  step "Installing $app_name"
+  # Prefer /Applications; fall back to ~/Applications if unwritable.
+  if [[ -w "$REVV_APP_DIR" ]]; then
+    dest_app_dir="$REVV_APP_DIR"
+  else
+    warn "$REVV_APP_DIR is not writable — using ~/Applications"
+    dest_app_dir="$HOME/Applications"
+    mkdir -p "$dest_app_dir"
+  fi
+  dest_app="$dest_app_dir/$app_name"
+
+  # Clear quarantine before copying; it may still land on the destination
+  # but be robust and strip again after the copy.
+  xattr -cr "$bundle_app" 2>/dev/null || true
+
+  # Stop any running instance and unload the agent so we can swap the binary.
+  if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
+    launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
+  fi
+  osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
+  sleep 1
+
+  [[ -d "$dest_app" ]] && rm -rf "$dest_app"
+  cp -R "$bundle_app" "$dest_app"
+  xattr -cr "$dest_app" 2>/dev/null || true
+  success "Installed → $dest_app"
 else
-  warn "$REVV_APP_DIR is not writable — using ~/Applications"
-  dest_app_dir="$HOME/Applications"
-  mkdir -p "$dest_app_dir"
+  dest_app="$REVV_INSTALLED_APP"
+  app_name="$(basename "$dest_app")"
+  app_process_name="${app_name%.app}"
+  dest_app_dir="$(dirname "$dest_app")"
+  success "Installed → $dest_app"
 fi
-dest_app="$dest_app_dir/$app_name"
-
-# Clear quarantine before copying; it may still land on the destination
-# but be robust and strip again after the copy.
-xattr -cr "$bundle_app" 2>/dev/null || true
-
-# Stop any running instance and unload the agent so we can swap the binary.
-if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
-  launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
-fi
-osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
-sleep 1
-
-[[ -d "$dest_app" ]] && rm -rf "$dest_app"
-cp -R "$bundle_app" "$dest_app"
-xattr -cr "$dest_app" 2>/dev/null || true
-success "Installed → $dest_app"
 
 # Revv bundles a GitHub OAuth App registered on nocturlab.ghe.com — the host
 # and client_id defaults live in apps/server/src/config.ts and are baked into
@@ -328,7 +393,7 @@ else
   rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
 fi
 
-# ── 7. LaunchAgent ────────────────────────────────────────────
+# ── 6. LaunchAgent ────────────────────────────────────────────
 step "Installing background service (LaunchAgent)"
 mkdir -p "$(dirname "$REVV_LAUNCH_AGENT_PLIST")" "$REVV_LOG_DIR"
 bun_bin="$HOME/.bun/bin/bun"
@@ -361,7 +426,7 @@ for i in {1..30}; do
   fi
 done
 
-# ── 8. Install the management CLI ─────────────────────────────
+# ── 7. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
 mkdir -p "$REVV_SUPPORT_DIR"
 cat > "$REVV_SUPPORT_DIR/config" <<CFG
@@ -402,11 +467,11 @@ if ! printf '%s' ":$PATH:" | grep -q ":$REVV_CLI_DIR:"; then
   fi
 fi
 
-# ── 9. Launch the app ─────────────────────────────────────────
+# ── 8. Launch the app ─────────────────────────────────────────
 step "Launching Revv"
 open "$dest_app" || warn "Could not auto-launch. Open it from $dest_app_dir manually."
 
-# ── 10. Summary ───────────────────────────────────────────────
+# ── 9. Summary ────────────────────────────────────────────────
 printf '\n%s%s' "$REVV_BOLD" "$REVV_GREEN"
 printf '  ┌────────────────────────────────────────┐\n'
 printf '  │   ✓  Revv installed successfully       │\n'
@@ -420,7 +485,7 @@ printf '  %sAuth key:%s   %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_AUTH_KEY"
 printf '  %sLogs:%s       %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_LOG_DIR"
 printf '\n  %sManage with the revv CLI:%s\n' "$REVV_BOLD" "$REVV_RESET"
 printf '    %s$%s revv status      show app + server status\n'    "$REVV_DIM" "$REVV_RESET"
-printf '    %s$%s revv update      pull latest, rebuild, reinstall\n' "$REVV_DIM" "$REVV_RESET"
+printf '    %s$%s revv update      install the latest channel build\n' "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv restart     restart the API server\n'      "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv logs        tail server logs\n'            "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv uninstall   remove everything\n\n'         "$REVV_DIM" "$REVV_RESET"

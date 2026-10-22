@@ -1,75 +1,110 @@
 <script lang="ts">
+import type {
+  WalkthroughBlock,
+  WalkthroughReviewRound,
+  WalkthroughSemanticStep,
+} from "@revv/shared";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import Warning from "phosphor-svelte/lib/Warning";
 import { onDestroy, onMount, untrack } from "svelte";
-
-const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
-
-import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
-import { API_BASE_URL } from "@revv/shared";
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
-import CaretDown from "phosphor-svelte/lib/CaretDown";
-import AlertTriangle from "phosphor-svelte/lib/Warning";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import { toast } from "svelte-sonner";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { stackCitations } from "$lib/actions/stack-citations.svelte";
+import { API_BASE_URL } from "$lib/api/base-url";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { ThoughtsReveal } from "$lib/components/ai/thoughts";
 import { ToolActivityGroup } from "$lib/components/ai/tool";
+import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
+import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
+import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
+import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
+import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
+import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
+import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
-import { Dotmatrix } from "$lib/components/ui/dotmatrix/index.js";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
-import { gsapFadeY, tokens } from "$lib/motion";
-import { getRepositories } from "$lib/stores/prs.svelte";
+import { openStackLayer } from "$lib/stacks/open-layer";
+import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
+import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
+  getLoadedHeadSha,
   getPendingWalkthroughBlockJump,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
   getBlocks,
   getCloneInProgress,
   getCloneRepoId,
+  getDisplayedWalkthroughId,
+  getExplorationInputs,
+  getExplorationResults,
   getExplorationSteps,
   getGeneratedBy,
   getIsLiveGeneration,
   getIsStreaming,
-  getIsSuperseded,
   getIssues,
   getLastCompletedPhase,
+  getLastWalkthroughEventAt,
+  getLeads,
   getPhase,
   getProviderConfig,
   getRatings,
+  getReviewRounds,
   getRiskLevel,
+  getSelectedMode,
+  getSelectedReportId,
   getSemanticSteps,
   getSentiment,
   getSource,
   getStreamError,
   getStreamStartedAt,
   getSummary,
-  getThoughts,
   getTimeline,
+  getWalkthroughUiState,
   hasBlockAnimated,
   hasContainerAnimated,
   hasIssueAnimated,
   hydrateFromCache,
+  loadReviewRounds,
   markBlockAnimated,
   markContainerAnimated,
   markIssueAnimated,
   pollCloneUntilResolved,
   prepareEntry,
   regenerate,
+  resume,
+  selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
+import { type GroupableActivity, isExplorationActivity } from "$lib/utils/activity-groups";
 import {
-  type GroupableActivity,
-  groupActivityRuns,
-  isActivityGroup,
-  isExplorationActivity,
-} from "$lib/utils/activity-groups";
+  agentAuthRecoveryDescription,
+  isAgentAuthRecoveryError,
+} from "$lib/utils/agent-auth-recovery";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
+import { firstPassView } from "$lib/utils/hunk-scan";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
-import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
+import {
+  groupIssuesBySeverityWithIndex,
+  partitionBySignal,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
+import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
+import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
+import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
+import FirstPassPreview from "./first-pass/FirstPassPreview.svelte";
+import FirstPassRibbon from "./first-pass/FirstPassRibbon.svelte";
 import IssueCard from "./IssueCard.svelte";
+import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
+import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
 import WalkthroughSection from "./WalkthroughSection.svelte";
 
@@ -88,17 +123,43 @@ const riskLevel = $derived(getRiskLevel());
 const isStreaming = $derived(getIsStreaming());
 const streamError = $derived(getStreamError());
 const explorationSteps = $derived(getExplorationSteps());
-const thoughts = $derived(getThoughts());
+const explorationResults = $derived(getExplorationResults());
+const explorationInputs = $derived(getExplorationInputs());
 const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
-const issues = $derived(getIssues());
+const allIssues = $derived(getIssues());
+// Low-signal issues are split out, not dropped: the count is always
+// rendered and the disclosure holds the rest.
+const issueSignal = $derived(
+  partitionBySignal(allIssues, { hideLowSignal: shouldHideLowSignal(getSettings()) }),
+);
+const issues = $derived(issueSignal.shown);
+const filteredIssues = $derived(issueSignal.filtered);
 const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 const ratings = $derived(getRatings());
+// The first pass for the head on screen. It runs on its own, so it's here
+// before Generate; a stale walkthrough reviewed an older head, and its issues
+// can't confirm or miss this head's leads, so it shows none. Leads the review
+// took up mark their issue card; the rest fold under the issues.
+const firstPass = $derived.by(() => {
+  const scan = getHunkScan(prId, getLoadedHeadSha(prId));
+  const rows = getWalkthroughUiState().kind === "complete-stale" ? [] : scan.rows;
+  return firstPassView(rows, scan.status, allIssues, !isStreaming, getLeads());
+});
+let firstPassOpen = $state(false);
 const isLiveGeneration = $derived(getIsLiveGeneration());
 const cloneInProgress = $derived(getCloneInProgress());
 const cloneRepoId = $derived(getCloneRepoId());
 const repositories = $derived(getRepositories());
+const selectedMode = $derived(getSelectedMode(prId));
+// Merged-PR stamp. `getPrById` spans the open and archived lists, so this
+// keeps answering once the PR moves into the archive.
+const isMerged = $derived(getPrById(prId)?.status === "merged");
+const mergedAt = $derived(getPrById(prId)?.closedAt ?? undefined);
+const walkthroughComplete = $derived(getWalkthroughUiState().kind === "complete");
+const cloneRepo = $derived(cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null);
+const cloneError = $derived(cloneRepo?.cloneError ?? null);
 // Phase C markdown — rendered inline as its own sentiment card when set.
 // Replaces the legacy heuristic of sniffing markdown blocks for a `##
 // Overall Sentiment` heading.
@@ -106,8 +167,6 @@ const sentiment = $derived(getSentiment());
 const renderedSentiment = $derived(sentiment ? renderMarkdown(sentiment) : "");
 // Pointer into the A→B→C→D pipeline — drives the 4-dot header indicator.
 const lastCompletedPhase = $derived(getLastCompletedPhase());
-// Newer commit invalidated this walkthrough mid-render — show a banner.
-const superseded = $derived(getIsSuperseded());
 // Attribution + cache-source — drives the mono footer (matches the recap
 // detail footer pattern) shown under the walkthrough body. Leads with the
 // originating user when available, falls back to the model name, then trails
@@ -115,6 +174,66 @@ const superseded = $derived(getIsSuperseded());
 const generatedBy = $derived(getGeneratedBy());
 const providerConfig = $derived(getProviderConfig());
 const walkthroughSource = $derived(getSource());
+const reviewRounds = $derived(getReviewRounds(prId));
+const displayedWalkthroughId = $derived(getDisplayedWalkthroughId(prId));
+const selectedReportId = $derived(getSelectedReportId(prId));
+const reportRounds = $derived(reviewRounds?.rounds ?? []);
+const currentReportHeadSha = $derived(reviewRounds?.currentHeadSha ?? null);
+// Reports are picked from the commit history in the bottom bar
+// (CommitsDropdown); this component only keeps the one on screen valid.
+const visibleReportRounds = $derived.by((): WalkthroughReviewRound[] =>
+  reportRounds
+    .filter((round) => round.visibility !== "hidden")
+    .sort((a, b) => {
+      const aCurrent = currentReportHeadSha !== null && a.toSha === currentReportHeadSha;
+      const bCurrent = currentReportHeadSha !== null && b.toSha === currentReportHeadSha;
+      if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+
+      const aTime = Date.parse(a.completedAt ?? a.createdAt);
+      const bTime = Date.parse(b.completedAt ?? b.createdAt);
+      if (aTime !== bTime) return bTime - aTime;
+
+      return b.roundNumber - a.roundNumber;
+    }),
+);
+const displayedReportIsVisible = $derived(
+  displayedWalkthroughId !== null &&
+    visibleReportRounds.some((round) => round.walkthroughId === displayedWalkthroughId),
+);
+
+let reportLoadingId = $state<string | null>(null);
+let autoSelectedReportKey: string | null = null;
+
+async function chooseReport(walkthroughId: string | null): Promise<void> {
+  if (reportLoadingId !== null) return;
+  reportLoadingId = walkthroughId ?? "latest";
+  try {
+    await selectWalkthroughReport(prId, walkthroughId);
+  } finally {
+    reportLoadingId = null;
+  }
+}
+
+$effect(() => {
+  const candidate =
+    visibleReportRounds.find((round) => round.status !== "generating") ??
+    visibleReportRounds[0] ??
+    null;
+  if (
+    !candidate ||
+    selectedReportId !== null ||
+    displayedReportIsVisible ||
+    isStreaming ||
+    reportLoadingId !== null
+  ) {
+    return;
+  }
+
+  const key = `${prId}:${candidate.walkthroughId}`;
+  if (autoSelectedReportKey === key) return;
+  autoSelectedReportKey = key;
+  void chooseReport(candidate.walkthroughId);
+});
 
 const footerParts: string[] = $derived.by(() => {
   const parts: string[] = [];
@@ -127,6 +246,7 @@ const footerParts: string[] = $derived.by(() => {
   if (providerConfig?.thinkingEffort) {
     parts.push(`thinking: ${providerConfig.thinkingEffort}`);
   }
+  parts.push(`${WALKTHROUGH_PERSPECTIVES[selectedMode].label.toLowerCase()} perspective`);
   if (walkthroughSource === "remote") {
     parts.push("loaded from team cache");
   }
@@ -138,6 +258,57 @@ let elapsedSeconds = $state(0);
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 let walkthroughDebounce: ReturnType<typeof setTimeout> | undefined;
 let hydrating = $state(true);
+let hydratedForPr: string | null = null;
+let lastStreamErrorToast: string | null = null;
+let lastCloneErrorToast: string | null = null;
+
+$effect(() => {
+  void loadReviewRounds(prId);
+});
+
+$effect(() => {
+  if (!isActive || !streamError) {
+    if (!streamError) lastStreamErrorToast = null;
+    return;
+  }
+
+  const key = `${prId}:${streamError}`;
+  if (lastStreamErrorToast === key) return;
+  lastStreamErrorToast = key;
+
+  toast.error("Walkthrough failed", {
+    id: `walkthrough-error-${prId}`,
+    description: isAgentAuthRecoveryError(streamError)
+      ? agentAuthRecoveryDescription(streamError)
+      : streamError,
+    ...(isAgentAuthRecoveryError(streamError)
+      ? {
+          action: {
+            label: "Open Settings",
+            onClick: () => openSettings("ai"),
+          },
+        }
+      : {}),
+    duration: 8000,
+  });
+});
+
+$effect(() => {
+  if (!isActive || !cloneError) {
+    if (!cloneError) lastCloneErrorToast = null;
+    return;
+  }
+
+  const key = `${cloneRepoId ?? "unknown"}:${cloneError}`;
+  if (lastCloneErrorToast === key) return;
+  lastCloneErrorToast = key;
+
+  toast.error("Repository clone failed", {
+    id: `repo-clone-error-${cloneRepoId ?? prId}`,
+    description: cloneError,
+    duration: 8000,
+  });
+});
 
 $effect(() => {
   if (isStreaming && streamStartedAt) {
@@ -157,6 +328,58 @@ $effect(() => {
     if (elapsedTimer) {
       clearInterval(elapsedTimer);
       elapsedTimer = null;
+    }
+  };
+});
+
+// ── Stream-stall watchdog ───────────────────────────────────────────
+// SSE delivery is best-effort (doctrine invariant #8): a fast-failing job
+// (e.g. an agent usage-limit hit that errors in <1s) can have its terminal
+// `lifecycle:error` envelope — along with `lifecycle:started`/`phase` — miss
+// this client entirely (broadcast/registration race, transient gap). The
+// connection-level dead-socket watchdog in events.svelte.ts never fires
+// because heartbeats keep flowing, so the entry stays `isStreaming` forever
+// and the error never surfaces. Mirrors the clone poller below: when a live
+// stream goes silent past the threshold, re-hydrate from `/current`, which is
+// authoritative for the terminal status regardless of SSE delivery.
+//
+// Two thresholds: a tight one before the first substantive SSE event confirms
+// the job is live (`lifecycle:started` should land within ~1-2s of Generate),
+// and a heartbeat-tolerant one afterward (the server emits a `phase` heartbeat
+// every 45s, so a genuinely-alive job is never silent that long).
+const STREAM_START_STALL_MS = 20_000;
+const STREAM_STALL_MS = 90_000;
+const STALL_CHECK_INTERVAL_MS = 5_000;
+let stallTimer: ReturnType<typeof setInterval> | null = null;
+let lastStallReconcileAt = 0;
+$effect(() => {
+  if (!isStreaming || cloneInProgress) {
+    if (stallTimer) {
+      clearInterval(stallTimer);
+      stallTimer = null;
+    }
+    return;
+  }
+  const watchedPrId = prId;
+  stallTimer = setInterval(() => {
+    const threshold = isLiveGeneration ? STREAM_STALL_MS : STREAM_START_STALL_MS;
+    const lastActivity = Math.max(
+      getLastWalkthroughEventAt(watchedPrId) ?? 0,
+      streamStartedAt ?? 0,
+    );
+    const now = Date.now();
+    if (now - lastActivity <= threshold) return;
+    // Gate so we reconcile at most once per window — for a genuinely-still-
+    // generating row `/current` keeps `isStreaming` true and doesn't refresh
+    // the activity clock, which would otherwise hammer the endpoint every tick.
+    if (now - lastStallReconcileAt <= threshold) return;
+    lastStallReconcileAt = now;
+    void hydrateFromCache(watchedPrId, { activate: false });
+  }, STALL_CHECK_INTERVAL_MS);
+  return () => {
+    if (stallTimer) {
+      clearInterval(stallTimer);
+      stallTimer = null;
     }
   };
 });
@@ -237,12 +460,27 @@ const CHAPTERS = [
   {
     id: "rated",
     label: "Rating",
-    blurb: "Across 9 axis",
+    blurb: "Across 9 axes",
     activeBlurb: "Scoring each axis…",
     spinner: "prism-bloom",
     targetId: "walkthrough-rating",
   },
 ] as const;
+
+// ── First pass chapter ──────────────────────────────────────────────
+// Prepended only when this head has scan rows (TypeSafe is on), so older
+// walkthroughs keep their four cells. The agent waits for it, so while it runs
+// it is the active cell and every agent chapter is queued — until the job
+// hands the agent its leads. The scan can outlive that (past the join budget,
+// or interrupted by a newer head and left `running` on disk), and the agent's
+// chapters take over regardless.
+const FIRST_PASS_SPINNER = "square-5";
+const agentStarted = $derived(getLeads() !== null || lastCompletedPhase !== "none");
+const stepperActiveId = $derived(
+  firstPass.rows.length > 0 && firstPass.running && !agentStarted
+    ? "first-pass"
+    : (CHAPTERS[activeChapterIndex]?.id ?? CHAPTERS[0].id),
+);
 
 // ── Recent tool calls under the active chapter ───────────────────────
 // The active chapter cell renders a vertical list of the last 3 tool
@@ -309,16 +547,33 @@ const visibleBlocks = $derived.by(() => {
   );
 });
 
-// ── Per-chapter availability ────────────────────────────────────────
+// ── Stepper chapters ────────────────────────────────────────────────
 // A chapter is "available" when its target section has been written —
 // clicking it should land on real content, not an empty anchor. Used
 // post-streaming to gate clickability and pick the right visual state.
-const chapterAvailability = $derived([
-  summary !== null,
-  visibleBlocks.length > 0,
-  sentiment !== null,
-  ratings.length > 0,
-]);
+const chapters = $derived.by((): StepperChapter[] => {
+  const written = [
+    summary !== null,
+    visibleBlocks.length > 0,
+    sentiment !== null,
+    ratings.length > 0,
+  ];
+  const agent = CHAPTERS.map((chapter, i) => ({ ...chapter, available: written[i] ?? false }));
+  if (firstPass.rows.length === 0) return agent;
+  const scan: StepperChapter = {
+    id: "first-pass",
+    label: "First pass",
+    blurb: firstPass.result,
+    activeBlurb: firstPass.scanning,
+    spinner: FIRST_PASS_SPINNER,
+    targetId: "walkthrough-first-pass",
+    // The unraised leads fold under the issues, in the content branch.
+    available: summary !== null && firstPass.hasLeads,
+    extra: firstPassRibbon,
+    onjump: () => (firstPassOpen = true),
+  };
+  return [scan, ...agent];
+});
 
 // Show a skeleton placeholder at the bottom of the diff section while
 // Phase B is active — i.e. overview landed but diff analysis hasn't
@@ -334,22 +589,6 @@ const showDiffSkeleton = $derived(
     ratings.length === 0 &&
     (lastCompletedPhase === "none" || lastCompletedPhase === "A" || lastCompletedPhase === "B"),
 );
-
-// Below-chapter activity feed: mirrors the recap pattern
-// (`RecapDetail.svelte`). We only surface *exploration* tool calls
-// (Read/Grep/Glob/LS) here — MCP content-write calls like
-// `add_diff_step`, `set_overview`, `rate_axis`, etc. are deliberately
-// hidden because their output already lands as visible blocks/ratings
-// in the walkthrough itself. `groupActivityRuns` then collapses the
-// consecutive exploration calls into a single shimmer-labeled group
-// with odometer counts. We synthesize a stable `id` from the absolute
-// index because `Activity` doesn't carry one.
-const groupableExplorationSteps = $derived.by<readonly GroupableActivity[]>(() =>
-  explorationSteps
-    .map((step, i): GroupableActivity => ({ ...step, id: `step-${i}` }))
-    .filter((step) => isExplorationActivity(step)),
-);
-const walkthroughActivityEntries = $derived(groupActivityRuns(groupableExplorationSteps));
 
 // Interleaved view: walks the chronological `timeline` (mixed thoughts
 // + exploration tool calls) and emits a render list where consecutive
@@ -374,7 +613,15 @@ const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => 
       continue;
     }
     if (!isExplorationActivity(entry.activity)) continue;
-    const item: GroupableActivity = { ...entry.activity, id: entry.id };
+    const callId = entry.activity.callId;
+    const result = callId ? explorationResults[callId] : undefined;
+    const lateInput = callId ? explorationInputs[callId] : undefined;
+    const item: GroupableActivity = {
+      ...entry.activity,
+      id: entry.id,
+      ...(lateInput !== undefined ? { payload: lateInput } : {}),
+      ...(result ? { output: result.output, isError: result.isError } : {}),
+    };
     const last = out.at(-1);
     if (last && last.kind === "explorations") {
       out[out.length - 1] = { ...last, items: [...last.items, item] };
@@ -384,17 +631,17 @@ const interleavedEntries = $derived.by<readonly InterleavedRenderEntry[]>(() => 
   }
   return out;
 });
-const hasThoughtText = $derived(thoughts.trim().length > 0);
-let thoughtsOpen = $state(false);
+let thoughtsOpen = $state(true);
 
 const blocksWithDelay = $derived.by(() => {
   let newInBatch = 0;
   return visibleBlocks.map((block) => {
     // Pre-render annotation markdown once per block so the template can
     // emit the annotation as a sibling grid item without each re-render
-    // re-parsing markdown. Only code/diff blocks carry annotations.
+    // re-parsing markdown. Only code/diff/artifact blocks carry annotations.
     const renderedAnnotation =
-      (block.type === "code" || block.type === "diff") && block.annotation
+      (block.type === "code" || block.type === "diff" || block.type === "artifact") &&
+      block.annotation
         ? renderMarkdown(block.annotation)
         : null;
     if (hasBlockAnimated(prId, block.id)) {
@@ -474,10 +721,23 @@ $effect(() => {
   if (summary !== null) markBlockAnimated(prId, "overview-block");
 });
 
-// Total chapters shown to the reader = the virtual overview chapter (when
-// summary has arrived) + every visible Phase B chapter. Used by both the
-// Overview chapter and the Phase B chapter loop for the "Ch N / M" eyebrow.
-const totalChapters = $derived((summary !== null ? 1 : 0) + visibleSemanticSteps.length);
+// The Overview is chapter 0 and unnumbered, so the "Ch N / M" eyebrow counts
+// visible Phase B chapters only. Must agree with `chapterNumbersByIndex`,
+// which is what the chat agent reads when the user says "chapter N".
+const totalChapters = $derived(visibleSemanticSteps.length);
+
+const stack = new WalkthroughStack(
+  () => prId,
+  () => ({
+    chapters: visibleSemanticSteps.map((s) => ({
+      index: s.semanticStepIndex,
+      files: (blocksBySection.get(s.semanticStepIndex) ?? []).flatMap(({ block }) =>
+        block.type === "code" || block.type === "diff" ? [block.filePath] : [],
+      ),
+    })),
+    issues: issueGroups.flatMap((g) => g.issues.map(({ issue }) => issue)),
+  }),
+);
 
 // Mirror the block-stagger logic for issue cards. Issue cards have their
 // own CSS entrance animation (`issue-card-enter`), so without tracking they
@@ -593,15 +853,10 @@ function chapterTagFor(blockId: string): string | null {
     const n = stepNumberFor(blockId);
     return n !== null ? `→ Step ${n}` : null;
   }
-  let chapterLabel: number;
-  if (semanticIdx === -1) {
-    // Virtual Overview chapter — always Ch 1
-    chapterLabel = 1;
-  } else {
-    const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
-    // visibleSemanticSteps is 0-based; +1 for 1-based, +1 more to account for the Overview chapter
-    chapterLabel = pos >= 0 ? pos + 2 : semanticIdx + 2;
-  }
+  // Virtual Overview chapter — chapter 0, which the UI leaves unnumbered.
+  if (semanticIdx === -1) return `→ Overview`;
+  const pos = visibleSemanticSteps.findIndex((s) => s.semanticStepIndex === semanticIdx);
+  const chapterLabel = pos >= 0 ? pos + 1 : semanticIdx + 1;
   return `→ Ch ${chapterLabel} · Step ${stepIdx + 1}`;
 }
 
@@ -718,7 +973,7 @@ function jumpToSection(elementId: string): void {
   scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
 }
 
-// Cross-tab jump: when another tab (e.g. Request Changes) calls
+// Cross-tab jump: when another tab (e.g. Conversation) calls
 // jumpToWalkthroughBlock(), the store flips activeTab → 'walkthrough' and
 // stashes the blockId. We consume it here once we're active + scrollRoot is
 // bound. One rAF of slack lets the display swap (`display: none` → `display:
@@ -735,51 +990,65 @@ $effect(() => {
 
 onMount(() => {
   initHighlighter();
-  // Seed a loading entry synchronously so the UI renders the skeleton
-  // while we check the cache. Without this, the derived state resolves
-  // to defaults (no summary, not streaming, no error) and the template
-  // briefly shows the "No walkthrough data received" empty state.
-  prepareEntry(prId);
-  // Try to hydrate instantly from the JSON cache endpoint. On a hit the
-  // walkthrough renders immediately with no SSE round-trip. On a miss
-  // we fall back to the debounced SSE stream — the debounce is intentional
-  // for uncached PRs so quickly arrowing through the PR list doesn't
-  // trigger spurious AI generations.
-  hydrateFromCache(prId).then(
-    () => {
-      hydrating = false;
-    },
-    () => {
-      hydrating = false;
-    },
-  );
+});
+
+// Keyed on the PR only. The server picks the perspective (the newest
+// walkthrough's, else identity), so a perspective switch — which seeds its own
+// entry — never re-runs this and races the start request.
+$effect(() => {
+  const id = prId;
+  if (hydratedForPr === id) return;
+  hydratedForPr = id;
+  // Untracked: the store reads below must not subscribe this effect to
+  // every entry write.
+  untrack(() => {
+    hydrating = true;
+    // Seed a loading entry synchronously so the UI renders the skeleton
+    // while we check the cache. Without this, the derived state resolves
+    // to defaults (no summary, not streaming, no error) and the template
+    // briefly shows the "No walkthrough data received" empty state.
+    prepareEntry(id);
+    // Try to hydrate instantly from the JSON cache endpoint. On a hit the
+    // walkthrough renders immediately with no SSE round-trip. On a miss
+    // we fall back to the debounced SSE stream — the debounce is intentional
+    // for uncached PRs so quickly arrowing through the PR list doesn't
+    // trigger spurious AI generations.
+    hydrateFromCache(id).then(
+      () => {
+        hydrating = false;
+      },
+      () => {
+        hydrating = false;
+      },
+    );
+  });
 });
 
 onDestroy(() => {
   if (elapsedTimer) clearInterval(elapsedTimer);
+  if (stallTimer) clearInterval(stallTimer);
   if (walkthroughDebounce) clearTimeout(walkthroughDebounce);
   stopClonePoll(prId);
 });
 
 // ── Clone-in-progress auto-retry ────────────────────────────────────
 // When the server rejects the walkthrough because the repo is still
-// cloning, we used to rely solely on a WS-delivered `cloneStatus === 'ready'`
-// update to auto-retry. That's fragile: missed WS messages, server restarts
+// cloning, we used to rely solely on an SSE-delivered `cloneStatus === 'ready'`
+// update to auto-retry. That's fragile: missed SSE messages, server restarts
 // that reset clone state to 'pending', and outright clone failures would
 // leave the UI permanently stuck on "Cloning repository…". Now we start a
 // poller against `GET /api/repos/:id/clone-status` that is authoritative for
-// all terminal states (ready/error/pending) regardless of WS delivery. The
-// WS fast-path still runs: if the repositories store already reports 'ready'
-// (from a WS broadcast) we stream immediately without waiting for the next
+// all terminal states (ready/error/pending) regardless of SSE delivery. The
+// SSE fast-path still runs: if the repositories store already reports 'ready'
+// (from an SSE broadcast) we stream immediately without waiting for the next
 // poll tick.
 $effect(() => {
   if (!cloneInProgress || !cloneRepoId) return;
-  const repo = repositories.find((r) => r.id === cloneRepoId);
-  if (repo?.cloneStatus === "ready") {
-    void startWalkthrough(prId);
+  if (cloneRepo?.cloneStatus === "ready") {
+    void startWalkthrough(prId, selectedMode);
     return;
   }
-  void pollCloneUntilResolved(prId, cloneRepoId);
+  void pollCloneUntilResolved(prId, cloneRepoId, selectedMode);
   return () => stopClonePoll(prId);
 });
 
@@ -787,7 +1056,7 @@ $effect(() => {
 // Visible when the UI is stuck in the clone-in-progress state. Hits the
 // server's `/retry-clone` endpoint, which resets the repo's clone state and
 // kicks off a fresh clone, then restarts the poller so the UI un-sticks
-// regardless of whether the WS fast-path fires.
+// regardless of whether the SSE fast-path fires.
 let retryingClone = $state(false);
 async function handleRetryClone(): Promise<void> {
   if (!cloneRepoId || retryingClone) return;
@@ -798,7 +1067,7 @@ async function handleRetryClone(): Promise<void> {
       method: "POST",
       headers: authHeaders(),
     });
-    void pollCloneUntilResolved(prId, repoId);
+    void pollCloneUntilResolved(prId, repoId, selectedMode);
   } finally {
     retryingClone = false;
   }
@@ -806,34 +1075,47 @@ async function handleRetryClone(): Promise<void> {
 
 // ── Regenerate ──────────────────────────────────────────────────────
 function handleRegenerate(): void {
-  regenerate(prId);
+  regenerate(prId, selectedMode);
+}
+
+function handleResume(): void {
+  resume(prId, selectedMode);
 }
 </script>
 
-<div class="walkthrough">
-	{#if superseded}
-		<!-- Outdated-walkthrough banner. The server marked this row 'superseded'
-		     because a new commit landed mid-render and a fresher walkthrough
-		     was created for the newer head SHA. Regenerate swaps this entry for
-		     the new one via the /walkthrough/regenerate endpoint. -->
-		<div class="walkthrough-banner" role="status">
-			<div class="walkthrough-banner-row walkthrough-banner-row--superseded">
-				<div class="walkthrough-banner-icon">
-					<AlertCircle size={16} weight="fill" />
-				</div>
-				<div class="walkthrough-banner-body">
-					<p class="walkthrough-banner-title">This walkthrough is outdated</p>
-					<p class="walkthrough-banner-subtitle">
-						The PR has new commits since this review was generated.
-					</p>
-				</div>
-				<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleRegenerate}>
-					<RefreshCw size={14} weight="fill" />
-					Regenerate
-				</Button>
-			</div>
+{#snippet firstPassRibbon()}
+	<FirstPassRibbon rows={firstPass.rows} />
+{/snippet}
+
+{#snippet reliedOnMargin()}
+	{#if stack.notes && stack.place}
+		<ReliedOnNote links={stack.notes.reliedOn} place={stack.place} />
+	{/if}
+{/snippet}
+
+{#snippet changedAboveMargin(index: number)}
+	{@const note = stack.notes?.chapters.get(index)}
+	{#if note && stack.place}
+		<ChangedAboveNote {note} place={stack.place} />
+	{/if}
+{/snippet}
+
+<div class="walkthrough" use:stackCitations={stack.place}>
+	{#if isMerged}
+		<!-- Pressed into the top-right of the content column. Its own grid row
+		     (same 6-col template as the stepper header) so it aligns with the
+		     content column on every sidebar/right-panel toggle, and so it never
+		     overlaps the stepper below it. -->
+		<div class="merged-stamp-row">
+			<MergedStamp {prId} {mergedAt} />
 		</div>
 	{/if}
+
+	{#if stack.isStacked}
+		<StackOverviewRow {prId} />
+	{/if}
+
+
 	{#if !streamError && stepperVisible}
 		<!-- Persistent chapters stepper. Replaces the old A→B→C→D dot indicator.
 		     Lives outside the if/else ladder so it stays mounted as the streaming
@@ -849,75 +1131,18 @@ function handleRegenerate(): void {
 			class:walkthrough-stepper-header--no-anim={stepperAnimated}
 			onanimationend={(e) => lockContainerAnimation('stepper', e)}
 		>
-			<div
-				class="chapter-stepper"
-				role="progressbar"
-				aria-label="Walkthrough chapters"
-				aria-valuenow={activeChapterIndex + 1}
-				aria-valuemin={1}
-				aria-valuemax={CHAPTERS.length}
-			>
-				{#each CHAPTERS as chapter, i (chapter.id)}
-					{@const active = isStreaming && i === activeChapterIndex}
-					{@const done = isStreaming && i < activeChapterIndex}
-					{@const queued = isStreaming && i > activeChapterIndex}
-					{@const available = chapterAvailability[i] ?? false}
-					{@const clickable = !active && available}
-					<button
-						type="button"
-						class="chapter-cell"
-						class:chapter-cell--active={active}
-						class:chapter-cell--done={done}
-						class:chapter-cell--queued={queued}
-						class:chapter-cell--available={!isStreaming && available}
-						class:chapter-cell--unavailable={!isStreaming && !available}
-						class:chapter-cell--clickable={clickable}
-						disabled={!clickable}
-						aria-label={clickable ? `Jump to ${chapter.label}` : chapter.label}
-						onclick={clickable ? () => jumpToSection(chapter.targetId) : undefined}
-					>
-						<div class="chapter-eyebrow">Step {String(i + 1).padStart(2, '0')}</div>
-						{#if active}
-							<div class="chapter-active-layout">
-								<div class="chapter-title">{chapter.label}</div>
-								<div class="chapter-active-row">
-							<Dotmatrix variant={chapter.spinner} active={active} />
-									{#if recentExplorationSteps.length > 0}
-										<div class="chapter-tool-calls">
-											{#each recentExplorationSteps.slice(-2) as { step, ordinal }, i (ordinal)}
-												<div
-													class="chapter-tool-call"
-													style="top: {i * TOOL_CALL_ROW_H}px"
-													in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-													out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-												>
-													<span class="chapter-tool-call-tool">{step.toolName}</span>
-													<span class="chapter-tool-call-desc">{step.summary}</span>
-												</div>
-											{/each}
-										</div>
-									{:else}
-										<span>{chapter.activeBlurb}</span>
-									{/if}
-								</div>
-							</div>
-						{:else}
-							<div class="chapter-title-row">
-								<div class="chapter-title">{chapter.label}</div>
-							</div>
-							<div class="chapter-body">
-								<div class="chapter-blurb">{chapter.blurb}</div>
-							</div>
-						{/if}
-					</button>
-				{/each}
-			</div>
+			<ChapterStepper
+				{chapters}
+				activeId={stepperActiveId}
+				{isStreaming}
+				toolCalls={stepperActiveId === 'first-pass' ? [] : recentExplorationSteps}
+				onjump={jumpToSection}
+			/>
 		</div>
 	{/if}
 
 	{#if streamError && !summary && blocks.length === 0}
-		<!-- Error state: no data at all -->
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
 			{#if explorationSteps.length > 0}
 				<div class="exploration-feed exploration-feed--error">
 					{#each explorationSteps.slice(-6) as step, i (i)}
@@ -928,10 +1153,11 @@ function handleRegenerate(): void {
 					{/each}
 				</div>
 			{/if}
-			<pre class="error-text">{streamError}</pre>
-			{#if streamError.includes('not configured') || streamError.includes('API key')}
-				<p class="error-hint">Add your Anthropic API key in Settings to enable walkthroughs.</p>
-			{/if}
+			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
+			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
+				<ArrowsClockwise size={16} />
+				Retry
+			</Button>
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
@@ -943,37 +1169,38 @@ function handleRegenerate(): void {
 		     error event didn't carry it), we can't address the retry at a
 		     specific repo, so we fall back to a generic Try again that
 		     regenerates the walkthrough. -->
-		{@const repo = cloneRepoId ? repositories.find((r) => r.id === cloneRepoId) : null}
-		{@const repoError = repo?.cloneError ?? null}
-		<div class="walkthrough-empty">
+		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
 			{#if !cloneRepoId}
-			<AlertTriangle size={20} weight="fill" />
-			<p class="loading-text">Couldn't identify the repository that was cloning.</p>
-		{:else}
+				<Warning size={20} weight="fill" />
+				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
+			{:else}
 				<div class="clone-progress-container">
 					<p class="loading-text">Cloning repository…</p>
 					<Progress indeterminate class="clone-progress-bar" />
 					<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
-					{#if repoError}
-						<pre class="error-text">{repoError}</pre>
-					{/if}
-                <Button
-                    variant="outline"
-                    size="lg"
-                    style="cursor: pointer;"
-                    disabled={retryingClone}
-                    onclick={handleRetryClone}
-                >
-                    <RefreshCw size={16} weight="fill" />
-                    Retry clone
-                </Button>
+					<Button
+						variant="outline"
+						size="lg"
+						style="cursor: pointer;"
+						disabled={retryingClone}
+						onclick={handleRetryClone}
+					>
+						<ArrowsClockwise size={16} />
+						Retry clone
+					</Button>
 				</div>
 			{/if}
 		</div>
 	{:else if !isStreaming && !summary && blocks.length === 0 && !streamError && !cloneInProgress && !hydrating}
-		<div class="walkthrough-empty">
-			<p class="loading-text">No walkthrough generated yet for this PR.</p>
-		</div>
+		{#if firstPass.rows.length > 0}
+			<div class="walkthrough-loading">
+				<FirstPassPreview view={firstPass} spinner={FIRST_PASS_SPINNER} onjump={jumpToDiffLine} />
+			</div>
+		{:else}
+			<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
+				<p class="loading-text">No walkthrough generated yet for this PR.</p>
+			</div>
+		{/if}
 	{:else if !summary && blocks.length === 0 && sentiment === null && ratings.length === 0 && isStreaming}
 		<!-- Loading state: skeleton + exploration feed. Only shown before the
 		     first MCP write lands. The moment Phase A's summary (or any later
@@ -1011,29 +1238,36 @@ function handleRegenerate(): void {
 		<!-- Landing page content -->
 		<div
 			class="walkthrough-content"
+			data-prlens-breakout=""
 			class:walkthrough-content--no-anim={contentAnimated}
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
-			<!-- Inline error (only when the stream errored mid-flight after we
-			     already had a summary; the empty-state branches above handle
-			     summary-less errors). Lives in col 3 of the walkthrough grid via
-			     the `.walkthrough-content > .stream-error-inline` rule. -->
 			{#if streamError}
-				<p class="stream-error-inline">{streamError}</p>
+				<div class="partial-error" role="status">
+					<div class="partial-error-copy">
+						<Warning size={14} weight="fill" />
+						<span>{streamError}</span>
+					</div>
+					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
+						<ArrowsClockwise size={14} />
+						Retry
+					</Button>
+				</div>
 			{/if}
 
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
 			     reviewer's eye lands on blockers before nice-to-knows. The overall
 			     "N issues flagged" line is preserved as the section header; each
 			     bucket then carries its own labeled sub-header with a count. -->
-			{#if issues.length > 0}
+			{#if issues.length > 0 || filteredIssues.length > 0}
 				<div
 					class="issues-section"
 					class:issues-section--no-anim={issuesSectionAnimated}
 					onanimationend={(e) => lockContainerAnimation('issues-section', e)}
+					{@attach stack.notes && stack.notes.issues.size > 1 ? spreadRailNotes : undefined}
 				>
 					<div class="issues-header">
-						<AlertTriangle size={13} weight="fill" />
+						<Warning size={13} weight="fill" />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
 					<div class="issues-groups">
@@ -1056,34 +1290,58 @@ function handleRegenerate(): void {
 										     case jumpToStep would silently no-op and the click would feel
 										     broken. stepN is null whenever the lookup fails, which catches
 										     both a missing targetBlockId and an id that doesn't resolve. -->
-										{#if stepN !== null && targetBlockId}
+										{@const target = stepN !== null ? targetBlockId : null}
+										<IssueStackNote {stack} issueId={issue.id}>
 											<IssueCard
 												{issue}
-												clickable
-												onclick={() => selectIssue(issue.id, targetBlockId)}
-												stepTag={chapterTag ?? `→ Step ${stepN}`}
+												clickable={target !== null}
+												onclick={() => {
+													if (target) selectIssue(issue.id, target);
+												}}
+												stepTag={target ? (chapterTag ?? `→ Step ${stepN}`) : null}
 												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
 												noAnim={issueDelayById.get(issue.id) === -1}
 												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
 												hideFileBadge={true}
+												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 											/>
-										{:else}
-											<IssueCard
-												{issue}
-												stepTag={null}
-												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-												noAnim={issueDelayById.get(issue.id) === -1}
-												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-												hideFileBadge={true}
-											/>
-										{/if}
+										</IssueStackNote>
 									{/each}
 								</div>
 							</div>
 						{/each}
 					</div>
+
+					<LowSignalDisclosure count={filteredIssues.length}>
+						{#each filteredIssues as issue (issue.id)}
+							<IssueCard
+								{issue}
+								stepTag={null}
+								noAnim
+								onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
+								hideFileBadge={true}
+								firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
+							/>
+						{/each}
+					</LowSignalDisclosure>
+
+					{#if firstPass.hasLeads}
+						<div id="walkthrough-first-pass">{@render firstPassLeads()}</div>
+					{/if}
 				</div>
+			{:else if firstPass.hasLeads}
+				<div id="walkthrough-first-pass" class="first-pass-section">{@render firstPassLeads()}</div>
 			{/if}
+
+			{#snippet firstPassLeads()}
+				<FirstPassLeads
+					leads={firstPass.unraised}
+					note={firstPass.note}
+					isComplete={!isStreaming}
+					bind:open={firstPassOpen}
+					onjump={jumpToDiffLine}
+				/>
+			{/snippet}
 
 			<!-- Body — every chapter renders as a collapsible WalkthroughSection.
 			     The Phase A summary becomes the virtual first chapter ("Overview");
@@ -1103,8 +1361,9 @@ function handleRegenerate(): void {
 				{blockIssueSeverity}
 				{selectedIssueBlockId}
 				{selectedIssueSeverity}
-				chapterNumber={1}
+				chapterNumber={null}
 				chapterCount={totalChapters}
+				margin={stack.notes && stack.notes.reliedOn.length > 0 ? reliedOnMargin : undefined}
 			/>
 			{#each visibleSemanticSteps as section, sectionIdx (section.semanticStepIndex)}
 				<WalkthroughSection
@@ -1114,8 +1373,9 @@ function handleRegenerate(): void {
 					{blockIssueSeverity}
 					{selectedIssueBlockId}
 					{selectedIssueSeverity}
-					chapterNumber={sectionIdx + 2}
+					chapterNumber={sectionIdx + 1}
 					chapterCount={totalChapters}
+					margin={stack.notes?.chapters.has(section.semanticStepIndex) ? changedAboveMargin : undefined}
 				/>
 			{/each}
 
@@ -1131,39 +1391,33 @@ function handleRegenerate(): void {
 			<div class="block-group">
 				<span class="block-step-dot" aria-hidden="true"></span>
 				<div class="block-wrapper block-wrapper--no-anim walkthrough-skeleton">
-					<button
-						type="button"
-						class="walkthrough-skeleton-trigger"
-						aria-label="Reviewing. Toggle streamed thoughts."
-						aria-expanded={thoughtsOpen}
-						onclick={() => { thoughtsOpen = !thoughtsOpen; }}
+					<ThoughtsReveal
+						bind:open={thoughtsOpen}
+						triggerClass="walkthrough-phase-trigger"
+						ariaLabel="Reviewing. Toggle streamed thoughts."
+						metaLabel=""
 					>
-						<Shimmer class="text-sm" aria-label="Reviewing">Reviewing...</Shimmer>
-						<span class="walkthrough-skeleton-meta">
-							<span>{hasThoughtText ? 'Thoughts' : 'Waiting for thoughts'}</span>
-							<span
-								class="walkthrough-skeleton-chevron-wrap"
-								data-state={thoughtsOpen ? 'open' : 'closed'}
-							>
-								<CaretDown class="walkthrough-skeleton-chevron" aria-hidden="true" />
-							</span>
-						</span>
-					</button>
-
-					{#if thoughtsOpen}
+						{#snippet prefix()}
+							<Shimmer class="text-sm" aria-label="Reviewing">Reviewing...</Shimmer>
+						{/snippet}
 						{#if interleavedEntries.length > 0}
 							<div class="walkthrough-activity-stack">
 								{#each interleavedEntries as entry, entryIdx (entry.id)}
 									{#if entry.kind === 'thought'}
-										<div class="walkthrough-inline-thought">
-											{@html renderMarkdown(entry.text)}
+										<div class="walkthrough-activity-entry" data-kind="thought">
+											<div class="walkthrough-inline-thought prose prose-sm">
+												{@html renderMarkdown(entry.text)}
+											</div>
 										</div>
 									{:else}
-										<ToolActivityGroup
-											items={entry.items}
-											active={entryIdx === interleavedEntries.length - 1}
-											defaultOpen={false}
-										/>
+										<div class="walkthrough-activity-entry" data-kind="explorations">
+											<ToolActivityGroup
+												items={entry.items}
+												active={entryIdx === interleavedEntries.length - 1}
+												defaultOpen={false}
+												prId={prId}
+											/>
+										</div>
 									{/if}
 								{/each}
 							</div>
@@ -1172,19 +1426,7 @@ function handleRegenerate(): void {
 								No streamed thoughts yet. Tool calls will appear here as they happen.
 							</p>
 						{/if}
-					{:else if walkthroughActivityEntries.length > 0}
-						<div class="walkthrough-activity-stack">
-							{#each walkthroughActivityEntries as entry, entryIdx (isActivityGroup(entry) ? `group-${entry.items[0]?.id ?? entryIdx}` : entry.id)}
-								{#if isActivityGroup(entry)}
-									<ToolActivityGroup
-										items={entry.items}
-										active={entryIdx === walkthroughActivityEntries.length - 1}
-										defaultOpen={false}
-									/>
-								{/if}
-							{/each}
-						</div>
-					{/if}
+					</ThoughtsReveal>
 				</div>
 			</div>
 		{/if}
@@ -1202,7 +1444,7 @@ function handleRegenerate(): void {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body">{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}
@@ -1235,6 +1477,12 @@ function handleRegenerate(): void {
 					<span>{footerParts.join(" · ")}</span>
 				</footer>
 			{/if}
+
+			{#if stack.isStacked && walkthroughComplete}
+				<div class="stack-handoff-slot">
+					<StackHandoffCard {prId} />
+				</div>
+			{/if}
 		</div>
 
 	{/if}
@@ -1242,35 +1490,40 @@ function handleRegenerate(): void {
 
 <style>
 	.walkthrough {
+		--walkthrough-columns:
+			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
+			48px
+			minmax(0, 820px)
+			40px
+			380px
+			minmax(24px, 1fr);
 		display: flex;
 		flex-direction: column;
 		background: var(--color-bg-primary);
 	}
 
 	.walkthrough-content {
-		/* 6-col grid that anchors the content column to the VIEWPORT centre
-		   (not the main-area centre), so resizing or toggling the left pane
-		   doesn't shift the content horizontally. Content only moves left —
-		   and only by exactly the required distance — when the main-area
-		   has shrunk enough that rail-plus-content would overflow.
+		/* 6-col grid that centres the content column within the MAIN AREA,
+		   so the content re-centres whenever either flanking pane (sidebar
+		   or right chat panel) toggles. Both panes are real grid columns in
+		   AppShell.svelte, so opening either shrinks the main-area — and the
+		   grid container here (`.review-content`, container-type: inline-size)
+		   shrinks with it. `100%`/`50%` therefore always track the visible
+		   main-area width, which is exactly what we centre against.
 
-		   col 1 = max(24px, min(100% - 50vw - 458px, 100% - 1312px))
-		     - 100% - 50vw - 458px : the col_1 width that places the content
-		         column's centre at viewport x = 50vw. Derivation: sidebar
-		         width S = 100vw - 100% (because 100% = main-area width =
-		         V - S). Content's viewport x-centre = S + col_1 + 48 + 410;
-		         setting that to V/2 = 50vw gives col_1 = 100% - 50vw - 458.
-		         When S changes (sidebar toggle/resize), 100% and 50vw shift
-		         in lockstep so that S + col_1 + 458 stays at V/2 — content
-		         position in the viewport is stable.
+		   col 1 = max(24px, min(50% - 458px, 100% - 1312px))
+		     - 50% - 458px : the col_1 width that places the content column's
+		         centre at the main-area centre (50%). Content x-centre within
+		         the grid = col_1 + 48 + 410; setting that to 50% gives
+		         col_1 = 50% - 458. Because `%` is relative to the main-area
+		         width, this stays centred on every sidebar/right-panel toggle.
 		     - 100% - 1312px : the largest col_1 that still lets the rail end
 		         at exactly 100% - 24 (24px right gutter inside main-area).
-		         When this binds (narrow main-area), content's viewport x
-		         = S + (100% - 1312) + 458 = V - 854 — also independent of S,
-		         so toggling the sidebar still doesn't jump the content.
-		     min() picks whichever binds. They cross when V ≥ 1708 (viewport,
-		     not main-area); above, viewport-centring wins; below, rail
-		     pinning wins. Floor of 24px keeps a minimum left gutter.
+		         Binds on narrower main-areas where pure centring would push
+		         rail-plus-content past the right gutter.
+		     min() picks whichever binds. They cross at a main-area width of
+		         1708; above, centring wins; below, rail pinning wins. Floor
+		         of 24px keeps a minimum left gutter.
 		   col 2 = 48        (severity-dot gutter)
 		   col 3 = 820       (content)
 		   col 4 = 40        (content ↔ rail gap)
@@ -1282,31 +1535,22 @@ function handleRegenerate(): void {
 		   the @container rule at the bottom falls through to a stacked
 		   layout. The breakpoint is on main-area width (100%, via
 		   container-type: inline-size on .review-content) so the collapse
-		   triggers only when the sidebar has eaten enough room to matter.
-
-		   Note: the right pane (chat) is positioned absolutely on top of
-		   the main-area in AppShell.svelte (NOT a grid column), so opening
-		   it does not change `100%` and therefore does not affect any of
-		   the math here. That's by design — the user wants the right-pane
-		   toggle to leave the main-content render byte-identical, which
-		   requires not shrinking main-area. */
+		   triggers only when a flanking pane has eaten enough room to matter. */
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 28px 0;
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) 60ms both;
 	}
 
-	/* Single-column sections live in the content column (col 3). Separator,
-	   .stream-error-inline, and .issues-section sit there as direct children. */
-	.walkthrough-content > .stream-error-inline,
+	/* Single-column sections live in the content column (col 3). Every direct
+	   child of the grid needs a line here: auto-placement drops it into col 1,
+	   which is a ~24px gutter track, and the child renders as an unreadable
+	   one-character-wide sliver pinned to the far left. */
+	.walkthrough-content > .partial-error,
 	.walkthrough-content > .issues-section,
+	.walkthrough-content > .first-pass-section,
 	.walkthrough-content > .walkthrough-footer,
+	.walkthrough-content > .stack-handoff-slot,
 	.walkthrough-content > :global([data-slot="separator"]) {
 		grid-column: 3;
 	}
@@ -1323,13 +1567,6 @@ function handleRegenerate(): void {
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
-	}
-
-	/* Mid-stream error surfaced above the body when summary already landed. */
-	.stream-error-inline {
-		color: var(--color-danger);
-		font-size: 13px;
-		margin: 0 0 8px;
 	}
 
 	/* Suppress the entrance animation on tab revisits. Paired with the
@@ -1371,6 +1608,16 @@ function handleRegenerate(): void {
 		pointer-events: auto;
 	}
 
+	.walkthrough-empty--in-flow {
+		position: static;
+		inset: auto;
+		min-height: 40vh;
+	}
+
+	.stack-handoff-slot {
+		min-width: 0;
+	}
+
 	/* Loading and stepper-header use the SAME 6-col grid as
 	   `.walkthrough-content` so their inner content lands in col 3 — the
 	   820 content column — exactly where the streamed walkthrough blocks
@@ -1382,13 +1629,7 @@ function handleRegenerate(): void {
 	   walkthrough content column. */
 	.walkthrough-loading {
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 28px 0;
 		row-gap: 20px;
 	}
@@ -1400,6 +1641,32 @@ function handleRegenerate(): void {
 		grid-column: 3;
 	}
 
+	.merged-stamp-row {
+		display: grid;
+		/* Byte-identical 6-col template to `.walkthrough-content` (and the
+		   stepper header), so the right-aligned stamp lands
+		   on col 3's right edge — the content column's right edge — at every
+		   main-area width. It MUST stay `minmax(0, 820px)` rather than a hard
+		   `820px`: a hard track keeps its full width once the main area drops
+		   below the 1336 geometric minimum, and the stamp then stops moving
+		   while the content re-flows around it (it also overflows the scroll
+		   container horizontally). The sub-1336 case is handled by the
+		   `@container` fallback at the bottom of this file, which this row
+		   opts into alongside every other single-column section. */
+		grid-template-columns: var(--walkthrough-columns);
+		padding: 20px 0 0;
+	}
+
+	.merged-stamp-row > :global(*) {
+		grid-column: 3;
+		justify-self: end;
+		/* Lift the stamp up into the header's empty right margin without
+		   dragging the stepper with it: the two margins cancel, so the row
+		   keeps its height and only the ink moves. */
+		margin-top: -22px;
+		margin-bottom: 22px;
+	}
+
 	/* ── Persistent chapters stepper header ─────────────────────────────
 	   Replaces the old A→B→C→D dot indicator. Stays mounted across the
 	   loading → content transition so the user keeps a map of where the
@@ -1408,18 +1675,12 @@ function handleRegenerate(): void {
 
 	.walkthrough-stepper-header {
 		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		padding: 24px 0 4px;
 		animation: fadeIn var(--duration-smooth) var(--ease-standard) both;
 	}
 
-	.walkthrough-stepper-header > * {
+	.walkthrough-stepper-header > :global(*) {
 		grid-column: 3;
 	}
 
@@ -1434,280 +1695,6 @@ function handleRegenerate(): void {
 	.walkthrough-stepper-header + .walkthrough-loading,
 	.walkthrough-stepper-header + .walkthrough-content {
 		padding-top: 14px;
-	}
-
-	/* ── Chapters stepper ────────────────────────────────────────────────
-	   Four-cell horizontal grid. Active cell: 2px accent top rule, italic
-	   serif eyebrow, big serif title, body row of {dot-matrix spinner +
-	   "reading" verb + live mono file path}. Past/queued cells: same title
-	   with a static blurb under it — no "done" affordance, just absence of
-	   the active treatment. */
-
-	.chapter-stepper {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		column-gap: 16px;
-	}
-
-	.chapter-cell {
-		/* Reset button defaults — the cell is rendered as a <button> so it can
-		   participate in tab order and fire onclick when clickable. Inheriting
-		   the surrounding type styles keeps the visual output identical to the
-		   prior <div>-based markup. */
-		appearance: none;
-		background: transparent;
-		border: none;
-		border-radius: 0;
-		font: inherit;
-		color: inherit;
-		text-align: left;
-		display: block;
-		width: 100%;
-
-		min-width: 0;
-		padding: 10px 0 0;
-		/* `--color-border` (not `--color-border-subtle`): in dark mode the
-		   `subtle` token collapses onto the tertiary surface and the rule
-		   becomes invisible. Border is a tier up — visible against
-		   `--color-bg-primary` in both light and dark themes. */
-		border-top: 2px solid var(--color-border);
-		transition: border-color var(--duration-smooth) var(--ease-soft), opacity var(--duration-smooth) var(--ease-soft),
-			transform var(--duration-quick) var(--ease-soft), background-color var(--duration-quick) var(--ease-soft);
-		cursor: default;
-	}
-
-	.chapter-cell:disabled {
-		cursor: default;
-	}
-
-	.chapter-cell--active {
-		border-top-color: var(--color-accent);
-	}
-
-	.chapter-cell--done {
-		border-top-color: var(--color-accent);
-		opacity: 0.5;
-	}
-
-	.chapter-cell--queued {
-		opacity: 0.35;
-	}
-
-	/* ── Navigation mode (post-streaming) ─────────────────────────────────
-	   Once generation finishes, the stepper persists as a chapter index for
-	   quick jumps to any section. Chapters whose content was written get a
-	   highlighted top rule + clickable hover/focus treatment; chapters that
-	   never wrote (e.g., generation aborted before Phase D) stay muted. */
-
-	.chapter-cell--available {
-		border-top-color: var(--color-accent);
-	}
-
-	.chapter-cell--unavailable {
-		opacity: 0.35;
-	}
-
-	.chapter-cell--clickable {
-		cursor: pointer;
-	}
-
-	/* Done cells (already-completed phases during streaming) drop to 0.5
-	   opacity by default to read as "past." Bump opacity on hover so the
-	   click affordance is unambiguous when the user reaches for one. */
-	.chapter-cell--clickable.chapter-cell--done:hover {
-		opacity: 1;
-	}
-
-	.chapter-cell--clickable:hover .chapter-title {
-		color: var(--color-accent);
-	}
-
-	.chapter-cell--clickable:hover .chapter-blurb {
-		color: var(--color-text-secondary);
-	}
-
-	.chapter-cell--clickable:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-		border-radius: 4px;
-	}
-
-	.chapter-cell--clickable:active {
-		transform: translateY(1px);
-	}
-
-	.chapter-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
-		font-style: italic;
-		font-size: 11.5px;
-		font-weight: 500;
-		letter-spacing: 0.3px;
-		color: var(--color-text-muted);
-		margin-bottom: 2px;
-		white-space: nowrap;
-		transition: color var(--duration-smooth) var(--ease-soft);
-	}
-
-	.chapter-cell--active .chapter-eyebrow,
-	.chapter-cell--done .chapter-eyebrow,
-	.chapter-cell--available .chapter-eyebrow {
-		color: var(--color-accent);
-	}
-
-	.chapter-active-layout {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-		margin-bottom: 6px;
-
-	}
-
-	/* inactive path only */
-	.chapter-title-row {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		margin-bottom: 6px;
-		min-width: 0;
-	}
-
-	.chapter-title {
-		font-family: 'Newsreader', Georgia, serif;
-		font-size: 18px;
-		font-weight: 500;
-		letter-spacing: -0.012em;
-		line-height: 1.05;
-		color: var(--color-text-primary);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		transition: color var(--duration-smooth) var(--ease-soft);
-	}
-
-
-
-	.chapter-body {
-		min-height: 32px;
-	}
-
-	.chapter-active-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10px;
-		color: var(--color-accent);
-		min-width: 0;
-	}
-
-	.chapter-tool-calls {
-		position: relative;
-		flex: 1;
-		height: 28px; /* 2 × 14px rows, fixed — prevents layout shift during transitions */
-		min-width: 0;
-		overflow: hidden;
-	}
-
-	.chapter-tool-call {
-		position: absolute;
-		left: 0;
-		right: 0;
-		display: flex;
-		gap: 6px;
-		min-width: 0;
-		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
-		   transition (used inline) writes inline `transform`, and a base-class
-		   transform would compose unpredictably with it. The animated property
-		   is bounded to ±14px so the layout cost is trivial. */
-		transition: top var(--duration-smooth) var(--ease-standard);
-	}
-
-	.chapter-tool-call-tool {
-		color: var(--color-accent);
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-
-	.chapter-tool-call-desc {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		min-width: 0;
-		color: var(--color-text-muted);
-	}
-
-	.chapter-blurb {
-		font-size: 10.5px;
-		line-height: 1.35;
-		color: var(--color-text-muted);
-		white-space: nowrap;
-		overflow: hidden;
-		transition: color var(--duration-smooth) var(--ease-soft);
-		text-overflow: ellipsis;
-	}
-
-	/* ── Superseded banner ──────────────────────────────────────────────
-	   Renders at the top of the walkthrough when the server marked this row
-	   `superseded`. The outer grid aligns it with the content column (col 3
-	   of the 6-col walkthrough grid), and the inner flex row stacks an icon,
-	   a two-line message, and a Regenerate button on one line. */
-
-	.walkthrough-banner {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding: 14px 0 0;
-	}
-
-	.walkthrough-banner > .walkthrough-banner-row {
-		grid-column: 3;
-	}
-
-	.walkthrough-banner-row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 10px 12px;
-		border-radius: 8px;
-	}
-
-	.walkthrough-banner-row--superseded {
-		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
-	}
-
-	.walkthrough-banner-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		color: var(--color-warning);
-	}
-
-	.walkthrough-banner-body {
-		flex: 1;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.walkthrough-banner-title {
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--color-text-primary);
-		margin: 0;
-	}
-
-	.walkthrough-banner-subtitle {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
 	}
 
 	/* ── Exploration feed (error branch only) ────────────────────────────
@@ -1771,6 +1758,11 @@ function handleRegenerate(): void {
 		flex-direction: column;
 		gap: 10px;
 		animation: content-enter var(--duration-ceremonial-medium) var(--ease-standard) 0.15s both;
+	}
+
+	/* No issues to sit under: the leads take the issues' slot. */
+	.first-pass-section {
+		margin-top: 20px;
 	}
 
 	/* Tab-revisit override — see .walkthrough-content--no-anim for why. */
@@ -1858,13 +1850,7 @@ function handleRegenerate(): void {
 		   identically to the parent's — no subgrid needed. */
 		display: grid;
 		grid-column: 1 / -1;
-		grid-template-columns:
-			max(24px, min(calc(100% - 50vw - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
+		grid-template-columns: var(--walkthrough-columns);
 		row-gap: 20px;
 		margin-top: 20px;
 		grid-auto-flow: row;
@@ -1943,9 +1929,8 @@ function handleRegenerate(): void {
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
-		will-change: opacity, transform, filter;
 		scroll-margin-top: 16px;
 		border-radius: 8px;
 		outline: 2px solid transparent;
@@ -1994,10 +1979,10 @@ function handleRegenerate(): void {
 	.walkthrough-skeleton {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		width: 100%;
 	}
 
-	.walkthrough-skeleton-trigger {
+	.walkthrough-phase-trigger {
 		display: flex;
 		width: 100%;
 		align-items: center;
@@ -2012,36 +1997,24 @@ function handleRegenerate(): void {
 		font: inherit;
 	}
 
-	.walkthrough-skeleton-meta {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-		flex-shrink: 0;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-	}
-
-	.walkthrough-skeleton-chevron-wrap {
-		display: inline-grid;
-		place-items: center;
-		transition: transform var(--duration-snap) var(--ease-out-expo);
-	}
-
-	.walkthrough-skeleton-chevron-wrap[data-state="open"] {
-		transform: rotate(180deg);
-	}
-
-	.walkthrough-skeleton-chevron-wrap :global(.walkthrough-skeleton-chevron) {
-		width: 0.75rem;
-		height: 0.75rem;
-	}
-
 	.walkthrough-activity-stack {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
-		max-width: 42rem;
+		margin-top: 0.375rem;
+		padding-left: 0.75rem;
+		border-left: 1px solid var(--color-border);
+	}
+
+	.walkthrough-activity-entry + .walkthrough-activity-entry {
+		margin-top: 0.375rem;
+	}
+
+	.walkthrough-activity-entry[data-kind="thought"] + .walkthrough-activity-entry[data-kind="explorations"] {
 		margin-top: 0.25rem;
+	}
+
+	.walkthrough-activity-entry[data-kind="explorations"] + .walkthrough-activity-entry[data-kind="thought"] {
+		margin-top: 0.875rem;
 	}
 
 	.walkthrough-thought-empty {
@@ -2057,61 +2030,9 @@ function handleRegenerate(): void {
 		word-break: break-word;
 	}
 
-	.walkthrough-inline-thought :global(p),
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol),
-	.walkthrough-inline-thought :global(pre),
-	.walkthrough-inline-thought :global(blockquote) {
-		margin: 0 0 0.5rem;
-	}
-
-	.walkthrough-inline-thought :global(:last-child) {
-		margin-bottom: 0;
-	}
-
-	.walkthrough-inline-thought :global(ul),
-	.walkthrough-inline-thought :global(ol) {
-		padding-left: 1.25rem;
-	}
-
-	.walkthrough-inline-thought :global(li) {
-		margin: 0.15rem 0;
-	}
-
-	.walkthrough-inline-thought :global(code) {
-		font-family: var(--font-mono);
-		font-size: 0.92em;
-		padding: 0.08em 0.3em;
-		border-radius: 0.25rem;
-		background: color-mix(in srgb, var(--color-bg-tertiary) 70%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(pre) {
-		overflow-x: auto;
-		padding: 0.625rem;
-		border-radius: 0.375rem;
-		background: var(--color-bg-tertiary);
-	}
-
-	.walkthrough-inline-thought :global(pre code) {
-		padding: 0;
-		background: transparent;
-		font-size: inherit;
-	}
-
-	.walkthrough-inline-thought :global(blockquote) {
-		padding-left: 0.75rem;
-		border-left: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
-		color: var(--color-text-secondary);
-	}
-
-	.walkthrough-inline-thought :global(a) {
-		color: var(--color-accent);
-		text-decoration-line: underline;
-		text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.walkthrough-inline-thought` only sets the
+	   quieter muted body tone. */
 
 	/* ── Annotation rail ─────────────────────────────────────────────────
 	   Sits top-aligned beside its block in the grid row. No sticky — CSS
@@ -2127,7 +2048,7 @@ function handleRegenerate(): void {
 		padding: 4px 0;
 		/* Match the block's entrance timing so rail text appears in sync
 		   with its block. Paired with the --enter-delay inline style. */
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) both;
+		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
 		animation-delay: var(--enter-delay, 0ms);
 	}
 
@@ -2159,26 +2080,8 @@ function handleRegenerate(): void {
 		overflow-wrap: anywhere;
 	}
 
-	.block-annotation-inner :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.block-annotation-inner :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.block-annotation-inner :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.block-annotation-inner :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	.loading-text {
 		font-size: 13px;
@@ -2192,35 +2095,39 @@ function handleRegenerate(): void {
 		margin: 0;
 	}
 
-	/* ── Error states ────────────────────────────────────────────────── */
-
-	.error-text {
-		font-size: 12px;
-		color: var(--color-danger);
-		white-space: pre-wrap;
-		word-break: break-word;
-		overflow-y: auto;
-		max-height: 200px;
-		max-width: 480px;
-		width: 100%;
-		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
-		border-radius: 6px;
-		padding: 10px 12px;
-		margin: 0;
-		font-family: var(--font-mono, monospace);
-	}
-
-	.error-hint {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
-	}
-
 	.error-inline {
 		font-size: 12px;
 		color: var(--color-danger);
 		margin-top: 8px;
+	}
+
+	.partial-error {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		/* Wrap the button under the copy rather than letting the copy shrink to
+		   nothing — `overflow-wrap: anywhere` below would otherwise break the
+		   message one character per line. */
+		flex-wrap: wrap;
+		gap: 12px;
+		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+		color: var(--color-danger);
+		padding: 10px 12px;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.partial-error-copy {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.partial-error-copy span {
+		overflow-wrap: anywhere;
 	}
 
 	/* ── Animations ──────────────────────────────────────────────────── */
@@ -2320,42 +2227,8 @@ function handleRegenerate(): void {
 		color: var(--color-text-secondary);
 	}
 
-	.sentiment-card-body :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.sentiment-card-body :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.sentiment-card-body :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--color-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.sentiment-card-body :global(strong) {
-		color: var(--color-text-primary);
-		font-weight: 600;
-	}
-
-	.sentiment-card-body :global(ul),
-	.sentiment-card-body :global(ol) {
-		margin: 4px 0 8px;
-		padding-left: 20px;
-	}
-
-	.sentiment-card-body :global(li) {
-		margin: 2px 0;
-	}
-
-	.sentiment-card-body :global(a) {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.sentiment-card-body` only owns base text density. */
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +
@@ -2384,8 +2257,8 @@ function handleRegenerate(): void {
 		}
 
 		/* Children no longer need explicit column placement. */
-		.walkthrough-content > .stream-error-inline,
 		.walkthrough-content > .issues-section,
+		.walkthrough-content > .first-pass-section,
 		.walkthrough-content > :global([data-slot="separator"]) {
 			grid-column: auto;
 		}
@@ -2395,8 +2268,8 @@ function handleRegenerate(): void {
 		   extra horizontal padding — that would shift them inward of the
 		   parent's content edges and break alignment with .blocks below. */
 		.walkthrough-loading,
-		.walkthrough-stepper-header,
-		.walkthrough-banner {
+		.merged-stamp-row,
+		.walkthrough-stepper-header {
 			display: block;
 			width: 100%;
 			max-width: calc(72px + 820px + 32px);
@@ -2406,8 +2279,12 @@ function handleRegenerate(): void {
 			box-sizing: border-box;
 		}
 
-		.walkthrough-banner > .walkthrough-banner-row {
-			grid-column: auto;
+		/* The stamp is the one right-aligned section: `justify-self: end` is a
+		   grid property and does nothing once this row is a block, so re-hang
+		   it off the content column's right edge with a flex end-alignment. */
+		.merged-stamp-row {
+			display: flex;
+			justify-content: flex-end;
 		}
 
 		.walkthrough-loading {
@@ -2421,7 +2298,8 @@ function handleRegenerate(): void {
 		}
 
 		.walkthrough-loading > :global(*),
-		.walkthrough-stepper-header > * {
+		.merged-stamp-row > :global(*),
+		.walkthrough-stepper-header > :global(*) {
 			grid-column: auto;
 		}
 
@@ -2432,6 +2310,24 @@ function handleRegenerate(): void {
 
 		.block-group > .block-wrapper {
 			grid-column: auto;
+		}
+
+		/* With `.blocks` no longer a grid, a `display: contents` group leaves the
+		   severity dot as an inline box — width/height stop applying and it paints
+		   as a thin bar rather than a dot. Give the group a box and hang the dot in
+		   the stacked layout's 72px left gutter, 16px clear of the content edge
+		   (same offset the wide layout gets from margin-right). Kept in sync with
+		   the matching @container block in WalkthroughSection.svelte. */
+		.block-group:not(.block-group--sentiment-stack) {
+			display: block;
+			position: relative;
+		}
+
+		.block-step-dot {
+			position: absolute;
+			left: -24px;
+			top: 18px;
+			margin: 0;
 		}
 
 		.block-group--sentiment-stack {

@@ -2,8 +2,8 @@
 import type { CloneStatus } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import AlertCircle from "phosphor-svelte/lib/WarningCircle";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { gsapFade } from "$lib/motion";
 
 let {
@@ -97,21 +97,21 @@ function handleRetryKey(e: KeyboardEvent) {
 		onclick={handleRetry}
 		onkeydown={handleRetryKey}
 	>
-		<AlertCircle {size} />
+		<WarningCircle {size} />
 		{#if showLabel}
 			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'error'}
 	<span class="inline-flex items-center gap-1 text-danger" title={tooltip} aria-label={tooltip}>
-		<AlertCircle {size} />
+		<WarningCircle {size} />
 		{#if showLabel}
 			<span class="text-xs font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'cloning'}
 	<span class="inline-flex items-center gap-1 text-accent" title={tooltip} aria-label={tooltip}>
-		<Loader2 {size} class="motion-essential-spin" />
+		<Spinner {size} class="motion-essential-spin" />
 		{#if showLabel}
 			<span class="text-xs font-medium">{label}</span>
 		{/if}

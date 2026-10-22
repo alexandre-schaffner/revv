@@ -1,7 +1,8 @@
+import { isPrLensFenceLang } from "@revv/shared";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import remend from "remend";
-import { highlightCode } from "./code-highlight.svelte";
+import { highlightCode, isHighlighterReady } from "./code-highlight.svelte";
 
 marked.setOptions({
   breaks: true,
@@ -12,16 +13,22 @@ marked.use({
   hooks: {
     // Wrap every rendered table in a scroll container so wide tables don't
     // blow out narrow panels. Styled globally via `.prose-table` in app.css.
+    // The `not-prose` opt-out keeps @tailwindcss/typography from layering its
+    // own table defaults (margins, row borders) onto the inner `<table>`, so
+    // `.prose-table` fully owns table rendering inside a `.prose` surface.
     // Safe because the custom code renderer escapes `<` to `&lt;` — real
     // `<table>` tags only appear for actually-rendered GFM tables.
     postprocess(html: string): string {
       return html
-        .replace(/<table([\s>])/g, '<div class="prose-table" tabindex="0"><table$1')
+        .replace(/<table([\s>])/g, '<div class="prose-table not-prose" tabindex="0"><table$1')
         .replace(/<\/table>/g, "</table></div>");
     },
   },
   renderer: {
     code({ text, lang }) {
+      if (isPrLensFenceLang(lang)) {
+        return `<div class="prlens-diagram not-prose" data-prlens-src="${encodeBase64(text)}"><span class="prlens-loading">Rendering diagram...</span></div>`;
+      }
       if (lang) {
         const highlighted = highlightCode(text, lang);
         if (highlighted) return highlighted;
@@ -33,6 +40,16 @@ marked.use({
   },
 });
 
+// UTF-8 → base64. Inverse of the decode in actions/prlens.svelte.ts (atob →
+// bytes → TextDecoder), so multi-byte source survives the data-attribute
+// round-trip.
+function encodeBase64(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export function renderMarkdown(source: string): string {
   // Normalize literal \n escape sequences (AI output artefact) to real newlines
   // so that marked sees actual paragraph breaks instead of two-character text.
@@ -41,6 +58,86 @@ export function renderMarkdown(source: string): string {
   return DOMPurify.sanitize(raw, {
     ADD_ATTR: ["style", "class", "tabindex"],
   });
+}
+
+// Rendered HTML per top-level block, keyed on the block's markdown source.
+// Insertion-ordered, so the oldest entry is evicted first once full.
+const blockHtmlCache = new Map<string, string>();
+const BLOCK_CACHE_LIMIT = 2000;
+
+function renderBlock(raw: string): string {
+  const cached = blockHtmlCache.get(raw);
+  if (cached !== undefined) return cached;
+  const html = renderMarkdown(raw);
+  // A block rendered before Shiki loaded holds plain `<pre>`; don't pin it.
+  if (isHighlighterReady()) {
+    if (blockHtmlCache.size >= BLOCK_CACHE_LIMIT) {
+      const oldest = blockHtmlCache.keys().next().value;
+      if (oldest !== undefined) blockHtmlCache.delete(oldest);
+    }
+    blockHtmlCache.set(raw, html);
+  }
+  return html;
+}
+
+/**
+ * {@link renderMarkdown}, split into top-level blocks that each render on
+ * their own. A streamed message only ever grows its last block, so the
+ * earlier ones come back from the cache unchanged and a `{@html}` per block
+ * leaves their DOM alone: a chunk costs one block's parse, highlight and
+ * sanitize, not the whole message's.
+ *
+ * Two constructs reach across blocks and only survive as one parse: a raw
+ * HTML block opening an element a later block closes (`<details>` around
+ * markdown), and a `[ref]: url` definition serving another block's link. A
+ * message holding either renders as a single block.
+ */
+export function renderMarkdownBlocks(source: string): string[] {
+  const normalized = source.replace(/\\n/g, "\n");
+  const tokens = marked.lexer(normalized);
+  const crossBlock =
+    Object.keys(tokens.links).length > 0 || tokens.some((token) => token.type === "html");
+  if (crossBlock) return [renderMarkdown(normalized)];
+  return tokens.filter((token) => token.type !== "space").map((token) => renderBlock(token.raw));
+}
+
+/** Declarations Shiki's highlighting writes: colors, nothing that can move or cover. */
+const SAFE_STYLE_PROPERTY = /^(?:color|background-color|--shiki[\w-]*)$/;
+/** The renderer's and Shiki's own class names; no app utility class gets through. */
+const SAFE_CLASS = /^(?:shiki[\w-]*|line|language-[\w+#.-]+|prose-table|not-prose)$/;
+
+let untrustedPurify: ReturnType<typeof DOMPurify> | null = null;
+
+function untrustedSanitizer(): ReturnType<typeof DOMPurify> {
+  if (untrustedPurify) return untrustedPurify;
+  const purify = DOMPurify(window);
+  purify.addHook("uponSanitizeAttribute", (_node, data) => {
+    if (data.attrName === "style") {
+      data.keepAttr = data.attrValue.split(";").every((declaration) => {
+        const property = declaration.split(":")[0]?.trim().toLowerCase() ?? "";
+        return property === "" || SAFE_STYLE_PROPERTY.test(property);
+      });
+    } else if (data.attrName === "class") {
+      const kept = data.attrValue.split(/\s+/).filter((name) => SAFE_CLASS.test(name));
+      data.attrValue = kept.join(" ");
+      data.keepAttr = kept.length > 0;
+    }
+  });
+  untrustedPurify = purify;
+  return purify;
+}
+
+/**
+ * {@link renderMarkdown} for markdown someone else wrote: GitHub PR bodies,
+ * comments, reviews, and the summaries CI integrations post. Its raw HTML
+ * may not restyle the app: `style` keeps only colors and `class` only the
+ * renderer's own names, so no fixed-position overlay can pass for an app
+ * dialog. No AI-output newline normalisation either: a literal `\n` here
+ * is what the author typed.
+ */
+export function renderUntrustedMarkdown(source: string): string {
+  const raw = marked.parse(source, { async: false }) as string;
+  return untrustedSanitizer().sanitize(raw, { ADD_ATTR: ["style", "tabindex"] });
 }
 
 export interface MarkdownBlock {

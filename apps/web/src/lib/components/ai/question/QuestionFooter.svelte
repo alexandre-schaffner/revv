@@ -9,7 +9,7 @@ export type QuestionFooterProps = {
 
 <script lang="ts">
 	import Check from "phosphor-svelte/lib/Check";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import X from "phosphor-svelte/lib/X";
 	import { Button } from "$lib/components/ui/button/index.js";
 
@@ -32,7 +32,7 @@ import X from "phosphor-svelte/lib/X";
 	</Button>
 	<Button size="sm" onclick={onSubmit} disabled={!canSubmit}>
 		{#if submitting}
-			<Loader2 data-icon="inline-start" class="motion-essential-spin" />
+			<Spinner data-icon="inline-start" class="motion-essential-spin" />
 			Submitting…
 		{:else}
 			<Check data-icon="inline-start" />

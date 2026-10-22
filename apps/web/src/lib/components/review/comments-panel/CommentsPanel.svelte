@@ -1,13 +1,14 @@
 <script lang="ts">
 /*
  * CommentsPanel — orchestrates the unresolved-comment list in the
- * Request Changes tab. One collapsible row per file; the expanded
+ * Conversation tab's Your review section. One collapsible row per file; the expanded
  * body enumerates all threads on that file with "THREADS" dividers.
  *
  * Keyboard navigation operates over the file rows (keyed by filePath),
  * not individual threads.
  */
 import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import { groupThreadsByFile } from "$lib/utils/group-threads";
 import CommentSummaryBar from "./CommentSummaryBar.svelte";
 import CommentTestRow from "./CommentTestRow.svelte";
@@ -16,9 +17,10 @@ interface Props {
   threads: readonly CommentThread[];
   getThreadMessages: (threadId: string) => ThreadMessage[];
   onJump: (filePath: string, line: number) => void;
+  onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump }: Props = $props();
+let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
 
 // ── Filter state ─────────────────────────────────────────
 
@@ -93,10 +95,8 @@ function focusRow(filePath: string): void {
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
+  if (isTextEditingKeyTarget(e)) return;
   const target = e.target as HTMLElement | null;
-  const inInput =
-    target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-  if (inInput) return;
 
   if (e.key === "e" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
@@ -106,7 +106,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
 
   let focusedPath: string | undefined;
   for (const [path, el] of rowRefs) {
-    if (el === target) {
+    if (el && target && (el === target || el.contains(target))) {
       focusedPath = path;
       break;
     }
@@ -169,6 +169,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
                         index={idx}
                         onToggleOpen={() => toggleRow(group.filePath)}
                         {onJump}
+                        {onDiscard}
                         onTriggerRef={(el) => setRowRef(group.filePath, el)}
                     />
                 {/each}

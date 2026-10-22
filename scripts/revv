@@ -7,7 +7,7 @@
 # and the LaunchAgent at ~/Library/LaunchAgents/com.revv.server.plist.
 #
 # Commands:
-#   revv update      Pull latest on the configured channel, rebuild, reinstall
+#   revv update      Pull latest channel; install release bundle or rebuild fallback
 #   revv channel     Print or change the release channel (stable | nightly)
 #   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
 #   revv start       Load + start the server LaunchAgent
@@ -40,6 +40,7 @@ LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/Revv"
 CLI_PATH="$HOME/.local/bin/revv"
 API_URL="http://localhost:45678"
+REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
 # Override defaults with values persisted by the installer.
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -128,6 +129,26 @@ fi
 # Canonical paths (auth key, support dir, etc.)
 REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
 REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
+# Canonical DB path. The server resolves the SQLite file to the durable
+# app-data dir (`<appDataDir>/revv.db` = `$REVV_SUPPORT_DIR/revv.db`), NOT the
+# cwd/INSTALL_DIR — see apps/server/src/db/index.ts (resolveDbPath). In a prod
+# install the server's REVV_DB_PATH is set in the LaunchAgent plist's
+# EnvironmentVariables, which THIS shell does not inherit — so we read it back
+# from the plist to track whatever the server actually uses, instead of blindly
+# recomputing the default (which only coincidentally matches today). Precedence:
+#   1. REVV_DB_PATH exported in this shell (explicit CLI/dev override)
+#   2. REVV_DB_PATH from the LaunchAgent plist (authoritative server value)
+#   3. default: $REVV_SUPPORT_DIR/revv.db
+resolve_db_path() {
+  if [[ -n "${REVV_DB_PATH:-}" ]]; then printf '%s' "$REVV_DB_PATH"; return; fi
+  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
+    local p
+    p="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:REVV_DB_PATH' \
+      "$LAUNCH_AGENT_PLIST" 2>/dev/null)" && [[ -n "$p" ]] && { printf '%s' "$p"; return; }
+  fi
+  printf '%s' "$REVV_SUPPORT_DIR/revv.db"
+}
+REVV_DB_PATH="$(resolve_db_path)"
 
 find_app() {
   for p in "${APP_CANDIDATES[@]}"; do
@@ -161,6 +182,18 @@ server_running() {
   nc -z 127.0.0.1 45678 >/dev/null 2>&1
 }
 
+wait_for_server() {
+  local timeout_seconds="${1:-20}"
+  local deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    if curl -fsS "$API_URL/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 # ── Channel helpers ─────────────────────────────────────────────────────
 # SQLite is the source of truth for `update_channel`. The server writes
 # through to it inside `SettingsService.updateSettings`, so a read of the
@@ -168,12 +201,28 @@ server_running() {
 # entirely; writes go through the API so the in-memory `SubscriptionRef`
 # cache that drives the web app stays consistent.
 read_channel() {
-  command -v sqlite3 >/dev/null 2>&1 || \
-    fail "sqlite3 not found — install it (e.g. 'brew install sqlite') and retry."
-  [[ -f "$INSTALL_DIR/revv.db" ]] || \
-    fail "Revv database missing at $INSTALL_DIR/revv.db. Run 'revv start' to initialize it."
+  # NEVER abort the caller: `read_channel` runs at the very top of `cmd_update`,
+  # before the fresh source (and this CLI) is installed. A hard failure here
+  # would strand an install that can't read its own channel — including any
+  # future DB-path regression — with no way to `revv update` out of it. So on
+  # any unreadable-DB condition we warn (to stderr, so the captured stdout stays
+  # clean) and default to 'stable', letting the update proceed and self-heal.
+  # A nightly user hitting this can re-run with 'revv update --channel nightly'.
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 not found — defaulting to the 'stable' channel for this update (install it, e.g. 'brew install sqlite', for channel-aware updates)." >&2
+    printf "stable"; return 0
+  fi
+  # Prefer the canonical app-data DB, but fall back to the legacy cwd/INSTALL_DIR
+  # location: on an install whose new server hasn't booted yet, the one-time
+  # relocation in db/index.ts hasn't run, so the DB may still sit at the old path.
+  local db="$REVV_DB_PATH"
+  [[ -f "$db" ]] || db="$INSTALL_DIR/revv.db"
+  if [[ ! -f "$db" ]]; then
+    warn "Revv database not found (looked in $REVV_DB_PATH and $INSTALL_DIR/revv.db) — defaulting to 'stable'. Run 'revv start' to initialize it, or pass 'revv update --channel <stable|nightly>' to pick explicitly." >&2
+    printf "stable"; return 0
+  fi
   local v
-  v="$(sqlite3 "$INSTALL_DIR/revv.db" \
+  v="$(sqlite3 "$db" \
     "SELECT update_channel FROM user_settings WHERE id='default';" 2>/dev/null)"
   case "$v" in nightly) printf "nightly" ;; *) printf "stable" ;; esac
 }
@@ -219,7 +268,7 @@ ${BOLD}Usage:${RESET}
   revv <command>
 
 ${BOLD}Commands:${RESET}
-  ${CYAN}update${RESET}      Pull latest on the configured channel, rebuild, reinstall
+  ${CYAN}update${RESET}      Pull latest channel; install release bundle or rebuild fallback
               ${DIM}flags: --channel <stable|nightly> (one-shot, doesn't persist)${RESET}
   ${CYAN}channel${RESET}     Print or change the release channel (stable | nightly)
   ${CYAN}uninstall${RESET}   Remove ALL Revv artifacts (app, data, config, services, CLI)
@@ -245,7 +294,7 @@ ${BOLD}Install${RESET}
   Helper lib:      $HOME/.local/share/revv/common.sh
 
 ${BOLD}Data${RESET}
-  Database:        $INSTALL_DIR/revv.db
+  Database:        $REVV_DB_PATH
   Git clones:      $HOME/.revv/repos/
   Settings:        $HOME/.revv/settings.json
   Auth key:        $REVV_AUTH_KEY
@@ -378,6 +427,7 @@ cmd_update() {
 
   # ── Fetch ─────────────────────────────────────────────────
   spin_start "Fetching latest from origin…"
+  git -C "$INSTALL_DIR" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   git -C "$INSTALL_DIR" fetch --all --prune --tags >/dev/null 2>&1 || true
   spin_stop 1
 
@@ -393,7 +443,7 @@ cmd_update() {
 
   if [[ "$before" == "$after" ]]; then
     info "Already up to date ($(git -C "$INSTALL_DIR" rev-parse --short HEAD))"
-    if ! confirm "Force a rebuild anyway?"; then
+    if ! confirm "Force a reinstall anyway?"; then
       success "Nothing to do."
       return 0
     fi
@@ -413,40 +463,18 @@ cmd_update() {
   step "Dependencies"
   (cd "$INSTALL_DIR" && bun install)
 
-  # ── Build ─────────────────────────────────────────────────
-  step "Build"
-  (cd "$INSTALL_DIR" && make dist)
-
-  # Find the newly built .app.
-  local bundle_app app_name
-  bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
-  if [[ -z "$bundle_app" ]]; then
-    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+  # Pick up release helpers from the freshly checked-out source before the
+  # app install step. The copy beside the CLI may be from an older release.
+  if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
+    unset __REVV_COMMON_LOADED__
+    # shellcheck disable=SC1091
+    source "$INSTALL_DIR/scripts/lib/common.sh"
   fi
-  [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
-  app_name="$(basename "$bundle_app")"
 
-  # Determine install destination.
-  local dest_app dest_dir old_app
+  # ── Desktop app ───────────────────────────────────────────
+  local bundle_app app_name dest_app dest_dir old_app used_prebuilt=0
   old_app="$(find_app)" || old_app=""
-  if [[ -n "$old_app" ]]; then
-    dest_dir="$(dirname "$old_app")"
-  else
-    dest_dir="/Applications"
-  fi
-  if [[ ! -w "$dest_dir" ]]; then
-    warn "$dest_dir is not writable — falling back to ~/Applications"
-    dest_dir="$HOME/Applications"
-    mkdir -p "$dest_dir"
-  fi
-  dest_app="$dest_dir/$app_name"
 
-  if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
-    info "Product name changed — removing stale $old_app"
-    rm -rf "$old_app"
-  fi
-
-  # ── Install ───────────────────────────────────────────────
   printf "\n"
   spin_start "Quitting Revv…"
   osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
@@ -454,18 +482,69 @@ cmd_update() {
   sleep 1
   spin_stop 1
 
-  spin_start "Installing ${app_name}…"
-  rm -rf "$dest_app"
-  cp -R "$bundle_app" "$dest_app"
-  xattr -cr "$dest_app" 2>/dev/null || true
-  spin_stop 1
+  step "Desktop app"
+  local release_tag old_app_dir=""
+  if [[ "$channel" == "stable" ]]; then
+    release_tag="$(git -C "$INSTALL_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  else
+    release_tag="nightly-$(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+  fi
+  [[ -n "$old_app" ]] && old_app_dir="$(dirname "$old_app")"
+  if install_release_app "$release_tag" "$old_app_dir"; then
+    dest_app="$REVV_INSTALLED_APP"
+    app_name="$(basename "$dest_app")"
+    used_prebuilt=1
+    success "Installed → $dest_app"
+  else
+    warn "Could not install a pre-built app bundle; falling back to a local build."
+  fi
 
-  # Re-source common.sh from the freshly-pulled tree so we pick up any new
-  # helpers that didn't exist in the version this revv CLI started with.
-  if [[ -f "$INSTALL_DIR/scripts/lib/common.sh" ]]; then
-    unset __REVV_COMMON_LOADED__
-    # shellcheck disable=SC1091
-    source "$INSTALL_DIR/scripts/lib/common.sh"
+  if [[ "$used_prebuilt" -eq 0 ]]; then
+    if declare -F detect_platform >/dev/null 2>&1 \
+      && declare -F ensure_xcode_clt >/dev/null 2>&1 \
+      && declare -F ensure_rust >/dev/null 2>&1; then
+      step "Checking local build toolchain"
+      detect_platform
+      ensure_xcode_clt
+      ensure_rust
+    elif ! command -v cargo >/dev/null 2>&1; then
+      fail "Rust/Cargo is required for the local Tauri build fallback. Install it with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    fi
+
+    step "Build"
+    (cd "$INSTALL_DIR" && make dist)
+
+    # Find the newly built .app.
+    bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
+    if [[ -z "$bundle_app" ]]; then
+      bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
+    fi
+    [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
+    app_name="$(basename "$bundle_app")"
+
+    # Determine install destination.
+    if [[ -n "$old_app" ]]; then
+      dest_dir="$(dirname "$old_app")"
+    else
+      dest_dir="/Applications"
+    fi
+    if [[ ! -w "$dest_dir" ]]; then
+      warn "$dest_dir is not writable — falling back to ~/Applications"
+      dest_dir="$HOME/Applications"
+      mkdir -p "$dest_dir"
+    fi
+    dest_app="$dest_dir/$app_name"
+
+    if [[ -n "$old_app" && "$old_app" != "$dest_app" && -d "$old_app" ]]; then
+      info "Product name changed — removing stale $old_app"
+      rm -rf "$old_app"
+    fi
+
+    spin_start "Installing ${app_name}…"
+    rm -rf "$dest_app"
+    cp -R "$bundle_app" "$dest_app"
+    xattr -cr "$dest_app" 2>/dev/null || true
+    spin_stop 1
   fi
 
   # ── LaunchAgent ───────────────────────────────────────────
@@ -499,6 +578,14 @@ cmd_update() {
     launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     spin_stop 1
+  fi
+
+  spin_start "Waiting for API server…"
+  if wait_for_server 30; then
+    spin_stop 1
+  else
+    spin_stop 0
+    warn "API server did not respond before launch; opening Revv anyway."
   fi
 
   # Refresh the CLI itself + helper lib in case they changed upstream.
@@ -566,10 +653,13 @@ cmd_uninstall() {
   local tauri_http_caches="$HOME/Library/Caches/${tauri_id}.WebView"
   local tauri_preferences="$HOME/Library/Preferences/${tauri_id}.plist"
 
-  # The production database lives in the server CWD (= INSTALL_DIR for prod installs).
-  local prod_db="$INSTALL_DIR/revv.db"
-  local prod_db_wal="$INSTALL_DIR/revv.db-wal"
-  local prod_db_shm="$INSTALL_DIR/revv.db-shm"
+  # The production database lives in the app-data dir ($REVV_SUPPORT_DIR/revv.db,
+  # resolved into $REVV_DB_PATH above). Step 7 removes $REVV_SUPPORT_DIR wholesale,
+  # but list/remove it explicitly too so a REVV_DB_PATH override outside the
+  # support dir is still cleaned up.
+  local prod_db="$REVV_DB_PATH"
+  local prod_db_wal="$REVV_DB_PATH-wal"
+  local prod_db_shm="$REVV_DB_PATH-shm"
 
   cat <<EOF
 
@@ -645,11 +735,17 @@ EOF
   rm -f "$tauri_autostart_plist"
 
   # ── 5. Remove database files ────────────────────────────────
-  # Production DB (lives in server CWD = INSTALL_DIR for prod installs)
+  # Production DB lives in the app-data dir ($prod_db, resolved from
+  # $REVV_DB_PATH); step 7 removes $REVV_SUPPORT_DIR wholesale, but clean it up
+  # explicitly here too so a REVV_DB_PATH override outside that tree is handled.
   for f in "$prod_db" "$prod_db_wal" "$prod_db_shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done
-  # Also check repo root (some installs run from there)
+  # Also sweep the legacy cwd/INSTALL_DIR and repo-root locations (pre-b985e5c
+  # installs, or a dev server run from either directory).
+  for f in "$INSTALL_DIR/revv.db" "$INSTALL_DIR/revv.db-wal" "$INSTALL_DIR/revv.db-shm"; do
+    [[ -f "$f" ]] && rm -f "$f"
+  done
   for f in "./revv.db" "./revv.db-wal" "./revv.db-shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done

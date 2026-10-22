@@ -64,13 +64,40 @@ export type NormalizedAgentEvent =
       readonly subagentProviderCallId?: string;
     }
   /**
+   * Terminal result of a previously-emitted `tool-call`, decoded from the ACP
+   * `tool_call_update` notification once its `status` reaches `completed` /
+   * `failed`. `callId` correlates back to the originating `tool-call`. `output`
+   * is best-effort textual content (text content blocks joined; diffs rendered
+   * to text); producers truncate it to keep the journal small. Surfaced to the
+   * UI as a clickable output peek (chat `activity-result` /
+   * walkthrough `exploration-result`).
+   */
+  | {
+      readonly kind: "tool-result";
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }
+  /**
+   * Late-arriving tool input for a previously-emitted `tool-call`, decoded from
+   * the first `tool_call_update` that carries a usable `rawInput`/`locations`.
+   * Some adapters send the initial `tool_call` with an empty input and only fill
+   * it in on a follow-up update; this lets the UI back-fill the activity's
+   * filename/command (and file peek) by `callId`.
+   */
+  | {
+      readonly kind: "tool-call-update";
+      readonly callId: string;
+      readonly input: unknown;
+    }
+  /**
    * Full task-list snapshot. Both providers re-emit the entire list on each
    * update — the consumer reconciles against persisted rows.
    */
   | {
       readonly kind: "task-list-update";
       readonly tasks: ReadonlyArray<NormalizedTask>;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
     }
   /**
    * Agent has presented a plan (Claude ExitPlanMode tool, or the opencode
@@ -83,7 +110,7 @@ export type NormalizedAgentEvent =
       readonly kind: "plan-presented";
       readonly markdown: string;
       readonly providerPlanId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
     }
   /**
    * A sub-agent invocation has started. The driver maintains a closure-side
@@ -96,7 +123,7 @@ export type NormalizedAgentEvent =
       readonly subagentType: string;
       readonly description: string;
       readonly prompt: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
     }
   /**
    * A sub-agent invocation has finished. `ok = false` means the sub-agent
@@ -108,7 +135,7 @@ export type NormalizedAgentEvent =
       readonly providerCallId: string;
       readonly result: string;
       readonly ok: boolean;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
     }
   /**
    * Agent has asked the user one or more questions and is paused waiting
@@ -126,53 +153,42 @@ export type NormalizedAgentEvent =
   | {
       readonly kind: "user-question-asked";
       readonly providerRequestId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
       readonly questions: ReadonlyArray<import("@revv/shared").NormalizedQuestion>;
       readonly previewFormat: "markdown" | "html";
       /** Opencode `QuestionRequest.tool.callID`; absent for Claude. */
       readonly providerToolCallId?: string;
     }
   /**
-   * Opencode-only follow-up: the daemon broadcasts `question.replied` /
-   * `question.rejected` after our HTTP POST resolves the question. We emit
+   * Out-of-band resolution follow-up: emitted when the agent surfaces a
+   * question-resolved signal after our reply was POSTed back to it. We emit
    * this so the persistence wrapper can flip the row's status idempotently
    * (the answer endpoint already wrote the DB row on the user-facing path).
    *
-   * Claude doesn't emit this — its resolution lives entirely inside the
-   * answer endpoint (resolve the in-memory deferred and update DB inline).
+   * Agents whose resolution lives entirely inside the answer endpoint
+   * (resolve the in-memory deferred and update DB inline) never emit this.
    */
   | {
       readonly kind: "user-question-resolved";
       readonly providerRequestId: string;
-      readonly source: "opencode";
+      readonly source: "acp";
       readonly status: "answered" | "rejected";
       readonly answers?: Readonly<Record<string, ReadonlyArray<string>>>;
     }
-  | { readonly kind: "error"; readonly message: string };
-
-/**
- * Helper used by both Claude and opencode adapters to derive `source` /
- * `mcpServer` / `bareName` from a raw tool name. Public so callers writing
- * their own tool-name dispatchers can stay consistent.
- */
-export function classifyToolCallShape(rawToolName: string): {
-  source: "builtin" | "mcp";
-  mcpServer?: string;
-  bareName: string;
-} {
-  if (rawToolName.startsWith("mcp__")) {
-    const rest = rawToolName.slice("mcp__".length);
-    const sep = rest.indexOf("__");
-    if (sep > 0) {
-      return {
-        source: "mcp",
-        mcpServer: rest.slice(0, sep),
-        bareName: rest.slice(sep + 2),
-      };
+  /**
+   * Point-in-time context-window occupancy from the agent. ACP's
+   * `usage_update` carries only `used` (tokens currently in context) and
+   * `size` (window size) — NOT the input/output/cache throughput breakdown —
+   * so this event populates the occupancy gauge only. Consumers that track
+   * `WalkthroughTokenUsage` fold it via `mergeContextOccupancy`; chat ignores
+   * it. Not all ACP agents emit it; consumers must not depend on one arriving.
+   */
+  | {
+      readonly kind: "usage";
+      readonly contextTokens: number;
+      readonly contextWindowTokens?: number;
     }
-  }
-  return { source: "builtin", bareName: rawToolName };
-}
+  | { readonly kind: "error"; readonly message: string };
 
 export function normalizeTaskStatus(v: unknown): "pending" | "in_progress" | "completed" {
   if (v === "in_progress") return "in_progress";
@@ -192,13 +208,38 @@ export function normalizeTaskPriority(v: unknown): "low" | "medium" | "high" | n
 
 import type { ActivityKind } from "@revv/shared";
 import { classifyTool, normalizeToolName } from "@revv/shared";
-import { buildExplorationDescription } from "../prompts/walkthrough";
+import { buildExplorationDescription, toRepoRelative } from "../prompts/walkthrough";
 
 export interface BuiltActivity {
   readonly activityKind: ActivityKind;
   readonly toolName: string;
   readonly summary: string;
   readonly payload?: unknown;
+  readonly callId?: string;
+}
+
+/**
+ * Tool-input keys that hold a filesystem path. When `cwd` is known we rewrite
+ * these to repo-relative form so the persisted payload matches the (already
+ * relativized) summary — and so the web file-peek can pass the path straight to
+ * `GET /api/prs/:id/repo-file` (which resolves against the clone root, not an
+ * absolute worktree path).
+ */
+const PATH_INPUT_KEYS = ["file_path", "path", "notebook_path"] as const;
+
+export function relativizeToolInput(input: unknown, cwd?: string): unknown {
+  if (!cwd || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const obj = input as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  for (const key of PATH_INPUT_KEYS) {
+    const v = obj[key];
+    if (typeof v !== "string") continue;
+    const rel = toRepoRelative(v, cwd);
+    if (rel === v) continue;
+    next ??= { ...obj };
+    next[key] = rel;
+  }
+  return next ?? input;
 }
 
 /**
@@ -210,13 +251,23 @@ export interface BuiltActivity {
  * Used by every provider that surfaces tool calls in the UI. Centralising
  * this means a future change to how we describe Bash commands or MCP tools
  * only needs to land in one place.
+ *
+ * `cwd` (the agent's working directory — the per-job git worktree) is optional:
+ * when supplied, absolute path arguments are rendered relative to it so the
+ * feed shows `apps/server/…` instead of the full `/Users/…/worktree/…` path.
  */
-export function buildActivity(rawToolName: string, input: unknown): BuiltActivity {
+export function buildActivity(
+  rawToolName: string,
+  input: unknown,
+  cwd?: string,
+  callId?: string,
+): BuiltActivity {
   const toolName = normalizeToolName(rawToolName);
   return {
     activityKind: classifyTool(toolName),
     toolName,
-    summary: buildExplorationDescription(toolName, input),
-    ...(input !== undefined ? { payload: input } : {}),
+    summary: buildExplorationDescription(toolName, input, cwd),
+    ...(input !== undefined ? { payload: relativizeToolInput(input, cwd) } : {}),
+    ...(callId !== undefined ? { callId } : {}),
   };
 }

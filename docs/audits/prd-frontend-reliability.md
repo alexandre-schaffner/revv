@@ -16,7 +16,7 @@ The frontend audit uncovered 6 critical bugs and 8 high-severity reliability iss
 
 ### US-001: Fix `mergePullRequests` duplicate PR bug
 
-**Description:** As a user, I want the PR list to remain deduplicated after WebSocket updates, so that I don't see the same PR multiple times.
+**Description:** As a user, I want the PR list to remain deduplicated after SSE `prs:updated` pushes, so that I don't see the same PR multiple times.
 
 **Acceptance Criteria:**
 
@@ -25,16 +25,17 @@ The frontend audit uncovered 6 critical bugs and 8 high-severity reliability iss
 - [ ] After receiving `prs:updated` multiple times, `pullRequests` array length is stable.
 - [ ] `make typecheck` passes.
 
-### US-002: Fix `disconnect()` → reconnect loop
+### US-002: Ensure sign-out fully stops the SSE connection
 
-**Description:** As a user, I want signing out to stop all WebSocket activity, so that the app does not spam reconnection attempts with a cleared token.
+**Description:** As a user, I want signing out to stop all SSE activity, so that the app does not keep reconnecting with a cleared token.
+
+**Context:** The realtime channel is `EventSource`, which auto-reconnects on transient errors. Sign-out calls `disconnect()`, which must `close()` the source (stopping native reconnection) and clear the liveness watchdog — otherwise the browser keeps retrying `GET /api/events` with a stale token.
 
 **Acceptance Criteria:**
 
-- [ ] `apps/web/src/lib/stores/ws.svelte.ts` declares `let intentionalDisconnect = false`.
-- [ ] `disconnect()` sets `intentionalDisconnect = true` before closing the socket.
-- [ ] `onClose` handler checks `if (intentionalDisconnect)` and skips `scheduleReconnect()`.
-- [ ] After `signOut()`, no WebSocket connection attempts occur for ≥5 seconds.
+- [ ] `apps/web/src/lib/stores/events.svelte.ts` `disconnect()` clears the watchdog timer, calls `source.close()`, and nulls `source`.
+- [ ] The `error` handler does not schedule a manual reconnect that could race the native retry after an intentional close.
+- [ ] After `signOut()`, no `GET /api/events` connection attempts occur for ≥5 seconds.
 - [ ] `make typecheck` passes.
 
 ### US-003: Fix `applyUserUpdate` avatar loss
@@ -126,7 +127,7 @@ The frontend audit uncovered 6 critical bugs and 8 high-severity reliability iss
 ## Functional Requirements
 
 - FR-1: PR deduplication must use a `Set<string>` of IDs, not arrays.
-- FR-2: WebSocket disconnect must be intentional-disconnect-aware.
+- FR-2: SSE sign-out must fully `close()` the `EventSource` so native auto-reconnect stops.
 - FR-3: User state updates must preserve existing fields via spread.
 - FR-4: Destructive operations (removeAccount) must complete locally regardless of network.
 - FR-5: 401 responses from identity must trigger sign-out.
@@ -150,9 +151,9 @@ The frontend audit uncovered 6 critical bugs and 8 high-severity reliability iss
 
 ## Success Metrics
 
-- PR list length is stable after repeated WS updates.
+- PR list length is stable after repeated SSE `prs:updated` pushes.
 - Sign-out stops all network activity (verified in Network tab).
-- Avatar persists after partial `user:updated` WS messages.
+- Avatar persists after partial `user:updated` SSE messages.
 - Double-clicking "Pin" sends exactly one request.
 - HMR remount does not duplicate `setInterval` timers.
 - `make typecheck && make lint` passes.

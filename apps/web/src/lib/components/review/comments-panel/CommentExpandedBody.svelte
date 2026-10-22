@@ -8,8 +8,10 @@
  * thin left guide.
  */
 
-import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import Trash from "phosphor-svelte/lib/Trash";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { renderMarkdown } from "$lib/utils/markdown";
@@ -19,9 +21,13 @@ interface Props {
   threads: readonly CommentThread[];
   getThreadMessages: (threadId: string) => ThreadMessage[];
   onJump?: ((filePath: string, line: number) => void) | undefined;
+  /** Discard a pending (unsynced) thread. Only offered for threads that
+      haven't been pushed to GitHub yet (externalCommentId == null). */
+  onDiscard?: ((threadId: string) => void) | undefined;
 }
 
-let { threads, getThreadMessages, onJump }: Props = $props();
+let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
+const currentUserLogin = $derived(getCurrentUserLogin());
 
 // Flatten to a render-ready shape so the template doesn't recompute on
 // every iteration. Re-derive when the shiki highlighter becomes ready
@@ -58,7 +64,18 @@ const renderedThreads = $derived.by(() => {
                         title="Jump to diff line {entry.thread.startLine}"
                     >
                         <span class="thread-jump-label">jump</span>
-                        <ArrowUpRight size={11} weight="fill" aria-hidden="true" />
+                        <ArrowUpRight size={11} aria-hidden="true" />
+                    </button>
+                {/if}
+                {#if onDiscard && entry.thread.externalCommentId == null && entry.messages[0] && canUserModifyComment(entry.messages[0], currentUserLogin)}
+                    <button
+                        type="button"
+                        class="thread-discard"
+                        onclick={() => onDiscard?.(entry.thread.id)}
+                        title="Discard this pending comment"
+                    >
+                        <Trash size={11} aria-hidden="true" />
+                        <span class="thread-discard-label">discard</span>
                     </button>
                 {/if}
             </div>
@@ -76,7 +93,7 @@ const renderedThreads = $derived.by(() => {
                                     {formatRelativeTime(msg.createdAt)}
                                 </time>
                             </div>
-                            <div class="turn-body prose">
+                            <div class="turn-body prose prose-sm prose-dense">
                                 {#if entry.rendered[i]?.html}
                                     {@html entry.rendered[i].html}
                                 {:else}
@@ -162,6 +179,43 @@ const renderedThreads = $derived.by(() => {
         line-height: 1;
     }
 
+    /* Discard sits at the right edge of the thread head. Danger-tinted to
+       match the inline AnnotationThread "Discard" affordance. */
+    .thread-discard {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        border: 1px solid color-mix(in srgb, var(--color-danger) 24%, transparent);
+        background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+        color: var(--color-danger);
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        transition:
+            background var(--duration-snap) var(--ease-soft),
+            border-color var(--duration-snap) var(--ease-soft);
+    }
+
+    .thread-discard:hover {
+        background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+        border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+    }
+
+    .thread-discard:focus-visible {
+        outline: 2px solid var(--color-danger);
+        outline-offset: 2px;
+    }
+
+    .thread-discard-label {
+        line-height: 1;
+    }
+
     /* ── Turns ─────────────────────────────────────────────── */
 
     .turns {
@@ -199,11 +253,9 @@ const renderedThreads = $derived.by(() => {
         margin-left: auto;
     }
 
+    /* Density + body tone come from `prose prose-sm prose-dense`; this only
+       owns the reading measure and offset. */
     .turn-body {
-        font-family: var(--font-sans);
-        font-size: 13px;
-        line-height: 1.55;
-        color: var(--color-text-secondary);
         max-width: 65ch;
         margin-top: 6px;
     }
@@ -214,42 +266,8 @@ const renderedThreads = $derived.by(() => {
         font-style: italic;
     }
 
-    /* Prose overrides — keep paragraphs flush, trim spacing. */
-    .turn-body :global(p) {
-        margin: 0 0 6px;
-    }
-    .turn-body :global(p:last-child) {
-        margin-bottom: 0;
-    }
-    .turn-body :global(strong) {
-        font-weight: 600;
-        color: var(--color-text-primary);
-    }
-    .turn-body :global(code) {
-        font-family: var(--font-mono, ui-monospace, monospace);
-        font-size: 0.85em;
-        background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
-        padding: 1px 4px;
-        border-radius: 3px;
-    }
-    .turn-body :global(ul),
-    .turn-body :global(ol) {
-        margin: 4px 0 6px;
-        padding-left: 1.25em;
-    }
-    .turn-body :global(pre) {
-        background: var(--color-bg-tertiary);
-        padding: 8px 10px;
-        border-radius: 4px;
-        overflow-x: auto;
-        font-size: 12px;
-        margin: 6px 0;
-    }
-    .turn-body :global(pre code) {
-        background: transparent;
-        padding: 0;
-        font-size: inherit;
-    }
+    /* Markdown styling comes from the app-wide themed @tailwindcss/typography
+       prose layer (see app.css); `.turn-body` only owns the reading measure. */
 
     .empty-thread {
         margin: 0;

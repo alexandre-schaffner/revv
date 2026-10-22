@@ -1,38 +1,52 @@
 import { cors } from "@elysiajs/cors";
-import { API_PORT } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { auth } from "./auth";
+import { stopAllAcpConnections } from "./ai/acp/acp-connection";
+import { auth, db } from "./auth";
 import { serverEnv } from "./config";
+import { resolveDbPath } from "./db/index";
+import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
+import { isLoopbackAddress } from "./net";
+import { configuredGitHubHosts, githubLedgerPath } from "./observability/github-ledger/config";
+import { enterOrigin, relabelOrigin } from "./observability/github-ledger/origin";
+import { installGitHubLedger } from "./observability/github-ledger/record";
+import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
 import { eventsRoute } from "./routes/events";
 import { githubRoutes } from "./routes/github";
+import { externalIntegrationRoutes } from "./routes/integrations";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
+import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
 import { mcpRecapRoute } from "./routes/mcp/recap";
+import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
+import { prConversationRoutes } from "./routes/prs-conversation";
 import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
+import { stackReviewRoutes } from "./routes/stack-review";
+import { repoStackRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
 import { walkthroughsRoute } from "./routes/walkthroughs";
-import { wsRoute } from "./routes/ws";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
 import { DbMaintenance } from "./services/DbMaintenance";
+import { Identity } from "./services/Identity";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
+import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -40,33 +54,87 @@ import { acquireSingleInstance } from "./singleInstance";
 // Acquire a PID file keyed on the DB path so dev (revv-dev.db) and prod
 // (revv.db) environments stay independent.  If a stale instance is found it
 // is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
-const port = Number(process.env.PORT) || API_PORT;
-const releasePidFile = acquireSingleInstance(`${serverEnv.dbPath}.pid`);
+const port = serverEnv.port;
+const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.channel}.pid`);
 
 logError("server", `starting on port ${port}`);
+
+const ledgerPath = githubLedgerPath();
+if (ledgerPath !== null) {
+  installGitHubLedger({ path: ledgerPath, enterpriseHosts: () => configuredGitHubHosts(db) });
+}
+
+const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");
 
 const app = new Elysia()
   .use(
     cors({
-      origin: [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://[::1]:5173",
-        "http://localhost:45678",
-        "http://localhost:45679",
-        "tauri://localhost",
-        "https://tauri.localhost",
-      ],
+      origin: [...CORS_ORIGINS],
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
+  .onRequest(({ request, server, set }) => {
+    // Defense-in-depth: reject non-loopback peers so a future bind-widening
+    // can't silently re-expose the API. Skipped when bound to a non-loopback
+    // host; fails open when the peer IP is undeterminable.
+    if (isLoopbackAddress(serverEnv.host)) {
+      const peer = server?.requestIP(request)?.address;
+      if (peer && !isLoopbackAddress(peer)) {
+        set.status = 403;
+        return "Forbidden: this server only accepts loopback connections";
+      }
+    }
+  })
+  .onRequest((ctx) => {
+    // Stamp request start time for the post-hoc http.request span.
+    (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
+    const { pathname } = new URL(ctx.request.url);
+    enterOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request");
+  })
+  .onTransform({ as: "global" }, ({ request, route }) => {
+    if (route) relabelOrigin(`${request.method} ${route}`);
+  })
+  .onAfterHandle(({ request, store, set }) => {
+    const startMs = (store as { _revvStartMs?: number })._revvStartMs;
+    if (startMs == null) return;
+    const url = new URL(request.url);
+    recordSpan("http.request", startMs, performance.now() - startMs, {
+      method: request.method,
+      path: url.pathname,
+      status: set.status,
+      statusClass: `${Math.floor(Number(set.status) / 100)}xx`,
+    });
+  })
+  .onError(({ request, store, set, error: err }) => {
+    const startMs = (store as { _revvStartMs?: number })._revvStartMs;
+    if (startMs == null) return;
+    const url = new URL(request.url);
+    recordSpan(
+      "http.request",
+      startMs,
+      performance.now() - startMs,
+      {
+        method: request.method,
+        path: url.pathname,
+        status: set.status ?? 500,
+        statusClass: `${Math.floor(Number(set.status ?? 500) / 100)}xx`,
+      },
+      err instanceof Error
+        ? { name: err.name, message: err.message }
+        : { name: "Error", message: String(err) },
+    );
+  })
   .mount(auth.handler)
   .use(chatRoute)
   .use(repoRoutes)
   .use(githubRoutes)
   .use(prRoutes)
+  .use(prConversationRoutes)
+  .use(stackRoutes)
+  .use(repoStackRoutes)
+  .use(stackReviewRoutes)
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
@@ -77,24 +145,46 @@ const app = new Elysia()
   .use(onboardingRoutes)
   .use(userRoutes)
   .use(walkthroughsRoute)
-  .use(wsRoute)
   .use(eventsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
   .use(mcpRecapRoute)
+  .use(mcpStackBriefRoute)
   .use(mcpChatContextRoute)
+  .use(mcpExternalAgentRoute)
+  .use(externalIntegrationRoutes)
   .get("/api/health", () => ({
     status: "ok" as const,
+    channel: serverEnv.channel,
+    port,
     timestamp: new Date().toISOString(),
   }))
   .listen({
     port,
+    // Loopback only — without a hostname Bun binds to 0.0.0.0 (every interface).
+    hostname: serverEnv.host,
     // Prevent Bun's default idle timeout from killing long-running SSE streams
     // (e.g. agent chat turns that go quiet for >10 s during tool execution).
     idleTimeout: 255,
   });
 
-logError("server", `listening on http://localhost:${port}`);
+logError("server", `listening on http://${serverEnv.host}:${port}`);
+
+enterOrigin("boot", "boot");
+
+// Migrate any plaintext GitHub tokens left in the `account` table into the OS
+// secure store, then null the columns. Awaited before the sync scheduler boots
+// so the first poll cycle reads tokens from their new home. One-time and
+// idempotent — a no-op once every row has been migrated.
+await AppRuntime.runPromise(
+  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
+)
+  .then((n) => {
+    if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
+  })
+  .catch((err) => {
+    logError("secret-store", "legacy token migration failed:", err);
+  });
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 // SIGTERM arrives on bun --watch restarts and launchd stops.
@@ -134,6 +224,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
     await AppRuntime.dispose();
   } catch {}
 
+  // 2b. Tear down any pooled ACP agent subprocesses (chat transport).
+  try {
+    stopAllAcpConnections();
+  } catch {}
+
   // 3. Release the PID file so the next startup doesn't treat us as stale.
   releasePidFile();
 
@@ -155,7 +250,7 @@ AppRuntime.runPromise(Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resumePendi
 );
 
 // Start the background sync scheduler on boot, decoupled from any UI
-// client. Previously this was triggered from the WebSocket `open` handler,
+// client. Previously this was triggered from the realtime transport handler,
 // which meant sync only ran while the desktop window was open. With the
 // Tauri app running in tray mode (window hidden / closed to tray), the
 // server is the only long-lived process — it must drive its own polling.
@@ -182,12 +277,29 @@ AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePend
     logError("recap-jobs", "resumePending failed on boot:", err);
   });
 
+AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
+  (err) => {
+    logError("stack-brief", "resumePending failed on boot:", err);
+  },
+);
+
 // Resume any repos with cloneStatus 'pending' or 'error' on boot so that
 // repos that failed to clone (e.g. due to a server restart mid-clone) are
 // automatically retried without requiring user intervention.
 AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.resumePendingClones())).catch(
   (err) => {
     logError("repo-clone", "resumePendingClones failed on boot:", err);
+  },
+);
+
+// Reap Revv-owned review worktrees + `revv/pr-N` branches for PRs that are
+// closed/merged (or no longer tracked), left behind by prior runs. Bounds
+// accumulation in the user's clone so VSCode isn't overwhelmed. Runs after
+// `resumePending` so any in-flight generation's worktree is protected by
+// `pruneWorktree`'s `generating` guard. Best-effort; never crashes boot.
+AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.sweepStaleWorktrees())).catch(
+  (err) => {
+    logError("repo-clone", "sweepStaleWorktrees failed on boot:", err);
   },
 );
 

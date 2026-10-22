@@ -6,6 +6,8 @@ export interface ToolActivityGroupProps {
   active?: boolean;
   defaultOpen?: boolean;
   forceOpenWhileActive?: boolean;
+  /** PR id, threaded to each item's card so file peeks can fetch content. */
+  prId?: string;
   class?: string;
 }
 </script>
@@ -14,20 +16,21 @@ export interface ToolActivityGroupProps {
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import ToolActivityCountSummary from "$lib/components/ai/tool/ToolActivityCountSummary.svelte";
-import ToolActivityReveal from "$lib/components/ai/tool/ToolActivityReveal.svelte";
+import ToolCallCard from "$lib/components/ai/tool/ToolCallCard.svelte";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
 import { cn } from "$lib/utils.js";
-import { activityGroupSummary, activityToolLabel } from "$lib/utils/activity-groups";
+import { activityGroupSummary } from "$lib/utils/activity-groups";
 
 let {
   items,
   active = false,
   defaultOpen = false,
   forceOpenWhileActive = false,
+  prId,
   class: className,
 }: ToolActivityGroupProps = $props();
 
@@ -65,14 +68,15 @@ $effect(() => {
     <CollapsibleContent class="tool-activity-content">
       <div class="tool-activity-list">
         {#each items as item (item.id)}
-          <div class="tool-activity-item">
-            <span class="tool-activity-item-tool">{activityToolLabel(item)}</span>
-            {#key item.summary}
-              <ToolActivityReveal class="tool-activity-item-summary">
-                {item.summary}
-              </ToolActivityReveal>
-            {/key}
-          </div>
+          <ToolCallCard
+            activityKind={item.activityKind}
+            toolName={item.toolName}
+            summary={item.summary}
+            payload={item.payload}
+            output={item.output}
+            isError={item.isError}
+            prId={prId}
+          />
         {/each}
       </div>
     </CollapsibleContent>
@@ -148,31 +152,8 @@ $effect(() => {
   .tool-activity-list {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.375rem 0 0.125rem 0.875rem;
-  }
-
-  .tool-activity-item {
-    display: flex;
-    min-width: 0;
-    align-items: baseline;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    line-height: 1.45;
-  }
-
-  .tool-activity-item-tool {
-    flex-shrink: 0;
-    font-weight: 500;
-    color: var(--color-text-primary);
-  }
-
-  .tool-activity-item-summary {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: color-mix(in srgb, var(--color-text-muted) 72%, transparent);
+    gap: 0.125rem;
+    padding: 0.375rem 0 0.125rem 0.5rem;
   }
 
   @keyframes tool-activity-group-in {

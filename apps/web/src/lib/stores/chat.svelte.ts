@@ -10,7 +10,6 @@
 //
 // State map shape:
 //   - `chatHistories` — the message + activity list rendered in the panel
-//   - `chatErrors`    — latest error per PR (NOT_CONFIGURED, RATE_LIMITED, …)
 //   - `streamingPrIds`— who's mid-turn so the UI can show the indicator
 //   - `loadedPrIds`   — set of PRs whose persisted history has been hydrated
 //                       at least once. Prevents re-fetching on every panel
@@ -21,7 +20,16 @@
 // Map-reassignment for Svelte-5 reactivity, matching the `loadedHeadShas`
 // idiom in `review.svelte.ts` and the entry maps in `walkthrough.svelte.ts`.
 
-import type { ActivityKind, ChatTask, InteractionMode, NormalizedQuestion } from "@revv/shared";
+import {
+  type ActivityKind,
+  attachmentByteSize,
+  type ChatAttachment,
+  type ChatAttachmentMetadata,
+  type ChatSessionContext,
+  type ChatTask,
+  type InteractionMode,
+  type NormalizedQuestion,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import {
   type AvailableAgents,
@@ -35,6 +43,7 @@ import {
   fetchAvailableAgents,
   fetchChatMessages,
   fetchProposedChanges,
+  fetchSessionContext,
   type MergePushError,
   type MergePushResult,
   type PersistedChatEntry,
@@ -49,6 +58,11 @@ import {
   streamChatMessage,
   submitQuestionAnswer,
 } from "$lib/api/chat";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
+import {
+  agentAuthRecoveryDescription,
+  isAgentAuthRecoveryError,
+} from "$lib/utils/agent-auth-recovery";
 
 export type ChatItem =
   | {
@@ -57,6 +71,7 @@ export type ChatItem =
       role: "user" | "assistant";
       content: string;
       isStreaming: boolean;
+      attachments?: ReadonlyArray<ChatAttachmentMetadata>;
       turnId?: string;
       /**
        * Set when this turn errored mid-stream and we kept the bubble
@@ -72,6 +87,14 @@ export type ChatItem =
       toolName: string;
       summary: string;
       turnId?: string;
+      /** Raw tool input (file_path, command, …) — powers the clickable peek. */
+      payload?: unknown;
+      /** Provider tool-call id; correlates the later `activity-result` patch. */
+      callId?: string;
+      /** Captured tool output (stdout / result text), once the result arrives. */
+      output?: string;
+      /** Whether the tool call ended in error. */
+      isError?: boolean;
       /**
        * When set, this activity row was emitted by a sub-agent. The
        * SubagentInvocation card filters its nested activities by this
@@ -113,8 +136,14 @@ export type ChatItem =
     };
 
 let chatHistories = $state(new Map<string, ChatItem[]>());
-let chatErrors = $state(new Map<string, { code: string; message: string } | null>());
 let streamingPrIds = $state(new Set<string>());
+// Turn id of the in-flight turn, per PR. Owned by the turn lifecycle (set on
+// send, cleared on done / error / abort) rather than inferred from whichever
+// assistant bubble happens to be open: a turn's prose is split across several
+// bubbles, so between two of them no bubble is streaming while the turn very
+// much still is. The panel reads this to fold the live turn's tool calls into
+// the dot-matrix ticker.
+let activeTurnIds = $state(new Map<string, string>());
 let loadedPrIds = $state(new Set<string>());
 let proposedChanges = $state(new Map<string, ProposedChanges | null>());
 let pushingPrIds = $state(new Set<string>());
@@ -126,6 +155,14 @@ let interactionModes = $state(new Map<string, InteractionMode>());
 // CLI agent, not on the PR).
 let availableAgents = $state<AvailableAgents | null>(null);
 let availableAgentsLoading = $state(false);
+let sessionContexts = $state(new Map<string, ChatSessionContext>());
+let sessionContextLoading = $state(new Set<string>());
+// PRs successfully warmed this session, so composer focus only triggers the
+// (worktree-acquiring) warm fetch once per PR. Failed warms are NOT recorded
+// here — they must stay retryable. `warmingPrIds` dedupes concurrent in-flight
+// warms (repeated focus events) without making a failure permanent.
+const warmedPrIds = new Set<string>();
+const warmingPrIds = new Set<string>();
 
 // In-progress reviewer comments left on a proposed-changes diff. These are
 // ephemeral feedback bound for the chat agent (NOT PR review threads — the
@@ -182,12 +219,13 @@ export function getChatItems(prId: string): ChatItem[] {
   return chatHistories.get(prId) ?? [];
 }
 
-export function getChatError(prId: string): { code: string; message: string } | null {
-  return chatErrors.get(prId) ?? null;
-}
-
 export function isChatStreaming(prId: string): boolean {
   return streamingPrIds.has(prId);
+}
+
+/** Turn id of the in-flight turn for a PR, or null when idle. */
+export function getActiveTurnId(prId: string): string | null {
+  return activeTurnIds.get(prId) ?? null;
 }
 
 export function getProposedChanges(prId: string): ProposedChanges | null {
@@ -227,7 +265,8 @@ export function isRebasingProposed(prId: string): boolean {
 }
 
 export function getSelectedCommitShas(prId: string): Set<string> {
-  return selectedCommitShas.get(prId) ?? new Set();
+  const shas = selectedCommitShas.get(prId);
+  return shas ?? new Set();
 }
 
 export function isCommitSelected(prId: string, sha: string): boolean {
@@ -250,6 +289,84 @@ export function isPlanModeAvailable(): boolean {
   return availableAgents?.planAvailable ?? false;
 }
 
+export function getChatSessionContext(prId: string): ChatSessionContext | null {
+  return sessionContexts.get(prId) ?? null;
+}
+
+/**
+ * `@`-mention candidate paths for a PR: the changed files first (most likely
+ * targets), then the rest of the repo tree, de-duplicated. The caller supplies
+ * the changed paths (they live in the review/diff store); this owns the merge
+ * so the composer view stays free of data-shaping.
+ */
+export function getChatMentionPaths(
+  prId: string | null | undefined,
+  changedPaths: readonly string[],
+): string[] {
+  const changedSet = new Set(changedPaths);
+  const repo = (prId ? sessionContexts.get(prId)?.repoFiles : undefined) ?? [];
+  return [...changedPaths, ...repo.filter((path) => !changedSet.has(path))];
+}
+
+async function fetchAndStoreSessionContext(
+  prId: string,
+  opts: { warm?: boolean } = {},
+): Promise<boolean> {
+  try {
+    const context = await fetchSessionContext(prId, opts);
+    sessionContexts.set(prId, context);
+    sessionContexts = new Map(sessionContexts);
+    return true;
+  } catch (err) {
+    console.warn("Failed to load chat session context", err);
+    return false;
+  }
+}
+
+/**
+ * Eagerly warm the chat session for a PR: acquire its worktree and harvest the
+ * agent's slash commands so the `/`-command menu works on a brand-new chat,
+ * before any message is sent. Triggered on composer focus (real intent to chat)
+ * and deduped to once per PR — it is heavier than the plain context fetch (git
+ * fetch + agent start), so we never run it on mere PR browsing.
+ */
+export async function warmChatSessionContext(prId: string): Promise<void> {
+  if (warmedPrIds.has(prId) || warmingPrIds.has(prId)) return;
+  warmingPrIds.add(prId);
+  try {
+    // Mark warmed only on success — a failed warm (worktree acquire error, agent
+    // cold-start timeout, transient GitHub 5xx) must stay retryable, or the PR is
+    // stuck without slash commands until reload.
+    const ok = await fetchAndStoreSessionContext(prId, { warm: true });
+    if (ok) warmedPrIds.add(prId);
+  } finally {
+    warmingPrIds.delete(prId);
+  }
+}
+
+export async function loadChatSessionContext(prId: string): Promise<void> {
+  if (sessionContexts.has(prId) || sessionContextLoading.has(prId)) return;
+  sessionContextLoading.add(prId);
+  sessionContextLoading = new Set(sessionContextLoading);
+  try {
+    await fetchAndStoreSessionContext(prId);
+  } finally {
+    sessionContextLoading.delete(prId);
+    sessionContextLoading = new Set(sessionContextLoading);
+  }
+}
+
+/**
+ * Re-fetch session context, bypassing the load-once cache. Called when a turn
+ * completes: the first turn opens the agent session + worktree, so this is
+ * when slash commands and the full repo-file list become available (the
+ * initial PR-selection fetch returns them empty by design — the server's
+ * session-context endpoint is side-effect-free and never opens a session).
+ */
+async function refreshChatSessionContext(prId: string): Promise<void> {
+  await fetchAndStoreSessionContext(prId);
+}
+
 export async function loadAvailableAgents(): Promise<void> {
   if (availableAgentsLoading || availableAgents !== null) return;
   availableAgentsLoading = true;
@@ -259,7 +376,6 @@ export async function loadAvailableAgents(): Promise<void> {
     // Best-effort — the composer falls back to disabled plan mode.
     availableAgents = {
       agent: "opencode",
-      agents: [],
       planAvailable: false,
     };
   } finally {
@@ -284,7 +400,34 @@ function patchItem(prId: string, id: string, patch: (item: ChatItem) => ChatItem
   const idx = items.findIndex((i) => i.id === id);
   if (idx === -1) return;
   const next = [...items];
-  next[idx] = patch(items[idx]!);
+  const item = items[idx];
+  if (!item) return;
+  next[idx] = patch(item);
+  setItems(prId, next);
+}
+
+/**
+ * Patch the activity item whose provider `callId` matches — used to stamp a
+ * tool's captured output onto its row when the `activity-result` frame lands.
+ * No-op if no matching activity is present (result for a different session, or
+ * an activity that was never surfaced).
+ */
+function patchActivityByCallId(
+  prId: string,
+  callId: string,
+  patch: (item: Extract<ChatItem, { kind: "activity" }>) => ChatItem,
+): void {
+  const items = chatHistories.get(prId) ?? [];
+  // Match the LAST activity with this call id: result/input frames arrive during
+  // the active turn, so the current turn's row is the most recent one. This
+  // mirrors the server's turn-scoped `updateActivityResult` so the two agree
+  // even if a provider recycles a `toolCallId` across turns.
+  const idx = items.findLastIndex((i) => i.kind === "activity" && i.callId === callId);
+  if (idx === -1) return;
+  const item = items[idx];
+  if (item?.kind !== "activity") return;
+  const next = [...items];
+  next[idx] = patch(item);
   setItems(prId, next);
 }
 
@@ -295,9 +438,14 @@ function removeItem(prId: string, id: string): void {
   setItems(prId, next);
 }
 
-function setError(prId: string, error: { code: string; message: string } | null): void {
-  chatErrors.set(prId, error);
-  chatErrors = new Map(chatErrors);
+function setActiveTurn(prId: string, turnId: string | null): void {
+  if (turnId === null) {
+    if (!activeTurnIds.has(prId)) return;
+    activeTurnIds.delete(prId);
+  } else {
+    activeTurnIds.set(prId, turnId);
+  }
+  activeTurnIds = new Map(activeTurnIds);
 }
 
 function setStreaming(prId: string, streaming: boolean): void {
@@ -345,7 +493,8 @@ function setBatchOpInFlight(prId: string, inFlight: boolean): void {
 }
 
 export function toggleCommitSelection(prId: string, sha: string): void {
-  const current = selectedCommitShas.get(prId) ?? new Set<string>();
+  const existing = selectedCommitShas.get(prId);
+  const current = existing ?? new Set<string>();
   const next = new Set(current);
   if (next.has(sha)) {
     next.delete(sha);
@@ -434,6 +583,15 @@ export function clearProposedComments(prId: string, sha: string): void {
 
 // ── Persisted-entry → ChatItem projection ─────────────────────────────────
 
+/** Parse a persisted JSON column without throwing on malformed data. */
+function safeParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 function entryToChatItem(entry: PersistedChatEntry): ChatItem {
   if (entry.entryKind === "message") {
     return {
@@ -442,6 +600,7 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       role: entry.role,
       content: entry.content,
       isStreaming: entry.isStreaming,
+      attachments: entry.attachments,
       turnId: entry.turnId,
       ...(entry.error ? { error: entry.error } : {}),
     };
@@ -454,6 +613,10 @@ function entryToChatItem(entry: PersistedChatEntry): ChatItem {
       toolName: entry.toolName ?? entry.activityKind,
       summary: entry.summary,
       turnId: entry.turnId,
+      ...(entry.payloadJson != null ? { payload: safeParseJson(entry.payloadJson) } : {}),
+      ...(entry.callId != null ? { callId: entry.callId } : {}),
+      ...(entry.output != null ? { output: entry.output } : {}),
+      ...(entry.isError != null ? { isError: entry.isError } : {}),
       ...(entry.subagentInvocationId ? { subagentInvocationId: entry.subagentInvocationId } : {}),
     };
   }
@@ -537,34 +700,89 @@ export interface SendChatMessageParams {
   approvedPlanId?: string;
   /** Override the session's stored interaction mode for this turn. */
   interactionMode?: InteractionMode;
+  attachments?: ReadonlyArray<ChatAttachment>;
 }
 
-function spliceBeforeAssistant(prId: string, assistantId: string, item: ChatItem): void {
-  const items = chatHistories.get(prId) ?? [];
-  const idx = items.findIndex((i) => i.id === assistantId);
-  if (idx === -1) {
-    setItems(prId, [...items, item]);
-  } else {
-    setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-  }
+/**
+ * Chronological turn writer. A turn is a sequence of prose runs and
+ * timeline rows (tool calls, plans, questions, sub-agents) and the panel
+ * must show them in the order the agent produced them. So: text opens an
+ * assistant bubble lazily and appends into it; anything else seals that
+ * bubble first and appends after it, which means the next prose run opens
+ * a fresh bubble further down. One bubble per turn — the old shape — would
+ * force every tool call to render either wholly above or wholly below the
+ * agent's entire narration.
+ *
+ * Mirrors `wrapStreamWithPersistence` on the server, which splits the
+ * persisted `chat_messages` rows on the same boundaries, so the live view
+ * and the view after a reload agree.
+ */
+function createTurnWriter(prId: string, turnId: string) {
+  let assistantId: string | null = null;
+
+  return {
+    /** Append `chunk` to the open bubble, opening one if needed. */
+    text(chunk: string): void {
+      if (chunk.length === 0) return;
+      if (!assistantId) {
+        assistantId = crypto.randomUUID();
+        appendItem(prId, {
+          kind: "message",
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+          turnId,
+        });
+      }
+      patchItem(prId, assistantId, (item) =>
+        item.kind === "message" ? { ...item, content: item.content + chunk } : item,
+      );
+    },
+
+    /** Seal the open prose run, then append `item` after it. */
+    row(item: ChatItem): void {
+      this.seal();
+      appendItem(prId, item);
+    },
+
+    /**
+     * Close the open bubble. An empty one is dropped (nothing to show);
+     * one with partial text is kept and, when the turn errored, carries
+     * the message so the content + preceding tool rows aren't orphaned.
+     */
+    seal(error?: string): void {
+      const id = assistantId;
+      assistantId = null;
+      if (!id) return;
+      const open = (chatHistories.get(prId) ?? []).find((i) => i.id === id);
+      if (open?.kind !== "message" || open.content.length === 0) {
+        removeItem(prId, id);
+        return;
+      }
+      patchItem(prId, id, (item) =>
+        item.kind === "message"
+          ? { ...item, isStreaming: false, ...(error ? { error } : {}) }
+          : item,
+      );
+    },
+  };
 }
 
 export function sendChatMessage(params: SendChatMessageParams): void {
-  const { prId, message, approvedPlanId, interactionMode } = params;
+  const { prId, message, approvedPlanId, interactionMode, attachments = [] } = params;
   const trimmed = message.trim();
-  if (trimmed.length === 0) return;
+  if (trimmed.length === 0 && attachments.length === 0) return;
 
   // Cancel any in-flight turn for this PR. The user is overriding it.
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
-  setError(prId, null);
 
-  // Append the user's message + a placeholder assistant message.
-  // `turnId` correlates the assistant placeholder with the activities that
-  // stream in for the same turn — the RightPanel uses it to fold the last
-  // 2 tool calls into the bubble's dot-matrix loader.
+  // Append the user's message. The assistant's side of the turn is written
+  // incrementally by the turn writer as frames arrive. `turnId` marks every
+  // row it produces — the RightPanel uses it to fold this turn's tool calls
+  // into the dot-matrix loader while the turn is live.
   const userId = crypto.randomUUID();
-  const assistantId = crypto.randomUUID();
   const turnId = crypto.randomUUID();
   appendItem(prId, {
     kind: "message",
@@ -572,58 +790,67 @@ export function sendChatMessage(params: SendChatMessageParams): void {
     role: "user",
     content: trimmed,
     isStreaming: false,
+    attachments: attachments.map((attachment) => ({
+      kind: attachment.kind,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachmentByteSize(attachment),
+    })),
     turnId,
   });
-  appendItem(prId, {
-    kind: "message",
-    id: assistantId,
-    role: "assistant",
-    content: "",
-    isStreaming: true,
-    turnId,
-  });
+  const turn = createTurnWriter(prId, turnId);
   setStreaming(prId, true);
+  setActiveTurn(prId, turnId);
 
   const controller = streamChatMessage(
     {
       prId,
       message: trimmed,
+      attachments,
       ...(approvedPlanId !== undefined ? { approvedPlanId } : {}),
       ...(interactionMode !== undefined ? { interactionMode } : {}),
     },
     {
       onText: (chunk) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, content: item.content + chunk } : item,
-        );
+        turn.text(chunk);
       },
       onActivity: (activity) => {
-        // Activity entries are inserted BEFORE the streaming
-        // assistant message so the visual order is: user → activity
-        // → activity → … → assistant text. Find the placeholder and
-        // splice in front.
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: activity.activityKind,
           toolName: activity.toolName,
           summary: activity.summary,
           turnId,
+          ...(activity.payload !== undefined ? { payload: activity.payload } : {}),
+          ...(activity.callId !== undefined ? { callId: activity.callId } : {}),
           ...(activity.subagentInvocationId
             ? { subagentInvocationId: activity.subagentInvocationId }
             : {}),
         });
       },
+      onActivityResult: ({ callId, output, isError }) => {
+        // Stamp captured output onto the matching activity (by provider call
+        // id) so its peek can render stdout / results in place.
+        patchActivityByCallId(prId, callId, (item) => ({ ...item, output, isError }));
+      },
+      onActivityInput: ({ callId, payload }) => {
+        // Back-fill late-arriving tool input so the card's filename/command
+        // and file peek resolve (agents that send an empty initial tool-call).
+        patchActivityByCallId(prId, callId, (item) => ({ ...item, payload }));
+      },
       onTaskList: ({ turnId: taskTurnId, tasks }) => {
         // Reconcile with any existing task-list for the same turn —
         // snapshot semantics. If we already have a row, update in
-        // place; otherwise insert.
+        // place; otherwise insert. Doesn't seal the open prose run: the
+        // task list renders in the Queue dock, not inline, so it takes no
+        // slot in the timeline (the server splits on the same rule).
         const items = chatHistories.get(prId) ?? [];
         const existingIdx = items.findIndex(
           (i) => i.kind === "task-list" && i.turnId === taskTurnId,
         );
         if (existingIdx === -1) {
-          spliceBeforeAssistant(prId, assistantId, {
+          appendItem(prId, {
             kind: "task-list",
             id: `task-list-${taskTurnId}`,
             turnId: taskTurnId,
@@ -637,7 +864,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         }
       },
       onPlanPresented: ({ planId, turnId: planTurnId, markdown }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "plan",
           id: planId,
           turnId: planTurnId,
@@ -646,7 +873,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         });
       },
       onSubagentStart: ({ invocationId, parentTurnId, subagentType, description }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "subagent",
           id: invocationId,
           parentTurnId,
@@ -668,7 +895,7 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         );
       },
       onQuestionPosted: ({ questionId, turnId: qTurnId, questions, previewFormat }) => {
-        spliceBeforeAssistant(prId, assistantId, {
+        turn.row({
           kind: "question",
           id: questionId,
           turnId: qTurnId,
@@ -691,33 +918,38 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         );
       },
       onDone: () => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         setStreaming(prId, false);
+        setActiveTurn(prId, null);
         abortControllers.delete(prId);
         // Refresh the proposed-changes strip — the agent may have made
         // commits during this turn.
         void refreshProposedChanges(prId);
+        // The first turn opens the agent session + worktree, so slash commands
+        // and the full repo-file list only become available now — re-fetch the
+        // (otherwise load-once) session context to populate the menus.
+        void refreshChatSessionContext(prId);
         // Auto-dispatch the next queued message, if any.
         dequeueAndSend(prId);
       },
       onError: (err) => {
         // Plan-pending: the user tried to send a new message while a
-        // plan is awaiting decision. Drop the assistant placeholder,
-        // surface a focused toast pointing at the open plan, and let
-        // the UI scroll the card into view. Keep the user message —
-        // they'll likely want to retry after deciding.
+        // plan is awaiting decision. Close out the turn, surface a
+        // focused toast pointing at the open plan, and let the UI scroll
+        // the card into view. Keep the user message — they'll likely
+        // want to retry after deciding.
         if (err.code === "PLAN_PENDING") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           toast.error("Approve or reject the open plan before sending a new message.");
           return;
         }
         if (err.code === "QUESTION_PENDING") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           toast.error("Answer the open question before sending a new message.");
           return;
@@ -726,8 +958,9 @@ export function sendChatMessage(params: SendChatMessageParams): void {
         // daemon has no `plan` agent. Disable the toggle and surface
         // the message so the user knows what to do.
         if (err.code === "AGENT_UNAVAILABLE") {
-          removeItem(prId, assistantId);
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           interactionModes.set(prId, "default");
           interactionModes = new Map(interactionModes);
@@ -742,34 +975,53 @@ export function sendChatMessage(params: SendChatMessageParams): void {
           const oldHeadSha = typeof err.oldHeadSha === "string" ? err.oldHeadSha : "";
           const newHeadSha = typeof err.newHeadSha === "string" ? err.newHeadSha : "";
           setWorktreeBlocked(prId, { oldHeadSha, newHeadSha, commits });
-          // The assistant placeholder has no content — remove it.
-          removeItem(prId, assistantId);
+          // Rejected before the agent ran — nothing was streamed.
+          turn.seal();
           setStreaming(prId, false);
+          setActiveTurn(prId, null);
           abortControllers.delete(prId);
           return;
         }
-        // Preserve any partial content the agent already streamed —
-        // activity lines were spliced *before* this bubble, so removing
-        // it would leave them orphaned. Only drop the bubble if it's
-        // truly empty (no streamed text yet); otherwise mark it errored
-        // and let the renderer attach an inline error chip.
-        const items = chatHistories.get(prId) ?? [];
-        const placeholder = items.find((i) => i.id === assistantId);
-        const hasContent = placeholder?.kind === "message" && placeholder.content.length > 0;
-        if (hasContent) {
-          patchItem(prId, assistantId, (item) =>
-            item.kind === "message" ? { ...item, isStreaming: false, error: err.message } : item,
-          );
-        } else {
-          removeItem(prId, assistantId);
-        }
-        setError(prId, err);
+        // Keep whatever the agent already streamed: the tool rows around
+        // it are part of the same turn and removing the bubble would
+        // orphan them. `seal` drops it only if it is truly empty.
+        turn.seal(err.message);
         setStreaming(prId, false);
+        setActiveTurn(prId, null);
         abortControllers.delete(prId);
         // The agent may have committed before the stream errored —
         // refresh so the proposed-changes strip reflects whatever
         // landed in the worktree.
         void refreshProposedChanges(prId);
+        if (err.code === "NOT_CONFIGURED") {
+          toast.error("AI agent not configured", {
+            description: "Reconnect the agent in Settings, then retry.",
+            action: {
+              label: "Open Settings",
+              onClick: () => openSettings("ai"),
+            },
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+        if (err.code === "GITHUB_RATE_LIMITED") {
+          toast.error("GitHub rate limit reached", {
+            description: err.message,
+            duration: 15000,
+          });
+          return;
+        }
+        if (isAgentAuthRecoveryError(err.message)) {
+          toast.error("AI agent authentication required", {
+            description: agentAuthRecoveryDescription(err.message),
+            action: {
+              label: "Open Settings",
+              onClick: () => openSettings("ai"),
+            },
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
         toast.error(err.message || "AI chat failed");
       },
     },
@@ -854,8 +1106,8 @@ export interface SubmitQuestionAction {
 /**
  * Submit the user's response (or rejection) to an open question. Optimistic:
  * flips the local item to its terminal state before the server confirms so
- * the UI feels snappy; reverts on error. The server's WS broadcast (or the
- * SSE follow-up frame for opencode) keeps other tabs in sync.
+ * the UI feels snappy; reverts on error. The server's SSE broadcast keeps
+ * other tabs in sync.
  */
 export async function submitQuestionAnswers(
   prId: string,
@@ -964,7 +1216,6 @@ export function sendProposedFeedback(params: SendProposedFeedbackParams): boolea
 export function invalidateChatHistory(prId: string): void {
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
-  setError(prId, null);
   setStreaming(prId, false);
   if (loadedPrIds.has(prId)) {
     loadedPrIds.delete(prId);
@@ -976,8 +1227,8 @@ export async function clearChatHistory(prId: string): Promise<void> {
   abortControllers.get(prId)?.abort();
   abortControllers.delete(prId);
   setItems(prId, []);
-  setError(prId, null);
   setStreaming(prId, false);
+  setActiveTurn(prId, null);
   setProposedChanges(prId, null);
   setWorktreeBlocked(prId, null);
   clearCommitSelection(prId);
@@ -1048,6 +1299,7 @@ export function abortChatTurn(prId: string): void {
     }
   }
   setStreaming(prId, false);
+  setActiveTurn(prId, null);
   // The agent may have committed before the user hit Stop — refresh so the
   // proposed-changes strip reflects whatever landed in the worktree.
   void refreshProposedChanges(prId);
@@ -1136,81 +1388,48 @@ export async function resolveAndPushProposed(prId: string): Promise<void> {
     isStreaming: false,
     turnId,
   });
-  const assistantId = crypto.randomUUID();
-  appendItem(prId, {
-    kind: "message",
-    id: assistantId,
-    role: "assistant",
-    content: "",
-    isStreaming: true,
-    turnId,
-  });
+  const turn = createTurnWriter(prId, turnId);
 
   return new Promise<void>((resolve) => {
     const controller = resolveConflictsAndPush(prId, {
       onStatus: (message) => {
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: "tool.other" as ActivityKind,
           toolName: "merge-and-push",
           summary: message,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onConflictFiles: (files) => {
         const summary = `Conflicts in ${files.length} file${
           files.length === 1 ? "" : "s"
         }: ${files.slice(0, 3).join(", ")}${files.length > 3 ? "…" : ""}`;
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: "tool.other" as ActivityKind,
           toolName: "merge-and-push",
           summary,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onAgentText: (chunk) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, content: item.content + chunk } : item,
-        );
+        turn.text(chunk);
       },
       onAgentActivity: (activity) => {
-        const items = chatHistories.get(prId) ?? [];
-        const idx = items.findIndex((i) => i.id === assistantId);
-        const item: ChatItem = {
+        turn.row({
           kind: "activity",
           id: crypto.randomUUID(),
           activityKind: activity.activityKind as ActivityKind,
           toolName: activity.toolName ?? activity.activityKind,
           summary: activity.summary,
           turnId,
-        };
-        if (idx === -1) {
-          setItems(prId, [...items, item]);
-        } else {
-          setItems(prId, [...items.slice(0, idx), item, ...items.slice(idx)]);
-        }
+        });
       },
       onResult: (result) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         if (result.status === "pushed") {
           toast.success(
             `Pushed ${result.pushedCommits} commit${
@@ -1225,15 +1444,11 @@ export async function resolveAndPushProposed(prId: string): Promise<void> {
         }
       },
       onError: (err) => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false, error: err.message } : item,
-        );
+        turn.seal(err.message);
         toast.error(err.message || "Conflict resolution failed");
       },
       onDone: () => {
-        patchItem(prId, assistantId, (item) =>
-          item.kind === "message" ? { ...item, isStreaming: false } : item,
-        );
+        turn.seal();
         resolveAbortControllers.delete(prId);
         setResolvingPush(prId, false);
         resolve();
@@ -1400,8 +1615,7 @@ export async function batchDiscardSelectedAction(prId: string): Promise<void> {
 export interface QueuedMessage {
   id: string;
   text: string;
-  /** Files attached to this queued message (not yet sent). */
-  files?: File[] | undefined;
+  attachments?: ReadonlyArray<ChatAttachment> | undefined;
   queuedAt: number;
 }
 
@@ -1411,14 +1625,18 @@ export function getQueuedMessages(prId: string): QueuedMessage[] {
   return queuedMessages.get(prId) ?? [];
 }
 
-export function enqueueMessage(prId: string, text: string, files?: File[]): void {
+export function enqueueMessage(
+  prId: string,
+  text: string,
+  attachments?: ReadonlyArray<ChatAttachment>,
+): void {
   const trimmed = text.trim();
-  if (trimmed.length === 0) return;
+  if (trimmed.length === 0 && (!attachments || attachments.length === 0)) return;
   const existing = queuedMessages.get(prId) ?? [];
   const msg: QueuedMessage = {
     id: crypto.randomUUID(),
     text: trimmed,
-    files,
+    attachments,
     queuedAt: Date.now(),
   };
   queuedMessages.set(prId, [...existing, msg]);
@@ -1462,7 +1680,11 @@ function dequeueAndSend(prId: string): void {
     queuedMessages.set(prId, rest);
   }
   queuedMessages = new Map(queuedMessages);
-  sendChatMessage({ prId, message: next.text });
+  sendChatMessage({
+    prId,
+    message: next.text,
+    ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
+  });
 }
 
 // ── Checkpoints ────────────────────────────────────────────────────────────
@@ -1545,7 +1767,7 @@ export function clearToolApprovals(prId: string): void {
 }
 
 /**
- * Apply a `chat:question-resolved` WebSocket broadcast from another client.
+ * Apply a `chat:question-resolved` SSE broadcast from another client.
  * Mirrors the optimistic patch in `submitQuestionAnswers` so every open tab
  * sees the card flip to its terminal state without a full history reload.
  */

@@ -33,7 +33,7 @@ export interface BlobStoreStatus {
   detail: string;
 }
 
-export class BlobStore extends Context.Tag("BlobStore")<
+export class BlobStore extends Context.Service<
   BlobStore,
   {
     /**
@@ -70,4 +70,4 @@ export class BlobStore extends Context.Tag("BlobStore")<
      */
     readonly status: () => Effect.Effect<BlobStoreStatus>;
   }
->() {}
+>()("BlobStore") {}

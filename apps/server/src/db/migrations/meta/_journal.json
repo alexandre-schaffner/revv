@@ -118,21 +118,238 @@
       "idx": 16,
       "version": "6",
       "when": 1779555000000,
-      "tag": "0140_update_channel",
+      "tag": "0140_recap_structured_entries",
       "breakpoints": true
     },
     {
       "idx": 17,
       "version": "6",
-      "when": 1779560000000,
-      "tag": "0150_github_issues",
+      "when": 1779557000000,
+      "tag": "0140_cache_signing",
       "breakpoints": true
     },
     {
       "idx": 18,
       "version": "6",
+      "when": 1779560000000,
+      "tag": "0150_recap_pr_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
       "when": 1779565000000,
-      "tag": "0160_github_issues_labels",
+      "tag": "0160_recap_theme_summaries",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1779570000000,
+      "tag": "0170_drop_recap_stranded_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1779575000000,
+      "tag": "0180_update_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1779580000000,
+      "tag": "0190_account_reauth_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1779585000000,
+      "tag": "0200_linked_clones",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1779590000000,
+      "tag": "0210_github_client_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1779595000000,
+      "tag": "0220_walkthrough_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1779600000000,
+      "tag": "0230_review_session_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1779610000000,
+      "tag": "0240_repository_avatar_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1779615000000,
+      "tag": "0250_chat_agent",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1779620000000,
+      "tag": "0260_chat_session_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1779625000000,
+      "tag": "0270_unify_agent_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1779630000000,
+      "tag": "0280_chat_message_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1779635000000,
+      "tag": "0290_chat_activity_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1779640000000,
+      "tag": "0300_review_rounds",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1779645000000,
+      "tag": "0310_walkthrough_error_message",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1779650000000,
+      "tag": "0320_pr_diff_files_cached_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1779655000000,
+      "tag": "0330_decode_plain_text_entities",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1779660000000,
+      "tag": "0340_jev_advisory",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1779665000000,
+      "tag": "0350_drop_ai_context_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1779670000000,
+      "tag": "0360_jev_generation_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1779675000000,
+      "tag": "0370_pr_diff_stats_head",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1779680000000,
+      "tag": "0380_external_agent_integrations",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1779685000000,
+      "tag": "0390_drop_jev_verdicts",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1779690000000,
+      "tag": "0400_drop_jev_hook_toggles",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1779700000000,
+      "tag": "0410_hunk_scans",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1779710000000,
+      "tag": "0420_walkthrough_leads",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1779720000000,
+      "tag": "0430_external_walkthrough_generate_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1791897823334,
+      "tag": "0440_pr_stack_membership",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1792139443925,
+      "tag": "0450_pr_stacks",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1792695674180,
+      "tag": "0049_github_issues",
       "breakpoints": true
     }
   ]

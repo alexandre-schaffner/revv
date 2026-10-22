@@ -6,7 +6,7 @@
 //
 // Two responsibilities:
 //
-//   1. Session bookkeeping — find/upsert/clear per (prId, agent, prHeadSha),
+//   1. Session bookkeeping — find/upsert/clear per (prId, agent, model, prHeadSha),
 //      patch in the agent-side session id once the SDK / daemon emits it.
 //   2. Transcript persistence — append user messages, stream assistant
 //      content into a single row, append typed activity rows. All inserts
@@ -17,7 +17,12 @@
 // turns (which shouldn't happen for the same PR but could during retries)
 // can't double-issue the same sequence number.
 
-import type { ChatTask, InteractionMode, NormalizedQuestion } from "@revv/shared";
+import type {
+  ChatAttachmentMetadata,
+  ChatTask,
+  InteractionMode,
+  NormalizedQuestion,
+} from "@revv/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -28,13 +33,16 @@ import {
   chatSessions,
   chatSubagentInvocations,
   chatTasks,
+  pullRequests,
 } from "../db/schema/index";
 import { DbService } from "./Db";
+import { resolveProposedBaseSha } from "./GitOps";
 
 export interface ChatSessionRow {
   readonly id: string;
   readonly pullRequestId: string;
   readonly agent: string;
+  readonly model: string;
   readonly sessionId: string | null;
   readonly prHeadSha: string;
   readonly worktreePath: string;
@@ -45,9 +53,23 @@ export interface ChatSessionRow {
   readonly lastActivityAt: string;
 }
 
+/**
+ * A chat session plus the commit its agent work is actually built on.
+ *
+ * `baseSha` is the tightest of the session's frozen `prHeadSha` and the PR's
+ * current head — see `resolveProposedBaseSha`. It is NOT "the PR head": naming
+ * it `prHeadSha` is what let a resolved baseline get written into an HTTP
+ * response field that claims to carry the PR's head.
+ */
+export interface ResolvedChatSession {
+  readonly row: ChatSessionRow;
+  readonly baseSha: string;
+}
+
 export interface FindOrCreateChatSessionParams {
   readonly prId: string;
   readonly agent: string;
+  readonly model: string;
   readonly prHeadSha: string;
   readonly worktreePath: string;
   readonly branchName: string;
@@ -56,6 +78,7 @@ export interface FindOrCreateChatSessionParams {
 export interface UpsertChatSessionParams {
   readonly prId: string;
   readonly agent: string;
+  readonly model: string;
   readonly prHeadSha: string;
   readonly sessionId: string;
   readonly worktreePath: string;
@@ -67,6 +90,7 @@ export interface ChatMessageRow {
   readonly chatSessionId: string;
   readonly role: "user" | "assistant";
   readonly content: string;
+  readonly attachments: ReadonlyArray<ChatAttachmentMetadata>;
   readonly isStreaming: boolean;
   readonly sequence: number;
   readonly turnId: string;
@@ -83,6 +107,9 @@ export interface ChatActivityRow {
   readonly toolName: string | null;
   readonly summary: string;
   readonly payloadJson: string | null;
+  readonly callId: string | null;
+  readonly output: string | null;
+  readonly isError: boolean | null;
   readonly sequence: number;
   readonly subagentInvocationId: string | null;
   readonly createdAt: string;
@@ -97,7 +124,7 @@ export interface ChatTaskRow {
   readonly activeForm: string | null;
   readonly status: "pending" | "in_progress" | "completed";
   readonly priority: "low" | "medium" | "high" | null;
-  readonly source: "claude" | "opencode";
+  readonly source: "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -109,7 +136,7 @@ export interface ChatPlanRow {
   readonly turnId: string;
   readonly planMarkdown: string;
   readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly source: "claude" | "opencode";
+  readonly source: "acp";
   readonly sequence: number;
   readonly createdAt: string;
   readonly decidedAt: string | null;
@@ -125,7 +152,7 @@ export interface ChatSubagentInvocationRow {
   readonly prompt: string;
   readonly status: "running" | "completed" | "errored";
   readonly result: string | null;
-  readonly source: "claude" | "opencode";
+  readonly source: "acp";
   readonly sequence: number;
   readonly startedAt: string;
   readonly completedAt: string | null;
@@ -135,7 +162,7 @@ export interface ChatQuestionRow {
   readonly id: string;
   readonly chatSessionId: string;
   readonly turnId: string;
-  readonly source: "claude" | "opencode";
+  readonly source: "acp";
   readonly providerRequestId: string;
   readonly providerToolCallId: string | null;
   readonly previewFormat: "markdown" | "html";
@@ -167,12 +194,13 @@ export type ChatTimelineEntry =
   | (ChatSubagentInvocationRow & { readonly entryKind: "subagent" })
   | (ChatQuestionRow & { readonly entryKind: "question" });
 
-export class ChatSessionService extends Context.Tag("ChatSessionService")<
+export class ChatSessionService extends Context.Service<
   ChatSessionService,
   {
     readonly find: (
       prId: string,
       agent: string,
+      model: string,
       prHeadSha: string,
     ) => Effect.Effect<ChatSessionRow | null>;
     /**
@@ -182,7 +210,24 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      */
     readonly findLatestForPr: (prId: string, agent: string) => Effect.Effect<ChatSessionRow | null>;
     /**
-     * Look up the existing row for (prId, agent, prHeadSha) or insert a
+     * {@link findLatestForPr}, with the proposed-commit baseline already
+     * resolved against the PR's current head.
+     *
+     * Every caller that enumerates, pushes, rebuilds or discards the agent's
+     * commits needs the same `<base>..<branch>` range, and the row's own
+     * `prHeadSha` is frozen at session creation — so each of them had to fetch
+     * `pull_requests.headSha` alongside the row and call
+     * `resolveProposedBaseSha` itself. Four copies of a four-field preamble is
+     * four chances for one of them to pass a different `tip` (which is exactly
+     * what happened: the display path asked about `HEAD`, the write paths
+     * about the branch). Resolving it here makes disagreement unrepresentable.
+     */
+    readonly findLatestForPrWithBase: (
+      prId: string,
+      agent: string,
+    ) => Effect.Effect<ResolvedChatSession | null>;
+    /**
+     * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
      * fresh one with `session_id = NULL`. Used by the chat route at the
      * START of a turn so subsequent message/activity inserts can FK to
      * the row before the agent emits its session id (which arrives
@@ -204,14 +249,19 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     /**
      * Update the prHeadSha of an existing session row. Called by the
      * merge-and-push flow after a successful push so the session lookup
-     * (keyed on `(prId, agent, prHeadSha)`) keeps finding this conversation
+     * (keyed on `(prId, agent, model, prHeadSha)`) keeps finding this conversation
      * even after `pull_requests.headSha` advances to the freshly pushed tip.
      */
     readonly updatePrHeadSha: (params: {
       readonly chatSessionId: string;
       readonly prHeadSha: string;
     }) => Effect.Effect<void>;
-    readonly clear: (prId: string, agent: string, prHeadSha: string) => Effect.Effect<void>;
+    readonly clear: (
+      prId: string,
+      agent: string,
+      model: string,
+      prHeadSha: string,
+    ) => Effect.Effect<void>;
     readonly clearAllForPr: (prId: string, agent: string) => Effect.Effect<void>;
     readonly clearAllForAgent: (agent: string) => Effect.Effect<void>;
 
@@ -224,6 +274,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
       readonly chatSessionId: string;
       readonly turnId: string;
       readonly content: string;
+      readonly attachments?: ReadonlyArray<ChatAttachmentMetadata>;
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
 
     /**
@@ -258,8 +309,39 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
       readonly toolName: string | null;
       readonly summary: string;
       readonly payload?: unknown;
+      readonly callId?: string | null;
       readonly subagentInvocationId?: string | null;
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }>;
+
+    /**
+     * Stamp a tool's captured output onto its activity row, matched by provider
+     * `callId` *within a turn*. Idempotent last-write-wins; a no-op if the call
+     * id is unknown (the activity wasn't persisted, or the result arrived for a
+     * different session). Scoping by `turnId` keeps a provider that recycles a
+     * `toolCallId` across turns (warm ACP connections span turns) from stamping
+     * onto an older turn's row. Powers the clickable output peek after a reload.
+     */
+    readonly updateActivityResult: (params: {
+      readonly chatSessionId: string;
+      readonly turnId: string;
+      readonly callId: string;
+      readonly output: string;
+      readonly isError: boolean;
+    }) => Effect.Effect<void>;
+
+    /**
+     * Back-fill an activity's tool input (matched by provider `callId` within a
+     * turn) when it arrives after the initial tool-call — so the persisted
+     * payload (and thus the filename/command + file peek) survives a reload.
+     * Idempotent; a no-op if the call id is unknown. Turn-scoped for the same
+     * reason as `updateActivityResult`.
+     */
+    readonly updateActivityInput: (params: {
+      readonly chatSessionId: string;
+      readonly turnId: string;
+      readonly callId: string;
+      readonly payload: unknown;
+    }) => Effect.Effect<void>;
 
     /** Read the full timeline for a session, ordered by sequence. */
     readonly listTimeline: (chatSessionId: string) => Effect.Effect<readonly ChatTimelineEntry[]>;
@@ -283,7 +365,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly applyTaskListSnapshot: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
       readonly tasks: ReadonlyArray<ChatTask>;
     }) => Effect.Effect<readonly ChatTaskRow[]>;
 
@@ -298,7 +380,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createPlan: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
       readonly markdown: string;
     }) => Effect.Effect<ChatPlanRow>;
 
@@ -316,7 +398,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly startSubagentInvocation: (params: {
       readonly chatSessionId: string;
       readonly parentTurnId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
       readonly providerCallId: string;
       readonly subagentType: string;
       readonly description: string;
@@ -347,7 +429,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
     readonly createQuestion: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
-      readonly source: "claude" | "opencode";
+      readonly source: "acp";
       readonly providerRequestId: string;
       readonly providerToolCallId?: string | null;
       readonly previewFormat: "markdown" | "html";
@@ -358,8 +440,8 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      * Flip the question's status. Idempotent: if the row is already in a
      * terminal state (anything other than 'pending'), this is a no-op
      * and returns the existing row unchanged. Used by both the user's
-     * answer endpoint and the opencode SSE follow-up handler — whichever
-     * runs second hits the no-op path.
+     * answer endpoint and the agent stream's resolution follow-up —
+     * whichever runs second hits the no-op path.
      */
     readonly decideQuestion: (params: {
       readonly questionId: string;
@@ -379,7 +461,7 @@ export class ChatSessionService extends Context.Tag("ChatSessionService")<
      */
     readonly supersedePendingQuestionsOnBoot: () => Effect.Effect<number>;
   }
->() {}
+>()("ChatSessionService") {}
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -416,6 +498,7 @@ export const ChatSessionServiceLive = Layer.effect(
       id: row.id,
       pullRequestId: row.pullRequestId,
       agent: row.agent,
+      model: row.model,
       sessionId: row.sessionId,
       prHeadSha: row.prHeadSha,
       worktreePath: row.worktreePath,
@@ -425,6 +508,36 @@ export const ChatSessionServiceLive = Layer.effect(
       createdAt: row.createdAt,
       lastActivityAt: row.lastActivityAt,
     });
+
+    const parseAttachmentMetadata = (
+      value: string | null,
+    ): ReadonlyArray<ChatAttachmentMetadata> => {
+      if (!value) return [];
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (!Array.isArray(parsed)) return [];
+        const result: ChatAttachmentMetadata[] = [];
+        for (const item of parsed) {
+          if (!item || typeof item !== "object") continue;
+          const record = item as Record<string, unknown>;
+          const kind = record.kind;
+          const name = record.name;
+          const mimeType = record.mimeType;
+          const size = record.size;
+          if (
+            (kind === "image" || kind === "text") &&
+            typeof name === "string" &&
+            typeof mimeType === "string" &&
+            typeof size === "number"
+          ) {
+            result.push({ kind, name, mimeType, size });
+          }
+        }
+        return result;
+      } catch {
+        return [];
+      }
+    };
 
     const rowToTaskRow = (row: typeof chatTasks.$inferSelect): ChatTaskRow => ({
       id: row.id,
@@ -516,7 +629,7 @@ export const ChatSessionServiceLive = Layer.effect(
     });
 
     return {
-      find: (prId, agent, prHeadSha) =>
+      find: (prId, agent, model, prHeadSha) =>
         Effect.sync(() => {
           const row = db
             .select()
@@ -525,6 +638,7 @@ export const ChatSessionServiceLive = Layer.effect(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
@@ -544,7 +658,49 @@ export const ChatSessionServiceLive = Layer.effect(
           return row ? rowToSessionRow(row) : null;
         }),
 
-      findOrCreate: ({ prId, agent, prHeadSha, worktreePath, branchName }) =>
+      findLatestForPrWithBase: (prId, agent) =>
+        Effect.gen(function* () {
+          const row = yield* Effect.sync(() => {
+            const found = db
+              .select()
+              .from(chatSessions)
+              .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
+              .orderBy(desc(chatSessions.lastActivityAt))
+              .limit(1)
+              .get();
+            return found ? rowToSessionRow(found) : null;
+          });
+          if (!row) return null;
+          // A failed read answers `null`, which `resolveProposedBaseSha` reads
+          // as "no known PR head" and resolves to the session baseline — the
+          // historical answer. Letting it throw would take down the fiber for
+          // a lookup whose absence is already a handled case.
+          const prHeadSha = yield* Effect.try(
+            () =>
+              db
+                .select({ headSha: pullRequests.headSha })
+                .from(pullRequests)
+                .where(eq(pullRequests.id, prId))
+                .get()?.headSha ?? null,
+          ).pipe(Effect.orElseSucceed(() => null));
+          // Always `row.branchName`, never `"HEAD"`. The worktree's HEAD is
+          // detached onto the source-branch tip during a push and is restored
+          // only best-effort, so a run that died mid-push leaves HEAD and the
+          // agent branch pointing at different commits — and a baseline
+          // resolved against the wrong one makes the strip list commits the
+          // rebuild would not touch.
+          const baseSha = yield* Effect.promise(() =>
+            resolveProposedBaseSha({
+              worktreePath: row.worktreePath,
+              tip: row.branchName,
+              sessionPrHeadSha: row.prHeadSha,
+              prHeadSha,
+            }),
+          );
+          return { row, baseSha };
+        }),
+
+      findOrCreate: ({ prId, agent, model, prHeadSha, worktreePath, branchName }) =>
         Effect.sync(() => {
           const existing = db
             .select()
@@ -553,6 +709,7 @@ export const ChatSessionServiceLive = Layer.effect(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
@@ -577,6 +734,7 @@ export const ChatSessionServiceLive = Layer.effect(
               id,
               pullRequestId: prId,
               agent,
+              model,
               sessionId: null,
               prHeadSha,
               worktreePath,
@@ -591,6 +749,7 @@ export const ChatSessionServiceLive = Layer.effect(
             id,
             pullRequestId: prId,
             agent,
+            model,
             sessionId: null,
             prHeadSha,
             worktreePath,
@@ -623,7 +782,7 @@ export const ChatSessionServiceLive = Layer.effect(
             .run();
         }),
 
-      upsert: ({ prId, agent, prHeadSha, sessionId, worktreePath, branchName }) =>
+      upsert: ({ prId, agent, model, prHeadSha, sessionId, worktreePath, branchName }) =>
         Effect.sync(() => {
           const now = nowIso();
           db.insert(chatSessions)
@@ -631,6 +790,7 @@ export const ChatSessionServiceLive = Layer.effect(
               id: crypto.randomUUID(),
               pullRequestId: prId,
               agent,
+              model,
               sessionId,
               prHeadSha,
               worktreePath,
@@ -641,7 +801,12 @@ export const ChatSessionServiceLive = Layer.effect(
               lastActivityAt: now,
             })
             .onConflictDoUpdate({
-              target: [chatSessions.pullRequestId, chatSessions.agent, chatSessions.prHeadSha],
+              target: [
+                chatSessions.pullRequestId,
+                chatSessions.agent,
+                chatSessions.model,
+                chatSessions.prHeadSha,
+              ],
               set: {
                 sessionId,
                 worktreePath,
@@ -652,13 +817,14 @@ export const ChatSessionServiceLive = Layer.effect(
             .run();
         }),
 
-      clear: (prId, agent, prHeadSha) =>
+      clear: (prId, agent, model, prHeadSha) =>
         Effect.sync(() => {
           db.delete(chatSessions)
             .where(
               and(
                 eq(chatSessions.pullRequestId, prId),
                 eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
@@ -677,17 +843,20 @@ export const ChatSessionServiceLive = Layer.effect(
           db.delete(chatSessions).where(eq(chatSessions.agent, agent)).run();
         }),
 
-      appendUserMessage: ({ chatSessionId, turnId, content }) =>
+      appendUserMessage: ({ chatSessionId, turnId, content, attachments }) =>
         Effect.sync(() => {
           const sequence = allocateSequence(chatSessionId);
           const id = crypto.randomUUID();
           const now = nowIso();
+          const attachmentsJson =
+            attachments && attachments.length > 0 ? JSON.stringify(attachments) : null;
           db.insert(chatMessages)
             .values({
               id,
               chatSessionId,
               role: "user",
               content,
+              attachmentsJson,
               isStreaming: 0,
               sequence,
               turnId,
@@ -710,6 +879,7 @@ export const ChatSessionServiceLive = Layer.effect(
               chatSessionId,
               role: "assistant",
               content: "",
+              attachmentsJson: null,
               isStreaming: 1,
               sequence,
               turnId,
@@ -750,6 +920,7 @@ export const ChatSessionServiceLive = Layer.effect(
         toolName,
         summary,
         payload,
+        callId,
         subagentInvocationId,
       }) =>
         Effect.sync(() => {
@@ -765,12 +936,43 @@ export const ChatSessionServiceLive = Layer.effect(
               toolName: toolName ?? null,
               summary,
               payloadJson: payload === undefined ? null : JSON.stringify(payload),
+              callId: callId ?? null,
+              output: null,
+              isError: null,
               sequence,
               subagentInvocationId: subagentInvocationId ?? null,
               createdAt: now,
             })
             .run();
           return { id, sequence };
+        }),
+
+      updateActivityResult: ({ chatSessionId, turnId, callId, output, isError }) =>
+        Effect.sync(() => {
+          db.update(chatActivities)
+            .set({ output, isError })
+            .where(
+              and(
+                eq(chatActivities.chatSessionId, chatSessionId),
+                eq(chatActivities.turnId, turnId),
+                eq(chatActivities.callId, callId),
+              ),
+            )
+            .run();
+        }),
+
+      updateActivityInput: ({ chatSessionId, turnId, callId, payload }) =>
+        Effect.sync(() => {
+          db.update(chatActivities)
+            .set({ payloadJson: payload === undefined ? null : JSON.stringify(payload) })
+            .where(
+              and(
+                eq(chatActivities.chatSessionId, chatSessionId),
+                eq(chatActivities.turnId, turnId),
+                eq(chatActivities.callId, callId),
+              ),
+            )
+            .run();
         }),
 
       listTimeline: (chatSessionId) =>
@@ -865,6 +1067,7 @@ export const ChatSessionServiceLive = Layer.effect(
                 chatSessionId: m.chatSessionId,
                 role: m.role as "user" | "assistant",
                 content: m.content,
+                attachments: parseAttachmentMetadata(m.attachmentsJson),
                 isStreaming: m.isStreaming === 1,
                 sequence: m.sequence,
                 turnId: m.turnId,
@@ -886,6 +1089,9 @@ export const ChatSessionServiceLive = Layer.effect(
                 toolName: a.toolName,
                 summary: a.summary,
                 payloadJson: a.payloadJson,
+                callId: a.callId,
+                output: a.output,
+                isError: a.isError,
                 sequence: a.sequence,
                 subagentInvocationId: a.subagentInvocationId,
                 createdAt: a.createdAt,
@@ -1315,7 +1521,7 @@ export const ChatSessionServiceLive = Layer.effect(
           if (existing.status !== "pending") {
             // Idempotent: already resolved — return the existing row
             // untouched so concurrent callers (answer endpoint +
-            // opencode SSE follow-up) settle on the same final state.
+            // stream resolution follow-up) settle on the same final state.
             return rowToQuestionRow(existing);
           }
           const now = nowIso();

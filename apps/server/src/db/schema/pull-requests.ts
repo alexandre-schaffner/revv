@@ -22,6 +22,30 @@ export const pullRequests = sqliteTable(
     additions: integer("additions").notNull().default(0),
     deletions: integer("deletions").notNull().default(0),
     changedFiles: integer("changed_files").notNull().default(0),
+    /**
+     * Head SHA for which additions/deletions/changedFiles came from the
+     * GraphQL stats endpoint. Distinguishes a real 0/0/0 from the list endpoint's placeholder.
+     */
+    diffStatsHeadSha: text("diff_stats_head_sha"),
+    /**
+     * How many `pr_diff_files` rows the last complete GitHub files fetch
+     * produced for this PR. Written only by `DiffCacheService.cacheFiles`, in
+     * the same transaction as the rows themselves, and cleared when the cache
+     * is invalidated.
+     *
+     * Deliberately separate from `changed_files`. That column is GitHub's own
+     * stat and counts file *entries*, which exceeds the number of distinct
+     * paths whenever a file's type changed (GitHub reports one `removed` and
+     * one `added` entry for the same path). `pr_diff_files` is keyed on
+     * `(prId, path)`, so the cached row count for such a PR can never reach
+     * `changed_files` — and the completeness guard, comparing the two, made
+     * every single page view re-fetch all 30 pages from GitHub. This column is
+     * the honest signal: "the cache holds everything the last fetch returned."
+     * Null on rows written before this column existed, and on rows whose diff
+     * cache was invalidated; both fall back to the `changed_files` comparison
+     * and self-heal after one fetch.
+     */
+    diffFilesCachedCount: integer("diff_files_cached_count"),
     headSha: text("head_sha"),
     baseSha: text("base_sha"),
     createdAt: text("created_at").notNull(),
@@ -38,7 +62,7 @@ export const pullRequests = sqliteTable(
     /**
      * sha256(sorted(threadNodeId + lastCommentUpdatedAt)) — computed after each
      * GraphQL thread pull. If unchanged on the next tick, skip all downstream
-     * DB writes and WS events for this PR (Phase 3 optimization; stored now so
+     * DB writes and SSE events for this PR (Phase 3 optimization; stored now so
      * migrations don't need to change again).
      */
     threadsFingerprint: text("threads_fingerprint"),
@@ -49,6 +73,13 @@ export const pullRequests = sqliteTable(
      * "tagged on" even when not a requested reviewer.
      */
     mentionedUsers: text("mentioned_users").notNull().default("[]"),
+    /**
+     * GitHub's native stack this PR belongs to (`PullRequest.stack.number`)
+     * and its place in it (`stackEntry.position`, 1 sits on the base branch).
+     * Null when the PR isn't stacked, or the host predates stacks.
+     */
+    stackNumber: integer("stack_number"),
+    stackPosition: integer("stack_position"),
   },
   (t) => ({
     /**

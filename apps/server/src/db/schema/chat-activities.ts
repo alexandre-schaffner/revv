@@ -35,6 +35,15 @@ export const chatActivities = sqliteTable(
     toolName: text("tool_name"),
     summary: text("summary").notNull(),
     payloadJson: text("payload_json"),
+    // Provider tool-call id (ACP `toolCallId`). Lets the later tool result
+    // (streamed as an `activity-result` frame) be matched back to this row.
+    callId: text("call_id"),
+    // Captured terminal output of the tool call (stdout / result text / error),
+    // truncated by the decoder. Null until the result arrives (best-effort —
+    // some agents never report a terminal tool-call status). Powers the
+    // clickable output peek.
+    output: text("output"),
+    isError: integer("is_error", { mode: "boolean" }),
     sequence: integer("sequence").notNull(),
     // Optional FK to chat_subagent_invocations. When set, this activity row
     // is a tool call made *inside* a sub-agent (Claude `Task` or opencode
@@ -50,5 +59,8 @@ export const chatActivities = sqliteTable(
       t.sequence,
     ),
     sessionIdx: index("chat_activities_session_idx").on(t.chatSessionId),
+    // Result frames arrive keyed by (session, provider call id); index the
+    // lookup that stamps them onto the originating row.
+    sessionCallIdx: index("chat_activities_session_call_idx").on(t.chatSessionId, t.callId),
   }),
 );

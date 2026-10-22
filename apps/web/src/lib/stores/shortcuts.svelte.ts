@@ -1,7 +1,9 @@
 import { goto } from "$app/navigation";
-import { setActiveTab } from "./review.svelte";
+import { copySelectedPrLink } from "./pr-link.svelte";
+import { REVIEW_TABS, setActiveTab } from "./review.svelte";
 import { toggleSettings } from "./settingsModal.svelte";
-import { toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
+import { setRightPanelOpen, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
+import { getStackView, moveInStack } from "./stack-nav.svelte";
 
 export type PaletteMode = "search" | "command";
 
@@ -67,6 +69,25 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
+  // Cmd+Shift+C → copy the selected PR's `revv://` deep link.
+  //
+  // Match on `e.code`: Shift rewrites the produced character on some layouts,
+  // and `copySelectedPrLink` is a no-op when nothing is selected, so this
+  // needs no page guard.
+  if (e.shiftKey && !e.altKey && e.code === "KeyC") {
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    void copySelectedPrLink();
+    return;
+  }
+
   // Cmd+W → close the current PR view.
   //
   // When we're on a PR, we prefer `history.back()` over `goto('/')`
@@ -94,24 +115,12 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+B → toggle sidebar
-  if (!e.shiftKey && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-    return;
-  }
-
-  // Cmd+S → toggle sidebar (same as Cmd+B)
-  if (!e.shiftKey && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-    return;
-  }
-
-  // Cmd+R → toggle right panel (chat) — only when actively reviewing a PR
-  if (!e.shiftKey && e.key.toLowerCase() === "r") {
+  // Cmd+Option+B → toggle right panel (chat) — only when actively reviewing a PR.
+  //
+  // Match on `e.code` (the physical key), not `e.key`: on macOS, holding Option
+  // rewrites the produced character — Option+B yields "∫", so `e.key` is never
+  // "b" here. `e.code` stays "KeyB" regardless of modifiers.
+  if (!e.shiftKey && e.altKey && e.code === "KeyB") {
     const onPrPage = window.location.pathname.startsWith("/review/");
     if (!onPrPage) return;
     e.preventDefault();
@@ -120,27 +129,53 @@ function handleKeydown(e: KeyboardEvent): void {
     return;
   }
 
-  // Cmd+1 → Walkthrough tab
-  if (e.key === "1") {
+  if (!e.shiftKey && e.altKey && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
+    if (!window.location.pathname.startsWith("/review/") || !getStackView()) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("walkthrough");
+    if (!e.repeat) moveInStack(e.code === "ArrowUp" ? "up" : "down");
     return;
   }
 
-  // Cmd+2 → Diff tab
-  if (e.key === "2") {
+  // Cmd+L → focus the chat composer — only when actively reviewing a PR.
+  // Opens the right panel first if it's collapsed, then focuses the textarea
+  // once it has rendered (rAF defers past the panel's mount).
+  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "l") {
+    const onPrPage = window.location.pathname.startsWith("/review/");
+    if (!onPrPage) return;
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("diff");
+    setRightPanelOpen(true);
+    requestAnimationFrame(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        '[data-slot="prompt-input-textarea"]',
+      );
+      textarea?.focus();
+    });
     return;
   }
 
-  // Cmd+3 → Request Changes tab
-  if (e.key === "3") {
+  // Cmd+B → toggle sidebar
+  if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
     e.preventDefault();
     e.stopPropagation();
-    setActiveTab("request-changes");
+    toggleSidebar();
+    return;
+  }
+
+  // Cmd+1/2/3 → the review tabs, in the order the tab bar shows them.
+  const tab = /^[1-9]$/.test(e.key) ? REVIEW_TABS[Number(e.key) - 1] : undefined;
+  if (tab) {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveTab(tab);
     return;
   }
 

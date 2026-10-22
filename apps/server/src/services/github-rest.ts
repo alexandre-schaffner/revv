@@ -1,0 +1,894 @@
+import { createHash } from "node:crypto";
+import { Effect, Schedule } from "effect";
+import {
+  GitHubAccessDeniedError,
+  GitHubApiError,
+  GitHubAuthError,
+  type GitHubError,
+  GitHubNetworkError,
+  GitHubNotFoundError,
+  GitHubRateLimitError,
+} from "../domain/errors";
+import { githubTryPromise } from "../observability/github-ledger/origin";
+import type { DbService } from "./Db";
+import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
+
+const retrySchedule = Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(3)]);
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+
+const isTransientGitHubError = (e: GitHubError): boolean => e instanceof GitHubNetworkError;
+
+export const retryTransient = <A, R>(
+  effect: Effect.Effect<A, GitHubError, R>,
+): Effect.Effect<A, GitHubError, R> =>
+  effect.pipe(Effect.retry({ schedule: retrySchedule, while: isTransientGitHubError }));
+
+export const retryTransientBeforeFallback = <A, R>(
+  effect: Effect.Effect<A, GitHubError, R>,
+): Effect.Effect<A, GitHubError, R> =>
+  effect.pipe(
+    Effect.retry({
+      schedule: retrySchedule,
+      while: (e) => isTransientGitHubError(e) && graphqlErrorsOf(e) === null,
+    }),
+  );
+
+function cacheKeyForRequest(apiBase: string, path: string, token: string): string {
+  const separator = path.includes("?") ? "&" : "?";
+  const tokenScope = createHash("sha256").update(token).digest("hex");
+  return buildCacheKey("GET", `${apiBase}${path}${separator}viewer=${tokenScope}`);
+}
+
+/** Pass through known GitHub errors; wrap unknown ones in GitHubNetworkError. */
+export function toGitHubError(e: unknown): GitHubError {
+  if (
+    e instanceof GitHubAuthError ||
+    e instanceof GitHubAccessDeniedError ||
+    e instanceof GitHubRateLimitError ||
+    e instanceof GitHubNotFoundError ||
+    e instanceof GitHubApiError ||
+    e instanceof GitHubNetworkError
+  ) {
+    return e;
+  }
+  return new GitHubNetworkError({ cause: e });
+}
+
+/**
+ * Build the REST API base URL for an explicit GitHub host. `github.com` maps
+ * to the public `api.github.com`; every GitHub Enterprise host maps to
+ * `api.<host>`.
+ *
+ * Host is a **per-repository** property (`repositories.github_host`), never a
+ * global one — the settings-derived base URL is only a fallback for flows that
+ * have no repo in hand (add-repo, onboarding, device auth).
+ */
+export function apiBaseForHost(host: string): string {
+  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
+}
+
+/** Build the standard headers for GitHub API requests. */
+export function githubHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+async function githubHttpFetch(url: string, init: RequestInit, path: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GITHUB_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    const name = typeof e === "object" && e !== null && "name" in e ? String(e.name) : "";
+    if (name === "AbortError") {
+      throw new GitHubNetworkError({
+        cause: `Request timed out after ${GITHUB_REQUEST_TIMEOUT_MS}ms for ${path}`,
+      });
+    }
+    const detail = e instanceof Error && e.message ? `${e.name}: ${e.message}` : String(e);
+    throw new GitHubNetworkError({ cause: `${detail} for ${path}` });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Assert a fetch response is successful, throwing the appropriate domain error on failure. */
+export function assertGitHubOk(res: Response, path: string): void {
+  if (res.status === 401) {
+    throw new GitHubAuthError({ message: "Invalid or expired GitHub token" });
+  }
+  if (res.status === 403 || res.status === 429) {
+    const retryAfter = parseRetryAfter(res.headers.get("Retry-After"));
+    if (retryAfter !== null) {
+      throw new GitHubRateLimitError({
+        resetAt: new Date(Date.now() + retryAfter * 1000),
+        retryAfter,
+        kind: "secondary",
+      });
+    }
+
+    const remaining = res.headers.get("X-RateLimit-Remaining");
+    if (res.status === 403 && remaining === "0") {
+      const resetHeader = res.headers.get("X-RateLimit-Reset");
+      const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
+      const resource = res.headers.get("X-RateLimit-Resource");
+      throw new GitHubRateLimitError({
+        resetAt,
+        kind: "primary",
+        ...(resource ? { resource } : {}),
+      });
+    }
+
+    if (res.status === 429) {
+      const defaultRetryAfter = 60;
+      throw new GitHubRateLimitError({
+        resetAt: new Date(Date.now() + defaultRetryAfter * 1000),
+        retryAfter: defaultRetryAfter,
+        kind: "secondary",
+      });
+    }
+
+    throw new GitHubAccessDeniedError({
+      resource: path,
+      message: `Access denied for ${path} (check GitHub org OAuth app policies)`,
+    });
+  }
+  if (res.status === 404) {
+    throw new GitHubNotFoundError({ resource: path, id: path });
+  }
+  if (!res.ok) {
+    // 5xx and 408 are the only statuses worth replaying — GitHub is having a
+    // bad moment and the identical request may succeed. Every other status is
+    // a considered rejection (422 validation, 405 method, 409 conflict, …);
+    // retrying those just spends the backoff budget to get the same answer.
+    if (res.status >= 500 || res.status === 408) {
+      throw new GitHubNetworkError({ cause: `HTTP ${res.status} for ${path}` });
+    }
+    throw new GitHubApiError({ status: res.status, cause: `HTTP ${res.status} for ${path}` });
+  }
+}
+
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds);
+  }
+  const retryAt = Date.parse(header);
+  if (Number.isNaN(retryAt)) return null;
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+}
+
+/**
+ * Annotate the current span with the GitHub response status and remaining
+ * rate-limit budget. These are the two signals the telemetry dashboard cares
+ * about most for GitHub health: status drives the per-operation error rate, and
+ * `github.rate_limit_remaining` makes rate-limit pressure visible *before* it
+ * trips a 403 (the failure mode behind several known sync stalls).
+ */
+function annotateGitHubResponse(res: Response): Effect.Effect<void> {
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  return Effect.gen(function* () {
+    yield* Effect.annotateCurrentSpan("http.response.status_code", res.status);
+    if (remaining != null && remaining !== "") {
+      yield* Effect.annotateCurrentSpan("github.rate_limit_remaining", Number(remaining));
+    }
+  });
+}
+
+export function githubFetch(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return Effect.withSpan("GitHub.fetch", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.gen(function* () {
+      const res = yield* githubTryPromise({
+        try: () => githubHttpFetch(`${apiBase}${path}`, { headers: githubHeaders(token) }, path),
+        catch: toGitHubError,
+      });
+      yield* annotateGitHubResponse(res);
+      yield* Effect.try({ try: () => assertGitHubOk(res, path), catch: toGitHubError });
+      return yield* Effect.tryPromise({ try: () => res.json(), catch: toGitHubError });
+    }),
+  );
+}
+
+/**
+ * {@link githubFetch} for an endpoint whose status carries the answer: the
+ * statuses in `answered` (a `/stats/*` 422, a collaborator check's 404) come
+ * back with their body instead of failing, and so does every 2xx (a
+ * `/stats/*` 202 "still computing", a 204 "empty"). Any other status fails
+ * as {@link githubFetch} would. `body` is null when there was none.
+ */
+export function githubFetchStatus(
+  path: string,
+  token: string,
+  apiBase: string,
+  answered: readonly number[] = [],
+): Effect.Effect<{ readonly status: number; readonly body: unknown }, GitHubError> {
+  return Effect.withSpan("GitHub.fetch", {
+    attributes: { path, method: "GET" },
+  })(
+    githubTryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          { headers: githubHeaders(token) },
+          path,
+        );
+        if (!answered.includes(res.status)) assertGitHubOk(res, path);
+        const text = await res.text();
+        return { status: res.status, body: text ? (JSON.parse(text) as unknown) : null };
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+export function githubFetchDataUrl(url: string): Effect.Effect<string, GitHubError> {
+  return githubTryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(url, {}, url);
+      if (!res.ok) {
+        throw new GitHubApiError({ status: res.status, cause: `HTTP ${res.status} for ${url}` });
+      }
+      const contentType = res.headers.get("content-type") ?? "image/png";
+      const base64 = Buffer.from(await res.arrayBuffer()).toString("base64");
+      return `data:${contentType};base64,${base64}`;
+    },
+    catch: toGitHubError,
+  });
+}
+
+export function conditionalFetch(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError, DbService | GitHubEtagCache> {
+  // This is the highest-volume GET path during sync. The span's `cache`
+  // attribute (hit/miss) makes conditional-request efficiency — and the
+  // rate-limit budget it preserves — visible in the telemetry dashboard.
+  return Effect.withSpan("GitHub.conditionalFetch", {
+    attributes: { path, method: "GET" },
+  })(
+    Effect.gen(function* () {
+      const cache = yield* GitHubEtagCache;
+      const cacheKey = cacheKeyForRequest(apiBase, path, token);
+      const cached = yield* cache.get(cacheKey);
+
+      const result = yield* githubTryPromise({
+        try: async () => {
+          const headers: Record<string, string> = githubHeaders(token);
+          if (cached) {
+            headers["If-None-Match"] = cached.etag;
+          }
+          const res = await githubHttpFetch(`${apiBase}${path}`, { headers }, path);
+          const remaining = res.headers.get("x-ratelimit-remaining");
+
+          if (res.status === 304 && cached) {
+            return {
+              kind: "hit" as const,
+              body: cached.body,
+              bytes: 0,
+              status: res.status,
+              remaining,
+            };
+          }
+
+          assertGitHubOk(res, path);
+
+          const bodyText = await res.text();
+          const body = bodyText ? JSON.parse(bodyText) : null;
+          const etag = res.headers.get("ETag");
+          const lastModified = res.headers.get("Last-Modified");
+          return {
+            kind: "miss" as const,
+            body,
+            bytes: bodyText.length,
+            etag,
+            lastModified,
+            status: res.status,
+            remaining,
+          };
+        },
+        catch: toGitHubError,
+      });
+
+      yield* Effect.annotateCurrentSpan("cache", result.kind);
+      yield* Effect.annotateCurrentSpan("http.response.status_code", result.status);
+      if (result.remaining != null && result.remaining !== "") {
+        yield* Effect.annotateCurrentSpan("github.rate_limit_remaining", Number(result.remaining));
+      }
+
+      if (result.kind === "hit") {
+        recordCacheHit(cache, result.body);
+        return result.body;
+      }
+
+      cache.recordMiss();
+      if (result.etag) {
+        yield* cache.put(cacheKey, result.etag, result.lastModified ?? null, result.body);
+      }
+      return result.body;
+    }),
+  );
+}
+
+export function conditionalFetchPaginated(
+  path: string,
+  token: string,
+  maxPages: number = 3,
+  apiBase: string,
+  options: {
+    readonly canReplayCached?: (cached: readonly unknown[]) => boolean;
+  } = {},
+): Effect.Effect<unknown[], GitHubError, DbService | GitHubEtagCache> {
+  return Effect.withSpan("GitHub.fetchPaginated.conditional", {
+    attributes: { path, maxPages },
+  })(
+    Effect.gen(function* () {
+      const cache = yield* GitHubEtagCache;
+      const cacheKey = cacheKeyForRequest(apiBase, path, token);
+      const cached = yield* cache.get(cacheKey);
+
+      const result = yield* githubTryPromise({
+        try: async () => {
+          const headers: Record<string, string> = githubHeaders(token);
+          if (cached) {
+            headers["If-None-Match"] = cached.etag;
+          }
+
+          const firstUrl = `${apiBase}${path}`;
+          let firstResponse = await githubHttpFetch(firstUrl, { headers }, path);
+
+          if (firstResponse.status === 304 && cached) {
+            if (Array.isArray(cached.body)) {
+              const replayAllowed = options.canReplayCached?.(cached.body) ?? false;
+              if (replayAllowed) {
+                return { kind: "hit" as const, body: cached.body };
+              }
+            }
+
+            firstResponse = await githubHttpFetch(
+              firstUrl,
+              { headers: githubHeaders(token) },
+              path,
+            );
+          }
+
+          const results: unknown[] = [];
+          let url: string | null = firstUrl;
+          let etag: string | null = null;
+          let lastModified: string | null = null;
+          let bytes = 0;
+
+          for (let page = 0; page < maxPages && url; page++) {
+            const res =
+              page === 0
+                ? firstResponse
+                : await githubHttpFetch(url, { headers: githubHeaders(token) }, path);
+            assertGitHubOk(res, path);
+
+            if (page === 0) {
+              etag = res.headers.get("ETag");
+              lastModified = res.headers.get("Last-Modified");
+            }
+
+            const bodyText = await res.text();
+            bytes += bodyText.length;
+            const data = bodyText ? JSON.parse(bodyText) : [];
+            if (Array.isArray(data)) {
+              results.push(...data);
+            }
+
+            url = parseLinkNext(res.headers.get("Link"));
+          }
+
+          return {
+            kind: "miss" as const,
+            body: results,
+            bytes,
+            etag,
+            lastModified,
+          };
+        },
+        catch: toGitHubError,
+      });
+
+      yield* Effect.annotateCurrentSpan("cache", result.kind);
+
+      if (result.kind === "hit") {
+        recordCacheHit(cache, result.body);
+        return [...result.body];
+      }
+
+      cache.recordMiss();
+      if (result.etag) {
+        yield* cache.put(cacheKey, result.etag, result.lastModified, result.body);
+      }
+      return result.body;
+    }),
+  );
+}
+
+function recordCacheHit(
+  cache: { readonly recordHit: (bodyByteSize: number) => void },
+  body: unknown,
+): void {
+  let saved = 0;
+  try {
+    saved = JSON.stringify(body).length;
+  } catch {
+    /* stats are best-effort */
+  }
+  cache.recordHit(saved);
+}
+
+export function githubPost(
+  path: string,
+  token: string,
+  body: Record<string, unknown>,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return Effect.withSpan("GitHub.post", {
+    attributes: { path, method: "POST" },
+  })(
+    Effect.gen(function* () {
+      const res = yield* githubTryPromise({
+        try: () =>
+          githubHttpFetch(
+            `${apiBase}${path}`,
+            {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            },
+            path,
+          ),
+        catch: toGitHubError,
+      });
+      yield* annotateGitHubResponse(res);
+      return yield* Effect.tryPromise({
+        try: async () => {
+          if (res.status === 422) {
+            const text = await res.text().catch(() => "");
+            throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
+          }
+          assertGitHubOk(res, path);
+          return res.json();
+        },
+        catch: toGitHubError,
+      });
+    }),
+  );
+}
+
+export function githubPatch(
+  path: string,
+  token: string,
+  body: Record<string, unknown>,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return githubTryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "PATCH",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        path,
+      );
+      if (res.status === 422) {
+        const text = await res.text().catch(() => "");
+        throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
+      }
+      assertGitHubOk(res, path);
+      return res.json();
+    },
+    catch: toGitHubError,
+  });
+}
+
+export function githubPut(
+  path: string,
+  token: string,
+  body: Record<string, unknown>,
+  apiBase: string,
+): Effect.Effect<unknown, GitHubError> {
+  return githubTryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        {
+          method: "PUT",
+          headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        path,
+      );
+      if (res.status === 405) {
+        const text = await res.text().catch(() => "");
+        throw new GitHubApiError({
+          status: 405,
+          cause: `HTTP 405 Method Not Allowed: ${text}`,
+        });
+      }
+      if (res.status === 422) {
+        const text = await res.text().catch(() => "");
+        throw new GitHubApiError({ status: 422, cause: `422 Unprocessable Entity: ${text}` });
+      }
+      assertGitHubOk(res, path);
+      return res.json();
+    },
+    catch: toGitHubError,
+  });
+}
+
+export function githubDelete(
+  path: string,
+  token: string,
+  apiBase: string,
+  body?: Record<string, unknown>,
+): Effect.Effect<unknown, GitHubError> {
+  return githubTryPromise({
+    try: async () => {
+      const res = await githubHttpFetch(
+        `${apiBase}${path}`,
+        body
+          ? {
+              method: "DELETE",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {
+              method: "DELETE",
+              headers: githubHeaders(token),
+            },
+        path,
+      );
+      assertGitHubOk(res, path);
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
+    },
+    catch: toGitHubError,
+  });
+}
+
+/**
+ * GET an endpoint that answers with a redirect to a short-lived download URL
+ * (Actions job logs) and return the target's body as text. The redirect is
+ * followed by hand so the GitHub token never travels to the storage host.
+ */
+export function githubFetchRedirectText(
+  path: string,
+  token: string,
+  apiBase: string,
+): Effect.Effect<string, GitHubError> {
+  return Effect.withSpan("GitHub.fetchRedirectText", {
+    attributes: { path, method: "GET" },
+  })(
+    githubTryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}${path}`,
+          { headers: githubHeaders(token), redirect: "manual" },
+          path,
+        );
+        const location = res.headers.get("Location");
+        if (res.status >= 300 && res.status < 400 && location) {
+          const target = await githubHttpFetch(location, {}, path);
+          if (!target.ok) {
+            throw new GitHubApiError({
+              status: target.status,
+              cause: `HTTP ${target.status} for ${path} (download)`,
+            });
+          }
+          return target.text();
+        }
+        if (res.status === 410) {
+          throw new GitHubApiError({ status: 410, cause: `HTTP 410 for ${path}` });
+        }
+        assertGitHubOk(res, path);
+        return res.text();
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+/** One entry of a GraphQL response's `errors` array. */
+export interface GraphqlError {
+  readonly message: string;
+  readonly type?: string;
+  /** Where in `data` the failed field sits, e.g. `["repository", "pullRequest"]`. */
+  readonly path?: ReadonlyArray<string | number>;
+}
+
+/**
+ * GitHub's answer when a query fails on its side ("Something went wrong while
+ * executing your query. This may be the result of a timeout…", or on GitHub
+ * Enterprise "…executing your query on <time>. Please include `<id>`…").
+ */
+function isGraphqlServerFailure(message: string): boolean {
+  return message.startsWith("Something went wrong while executing your query");
+}
+
+export class GraphqlErrorAnswer {
+  constructor(readonly errors: ReadonlyArray<GraphqlError>) {}
+
+  toString(): string {
+    return `GraphQL: ${this.errors.map((e) => e.message).join("; ") || "empty data field"}`;
+  }
+}
+
+export function graphqlErrorsOf(err: GitHubError): ReadonlyArray<GraphqlError> | null {
+  return (err instanceof GitHubApiError || err instanceof GitHubNetworkError) &&
+    err.cause instanceof GraphqlErrorAnswer
+    ? err.cause.errors
+    : null;
+}
+
+interface GraphqlPayload<T> {
+  readonly data?: T | null;
+  readonly errors?: ReadonlyArray<GraphqlError>;
+}
+
+/**
+ * POST one GraphQL request and classify the answer. `tolerateErrors` decides
+ * what a 200 carrying `errors` means: a rejected query (the default), or an
+ * aliased query where one unreachable field shouldn't cost the others theirs.
+ * A `RATE_LIMITED` entry is a rate limit either way.
+ */
+function postGraphql<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+  tolerateErrors: boolean,
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
+  const operationName = query.match(/(?:query|mutation)\s+(\w+)/)?.[1] ?? "unknown";
+  return Effect.withSpan("GitHub.graphql", {
+    attributes: { operationName },
+  })(
+    githubTryPromise({
+      try: async () => {
+        const res = await githubHttpFetch(
+          `${apiBase}/graphql`,
+          {
+            method: "POST",
+            headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+            body: JSON.stringify({ query, variables }),
+          },
+          "/graphql",
+        );
+        assertGitHubOk(res, "/graphql");
+        const payload = (await res.json()) as GraphqlPayload<T>;
+        // GraphQL's primary limit answers 200 with a `RATE_LIMITED` error, not
+        // the 403 `assertGitHubOk` recognises. Classify it so callers pause
+        // GraphQL work until the reset instead of retrying into the wall.
+        // `resource: "graphql"` is load-bearing: GraphQL has its own budget,
+        // and callers must not read this as the REST budget running out.
+        if (payload.errors?.some((e) => e.type === "RATE_LIMITED")) {
+          const resetHeader = res.headers.get("X-RateLimit-Reset");
+          throw new GitHubRateLimitError({
+            resetAt: resetHeader ? new Date(Number(resetHeader) * 1000) : new Date(),
+            kind: "primary",
+            resource: "graphql",
+          });
+        }
+        // GitHub's own failure, in a 200: the query ran out of time or hit a
+        // bug on GitHub's side (expensive fields like a stack's merge states
+        // can tip it over). The next ask usually answers, so this one is
+        // transient, like the 5xx it stands in for.
+        const failed = payload.errors?.find((e) => isGraphqlServerFailure(e.message));
+        if (failed) throw new GitHubNetworkError({ cause: new GraphqlErrorAnswer([failed]) });
+        // Any other 200 carrying `errors` means GraphQL parsed and rejected the query
+        // (unknown field, missing scope, node not visible). That verdict is
+        // stable, so this must NOT be a retryable network error — otherwise
+        // every such call costs 4 attempts and ~14s of backoff, which in the
+        // sequential thread sweep stalls every PR behind it.
+        if (!tolerateErrors && payload.errors && payload.errors.length > 0) {
+          throw new GitHubApiError({
+            status: res.status,
+            cause: new GraphqlErrorAnswer(payload.errors),
+          });
+        }
+        // A query GraphQL refused outright (an unknown field on an older GitHub
+        // Enterprise) answers with no `data` at all. Keep its errors: callers
+        // read them to tell a schema complaint from any other failure.
+        if (!payload.data) {
+          throw new GitHubApiError({
+            status: res.status,
+            cause: new GraphqlErrorAnswer(payload.errors ?? []),
+          });
+        }
+        return { data: payload.data, errors: payload.errors ?? [] };
+      },
+      catch: toGitHubError,
+    }),
+  );
+}
+
+export function githubGraphql<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, false).pipe(Effect.map((r) => r.data));
+}
+
+/**
+ * {@link githubGraphql} for aliased queries: GitHub answers a field it can't
+ * resolve (repo renamed, access revoked) with `null` plus an `errors` entry,
+ * and that one field must not fail the rest. Callers treat a `null` alias as
+ * "unknown".
+ */
+export function githubGraphqlPartial<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<T, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true).pipe(Effect.map((r) => r.data));
+}
+
+/**
+ * {@link githubGraphqlPartial} that also hands back GitHub's `errors`, for
+ * callers that must tell which fields came back null and why: a GitHub App
+ * installation without `checks: read` gets `FORBIDDEN` on `statusCheckRollup`
+ * and nothing else, and "can't see the checks" must not read as "no checks".
+ */
+export function githubGraphqlWithErrors<T = unknown>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string,
+  apiBase: string,
+): Effect.Effect<{ data: T; errors: ReadonlyArray<GraphqlError> }, GitHubError> {
+  return postGraphql<T>(query, variables, token, apiBase, true);
+}
+
+/**
+ * Ask a GraphQL query that names fields an older GitHub Enterprise may lack.
+ * GraphQL rejects the whole query on one unknown field or enum value, so a
+ * refusal naming any of `modernTokens` earns one retry with `ask(false)`, the
+ * query without them. Anything else (auth, rate limit, network) is answered
+ * the same way by both shapes, so it fails as is. Reports which shape
+ * answered, for follow-up queries that must match it.
+ *
+ * `anyGraphqlFailure` widens the retry to every failure GraphQL answered —
+ * a refusal or a timeout on GitHub's side — for modern fields that are
+ * optional garnish: one PR's field can be refused or tip the query over,
+ * and the rest of the answer shouldn't wait on it. `outdated` then tells a
+ * host that lacks the fields apart from one that failed on them this once.
+ */
+export function withSchemaFallback<A, R>(
+  ask: (modern: boolean) => Effect.Effect<A, GitHubError, R>,
+  modernTokens: readonly string[],
+  options: { readonly anyGraphqlFailure?: boolean } = {},
+): Effect.Effect<
+  { readonly value: A; readonly modern: boolean; readonly outdated: boolean },
+  GitHubError,
+  R
+> {
+  const outdated = (err: GitHubError) => {
+    if (!(err instanceof GitHubApiError)) return false;
+    const messages = graphqlErrorsOf(err)?.map((e) => e.message) ?? [String(err.cause)];
+    return messages.some((message) => modernTokens.some((token) => message.includes(token)));
+  };
+  return ask(true).pipe(
+    Effect.map((value) => ({ value, modern: true, outdated: false })),
+    Effect.catch((err) =>
+      outdated(err) || (options.anyGraphqlFailure === true && graphqlErrorsOf(err) !== null)
+        ? ask(false).pipe(
+            Effect.map((value) => ({ value, modern: false, outdated: outdated(err) })),
+          )
+        : Effect.fail(err),
+    ),
+  );
+}
+
+/** One page of a GraphQL connection, as selected out of a query's response. */
+export interface GraphqlConnection<N> {
+  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  readonly nodes: ReadonlyArray<N | null>;
+}
+
+/**
+ * Walk a cursor-paginated GraphQL connection. The query must declare a
+ * `$cursor: String` variable and pass it as the connection's `after`.
+ *
+ * `selectConnection` returning nothing means the parent node isn't there (repo
+ * or PR not visible to the token) and fails with `notFound()`, rather than
+ * passing for an empty list.
+ */
+export function paginateGraphql<T, N>(opts: {
+  readonly query: string;
+  readonly variables: Record<string, unknown>;
+  readonly selectConnection: (data: T) => GraphqlConnection<N> | null | undefined;
+  readonly maxPages: number;
+  readonly token: string;
+  readonly apiBase: string;
+  readonly notFound: () => GitHubError;
+  readonly stopAfter?: (page: readonly N[]) => boolean;
+}): Effect.Effect<N[], GitHubError> {
+  return Effect.gen(function* () {
+    const out: N[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < opts.maxPages; page++) {
+      const data: T = yield* githubGraphql<T>(
+        opts.query,
+        { ...opts.variables, cursor },
+        opts.token,
+        opts.apiBase,
+      );
+      const connection = opts.selectConnection(data);
+      if (!connection) return yield* Effect.fail(opts.notFound());
+      const nodes = connection.nodes.filter((node): node is N => node !== null);
+      out.push(...nodes);
+      if (!connection.pageInfo.hasNextPage || opts.stopAfter?.(nodes)) break;
+      cursor = connection.pageInfo.endCursor;
+    }
+    return out;
+  });
+}
+
+export function parseLinkNext(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  return match?.[1] ?? null;
+}
+
+export function githubFetchPaginated(
+  path: string,
+  token: string,
+  maxPages: number = 3,
+  apiBase: string,
+): Effect.Effect<unknown[], GitHubError> {
+  return Effect.withSpan("GitHub.fetchPaginated", {
+    attributes: { path, maxPages },
+  })(
+    Effect.gen(function* () {
+      const results: unknown[] = [];
+      let url: string | null = `${apiBase}${path}`;
+      let page = 0;
+
+      // One child span per page so the waterfall shows how many round-trips a
+      // paginated list actually cost (and which page was slow).
+      while (url && page < maxPages) {
+        const pageUrl: string = url;
+        const next = yield* Effect.withSpan("GitHub.page", {
+          attributes: { path, page },
+        })(
+          githubTryPromise({
+            try: async () => {
+              const res = await githubHttpFetch(pageUrl, { headers: githubHeaders(token) }, path);
+              assertGitHubOk(res, path);
+              const data = await res.json();
+              return { data, nextUrl: parseLinkNext(res.headers.get("Link")) };
+            },
+            catch: toGitHubError,
+          }),
+        );
+        if (Array.isArray(next.data)) results.push(...next.data);
+        url = next.nextUrl;
+        page++;
+      }
+
+      yield* Effect.annotateCurrentSpan("pages", page);
+      yield* Effect.annotateCurrentSpan("count", results.length);
+      return results;
+    }),
+  );
+}

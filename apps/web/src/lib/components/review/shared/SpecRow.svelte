@@ -20,7 +20,7 @@
  * collapse" variant — panels that want click-to-jump use the scorecard's
  * own RatingTestRow directly, not this primitive.
  */
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import CaretRight from "phosphor-svelte/lib/CaretRight";
 import type { Snippet } from "svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 
@@ -67,6 +67,14 @@ let {
   trailing,
   content,
 }: Props = $props();
+
+function focusTriggerOnPointerDown(e: PointerEvent): void {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest('[data-slot="checkbox"]')) return;
+  if (e.currentTarget instanceof HTMLElement) {
+    e.currentTarget.focus({ preventScroll: true });
+  }
+}
 </script>
 
 <li
@@ -79,7 +87,10 @@ let {
         {open}
         onOpenChange={(next: boolean) => {
             if (disabled) return;
-            if (next !== open) onToggle();
+            if (next !== open) {
+                triggerRef?.focus({ preventScroll: true });
+                onToggle();
+            }
         }}
     >
         <Collapsible.Trigger
@@ -88,6 +99,7 @@ let {
             aria-disabled={disabled}
             aria-label={ariaLabel}
             bind:ref={triggerRef}
+            onpointerdown={focusTriggerOnPointerDown}
         >
             <span class="spec-row-gutter" aria-hidden="true"></span>
 
@@ -112,7 +124,7 @@ let {
                 class:spec-row-chevron--hidden={disabled}
                 aria-hidden="true"
             >
-                <ChevronRight size={14} weight="fill" />
+                <CaretRight size={14} />
             </span>
         </Collapsible.Trigger>
 

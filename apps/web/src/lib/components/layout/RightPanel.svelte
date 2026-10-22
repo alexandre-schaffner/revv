@@ -1,16 +1,16 @@
 <script lang="ts">
 import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
+import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import Check from "phosphor-svelte/lib/Check";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import Circle from "phosphor-svelte/lib/Circle";
 import Copy from "phosphor-svelte/lib/Copy";
-import Gear from "phosphor-svelte/lib/Gear";
+import Eraser from "phosphor-svelte/lib/Eraser";
 import GitBranch from "phosphor-svelte/lib/GitBranch";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import Lightbulb from "phosphor-svelte/lib/Lightbulb";
-import MagicWand from "phosphor-svelte/lib/MagicWand";
+import MapTrifold from "phosphor-svelte/lib/MapTrifold";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import Robot from "phosphor-svelte/lib/Robot";
 import Spinner from "phosphor-svelte/lib/Spinner";
@@ -25,6 +25,8 @@ const TOOL_CALL_ROW_H = 14; // px — match walkthrough's compact tool-call rows
 
 import { toast } from "svelte-sonner";
 import { fetchProposedDiffFiles, type ProposedDiffFile } from "$lib/api/chat";
+import { encodeAttachments } from "$lib/chat/attachments";
+import AttachmentChip from "$lib/components/ai/AttachmentChip.svelte";
 import { Checkpoint } from "$lib/components/ai/checkpoint";
 import {
   Confirmation,
@@ -49,6 +51,8 @@ import {
 } from "$lib/components/ai/plan";
 import {
   PromptInput,
+  PromptInputAttachButton,
+  PromptInputAttachments,
   PromptInputBody,
   PromptInputButton,
   PromptInputFooter,
@@ -74,7 +78,7 @@ import {
 } from "$lib/components/ai/queue";
 import { Suggestion, SuggestionItem } from "$lib/components/ai/suggestion";
 import type { ToolState } from "$lib/components/ai/tool";
-import { Tool, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
+import { Tool, ToolCallCard, ToolContent, ToolHeader, ToolOutput } from "$lib/components/ai/tool";
 import ProposedDiffModal from "$lib/components/review/ProposedDiffModal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { Checkbox } from "$lib/components/ui/checkbox";
@@ -97,8 +101,10 @@ import {
   clearCommitSelection,
   discardProposedCommitAction,
   enqueueMessage,
-  getChatError,
+  getActiveTurnId,
   getChatItems,
+  getChatMentionPaths,
+  getChatSessionContext,
   getCheckpoints,
   getInteractionMode,
   getProposedChanges,
@@ -118,6 +124,7 @@ import {
   isResolvingPush,
   loadAvailableAgents,
   loadChatHistory,
+  loadChatSessionContext,
   pushProposed,
   rebaseAllProposedAction,
   refreshProposedChanges,
@@ -130,9 +137,10 @@ import {
   sendChatMessage,
   setInteractionMode,
   toggleCommitSelection,
+  warmChatSessionContext,
 } from "$lib/stores/chat.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
-import { getLoadedHeadSha } from "$lib/stores/review.svelte";
+import { getLoadedHeadSha, getReviewFiles } from "$lib/stores/review.svelte";
 import {
   FALLBACK_PROMPTS,
   fetchSuggestions,
@@ -144,31 +152,22 @@ import StreamingVerb from "./StreamingVerb.svelte";
 
 interface Props {
   onClose: () => void;
+  /** True when the panel is covering the main pane instead of sitting beside
+      it (see `getChatStacked`). Swaps the close affordance for a back button
+      and caps the conversation to a readable column at full-pane width. */
+  stacked?: boolean;
   prId?: string;
 }
 
-let { onClose, prId }: Props = $props();
+let { onClose, stacked = false, prId }: Props = $props();
 
 const items = $derived(prId ? getChatItems(prId) : []);
-// Turn ids whose assistant bubble is still streaming. Activity rows for
-// these turns get folded into the bubble's dot-matrix loader (walkthrough
-// style) instead of rendering as standalone tool-lines, so the panel
-// stays compact during generation.
-const streamingTurnIds = $derived(
-  new Set(
-    items
-      .filter(
-        (i): i is Extract<typeof i, { kind: "message" }> =>
-          i.kind === "message" &&
-          i.role === "assistant" &&
-          i.isStreaming &&
-          typeof i.turnId === "string",
-      )
-      .map((i) => i.turnId as string),
-  ),
-);
+// The turn currently in flight, if any. Its activity rows are folded into
+// the dot-matrix loader (walkthrough style) instead of rendering as
+// standalone tool-lines, so the panel stays compact during generation;
+// they take their place in the timeline once the turn ends.
+const activeTurnId = $derived(prId ? getActiveTurnId(prId) : null);
 const isStreaming = $derived(prId ? isChatStreaming(prId) : false);
-const error = $derived(prId ? getChatError(prId) : null);
 const proposed = $derived(prId ? getProposedChanges(prId) : null);
 const commitCount = $derived(proposed?.commits.length ?? 0);
 const isPushing = $derived(prId ? isPushingProposed(prId) : false);
@@ -187,6 +186,13 @@ const planModeAvailable = $derived(isPlanModeAvailable());
 const queuedMessages = $derived(prId ? getQueuedMessages(prId) : []);
 const chatCheckpoints = $derived(prId ? getCheckpoints(prId) : []);
 const toolApprovals = $derived(prId ? getToolApprovals(prId) : []);
+const sessionContext = $derived(prId ? getChatSessionContext(prId) : null);
+const mentionPaths = $derived(
+  getChatMentionPaths(
+    prId,
+    getReviewFiles().map((file) => file.path),
+  ),
+);
 /** Index → checkpoint lookup for interleaving in the message loop. */
 const checkpointByAfterIndex = $derived(new Map(chatCheckpoints.map((cp) => [cp.afterIndex, cp])));
 /** Pending (un-responded) tool approvals, rendered after the last message. */
@@ -203,18 +209,12 @@ const showQueueDock = $derived(
   queuedMessages.length > 0 || activeTasks.length > 0 || commitCount > 0,
 );
 
-const streamingTurnId = $derived(
-  items.findLast(
-    (i): i is Extract<typeof i, { kind: "message" }> =>
-      i.kind === "message" && i.role === "assistant" && i.isStreaming,
-  )?.turnId,
-);
 const recentToolCalls = $derived(
-  streamingTurnId
+  activeTurnId
     ? items
         .filter(
           (i): i is Extract<typeof i, { kind: "activity" }> =>
-            i.kind === "activity" && i.turnId === streamingTurnId,
+            i.kind === "activity" && i.turnId === activeTurnId,
         )
         .slice(-2)
     : [],
@@ -247,6 +247,23 @@ let newBranchDialogMode = $state<"input" | "confirm-overwrite">("input");
 let newBranchValue = $state("");
 let newBranchInputEl: HTMLInputElement | null = $state(null);
 
+// Floating composer's measured height. The conversation reserves this much
+// padding at the bottom so the last message can scroll above the composer
+// instead of getting hidden behind it. Composer height swings with the
+// queue dock (proposed commits + todos + queued messages) and textarea
+// autoResize, so a static `pb-32` isn't enough.
+let composerEl: HTMLDivElement | null = $state(null);
+let composerH = $state(0);
+$effect(() => {
+  if (!composerEl) return;
+  const ro = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (entry) composerH = entry.contentRect.height;
+  });
+  ro.observe(composerEl);
+  return () => ro.disconnect();
+});
+
 // Hydrate on initial mount AND on PR switch. The panel is mounted once in
 // AppShell and just gets a new `prId` prop on navigation, so this $effect
 // is the only place that fires on PR switch. `loadChatHistory` is
@@ -257,6 +274,7 @@ $effect(() => {
     void refreshProposedChanges(prId);
     void loadChatHistory(prId);
     void loadAvailableAgents();
+    void loadChatSessionContext(prId);
   }
 });
 
@@ -293,15 +311,16 @@ function nestedActivitiesFor(invocationId: string) {
   );
 }
 
-function handlePromptSubmit(message: PromptInputMessage): void {
+async function handlePromptSubmit(message: PromptInputMessage): Promise<void> {
   if (!prId) return;
   const value = message.text.trim();
-  if (value.length === 0) return;
+  const attachments = await encodeAttachments(message.files ?? [], (msg) => toast.error(msg));
+  if (value.length === 0 && attachments.length === 0) return;
   if (isStreaming) {
     // Agent is busy — queue the message for dispatch when it finishes.
-    enqueueMessage(prId, value);
+    enqueueMessage(prId, value, attachments);
   } else {
-    sendChatMessage({ prId, message: value });
+    sendChatMessage({ prId, message: value, attachments });
   }
 }
 
@@ -469,10 +488,21 @@ function activitiesForTurn(
 }
 </script>
 
-<div class="panel">
+<div class="panel" class:panel--stacked={stacked}>
 	<!-- Header -->
-	<div class="panel-header">
+	<div class="panel-header" data-glass>
+		{#if stacked}
+			<!-- Stacked over the main pane: the panel *is* the view, so the exit
+				 is a back button at the head of the row (Slack thread style)
+				 rather than a close affordance at the far end. -->
+			<button class="back-btn" onclick={onClose} aria-label="Back to pull request">
+				<ArrowLeft size={14} />
+			</button>
+		{/if}
 		<span class="panel-title">Chat</span>
+		{#if stacked && selectedPr}
+			<span class="panel-subtitle">#{selectedPr.externalId} {selectedPr.title}</span>
+		{/if}
 		<div class="header-actions">
 			{#if commitCount > 0}
 				<div
@@ -488,10 +518,10 @@ function activitiesForTurn(
 						disabled={isPushing || isStreaming || isResolving}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							<span class="push-pill-label">Pushing…</span>
 						{:else}
-							<UploadSimple size={12} weight="fill" />
+							<UploadSimple size={12} />
 							<span class="push-pill-label">
 								Push
 								<span class="push-pill-count">{commitCount}</span>
@@ -507,7 +537,7 @@ function activitiesForTurn(
 								title="Push options"
 								disabled={isPushing || isStreaming || isResolving}
 							>
-								<CaretDown size={11} weight="fill" />
+								<CaretDown size={11} />
 							</button>
 						</PopoverTrigger>
 						<PopoverContent class="w-72 p-1" align="end" side="bottom">
@@ -516,7 +546,7 @@ function activitiesForTurn(
 								class="push-menu-item"
 								onclick={openNewBranchDialog}
 							>
-								<GitBranch size={12} weight="fill" class="push-menu-item-icon" />
+								<GitBranch size={12} class="push-menu-item-icon" />
 								<div class="push-menu-item-body">
 									<span class="push-menu-item-title">Push to new branch…</span>
 									<span class="push-menu-item-hint">
@@ -540,12 +570,14 @@ function activitiesForTurn(
 						: 'Clear conversation'}
 					disabled={isPushing || isResolving}
 				>
-					<MagicWand size={13} weight="fill" />
+					<Eraser size={13} />
 				</button>
 			{/if}
-			<button class="icon-btn" onclick={onClose} aria-label="Close panel">
-				<X size={14} weight="fill" />
-			</button>
+			{#if !stacked}
+				<button class="icon-btn" onclick={onClose} aria-label="Close panel">
+					<X size={14} />
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -565,10 +597,10 @@ function activitiesForTurn(
 					title="Rebase all commits onto new PR head"
 				>
 					{#if isRebasing}
-						<Spinner size={11} weight="fill" class="motion-essential-spin" />
+						<Spinner size={11} class="motion-essential-spin" />
 						<span>Rebasing…</span>
 					{:else}
-						<ArrowCounterClockwise size={11} weight="fill" />
+						<ArrowCounterClockwise size={11} />
 						<span>Rebase all</span>
 					{/if}
 				</button>
@@ -587,9 +619,9 @@ function activitiesForTurn(
 							aria-label="Discard commit {commit.shortSha}"
 						>
 							{#if isDiscardingCommit(commit.sha)}
-								<Spinner size={10} weight="fill" class="motion-essential-spin" />
+								<Spinner size={10} class="motion-essential-spin" />
 							{:else}
-								<Trash size={10} weight="fill" />
+								<Trash size={10} />
 							{/if}
 						</button>
 					</li>
@@ -604,14 +636,15 @@ function activitiesForTurn(
 		resetKey={prId}
 		innerClass="min-h-0"
 	>
-		{#if items.length === 0 && !error}
+			{#if items.length === 0}
 			<ConversationEmptyState
 				title="Ask the agent about this pull request"
 				description="The agent runs inside the PR's worktree and can read the code, propose fixes, and commit them on a working branch."
-				class="pb-32"
+				class={stacked ? 'mx-auto w-full max-w-3xl' : ''}
+				style="padding-bottom: calc({composerH}px + 1rem)"
 			>
 				{#snippet icon()}
-					<Robot size={32} weight="fill" />
+					<Robot size={32} />
 				{/snippet}
 				<Suggestion class="mt-3 justify-center">
 					{#each suggestedPrompts as prompt (prompt)}
@@ -625,18 +658,29 @@ function activitiesForTurn(
 				</Suggestion>
 			</ConversationEmptyState>
 		{:else}
-			<ConversationContent class="gap-2 px-2.5 pt-3 pb-32">
+			<!-- Stacked: the panel is as wide as the main pane, so cap the
+				 conversation to a readable column instead of letting bubbles
+				 run the full width. -->
+			<ConversationContent
+				class={stacked ? 'mx-auto w-full max-w-3xl gap-3 px-3.5 pt-3' : 'gap-3 px-3.5 pt-3'}
+				style="padding-bottom: calc({composerH}px + 1rem)"
+			>
 				{#each items as item, itemIdx (item.id)}
 				{#if item.kind === 'activity'}
 						<!-- Skip nested sub-agent tool calls — they render
 							 inside their SubagentInvocation card. Also fold
 							 active-turn tool calls into the dot-matrix
 							 indicator below. -->
-						{#if !item.subagentInvocationId && !(item.turnId && streamingTurnIds.has(item.turnId))}
-							<div class="tool-line">
-								<span class="tool-bullet">&rsaquo;</span>
-								<span class="tool-text">{item.summary}</span>
-							</div>
+						{#if !item.subagentInvocationId && !(item.turnId && item.turnId === activeTurnId)}
+							<ToolCallCard
+								activityKind={item.activityKind}
+								toolName={item.toolName}
+								summary={item.summary}
+								payload={item.payload}
+								output={item.output}
+								isError={item.isError}
+								prId={prId ?? undefined}
+							/>
 						{/if}
 					{:else if item.kind === 'task-list'}
 						<!-- Rendered exclusively in the Queue dock below. -->
@@ -662,7 +706,7 @@ function activitiesForTurn(
 									</span>
 								{/if}
 							</PlanHeader>
-							<PlanContent class="text-sm leading-relaxed">
+							<PlanContent class="prose prose-sm max-w-none">
 								{@html messageHtml(item.markdown)}
 							</PlanContent>
 							{#if item.status === 'pending'}
@@ -697,10 +741,15 @@ function activitiesForTurn(
 								{#if nestedActivitiesFor(item.id).length > 0}
 									<div class="space-y-0.5">
 										{#each nestedActivitiesFor(item.id) as activity (activity.id)}
-											<div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
-												<span class="font-semibold text-muted-foreground/60">&rsaquo;</span>
-												<span class="flex-1 min-w-0 break-words">{activity.summary}</span>
-											</div>
+											<ToolCallCard
+												activityKind={activity.activityKind}
+												toolName={activity.toolName}
+												summary={activity.summary}
+												payload={activity.payload}
+												output={activity.output}
+												isError={activity.isError}
+												prId={prId ?? undefined}
+											/>
 										{/each}
 									</div>
 								{/if}
@@ -731,20 +780,30 @@ function activitiesForTurn(
 				{:else if item.role === 'user'}
 					<Message from="user">
 						<MessageContent>
-							<MessageResponse content={item.content} class="rounded-[14px] rounded-br-[4px] bg-accent px-3 py-2 text-sm leading-relaxed text-white [&_a]:text-white [&_a]:underline [&_code]:bg-black/20 [&_code]:text-xs [&_pre]:bg-black/20" />
+							<div class="flex max-w-full flex-col items-end gap-1.5">
+								{#if item.content}
+									<MessageResponse content={item.content} mentionPills class="prose-user-bubble rounded-[14px] rounded-br-[4px] border border-user-bubble-border bg-user-bubble px-3 py-2" />
+								{/if}
+								{#if item.attachments && item.attachments.length > 0}
+									<div class="flex max-w-[min(26rem,80vw)] flex-wrap justify-end gap-1">
+										{#each item.attachments as attachment, attachmentIndex (`${attachment.name}-${attachment.size}-${attachmentIndex}`)}
+											<AttachmentChip
+												kind={attachment.kind}
+												name={attachment.name}
+												size={attachment.size}
+												tone="accent"
+											/>
+										{/each}
+									</div>
+								{/if}
+							</div>
 						</MessageContent>
 					</Message>
 				{:else if item.kind === 'message' && item.role === 'assistant'}
 					<Message from="assistant">
 						<MessageContent>
 							{#if item.content}
-								<MessageResponse content={item.content} class="text-sm leading-relaxed" />
-							{/if}
-							{#if item.error}
-								<div class="mt-2 flex items-start gap-1.5 rounded border border-border bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground" role="alert">
-									<Warning size={12} weight="fill" class="mt-0.5 shrink-0" />
-									<span class="min-w-0 break-words">{item.error}</span>
-								</div>
+								<MessageResponse content={item.content} linkifyFiles class="w-full" />
 							{/if}
 						</MessageContent>
 					</Message>
@@ -788,68 +847,47 @@ function activitiesForTurn(
 						/>
 					</Confirmation>
 				{/each}
+
+				{#if isStreaming}
+					<div class="streaming-indicator" aria-label="AI is thinking…">
+						{#if activeTurnId}
+							<Dotmatrix
+								variant={squareVariantForId(activeTurnId)}
+								size="small"
+							/>
+						{/if}
+						{#if recentToolCalls.length > 0}
+							<div class="chat-tool-calls">
+								{#each recentToolCalls as step, i (step.id)}
+									<div
+										class="chat-tool-call"
+										style="top: {i * TOOL_CALL_ROW_H}px"
+										in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
+										out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
+									>
+										<span class="chat-tool-call-tool">{step.toolName}</span>
+										<span class="chat-tool-call-desc">{step.summary}</span>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<StreamingVerb />
+						{/if}
+					</div>
+				{/if}
 			</ConversationContent>
 		{/if}
 
-		{#if isStreaming}
-			<div class="streaming-indicator" aria-label="AI is thinking…">
-				{#if streamingTurnId}
-					<Dotmatrix
-						variant={squareVariantForId(streamingTurnId)}
-						size="small"
-					/>
-				{/if}
-				{#if recentToolCalls.length > 0}
-					<div class="chat-tool-calls">
-						{#each recentToolCalls as step, i (step.id)}
-							<div
-								class="chat-tool-call"
-								style="top: {i * TOOL_CALL_ROW_H}px"
-								in:gsapFadeY={{ y: TOOL_CALL_ROW_H, duration: tokens.smooth }}
-								out:gsapFadeY={{ y: -TOOL_CALL_ROW_H, duration: tokens.quick }}
-							>
-								<span class="chat-tool-call-tool">{step.toolName}</span>
-								<span class="chat-tool-call-desc">{step.summary}</span>
-							</div>
-						{/each}
-					</div>
-				{:else}
-					<StreamingVerb />
-				{/if}
-			</div>
-		{/if}
-
-		{#if error && !isStreaming}
-			<div class="error-state">
-				{#if error.code === 'NOT_CONFIGURED'}
-					<Gear size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">AI not configured</p>
-					<p class="error-hint">
-						Install <a href="https://opencode.ai" class="error-link">opencode</a>
-						or <a href="https://claude.ai/code" class="error-link">Claude Code</a>
-						and authenticate, then select your CLI agent in <a href="/settings" class="error-link">Gear</a>.
-					</p>
-				{:else if error.code === 'RATE_LIMITED'}
-					<Warning size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">Rate limited</p>
-					<p class="error-hint">{error.message}</p>
-				{:else}
-					<Warning size={24} weight="fill" class="error-icon" />
-					<p class="error-primary">Chat failed</p>
-					<p class="error-hint">{error.message}</p>
-				{/if}
-			</div>
-		{/if}
 		<ConversationScrollButton />
 	</Conversation>
 
 	<!-- Floating composer: queue dock + chat input share one glass surface
 		 anchored to the panel bottom; messages scroll underneath them. -->
-	<div class="composer-float">
+	<div class="composer-float" bind:this={composerEl}>
 	<!-- Queue dock: proposed commits + agent tasks + queued messages -->
 	{#if showQueueDock}
 		<div class="queue-dock" transition:gsapSlide={{ duration: tokens.smooth }}>
-			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none">
+			<Queue class="composer-glass rounded-t-xl rounded-b-none border-b-0 shadow-none" data-glass>
 				<!-- Proposed commits from the agent -->
 				{#if commitCount > 0 && proposed}
 					<div transition:gsapSlide={{ duration: tokens.smooth }}>
@@ -1123,17 +1161,23 @@ function activitiesForTurn(
 			onsubmit={handlePromptSubmit}
 			onstop={handleStop}
 			status={inputStatus}
+			data-glass
 			class={'composer-glass composer-glass-input transition-[border-color,box-shadow] duration-quick ease-out-expo' + (showQueueDock ? ' composer-glass--attached rounded-t-none border-t-0' : '') + (!prId ? ' opacity-60' : '')}
 		>
 			<PromptInputBody>
+				<PromptInputAttachments />
 				<PromptInputTextarea
 					placeholder="Ask anything…"
 					disabled={!prId}
 					class="text-sm leading-relaxed"
+					commands={sessionContext?.commands ?? []}
+					mentionPaths={mentionPaths}
+					onfocus={() => prId && warmChatSessionContext(prId)}
 				/>
 			</PromptInputBody>
 			<PromptInputFooter>
 				<PromptInputTools>
+					<PromptInputAttachButton />
 					<PromptInputButton
 						tooltip={
 							planModeAvailable
@@ -1147,7 +1191,10 @@ function activitiesForTurn(
 						aria-pressed={interactionMode === 'plan'}
 						class={interactionMode === 'plan' ? 'bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent' : ''}
 					>
-						<Lightbulb class="size-3.5" />
+						<MapTrifold class="size-3.5" />
+						{#if interactionMode === 'plan'}
+							<span class="text-xs font-medium">Plan</span>
+						{/if}
 					</PromptInputButton>
 				</PromptInputTools>
 				<PromptInputSubmit disabled={!prId} />
@@ -1180,7 +1227,7 @@ function activitiesForTurn(
 					onclick={dismissConflictDialog}
 					aria-label="Close conflict dialog"
 				>
-					<X size={14} weight="fill" />
+					<X size={14} />
 				</button>
 			</div>
 			<div class="conflict-card-body">
@@ -1228,7 +1275,7 @@ function activitiesForTurn(
 				<Dialog.Title>
 					<span class="new-branch-title">
 						{#if newBranchDialogMode === 'input'}
-							<GitBranch size={16} weight="fill" />
+							<GitBranch size={16} />
 							Push to a new branch
 						{:else}
 							<Warning size={16} weight="fill" class="new-branch-title-warn" />
@@ -1302,7 +1349,7 @@ function activitiesForTurn(
 						disabled={isPushing || !isValidNewBranchName(newBranchValue)}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							Pushing…
 						{:else}
 							Push
@@ -1316,7 +1363,7 @@ function activitiesForTurn(
 						disabled={isPushing}
 					>
 						{#if isPushing}
-							<Spinner size={12} weight="fill" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 							Overwriting…
 						{:else}
 							Overwrite
@@ -1381,6 +1428,15 @@ function activitiesForTurn(
 		pointer-events: auto;
 	}
 
+	/* Match the conversation's capped column (max-w-3xl = 48rem) so the
+	   composer stays under the messages instead of spanning the whole pane. */
+	.panel--stacked .composer-float {
+		left: 50%;
+		right: auto;
+		width: min(48rem, 100% - 20px);
+		transform: translateX(-50%);
+	}
+
 	/* Shared glass surface — blur + saturate like PillTabs.
 	   10px blur is the standing-chrome cap; reserve 16px for short-lived
 	   overlays (dialogs, popovers, command palette). */
@@ -1426,7 +1482,7 @@ function activitiesForTurn(
 		padding: 0 8px 0 12px;
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		gap: 8px;
 		flex-shrink: 0;
 		position: sticky;
 		top: 0;
@@ -1442,12 +1498,54 @@ function activitiesForTurn(
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: var(--color-text-muted);
+		/* The PR subtitle beside it absorbs the squeeze instead. */
+		flex-shrink: 0;
 	}
 
 	.header-actions {
 		display: flex;
 		align-items: center;
 		gap: 2px;
+		margin-left: auto;
+		padding-left: 8px;
+	}
+
+	/* ── Stacked header (panel covering the main pane) ── */
+	.panel--stacked .panel-header {
+		padding-left: 6px;
+	}
+
+	.back-btn {
+		width: 24px;
+		height: 24px;
+		border-radius: 4px;
+		border: none;
+		background: transparent;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		transition:
+			background-color var(--duration-snap),
+			color var(--duration-snap);
+	}
+
+	.back-btn:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-primary);
+	}
+
+	/* Which PR you'd return to — the stacked panel hides the main pane, so the
+	   header carries the context the pane would otherwise show. */
+	.panel-subtitle {
+		font-size: 11px;
+		color: var(--color-text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
 	}
 
 	/* Streaming indicator — dot matrix + last-2 tool calls sit below the
@@ -1494,7 +1592,7 @@ function activitiesForTurn(
 
 	   Style: a neutral elevated chip. The accent comes through only in
 	   the upload icon + count badge so the button reads as primary
-	   without flooding the panel header with color. Roboth halves are
+	   without flooding the panel header with color. Both halves are
 	   transparent and inherit the wrapper background, so the surface
 	   is uniform across the divider. */
 	.push-pill {
@@ -1773,26 +1871,6 @@ function activitiesForTurn(
 	}
 
 	/* Content / messages */
-	/* Tool-use line */
-	.tool-line {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		font-size: 11px;
-		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-	}
-
-	.tool-bullet {
-		color: var(--color-accent);
-	}
-
-	.tool-text {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
 	/* Streaming tool-call stack: shown in the panel header during a
 	   streaming turn (next to the dot-matrix loader). Last 2 activities
 	   stack vertically and animate up as new ones arrive — same shape as
@@ -1833,40 +1911,6 @@ function activitiesForTurn(
 		white-space: nowrap;
 		min-width: 0;
 		color: var(--color-text-muted);
-	}
-
-	/* Error states */
-	.error-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		padding: 24px;
-		text-align: center;
-		gap: 6px;
-	}
-
-	:global(.error-icon) {
-		color: var(--color-text-muted);
-		margin-bottom: 4px;
-	}
-
-	.error-primary {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--color-text-secondary);
-		margin: 0;
-	}
-
-	.error-hint {
-		font-size: 12px;
-		color: var(--color-text-muted);
-		margin: 0;
-	}
-
-	.error-link {
-		color: var(--color-accent);
-		text-decoration: underline;
-		text-underline-offset: 2px;
 	}
 
 	/* Queue dock — floats above the composer inside the floating composer

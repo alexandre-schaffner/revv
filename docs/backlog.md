@@ -22,7 +22,7 @@ Tracked from `alexandre-schaffner/rethink-walkthrough-streaming` review ("Merge 
 ## Deferred Cleanup
 
 ### C-001 — Remove legacy per-PR SSE `fanOut` path
-- **Description:** The dual-emit cutover keeps `fanOut` running alongside the new `EventBus`. Once the client cutover is proven stable, the per-PR SSE handler and all `fanOut` machinery should be deleted atomically.
+- **Description:** The dual-emit cutover keeps `fanOut` running alongside the new `Broadcaster` (SSE). Once the client cutover is proven stable, the per-PR SSE handler and all `fanOut` machinery should be deleted atomically.
 
 ### C-002 — SSR prerender import removal in PrerenderCache.ts
 - **Description:** Walkthrough code-block SSR prerender import noted in the diff as no longer needed after the SSE refactor. Separate PR.

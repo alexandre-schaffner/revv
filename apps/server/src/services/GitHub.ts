@@ -1,39 +1,63 @@
-import type {
-  Issue,
-  MergeEligibility,
-  MergeMethod,
-  Org,
-  PullRequest,
-  Repository,
-} from "@revv/shared";
-import { Context, Effect, Layer, Schedule } from "effect";
+import type { Issue, MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
+import { Context, Effect, Layer, Result } from "effect";
 import { serverEnv } from "../config";
-import {
-  GitHubAuthError,
-  type GitHubError,
-  GitHubNetworkError,
-  GitHubNotFoundError,
-  GitHubRateLimitError,
-} from "../domain/errors";
+import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
+import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
+import { logError } from "../logger";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
-import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
+import type { GitHubEtagCache } from "./GitHubEtagCache";
+import {
+  getPrsViaGraphql,
+  listClosedPrNumbersSince,
+  listOpenPrsViaGraphql,
+  listPrDiffStatsViaGraphql,
+  type OpenPrList,
+  type OpenPrListSignature,
+  type PrDiffStats,
+  probeOpenPrListSignatures,
+  reposByName,
+} from "./github-graphql-prs";
+import { getCodeFrequency, getCommitActivity, searchPullRequests } from "./github-repo-stats";
+import {
+  apiBaseForHost,
+  assertGitHubOk,
+  conditionalFetch,
+  conditionalFetchPaginated,
+  type GraphqlConnection,
+  githubDelete,
+  githubFetch,
+  githubFetchPaginated,
+  githubFetchStatus,
+  githubGraphql,
+  githubHeaders,
+  githubPatch,
+  githubPost,
+  githubPut,
+  paginateGraphql,
+  parseLinkNext,
+  retryTransient,
+  toGitHubError,
+  withSchemaFallback,
+} from "./github-rest";
 import { SettingsService } from "./Settings";
 
 /**
- * Resolve the GitHub REST API base URL at call time from user settings.
- * Falls back to `serverEnv.githubHost` when settings haven't been written yet
- * (first-run, or settings file missing). Returns `https://api.github.com` for
- * `github.com`; `https://api.<host>` for GitHub Enterprise.
+ * Fallback GitHub REST API base URL, derived from the *global* settings host.
+ *
+ * Only correct for flows that have no repository in hand: add-repo, onboarding,
+ * device auth, org/team pickers. Anything scoped to a repo must pass an
+ * explicit `apiBase` built from that repo's `githubHost` — the settings row
+ * holds one host, so relying on it silently sends GitHub Enterprise traffic to
+ * `api.github.com` (or vice versa) the moment two hosts coexist on one machine.
  */
 const resolveApiBase: Effect.Effect<string, never, SettingsService> = Effect.gen(function* () {
   const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
     Effect.orElseSucceed(() => null),
   );
   const host = settings?.githubHost?.trim() || serverEnv.githubHost;
-  return host === "github.com" ? "https://api.github.com" : `https://api.${host}`;
+  return apiBaseForHost(host);
 });
-
-const retrySchedule = Schedule.intersect(Schedule.exponential("2 seconds"), Schedule.recurs(3));
 
 /** Parse "owner/repo" into parts, failing with GitHubNotFoundError if malformed. */
 function parseRepoFullName(
@@ -46,294 +70,7 @@ function parseRepoFullName(
   return Effect.succeed({ owner, repo });
 }
 
-/** Pass through known GitHub errors; wrap unknown ones in GitHubNetworkError. */
-function toGitHubError(e: unknown): GitHubError {
-  if (
-    e instanceof GitHubAuthError ||
-    e instanceof GitHubRateLimitError ||
-    e instanceof GitHubNotFoundError ||
-    e instanceof GitHubNetworkError
-  ) {
-    return e;
-  }
-  return new GitHubNetworkError({ cause: e });
-}
-
-/** Build the standard headers for GitHub API requests. */
-function githubHeaders(token: string): Record<string, string> {
-  return {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github.v3+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-}
-
-/** Assert a fetch response is successful, throwing the appropriate domain error on failure. */
-function assertGitHubOk(res: Response, path: string): void {
-  if (res.status === 401) {
-    throw new GitHubAuthError({ message: "Invalid or expired GitHub token" });
-  }
-  if (res.status === 403) {
-    const remaining = res.headers.get("X-RateLimit-Remaining");
-    if (remaining === "0") {
-      const resetHeader = res.headers.get("X-RateLimit-Reset");
-      const resetAt = resetHeader ? new Date(Number(resetHeader) * 1000) : new Date();
-      throw new GitHubRateLimitError({ resetAt });
-    }
-    // Not a rate limit — likely org access restriction or insufficient permissions
-    throw new GitHubNetworkError({
-      cause: `HTTP 403 – access denied for ${path} (check GitHub org OAuth app policies)`,
-    });
-  }
-  if (res.status === 404) {
-    throw new GitHubNotFoundError({ resource: path, id: path });
-  }
-  if (!res.ok) {
-    throw new GitHubNetworkError({ cause: `HTTP ${res.status}` });
-  }
-}
-
-function githubFetch(
-  path: string,
-  token: string,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        headers: githubHeaders(token),
-      });
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
-}
-
-/**
- * Fetch a single-page GitHub REST endpoint with conditional-request caching.
- *
- * On cache hit with unchanged server state, GitHub responds `304 Not Modified`
- * and we replay the stored body — zero bytes of real payload, zero rate-limit
- * cost. On `200`, we refresh the stored ETag + body for next time.
- *
- * Only use this for endpoints that return a single page. Paginated endpoints
- * (`listUserRepos`, `listReviewComments`) still call `githubFetchPaginated`
- * directly; per-page ETag caching can be added later.
- */
-function conditionalFetch(
-  path: string,
-  token: string,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError, DbService | GitHubEtagCache> {
-  return Effect.gen(function* () {
-    const cache = yield* GitHubEtagCache;
-    const cacheKey = buildCacheKey("GET", path);
-    const cached = yield* cache.get(cacheKey);
-
-    const result = yield* Effect.tryPromise({
-      try: async () => {
-        const headers: Record<string, string> = githubHeaders(token);
-        if (cached) {
-          headers["If-None-Match"] = cached.etag;
-        }
-        const res = await fetch(`${apiBase}${path}`, { headers });
-
-        if (res.status === 304 && cached) {
-          // Server confirms our cached body is still fresh.
-          return { kind: "hit" as const, body: cached.body, bytes: 0 };
-        }
-
-        // For any other status code, fall through to normal error handling.
-        assertGitHubOk(res, path);
-
-        const bodyText = await res.text();
-        const body = bodyText ? JSON.parse(bodyText) : null;
-        const etag = res.headers.get("ETag");
-        const lastModified = res.headers.get("Last-Modified");
-        return {
-          kind: "miss" as const,
-          body,
-          bytes: bodyText.length,
-          etag,
-          lastModified,
-        };
-      },
-      catch: toGitHubError,
-    });
-
-    if (result.kind === "hit") {
-      // Approximate bytes saved = size of the body we'd have downloaded.
-      let saved = 0;
-      try {
-        saved = JSON.stringify(result.body).length;
-      } catch {
-        /* swallow — stats are best-effort */
-      }
-      cache.recordHit(saved);
-      return result.body;
-    }
-
-    cache.recordMiss();
-    if (result.etag) {
-      yield* cache.put(cacheKey, result.etag, result.lastModified ?? null, result.body);
-    }
-    return result.body;
-  });
-}
-
-function githubPost(
-  path: string,
-  token: string,
-  body: Record<string, unknown>,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "POST",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 422) {
-        const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
-      }
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
-}
-
-function githubPatch(
-  path: string,
-  token: string,
-  body: Record<string, unknown>,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "PATCH",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 422) {
-        const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
-      }
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
-}
-
-function githubPut(
-  path: string,
-  token: string,
-  body: Record<string, unknown>,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}${path}`, {
-        method: "PUT",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 405) {
-        const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `HTTP 405 Method Not Allowed: ${text}` });
-      }
-      if (res.status === 422) {
-        const text = await res.text().catch(() => "");
-        throw new GitHubNetworkError({ cause: `422 Unprocessable Entity: ${text}` });
-      }
-      assertGitHubOk(res, path);
-      return res.json();
-    },
-    catch: toGitHubError,
-  });
-}
-
-/**
- * POST a GraphQL query/mutation. Throws on `errors[]` in the response body
- * even if the HTTP status is 200 (GitHub convention).
- */
-function githubGraphql<T = unknown>(
-  query: string,
-  variables: Record<string, unknown>,
-  token: string,
-  apiBase: string,
-): Effect.Effect<T, GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${apiBase}/graphql`, {
-        method: "POST",
-        headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-        body: JSON.stringify({ query, variables }),
-      });
-      assertGitHubOk(res, "/graphql");
-      const payload = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
-      if (payload.errors && payload.errors.length > 0) {
-        throw new GitHubNetworkError({
-          cause: `GraphQL: ${payload.errors.map((e) => e.message).join("; ")}`,
-        });
-      }
-      if (!payload.data) {
-        throw new GitHubNetworkError({ cause: "GraphQL: empty data field" });
-      }
-      return payload.data;
-    },
-    catch: toGitHubError,
-  });
-}
-
-/** Parse GitHub Link header to find the URL for rel="next". */
-function parseLinkNext(linkHeader: string | null): string | null {
-  if (!linkHeader) return null;
-  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-  return match?.[1] ?? null;
-}
-
-/**
- * Fetch a paginated GitHub API list endpoint, following Link rel="next" headers
- * up to `maxPages` pages. Returns the concatenated array of all results.
- */
-function githubFetchPaginated(
-  path: string,
-  token: string,
-  maxPages: number = 3,
-  apiBase: string,
-): Effect.Effect<unknown[], GitHubError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const results: unknown[] = [];
-      let url: string | null = `${apiBase}${path}`;
-
-      for (let page = 0; page < maxPages && url; page++) {
-        const res = await fetch(url, {
-          headers: githubHeaders(token),
-        });
-        assertGitHubOk(res, path);
-
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          results.push(...data);
-        }
-
-        url = parseLinkNext(res.headers.get("Link"));
-      }
-
-      return results;
-    },
-    catch: toGitHubError,
-  });
-}
-
-function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest {
+function mapPr(raw: Record<string, unknown>, repositoryId: string): ObservedPr {
   const user = raw.user as Record<string, unknown>;
   const head = raw.head as Record<string, unknown>;
   const base = raw.base as Record<string, unknown>;
@@ -349,6 +86,10 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     authorAvatarContent: null,
     authorAvatarUrl: (user.avatar_url as string | null) ?? null,
     requestedReviewers,
+    // GitHub's PR payload has no mentions field; they're parsed out of the
+    // body and unioned with comment-sourced mentions during sync, then read
+    // back off the DB row. Always empty on this path.
+    mentionedUsers: [],
     status: raw.state === "closed" ? (raw.merged_at ? "merged" : "closed") : "open",
     reviewStatus: "pending",
     isDraft: (raw.draft as boolean | undefined) ?? false,
@@ -364,16 +105,10 @@ function mapPr(raw: Record<string, unknown>, repositoryId: string): PullRequest 
     updatedAt: raw.updated_at as string,
     fetchedAt: new Date().toISOString(),
     closedAt: (raw.closed_at as string | null) ?? null,
+    stack: STACK_UNSEEN,
   };
 }
 
-/**
- * Map a raw GitHub issue payload to the storable Issue shape minus the
- * per-viewer `assignedToViewer` flag (computed in IssuesService against the
- * caller's GitHub login). The same endpoint also returns pull requests —
- * the `pull_request` key on the raw payload is how GitHub distinguishes them;
- * `IssuesService.listForRepo` filters those out before calling this.
- */
 function mapIssue(
   raw: Record<string, unknown>,
   repositoryId: string,
@@ -424,6 +159,7 @@ function mapRepo(raw: Record<string, unknown>): Repository {
     cloneStatus: "pending",
     clonePath: null,
     cloneError: null,
+    managed: true,
     // githubHost is resolved by the caller (repo.githubHost for syncs, current settings host for add-repo)
     githubHost: "",
   };
@@ -443,6 +179,44 @@ export interface PrFileMeta {
   readonly patch: string | null;
 }
 
+const PR_FILES_PAGE_SIZE = 100;
+export const PR_FILES_MAX_PAGES = 30;
+export const PR_FILES_MAX_COUNT = PR_FILES_PAGE_SIZE * PR_FILES_MAX_PAGES;
+/**
+ * Hard cap on `files[]` from GitHub's compare endpoint. Unlike `/pulls/:n/files`
+ * this endpoint does not paginate the file list, so a range touching more than
+ * 300 files comes back truncated.
+ */
+const COMPARE_FILES_MAX_COUNT = 300;
+
+/**
+ * Collapse repeated filenames in GitHub's PR-files list.
+ *
+ * GitHub emits *two* entries for one path when the file's type changed — a
+ * regular file replaced by a symlink comes back as a `removed` entry
+ * immediately followed by an `added` entry, both with the same `filename`.
+ * Two consequences, both bugs we hit:
+ *
+ *   • `pr_diff_files` is keyed on `(prId, path)`, so the pair collapses to a
+ *     single row on write. The stored row count then never reaches GitHub's
+ *     `changed_files` stat (which counts entries, not paths), and the
+ *     completeness guard re-fetched all 30 pages on *every* page view.
+ *   • `@pierre/trees` throws `Duplicate path` when the sidebar tree is built
+ *     from a list containing the same path twice. That throw happens inside a
+ *     Svelte `$effect`, which aborts the whole flush — the walkthrough's code
+ *     blocks silently never mount.
+ *
+ * Deduping at the gateway keeps what we return identical to what we store.
+ * Last entry wins, matching the cache write's `onConflictDoUpdate`; the
+ * surviving entry keeps the first occurrence's position so file order is
+ * stable.
+ */
+export function dedupePrFilesByPath(files: readonly PrFileMeta[]): PrFileMeta[] {
+  const byPath = new Map<string, PrFileMeta>();
+  for (const file of files) byPath.set(file.filename, file);
+  return [...byPath.values()];
+}
+
 export interface PrCommit {
   readonly sha: string;
   readonly message: string;
@@ -451,40 +225,113 @@ export interface PrCommit {
   readonly date: string | null;
 }
 
-export class GitHubService extends Context.Tag("GitHubService")<
-  GitHubService,
-  {
-    readonly listPrs: (
-      repoFullName: string,
-      repositoryId: string,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<PullRequest[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+/**
+ * One installation of the GitHub App the user signed in through, as returned
+ * by `repos.appInstallationsForUser`.
+ */
+export interface AppInstallation {
+  /** Login of the org or user the app is installed on. */
+  readonly accountLogin: string;
+  readonly repositorySelection: "all" | "selected";
+  /** The installation's settings page, where its repository access is edited. */
+  readonly htmlUrl: string;
+  readonly appSlug: string;
+}
+
+const COLLABORATOR_ROLES = ["admin", "maintain", "write", "triage", "read", "none"] as const;
+
+export interface GitHubGatewayService {
+  readonly prs: {
     /**
-     * Open issues for a repo via REST `/repos/{owner}/{repo}/issues?state=open`.
-     * GitHub's REST issues endpoint includes pull requests in the response
-     * (every PR is technically an issue); rows carrying a `pull_request` field
-     * are filtered out so callers only see real issues.
+     * Every open PR of one repo, most recently updated first.
      *
-     * Returns rows ordered by GitHub's default (most recently updated first);
-     * the per-viewer `assignedToViewer` flag is computed downstream by
-     * IssuesService since it depends on which user is calling.
+     * GraphQL, not `GET /pulls`: the REST list embeds two full repository
+     * objects per PR (~20 KB each), so a 65-PR repo came back as 1.3 MB, and on
+     * GitHub Enterprise its ETag never matched — every author's `avatar_url`
+     * carries a per-request signed token, so the body differs on every read and
+     * the conditional cache never saw a 304. This asks for the list fields only
+     * (~40 KB for the same repo) at 1 GraphQL point per 100 PRs.
+     *
+     * Diff sizes are left at 0/0/0, as the REST list did; `prs.diffStats`
+     * fills them in for the PRs whose head moved. Stack membership comes along
+     * unless `withStacks` is false or GitHub won't give it, when each PR's
+     * `stack` is `STACK_UNSEEN` (see `StackSighting`).
      */
-    readonly listOpenIssues: (
+    readonly listOpen: (
       repoFullName: string,
       repositoryId: string,
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<
-      ReadonlyArray<Omit<Issue, "assignedToViewer">>,
-      GitHubError,
-      SettingsService
-    >;
-    readonly getPr: (
+      options?: { readonly withStacks?: boolean; readonly updatedSince?: string | null },
+    ) => Effect.Effect<OpenPrList, GitHubError, SettingsService>;
+    /**
+     * Numbers of the PRs that closed or merged at or after `since` — what a
+     * `prs.listOpen` read with `updatedSince` can't see. Null when unknown.
+     */
+    readonly listClosedSince: (
+      repoFullName: string,
+      since: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<number[] | null, GitHubError, SettingsService>;
+    /**
+     * `prs.listOpen` over REST's `GET /pulls`, for when the GraphQL budget is
+     * spent. Heavier per changed page, but conditional: a 304 costs nothing
+     * against the REST limit, so a quiet repo stays free (except on GitHub
+     * Enterprise, whose signed avatar URLs defeat the ETag).
+     */
+    readonly listOpenRest: (
+      repoFullName: string,
+      repositoryId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<ObservedPr[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * The open-PR list signature of many repos (same host, same token) in one
+     * GraphQL point per 80 repos — what lets the poll skip `prs.listOpen` for
+     * repos where nothing moved. See `probeOpenPrListSignatures`.
+     */
+    readonly probeOpenLists: (
+      repoFullNames: readonly string[],
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Map<string, OpenPrListSignature>, GitHubError, SettingsService>;
+    readonly get: (
       repoFullName: string,
       prNumber: number,
       token: string,
-    ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+      apiBase?: string,
+    ) => Effect.Effect<ObservedPr, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * Many PRs of one repo by number, any state, in one GraphQL request per 50
+     * (see `getPrsViaGraphql`). Absent from the map when GitHub couldn't say.
+     */
+    readonly getMany: (
+      repoFullName: string,
+      repositoryId: string,
+      prNumbers: readonly number[],
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Map<number, ObservedPr>, GitHubError, SettingsService>;
+    /**
+     * Diff size for many PRs of one repo, keyed by PR number.
+     *
+     * `prs.listOpen` leaves these out: GitHub computes them per PR, so asking
+     * for every open PR on every poll would slow the list down to size PRs whose
+     * head hasn't moved. One aliased GraphQL request per 100 PRs, for just the
+     * PRs that need it, instead of one REST detail fetch per PR.
+     *
+     * Best-effort: GitHub returns partial data plus per-alias errors, so a
+     * deleted/inaccessible PR is simply absent from the map. Treat absence as
+     * "unknown", never zero — see the `changed_files > 0` guard in
+     * `PullRequestService.upsertPrs`.
+     */
+    readonly diffStats: (
+      repoFullName: string,
+      prNumbers: readonly number[],
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Map<number, PrDiffStats>, GitHubError, SettingsService>;
     /**
      * Find PR numbers closed (or merged) in a time window via GitHub's
      * issue-search API. Used by the recap pipeline to discover PRs that
@@ -494,13 +341,14 @@ export class GitHubService extends Context.Tag("GitHubService")<
      * The Search API has a hard cap of 1000 results; for typical
      * daily/weekly windows this is more than enough. Returns the matched
      * PR numbers + their closed/merged metadata; the caller fetches full
-     * PR data via `getPr` for any number not already in the local DB.
+     * PR data via `prs.get` for any number not already in the local DB.
      */
-    readonly searchClosedPrsInWindow: (
+    readonly searchClosedInWindow: (
       repoFullName: string,
       sinceIso: string,
       untilIso: string,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<
       ReadonlyArray<{
         readonly number: number;
@@ -510,220 +358,96 @@ export class GitHubService extends Context.Tag("GitHubService")<
       GitHubError,
       SettingsService
     >;
-    readonly getRepo: (
-      fullName: string,
-      token: string,
-    ) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Like `getRepo`, but bypasses the ETag cache. Required for fields that
-     * rotate server-side without changing the endpoint's ETag — notably
-     * GitHub Enterprise signed `avatar_url`s, whose token expires but whose
-     * ETag stays the same. Hitting `getRepo` would replay the cached body
-     * with the now-dead token; this variant forces a 200 every time.
-     */
-    readonly getRepoFresh: (
-      fullName: string,
+    readonly meta: (
+      repoFullName: string,
+      prNumber: number,
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<Repository, GitHubError, SettingsService>;
-    readonly listUserRepos: (
-      token: string,
-    ) => Effect.Effect<Repository[], GitHubError, SettingsService>;
-    /**
-     * Open PR count per repo, batched into a single GraphQL request with
-     * aliased fields. Repos that error out (missing access, deleted, etc.)
-     * are simply omitted from the result map — the caller treats absence as
-     * "unknown" and renders accordingly. Pass at most ~80 fullNames per
-     * call; longer lists are split internally.
-     */
-    readonly getOpenPrCounts: (
-      fullNames: readonly string[],
-      token: string,
-    ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
-    readonly listUserOrgs: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
-    readonly getPrMeta: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
     ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly getPrFiles: (
+    readonly files: (
       repoFullName: string,
       prNumber: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly listPrCommits: (
-      repoFullName: string,
-      prNumber: number,
-      token: string,
-    ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
-    readonly getFileContent: (
-      repoFullName: string,
-      path: string,
-      ref: string,
-      token: string,
-    ) => Effect.Effect<string, GitHubError, SettingsService>;
     /**
-     * Fetch the raw bytes for a file at a specific ref. Uses the
-     * `application/vnd.github.raw` accept type, which makes GitHub stream
-     * the literal blob instead of the base64-encoded JSON envelope —
-     * required for binary files (images, fonts) where the local shallow
-     * clone may not have the head SHA's blob yet.
+     * Files changed between two refs, as a three-dot (merge-base) comparison.
+     *
+     * GitHub's compare endpoint resolves the merge base server-side and returns
+     * `files[]` entries with the same shape and the same hunks-only `patch`
+     * format as `/pulls/:n/files`, so a commit-scoped review view renders
+     * through exactly the same pipeline as the full-PR one.
+     *
+     * Caveat: compare caps `files[]` at 300 entries with no pagination, where
+     * the full-PR path walks up to {@link PR_FILES_MAX_COUNT}. A range wider
+     * than 300 files is silently truncated by GitHub; we log a warning when the
+     * cap is hit so it's visible in the server log.
      */
-    readonly getFileRawBytes: (
+    readonly compareFiles: (
       repoFullName: string,
-      path: string,
-      ref: string,
+      baseRef: string,
+      headRef: string,
       token: string,
-    ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
-    readonly postReview: (
-      repoFullName: string,
-      prNumber: number,
-      review: {
-        readonly body: string;
-        readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-        readonly comments: ReadonlyArray<{
-          readonly path: string;
-          readonly body: string;
-          readonly line: number;
-          readonly side: "LEFT" | "RIGHT";
-          readonly startLine?: number;
-          readonly startSide?: "LEFT" | "RIGHT";
-        }>;
-      },
-      token: string,
-    ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
-    readonly listReviewCommentsForReview: (
-      repoFullName: string,
-      prNumber: number,
-      reviewId: number,
-      token: string,
-    ) => Effect.Effect<
-      Array<{
-        id: number;
-        path: string;
-        line: number | null;
-        originalLine: number | null;
-        body: string;
-      }>,
-      GitHubError,
-      SettingsService
-    >;
-    readonly postReviewComment: (
-      repoFullName: string,
-      prNumber: number,
-      comment: {
-        readonly path: string;
-        readonly body: string;
-        readonly line: number;
-        readonly side: "LEFT" | "RIGHT";
-        readonly startLine?: number;
-        readonly startSide?: "LEFT" | "RIGHT";
-        readonly commitSha: string;
-      },
-      token: string,
-    ) => Effect.Effect<
-      { id: number; htmlUrl: string; createdAt: string },
-      GitHubError,
-      SettingsService
-    >;
-    readonly replyToComment: (
-      repoFullName: string,
-      prNumber: number,
-      commentId: string | number,
-      body: string,
-      token: string,
-    ) => Effect.Effect<
-      { id: number; htmlUrl: string; createdAt: string },
-      GitHubError,
-      SettingsService
-    >;
-    readonly listReviewComments: (
-      repoFullName: string,
-      prNumber: number,
-      since: string | null,
-      token: string,
-    ) => Effect.Effect<GhReviewComment[], GitHubError, SettingsService>;
-    readonly listReviewThreads: (
+      apiBase?: string,
+    ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    readonly commits: (
       repoFullName: string,
       prNumber: number,
       token: string,
-    ) => Effect.Effect<GhReviewThread[], GitHubError, SettingsService>;
-    readonly resolveReviewThread: (
-      threadNodeId: string,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    readonly unresolveReviewThread: (
-      threadNodeId: string,
-      token: string,
-    ) => Effect.Effect<void, GitHubError, SettingsService>;
-    readonly getAuthenticatedUser: (
-      token: string,
-    ) => Effect.Effect<
-      { login: string; id: number; avatarUrl: string | null },
-      GitHubError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
+      apiBase?: string,
+    ) => Effect.Effect<PrCommit[], GitHubError, SettingsService>;
     /**
      * Flip an open PR to draft. GitHub only exposes this via GraphQL, which
      * needs the PR's GraphQL node id — we resolve it first via a small
      * lookup query, then run the mutation.
      */
-    readonly convertPrToDraft: (
+    readonly convertToDraft: (
       repoFullName: string,
       prNumber: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /** Inverse of {@link convertPrToDraft}: move a draft back to ready-for-review. */
-    readonly markPrReadyForReview: (
+    /** Inverse of `prs.convertToDraft`: move a draft back to ready-for-review. */
+    readonly markReadyForReview: (
       repoFullName: string,
       prNumber: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
     /**
      * Close (but do not merge) the PR via REST PATCH /pulls/:number with
      * `state: 'closed'`. Closing a draft works the same as closing an open
      * PR.
      */
-    readonly closePullRequest: (
+    readonly close: (
       repoFullName: string,
       prNumber: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
     /**
      * Check whether the authenticated viewer can merge this PR, and whether
      * the PR is actually mergeable (no conflicts, required checks passing, etc.).
      * Uses a lightweight GraphQL query so branch-protection rules are respected.
      */
-    readonly getMergeEligibility: (
+    readonly mergeEligibility: (
       repoFullName: string,
       prNumber: number,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<MergeEligibility, GitHubError, SettingsService>;
     /**
      * Merge a pull request via the REST API. GitHub returns 405 when the PR
      * is not mergeable (conflicts, failing checks, or not approved); 422 when
      * the merge method is not enabled for the repo.
      */
-    readonly mergePullRequest: (
+    readonly merge: (
       repoFullName: string,
       prNumber: number,
       mergeMethod: MergeMethod,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
-    /**
-     * Like `getAuthenticatedUser`, but bypasses the ETag cache. Required for
-     * the same reason as {@link getRepoFresh}: GitHub Enterprise signed
-     * `avatar_url`s rotate server-side without changing the endpoint's ETag,
-     * so a plain `getAuthenticatedUser` would replay the cached body with the
-     * now-dead token. This variant forces a 200 every time.
-     */
-    readonly getAuthenticatedUserFresh: (
-      token: string,
-    ) => Effect.Effect<
-      { login: string; id: number; avatarUrl: string | null },
-      GitHubError,
-      SettingsService
-    >;
     /**
      * Create a new pull request via REST `POST /repos/{owner}/{repo}/pulls`.
      * `head` is the branch name (no `owner:` prefix needed for same-repo
@@ -732,11 +456,11 @@ export class GitHubService extends Context.Tag("GitHubService")<
      *
      * Used by the new-PR session flow's Open-PR step (orchestrator-only).
      * The handler is idempotent at the orchestrator layer: callers should
-     * first run {@link findPrByHead} and short-circuit if a PR for `head`
+     * first run `prs.findByHead` and short-circuit if a PR for `head`
      * already exists, since GitHub will reject a duplicate-PR POST with
      * 422.
      */
-    readonly createPullRequest: (
+    readonly create: (
       repoFullName: string,
       params: {
         readonly title: string;
@@ -746,6 +470,7 @@ export class GitHubService extends Context.Tag("GitHubService")<
         readonly draft?: boolean;
       },
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<
       {
         readonly id: number;
@@ -768,10 +493,11 @@ export class GitHubService extends Context.Tag("GitHubService")<
      * short-circuits to `complete` without calling `createPullRequest`
      * again.
      */
-    readonly findPrByHead: (
+    readonly findByHead: (
       repoFullName: string,
       headBranch: string,
       token: string,
+      apiBase?: string,
     ) => Effect.Effect<
       {
         readonly number: number;
@@ -783,8 +509,247 @@ export class GitHubService extends Context.Tag("GitHubService")<
       GitHubError,
       SettingsService
     >;
-  }
->() {}
+  };
+  readonly reviews: {
+    readonly submit: (
+      repoFullName: string,
+      prNumber: number,
+      review: {
+        readonly body: string;
+        readonly event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+        readonly comments: ReadonlyArray<{
+          readonly path: string;
+          readonly body: string;
+          readonly line: number;
+          readonly side: "LEFT" | "RIGHT";
+          readonly startLine?: number;
+          readonly startSide?: "LEFT" | "RIGHT";
+        }>;
+      },
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<{ id: number; htmlUrl: string }, GitHubError, SettingsService>;
+    readonly findPending: (
+      repoFullName: string,
+      prNumber: number,
+      reviewerLogin: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<{ id: number; htmlUrl: string } | null, GitHubError, SettingsService>;
+    readonly deletePending: (
+      repoFullName: string,
+      prNumber: number,
+      reviewId: number,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+    readonly commentsForReview: (
+      repoFullName: string,
+      prNumber: number,
+      reviewId: number,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      Array<{
+        id: number;
+        path: string;
+        line: number | null;
+        originalLine: number | null;
+        body: string;
+      }>,
+      GitHubError,
+      SettingsService
+    >;
+    readonly createComment: (
+      repoFullName: string,
+      prNumber: number,
+      comment: {
+        readonly path: string;
+        readonly body: string;
+        readonly line: number;
+        readonly side: "LEFT" | "RIGHT";
+        readonly startLine?: number;
+        readonly startSide?: "LEFT" | "RIGHT";
+        readonly commitSha: string;
+      },
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      { id: number; htmlUrl: string; createdAt: string },
+      GitHubError,
+      SettingsService
+    >;
+    readonly replyToComment: (
+      repoFullName: string,
+      prNumber: number,
+      commentId: string | number,
+      body: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      { id: number; htmlUrl: string; createdAt: string },
+      GitHubError,
+      SettingsService
+    >;
+    readonly listComments: (
+      repoFullName: string,
+      prNumber: number,
+      since: string | null,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      GhReviewComment[],
+      GitHubError,
+      DbService | GitHubEtagCache | SettingsService
+    >;
+    readonly listThreads: (
+      repoFullName: string,
+      prNumber: number,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<GhReviewThread[], GitHubError, SettingsService>;
+    readonly resolveThread: (
+      threadNodeId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+    readonly unresolveThread: (
+      threadNodeId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+  };
+  readonly repos: {
+    readonly listOpenIssues: (
+      repoFullName: string,
+      repositoryId: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<
+      ReadonlyArray<Omit<Issue, "assignedToViewer">>,
+      GitHubError,
+      SettingsService
+    >;
+    readonly get: (
+      fullName: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Repository, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    /**
+     * Like `repos.get`, but bypasses the ETag cache. Required for fields that
+     * rotate server-side without changing the endpoint's ETag — notably
+     * GitHub Enterprise signed `avatar_url`s, whose token expires but whose
+     * ETag stays the same. Hitting `repos.get` would replay the cached body
+     * with the now-dead token; this variant forces a 200 every time.
+     */
+    readonly getFresh: (
+      fullName: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Repository, GitHubError, SettingsService>;
+    readonly listForUser: (
+      token: string,
+    ) => Effect.Effect<Repository[], GitHubError, SettingsService>;
+    /**
+     * Open PR count per repo, batched into a single GraphQL request with
+     * aliased fields. Repos that error out (missing access, deleted, etc.)
+     * are simply omitted from the result map — the caller treats absence as
+     * "unknown" and renders accordingly. Pass at most ~80 fullNames per
+     * call; longer lists are split internally.
+     */
+    readonly openPrCounts: (
+      fullNames: readonly string[],
+      token: string,
+    ) => Effect.Effect<Map<string, number>, GitHubError, SettingsService>;
+    readonly orgsForUser: (token: string) => Effect.Effect<Org[], GitHubError, SettingsService>;
+    /**
+     * Installations of the GitHub App behind a user access token
+     * (`GET /user/installations`). Only meaningful for a token minted by a
+     * GitHub App: such a token sees a repository only where the app is
+     * installed, so this is how a 404 on a repo the user can reach in the
+     * browser gets explained.
+     */
+    readonly appInstallationsForUser: (
+      token: string,
+      apiBase: string,
+    ) => Effect.Effect<AppInstallation[], GitHubError>;
+    /**
+     * Teams (and their members) for a single org. Requires the token to carry
+     * the `read:org` scope and the user to be an org member; otherwise GitHub
+     * may deny the request and callers treat teams as a best-effort enhancement.
+     */
+    readonly teamsForOrg: (
+      org: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Team[], GitHubError, SettingsService>;
+    /**
+     * Fetch the collaborator permission level for a specific user on a repo.
+     * Uses `GET /repos/{owner}/{repo}/collaborators/{username}/permission`.
+     * 404 (user not a collaborator) is mapped to `'none'`.
+     *
+     * Pass `host` and `token` explicitly so callers can query across GHE
+     * hosts without depending on the settings-derived `resolveApiBase`.
+     */
+    readonly collaboratorPermission: (
+      token: string,
+      host: string,
+      owner: string,
+      repo: string,
+      username: string,
+    ) => Effect.Effect<(typeof COLLABORATOR_ROLES)[number], GitHubError>;
+    readonly commitActivity: typeof getCommitActivity;
+    readonly codeFrequency: typeof getCodeFrequency;
+    readonly searchPullRequests: typeof searchPullRequests;
+  };
+  readonly files: {
+    readonly content: (
+      repoFullName: string,
+      path: string,
+      ref: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<string, GitHubError, SettingsService>;
+    /**
+     * Fetch the raw bytes for a file at a specific ref. Uses the
+     * `application/vnd.github.raw` accept type, which makes GitHub stream
+     * the literal blob instead of the base64-encoded JSON envelope —
+     * required for binary files (images, fonts) where the local shallow
+     * clone may not have the head SHA's blob yet.
+     */
+    readonly rawBytes: (
+      repoFullName: string,
+      path: string,
+      ref: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<Uint8Array, GitHubError, SettingsService>;
+  };
+  readonly users: {
+    /**
+     * Fetch the authenticated viewer (`GET /user`), bypassing the ETag cache.
+     * Required for the same reason as `repos.getFresh`: GitHub Enterprise
+     * signed `avatar_url`s rotate server-side without changing the endpoint's
+     * ETag, so a conditional fetch would replay the cached body with the
+     * now-dead token. This variant forces a 200 every time.
+     */
+    readonly authenticatedFresh: (
+      token: string,
+    ) => Effect.Effect<
+      { login: string; id: number; avatarUrl: string | null },
+      GitHubError,
+      SettingsService
+    >;
+    readonly authenticatedFreshForHost: (
+      token: string,
+      host: string,
+    ) => Effect.Effect<{ login: string; id: number; avatarUrl: string | null }, GitHubError>;
+  };
+}
+
+export class GitHubGateway extends Context.Service<GitHubGateway, GitHubGatewayService>()(
+  "GitHubGateway",
+) {}
 
 export interface GhReviewComment {
   readonly id: number;
@@ -807,38 +772,62 @@ export interface GhReviewThread {
   readonly commentDatabaseIds: ReadonlyArray<number>;
 }
 
-export const GitHubServiceLive = Layer.succeed(GitHubService, {
-  listPrs: (repoFullName, repositoryId, token, explicitApiBase) =>
+const prsGateway: GitHubGatewayService["prs"] = {
+  listOpen: (
+    repoFullName,
+    repositoryId,
+    token,
+    explicitApiBase,
+    { withStacks = true, updatedSince = null } = {},
+  ) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* githubFetchPaginated(
+      return yield* listOpenPrsViaGraphql(
+        owner,
+        repo,
+        repositoryId,
+        token,
+        apiBase,
+        withStacks,
+        updatedSince,
+      );
+    }),
+
+  listClosedSince: (repoFullName, since, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      return yield* listClosedPrNumbersSince(owner, repo, token, apiBase, since);
+    }).pipe(retryTransient),
+
+  listOpenRest: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`,
         token,
-        10,
+        50,
         apiBase,
+        // Sorted by updated_at desc, so any new or recently changed PR changes
+        // page 1's ETag. Replaying a 304 is therefore safe even for repos with
+        // 100+ open PRs, and forcing a full refetch would spend the very
+        // budget this path exists to save.
+        { canReplayCached: () => true },
       );
       return (data as Record<string, unknown>[]).map((pr) => mapPr(pr, repositoryId));
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  listOpenIssues: (repoFullName, repositoryId, token, explicitApiBase) =>
+  probeOpenLists: (repoFullNames, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const data = yield* githubFetchPaginated(
-        `/repos/${owner}/${repo}/issues?state=open&sort=updated&direction=desc&per_page=100`,
-        token,
-        3,
-        apiBase,
-      );
-      return (data as Record<string, unknown>[])
-        .filter((raw) => raw.pull_request === undefined)
-        .map((raw) => mapIssue(raw, repositoryId));
-    }).pipe(Effect.retry(retrySchedule)),
+      return yield* probeOpenPrListSignatures(repoFullNames, token, apiBase);
+    }).pipe(retryTransient),
 
-  getPr: (repoFullName, prNumber, token) =>
+  get: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -846,11 +835,26 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         apiBase,
       );
       return mapPr(data as Record<string, unknown>, `${owner}/${repo}`);
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  searchClosedPrsInWindow: (repoFullName, sinceIso, untilIso, token) =>
+  getMany: (repoFullName, repositoryId, prNumbers, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      return yield* getPrsViaGraphql(owner, repo, repositoryId, prNumbers, token, apiBase);
+    }).pipe(retryTransient),
+
+  diffStats: (repoFullName, prNumbers, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      if (prNumbers.length === 0) return new Map<number, PrDiffStats>();
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      return yield* listPrDiffStatsViaGraphql(owner, repo, prNumbers, token, apiBase);
+    }).pipe(retryTransient),
+
+  searchClosedInWindow: (repoFullName, sinceIso, untilIso, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GitHub's search query syntax: `repo:owner/name is:pr is:closed
       // closed:since..until`. Timestamps in ISO form are accepted with
@@ -865,7 +869,7 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       const params = new URLSearchParams({ q, per_page: "100", sort: "updated", order: "desc" });
       const firstPath = `/search/issues?${params.toString()}`;
 
-      const items = yield* Effect.tryPromise({
+      const items = yield* githubTryPromise({
         try: async () => {
           const collected: Array<{ number: number; closedAt: string; merged: boolean }> = [];
           let url: string | null = `${apiBase}${firstPath}`;
@@ -897,115 +901,11 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         readonly closedAt: string;
         readonly merged: boolean;
       }>;
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  getRepo: (fullName, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(fullName);
-      const data = yield* conditionalFetch(`/repos/${owner}/${repo}`, token, apiBase);
-      return mapRepo(data as Record<string, unknown>);
-    }).pipe(Effect.retry(retrySchedule)),
-
-  getRepoFresh: (fullName, token, explicitApiBase) =>
+  meta: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
-      const { owner, repo } = yield* parseRepoFullName(fullName);
-      const data = yield* githubFetch(`/repos/${owner}/${repo}`, token, apiBase);
-      return mapRepo(data as Record<string, unknown>);
-    }).pipe(Effect.retry(retrySchedule)),
-
-  listUserRepos: (token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const data = yield* githubFetchPaginated(
-        "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100",
-        token,
-        3,
-        apiBase,
-      );
-      return (data as Record<string, unknown>[]).map((raw) => mapRepo(raw));
-    }).pipe(Effect.retry(retrySchedule)),
-
-  getOpenPrCounts: (fullNames, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const result = new Map<string, number>();
-      if (fullNames.length === 0) return result;
-
-      // Batch into chunks to keep GraphQL query complexity and URL length
-      // sensible. 80 aliased fields per call sits well under GitHub's
-      // 500_000-node complexity budget for `pullRequests(states: OPEN)`.
-      const CHUNK_SIZE = 80;
-      const chunks: string[][] = [];
-      for (let i = 0; i < fullNames.length; i += CHUNK_SIZE) {
-        chunks.push(fullNames.slice(i, i + CHUNK_SIZE) as string[]);
-      }
-
-      for (const chunk of chunks) {
-        // Build aliased fields and a parallel variables block. Owner/name
-        // come from listUserRepos (trusted), but variables are still used
-        // so the wire payload stays small and GraphQL-cache-friendly.
-        const fields: string[] = [];
-        const argDefs: string[] = [];
-        const variables: Record<string, string> = {};
-        chunk.forEach((fn, i) => {
-          const slash = fn.indexOf("/");
-          if (slash <= 0 || slash === fn.length - 1) return;
-          const owner = fn.slice(0, slash);
-          const name = fn.slice(slash + 1);
-          fields.push(
-            `r${i}: repository(owner: $o${i}, name: $n${i}) { pullRequests(states: OPEN) { totalCount } }`,
-          );
-          argDefs.push(`$o${i}: String!, $n${i}: String!`);
-          variables[`o${i}`] = owner;
-          variables[`n${i}`] = name;
-        });
-        if (fields.length === 0) continue;
-
-        const query = `query OpenPrCounts(${argDefs.join(", ")}) {\n${fields.join("\n")}\n}`;
-
-        // GitHub returns partial data on per-field errors (e.g. repo
-        // renamed or revoked) — fetch directly so we can tolerate the
-        // partial-success case the shared `githubGraphql` helper rejects.
-        const response = yield* Effect.tryPromise({
-          try: async () => {
-            const res = await fetch(`${apiBase}/graphql`, {
-              method: "POST",
-              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
-              body: JSON.stringify({ query, variables }),
-            });
-            assertGitHubOk(res, "/graphql");
-            return (await res.json()) as {
-              data?: Record<string, { pullRequests: { totalCount: number } } | null>;
-            };
-          },
-          catch: toGitHubError,
-        });
-
-        const data = response.data ?? {};
-        chunk.forEach((fn, i) => {
-          const node = data[`r${i}`];
-          if (node) result.set(fn, node.pullRequests.totalCount);
-        });
-      }
-
-      return result;
-    }).pipe(Effect.retry(retrySchedule)),
-
-  listUserOrgs: (token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const data = yield* githubFetchPaginated("/user/orgs?per_page=100", token, 3, apiBase);
-      return (data as Record<string, unknown>[]).map((raw) => ({
-        login: raw.login as string,
-        avatarUrl: (raw.avatar_url as string | null) ?? null,
-      }));
-    }).pipe(Effect.retry(retrySchedule)),
-
-  getPrMeta: (repoFullName, prNumber, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* conditionalFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -1016,30 +916,70 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       const base = raw.base as Record<string, unknown>;
       const head = raw.head as Record<string, unknown>;
       return { baseSha: base.sha as string, headSha: head.sha as string };
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  getPrFiles: (repoFullName, prNumber, token) =>
+  files: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // GitHub returns PR files in 100-file pages. Fetch the endpoint's full
+      // supported range so large PRs don't cache an incomplete sidebar/diff.
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${PR_FILES_PAGE_SIZE}`,
+        token,
+        PR_FILES_MAX_PAGES,
+        apiBase,
+      );
+      return dedupePrFilesByPath(
+        (data as Record<string, unknown>[]).map((f) => ({
+          filename: f.filename as string,
+          previousFilename: (f.previous_filename as string | undefined) ?? null,
+          status: f.status as string,
+          additions: (f.additions as number | undefined) ?? 0,
+          deletions: (f.deletions as number | undefined) ?? 0,
+          patch: (f.patch as string | undefined) ?? null,
+        })),
+      );
+    }).pipe(retryTransient),
+
+  compareFiles: (repoFullName, baseRef, headRef, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // Three-dot compare: GitHub resolves the merge base server-side, so the
+      // result matches what its own "Files changed" tab would show for the
+      // range. Conditional so repeat visits to the same range replay from
+      // `github_etag_cache` on a 304 and cost no primary rate-limit budget.
       const data = yield* conditionalFetch(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`,
+        `/repos/${owner}/${repo}/compare/${baseRef}...${headRef}`,
         token,
         apiBase,
       );
-      return (data as Record<string, unknown>[]).map((f) => ({
-        filename: f.filename as string,
-        previousFilename: (f.previous_filename as string | undefined) ?? null,
-        status: f.status as string,
-        additions: (f.additions as number | undefined) ?? 0,
-        deletions: (f.deletions as number | undefined) ?? 0,
-        patch: (f.patch as string | undefined) ?? null,
-      }));
-    }).pipe(Effect.retry(retrySchedule)),
+      const raw = (data as Record<string, unknown>).files as Record<string, unknown>[] | undefined;
+      const rawFiles = raw ?? [];
+      if (rawFiles.length >= COMPARE_FILES_MAX_COUNT) {
+        // GitHub caps compare at 300 files and offers no pagination, so a
+        // wider range is truncated with no signal in the payload.
+        logError(
+          "github",
+          `compare ${repoFullName} ${baseRef}...${headRef} hit the ${COMPARE_FILES_MAX_COUNT}-file compare cap; the ranged file list is truncated`,
+        );
+      }
+      return dedupePrFilesByPath(
+        rawFiles.map((f) => ({
+          filename: f.filename as string,
+          previousFilename: (f.previous_filename as string | undefined) ?? null,
+          status: f.status as string,
+          additions: (f.additions as number | undefined) ?? 0,
+          deletions: (f.deletions as number | undefined) ?? 0,
+          patch: (f.patch as string | undefined) ?? null,
+        })),
+      );
+    }).pipe(retryTransient),
 
-  listPrCommits: (repoFullName, prNumber, token) =>
+  commits: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // Paginate to capture the head commit. GitHub's PR commits endpoint
       // returns up to 250 commits in ascending date order (oldest first),
@@ -1114,54 +1054,187 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
           date: c.date,
         }),
       );
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  getFileContent: (repoFullName, path, ref, token) =>
+  convertToDraft: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-      const data = yield* githubFetch(
-        `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`,
+      const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
+      yield* githubGraphql(
+        `mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { clientMutationId } }`,
+        { id: nodeId },
         token,
         apiBase,
       );
-      const obj = data as Record<string, unknown>;
-      if (obj.encoding === "base64" && typeof obj.content === "string") {
-        return Buffer.from(obj.content as string, "base64").toString("utf-8");
-      }
-      // Binary or unsupported encoding
-      return "";
-    }).pipe(Effect.retry(retrySchedule)),
+    }),
 
-  getFileRawBytes: (repoFullName, path, ref, token) =>
+  markReadyForReview: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-      const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
-      return yield* Effect.tryPromise({
-        try: async () => {
-          // `application/vnd.github.raw` flips the response from a base64
-          // JSON envelope to the literal blob. The other GitHub headers
-          // (Auth, API version) stay the same.
-          const res = await fetch(url, {
-            headers: {
-              ...githubHeaders(token),
-              Accept: "application/vnd.github.raw",
-            },
-          });
-          assertGitHubOk(res, `/repos/${owner}/${repo}/contents/${encodedPath}`);
-          const buf = await res.arrayBuffer();
-          return new Uint8Array(buf);
-        },
-        catch: toGitHubError,
-      });
-    }).pipe(Effect.retry(retrySchedule)),
+      const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
+      yield* githubGraphql(
+        `mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }`,
+        { id: nodeId },
+        token,
+        apiBase,
+      );
+    }),
 
-  postReview: (repoFullName, prNumber, review, token) =>
+  close: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubPatch(
+        `/repos/${owner}/${repo}/pulls/${prNumber}`,
+        token,
+        { state: "closed" },
+        apiBase,
+      );
+    }),
+
+  mergeEligibility: (repoFullName, prNumber, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // `mergeCommitAllowed` / `squashMergeAllowed` / `rebaseMergeAllowed` are
+      // recent additions to `Repository`, and GraphQL rejects the *whole* query
+      // on an unknown field — so on a GitHub Enterprise release that predates
+      // them, asking for them would cost the caller `canMerge` too and the merge
+      // pill would vanish rather than degrade. Ask once with them; on a schema
+      // complaint, ask again without, and an unreported method counts as
+      // allowed.
+      const MERGE_METHOD_FIELDS = [
+        "mergeCommitAllowed",
+        "squashMergeAllowed",
+        "rebaseMergeAllowed",
+      ];
+      const buildQuery = (withMergeMethods: boolean): string => `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              mergeable
+              mergeStateStatus
+            }
+            viewerPermission
+            ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
+          }
+        }
+      `;
+      interface Resp {
+        repository: {
+          pullRequest: {
+            mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
+            mergeStateStatus: string | null;
+          } | null;
+          viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
+          mergeCommitAllowed: boolean | null;
+          squashMergeAllowed: boolean | null;
+          rebaseMergeAllowed: boolean | null;
+        } | null;
+      }
+      const ask = (withMergeMethods: boolean) =>
+        githubGraphql<Resp>(
+          buildQuery(withMergeMethods),
+          { owner, repo, number: prNumber },
+          token,
+          apiBase,
+        );
+      const { value: data } = yield* withSchemaFallback(ask, MERGE_METHOD_FIELDS);
+      const pr = data.repository?.pullRequest;
+      if (!pr) {
+        return yield* Effect.fail(
+          new GitHubNotFoundError({
+            resource: "pull_request",
+            id: `${owner}/${repo}#${prNumber}`,
+          }),
+        );
+      }
+      const perm = data.repository?.viewerPermission;
+      const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // Repos routinely disable merge strategies (squash-only is the common
+      // house style). Offering a disabled one earns a 405 from the merge
+      // endpoint, so the allowed set travels with the eligibility answer.
+      const allowedMethods: MergeMethod[] = [];
+      if (data.repository?.mergeCommitAllowed !== false) allowedMethods.push("merge");
+      if (data.repository?.squashMergeAllowed !== false) allowedMethods.push("squash");
+      if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
+      return {
+        canMerge,
+        mergeable: pr.mergeable === "MERGEABLE",
+        mergeStateStatus: pr.mergeStateStatus ?? "unknown",
+        allowedMethods,
+      };
+    }),
+
+  merge: (repoFullName, prNumber, mergeMethod, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubPut(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
+        token,
+        { merge_method: mergeMethod },
+        apiBase,
+      );
+    }),
+
+  create: (repoFullName, params, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const body: Record<string, unknown> = {
+        title: params.title,
+        body: params.body,
+        head: params.head,
+        base: params.base,
+      };
+      if (params.draft !== undefined) body.draft = params.draft;
+      const data = yield* githubPost(`/repos/${owner}/${repo}/pulls`, token, body, apiBase);
+      const raw = data as Record<string, unknown>;
+      const head = (raw.head as Record<string, unknown> | undefined) ?? {};
+      const base = (raw.base as Record<string, unknown> | undefined) ?? {};
+      return {
+        id: raw.id as number,
+        nodeId: (raw.node_id as string | undefined) ?? "",
+        number: raw.number as number,
+        htmlUrl: (raw.html_url as string | undefined) ?? "",
+        headSha: (head.sha as string | undefined) ?? "",
+        baseSha: (base.sha as string | undefined) ?? "",
+      };
+    }),
+
+  findByHead: (repoFullName, headBranch, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      // GitHub expects head as `owner:branch` to disambiguate forks.
+      const headQuery = encodeURIComponent(`${owner}:${headBranch}`);
+      const data = yield* githubFetch(
+        `/repos/${owner}/${repo}/pulls?state=all&head=${headQuery}&per_page=1`,
+        token,
+        apiBase,
+      );
+      const list = data as Array<Record<string, unknown>>;
+      const first = list[0];
+      if (!first) return null;
+      const head = (first.head as Record<string, unknown> | undefined) ?? {};
+      const base = (first.base as Record<string, unknown> | undefined) ?? {};
+      return {
+        number: first.number as number,
+        nodeId: (first.node_id as string | undefined) ?? "",
+        htmlUrl: (first.html_url as string | undefined) ?? "",
+        headSha: (head.sha as string | undefined) ?? "",
+        baseSha: (base.sha as string | undefined) ?? "",
+      };
+    }),
+};
+
+const reviewsGateway: GitHubGatewayService["reviews"] = {
+  submit: (repoFullName, prNumber, review, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const payload: Record<string, unknown> = {
         event: review.event,
@@ -1195,9 +1268,43 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       };
     }),
 
-  listReviewCommentsForReview: (repoFullName, prNumber, reviewId, token) =>
+  findPending: (repoFullName, prNumber, reviewerLogin, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+        token,
+        10,
+        apiBase,
+      );
+      const pending = (data as Record<string, unknown>[])
+        .filter((raw) => {
+          const user = raw.user as Record<string, unknown> | null | undefined;
+          return raw.state === "PENDING" && user?.login === reviewerLogin;
+        })
+        .sort((a, b) => Number(b.id ?? 0) - Number(a.id ?? 0))[0];
+      if (!pending) return null;
+      return {
+        id: pending.id as number,
+        htmlUrl: (pending.html_url as string | undefined) ?? "",
+      };
+    }),
+
+  deletePending: (repoFullName, prNumber, reviewId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubDelete(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
+        token,
+        apiBase,
+      );
+    }),
+
+  commentsForReview: (repoFullName, prNumber, reviewId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* githubFetch(
         `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
@@ -1214,9 +1321,9 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       }));
     }),
 
-  postReviewComment: (repoFullName, prNumber, c, token) =>
+  createComment: (repoFullName, prNumber, c, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const payload: Record<string, unknown> = {
         body: c.body,
@@ -1243,9 +1350,9 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       };
     }),
 
-  replyToComment: (repoFullName, prNumber, commentId, body, token) =>
+  replyToComment: (repoFullName, prNumber, commentId, body, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const data = yield* githubPost(
         `/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
@@ -1261,16 +1368,25 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       };
     }),
 
-  listReviewComments: (repoFullName, prNumber, since, token) =>
+  listComments: (repoFullName, prNumber, since, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const sinceQ = since ? `&since=${encodeURIComponent(since)}` : "";
-      const data = yield* githubFetchPaginated(
+      // Conditional (ETag) fetch: this is the per-PR REST call the 30s thread
+      // poll fires for every open PR. A conditional request that returns 304
+      // does NOT count against GitHub's primary REST rate limit, so quiet PRs
+      // (the overwhelming majority each tick) become free. The cache key folds
+      // in `since`, which only advances when new comments actually arrive — so
+      // an unchanged PR replays the same key and 304s. `canReplayCached` only
+      // allows the cheap replay when the cached body was a single (<100) page;
+      // a full page means there may be more, so we force a refetch.
+      const data = yield* conditionalFetchPaginated(
         `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100${sinceQ}`,
         token,
         5,
         apiBase,
+        { canReplayCached: (cached) => cached.length < 100 },
       );
       return (data as Record<string, unknown>[]).map((raw): GhReviewComment => {
         const user = (raw.user as Record<string, unknown> | null) ?? {};
@@ -1289,11 +1405,11 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
           htmlUrl: (raw.html_url as string | undefined) ?? "",
         };
       });
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  listReviewThreads: (repoFullName, prNumber, token) =>
+  listThreads: (repoFullName, prNumber, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       // GraphQL paginates at 100 per page — most PRs fit, but we page just in case.
       const query = `
@@ -1314,48 +1430,38 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
 					}
 				}
 			`;
+      interface ReviewThreadNode {
+        id: string;
+        isResolved: boolean;
+        comments: { nodes: Array<{ databaseId: number }> };
+      }
       interface ReviewThreadsResp {
         repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: boolean; endCursor: string | null };
-              nodes: Array<{
-                id: string;
-                isResolved: boolean;
-                comments: { nodes: Array<{ databaseId: number }> };
-              }>;
-            };
-          };
-        };
+          pullRequest: { reviewThreads: GraphqlConnection<ReviewThreadNode> } | null;
+        } | null;
       }
-      const out: GhReviewThread[] = [];
-      let cursor: string | null = null;
-      for (let p = 0; p < 5; p++) {
-        const data: ReviewThreadsResp = yield* githubGraphql<ReviewThreadsResp>(
-          query,
-          { owner, repo, number: prNumber, cursor },
-          token,
-          apiBase,
-        );
-        const page = data.repository.pullRequest.reviewThreads;
-        for (const node of page.nodes) {
-          out.push({
-            nodeId: node.id,
-            isResolved: node.isResolved,
-            commentDatabaseIds: node.comments.nodes.map(
-              (n: { databaseId: number }) => n.databaseId,
-            ),
-          });
-        }
-        if (!page.pageInfo.hasNextPage) break;
-        cursor = page.pageInfo.endCursor;
-      }
-      return out;
-    }).pipe(Effect.retry(retrySchedule)),
+      const nodes = yield* paginateGraphql<ReviewThreadsResp, ReviewThreadNode>({
+        query,
+        variables: { owner, repo, number: prNumber },
+        selectConnection: (data) => data.repository?.pullRequest?.reviewThreads,
+        maxPages: 5,
+        token,
+        apiBase,
+        notFound: () =>
+          new GitHubNotFoundError({ resource: "pull_request", id: `${repoFullName}#${prNumber}` }),
+      });
+      return nodes.map(
+        (node): GhReviewThread => ({
+          nodeId: node.id,
+          isResolved: node.isResolved,
+          commentDatabaseIds: node.comments.nodes.map((n) => n.databaseId),
+        }),
+      );
+    }).pipe(retryTransient),
 
-  resolveReviewThread: (threadNodeId, token) =>
+  resolveThread: (threadNodeId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       yield* githubGraphql(
         `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
         { id: threadNodeId },
@@ -1364,9 +1470,9 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
       );
     }),
 
-  unresolveReviewThread: (threadNodeId, token) =>
+  unresolveThread: (threadNodeId, token, explicitApiBase) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       yield* githubGraphql(
         `mutation($id: ID!) { unresolveReviewThread(input: { threadId: $id }) { clientMutationId } }`,
         { id: threadNodeId },
@@ -1374,20 +1480,252 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         apiBase,
       );
     }),
+};
 
-  getAuthenticatedUser: (token) =>
+const reposGateway: GitHubGatewayService["repos"] = {
+  listOpenIssues: (repoFullName, repositoryId, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const data = yield* githubFetchPaginated(
+        `/repos/${owner}/${repo}/issues?state=open&sort=updated&direction=desc&per_page=100`,
+        token,
+        3,
+        apiBase,
+      );
+      return (data as Record<string, unknown>[])
+        .filter((raw) => raw.pull_request === undefined)
+        .map((raw) => mapIssue(raw, repositoryId));
+    }).pipe(retryTransient),
+
+  get: (fullName, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(fullName);
+      const data = yield* conditionalFetch(`/repos/${owner}/${repo}`, token, apiBase);
+      return mapRepo(data as Record<string, unknown>);
+    }).pipe(retryTransient),
+
+  getFresh: (fullName, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(fullName);
+      const data = yield* githubFetch(`/repos/${owner}/${repo}`, token, apiBase);
+      return mapRepo(data as Record<string, unknown>);
+    }).pipe(retryTransient),
+
+  listForUser: (token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
-      const data = yield* conditionalFetch(`/user`, token, apiBase);
-      const raw = data as Record<string, unknown>;
-      return {
-        login: raw.login as string,
-        id: raw.id as number,
-        avatarUrl: (raw.avatar_url as string | null) ?? null,
-      };
-    }).pipe(Effect.retry(retrySchedule)),
+      const data = yield* githubFetchPaginated(
+        "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100",
+        token,
+        3,
+        apiBase,
+      );
+      return (data as Record<string, unknown>[]).map((raw) => mapRepo(raw));
+    }).pipe(retryTransient),
 
-  getAuthenticatedUserFresh: (token) =>
+  openPrCounts: (fullNames, token) =>
+    Effect.gen(function* () {
+      if (fullNames.length === 0) return new Map<string, number>();
+      const apiBase = yield* resolveApiBase;
+      const nodes = yield* reposByName<{ readonly pullRequests: { readonly totalCount: number } }>(
+        "OpenPrCounts",
+        fullNames,
+        "pullRequests(states: OPEN) { totalCount }",
+        token,
+        apiBase,
+      );
+      return new Map(
+        [...nodes].map(([fullName, node]) => [fullName, node.pullRequests.totalCount]),
+      );
+    }).pipe(retryTransient),
+
+  orgsForUser: (token) =>
+    Effect.gen(function* () {
+      const apiBase = yield* resolveApiBase;
+      const data = yield* githubFetchPaginated("/user/orgs?per_page=100", token, 3, apiBase);
+      return (data as Record<string, unknown>[]).map((raw) => ({
+        login: raw.login as string,
+        avatarUrl: (raw.avatar_url as string | null) ?? null,
+      }));
+    }).pipe(retryTransient),
+
+  appInstallationsForUser: (token, apiBase) =>
+    Effect.gen(function* () {
+      const data = (yield* githubFetch("/user/installations?per_page=100", token, apiBase)) as {
+        installations?: Record<string, unknown>[];
+      };
+      return (data.installations ?? []).map(
+        (raw): AppInstallation => ({
+          accountLogin: (raw.account as Record<string, unknown>).login as string,
+          repositorySelection: raw.repository_selection === "all" ? "all" : "selected",
+          htmlUrl: raw.html_url as string,
+          appSlug: raw.app_slug as string,
+        }),
+      );
+    }).pipe(retryTransient),
+
+  teamsForOrg: (org, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const fromGraphql = Effect.gen(function* () {
+        const query = `query OrgTeams($org: String!) {
+        organization(login: $org) {
+          teams(first: 100, orderBy: { field: NAME, direction: ASC }) {
+            nodes {
+              slug
+              name
+              members(first: 100) { nodes { login } }
+            }
+          }
+        }
+      }`;
+
+        // Fetch directly rather than via the shared `githubGraphql` helper:
+        // for orgs the user can't see teams in (missing `read:org`, SAML, or
+        // non-membership) GitHub answers 200 with `organization: null` and a
+        // top-level `errors` array. The helper rejects on any `errors`; here
+        // we tolerate the partial response and let the REST fallback decide.
+        const response = yield* githubTryPromise({
+          try: async () => {
+            const res = await fetch(`${apiBase}/graphql`, {
+              method: "POST",
+              headers: { ...githubHeaders(token), "Content-Type": "application/json" },
+              body: JSON.stringify({ query, variables: { org } }),
+            });
+            assertGitHubOk(res, "/graphql");
+            return (await res.json()) as {
+              data?: {
+                organization: {
+                  teams: {
+                    nodes: Array<{
+                      slug: string;
+                      name: string;
+                      members: { nodes: Array<{ login: string }> };
+                    }>;
+                  };
+                } | null;
+              };
+            };
+          },
+          catch: toGitHubError,
+        });
+
+        const nodes = response.data?.organization?.teams?.nodes ?? [];
+        return nodes.map((team) => ({
+          slug: team.slug,
+          name: team.name,
+          memberLogins: (team.members?.nodes ?? []).map((m) => m.login),
+        }));
+      });
+
+      const fromRest = Effect.gen(function* () {
+        const teamRows = (yield* githubFetchPaginated(
+          `/orgs/${encodeURIComponent(org)}/teams?per_page=100`,
+          token,
+          5,
+          apiBase,
+        )) as Array<{ slug: string; name: string }>;
+
+        return yield* Effect.forEach(
+          teamRows,
+          (team) =>
+            Effect.gen(function* () {
+              const members = (yield* githubFetchPaginated(
+                `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(team.slug)}/members?per_page=100`,
+                token,
+                10,
+                apiBase,
+              )) as Array<{ login: string }>;
+
+              return {
+                slug: team.slug,
+                name: team.name,
+                memberLogins: members.map((member) => member.login),
+              };
+            }),
+          { concurrency: 4 },
+        );
+      });
+
+      const graphqlResult = yield* Effect.result(fromGraphql);
+      if (Result.isSuccess(graphqlResult)) {
+        const graphqlTeams = graphqlResult.success;
+        if (graphqlTeams.some((team) => team.memberLogins.length > 0)) return graphqlTeams;
+        return yield* fromRest.pipe(Effect.catch(() => Effect.succeed(graphqlTeams)));
+      }
+
+      return yield* fromRest;
+    }).pipe(retryTransient),
+
+  collaboratorPermission: (token, host, owner, repo, username) =>
+    githubFetchStatus(
+      `/repos/${owner}/${repo}/collaborators/${username}/permission`,
+      token,
+      apiBaseForHost(host),
+      [404],
+    ).pipe(
+      Effect.map(({ status, body }) => {
+        if (status === 404) return "none" as const;
+        const roleName = (body as { role_name?: string } | null)?.role_name ?? "none";
+        return COLLABORATOR_ROLES.find((role) => role === roleName) ?? "none";
+      }),
+    ),
+
+  commitActivity: getCommitActivity,
+  codeFrequency: getCodeFrequency,
+  searchPullRequests: searchPullRequests,
+};
+
+const filesGateway: GitHubGatewayService["files"] = {
+  content: (repoFullName, path, ref, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const data = yield* githubFetch(
+        `/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`,
+        token,
+        apiBase,
+      );
+      const obj = data as Record<string, unknown>;
+      if (obj.encoding === "base64" && typeof obj.content === "string") {
+        return Buffer.from(obj.content as string, "base64").toString("utf-8");
+      }
+      // Binary or unsupported encoding
+      return "";
+    }).pipe(retryTransient),
+
+  rawBytes: (repoFullName, path, ref, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
+      return yield* githubTryPromise({
+        try: async () => {
+          // `application/vnd.github.raw` flips the response from a base64
+          // JSON envelope to the literal blob. The other GitHub headers
+          // (Auth, API version) stay the same.
+          const res = await fetch(url, {
+            headers: {
+              ...githubHeaders(token),
+              Accept: "application/vnd.github.raw",
+            },
+          });
+          assertGitHubOk(res, `/repos/${owner}/${repo}/contents/${encodedPath}`);
+          const buf = await res.arrayBuffer();
+          return new Uint8Array(buf);
+        },
+        catch: toGitHubError,
+      });
+    }).pipe(retryTransient),
+};
+
+const usersGateway: GitHubGatewayService["users"] = {
+  authenticatedFresh: (token) =>
     Effect.gen(function* () {
       const apiBase = yield* resolveApiBase;
       const data = yield* githubFetch(`/user`, token, apiBase);
@@ -1397,155 +1735,27 @@ export const GitHubServiceLive = Layer.succeed(GitHubService, {
         id: raw.id as number,
         avatarUrl: (raw.avatar_url as string | null) ?? null,
       };
-    }).pipe(Effect.retry(retrySchedule)),
+    }).pipe(retryTransient),
 
-  convertPrToDraft: (repoFullName, prNumber, token) =>
+  authenticatedFreshForHost: (token, host) =>
     Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
-      yield* githubGraphql(
-        `mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { clientMutationId } }`,
-        { id: nodeId },
-        token,
-        apiBase,
-      );
-    }),
-
-  markPrReadyForReview: (repoFullName, prNumber, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const nodeId = yield* resolvePrNodeId(owner, repo, prNumber, token, apiBase);
-      yield* githubGraphql(
-        `mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }`,
-        { id: nodeId },
-        token,
-        apiBase,
-      );
-    }),
-
-  closePullRequest: (repoFullName, prNumber, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      yield* githubPatch(
-        `/repos/${owner}/${repo}/pulls/${prNumber}`,
-        token,
-        { state: "closed" },
-        apiBase,
-      );
-    }),
-
-  getMergeEligibility: (repoFullName, prNumber, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const query = `
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              mergeable
-              mergeStateStatus
-            }
-            viewerPermission
-          }
-        }
-      `;
-      interface Resp {
-        repository: {
-          pullRequest: {
-            mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
-            mergeStateStatus: string | null;
-          } | null;
-          viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
-        } | null;
-      }
-      const data = yield* githubGraphql<Resp>(
-        query,
-        { owner, repo, number: prNumber },
-        token,
-        apiBase,
-      );
-      const pr = data.repository?.pullRequest;
-      if (!pr) {
-        return yield* Effect.fail(
-          new GitHubNotFoundError({
-            resource: "pull_request",
-            id: `${owner}/${repo}#${prNumber}`,
-          }),
-        );
-      }
-      const perm = data.repository?.viewerPermission;
-      const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
-      return {
-        canMerge,
-        mergeable: pr.mergeable === "MERGEABLE",
-        mergeStateStatus: pr.mergeStateStatus ?? "unknown",
-      };
-    }),
-
-  mergePullRequest: (repoFullName, prNumber, mergeMethod, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      yield* githubPut(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
-        token,
-        { merge_method: mergeMethod },
-        apiBase,
-      );
-    }),
-
-  createPullRequest: (repoFullName, params, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      const body: Record<string, unknown> = {
-        title: params.title,
-        body: params.body,
-        head: params.head,
-        base: params.base,
-      };
-      if (params.draft !== undefined) body.draft = params.draft;
-      const data = yield* githubPost(`/repos/${owner}/${repo}/pulls`, token, body, apiBase);
+      const apiBase = apiBaseForHost(host);
+      const data = yield* githubFetch(`/user`, token, apiBase);
       const raw = data as Record<string, unknown>;
-      const head = (raw.head as Record<string, unknown> | undefined) ?? {};
-      const base = (raw.base as Record<string, unknown> | undefined) ?? {};
       return {
+        login: raw.login as string,
         id: raw.id as number,
-        nodeId: (raw.node_id as string | undefined) ?? "",
-        number: raw.number as number,
-        htmlUrl: (raw.html_url as string | undefined) ?? "",
-        headSha: (head.sha as string | undefined) ?? "",
-        baseSha: (base.sha as string | undefined) ?? "",
+        avatarUrl: (raw.avatar_url as string | null) ?? null,
       };
-    }),
+    }).pipe(retryTransient),
+};
 
-  findPrByHead: (repoFullName, headBranch, token) =>
-    Effect.gen(function* () {
-      const apiBase = yield* resolveApiBase;
-      const { owner, repo } = yield* parseRepoFullName(repoFullName);
-      // GitHub expects head as `owner:branch` to disambiguate forks.
-      const headQuery = encodeURIComponent(`${owner}:${headBranch}`);
-      const data = yield* githubFetch(
-        `/repos/${owner}/${repo}/pulls?state=all&head=${headQuery}&per_page=1`,
-        token,
-        apiBase,
-      );
-      const list = data as Array<Record<string, unknown>>;
-      const first = list[0];
-      if (!first) return null;
-      const head = (first.head as Record<string, unknown> | undefined) ?? {};
-      const base = (first.base as Record<string, unknown> | undefined) ?? {};
-      return {
-        number: first.number as number,
-        nodeId: (first.node_id as string | undefined) ?? "",
-        htmlUrl: (first.html_url as string | undefined) ?? "",
-        headSha: (head.sha as string | undefined) ?? "",
-        baseSha: (base.sha as string | undefined) ?? "",
-      };
-    }),
+export const GitHubGatewayLive = Layer.succeed(GitHubGateway, {
+  prs: prsGateway,
+  reviews: reviewsGateway,
+  repos: reposGateway,
+  files: filesGateway,
+  users: usersGateway,
 });
 
 /**

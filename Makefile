@@ -23,30 +23,28 @@ install-deps: ## Install project dependencies only (skip tool checks)
 
 # Dev env: use a different port/db/clone-dir so dev doesn't clash with the
 # installed (production) Revv instance running in the background.
-DEV_ENV = PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_API_PORT=45679 REV_DEBUG=1
+DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 REV_DEBUG=1
 
 dev: kill-server ## Start all services in development mode
 	$(DEV_ENV) bun run dev
 
-dev-web: ## Start only the web frontend (port 5173)
-	VITE_API_PORT=45679 bun run dev:web
-
 dev-server: kill-server ## Start only the API server (port 45679)
-	REV_DEBUG=1 PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
+	REV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 
-dev-desktop: kill-server ## Start the Tauri desktop app in dev mode
-	$(DEV_ENV) bun run dev:desktop
+dev-desktop: kill-server ## Start the Tauri desktop app + Grafana (http://localhost:3000)
+	@printf "\033[36m[dev-desktop]\033[0m telemetry dashboard → \033[1mhttp://localhost:3000/d/revv-overview\033[0m (collector API/OTLP on :45680)\n"
+	OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:45680 $(DEV_ENV) bun run dev:desktop
 
 kill-server: ## Kill any stale dev server processes (uses PID files; safe to run at any time)
-	@if [ -f apps/server/revv-dev.db.pid ]; then \
-	  pid=$$(cat apps/server/revv-dev.db.pid 2>/dev/null); \
+	@if [ -f apps/server/revv-dev.db.dev.pid ]; then \
+	  pid=$$(cat apps/server/revv-dev.db.dev.pid 2>/dev/null); \
 	  if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then \
 	    printf "[kill-server] killing stale dev server (PID $$pid)…\n"; \
 	    kill "$$pid" 2>/dev/null || true; \
 	    sleep 1; \
 	    kill -9 "$$pid" 2>/dev/null || true; \
 	  fi; \
-	  rm -f apps/server/revv-dev.db.pid; \
+	  rm -f apps/server/revv-dev.db.dev.pid; \
 	fi
 
 # ── Team Cache Emulator (fake-gcs-server) ─────────────────────
@@ -119,11 +117,30 @@ dist: ## Build the Revv.app bundle used by the source installer
 	@printf "  Step 2/3: Building web frontend + API server\n"
 	bun run build
 	@printf "  Step 3/3: Building Tauri desktop bundle (.app only)\n"
-	# --bundles app skips DMG/MSI/DEB. Revv is distributed via source install,
-	# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
-	# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
-	# explicitly if you actually need the .dmg.
-	cd apps/desktop && bunx tauri build --bundles app
+	@if ! command -v cargo >/dev/null 2>&1; then \
+		if command -v bash >/dev/null 2>&1 && [ -f scripts/lib/common.sh ]; then \
+			bash -c 'set -euo pipefail; source scripts/lib/common.sh; detect_platform; ensure_xcode_clt; ensure_rust'; \
+		else \
+			printf "\n\033[0;31m  ✗ cargo not found.\033[0m\n"; \
+			printf "  Install Rust/Cargo, then rerun this command:\n"; \
+			printf "    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n\n"; \
+			printf "  If Rust is already installed, refresh this shell first:\n"; \
+			printf "    source $$HOME/.cargo/env\n\n"; \
+			exit 1; \
+		fi; \
+	fi
+	@# --bundles app skips the DMG. Revv is distributed via source install,
+	@# not via a signed DMG, and tauri-bundler's bundle_dmg.sh has been flaky
+	@# on machines where it's blocked from Finder/AppleEvents. Use `make dmg`
+	@# explicitly if you actually need the .dmg.
+	@#
+	@# createUpdaterArtifacts is true in tauri.conf.json so CI-signed release
+	@# builds emit a signed .app.tar.gz for the updater. This target runs on
+	@# end-user/dev machines (install.sh and `revv update`'s local-build
+	@# fallback) that never hold TAURI_SIGNING_PRIVATE_KEY, so it's overridden
+	@# off here -- otherwise the bundler hard-fails with "public key has been
+	@# found, but no private key".
+	@export PATH="$$HOME/.cargo/bin:$$PATH"; cd apps/desktop && bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 	@printf "\n\033[1m\033[32m  Build complete!\033[0m\n"
 	@printf "  Bundle located in: apps/desktop/target/release/bundle/macos/\n\n"
 
@@ -131,7 +148,7 @@ dmg: ## Build the full DMG installer (requires Finder/AppleEvents permission)
 	cd apps/desktop && bunx tauri build --bundles dmg
 
 dist-debug: ## Build a debug distribution (faster, larger binary)
-	cd apps/desktop && bunx tauri build --debug --bundles app
+	cd apps/desktop && bunx tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 # ── Quality ───────────────────────────────────────────────────
 

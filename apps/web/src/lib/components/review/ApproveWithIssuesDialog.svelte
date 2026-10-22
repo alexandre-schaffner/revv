@@ -1,9 +1,9 @@
 <script lang="ts">
 import type { CommentThread, WalkthroughIssue } from "@revv/shared";
-import MessageSquare from "phosphor-svelte/lib/Chat";
+import Chat from "phosphor-svelte/lib/Chat";
 import Info from "phosphor-svelte/lib/Info";
-import XOctagon from "phosphor-svelte/lib/Octagon";
-import AlertTriangle from "phosphor-svelte/lib/Warning";
+import Warning from "phosphor-svelte/lib/Warning";
+import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -68,7 +68,7 @@ function handleCancel(): void {
 			<Dialog.Header>
 				<Dialog.Title>
 					<span class="title-with-icon">
-						<AlertTriangle size={18} weight="fill" />
+						<Warning size={18} weight="fill" />
 						Approve with unresolved items?
 					</span>
 				</Dialog.Title>
@@ -78,13 +78,13 @@ function handleCancel(): void {
 		<div class="issue-summary">
 			{#if criticalCount > 0}
 				<span class="count-pill count-critical">
-					<XOctagon size={12} />
+					<WarningOctagon size={12} weight="fill" />
 					{criticalCount} critical
 				</span>
 			{/if}
 			{#if warningCount > 0}
 				<span class="count-pill count-warning">
-					<AlertTriangle size={12} weight="fill" />
+					<Warning size={12} weight="fill" />
 					{warningCount} warning{warningCount !== 1 ? 's' : ''}
 				</span>
 			{/if}
@@ -96,7 +96,7 @@ function handleCancel(): void {
 			{/if}
 			{#if threadCount > 0}
 				<span class="count-pill count-thread">
-					<MessageSquare size={12} weight="fill" />
+					<Chat size={12} />
 					{threadCount} comment{threadCount !== 1 ? 's' : ''}
 				</span>
 			{/if}
@@ -110,9 +110,9 @@ function handleCancel(): void {
 						<li class="issue-row">
 							<span class="severity-icon severity-{issue.severity}">
 								{#if issue.severity === 'critical'}
-									<XOctagon size={13} />
+									<WarningOctagon size={13} weight="fill" />
 								{:else if issue.severity === 'warning'}
-									<AlertTriangle size={13} weight="fill" />
+									<Warning size={13} weight="fill" />
 								{:else}
 									<Info size={13} />
 								{/if}
@@ -142,7 +142,7 @@ function handleCancel(): void {
 						{@const firstMessage = getThreadMessages(thread.id)[0]}
 						<li class="issue-row">
 							<span class="severity-icon severity-thread">
-								<MessageSquare size={13} weight="fill" />
+								<Chat size={13} />
 							</span>
                 <span class="issue-text">
                     <div class="issue-location">

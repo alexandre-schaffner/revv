@@ -5,11 +5,10 @@
 node_modules/
 
 # Build output
-apps/web/build/
+build/
+dist/
 apps/web/.svelte-kit/
-apps/server/dist/
 apps/desktop/target/
-packages/app/dist/
 
 # TypeScript
 *.tsbuildinfo
@@ -25,6 +24,8 @@ packages/app/dist/
 *.db-wal
 *.db-shm
 *.db.pid
+*.db.*.pid
+github-ledger.*.jsonl*
 
 # Turbo
 .turbo/
@@ -36,4 +37,11 @@ packages/app/dist/
 .DS_Store
 
 # Tooling
+.context/
 .openlogs/
+.repos/effect
+
+# Collector telemetry DB
+apps/collector/*.duckdb
+apps/collector/*.duckdb.wal
+apps/collector/*.collector.pid

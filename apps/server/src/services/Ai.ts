@@ -1,5 +1,17 @@
-import type { InteractionMode, UserSettings, WalkthroughStreamEvent } from "@revv/shared";
+import type {
+  ChatAttachment,
+  InteractionMode,
+  WalkthroughMode,
+  WalkthroughStreamEvent,
+} from "@revv/shared";
+import { resolveThinkingEffort } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
+import {
+  applyAcpAgentOverride,
+  isAcpAgentAvailable,
+  resolveGenerationModel,
+} from "../ai/acp/presets";
+import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
   buildChatUserMessage,
@@ -9,28 +21,24 @@ import {
   type ChatPrContext,
   type ChatWalkthroughContext,
 } from "../ai/prompts/chat";
-import { type RawChatStreamFrame, streamChatViaClaude } from "../ai/providers/chat-claude";
-import { streamChatViaOpencode } from "../ai/providers/chat-opencode";
+import type { WalkthroughPromptHints } from "../ai/prompts/walkthrough";
+import { streamChatViaAcp } from "../ai/providers/chat-acp";
+import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
-import { checkCliAvailability } from "../ai/providers/cli-agent";
-import { type ContinuationContext, streamWalkthroughViaMCP } from "../ai/providers/mcp-walkthrough";
-import type { OpencodeProviderDeps } from "../ai/providers/mcp-walkthrough-opencode";
-import { streamWalkthroughViaOpencodeMCP } from "../ai/providers/mcp-walkthrough-opencode";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
+import { type ContinuationContext, streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
 import {
   type AiError,
   AiGenerationError,
   AiNotConfiguredError,
-  ValidationError,
+  type ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
-import { logError } from "../logger";
 import { ChatMcpTokens } from "./ChatMcpTokens";
-import { ChatSessionService } from "./ChatSession";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
-import { OpencodeSupervisor } from "./OpencodeSupervisor";
 import { SettingsService } from "./Settings";
+import type { PromptDiffSource } from "./walkthrough-prompt-files";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +48,7 @@ export interface ChatParams {
   readonly pr: ChatPrContext;
   readonly walkthrough: ChatWalkthroughContext | null;
   readonly message: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   /**
    * Persisted chat timeline (messages + activities) for the current
    * session, NOT including the message being sent in this turn. The chat
@@ -78,92 +87,78 @@ export interface ChatParams {
   readonly interactionMode?: InteractionMode;
 }
 
-// ── Agent resolution ────────────────────────────────────────────────────────
-
-export type CliAgent = "opencode" | "claude";
-
-/**
- * Resolve the configured CLI agent.
- * @throws {ValidationError} If the agent is not a known value. This should
- *   never happen when settings are read through `SettingsService` (which
- *   validates), but we assert rather than silently downgrade so bad values
- *   surface loudly.
- */
-export function resolveAgent(settings: { aiAgent: string | null }): CliAgent {
-  const agent = settings.aiAgent ?? "opencode";
-  if (agent === "opencode" || agent === "claude") return agent;
-  throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected "opencode" or "claude"`,
-    field: "aiAgent",
-  });
-}
-
-/**
- * Resolve the agent that should generate project recaps. `recap.agent` is a
- * per-feature override: `'auto'` (default) inherits {@link resolveAgent};
- * `'opencode'` / `'claude'` pin recap generation regardless of the global
- * choice. Mirrors {@link resolveAgent}'s error semantics for unknown values.
- */
-export function resolveRecapAgent(settings: UserSettings): CliAgent {
-  const choice = settings.recap?.agent ?? "auto";
-  if (choice === "opencode" || choice === "claude") return choice;
-  if (choice === "auto") return resolveAgent(settings);
-  throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto", "opencode", or "claude"`,
-    field: "recap.agent",
-  });
-}
-
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class AiService extends Context.Tag("AiService")<
+export class AiService extends Context.Service<
   AiService,
   {
-    readonly streamWalkthrough: (params: {
-      /**
-       * The deterministic walkthrough id the MCP tool handlers will scope
-       * all writes to. Issued by {@link WalkthroughJobs.startJob} via
-       * `walkthroughService.createPartial` BEFORE the provider is spawned.
-       * The providers inject this into the shared tool-handler context
-       * (doctrine invariant #11 — identity is orchestrator-provided).
-       */
-      walkthroughId: string;
-      pr: {
-        title: string;
-        body: string | null;
-        sourceBranch: string;
-        targetBranch: string;
-        url: string;
-      };
-      files: PrFileMeta[];
-      worktreePath: string;
-      continuation?: ContinuationContext;
-      onSessionId?: (sessionId: string) => void;
-      /**
-       * Optional caller-owned abort controller. When provided, it is
-       * forwarded to the underlying provider so external cancellation
-       * (regenerate, scope close, shutdown) propagates straight into the
-       * Claude Agent SDK turn or the opencode HTTP session.
-       */
-      abortController?: AbortController;
-      /**
-       * Optional caller-provided callbacks for minting + clearing the
-       * opencode HTTP-MCP session token. Only consulted when the
-       * resolved agent is 'opencode'; the Claude SDK path ignores them.
-       * WalkthroughJobs supplies these because it owns the session-token
-       * map (in-process, ephemeral per invariant #1). Kept as plain
-       * callbacks so AiService doesn't need a layer dependency on
-       * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
-       * AiService already).
-       */
-      issueOpencodeSessionToken?: (walkthroughId: string) => Promise<string>;
-      clearOpencodeSessionToken?: (token: string) => Promise<void>;
-      registerOpencodeActivityNotifier?: (
-        walkthroughId: string,
-        callback: (event: WalkthroughStreamEvent) => void,
-      ) => Promise<void>;
-      unregisterOpencodeActivityNotifier?: (walkthroughId: string) => Promise<void>;
-    }) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
+    readonly streamWalkthrough: (
+      params: {
+        /**
+         * The deterministic walkthrough id the MCP tool handlers will scope
+         * all writes to. Issued by {@link WalkthroughJobs.startJob} via
+         * `walkthroughService.createPartial` BEFORE the provider is spawned.
+         * The providers inject this into the shared tool-handler context
+         * (doctrine invariant #11 — identity is orchestrator-provided).
+         */
+        walkthroughId: string;
+        /**
+         * Account that owns the PR. Passed through to the Claude MCP provider
+         * so it can scope SSE broadcasts without re-deriving accountId via a
+         * DB join on every tool call.
+         */
+        accountId: string;
+        pr: {
+          title: string;
+          body: string | null;
+          sourceBranch: string;
+          targetBranch: string;
+          url: string;
+        };
+        mode: WalkthroughMode;
+        files: PrFileMeta[];
+        worktreePath: string;
+        reviewMode?: {
+          readonly mode: "full" | "incremental";
+          readonly parentWalkthroughId: string | null;
+          readonly baseHeadSha: string | null;
+          readonly headSha: string;
+          readonly diffSource?: PromptDiffSource;
+        };
+        continuation?: ContinuationContext;
+        onSessionId?: (sessionId: string) => void;
+        /**
+         * Optional caller-owned abort controller. When provided, it is
+         * forwarded to the underlying provider so external cancellation
+         * (regenerate, scope close, shutdown) propagates straight into the
+         * Claude Agent SDK turn or the opencode HTTP session.
+         */
+        abortController?: AbortController;
+        /**
+         * Optional caller-provided callbacks for minting + clearing the
+         * HTTP-MCP session token. Only consulted when the resolved agent uses
+         * the HTTP MCP transport; the Claude SDK path ignores them.
+         * WalkthroughJobs supplies these because it owns the session-token
+         * map (in-process, ephemeral per invariant #1). Kept as plain
+         * callbacks so AiService doesn't need a layer dependency on
+         * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
+         * AiService already).
+         */
+        issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
+        clearHttpMcpSessionToken?: (token: string) => Promise<void>;
+        registerHttpMcpActivityNotifier?: (
+          walkthroughId: string,
+          callback: (event: WalkthroughStreamEvent) => void,
+        ) => Promise<void>;
+        unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
+        /**
+         * Per-job model/effort override, resolved once at job start. Absent
+         * uses configured settings. Goes through `resolveGenerationModel` so
+         * an override naming a model this agent can't run falls back safely.
+         */
+        launchOverride?: GenerationLaunchOverride;
+      } & WalkthroughPromptHints,
+    ) => Effect.Effect<AsyncGenerator<WalkthroughStreamEvent>, AiError>;
     /**
      * Stream a single chat turn for the right-pane chat. Resolves the
      * configured agent, builds the system prompt + user message, and hands
@@ -207,7 +202,7 @@ export class AiService extends Context.Tag("AiService")<
     }) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
     readonly isConfigured: () => Effect.Effect<boolean>;
   }
->() {}
+>()("AiService") {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -216,30 +211,10 @@ export const AiServiceLive = Layer.effect(
   Effect.gen(function* () {
     const settingsService = yield* SettingsService;
     const { db } = yield* DbService;
-    const supervisor = yield* OpencodeSupervisor;
+    // Every AI pipeline — chat, merge-conflict, walkthrough, recap, and
+    // suggestions — runs on the ACP transport now. There is no opencode daemon
+    // or provider SDK left to manage.
     const chatMcpTokens = yield* ChatMcpTokens;
-    const chatSessions = yield* ChatSessionService;
-
-    // Invariant #14 (agent-daemon lifecycle): daemon-bound state is
-    // ephemeral. When the opencode daemon exits — crash, idle cooldown,
-    // settings change — every session id we recorded for it now points
-    // to a process that's gone. Drop those rows so the next chat turn
-    // for any PR creates a fresh session with the system prompt + walk-
-    // through context re-attached, instead of trying to resume against
-    // the new daemon (which would 404, manifesting as Bug 1).
-    //
-    // Best-effort: failures here only mean the next chat turn might
-    // still hit a stale id and surface an error to the user. The exit
-    // handler is fire-and-forget by contract — never throw.
-    supervisor.onDaemonExit(() => {
-      void Effect.runPromise(chatSessions.clearAllForAgent("opencode")).catch((err) => {
-        logError(
-          "ai",
-          "clearAllForAgent(opencode) failed on daemon exit:",
-          err instanceof Error ? err.message : String(err),
-        );
-      });
-    });
 
     // Map ValidationError from getSettings() to AiGenerationError
     const getSettings = () =>
@@ -249,164 +224,160 @@ export const AiServiceLive = Layer.effect(
             new AiGenerationError({ cause: e, message: e.message }) as AiError,
         ),
       );
+    const getAgent = () =>
+      withDb(db, settingsService.resolveAgent()).pipe(
+        Effect.mapError(
+          (e: ValidationError) =>
+            new AiGenerationError({ cause: e, message: e.message }) as AiError,
+        ),
+      );
 
-    // Check if a CLI agent is available
+    // Whether the resolved agent's ACP launch command is available.
     const checkConfigured = (): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        const settings = yield* getSettings();
-        const agent = resolveAgent(settings);
-        return checkCliAvailability(agent);
-      }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+        const agent = yield* getAgent();
+        return isAcpAgentAvailable(agent);
+      }).pipe(Effect.catch(() => Effect.succeed(false)));
 
     return {
       streamWalkthrough: (params) =>
-        Effect.gen(function* () {
-          const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+        Effect.withSpan("Ai.streamWalkthrough", {
+          attributes: { walkthroughId: params.walkthroughId },
+        })(
+          Effect.gen(function* () {
+            const settings = yield* getSettings();
+            const agent = yield* getAgent();
 
-          if (!checkCliAvailability(agent)) {
-            return yield* Effect.fail(new AiNotConfiguredError());
-          }
+            // KPI telemetry: label the span with the resolved provider + model.
+            yield* Effect.annotateCurrentSpan("provider", agent);
+            if (settings.aiModel) yield* Effect.annotateCurrentSpan("model", settings.aiModel);
 
-          // Both providers receive the same param shape (including
-          // walkthroughId + db) and the tool handlers they register
-          // are byte-for-byte the same code — doctrine invariant #13
-          // (Agent-path parity).
-          const providerParams = { ...params, db };
-
-          if (agent === "opencode") {
-            if (!params.issueOpencodeSessionToken || !params.clearOpencodeSessionToken) {
-              return yield* Effect.fail(
-                new AiGenerationError({
-                  cause: new Error("missing opencode session-token callbacks"),
-                  message: "opencode provider requires caller-supplied session-token callbacks",
-                }),
-              );
+            // Walkthrough generation runs exclusively on the ACP transport now.
+            // The shared MCP tool handlers behind `/mcp/walkthrough` are the same
+            // code every agent reaches (doctrine invariant #13 — agent-path parity).
+            const acpAgentId = agent;
+            if (!isAcpAgentAvailable(acpAgentId)) {
+              return yield* Effect.fail(new AiNotConfiguredError());
             }
+
+            // HTTP-MCP callbacks are MANDATORY for every walkthrough now (there
+            // is no in-process path). WalkthroughJobs always supplies them.
             if (
-              !params.registerOpencodeActivityNotifier ||
-              !params.unregisterOpencodeActivityNotifier
+              !params.issueHttpMcpSessionToken ||
+              !params.clearHttpMcpSessionToken ||
+              !params.registerHttpMcpActivityNotifier ||
+              !params.unregisterHttpMcpActivityNotifier
             ) {
               return yield* Effect.fail(
                 new AiGenerationError({
-                  cause: new Error("missing opencode activity-notifier callbacks"),
-                  message: "opencode provider requires caller-supplied activity-notifier callbacks",
+                  cause: new Error("missing HTTP-MCP callbacks"),
+                  message:
+                    "walkthrough generation requires caller-supplied HTTP-MCP session-token + activity-notifier callbacks",
                 }),
               );
             }
-            const issueToken = params.issueOpencodeSessionToken;
-            const clearToken = params.clearOpencodeSessionToken;
-            const registerNotifier = params.registerOpencodeActivityNotifier;
-            const unregisterNotifier = params.unregisterOpencodeActivityNotifier;
-            const deps: OpencodeProviderDeps = {
-              ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-              jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-              jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-              client: () => Effect.runPromise(supervisor.client()),
-              issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-              clearSessionToken: (token) => clearToken(token),
-              registerActivityNotifier: (walkthroughId, callback) =>
-                registerNotifier(walkthroughId, callback),
-              unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
-            };
-            const raw = streamWalkthroughViaOpencodeMCP(
-              { ...providerParams, deps },
-              settings.aiModel ?? undefined,
-              settings,
+
+            const issueToken = params.issueHttpMcpSessionToken;
+            const clearToken = params.clearHttpMcpSessionToken;
+            const registerNotifier = params.registerHttpMcpActivityNotifier;
+            const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
+            // Guard against a chat-only agent id left over from the bottom bar (e.g. cursor).
+            const override = params.launchOverride;
+            const model = resolveGenerationModel(agent, override?.model ?? settings.aiModel);
+            const raw = streamWalkthroughViaAcp(
+              {
+                ...params,
+                db,
+                acpAgentId,
+                deps: {
+                  issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
+                  clearSessionToken: (token) => clearToken(token),
+                  registerActivityNotifier: (walkthroughId, callback) =>
+                    registerNotifier(walkthroughId, callback),
+                  unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
+                },
+              },
+              {
+                model,
+                // Sized effort for Auto, the user's pin otherwise.
+                thinkingEffort: resolveThinkingEffort(
+                  settings.aiThinkingEffort,
+                  override?.thinkingEffort ?? null,
+                ),
+              },
             );
             return guardWalkthroughStream(raw, {
-              label: "opencode-mcp",
+              label: "walkthrough-acp",
               synthesizePhases: false,
             });
-          }
-          const raw = streamWalkthroughViaMCP(
-            providerParams,
-            settings.aiModel ?? undefined,
-            settings,
-          );
-          return guardWalkthroughStream(raw, { label: "claude-mcp", synthesizePhases: false });
-        }),
+          }),
+        ),
 
       chat: (params: ChatParams) =>
-        Effect.gen(function* () {
-          const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+        Effect.withSpan("Ai.chat")(
+          Effect.gen(function* () {
+            const settings = yield* getSettings();
+            // Chat runs exclusively on the ACP transport — the selected registry
+            // agent drives it.
+            const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
+            yield* Effect.annotateCurrentSpan("prId", params.prId);
+            yield* Effect.annotateCurrentSpan("provider", "acp");
+            yield* Effect.annotateCurrentSpan("agent", acpAgentId);
 
-          if (!checkCliAvailability(agent)) {
-            return yield* Effect.fail(new AiNotConfiguredError());
-          }
+            // Availability is the ACP command's, not a per-agent CLI's.
+            if (!isAcpAgentAvailable(acpAgentId)) {
+              return yield* Effect.fail(new AiNotConfiguredError());
+            }
 
-          const systemPrompt = buildChatSystemPrompt({
-            pr: params.pr,
-            walkthrough: params.walkthrough,
-            branchName: params.branchName,
-          });
-          // Only inline the `## Conversation history` block on a fresh
-          // session (no resume id). On resume, the agent daemon already
-          // has the prior turns in its own session state; sending the
-          // transcript again causes the agent to echo it back into its
-          // response, which then renders as a visible "Conversation
-          // history" block in the chat bubble.
-          const message = params.resumeSessionId
-            ? params.message
-            : buildChatUserMessage({
-                message: params.message,
-                history: params.history,
-              });
+            const systemPrompt = buildChatSystemPrompt({
+              pr: params.pr,
+              walkthrough: params.walkthrough,
+              branchName: params.branchName,
+            });
+            // Only inline the `## Conversation history` block on a fresh
+            // session (no resume id). On resume the agent already has the prior
+            // turns in its own (disk-persisted) session state; sending the
+            // transcript again makes the agent echo it back into its response.
+            const message = params.resumeSessionId
+              ? params.message
+              : buildChatUserMessage({
+                  message: params.message,
+                  history: params.history,
+                });
 
-          if (agent === "claude") {
-            return streamChatViaClaude({
+            return streamChatViaAcp({
               message,
+              attachments: params.attachments,
               systemPrompt,
               resumeSessionId: params.resumeSessionId ?? undefined,
               cwd: params.cwd,
               onSessionId: params.onSessionId,
               abortController: params.abortController,
-              model: settings.aiModel ?? undefined,
-              db,
+              model: resolveGenerationModel(acpAgentId, settings.aiModel),
+              thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+              acpAgentId,
+              deps: {
+                issueChatMcpToken: (args: {
+                  prId: string;
+                  userId: string;
+                  actor: "chat:acp";
+                  interactionMode: InteractionMode;
+                }) => Effect.runPromise(chatMcpTokens.issue(args)),
+                clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
+              },
               prId: params.prId,
               userId: params.userId,
-              maxTurns: settings.aiMaxTurns,
               interactionMode: params.interactionMode,
             });
-          }
-
-          // opencode path
-          const deps = {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-            jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-            client: () => Effect.runPromise(supervisor.client()),
-            issueChatMcpToken: (args: {
-              prId: string;
-              userId: string;
-              actor: "chat:opencode";
-              interactionMode: InteractionMode;
-            }) => Effect.runPromise(chatMcpTokens.issue(args)),
-            clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-            hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-          };
-          return streamChatViaOpencode({
-            message,
-            systemPrompt,
-            resumeSessionId: params.resumeSessionId ?? undefined,
-            cwd: params.cwd,
-            onSessionId: params.onSessionId,
-            abortController: params.abortController,
-            model: settings.aiModel ?? undefined,
-            deps,
-            prId: params.prId,
-            userId: params.userId,
-            interactionMode: params.interactionMode,
-          });
-        }),
+          }),
+        ),
 
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
           const settings = yield* getSettings();
-          const agent = resolveAgent(settings);
+          const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
 
-          if (!checkCliAvailability(agent)) {
+          if (!isAcpAgentAvailable(acpAgentId)) {
             return yield* Effect.fail(new AiNotConfiguredError());
           }
 
@@ -417,61 +388,31 @@ export const AiServiceLive = Layer.effect(
           });
           const message = buildResolveConflictsUserMessage();
 
-          if (agent === "claude") {
-            return streamChatViaClaude({
-              message,
-              systemPrompt,
-              // No resume — this is a one-shot run that must
-              // not pull in any prior conversation context.
-              resumeSessionId: undefined,
-              cwd: params.cwd,
-              onSessionId: undefined,
-              abortController: params.abortController,
-              model: settings.aiModel ?? undefined,
-              db,
-              prId: params.prId,
-              userId: params.userId,
-              // Critical: no persistence — this turn must NOT
-              // land in the chat session JSONL on disk, so a
-              // future regular chat resume doesn't see the
-              // system prompt that allowed `git merge --continue`.
-              persistSession: false,
-              // And no review-context MCP — conflict resolution
-              // doesn't need it.
-              enableReviewContextMcp: false,
-              maxTurns: settings.aiMaxTurns,
-            });
-          }
-
-          // opencode: run a fresh, non-resumed session. The opencode
-          // daemon is stateful per session id; using `undefined`
-          // here forces a brand-new session that disappears when
-          // the daemon idles out.
-          const deps = {
-            ensureDaemon: () => Effect.runPromise(supervisor.ensureRunning()),
-            jobStarted: () => Effect.runPromise(supervisor.jobStarted()),
-            jobEnded: () => Effect.runPromise(supervisor.jobEnded()),
-            client: () => Effect.runPromise(supervisor.client()),
-            issueChatMcpToken: (args: {
-              prId: string;
-              userId: string;
-              actor: "chat:opencode";
-              interactionMode: InteractionMode;
-            }) => Effect.runPromise(chatMcpTokens.issue(args)),
-            clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
-            hasAgent: (name: string) => Effect.runPromise(supervisor.hasAgent(name)),
-          };
-          return streamChatViaOpencode({
+          // ACP transport: one-shot, no resume, no review-context MCP. The
+          // system prompt forbids push/amend/abort (auto-allow keeps that
+          // restriction prompt-level).
+          return streamChatViaAcp({
             message,
             systemPrompt,
             resumeSessionId: undefined,
             cwd: params.cwd,
             onSessionId: undefined,
             abortController: params.abortController,
-            model: settings.aiModel ?? undefined,
-            deps,
+            model: resolveGenerationModel(acpAgentId, settings.aiModel),
+            thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
+            acpAgentId,
+            deps: {
+              issueChatMcpToken: (args: {
+                prId: string;
+                userId: string;
+                actor: "chat:acp";
+                interactionMode: InteractionMode;
+              }) => Effect.runPromise(chatMcpTokens.issue(args)),
+              clearChatMcpToken: (token: string) => Effect.runPromise(chatMcpTokens.clear(token)),
+            },
             prId: params.prId,
             userId: params.userId,
+            enableReviewContextMcp: false,
           });
         }),
 

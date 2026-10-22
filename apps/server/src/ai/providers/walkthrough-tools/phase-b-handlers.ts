@@ -6,10 +6,7 @@
 // comment creation.
 
 import type {
-  CodeBlock,
   CommentThread,
-  DiffBlock,
-  MarkdownBlock,
   ThreadMessage,
   WalkthroughBlock,
   WalkthroughIssue,
@@ -24,6 +21,17 @@ import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { decodeWalkthroughIssue, isSameResolvedFinding } from "../../../services/walkthrough-issue";
+import { renderArtifactRejection } from "../../jev/artifact-quality";
+import { decodePlainText } from "../agent-text";
+import {
+  type BlockVariantInput,
+  blockContentError,
+  blockRow,
+  blockVariantCount,
+  buildBlock,
+  withArtifactWarnings,
+} from "../walkthrough-blocks";
 import {
   blockIdFor,
   errorResult,
@@ -46,65 +54,17 @@ import {
 // ── Block persistence helper ─────────────────────────────────────────────────
 //
 // Shared by addSemanticStepHandler (step_index=0 initial block) and
-// addDiffStepHandler (subsequent blocks). Both construct a typed
-// WalkthroughBlock from one of three variant inputs and upsert into
-// walkthroughBlocks with the same conflict target.
-
-interface BlockVariantInput {
-  readonly markdown?: { readonly content: string } | null | undefined;
-  readonly code?:
-    | {
-        readonly file_path: string;
-        readonly start_line: number;
-        readonly end_line: number;
-        readonly language: string;
-        readonly content: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-  readonly diff?:
-    | {
-        readonly file_path: string;
-        readonly patch: string;
-        readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
-      }
-    | null
-    | undefined;
-}
-
-function blockVariantCount(input: BlockVariantInput): number {
-  let n = 0;
-  if (input.markdown != null) n++;
-  if (input.code != null) n++;
-  if (input.diff != null) n++;
-  return n;
-}
+// addDiffStepHandler (subsequent blocks). The typed-block construction and
+// variant validation live in `../walkthrough-blocks` so the generation path
+// and the chat-edit path stay byte-for-byte identical (CLAUDE.md #2, #13).
+// This wrapper adds only the generation-path concern: the idempotent upsert
+// into `walkthrough_blocks` on the composite key.
 
 /**
- * Reject blocks whose payload would render as an empty box. An annotation on
- * a code/diff block reads as commentary *about* code that isn't there — use
- * a markdown block for prose-only content instead.
- */
-function emptyBlockError(input: BlockVariantInput): string | null {
-  if (input.markdown && input.markdown.content.trim().length === 0) {
-    return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
-  }
-  if (input.code && input.code.content.trim().length === 0) {
-    return "Error: code block requires non-empty content. Use a markdown block if you only want to write prose; an annotation without code reads as commentary about nothing.";
-  }
-  if (input.diff && input.diff.patch.trim().length === 0) {
-    return "Error: diff block requires a non-empty patch. Use a markdown block for prose-only content.";
-  }
-  return null;
-}
-
-/**
- * Construct a typed WalkthroughBlock from one of the three variant inputs and
- * upsert it into walkthroughBlocks. Returns the constructed block, or null if
- * no variant was provided (caller must validate beforehand).
+ * Build a typed WalkthroughBlock from one of the four variant inputs (via the
+ * shared {@link buildBlock}) and upsert it into walkthroughBlocks. Returns the
+ * constructed block, or null if no variant was provided (caller must validate
+ * beforehand with {@link blockVariantCount}).
  */
 function persistBlockVariant(
   db: Db,
@@ -120,57 +80,9 @@ function persistBlockVariant(
 ): WalkthroughBlock | null {
   const { walkthroughId, blockId, semanticStepIndex, stepIndex, order, createdAt } = opts;
 
-  let block: WalkthroughBlock;
-  let type: string;
-
-  if (variant.markdown) {
-    const md: MarkdownBlock = {
-      type: "markdown",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      content: variant.markdown.content,
-    };
-    block = md;
-    type = "markdown";
-  } else if (variant.code) {
-    const code: CodeBlock = {
-      type: "code",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: variant.code.file_path,
-      startLine: variant.code.start_line,
-      endLine: variant.code.end_line,
-      language: variant.code.language,
-      content: variant.code.content,
-      annotation: variant.code.annotation,
-      annotationPosition: variant.code.annotation_position,
-    };
-    block = code;
-    type = "code";
-  } else if (variant.diff) {
-    const diff: DiffBlock = {
-      type: "diff",
-      id: blockId,
-      order,
-      phase: "diff_analysis",
-      semanticStepIndex,
-      stepIndex,
-      filePath: variant.diff.file_path,
-      patch: variant.diff.patch,
-      annotation: variant.diff.annotation,
-      annotationPosition: variant.diff.annotation_position,
-    };
-    block = diff;
-    type = "diff";
-  } else {
-    return null;
-  }
+  const block = buildBlock(blockId, semanticStepIndex, stepIndex, variant);
+  if (!block) return null;
+  const { type, data } = blockRow(block);
 
   db.insert(walkthroughBlocks)
     .values({
@@ -181,7 +93,7 @@ function persistBlockVariant(
       semanticStepIndex,
       stepIndex,
       type,
-      data: JSON.stringify(block),
+      data,
       createdAt,
     })
     .onConflictDoUpdate({
@@ -191,7 +103,7 @@ function persistBlockVariant(
         walkthroughBlocks.semanticStepIndex,
         walkthroughBlocks.stepIndex,
       ],
-      set: { type, data: JSON.stringify(block) },
+      set: { type, data },
     })
     .run();
 
@@ -218,7 +130,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   ctx,
   input,
 ) => {
-  const trimmedTitle = input.title.trim();
+  const trimmedTitle = decodePlainText(input.title);
   if (trimmedTitle.length === 0) {
     return errorResult(
       "Error: add_semantic_step requires a non-empty title — chapters are named, not anonymous.",
@@ -227,11 +139,21 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 
   if (blockVariantCount(input.initial_block) !== 1) {
     return errorResult(
-      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff } — not zero, not two. A chapter cannot be opened without its first block.",
+      "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
     );
   }
-  const initialBlockErr = emptyBlockError(input.initial_block);
+  const initialBlockErr = blockContentError(input.initial_block);
   if (initialBlockErr) return errorResult(initialBlockErr);
+
+  // Same craft bar as add_diff_step; rejecting here also rejects the
+  // chapter, since a chapter can't exist without its first block.
+  if (input.initial_block.artifact) {
+    const verdict = await ctx.jev.judgeArtifact(input.initial_block.artifact.html, {
+      chapterTitle: trimmedTitle,
+      annotation: input.initial_block.artifact.annotation,
+    });
+    if (verdict.reject) return errorResult(renderArtifactRejection(verdict));
+  }
 
   let result: WalkthroughToolResult | null = null;
   let isFirstStep = false;
@@ -355,8 +277,14 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       data: { lastCompletedPhase: "B" },
     });
   }
+  if (input.initial_block.markdown) {
+    ctx.jev.scheduleProseCheck(input.initial_block.markdown.content, trimmedTitle);
+  }
   return okResult(
-    `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
+    withArtifactWarnings(
+      `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
+      input.initial_block,
+    ),
   );
 };
 
@@ -368,14 +296,31 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 // semanticStepIndex, stepIndex)).
 
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
-  // Exactly one of {markdown, code, diff} must be provided.
+  // Exactly one of {markdown, code, diff, artifact} must be provided.
   if (blockVariantCount(input) !== 1) {
     return errorResult(
-      "Error: add_diff_step requires exactly one of { markdown, code, diff } — not zero, not two. Pick the shape that matches the step's intent.",
+      "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
     );
   }
-  const emptyErr = emptyBlockError(input);
-  if (emptyErr) return errorResult(emptyErr);
+  const contentErr = blockContentError(input);
+  if (contentErr) return errorResult(contentErr);
+  const variant = {
+    markdown: input.markdown,
+    code: input.code,
+    diff: input.diff,
+    artifact: input.artifact,
+  };
+
+  // Craft bar runs before the write: rejecting after would leave a hole in
+  // step_index, and there's no cheap way to undo a block already read.
+  const chapterTitle = chapterTitleFor(ctx.db, ctx.walkthroughId, input.semantic_step_index);
+  if (input.artifact) {
+    const verdict = await ctx.jev.judgeArtifact(input.artifact.html, {
+      chapterTitle,
+      annotation: input.artifact.annotation,
+    });
+    if (verdict.reject) return errorResult(renderArtifactRejection(verdict));
+  }
 
   let result: WalkthroughToolResult | null = null;
   let block: WalkthroughBlock | null = null;
@@ -424,7 +369,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
         order: input.semantic_step_index * 10000 + input.step_index,
         createdAt: now,
       },
-      { markdown: input.markdown, code: input.code, diff: input.diff },
+      variant,
     );
   });
   if (result) return result;
@@ -433,10 +378,35 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   }
 
   ctx.emit({ type: "block", data: block });
+  if (input.markdown) {
+    ctx.jev.scheduleProseCheck(input.markdown.content, chapterTitle);
+  }
+  // Voice advice from an earlier block, if it landed by now; rides out on
+  // this call rather than blocking the block it's about. See ai/jev/prose-voice.ts.
+  const advice = ctx.jev.takeProseAdvice() ?? "";
   return okResult(
-    `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.`,
+    withArtifactWarnings(
+      `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.${advice}`,
+      variant,
+    ),
   );
 };
+
+/** Chapter title for context, or a placeholder when the chapter is brand new. */
+function chapterTitleFor(db: Db, walkthroughId: string, semanticStepIndex: number): string {
+  return (
+    db
+      .select({ title: walkthroughSemanticSteps.title })
+      .from(walkthroughSemanticSteps)
+      .where(
+        and(
+          eq(walkthroughSemanticSteps.walkthroughId, walkthroughId),
+          eq(walkthroughSemanticSteps.semanticStepIndex, semanticStepIndex),
+        ),
+      )
+      .get()?.title ?? "(chapter being opened)"
+  );
+}
 
 // ── Handler: flag_issue (during Phase B) ─────────────────────────────────────
 //
@@ -444,11 +414,79 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
 // already-persisted diff steps).
 // Writes: one walkthrough_issues row (upsert on deterministic id).
 // Does not advance phase.
+//
+// The row writes unconditionally; a Jev judgment is scheduled behind it
+// (ai/jev/issue-relevance.ts) that may retract or relabel it later.
+// Scheduled, not awaited — blocking would cost each concern a round trip.
+// The completion gate and add_issue_comment get consistency from
+// ai/jev/pending.ts instead.
+
+/** Read-only preconditions for `flag_issue`, evaluated inside the write transaction. */
+function checkFlagIssuePreconditions(
+  db: Db,
+  walkthroughId: string,
+  input: FlagIssueInput,
+):
+  | { readonly ok: true; readonly blockIds: string[]; readonly parentWalkthroughId: string | null }
+  | { readonly ok: false; readonly error: string } {
+  const row = loadWalkthroughRow(db, walkthroughId);
+  if (!row) return { ok: false, error: `Walkthrough ${walkthroughId} not found.` };
+
+  const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
+  if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
+    return {
+      ok: false,
+      error: `Error: flag_issue is only valid during Phase A/B. Current phase: '${phase}'.`,
+    };
+  }
+
+  // Validate all referenced block_refs point at persisted diff blocks.
+  const stepRows = db
+    .select({
+      semanticStepIndex: walkthroughBlocks.semanticStepIndex,
+      stepIndex: walkthroughBlocks.stepIndex,
+    })
+    .from(walkthroughBlocks)
+    .where(
+      and(
+        eq(walkthroughBlocks.walkthroughId, walkthroughId),
+        eq(walkthroughBlocks.phase, "diff_analysis"),
+      ),
+    )
+    .all();
+  const knownBlocks = new Set(stepRows.map((r) => `${r.semanticStepIndex}:${r.stepIndex}`));
+  const unknown = input.block_refs.filter(
+    (r) => !knownBlocks.has(`${r.semantic_step_index}:${r.step_index}`),
+  );
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      error: `Error: block_refs [${unknown.map((r) => `{semantic_step_index: ${r.semantic_step_index}, step_index: ${r.step_index}}`).join(", ")}] reference diff blocks that don't exist yet. Call add_diff_step for each before flag_issue.`,
+    };
+  }
+
+  const seen = new Set<string>();
+  const uniqueRefs = input.block_refs.filter((r) => {
+    const k = `${r.semantic_step_index}:${r.step_index}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return {
+    ok: true,
+    blockIds: uniqueRefs.map((r) => blockIdFor(walkthroughId, r.semantic_step_index, r.step_index)),
+    parentWalkthroughId: row.parentWalkthroughId,
+  };
+}
 
 export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (ctx, input) => {
+  // Normalize before hashing: the id is derived from the title, so decoding
+  // afterwards would give the same concern two different ids across runs.
+  const title = decodePlainText(input.title);
+  const description = decodePlainText(input.description);
   const issueId = await computeIssueId(
     ctx.walkthroughId,
-    input.title,
+    title,
     input.file_path ?? null,
     input.start_line ?? null,
   );
@@ -456,54 +494,12 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   let result: WalkthroughToolResult | null = null;
   let issueEvent: WalkthroughIssue | null = null;
   ctx.db.transaction(() => {
-    const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-    if (!row) {
-      result = errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
+    const guard = checkFlagIssuePreconditions(ctx.db, ctx.walkthroughId, input);
+    if (!guard.ok) {
+      result = errorResult(guard.error);
       return;
     }
-    const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-    if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
-      result = errorResult(
-        `Error: flag_issue is only valid during Phase A/B. Current phase: '${phase}'.`,
-      );
-      return;
-    }
-
-    // Validate all referenced block_refs point at persisted diff blocks.
-    const stepRows = ctx.db
-      .select({
-        semanticStepIndex: walkthroughBlocks.semanticStepIndex,
-        stepIndex: walkthroughBlocks.stepIndex,
-      })
-      .from(walkthroughBlocks)
-      .where(
-        and(
-          eq(walkthroughBlocks.walkthroughId, ctx.walkthroughId),
-          eq(walkthroughBlocks.phase, "diff_analysis"),
-        ),
-      )
-      .all();
-    const knownBlocks = new Set(stepRows.map((r) => `${r.semanticStepIndex}:${r.stepIndex}`));
-    const unknown = input.block_refs.filter(
-      (r) => !knownBlocks.has(`${r.semantic_step_index}:${r.step_index}`),
-    );
-    if (unknown.length > 0) {
-      result = errorResult(
-        `Error: block_refs [${unknown.map((r) => `{semantic_step_index: ${r.semantic_step_index}, step_index: ${r.step_index}}`).join(", ")}] reference diff blocks that don't exist yet. Call add_diff_step for each before flag_issue.`,
-      );
-      return;
-    }
-
-    const seen = new Set<string>();
-    const uniqueRefs = input.block_refs.filter((r) => {
-      const k = `${r.semantic_step_index}:${r.step_index}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    const blockIds = uniqueRefs.map((r) =>
-      blockIdFor(ctx.walkthroughId, r.semantic_step_index, r.step_index),
-    );
+    const blockIds = guard.blockIds;
 
     // Issue `order` is the post-row insertion order within this walkthrough —
     // compute it inside the transaction so concurrent writes (which can't
@@ -515,6 +511,28 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
       .all();
     const order = existing.find((e) => e.id === issueId)?.order ?? existing.length;
 
+    // A new head produces a new immutable walkthrough row. Preserve a local
+    // resolution only when the regenerated concern is byte-for-byte the same
+    // finding at the same location; changed findings deliberately reopen.
+    const { parentWalkthroughId } = guard;
+    const priorResolution = parentWalkthroughId
+      ? ctx.db
+          .select()
+          .from(walkthroughIssues)
+          .where(eq(walkthroughIssues.walkthroughId, parentWalkthroughId))
+          .all()
+          .find((issue) =>
+            isSameResolvedFinding(issue, {
+              severity: input.severity,
+              title,
+              description,
+              filePath: input.file_path ?? null,
+              startLine: input.start_line ?? null,
+              endLine: input.end_line ?? null,
+            }),
+          )
+      : undefined;
+
     const now = new Date().toISOString();
     ctx.db
       .insert(walkthroughIssues)
@@ -523,59 +541,73 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
         walkthroughId: ctx.walkthroughId,
         order,
         severity: input.severity,
-        title: input.title,
-        description: input.description,
+        title,
+        description,
         filePath: input.file_path ?? null,
         startLine: input.start_line ?? null,
         endLine: input.end_line ?? null,
         blockIds: JSON.stringify(blockIds),
         createdAt: now,
+        ...(priorResolution
+          ? {
+              resolutionStatus: priorResolution.resolutionStatus,
+              resolutionExplanation: priorResolution.resolutionExplanation,
+              resolutionEvidence: priorResolution.resolutionEvidence,
+              resolvingCommitSha: priorResolution.resolvingCommitSha,
+              resolvedAt: priorResolution.resolvedAt,
+              resolvedBy: priorResolution.resolvedBy,
+            }
+          : {}),
       })
       .onConflictDoUpdate({
         target: walkthroughIssues.id,
         set: {
           severity: input.severity,
-          title: input.title,
-          description: input.description,
+          title,
+          description,
           filePath: input.file_path ?? null,
           startLine: input.start_line ?? null,
           endLine: input.end_line ?? null,
           blockIds: JSON.stringify(blockIds),
+          // Clear the score on re-flag: a stale verdict shouldn't stick to
+          // revised wording.
+          advisoryScore: null,
+          advisoryScoredAt: null,
         },
       })
       .run();
 
-    const issue: WalkthroughIssue = {
-      id: issueId,
-      severity: input.severity,
-      title: input.title,
-      description: input.description,
-      blockIds,
-      ...(input.file_path !== null ? { filePath: input.file_path } : {}),
-      ...(input.start_line !== null ? { startLine: input.start_line } : {}),
-      ...(input.end_line !== null ? { endLine: input.end_line } : {}),
-    };
-    issueEvent = issue;
+    const persisted = ctx.db
+      .select()
+      .from(walkthroughIssues)
+      .where(eq(walkthroughIssues.id, issueId))
+      .get();
+    if (persisted) issueEvent = decodeWalkthroughIssue(persisted);
   });
   if (result) return result;
   if (issueEvent) {
     ctx.emit({ type: "issue", data: issueEvent });
   }
+
+  // Fire-and-forget: the row is already durable; the judgment can only
+  // remove or relabel it.
+  ctx.jev.scheduleIssueJudgment(issueId, {
+    severity: input.severity,
+    title,
+    description,
+    filePath: input.file_path ?? null,
+    startLine: input.start_line ?? null,
+    endLine: input.end_line ?? null,
+  });
+
+  // Can't branch on agent-sent severity — it's provisional until the
+  // judgment lands — so every anchored concern gets a required inline
+  // comment. A redundant comment is cheap; a missing one bounces the run.
   const hasLineAnchor = input.file_path !== null && input.start_line !== null;
-  const requiresInlineComment =
-    hasLineAnchor && (input.severity === "warning" || input.severity === "critical");
-  let nextStepHint: string;
-  if (requiresInlineComment) {
-    nextStepHint = `\n\nNEXT STEP — REQUIRED: call add_issue_comment with issue_id="${issueId}", file_path="${input.file_path}", start_line=${input.start_line}, end_line=${input.end_line ?? input.start_line}, and a body that explains the concern to the coder (2–6 sentences, markdown, second-person voice). Without that follow-up call this issue has no inline comment in the diff and complete_walkthrough will reject. If the concern affects multiple call-sites, call add_issue_comment once per line range with the same issue_id.`;
-  } else if (input.severity === "info") {
-    nextStepHint = `\n\n(Severity 'info' — nitpick, no inline comment needed. Continue with the next concern or diff step.)`;
-  } else {
-    // warning/critical without a line anchor → PR-wide, no anchor possible
-    nextStepHint = `\n\n(PR-wide issue with no line anchor — no inline comment needed. Continue with the next concern or diff step.)`;
-  }
-  return okResult(
-    `Issue flagged: [${input.severity}] ${input.title} (id: ${issueId}).${nextStepHint}`,
-  );
+  const nextStepHint = hasLineAnchor
+    ? `\n\nNEXT STEP — REQUIRED: call add_issue_comment with issue_id="${issueId}", file_path="${input.file_path}", start_line=${input.start_line}, end_line=${input.end_line ?? input.start_line}, and a body that explains the concern to the coder (2–6 sentences, markdown, second-person voice). Without that follow-up call this issue has no inline comment in the diff. If the concern affects multiple call-sites, call add_issue_comment once per line range with the same issue_id.`
+    : `\n\n(PR-wide concern with no line anchor — no inline comment needed. Continue with the next concern or diff step.)`;
+  return okResult(`Issue flagged: ${title} (id: ${issueId}).${nextStepHint}`);
 };
 
 // ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────
@@ -587,7 +619,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
 //
 // Writes (one transaction): one `comment_threads` row + one `thread_messages`
 // row, both keyed on deterministic ids so retries upsert in place. Does NOT
-// advance phase. After commit broadcasts a `thread:created` WS event so any
+// advance phase. After commit broadcasts a `thread:created` SSE event so any
 // open `DiffViewerInner` re-renders inline at the anchor.
 //
 // Idempotency:
@@ -652,6 +684,14 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
       )
       .get();
     if (!issueRow) {
+      // Retracted by the relevance judgment behind flag_issue — not the
+      // agent's mistake. isError here would send it hunting a bug that isn't there.
+      if (ctx.jev.issueRetracted(input.issue_id)) {
+        result = okResult(
+          `That concern was withdrawn after you flagged it — the relevance check judged it below the bar for this pull request, so there is nothing left to comment on. This is not an error and not something to retry. Move on to the next concern or diff step.`,
+        );
+        return;
+      }
       result = errorResult(
         `Error: issue_id '${input.issue_id}' does not match any flagged issue for this walkthrough. Call flag_issue first; the result text contains the issue id you must pass back here.`,
       );

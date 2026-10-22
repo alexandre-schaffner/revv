@@ -1,4 +1,4 @@
-import type { WalkthroughIssue } from "@revv/shared";
+import type { UserSettings, WalkthroughIssue } from "@revv/shared";
 
 export type IssueSeverity = WalkthroughIssue["severity"];
 
@@ -25,7 +25,7 @@ export interface IssueGroup {
 
 /**
  * One entry per issue, but tagged with its global render index across every
- * group. Both the GuidedWalkthrough and RequestChanges panels use this to
+ * group. Both the GuidedWalkthrough and YourReview panels use this to
  * keep the entrance animation staggered as one continuous cascade rather
  * than restarting per-group.
  */
@@ -76,4 +76,37 @@ export function groupIssuesBySeverityWithIndex(
     label: group.label,
     issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
   }));
+}
+
+export interface SignalPartition {
+  /** Issues to render. Everything unscored lands here. */
+  shown: WalkthroughIssue[];
+  /** Issues collapsed behind the "show N filtered" disclosure. */
+  filtered: WalkthroughIssue[];
+}
+
+/**
+ * Split issues into what to show and what to tuck away. `lowSignal` is
+ * computed server-side so every surface agrees without re-deriving a
+ * threshold. An unscored issue (pre-feature walkthrough, cache-imported,
+ * scoring pass off) is never low signal. A submitted issue is never hidden —
+ * it's already on GitHub.
+ */
+export function partitionBySignal(
+  issues: readonly WalkthroughIssue[],
+  opts: { hideLowSignal: boolean },
+): SignalPartition {
+  if (!opts.hideLowSignal) return { shown: [...issues], filtered: [] };
+  const shown: WalkthroughIssue[] = [];
+  const filtered: WalkthroughIssue[] = [];
+  for (const issue of issues) {
+    if (issue.lowSignal === true && issue.submittedAt === undefined) filtered.push(issue);
+    else shown.push(issue);
+  }
+  return { shown, filtered };
+}
+
+/** Low-signal issues collapse only while TypeSafe is on, so turning it off restores the full list. */
+export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
+  return settings?.jev.enabled ?? false;
 }

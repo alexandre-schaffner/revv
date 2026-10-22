@@ -1,8 +1,10 @@
 <script lang="ts">
 import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
-import type { CodeBlock } from "@revv/shared";
+import { type CodeBlock, PIERRE_THEME } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
+import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { workerManager } from "$lib/utils/worker-pool";
 
@@ -17,13 +19,36 @@ const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.anno
 
 let instance: PierreFile<never> | null = null;
 
+/**
+ * Pierre's `File` numbers the gutter from 1 and has no offset option, so an
+ * excerpt starting at line 240 read 1..N. Shift every number by the block's
+ * start line after each render (the worker's highlight pass re-renders).
+ */
+function offsetLineNumbers(node: HTMLElement, startLine: number): void {
+  for (const cell of node.shadowRoot?.querySelectorAll<HTMLElement>("[data-column-number]") ?? []) {
+    const label = cell.querySelector("[data-line-number-content]");
+    const n = Number(cell.dataset.columnNumber);
+    if (label && Number.isInteger(n)) label.textContent = String(startLine + n - 1);
+  }
+}
+
 function mountCodeBlock(el: HTMLDivElement) {
-  const options: FileOptions<never> = {
-    theme: { dark: "pierre-dark", light: "pierre-light" },
+  const startLine = Number.isInteger(block.startLine) && block.startLine > 1 ? block.startLine : 1;
+  if (startLine > 1) {
+    // Pierre sizes the gutter for 1..N; widen it for the shifted numbers.
+    const lastLine = startLine + block.content.split("\n").length - 1;
+    el.style.setProperty("--diffs-min-number-column-width", `${String(lastLine).length}ch`);
+  }
+
+  const options: FileOptions<never, undefined> = {
+    theme: PIERRE_THEME,
     overflow: "scroll",
     // Suppress Pierre's built-in file header — we render our own clickable
     // header above so the user can jump to this file in the Diff tab.
     disableFileHeader: true,
+    ...(startLine > 1
+      ? { onPostRender: (node: HTMLElement) => offsetLineNumbers(node, startLine) }
+      : {}),
   };
 
   const file = {
@@ -60,7 +85,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 <div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
 		<div class="annotation annotation--left">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -71,7 +96,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 			<span class="code-file-path">{block.filePath}</span>
 			<span class="code-header-right">
 				<span class="code-line-range">:{block.startLine}-{block.endLine}</span>
-				<span class="code-jump-icon"><ArrowUpRight size={11} weight="fill" /></span>
+				<span class="code-jump-icon"><ArrowUpRight size={11} /></span>
 			</span>
 		</button>
 		<div class="code-body" use:mountCodeBlock></div>
@@ -79,7 +104,7 @@ function mountCodeBlock(el: HTMLDivElement) {
 
 	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
 		<div class="annotation annotation--right">
-			<div class="annotation-content">
+			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 				{@html renderedAnnotation}
 			</div>
 		</div>
@@ -134,26 +159,8 @@ function mountCodeBlock(el: HTMLDivElement) {
 		overflow-y: auto;
 	}
 
-	.annotation-content :global(p) {
-		margin: 0 0 8px;
-	}
-
-	.annotation-content :global(p:last-child) {
-		margin-bottom: 0;
-	}
-
-	.annotation-content :global(code) {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		background: var(--revv-bg-tertiary);
-		padding: 1px 4px;
-		border-radius: 3px;
-	}
-
-	.annotation-content :global(strong) {
-		color: var(--revv-text-primary);
-		font-weight: 600;
-	}
+	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
+	   prose layer (see app.css); `.annotation-content` only owns layout. */
 
 	.code-panel {
 		display: flex;

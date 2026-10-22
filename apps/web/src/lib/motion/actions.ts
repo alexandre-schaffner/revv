@@ -1,15 +1,18 @@
 /**
- * Svelte 5 use-directives. Two actions, both GSAP-driven:
+ * Svelte 5 use-directives.
  *
  *   <button use:gsapPress>           — press-down scale feedback
  *   <div use:bitsAnim={{ inPreset }}> — drives a bits-ui content surface from
  *                                       its data-state attribute
+ *   <div use:heroMorph>              — scroll-driven big-hero → sidebar-hero
+ *                                       crossfade for the recap detail layout
  */
 import type { Action } from "svelte/action";
 
 import { gsap } from "./gsap";
 import type { PresetFn } from "./presets";
 import { prefersReducedMotion } from "./reduced-motion";
+import { tokens } from "./tokens";
 
 /* ───────────────────────── gsapPress ───────────────────────── */
 
@@ -65,6 +68,66 @@ export const gsapPress: Action<HTMLElement, GsapPressParams | undefined> = (node
       node.removeEventListener("pointerup", up);
       node.removeEventListener("pointerleave", up);
       node.removeEventListener("pointercancel", up);
+    },
+  };
+};
+
+interface GsapHoverParams {
+  prop: `--${string}`;
+}
+
+export const gsapHover: Action<HTMLElement, GsapHoverParams> = (node, params) => {
+  let current = params;
+  let tween: gsap.core.Tween | null = null;
+  let pointer = false;
+  let focus = false;
+
+  const sync = () => {
+    const on = pointer || focus;
+    tween?.kill();
+    if (prefersReducedMotion()) {
+      gsap.set(node, { [current.prop]: on ? 1 : 0 });
+      return;
+    }
+    tween = gsap.to(node, {
+      [current.prop]: on ? 1 : 0,
+      duration: on ? tokens.smooth : tokens.quick,
+      ease: on ? tokens.easeOutQuart : tokens.easeSoft,
+    });
+  };
+  const enter = () => {
+    pointer = true;
+    sync();
+  };
+  const leave = () => {
+    pointer = false;
+    sync();
+  };
+  const focusIn = () => {
+    focus = node.matches(":has(:focus-visible)");
+    sync();
+  };
+  const focusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && node.contains(event.relatedTarget)) return;
+    focus = false;
+    sync();
+  };
+
+  node.addEventListener("pointerenter", enter);
+  node.addEventListener("pointerleave", leave);
+  node.addEventListener("focusin", focusIn);
+  node.addEventListener("focusout", focusOut);
+
+  return {
+    update(next: GsapHoverParams) {
+      current = next;
+    },
+    destroy() {
+      tween?.kill();
+      node.removeEventListener("pointerenter", enter);
+      node.removeEventListener("pointerleave", leave);
+      node.removeEventListener("focusin", focusIn);
+      node.removeEventListener("focusout", focusOut);
     },
   };
 };
@@ -134,7 +197,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
 
     if (!isOpen && !isClosed) return;
 
-    const preset = isOpen ? current.inPreset : current.outPreset!;
+    const preset = isOpen ? current.inPreset : current.outPreset;
     active = (preset as PresetFn<unknown>)(node, opts);
 
     if (prefersReducedMotion()) {
@@ -162,6 +225,79 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     destroy() {
       observer.disconnect();
       stop();
+    },
+  };
+};
+
+/* ───────────────────────── heroMorph ───────────────────────── */
+
+interface HeroMorphParams {
+  /** Selector for the sidebar element whose `inert` attribute mirrors visibility. */
+  sidebarSelector?: string;
+  /** Scroll distance (px) before the morph starts ramping. */
+  startPx?: number;
+  /** Scroll distance (px) over which `--shrink` ramps 0 → 1. */
+  rangePx?: number;
+}
+
+const HERO_MORPH_DEFAULTS = {
+  sidebarSelector: ".side",
+  startPx: 160,
+  rangePx: 120,
+} as const;
+
+function findScrollContainer(el: HTMLElement): HTMLElement | Window {
+  let cur: HTMLElement | null = el.parentElement;
+  while (cur) {
+    const oy = getComputedStyle(cur).overflowY;
+    if (oy === "auto" || oy === "scroll") return cur;
+    cur = cur.parentElement;
+  }
+  return window;
+}
+
+export const heroMorph: Action<HTMLElement, HeroMorphParams | undefined> = (node, params) => {
+  const cfg = { ...HERO_MORPH_DEFAULTS, ...params };
+  // Reduced motion suppresses the *ramp*, not the state: `--shrink` snaps
+  // 0 → 1 at the midpoint instead of tweening. Pinning it to 1 (what this
+  // used to do) leaves the sidebar fully opaque at scroll top, so the header
+  // renders twice. The global reduced-motion block in app.css already
+  // collapses the opacity transition, so there is nothing else to do here.
+  const snap = prefersReducedMotion();
+
+  // No viewport gate. Whether the sidebar has room is a question about the
+  // AppShell main pane, not the window, and RecapDetail answers it with an
+  // `@container` band that hides the rail outright — at which point `--shrink`
+  // is inert and this listener costs one clamp per scroll event.
+  const target = findScrollContainer(node);
+  // Cache the sidebar reference; `null` until the recap hydrates, the
+  // fallback inside onScroll picks it up on the next tick.
+  let sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+  let lastInert: boolean | null = null;
+
+  const onScroll = (): void => {
+    const top = target instanceof Window ? window.scrollY : target.scrollTop;
+    const ramp = Math.min(1, Math.max(0, (top - cfg.startPx) / cfg.rangePx));
+    const next = snap ? (ramp < 0.5 ? 0 : 1) : ramp;
+    node.style.setProperty("--shrink", String(next));
+    // Keep the sidebar out of the tab order / a11y tree while it's
+    // visually hidden, so screen readers don't see duplicate hero content.
+    if (!sidebar) sidebar = node.querySelector<HTMLElement>(cfg.sidebarSelector);
+    if (sidebar) {
+      const shouldInert = next < 0.1;
+      if (shouldInert !== lastInert) {
+        sidebar.toggleAttribute("inert", shouldInert);
+        lastInert = shouldInert;
+      }
+    }
+  };
+
+  onScroll();
+  target.addEventListener("scroll", onScroll, { passive: true });
+
+  return {
+    destroy() {
+      target.removeEventListener("scroll", onScroll);
     },
   };
 };

@@ -15,7 +15,7 @@ Wire the in-memory comment system to SQLite so that review sessions, comment thr
 
 ## What we built
 
-All four tables exist and are wired end-to-end. The frontend store calls the server on every mutation; WebSocket envelopes keep multi-window state in sync.
+All four tables exist and are wired end-to-end. The frontend store calls the server on every mutation; SSE event envelopes keep multi-window state in sync.
 
 ### Database (`apps/server/src/db/schema/`)
 
@@ -32,11 +32,11 @@ REST surface is identical to the original spec table; see `apps/server/src/route
 
 ### Frontend (`apps/web/src/lib/stores/review.svelte.ts`)
 
-Store hydrates from server on `/review/[prId]` load, calls REST for every mutation, and consumes `thread:*` WebSocket envelopes (`packages/shared/src/ws.ts`) to stay current across windows.
+Store hydrates from server on `/review/[prId]` load, calls REST for every mutation, and consumes `thread:*` SSE event envelopes (`packages/shared/src/events.ts`) over the global `GET /api/events` stream to stay current across windows.
 
-### WebSocket envelopes (`packages/shared/src/ws.ts`)
+### SSE event envelopes (`packages/shared/src/events.ts`)
 
-Server → client: `thread:created`, `thread:updated`, `thread:message`, `thread:deleted`, `thread:message:edited`, `thread:message:deleted`.
+Server → client: `thread:created`, `thread:updated`, `thread:message`, `thread:deleted`, `thread:message:edited`, `thread:message:deleted` (the `ThreadEventMessage` arm of the `ServerEventMessage` union).
 
 ---
 
@@ -216,18 +216,18 @@ When user completes a review or navigates away:
 
 ---
 
-## WebSocket Integration
+## SSE Integration
 
-Add new message types for real-time thread updates:
+Add new event envelopes for real-time thread updates:
 
 ```typescript
-// In packages/shared/src/ws.ts — add to WsServerMessage:
+// In packages/shared/src/events.ts — add to ServerEventMessage:
 | { type: 'thread:created'; data: { sessionId: string; thread: CommentThread; message: ThreadMessage } }
 | { type: 'thread:updated'; data: { threadId: string; status: ThreadStatus } }
 | { type: 'thread:message'; data: { threadId: string; message: ThreadMessage } }
 ```
 
-The server broadcasts these when threads are modified, so multiple windows (or future multi-user) stay in sync.
+The server broadcasts these (via `Broadcaster` on the `GET /api/events` SSE stream) when threads are modified, so multiple windows (or future multi-user) stay in sync.
 
 ---
 

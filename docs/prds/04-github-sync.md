@@ -43,9 +43,9 @@ Adds `postReviewComment`, `replyToComment`, `resolveReviewThread`, `unresolveRev
 - `GET /api/prs/:id/thread-summary` — role-aware counts (fetches current user's GitHub login from auth tables, compares against `pullRequests.authorLogin`)
 - `POST /api/threads/:id/reopen` — endpoint exists; **not yet called from any UI**
 
-### WebSocket envelopes (`packages/shared/src/ws.ts`)
+### SSE event envelopes (`packages/shared/src/events.ts`)
 
-`threads:synced`, `threads:sync-error`, `threads:new-reply`.
+`threads:synced`, `threads:sync-error`, `threads:new-reply` (arms of the `ServerEventMessage` union, fanned out by `Broadcaster` on `GET /api/events`).
 
 ### Frontend (`apps/web/src/lib/`)
 
@@ -110,7 +110,7 @@ From PRD-01 we'll have:
 
 - `comment_threads` and `thread_messages` tables in SQLite
 - `ReviewService` for CRUD operations on threads and messages
-- WebSocket broadcast when threads change
+- SSE broadcast (via `Broadcaster`) when threads change
 
 The `CommentThread` type already defines `ThreadStatus`: `'open' | 'pending_coder' | 'pending_reviewer' | 'resolved' | 'wont_fix'` — the status machine values are in the types but no transition logic exists.
 
@@ -309,12 +309,12 @@ function nextStatus(
 | `POST` | `/api/threads/:id/reopen`     | Reopen a resolved/wont_fix thread            |
 | `GET`  | `/api/user/identity`          | Current user's GitHub login + role info      |
 
-### WebSocket Messages
+### SSE Event Envelopes
 
-Add sync-related broadcasts:
+Add sync-related broadcasts to `ServerEventMessage` (`packages/shared/src/events.ts`):
 
 ```typescript
-// New server → client messages
+// New server → client envelopes
 | { type: 'threads:synced'; data: { prId: string; summary: ThreadSummary } }
 | { type: 'threads:new-reply'; data: { prId: string; threadId: string; message: ThreadMessage } }
 ```

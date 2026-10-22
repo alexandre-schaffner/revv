@@ -21,6 +21,9 @@ auditing the codebase for existing violations.
 CLAUDE.md remains the load-bearing project guide. It cross-references this doc but stays
 short — that file is meant to be skimmed cold; this one is meant to be searched.
 
+Architecture companion: [`architecture.md`](./architecture.md) — the module map and narrow-neck
+interfaces that this conventions file enforces.
+
 ---
 
 <a id="effect-services"></a>
@@ -33,7 +36,7 @@ ceremony with no payoff.
 <a id="effect-service-naming"></a>
 ### 2.1 Service tag + Layer naming
 
-**Rule.** A service named `XService` is declared as `class XService extends Context.Tag(...)`
+**Rule.** A service named `XService` is declared as `class XService extends Context.Service<Self, Shape>()("ServiceName")`
 and its concrete implementation is exported as `XServiceLive: Layer<...>`. No exceptions, no
 default exports, no `Live`-less Layers.
 
@@ -42,9 +45,9 @@ mechanical naming rule eliminates the entire class. The `Live` suffix mirrors Ef
 convention.
 
 **Canonical example.** `apps/server/src/services/Cache.ts:51` declares
-`class CacheService extends Context.Tag("CacheService")<...>` and exports its implementation as
+`class CacheService extends Context.Service<CacheService, Shape>()("CacheService")` and exports its implementation as
 `CacheServiceLive = Layer.sync(CacheService, () => {...})` at `apps/server/src/services/Cache.ts:72`.
-`WebSocketHub` / `WebSocketHubLive` at `apps/server/src/services/WebSocketHub.ts:9` and `:19`
+`Broadcaster` / `BroadcasterLive` at `apps/server/src/services/Broadcaster.ts:50` and `:70`
 follows the same shape.
 
 **Anti-pattern.** `export const Cache = Layer.sync(...)` (Live suffix missing — caller can't
@@ -56,9 +59,9 @@ tell from the import whether they're getting the tag or the Layer).
 ### 2.2 Stay inside Effect
 
 **Rule.** Inside a function that returns `Effect.Effect<...>`, do not call `Effect.runPromise`,
-`Effect.runSync`, or `Runtime.runPromise`. Schedule callbacks with `Effect.fork`, time-delays
+`Effect.runSync`, or `Effect.runPromiseWith`. Schedule callbacks with `Effect.forkChild`, time-delays
 with `Effect.sleep` + `Effect.schedule`, and bridge external callback-based APIs with
-`Effect.async` / `Effect.tryPromise`.
+`Effect.callback` / `Effect.tryPromise`.
 
 **Why.** `runPromise` synchronously starts a fresh fiber that the surrounding Effect cannot
 observe, supervise, interrupt, or join. Errors in the inner Effect bypass the outer error
@@ -74,7 +77,7 @@ loop entirely inside `Effect.gen`, using `Effect.forEach`, `Effect.tapError`, an
 timer with `Effect.sync(() => { void Effect.runPromise(...) })` and inside the `setTimeout`
 callback recursively calls `void Effect.runPromise(stopIfIdle())`. The same file uses the
 pattern again at `:525` for a `proc.exited.then(...)` handler. These should be replaced with
-`Effect.fork(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked `proc.exited`
+`Effect.forkChild(Effect.sleep(...).pipe(Effect.andThen(stopIfIdle)))` and a forked `proc.exited`
 observer that yields back into the supervisor's fiber.
 
 **Allowed boundary.** Bridging Effect into a plain-JS callback contract (e.g. SDK options that
@@ -139,64 +142,109 @@ Same pattern in `Walkthrough.ts` and `Db.ts` consumers.
 
 ---
 
-<a id="ws-envelopes"></a>
-## 3. WebSocket Envelope Conventions
+<a id="module-boundaries"></a>
+## 2.5 Module Boundary Rules
 
-All cross-process socket traffic between the Elysia server and the SvelteKit web client is
-shaped by the discriminated union in `packages/shared/src/ws.ts`. This is the canonical source
-of truth — anything else is divergence.
+The server architecture is documented in [`architecture.md`](./architecture.md). The rules below
+are the import-direction guardrails for keeping those modules deep.
 
-<a id="ws-envelope-shape"></a>
+<a id="feature-pr-context"></a>
+### 2.5.1 Feature modules use PR Context
+
+**Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubService`,
+`RepositoryService`, or `TokenProvider` directly. PR-scoped GitHub context flows through
+`PrContextService`.
+
+**Why.** Feature modules should express product lifecycle and user workflow logic, not token
+lookup, repository ownership, GitHub API calls, or account fallback rules. `PrContextService`
+is the narrow seam that hides that platform detail.
+
+**Enforcement.** `bun run check:import-boundaries` is part of `bun run lint`. It rejects new
+direct imports and lists the remaining legacy exceptions explicitly in the script while later
+waves migrate them.
+
+**Canonical example.** `WalkthroughJobs` depends on `PrContextService` for PR/repo/token/diff
+context before starting a walkthrough job.
+
+**Anti-pattern.** A chat or recap route importing `GitHubService` to fetch PR metadata or
+`TokenProvider` to resolve an access token.
+
+<a id="settings-agent-resolution"></a>
+### 2.5.2 Settings owns provider selection
+
+**Rule.** Code that needs the effective CLI agent calls `SettingsService.resolveAgent()` or
+`SettingsService.resolveRecapAgent()`. AI-provider modules may branch on the returned agent, but
+they do not own fallback or validation rules.
+
+**Why.** Agent choice is a settings concern. Keeping it in one service prevents drift between
+walkthroughs, chat, recaps, model listing, session lookup, and daemon lifecycle.
+
+**Backlog.** The daemon lifecycle still has provider-specific mechanics in feature code until the
+later AI-provider and job-helper waves.
+
+---
+
+<a id="event-envelopes"></a>
+## 3. SSE Event Envelope Conventions
+
+All server-to-client realtime traffic between the Elysia server and the SvelteKit web client
+flows over a single SSE stream (`GET /api/events`) and is shaped by the discriminated union
+`ServerEventMessage` in `packages/shared/src/events.ts`. This is the canonical source of truth —
+anything else is divergence. Inbound (client-to-server) commands are REST endpoints, not stream
+messages. The server-side narrow neck that fans these out is `Broadcaster`
+(`apps/server/src/services/Broadcaster.ts`); see [`architecture.md`](./architecture.md#realtime--events).
+
+<a id="event-envelope-shape"></a>
 ### 3.1 Envelope shape is `{ type, data? }`
 
-**Rule.** Every server-to-client message is a discriminated union arm of `WsServerMessage`
+**Rule.** Every server-to-client message is a discriminated union arm of `ServerEventMessage`
 with shape `{ type: string; data?: object | array }`. No flat fields hoisted to the top level;
 no alternative discriminator names (`event`, `kind`); no top-level payload fields outside `data`.
 Messages with no payload omit `data` entirely rather than passing `data: null`.
 
-**Why.** A single envelope shape lets the frontend dispatcher (`apps/web/src/lib/stores/ws.svelte.ts`)
+**Why.** A single envelope shape lets the frontend dispatcher (`apps/web/src/lib/stores/events.svelte.ts`)
 exhaustively switch on `msg.type` with `noUncheckedIndexedAccess`-friendly types. Adding a flat
 field means every consumer needs to know which arms carry it.
 
-**Canonical example.** `packages/shared/src/ws.ts:13–90` defines 25+ message arms, all conforming
-to `{ type, data? }`. Signal-only arms (`prs:sync-started` at `:15`) omit `data`; payload-bearing
-arms (`prs:sync-complete` at `:16`) carry a structured `data` object.
+**Canonical example.** `packages/shared/src/events.ts:59–320` defines 30+ message arms, all
+conforming to `{ type, data? }`. Signal-only arms (`prs:sync-started` at `:74`) omit `data`;
+payload-bearing arms (`prs:sync-complete` at `:78`) carry a structured `data` object.
 
 **Anti-pattern.** `{ type: "thing-happened", thing: { ... } }` (flat `thing` instead of nested
 in `data`). Or `{ event: "thing-happened", data: ... }` (`event` instead of `type`).
 
 **Nested payload note.** Embedding a typed sub-envelope inside `data` is fine when it carries
-real meaning. `walkthrough:edited` at `packages/shared/src/ws.ts:62–69` wraps a
-`WalkthroughStreamEvent` inside `data` so the frontend can reuse the SSE reducer code path —
-this is consistent with the rule (the outer shape is still `{ type, data }`) and is documented
-in code.
+real meaning. `walkthrough:event` at `packages/shared/src/events.ts:49–57` wraps a
+`WalkthroughStreamEvent` (plus the `prId` / `walkthroughId` / `seq` routing cursor) inside `data`
+so the frontend can reuse the walkthrough reducer code path — this is consistent with the rule
+(the outer shape is still `{ type, data }`) and is documented in code.
 
 **Backlog.** None — current canon is clean.
 
-<a id="ws-envelope-naming"></a>
+<a id="event-envelope-naming"></a>
 ### 3.2 Type names are `namespace:action`, lowercase, kebab-cased
 
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
 lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
-`threads`, `walkthrough`, `repos`, `user`, `chat`, `error`); the action is the verb
-(`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
+`threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `new-pr-session`, `error`);
+the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal
 in most identifiers, so message types can never accidentally collide with frontend variable
 names.
 
-**Canonical example.** Every entry in `packages/shared/src/ws.ts:13–90` follows the rule
-(`prs:updated`, `repos:clone-status`, `thread:message:edited` at `:72`).
+**Canonical example.** Every entry in `packages/shared/src/events.ts:59–320` follows the rule
+(`prs:updated`, `repos:clone-status`, `thread:message:edited` at `:159`).
 
 **Anti-pattern.** `prsUpdated`, `PRS_UPDATED`, `prs.updated`, or routing on a generic
 `message-type` discriminator field that holds free-form strings.
 
 **Backlog.** None — current canon is clean.
 
-<a id="ws-payload-semantics"></a>
+<a id="event-payload-semantics"></a>
 ### 3.3 Pick one payload contract: signal, full-state, delta
 
-**Rule.** Each WS message arm declares exactly one of three semantic contracts:
+**Rule.** Each event message arm declares exactly one of three semantic contracts:
 
 - **Signal** — no `data`. The receipt of the message is the entire signal. Example:
   `prs:sync-started`. Receivers re-fetch authoritative state from the DB.
@@ -211,17 +259,35 @@ The choice is documented at the type definition.
 **Why.** Frontend consumers wire reducers to one of three shapes. A message that "kinda" carries
 state and "kinda" carries deltas needs custom handler logic per consumer.
 
-**Canonical example.** Three arms of `packages/shared/src/ws.ts` illustrating each:
-`prs:sync-started` (signal, `:15`); `prs:updated` (full-state, `:14`); `thread:message`
-(delta, `:45`).
+**Canonical example.** Three arms of `packages/shared/src/events.ts` illustrating each:
+`prs:sync-started` (signal, `:74`); `prs:updated` (full-state, `:59`); `thread:message`
+(delta, `:134`).
 
 **Anti-pattern.** Mixing — e.g. a `repos:partial-update` message that sometimes carries the
 full list and sometimes carries one repo. Receivers can't tell whether to replace or merge.
 
-**Broadcast contract.** All WS broadcasts are best-effort and lossy. The hub's contract is
-documented in code at `apps/server/src/services/WebSocketHub.ts:36–45`: receivers reconcile
-from the DB on reconnect; never derive authoritative display state exclusively from WS
-messages. This is CLAUDE.md invariant #8.
+**Broadcast contract.** All broadcasts are best-effort and lossy. The broadcaster's contract is
+documented in code at `apps/server/src/services/Broadcaster.ts:16–21`: commit to SQLite first,
+broadcast second; receivers reconcile from the DB on reconnect (the snapshot REST endpoints) and
+never derive authoritative display state exclusively from stream messages. This is CLAUDE.md
+invariant #8.
+
+<a id="event-scope-targeting"></a>
+### 3.4 Account-scoped by default; `broadcastAll` only for server-global signals
+
+**Rule.** Feature events carry per-account data and MUST be sent with
+`broadcastToAccount(accountId, msg)`. `broadcastAll(msg)` fans out to every registered writer
+regardless of account and is reserved for server-global sync-lifecycle signals — today the
+`prs:sync-started` / `prs:sync-complete` spinners and the generic `error` envelope used for
+sync failures (`SYNC_ERROR` / `THREAD_SYNC_ERROR` codes), all emitted from
+`PollScheduler.ts`.
+
+**Why.** A data-bearing envelope (`prs:updated`, recap, thread, walkthrough) sent with
+`broadcastAll` leaks one account's data to every connected client. Scoping is a security
+boundary, not a perf optimization.
+
+**Anti-pattern.** Routing `prs:updated` (carries a specific account's `PullRequest[]`) through
+`broadcastAll`.
 
 **Backlog.** None — current canon is clean.
 
@@ -232,8 +298,7 @@ messages. This is CLAUDE.md invariant #8.
 
 Svelte 5 stores under `apps/web/src/lib/stores/` are how reactive state crosses component
 boundaries. The canon below is what `walkthrough.svelte.ts`, `prs.svelte.ts`, and `auth.svelte.ts`
-already do; `review.svelte.ts`, `sync.svelte.ts`, and the in-progress
-`walkthrough-stream.svelte.ts` are the migration targets.
+already do; `review.svelte.ts` and `sync.svelte.ts` are the remaining migration targets.
 
 <a id="stores-singleton"></a>
 ### 4.1 Singleton module + getX/setX exports
@@ -339,33 +404,31 @@ possible combinations; only ~4 are legal.
 
 **Backlog.** [`S-003`](./conventions-backlog.md#s-003).
 
-<a id="stores-ws-handlers"></a>
-### 4.5 WS message handlers in stores are named `on<EventName>`
+<a id="stores-event-handlers"></a>
+### 4.5 Event handlers in stores are named `on<EventName>`
 
-**Rule.** Functions exported from a store for the WS dispatcher (`ws.svelte.ts`) to call follow
-the form `on<EventName>` where `<EventName>` is the WS message `type` with the colon dropped
-and segments PascalCased (`thread:created` → `onThreadCreated`; `walkthrough:edited` →
-`onWalkthroughEdited`). One handler per WS message arm.
+**Rule.** Functions exported from a store for the SSE dispatcher
+(`apps/web/src/lib/stores/events.svelte.ts`) to call follow the form `on<EventName>` where
+`<EventName>` is the event message `type` with the colon dropped and segments PascalCased
+(`thread:created` → `onThreadCreated`; `chat:question-resolved` → `onChatQuestionResolved`).
+One handler per event message arm.
 
 **Why.** Reading the dispatcher should make it obvious which store owns which message. The
-`*FromWs` suffix style buries the event identity in the middle of the name and pluralizes
-inconsistently (`updateThreadStatusFromWs` vs the WS type `thread:updated`).
+legacy `*FromWs` suffix style buried the event identity in the middle of the name and pluralized
+inconsistently (`updateThreadStatusFromWs` vs the event type `thread:updated`).
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts:444`
-(`onWalkthroughError`), `:461` (`onWalkthroughEdited`), and
-`apps/web/src/lib/stores/walkthrough-stream.svelte.ts:601` (`onWalkthroughComplete`) match the
-WS message types `walkthrough:error`, `walkthrough:edited`, `walkthrough:complete`.
+**Canonical example.** `apps/web/src/lib/stores/review.svelte.ts:559` (`onThreadUpdated`),
+`:576` (`onThreadCreated`), `:699` (`onThreadMessageEdited`);
+`apps/web/src/lib/stores/walkthrough.svelte.ts:609` (`onWalkthroughEvent`); and
+`apps/web/src/lib/stores/chat.svelte.ts:1555` (`onChatQuestionResolved`) match the event
+message types `thread:updated`, `thread:created`, `thread:message:edited`, `walkthrough:event`,
+and `chat:question-resolved`. The `events.svelte.ts:184` dispatch reads as a flat list of these
+`on*` calls.
 
-**Anti-pattern.** `apps/web/src/lib/stores/review.svelte.ts:660` `updateThreadStatusFromWs`,
-`:677` `addThreadFromWs`, `:695` `addMessageFromWs`, `:933` `updateMessageFromWs`. Same pattern
-in `apps/web/src/lib/stores/chat.svelte.ts` (`resolveQuestionFromWs`).
+**Anti-pattern.** The retired `*FromWs` suffix style — `updateThreadStatusFromWs`,
+`addThreadFromWs`, `resolveQuestionFromWs`. No occurrences remain in the codebase.
 
-**Migration form.** `updateThreadStatusFromWs` → `onThreadUpdated`; `addThreadFromWs` →
-`onThreadCreated`; `addMessageFromWs` → `onThreadMessage`; `updateMessageFromWs` →
-`onThreadMessageEdited`; `removeMessageFromWs` → `onThreadMessageDeleted`; `removeThreadFromWs` →
-`onThreadDeleted`; `resolveQuestionFromWs` → `onChatQuestionResolved`.
-
-**Backlog.** [`S-004`](./conventions-backlog.md#s-004).
+**Backlog.** [`S-004`](./conventions-backlog.md#s-004) — closed; all handlers renamed.
 
 <a id="stores-optimistic"></a>
 ### 4.6 Client-initiated mutations are optimistic with entity-scoped rollback
@@ -376,7 +439,7 @@ specific fields being mutated on the specific entities involved* — never a lis
 the calling component branches on the throw (loading spinners, inline errors), the function
 rethrows after the toast; otherwise it may swallow.
 
-**Why.** Two reasons. (1) **UI lag.** Waiting for the server round-trip plus the WS
+**Why.** Two reasons. (1) **UI lag.** Waiting for the server round-trip plus the SSE
 rebroadcast before reflecting the user's action is the laggy-feel symptom this rule
 eliminates — closing a PR, flipping draft state, merging, pinning should feel
 instantaneous because the outcome is rarely in doubt. (2) **Concurrency.** A `prs:updated`
@@ -398,7 +461,7 @@ for the reverse rollback. Both helpers touch exactly one PR per call so concurre
 `repositories`, `pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` whole
 via `snapshotRepoState()`, restores them whole on error via `restoreRepoState()`. The
 shape works for the rare single-entity-delete case it lives in, but it does not generalize:
-any concurrent WS broadcast between snapshot and rollback is silently dropped. The fix is
+any concurrent SSE broadcast between snapshot and rollback is silently dropped. The fix is
 entity-scoped removal — capture the removed repo, the removed PR ids, and the removed
 pinned ids — and inverse them on rollback rather than restoring the whole world.
 
@@ -427,6 +490,7 @@ Easings come from:
 
 - `--ease-soft: cubic-bezier(0.4, 0, 0.2, 1)` — exits, bidirectional state
 - `--ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1)` — enter / appearance
+- `--ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1)` — enter without the snap, for motion the eye follows end to end (a hover lift, cards being dealt)
 - `--ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1)` — walkthrough chapters
 
 Reference them in CSS as `var(--duration-quick) var(--ease-out-expo)` or via Tailwind
@@ -491,13 +555,73 @@ Hand-typed durations that match no token, in the same file as 1200ms which also 
 [`M-014`](./conventions-backlog.md#m-014).
 
 <a id="motion-icon-only"></a>
-### 5.3 Icon-only policy (cross-reference)
+### 5.3 Iconography
 
-The "always use icons, never emojis" rule lives in CLAUDE.md and is fully honored — zero
-violations in the codebase. Use `phosphor-svelte` components or inline SVG for brand/octicon
-marks; no emoji glyphs in rendered UI, toasts, or component text.
+**No emoji.** The "always use icons, never emojis" rule lives in CLAUDE.md and is fully
+honored — zero violations. No emoji glyphs in rendered UI, toasts, or component text.
+
+**One icon system: `phosphor-svelte`.** Import deep
+(`phosphor-svelte/lib/<Icon>`), never from the package root, and **never under an
+alias**. The import name is the phosphor icon name. A Lucide-era alias
+(`import Loader2 from ".../Spinner"`) hides which glyph actually ships, and cost us
+six wrong icons — a bare `Octagon` for "blocker", an open-PR glyph for "closed", a
+`CalendarCheck` for "scheduled", and a sidebar toggle whose two `{#if}` branches
+resolved to the same icon, so the button never changed.
+
+**Defaults come from one place.** `routes/+layout.svelte` wraps the app in
+phosphor's `<IconContext>` and sets `weight: "regular"` and `aria-hidden: "true"`.
+Call sites state only what differs. Props beat context, so both stay overridable.
+
+- **`aria-hidden`.** phosphor stamps `role="img"` on every `<svg>`, and a `role=img`
+  with no accessible name is an unlabelled image (WCAG 1.1.1). Icons are decorative —
+  the adjacent label or the button's `aria-label` carries the meaning. An icon that
+  IS the only signal opts back in with `aria-hidden="false"` plus an `aria-label`.
+- **`weight` is information, not decoration.** `regular` is the default. `weight="fill"`
+  means one of exactly two things:
+  1. **State** — the on / active / selected half of a toggle. Prefer a dynamic
+     expression on one glyph (`weight={open ? "fill" : "regular"}`) over swapping
+     glyphs in an `{#if}`.
+  2. **Severity** — a status marker where solidity itself is the signal.
+
+  `bold`, `thin`, `light`, and `duotone` are not used.
+
+**The severity ramp.** Solidity descends with severity, so the most severe mark is
+always the heaviest on screen. Applies to the issues panel, the ratings panel, the
+approve dialog, and toasts.
+
+| Level | Glyph | Weight |
+| --- | --- | --- |
+| critical / blocker / error | `WarningOctagon` | `fill` |
+| warning / concern | `Warning` | `fill` |
+| failed check | `XCircle` | `fill` |
+| success / passed check | `CheckCircle` / `Check` | `fill` / `regular` |
+| info | `Info` / `Circle` | `regular` |
+
+**Inline SVG** is for brand and octicon-style marks only (`components/icons/*`, the
+`@pierre/trees` file-type sprite in `utils/file-icon.ts`, `ContinueArrow`). If a
+phosphor equivalent exists, use it — a hand-rolled 24-grid, 1.5–2px-stroke glyph
+next to phosphor's 256-grid set reads as two different icon sets. Imperative DOM
+callers that can't mount a component use `utils/phosphor-markup.ts`, which carries
+phosphor's own path data.
 
 **Backlog.** None.
+
+### 5.4 Rendered markdown goes through `.prose`
+
+Every `{@html …}` sink that renders markdown (`renderMarkdown(...)`, `messageHtml(...)`,
+`rendered*Html`, …) is wrapped in an element carrying `prose prose-sm`. Markdown styling is
+owned by one place — the themed `@tailwindcss/typography` layer in
+`apps/web/src/lib/styles/prose.css` (imported by `app.css`), whose `--tw-prose-*` slots map to
+`--color-*` tokens so both themes work with no `prose-invert`. Components **must not** re-declare
+element-level markdown CSS (`:global(p|code|strong|ul|ol|li|pre|blockquote|a)`) in their own
+`<style>`; express per-panel deviations as `--tw-prose-*` / container overrides instead. Dense
+side panels add `prose-dense` (13px/1.55) alongside `prose prose-sm`. The accent chat bubble adds
+`prose-on-accent`. A surface that deliberately is *not* prose (e.g. an inline-only sanitized
+display string) simply omits `.prose` — keep it outside a `.prose` ancestor.
+
+**Backlog.** None — the consolidation removed all per-component markdown CSS. (This rule was
+previously enforced by `scripts/check-prose.ts`; that gate was retired once the migration was
+complete, so the rule is now convention-only.)
 
 ---
 

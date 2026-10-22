@@ -1,16 +1,50 @@
 import { Data } from "effect";
 
+export class ProfilingError extends Data.TaggedError("ProfilingError")<{
+  readonly cause: unknown;
+}> {}
+
 // GitHub API errors
 export class GitHubRateLimitError extends Data.TaggedError("GitHubRateLimitError")<{
   readonly resetAt: Date;
+  readonly retryAfter?: number;
+  readonly kind?: "primary" | "secondary";
+  readonly resource?: string;
 }> {}
 
 export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
   readonly message: string;
 }> {}
 
+/**
+ * Transport-level failure: DNS, TLS, connection reset, request timeout, a
+ * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
+ * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `github-rest.ts`
+ * only retries this class, so nothing else may be mapped to it.
+ */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{
   readonly cause: unknown;
+}> {}
+
+/**
+ * GitHub understood the request and rejected it: a 4xx that isn't
+ * 401/403/404/429, or a GraphQL response carrying an `errors` array (other
+ * than GitHub's own failure, above).
+ * **Not retryable** — replaying it produces the same rejection, so retrying
+ * only burns the backoff budget (2s + 4s + 8s per call) and stalls the
+ * sequential sync loops.
+ *
+ * `cause` is a human-readable string (status + response body when available)
+ * so callers can sniff GitHub's error text; see `isExistingPendingReviewError`.
+ */
+export class GitHubApiError extends Data.TaggedError("GitHubApiError")<{
+  readonly status: number;
+  readonly cause: unknown;
+}> {}
+
+export class GitHubAccessDeniedError extends Data.TaggedError("GitHubAccessDeniedError")<{
+  readonly resource: string;
+  readonly message: string;
 }> {}
 
 export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")<{
@@ -18,10 +52,24 @@ export class GitHubNotFoundError extends Data.TaggedError("GitHubNotFoundError")
   readonly id: string;
 }> {}
 
+/**
+ * An add-repo lookup 404'd. GitHub answers 404 both for a repo that doesn't
+ * exist and for one the token can't see — and a GitHub App token can't see
+ * any repo the app isn't installed on — so this carries the diagnosis the
+ * user needs: what's missing and, when known, the page that fixes it.
+ */
+export class RepoNotAccessibleError extends Data.TaggedError("RepoNotAccessibleError")<{
+  readonly message: string;
+  readonly detail: string;
+  readonly action: { readonly label: string; readonly url: string } | null;
+}> {}
+
 export type GitHubError =
   | GitHubRateLimitError
   | GitHubAuthError
+  | GitHubAccessDeniedError
   | GitHubNetworkError
+  | GitHubApiError
   | GitHubNotFoundError;
 
 // General errors
@@ -34,6 +82,34 @@ export class ValidationError extends Data.TaggedError("ValidationError")<{
   readonly message: string;
   readonly field?: string;
 }> {}
+
+export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrationError")<{
+  readonly message: string;
+  readonly code:
+    | "INVALID_CREDENTIAL"
+    | "INVALID_PROJECT"
+    | "PR_NOT_FOUND"
+    | "INSTALL_FAILED"
+    | "NOT_CONNECTED"
+    | "INTERNAL";
+  readonly cause?: unknown;
+}> {}
+
+export function externalIntegrationHttpStatus(error: ExternalIntegrationError): number {
+  switch (error.code) {
+    case "INVALID_CREDENTIAL":
+      return 403;
+    case "INVALID_PROJECT":
+    case "PR_NOT_FOUND":
+      return 404;
+    case "NOT_CONNECTED":
+      return 409;
+    case "INSTALL_FAILED":
+      return 400;
+    case "INTERNAL":
+      return 500;
+  }
+}
 
 // AI errors
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
@@ -50,6 +126,35 @@ export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelec
 
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
+
+/**
+ * Why a TypeSafe System One (Jev) call produced no answer.
+ *
+ *   'unconfigured' — no API key in the keyring or `REVV_JEV_API_KEY`
+ *   'disabled'     — the master switch or this hook's toggle is off
+ *   'timeout'      — the call exceeded the caller's budget
+ *   'rate_limited' — a 429 (the SDK doesn't retry those; see `JevServiceLive`)
+ *   'transport'    — any other HTTP/connection failure, auth included
+ *   'malformed'    — a 2xx whose body didn't match the expected answer shape
+ *
+ * `'unconfigured'`/`'disabled'` short-circuit with zero latency. Every call
+ * site collapses all six to `null` and degrades to pre-Jev behaviour.
+ */
+export type JevUnavailableReason =
+  | "unconfigured"
+  | "disabled"
+  | "timeout"
+  | "rate_limited"
+  | "transport"
+  | "malformed";
+
+export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
+  readonly reason: JevUnavailableReason;
+  readonly message?: string;
+  /** Server's `Retry-After`, on `rate_limited` only, when it sent one. */
+  readonly retryAfterMs?: number;
+  readonly cause?: unknown;
+}> {}
 
 export type AiError =
   | AiGenerationError
@@ -80,6 +185,16 @@ export class CloneNotReadyError extends Data.TaggedError("CloneNotReadyError")<{
 
 export class CloneInProgressError extends Data.TaggedError("CloneInProgressError")<{
   readonly repoId: string;
+}> {}
+
+/**
+ * A caller pinned the head it wants reviewed (`startJob`'s `expectedHeadSha`)
+ * and GitHub serves a different one — typically a push GitHub hasn't caught
+ * up with yet. Nothing was cancelled or started.
+ */
+export class HeadShaMismatchError extends Data.TaggedError("HeadShaMismatchError")<{
+  readonly expectedHeadSha: string;
+  readonly githubHeadSha: string;
 }> {}
 
 /**
@@ -115,10 +230,10 @@ export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
 
 /**
  * Raised by the recap MCP tool surface when an out-of-order or
- * structurally-invalid call lands (e.g. `complete_recap` before
- * `commit_recap_overview`, or `commit_recap_overview` with an empty text
- * buffer). The agent receives this as a structured error result and can
- * recover by issuing the right call.
+ * structurally-invalid call lands (e.g. `complete_recap` before `set_lede`,
+ * or `add_pr_entry` with a pr_id not in the source bundle). The agent
+ * receives this as a structured error result and can recover by issuing
+ * the right call.
  */
 export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
   readonly recapId: string;
@@ -201,6 +316,35 @@ export class ImportError extends Data.TaggedError("ImportError")<{
 }> {}
 
 export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
+
+// ── SSH cache-signing errors ────────────────────────────────────────────────
+
+/** `ssh-keygen` binary is absent from PATH or the configured path. */
+export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
+  readonly message: string;
+}> {}
+
+/**
+ * The local machine cannot sign right now — key not found, auto-detect
+ * failed, or ssh-keygen returned an unexpected error. Push fails loudly
+ * (fire-and-forget contract unchanged); the walkthrough still completes.
+ */
+export class SshSigningUnavailable extends Data.TaggedError("SshSigningUnavailable")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/** Signature verification failed — tampered message, wrong key, wrong namespace. */
+export class SshSignatureInvalid extends Data.TaggedError("SshSignatureInvalid")<{
+  readonly message: string;
+}> {}
+
+/** Public-key fetch from `https://<host>/<login>.keys` failed. */
+export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
+  readonly host: string;
+  readonly login: string;
+  readonly cause?: unknown;
+}> {}
 
 /**
  * Type guard for ReviewError.

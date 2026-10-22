@@ -25,6 +25,7 @@ let {
 					bind:this={ref}
 					{...props}
 					data-slot="select-content"
+					data-glass
 					class={cn(
 						"relative z-50 min-w-[8rem] overflow-hidden rounded-md border border-border shadow-md",
 						className

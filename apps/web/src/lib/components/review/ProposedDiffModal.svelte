@@ -7,13 +7,15 @@ import {
   parseDiffFromFile,
 } from "@pierre/diffs";
 import { FileTree, type GitStatusEntry } from "@pierre/trees";
-import MessageSquare from "phosphor-svelte/lib/Chat";
+import { PIERRE_THEME } from "@revv/shared";
+import Chat from "phosphor-svelte/lib/Chat";
+import Columns from "phosphor-svelte/lib/Columns";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import Send from "phosphor-svelte/lib/PaperPlaneRight";
-import PanelLeftClose from "phosphor-svelte/lib/SidebarSimple";
-import PanelLeftOpen from "phosphor-svelte/lib/SidebarSimple";
-import Loader2 from "phosphor-svelte/lib/Spinner";
-import Trash2 from "phosphor-svelte/lib/Trash";
+import PaperPlaneRight from "phosphor-svelte/lib/PaperPlaneRight";
+import Rows from "phosphor-svelte/lib/Rows";
+import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
+import Spinner from "phosphor-svelte/lib/Spinner";
+import Trash from "phosphor-svelte/lib/Trash";
 import X from "phosphor-svelte/lib/X";
 import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
@@ -33,6 +35,7 @@ import {
   sendProposedFeedback,
   updateProposedComment,
 } from "$lib/stores/chat.svelte";
+import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
@@ -239,10 +242,11 @@ function annotationsFor(file: FileDiffMetadata): DiffLineAnnotation<CommentMeta>
 function buildOptions(
   file: FileDiffMetadata,
   diffStyle: "unified" | "split",
-): FileDiffOptions<CommentMeta> {
+): FileDiffOptions<CommentMeta, undefined> {
   return {
     diffStyle,
-    theme: { dark: "pierre-dark", light: "pierre-light" },
+    theme: PIERRE_THEME,
+    overflow: getDiffWrap() ? "wrap" : "scroll",
     // Collapse unchanged regions by default so line-info separators have
     // something to expand. With `true`, Pierre flattens the whole file
     // inline and no separator clicks would be meaningful.
@@ -537,7 +541,7 @@ onDestroy(() => {
 <Dialog.Root {open} {onOpenChange}>
 	<Dialog.Content
 		showCloseButton={false}
-		class="proposed-diff-dialog !p-0 !gap-0 !top-1/2 !-translate-y-1/2 sm:!max-w-none !w-[min(1100px,92vw)] !h-[min(80vh,800px)] !rounded-none !border-0 !shadow-none !text-foreground"
+		class="proposed-diff-dialog !p-0 !gap-0 !inset-y-0 !my-auto sm:!max-w-none !w-[min(1100px,92vw)] !h-[min(80vh,800px)] !rounded-none !border-0 !shadow-none !text-foreground"
 	>
 		<Dialog.Header class="sr-only">
 			<Dialog.Title>Proposed commit diff — {subject}</Dialog.Title>
@@ -553,11 +557,8 @@ onDestroy(() => {
 					aria-label={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
 					title={isTreeCollapsed ? 'Show file tree' : 'Hide file tree'}
 				>
-					{#if isTreeCollapsed}
-						<PanelLeftOpen size={14} weight="fill" />
-					{:else}
-						<PanelLeftClose size={14} weight="fill" />
-					{/if}
+					<!-- One glyph; `fill` is the "tree is showing" state. -->
+					<SidebarSimple size={14} weight={isTreeCollapsed ? 'regular' : 'fill'} />
 				</button>
 				<code class="card-sha">{sha.slice(0, 12)}</code>
 				<span class="card-subject" title={subject}>{subject}</span>
@@ -576,19 +577,7 @@ onDestroy(() => {
 						title="Unified view"
 						aria-label="Unified view"
 					>
-						<svg
-							width="14"
-							height="14"
-							viewBox="0 0 16 16"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						>
-							<line x1="3.5" y1="4.5" x2="12.5" y2="4.5" />
-							<line x1="3.5" y1="8" x2="12.5" y2="8" />
-							<line x1="3.5" y1="11.5" x2="12.5" y2="11.5" />
-						</svg>
+						<Rows size={14} weight={mode === 'unified' ? 'fill' : 'regular'} />
 					</button>
 					<div class="view-sep"></div>
 					<button
@@ -600,18 +589,7 @@ onDestroy(() => {
 						title="Split view"
 						aria-label="Split view"
 					>
-						<svg
-							width="14"
-							height="14"
-							viewBox="0 0 16 16"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						>
-							<rect x="2" y="2.5" width="12" height="11" rx="1.5" />
-							<line x1="8" y1="2.5" x2="8" y2="13.5" />
-						</svg>
+						<Columns size={14} weight={mode === 'split' ? 'fill' : 'regular'} />
 					</button>
 				</div>
 				<div class="commit-actions" role="group" aria-label="Commit actions">
@@ -624,9 +602,9 @@ onDestroy(() => {
 						aria-label="Discard commit"
 					>
 						{#if isDiscarding}
-							<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 						{:else}
-							<Trash2 size={12} weight="fill" />
+							<Trash size={12} />
 						{/if}
 						<span>Discard</span>
 					</button>
@@ -639,15 +617,15 @@ onDestroy(() => {
 						aria-label="Cherry-pick commit to PR branch"
 					>
 						{#if isCherryPicking}
-							<Loader2 size={12} weight="regular" class="motion-essential-spin" />
+							<Spinner size={12} class="motion-essential-spin" />
 						{:else}
-							<GitMerge size={12} weight="fill" />
+							<GitMerge size={12} />
 						{/if}
 						<span>Cherry-pick</span>
 					</button>
 				</div>
 				<button class="icon-btn" onclick={requestClose} aria-label="Close diff">
-					<X size={14} weight="fill" />
+					<X size={14} />
 				</button>
 			</header>
 			<div class="card-body" class:card-body--tree-collapsed={isTreeCollapsed}>
@@ -669,7 +647,7 @@ onDestroy(() => {
 			</div>
 			<footer class="card-footer">
 				<div class="footer-summary">
-					<MessageSquare size={12} weight="fill" />
+					<Chat size={12} />
 					{#if commentCount === 0}
 						<span class="footer-hint">Click a line to leave feedback for the agent.</span>
 					{:else}
@@ -691,7 +669,7 @@ onDestroy(() => {
 						? 'Wait for the current turn to finish'
 						: 'Send all comments to the agent'}
 				>
-					<Send size={12} weight="fill" />
+					<PaperPlaneRight size={12} />
 					<span>Send to agent</span>
 				</button>
 			</footer>

@@ -35,6 +35,27 @@ export function mountInto<Props extends Record<string, unknown>>(
 }
 
 /**
+ * Unmount any registered components whose target has been detached from the DOM.
+ *
+ * @pierre/diffs removes the previous annotation wrapper (via `element.remove()`)
+ * on every re-render, but it has no knowledge of the Svelte components we mounted
+ * inside those wrappers — so they stay registered here with their effects and
+ * listeners still live. Call this after a re-render to unmount the orphans;
+ * freshly-mounted hosts are still connected and are left untouched.
+ */
+export function pruneDetachedMounts(): void {
+  for (const [target, instance] of registry) {
+    if (target.isConnected) continue;
+    try {
+      unmount(instance);
+    } catch {
+      // ignore unmount errors
+    }
+    registry.delete(target);
+  }
+}
+
+/**
  * Unmount ALL mounted Svelte components. Call this before instance.cleanUp()
  * to prevent orphaned Svelte state when the diff container is destroyed.
  */

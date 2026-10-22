@@ -43,7 +43,7 @@ export const chatTasks = sqliteTable(
     status: text("status").notNull(),
     // 'low' | 'medium' | 'high' | NULL
     priority: text("priority"),
-    // 'claude' | 'opencode' — for debugging parity divergence.
+    // Transport that produced the row: always 'acp'.
     source: text("source").notNull(),
     sequence: integer("sequence").notNull(),
     createdAt: text("created_at").notNull(),

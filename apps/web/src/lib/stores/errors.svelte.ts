@@ -1,44 +1,32 @@
+import { toast } from "svelte-sonner";
+
 export type AppError = {
   message: string;
   code?: string;
   retryAfter?: number;
 };
 
-let currentError = $state<AppError | null>(null);
-let retryCountdown = $state<number>(0);
-
-let countdownTimer: ReturnType<typeof setInterval> | null = null;
+function formatRetryAfter(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
 export function setError(error: AppError): void {
-  currentError = error;
-  if (error.retryAfter && error.retryAfter > 0) {
-    retryCountdown = error.retryAfter;
-    if (countdownTimer) clearInterval(countdownTimer);
-    countdownTimer = setInterval(() => {
-      retryCountdown = Math.max(0, retryCountdown - 1);
-      if (retryCountdown === 0) {
-        if (countdownTimer) {
-          clearInterval(countdownTimer);
-          countdownTimer = null;
+  const details = [
+    error.code ? `Code: ${error.code}` : null,
+    error.retryAfter && error.retryAfter > 0
+      ? `Retrying in ${formatRetryAfter(error.retryAfter)}`
+      : null,
+  ].filter((detail): detail is string => detail !== null);
+
+  toast.error(
+    error.message,
+    details.length > 0
+      ? {
+          description: details.join(" · "),
+          duration: 6000,
         }
-      }
-    }, 1000);
-  }
-}
-
-export function clearError(): void {
-  currentError = null;
-  retryCountdown = 0;
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
-  }
-}
-
-export function getError(): AppError | null {
-  return currentError;
-}
-
-export function getCountdown(): number {
-  return retryCountdown;
+      : { duration: 6000 },
+  );
 }

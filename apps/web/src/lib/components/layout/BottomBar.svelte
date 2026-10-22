@@ -1,5 +1,5 @@
 <script lang="ts">
-import RefreshCw from "phosphor-svelte/lib/ArrowsClockwise";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import {
   Context,
   ContextCacheCreationUsage,
@@ -13,9 +13,13 @@ import {
 } from "$lib/components/ai/context";
 import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { getLastSyncAt, getSyncError, getThreadsSyncing } from "$lib/stores/sync.svelte";
+import {
+  getLastSyncAt,
+  getSyncError,
+  getThreadsSyncing,
+  requestFullSync,
+} from "$lib/stores/sync.svelte";
 import { getTokenUsage } from "$lib/stores/walkthrough.svelte";
-import { requestFullSync } from "$lib/stores/ws.svelte";
 import AgentSelector from "./AgentSelector.svelte";
 import CommitsDropdown from "./CommitsDropdown.svelte";
 import ModelSelector from "./ModelSelector.svelte";
@@ -28,14 +32,12 @@ const syncing = $derived(getThreadsSyncing(selectedPrId));
 const syncError = $derived(getSyncError(selectedPrId));
 
 const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
-const totalTokens = $derived(
-  usage.inputTokens +
-    usage.outputTokens +
-    usage.cacheReadInputTokens +
-    usage.cacheCreationInputTokens,
-);
-const contextWindow = $derived(getSettings()?.aiContextWindow ?? "200k");
-const maxContext = $derived(contextWindow === "1m" ? 1_000_000 : 200_000);
+const usedTokens = $derived(usage.contextTokens);
+// `contextWindowTokens` is reported by the Claude Agent SDK only; codex and
+// opencode runs leave it unset. Revv always runs at the full window, so the
+// fallback is a constant rather than a setting.
+const FALLBACK_CONTEXT_WINDOW = 1_000_000;
+const maxContext = $derived(usage.contextWindowTokens ?? FALLBACK_CONTEXT_WINDOW);
 const showUsage = $derived(selectedPrId !== null);
 
 let tick = $state(0);
@@ -81,7 +83,7 @@ function handleRetrySync() {
 	<!-- Right: usage indicator + sync + branch/sha -->
 	<div class="bottombar-right">
 		{#if showUsage}
-			<Context usedTokens={totalTokens} maxTokens={maxContext} {usage}>
+			<Context {usedTokens} maxTokens={maxContext} {usage}>
 				<ContextTrigger />
 				<ContextContent>
 					<ContextContentHeader />
@@ -103,16 +105,16 @@ function handleRetrySync() {
 				title="Sync comments for this PR"
 			>
 				{#if syncing}
-					<span class="flex items-center motion-essential-spin"><RefreshCw size={11} weight="fill" /></span>
+					<span class="flex items-center motion-essential-spin"><ArrowsClockwise size={11} /></span>
 					<span class="whitespace-nowrap">Syncing…</span>
 				{:else if syncError}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap text-danger">Sync failed</span>
 				{:else if lastSyncAt}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap">Synced {syncLabel}</span>
 				{:else}
-					<RefreshCw size={11} weight="fill" />
+					<ArrowsClockwise size={11} />
 					<span class="whitespace-nowrap">Sync now</span>
 				{/if}
 			</button>

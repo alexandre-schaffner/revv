@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Revv Artifact Host</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const parentWindow = window.parent;
+
+        // The CSP that governs this host (declared once in the <meta> above and
+        // also served as an HTTP header in the Tauri build). We re-inject it
+        // into the document we write below so the policy survives document.write
+        // in every environment — including dev, where the page is served by
+        // Vite with no CSP header and the original <meta> is discarded by the
+        // rewrite. Single-sourced: read from our own meta, never hard-coded.
+        const HOST_CSP = (() => {
+          const meta = document.querySelector(
+            'meta[http-equiv="Content-Security-Policy"]',
+          );
+          return meta ? meta.getAttribute("content") : null;
+        })();
+
+        function post(message) {
+          parentWindow.postMessage(message, "*");
+        }
+
+        function escapeForScript(value) {
+          return JSON.stringify(value)
+            .replace(/</g, "\\u003c")
+            .replace(/>/g, "\\u003e")
+            .replace(/&/g, "\\u0026")
+            .replace(/\u2028/g, "\\u2028")
+            .replace(/\u2029/g, "\\u2029");
+        }
+
+        function bridgeScript(theme, tokens, maxHeight) {
+          const payload = escapeForScript({ theme, tokens });
+          // A number literal, or the identifier `Infinity` (JSON has no spelling for it).
+          const maxHeightLiteral = Number.isFinite(maxHeight) ? String(maxHeight) : "Infinity";
+          return `<script>
+(() => {
+  const parentWindow = window.parent;
+  let current = ${payload};
+  const maxFrameHeight = ${maxHeightLiteral};
+
+  function post(message) {
+    parentWindow.postMessage(message, "*");
+  }
+
+  function applyTheme(payload) {
+    current = payload;
+    document.documentElement.dataset.theme = payload.theme;
+    document.documentElement.style.colorScheme = payload.theme;
+    for (const [name, value] of Object.entries(payload.tokens || {})) {
+      document.documentElement.style.setProperty(name, value);
+    }
+  }
+
+  // Measure the BODY, never documentElement: <html>.scrollHeight is floored at
+  // the viewport, i.e. at the iframe height the parent already gave us. Folding
+  // it into the max makes the handshake a one-way ratchet — once the frame is
+  // taller than the content (a transient narrow layout that wrapped the
+  // controls onto two lines is enough), every later report just echoes the
+  // inflated height back, and the artifact keeps a band of empty space under
+  // its last row forever. body is auto-height, so it measures the content.
+  function reportSize() {
+    const body = document.body;
+    if (!body) return;
+    // Absolutely-positioned children don't grow body, so walk the top-level
+    // boxes too and take the lowest edge (page coordinates, plus body's own
+    // bottom padding) before falling back to body's box.
+    let bottom = 0;
+    for (const child of body.children) {
+      const rect = child.getBoundingClientRect();
+      if (rect.bottom > bottom) bottom = rect.bottom;
+    }
+    const padBottom = parseFloat(getComputedStyle(body).paddingBottom) || 0;
+    const height = Math.max(
+      body.scrollHeight,
+      body.offsetHeight,
+      bottom > 0 ? bottom + window.scrollY + padBottom : 0
+    );
+    // The parent sizes the frame to this height, so below its cap the frame
+    // must never scroll. A legacy (non-overlay) scrollbar narrows the layout;
+    // if that wraps a row, the content outgrows the frame and keeps the bar
+    // up. One artifact measured 229 in a 197px frame (bar shown) and 197 in a
+    // 229px one (no bar), so the frame flipped every frame and jolted the
+    // whole walkthrough below it. Above the cap the artifact scrolls inside
+    // the capped frame, as before.
+    document.documentElement.style.overflowY = height > maxFrameHeight ? "auto" : "hidden";
+    post({ kind: "resize", height: Math.ceil(height) });
+  }
+
+  window.addEventListener("message", (event) => {
+    // Only the host frame that wrote us may drive theme changes; ignore any
+    // other window that holds a handle to this opaque-origin frame.
+    if (event.source !== parentWindow) return;
+    const data = event.data;
+    if (!data || typeof data !== "object" || data.kind !== "theme") return;
+    if (data.theme !== "light" && data.theme !== "dark") return;
+    if (!data.tokens || typeof data.tokens !== "object") return;
+    applyTheme({ theme: data.theme, tokens: data.tokens });
+    requestAnimationFrame(reportSize);
+  });
+
+  window.addEventListener("error", (event) => {
+    post({ kind: "error", message: event.message || "Artifact script error." });
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    const message = reason instanceof Error ? reason.message : String(reason || "Artifact promise rejection.");
+    post({ kind: "error", message });
+  });
+
+  applyTheme(current);
+  const observer = new ResizeObserver(reportSize);
+  observer.observe(document.documentElement);
+  if (document.body) observer.observe(document.body);
+  requestAnimationFrame(() => {
+    reportSize();
+    post({ kind: "mounted" });
+  });
+})();
+${"<"}/script>`;
+        }
+
+        // The on-brand, theme-aware baseline. Every rule references an injected
+        // CSS variable (the bridge applies them via setProperty on <html> and
+        // re-applies on theme toggle), so a do-nothing artifact is already
+        // styled in Revv's type/colors and flips light↔dark for free instead of
+        // inheriting the UA defaults (Times New Roman, black-on-transparent).
+        // Injected at the top of <head> at lowest specificity, so any artifact
+        // <style> overrides it.
+        function baseStyle() {
+          return `<style>
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; accent-color: var(--color-accent); }
+body {
+  margin: 0;
+  /* The host frame is full-bleed inside its card, so the inset lives here.
+     Without it every artifact renders jammed against the card border. */
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  /* An artifact is a compact instrument panel sitting beside 16px prose — it
+     must read visibly smaller than the walkthrough text around it. */
+  font-size: 13px;
+  line-height: 1.5;
+}
+code, pre, kbd, samp { font-family: var(--font-mono); font-size: 0.92em; }
+/* Form controls do NOT inherit type: left alone they render in the platform UI
+   font at the platform size, which is the fastest way for an artifact to look
+   foreign. Give them the app's type and quiet chrome by default; an artifact's
+   own <style> still wins (same specificity, injected later). */
+button, select, input, textarea { font: inherit; }
+button, select {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-island);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+button:disabled { color: var(--color-text-muted); cursor: default; }
+a { color: var(--color-accent); }
+a:hover { color: var(--color-accent-hover); }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+img, svg, canvas { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+${"<"}/style>`;
+        }
+
+        function injectHead(html) {
+          const meta = HOST_CSP
+            ? `<meta http-equiv="Content-Security-Policy" content="${HOST_CSP.replace(/"/g, "&quot;")}">`
+            : "";
+          // The CSP meta must sit at the top of <head>, before any content it
+          // governs; the baseline follows it at lowest specificity. Insert after
+          // <head>, synthesizing one if the document has none, so a
+          // self-contained artifact is covered either way.
+          const head = `${meta}${baseStyle()}`;
+          if (/<head[^>]*>/i.test(html)) {
+            return html.replace(/<head[^>]*>/i, (match) => `${match}${head}`);
+          }
+          if (/<html[^>]*>/i.test(html)) {
+            return html.replace(/<html[^>]*>/i, (match) => `${match}<head>${head}</head>`);
+          }
+          return `<head>${head}</head>${html}`;
+        }
+
+        function injectArtifact(html, theme, tokens, maxHeight) {
+          const bridge = bridgeScript(theme, tokens, maxHeight);
+          const withBridge = /<\/body\s*>/i.test(html)
+            ? html.replace(/<\/body\s*>/i, `${bridge}</body>`)
+            : `${html}${bridge}`;
+          document.open();
+          document.write(injectHead(withBridge));
+          document.close();
+        }
+
+        window.addEventListener("message", (event) => {
+          // Only accept the mount handshake from the parent that embedded us;
+          // a sibling frame holding our contentWindow must not win the race and
+          // inject arbitrary markup ahead of the legitimate mount.
+          if (event.source !== parentWindow) return;
+          const data = event.data;
+          if (!data || typeof data !== "object" || data.kind !== "mount") return;
+          if (typeof data.html !== "string") return;
+          if (data.theme !== "light" && data.theme !== "dark") return;
+          if (!data.tokens || typeof data.tokens !== "object") return;
+          const maxHeight =
+            typeof data.maxHeight === "number" && data.maxHeight > 0 ? data.maxHeight : Infinity;
+          injectArtifact(data.html, data.theme, data.tokens, maxHeight);
+        });
+
+        post({ kind: "ready" });
+      })();
+    </script>
+  </body>
+</html>

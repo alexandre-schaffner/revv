@@ -10,13 +10,21 @@ export const userSettings = sqliteTable("user_settings", {
   aiModel: text("ai_model").notNull(),
   aiThinkingEffort: text("ai_thinking_effort").notNull(),
   aiAgent: text("ai_agent").notNull(),
-  aiContextWindow: text("ai_context_window").notNull(),
   aiSuggestionsModel: text("ai_suggestions_model").notNull(),
   aiMaxTurns: integer("ai_max_turns").notNull(),
   theme: text("theme").notNull(),
   diffViewMode: text("diff_view_mode").notNull(),
   autoFetchInterval: integer("auto_fetch_interval").notNull(),
   githubHost: text("github_host").notNull(),
+  /**
+   * GitHub OAuth/App client ID for a user-added GitHub Enterprise host. Empty
+   * for github.com, which resolves its client ID from server config. When a
+   * user points Revv at their own GHE instance they register a GitHub App
+   * there and paste its (public) client ID here — there is no bundled
+   * registration on a customer's host. An `Iv…`-prefixed value is a GitHub App
+   * (no device-flow scope); `Ov…` is a classic OAuth App.
+   */
+  githubClientId: text("github_client_id").notNull().default(""),
   // recap sub-object flattened to individual columns
   recapEnabled: integer("recap_enabled", { mode: "boolean" }).notNull(),
   recapDailyEnabled: integer("recap_daily_enabled", { mode: "boolean" }).notNull(),
@@ -54,5 +62,16 @@ export const userSettings = sqliteTable("user_settings", {
    * the 48-hour stable cooldown.
    */
   updateChannel: text("update_channel").notNull().default("stable"),
+  // ── SSH cache signing ─────────────────────────────────────────────────────
+  /** `'off' | 'permissive' | 'strict'`. Default `'strict'` (on by default). */
+  cacheSigningMode: text("cache_signing_mode").notNull().default("strict"),
+  /** Path to the SSH private key. Empty string = auto-detect. */
+  cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
+  /** JSON-encoded `string[]` of trusted GitHub hosts. */
+  cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
+  // ── TypeSafe System One (Jev) ────────────────────────────────────────────
+  // One switch, default-off. API key lives in the keyring
+  // (`secret:jev-api-key`), not here — this row feeds the unauthenticated `GET /api/settings` DTO.
+  jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

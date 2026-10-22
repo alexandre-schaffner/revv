@@ -12,18 +12,23 @@
 // to a single context; the HTTP route in `routes/mcp/chat-context.ts`
 // drives the same TOOL_SPECS with a per-request context.
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { chapterNumbersByIndex } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
+import { repositories } from "../../db/schema/repositories";
 import { reviewSessions } from "../../db/schema/review-sessions";
 import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
+import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
+import { decodeIssue, decodeRating } from "./chat-edit-tools/helpers";
+import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -46,12 +51,7 @@ export type ChatToolHandler<TInput> = (
   args: TInput,
 ) => Promise<ChatToolResult>;
 
-export interface ChatToolSpec<TInput> {
-  readonly name: string;
-  readonly description: string;
-  readonly inputSchema: z.ZodType<TInput>;
-  readonly handler: ChatToolHandler<TInput>;
-}
+export type ChatToolSpec = ToolSpec<ChatToolContext, ChatToolResult>;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,14 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
     case "diff":
       content = str("patch");
       break;
+    case "artifact": {
+      // An artifact is a full HTML document (up to 256 KB) the chat agent
+      // can't act on; surface a compact placeholder plus the human-readable
+      // annotation instead of dumping the verbatim markup into its context.
+      const note = str("annotation").trim();
+      content = note ? `[interactive artifact: ${note}]` : "[interactive artifact]";
+      break;
+    }
     default:
       content = JSON.stringify(parsed);
   }
@@ -130,6 +138,11 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
   if (!prRow) {
     return fail(`PR not found: ${prId}`);
   }
+  const repository = db
+    .select()
+    .from(repositories)
+    .where(eq(repositories.id, prRow.repositoryId))
+    .get();
 
   // Latest completed walkthrough for this PR (ordered by generatedAt desc).
   const walkthroughRow = db
@@ -160,6 +173,21 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
         .all()
     : [];
   const blocksById = new Map(blockRows.map((b) => [b.id, b]));
+  const semanticRows = walkthroughRow
+    ? db
+        .select()
+        .from(walkthroughSemanticSteps)
+        .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughRow.id))
+        .orderBy(walkthroughSemanticSteps.semanticStepIndex)
+        .all()
+    : [];
+  const ratingRows = walkthroughRow
+    ? db
+        .select()
+        .from(walkthroughRatings)
+        .where(eq(walkthroughRatings.walkthroughId, walkthroughRow.id))
+        .all()
+    : [];
 
   // Inline review comments authored by the agent via `add_issue_comment` are
   // linked back to the issue via comment_threads.walkthroughIssueId. Fetch
@@ -224,11 +252,20 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     standaloneMsgsByThread.set(m.threadId, arr);
   }
 
+  const chapterNumbers = chapterNumbersByIndex(
+    semanticRows.map((s) => s.semanticStepIndex),
+    blockRows.map((b) => b.semanticStepIndex),
+  );
+
   // Build the structured payload. We return JSON-stringified text so the
   // agent can reason over it (and callers don't have to JSON-parse a result
   // shape outside of `content`).
   const payload = {
     pr: {
+      id: prRow.id,
+      number: prRow.externalId,
+      url: prRow.url,
+      repository: repository?.fullName ?? null,
       title: prRow.title,
       body: prRow.body,
       sourceBranch: prRow.sourceBranch,
@@ -237,11 +274,27 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     },
     walkthrough: walkthroughRow
       ? {
+          id: walkthroughRow.id,
+          reviewedHeadSha: walkthroughRow.prHeadSha,
           summary: walkthroughRow.summary,
           riskLevel: walkthroughRow.riskLevel,
           sentiment: walkthroughRow.sentiment,
           status: walkthroughRow.status,
           generatedAt: walkthroughRow.generatedAt,
+          chapters: semanticRows.map((semantic) => ({
+            semanticStepIndex: semantic.semanticStepIndex,
+            chapterNumber: chapterNumbers.get(semantic.semanticStepIndex) ?? null,
+            title: semantic.title,
+            summary: semantic.summary,
+            blocks: blockRows
+              .filter((block) => block.semanticStepIndex === semantic.semanticStepIndex)
+              .map((block) => ({
+                semanticStepIndex: block.semanticStepIndex,
+                stepIndex: block.stepIndex,
+                ...parseBlock(block),
+              })),
+          })),
+          ratings: ratingRows.map(decodeRating),
         }
       : null,
     flaggedIssues: issueRows.map((issue) => {
@@ -266,6 +319,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
             endLine: linked.endLine,
           }
         : null;
+      const decodedIssue = decodeIssue(issue);
       return {
         id: issue.id,
         severity: issue.severity,
@@ -275,8 +329,31 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
         startLine: issue.startLine,
         endLine: issue.endLine,
         submittedToGitHub: issue.submittedAt != null,
+        resolutionStatus: decodedIssue.resolutionStatus ?? "open",
+        resolutionExplanation: decodedIssue.resolutionExplanation ?? null,
+        resolutionEvidence: decodedIssue.resolutionEvidence ?? [],
+        resolvingCommitSha: decodedIssue.resolvingCommitSha ?? null,
+        resolvedAt: decodedIssue.resolvedAt ?? null,
+        resolvedBy: decodedIssue.resolvedBy ?? null,
         blocks,
-        inlineComment,
+        inlineComment: linked
+          ? {
+              threadId: linked.id,
+              status: linked.status,
+              filePath: linked.filePath,
+              startLine: linked.startLine,
+              endLine: linked.endLine,
+              body: inlineComment?.body ?? "",
+              messages: linkedMsgs.map((message) => ({
+                id: message.id,
+                role: message.authorRole,
+                author: message.authorName,
+                body: message.body,
+                createdAt: message.createdAt,
+                externalId: message.externalId,
+              })),
+            }
+          : null,
       };
     }),
     reviewerComments: standaloneThreads.map((thread) => ({
@@ -287,10 +364,12 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
       diffSide: thread.diffSide,
       status: thread.status,
       messages: (standaloneMsgsByThread.get(thread.id) ?? []).map((m) => ({
+        id: m.id,
         role: m.authorRole,
         author: m.authorName,
         body: m.body,
         createdAt: m.createdAt,
+        externalId: m.externalId,
       })),
     })),
   };
@@ -300,46 +379,23 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
 
 // ── Tool registry ───────────────────────────────────────────────────────────
 
-export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec<unknown>> = [
+export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec> = [
   {
     name: "get_review_context",
     description:
       "Fetch the structured review context for the current PR — walkthrough analysis, all flagged issues (with their associated diff steps and inline review comments), and standalone reviewer comment threads. Returns a single JSON-stringified payload. Call this at the start of a conversation when the user asks you to address issues or comments, instead of grepping the worktree for them.",
     inputSchema: getReviewContextSchema,
-    handler: getReviewContextHandler as ChatToolHandler<unknown>,
+    handler: getReviewContextHandler,
   },
   // Walkthrough-edit tools (CLAUDE.md invariant #7 chat-edit carve-out).
   // These mutate the latest completed walkthrough for the PR; they never
   // touch status / lastCompletedPhase. See `chat-edit-tools.ts` for
   // handler implementations.
-  ...(EDIT_TOOL_SPECS.map((spec) => ({
-    name: spec.name,
-    description: spec.description,
-    inputSchema: spec.inputSchema,
-    handler: spec.handler,
-  })) as unknown as ChatToolSpec<unknown>[]),
+  ...EDIT_TOOL_SPECS,
 ];
 
-// ── Claude Agent SDK adapter ────────────────────────────────────────────────
-
-/**
- * Create an in-process MCP server registration for the Claude Agent SDK,
- * scoped to a single PR. Mirrors `createWalkthroughMcpServer` but with the
- * read-only tool surface above.
- */
-export function createChatMcpServer(ctx: ChatToolContext): ReturnType<typeof createSdkMcpServer> {
-  return createSdkMcpServer({
-    name: "revv-chat-context",
-    version: "1.0.0",
-    tools: CHAT_TOOL_SPECS.map((spec) =>
-      tool(
-        spec.name,
-        spec.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (spec.inputSchema as any).shape ?? {},
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (args: any) => spec.handler(ctx, args),
-      ),
-    ),
-  });
-}
+export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatToolContext, ChatToolResult> = {
+  name: "revv-chat-context",
+  version: "1.0.0",
+  specs: CHAT_TOOL_SPECS,
+};

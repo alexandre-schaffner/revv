@@ -4,8 +4,9 @@ import { Context, Effect, Layer } from "effect";
 import { githubIssues, repositories } from "../db/schema/index";
 import { type GitHubError, NotFoundError, ValidationError } from "../domain/errors";
 import { DbService } from "./Db";
-import { GitHubService } from "./GitHub";
-import { SettingsService } from "./Settings";
+import { GitHubGateway } from "./GitHub";
+import { apiBaseForHost } from "./github-rest";
+import type { SettingsService } from "./Settings";
 
 /** Maximum rows returned to the homepage. Component renders 10 + a "N more" footer. */
 const HOMEPAGE_PAGE_SIZE = 30;
@@ -19,7 +20,7 @@ function sortForHomepage(a: Issue, b: Issue): number {
   return b.updatedAt.localeCompare(a.updatedAt);
 }
 
-export class IssuesService extends Context.Tag("IssuesService")<
+export class IssuesService extends Context.Service<
   IssuesService,
   {
     /**
@@ -40,16 +41,16 @@ export class IssuesService extends Context.Tag("IssuesService")<
     ) => Effect.Effect<
       ReadonlyArray<Issue>,
       GitHubError | NotFoundError | ValidationError,
-      DbService | GitHubService | SettingsService
+      DbService | GitHubGateway | SettingsService
     >;
   }
->() {}
+>()("IssuesService") {}
 
 export const IssuesServiceLive = Layer.succeed(IssuesService, {
   listForRepo: (repoId, viewerLogin, accountId, accessToken) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const github = yield* GitHubService;
+      const github = yield* GitHubGateway;
 
       // Resolve the repo + account-scoped ownership check before hitting GH.
       const repo = yield* Effect.try({
@@ -60,7 +61,12 @@ export const IssuesServiceLive = Layer.succeed(IssuesService, {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id: repoId }));
       }
 
-      const fetched = yield* github.listOpenIssues(repo.fullName, repo.id, accessToken);
+      const fetched = yield* github.repos.listOpenIssues(
+        repo.fullName,
+        repo.id,
+        accessToken,
+        apiBaseForHost(repo.githubHost),
+      );
 
       // Upsert into the local table. Best-effort — a failed upsert doesn't
       // block the response; the next call refreshes anyway. Wrapped in

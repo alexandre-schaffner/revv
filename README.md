@@ -1,359 +1,200 @@
-# Revv — AI-Powered Code Review
+<p align="center">
+  <img src="docs/assets/revv.png" width="96" height="96" alt="Revv app icon" />
+</p>
 
-An AI-assisted code review desktop application. Revv syncs your GitHub pull requests and enables deep, conversational code review from your desktop — including AI-generated walkthroughs, a persistent chat agent, and proposed-commit workflows.
+<h1 align="center">Revv</h1>
 
-## Features
+<p align="center">
+  <strong>Know what you're merging.</strong><br />
+  AI code review for your desktop. Understand the change, challenge the agent, ship the fix.
+</p>
 
-- **Synced GitHub PRs** — Automatic fetch and polling across repos, with real-time WebSocket updates
-- **AI Guided Walkthrough** — 4-phase MCP pipeline (Overview → Diff Analysis → Sentiment → 9-axis Rating) with chat-edit mutations post-completion
-- **Chat Agent** — Always-on right-panel agent with plan mode, tool-use streaming, task queue, and pending questions
-- **Chat-Driven Changes** — Proposed-commit strip with cherry-pick / discard / push (`--force-with-lease`) and AI merge-conflict resolution
-- **Comment Threads** — Persisted review threads with bidirectional GitHub sync, hunk decisions, and code-suggestion application
-- **Command Palette** — `Cmd+P` PR search, `Cmd+Shift+P` command mode with fuzzy scoring
-- **Multi-Account Auth** — GitHub Device Code flow; GHE-default with public `github.com` opt-in; multi-account management
-- **Themes** — Light / dark / system with an independent diff theme preference
+<p align="center">
+  <a href="https://github.com/alexandre-schaffner/revv/actions/workflows/ci.yml"><img src="https://github.com/alexandre-schaffner/revv/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/alexandre-schaffner/revv/releases"><img src="https://img.shields.io/badge/macOS-Alpha-0b7375?style=flat-square" alt="macOS alpha" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-6d28d9?style=flat-square" alt="MIT license" /></a>
+</p>
 
-## Stack
+<p align="center">
+  <a href="#install"><strong>Install Revv</strong></a> ·
+  <a href="#the-review-workflow">Explore the features</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="https://github.com/alexandre-schaffner/revv/issues">Report a bug</a>
+</p>
 
-- **Frontend** — Svelte 5 (SvelteKit) + Tailwind CSS v4 + shadcn-svelte
-- **Backend** — Bun + TypeScript + Elysia + Effect
-- **Database** — SQLite with Drizzle ORM (schema applied directly, no migration runner)
-- **Desktop** — Tauri v2 (Rust)
-- **Monorepo** — Turborepo
-- **AI** — Claude Agent SDK (in-process) + opencode (HTTP MCP, subprocess); MCP tool handlers shared in-process
+![Revv reviewing its own pull request: guided walkthrough, risk assessment, flagged issues, and an agent-proposed fix ready to push](docs/assets/screenshots/review.png)
 
-## Installation
+<p align="center"><sub>A real review of Revv itself. The agent found an issue, wrote a fix, added a regression test, and proposed a commit.</sub></p>
 
-### macOS
+Revv brings your GitHub pull requests, AI walkthroughs, diffs, and review conversations into one desktop app. Start with the reasoning behind a change, inspect the code, then ask your agent to explain it or fix it. Review the proposed commits and push them back to GitHub when you're ready.
 
-**Recommended — one-command installer:**
+**Bring your agent:** Claude Code, Codex, OpenCode, or Cursor. Choose the agent, model, and supported thinking effort in the app.
+
+## Install
+
+Available for **macOS**, currently in **alpha**.
 
 ```bash
 curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 ```
 
-The installer:
+The installer sets up the desktop app, local background server, and `revv` CLI. The release installer verifies its Sigstore attestation before continuing.
 
-1. Verifies its own Sigstore attestation (requires `gh` CLI or auto-bootstraps `cosign`)
-2. Downloads the pre-built `Revv.app` DMG for your architecture
-3. Verifies the bundle SHA256 checksum
-4. Installs `Revv.app` to `/Applications`
-
-**Requires macOS 10.15 (Catalina) or later.**
-
-> **Note:** macOS Gatekeeper will show an "unidentified developer" warning until Apple
-> Developer ID code-signing is complete. To open: right-click `Revv.app` → **Open**, then
-> click **Open** in the dialog. This is a known limitation — Authenticode/notarization is
-> tracked as a follow-up.
-
-#### Verifying the installer
-
-Before piping to bash, you can verify the release installer's Sigstore attestation manually:
+<details>
+<summary>Download and inspect the installer first</summary>
 
 ```bash
 curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh -o install.sh
+less install.sh
 gh attestation verify install.sh --repo alexandre-schaffner/revv
 bash install.sh
 ```
 
-To pin to a specific release tag:
+</details>
 
-```bash
-curl -fsSL https://github.com/alexandre-schaffner/revv/releases/download/v0.1.0/install.sh | bash
-```
+1. **Connect GitHub.** Sign in with the device code shown by Revv.
+2. **Pick your repositories.** Your pull requests start syncing into the app.
+3. **Set up your agent.** Onboarding walks you through provider installation and sign-in.
+4. **Open a PR.** Press <kbd>⌘</kbd> + <kbd>P</kbd>, find the change, and start reviewing.
 
-#### Customizing the installer
+## The review workflow
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt |
-| `REVV_APP_DIR` | `/Applications` | Falls back to `~/Applications` if not writable |
+### Understand the whole change
 
-#### Managing the install
+Every walkthrough gives you a plain-language **overview**, a **risk assessment**, a guided **diff analysis**, an **overall verdict**, and judgments across **nine review axes**. Flagged issues link back to the relevant walkthrough steps so you can follow the evidence.
 
-```bash
-revv status      # show install paths, versions, server state, update availability
-revv update      # git pull + rebuild + reinstall + reload service
-revv restart     # restart the background API server
-revv logs        # tail ~/Library/Logs/Revv/server.{out,err}.log
-revv open        # launch Revv.app
-revv uninstall   # remove app, source, LaunchAgent, and the CLI itself
-```
+Walkthroughs track the PR's commit: new commits get a new review, and interrupted generation can resume from saved progress.
 
----
+<details>
+<summary>See the nine-axis review</summary>
 
-### Windows
+![Revv's nine-axis review: correctness, scope, test coverage, clarity, safety, consistency, API changes, performance, and description, with seven passes and two concerns](docs/assets/screenshots/ratings.png)
 
-**Recommended — one-command installer:**
+</details>
 
-```powershell
-irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex
-```
+### Turn feedback into a fix
 
-The installer:
+The chat agent works inside the PR's own git worktree. Ask about the code, explore a plan, or request a fix with tests. Tool calls and responses stream into the panel as it works.
 
-1. Verifies its own Sigstore attestation (requires `gh` CLI)
-2. Downloads the pre-built Revv MSI
-3. Verifies the bundle SHA256 checksum
-4. Runs `msiexec` to install
+Changes arrive as **proposed commits**. Inspect them, cherry-pick the ones you want, discard others, and push from Revv. The agent can also help resolve merge conflicts.
 
-> **Note:** Windows SmartScreen may warn about the installer until Authenticode signing is
-> complete. This is a known limitation — code-signing is tracked as a follow-up.
+> “Fix the warning. Add a regression test, run it, and commit.”
 
-#### Verifying the installer
+### Get down to the lines
 
-```powershell
-Invoke-WebRequest -Uri https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 -OutFile install.ps1
-gh attestation verify install.ps1 --repo alexandre-schaffner/revv
-.\install.ps1
-```
+Switch between **unified and split diffs**, navigate the file tree, and review syntax-highlighted changes with virtualized scrolling for large PRs. Persisted hunk decisions keep your place; inline threads and code suggestions keep the discussion beside the code.
 
-**Alternative — download the MSI or NSIS installer from [Releases](https://github.com/alexandre-schaffner/revv/releases)** and run it directly.
+Review comments sync with GitHub in both directions. Your work stays attached to the pull request.
 
-#### Customizing the installer
+<details>
+<summary>See the diff view and first-pass leads</summary>
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `REVV_AUTO_YES` | `0` | `1` skips every confirm prompt |
+![Revv's unified diff with syntax highlighting, line numbers, and a first-pass lead marking a potential silent failure](docs/assets/screenshots/diff.png)
 
-#### Managing the install
+</details>
 
-```powershell
-revv status      # show install paths, versions, server state, update availability
-revv update      # git pull + rebuild + reinstall + reload service
-revv restart     # restart the background API server
-revv logs        # tail server logs
-revv open        # launch Revv.exe
-revv uninstall   # remove app, source, scheduled task, and the CLI itself
-```
+### Bring the review to your coding agent
 
----
+Connect **Claude Code, Codex, OpenCode, or Cursor** from **Settings → Integrations**. Through MCP, your external agent can read the current PR's walkthrough, issues, and comment threads, record verified fixes, and respond to review conversations.
 
-### Linux
+After pushing a fix, it can request a fresh walkthrough and wait for the results. One agent fixes the code; Revv reviews the next commit.
 
-Download the **AppImage** or **`.deb`** package from
-[Releases](https://github.com/alexandre-schaffner/revv/releases).
+<details>
+<summary>See the coding-agent integrations</summary>
 
-**AppImage (any distro):**
+![Revv's Integrations settings with connections for Claude Code, Codex, OpenCode, and Cursor](docs/assets/screenshots/integrations.png)
 
-```bash
-chmod +x Revv_*.AppImage
-./Revv_*.AppImage
-```
+</details>
 
-**Debian / Ubuntu:**
+### Catch up on what shipped
 
-```bash
-sudo dpkg -i revv_*.deb
-# Or install required libs first if dpkg reports missing deps:
-sudo apt-get install -f
-```
+**Daily and weekly recaps** turn repository activity into a readable account of what changed, who contributed, and what's still in flight. Browse the archive when you need to catch up on an earlier period.
 
-The `.deb` depends on `libwebkit2gtk-4.1-0` and `libgtk-3-0`. On Ubuntu 22.04+ these are
-available in the default repos. Older distros may need a PPA.
+![Revv's weekly recap, grouping shipped and in-progress work by theme and contributor](docs/assets/screenshots/recap.png)
 
-As on Windows, the API server is not registered as a system service by the package.
-Start it manually:
+### Built for the daily review queue
 
-```bash
-bun run /path/to/revv/apps/server/src/index.ts
-```
+| Feature | What you get |
+| --- | --- |
+| GitHub sync | Automatically refreshed PRs across your selected repositories. |
+| Multiple accounts | Personal, work, and GitHub Enterprise accounts in one app. |
+| Fast navigation | Fuzzy PR search with <kbd>⌘</kbd> + <kbd>P</kbd>; commands with <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>P</kbd>. |
+| Your reading setup | Light, dark, or system appearance, plus an independent diff theme. |
+| Local persistence | Review sessions, conversations, and generation progress saved in SQLite on your machine. |
+| Team cache | Reuse teammates' generated walkthroughs through a configured shared cache. |
 
-To set it up as a systemd user service, create
-`~/.config/systemd/user/revv-server.service` pointing at the same command,
-then `systemctl --user enable --now revv-server`.
+The app and its database run locally. GitHub sync talks to your GitHub host, and AI requests use your configured agent and provider.
 
-To build from source on Linux, see [Develop from a clone](#develop-from-a-clone) below.
+## Build from source
 
----
-
-## Develop from a clone
-
-### Prerequisites
-
-All platforms need **Bun 1.3+** and **Rust** (via [rustup](https://rustup.rs)).
-
-**macOS** — also needs Xcode Command Line Tools:
-
-```bash
-xcode-select --install
-```
-
-**Linux (Ubuntu/Debian)** — also needs Tauri system libraries:
-
-```bash
-sudo apt-get update && sudo apt-get install -y \
-  build-essential curl file \
-  libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-  librsvg2-dev patchelf libayatana-appindicator3-dev
-```
-
-**Windows** — also needs the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (included in Windows 11; install the Evergreen bootstrapper on Windows 10).
-
-From a checkout, the quickest way to set up the full toolchain is:
-
-```powershell
-.\install.ps1 -Dev    # toolchain + deps only
-```
-
-Without a checkout yet (installs toolchain via a temp clone):
-
-```powershell
-irm https://github.com/alexandre-schaffner/revv/releases/latest/download/install.ps1 | iex -Args '-Dev'
-```
-
-### Setup
+You'll need **macOS**, **Bun 1.3+**, **Rust**, and the **Xcode Command Line Tools**. The development installer can help set up the toolchain:
 
 ```bash
 git clone https://github.com/alexandre-schaffner/revv.git
 cd revv
-bun install
-cp .env.example .env   # fill in GITHUB_CLIENT_ID and BETTER_AUTH_SECRET
+./install.sh --dev
+make dev
 ```
 
-### Development
+Already have the toolchain? Run `bun install` followed by `make dev`. No `.env` setup is required for the default flow: the GitHub OAuth app is bundled, and the local auth secret is generated on first launch.
 
-**macOS / Linux:**
+`make dev` uses a separate development database and API port (`45679`), alongside the frontend at `5173`, so it can run beside an installed Revv instance.
+
+<details>
+<summary>Architecture and contributor commands</summary>
+
+| Layer | Stack | Location |
+| --- | --- | --- |
+| Desktop | Tauri v2 / Rust | [`apps/desktop`](apps/desktop) |
+| Interface | SvelteKit / Svelte 5 / Tailwind CSS v4 | [`apps/web`](apps/web) |
+| Local API | Bun / Elysia / Effect | [`apps/server`](apps/server) |
+| Persistence | SQLite / Drizzle | [`apps/server/src/db`](apps/server/src/db) |
+| Shared contracts | TypeScript / SSE event schemas | [`packages/shared`](packages/shared) |
 
 ```bash
-make dev             # all 3 services (web @ 5173, server @ 45678, Tauri desktop)
-make dev-web         # SvelteKit only
-make dev-server      # Elysia API only
+make dev-server       # API only, using the isolated dev environment
+make build            # build workspace packages
+make dist             # build the macOS app bundle
+
+# Full local CI, required before submitting code changes
+bun run typecheck && bun run lint && bun run knip && bun run build
 ```
 
-**Windows (PowerShell):**
+Read the [agent and contributor guide](AGENTS.md), [code conventions](docs/conventions.md), and [product roadmap](docs/prds/README.md) before making changes. Open pull requests against `main`.
 
-```powershell
-bun run dev          # all 3 services
-bun run dev:web      # frontend only
-bun run dev:server   # API only
-```
+</details>
 
-### Quality & Build
-
-**macOS / Linux:**
+## Manage your install
 
 ```bash
-make typecheck       # tsc across all packages
-make lint            # linters across all packages
-make build           # build all packages
-make dist            # build platform installer (dmg/msi/deb)
-make clean           # remove build artifacts
-make reset-db        # delete SQLite database
+revv status      # versions, install paths, and server state
+revv update      # update to the latest release
+revv restart     # restart the background server
+revv logs        # tail server logs
+revv open        # launch the app
+revv uninstall   # remove the install
 ```
 
-**Windows (PowerShell):**
+<details>
+<summary>Troubleshooting sign-in</summary>
 
-```powershell
-bun run typecheck    # tsc across all packages
-bun run lint         # linters across all packages
-bun run build        # build all packages
-bun run dist         # build Tauri desktop bundle
-bun run clean        # remove build artifacts
-```
-
-## Project Structure
-
-```
-revv/
-├── apps/
-│   ├── web/            # SvelteKit frontend (served by Tauri, localhost:5173 in dev)
-│   ├── server/         # Elysia HTTP + WebSocket API (port 45678)
-│   └── desktop/        # Tauri v2 shell
-├── packages/
-│   └── shared/         # Shared types & constants (@revv/shared)
-└── docs/prds/          # Product roadmap PRDs
-```
-
-## Architecture
-
-### Authentication
-
-GitHub **Device Code** OAuth flow. The server calls `POST https://github.com/login/device/code`, returns a `user_code` + `verification_uri` to the desktop client, and polls GitHub until the user approves. On success the server mints a 30-day session token passed to the API as `Authorization: Bearer`. Multi-account management is supported.
-
-### Effect System
-
-All backend services use Effect for dependency injection (`Context.Tag`, `Layer`), structured error handling, and composable async workflows. Don't bypass Effect when modifying services.
-
-### Agent Subsystem
-
-AI pipelines (walkthrough generation, chat agent) follow strict invariants documented in [`CLAUDE.md`](CLAUDE.md#agent-subsystem-invariants):
-
-- SQLite is the authoritative state store — survives `kill -9`
-- Agent content writes go through MCP only; orchestrator lifecycle writes stay in Elysia
-- Each MCP tool call is one atomic idempotent upsert on a deterministic key
-- Generation is a strict 4-phase pipeline (A → B → C → D); phases complete in order
-
-Both Claude Agent SDK (in-process) and opencode (HTTP MCP, subprocess) paths share in-process MCP tool handlers and must exhibit identical externally-observable behavior.
-
-### Real-Time Updates
-
-WebSocket hub broadcasts `prs:updated`, `repos:updated`, `walkthrough:updated`, `walkthrough:edited`, etc. Clients authenticate via `?token=` query param. Shape is `{ type, data? }` with `namespace:action` type strings — source of truth in `packages/shared/src/ws.ts`.
-
-### Database
-
-SQLite via Drizzle ORM. Schema in `apps/server/src/db/schema.ts` — applied directly on startup, no migration runner. To reset: `make reset-db`.
-
-## TypeScript
-
-All packages extend `tsconfig.base.json` with `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`. Don't suppress errors with `as` casts unless unavoidable.
-
-## API
-
-Key endpoints (all data routes require `Authorization: Bearer <token>`):
-
-**Auth (device-code flow)**
-- `POST /api/auth/device/init` — Start device flow; returns `device_code`, `user_code`, `verification_uri`
-- `POST /api/auth/device/poll` — Exchange an approved `device_code` for a session token
-
-**Data**
-- `GET /api/prs` — List pull requests
-- `GET /api/repos` — List repositories
-- `POST /api/reviews` — Create or update review session
-- `GET /api/reviews/:id` — Fetch review
-
-WebSocket at `ws://localhost:45678` authenticates via `?token=<session-token>`.
-
-## Troubleshooting
-
-### `Failed to start sign-in: TypeError: Load failed`
-
-The desktop app can't reach the local API server.
+**“Failed to start sign-in: Load failed”** usually means the app cannot reach its local server:
 
 ```bash
-curl http://localhost:45678/       # 404 on / is fine — any response means running
-launchctl list | grep revv         # PID in column 1 means running; - means crashed
-revv logs                          # tail ~/Library/Logs/Revv/server.{out,err}.log
+revv status
+revv restart
+revv logs
 ```
 
-### `Failed to start sign-in: Error: Failed to initiate sign-in`
+**Using a custom GitHub OAuth app?** Enable **Device Flow** in that app's GitHub settings. The default bundled app already handles this setup.
 
-Server is reachable but GitHub returned an error. Common causes:
+For other problems, [open an issue](https://github.com/alexandre-schaffner/revv/issues) with your Revv version and relevant logs.
 
-- **Device Flow not enabled** — go to `github.com/settings/developers` → your app → enable Device Flow → Update application
-- **Invalid `client_id`** — typo or non-existent OAuth App
+</details>
 
-## Roadmap
+---
 
-See [`docs/prds/`](docs/prds/) for the full product roadmap.
-
-| PRD | Title | Status |
-|-----|-------|--------|
-| 01 | Comment Persistence & Review Sessions | Shipped (~95%) |
-| 02 | Chat Agent | Shipped core · polish partial |
-| 03 | AI Guided Walkthrough | Shipped (~95%) |
-| 04 | GitHub Sync & Conversations | Backend shipped · frontend ~50% |
-| 05 | Chat-Driven Changes | Shipped core · polish partial |
-| 06 | Polish, Performance & Ship | Partial (~50%) |
-
-## Contributing
-
-1. Create a feature branch
-2. Make changes and test with `make dev`
-3. Run `make typecheck` and `make lint` before committing
-4. Open a pull request against `main`
-
-## License
-
-MIT
+<p align="center">
+  Built for people who read the diff.<br />
+  <a href="LICENSE">MIT licensed</a> · <a href="https://github.com/alexandre-schaffner/revv/releases">Releases</a> · <a href="https://github.com/alexandre-schaffner/revv/issues">Issues</a>
+</p>

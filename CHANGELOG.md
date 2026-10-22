@@ -1,0 +1,878 @@
+# Changelog
+
+## [0.31.0](https://github.com/alexandre-schaffner/revv/compare/v0.30.0...v0.31.0) (2026-10-13)
+
+
+### Features
+
+* add GitHub Conversation tab and streamline PR review ([#249](https://github.com/alexandre-schaffner/revv/issues/249)) ([60e3c12](https://github.com/alexandre-schaffner/revv/commit/60e3c127670fc6704e5f1ccde9abc7d3eac7a434))
+
+## [0.30.0](https://github.com/alexandre-schaffner/revv/compare/v0.29.0...v0.30.0) (2026-10-09)
+
+
+### Features
+
+* **server:** let external coding agents request and await a walkthrough ([#246](https://github.com/alexandre-schaffner/revv/issues/246)) ([af4bd2b](https://github.com/alexandre-schaffner/revv/commit/af4bd2b550c3165f595c0f32f2c171420aba7115))
+* user-picked walkthrough perspective + walkthrough history in the commits menu ([#245](https://github.com/alexandre-schaffner/revv/issues/245)) ([b4d7861](https://github.com/alexandre-schaffner/revv/commit/b4d7861a8755cd9bd1a077c8718c6e5d839b452b))
+
+## [0.29.0](https://github.com/alexandre-schaffner/revv/compare/v0.28.0...v0.29.0) (2026-10-06)
+
+
+### Features
+
+* Jev first pass (per-hunk smell leads) + poll split, model efforts, deps ([#243](https://github.com/alexandre-schaffner/revv/issues/243)) ([717d3c7](https://github.com/alexandre-schaffner/revv/commit/717d3c7e990140af8b82fec2d49874a48acd0ea5))
+
+## [0.28.0](https://github.com/alexandre-schaffner/revv/compare/v0.27.0...v0.28.0) (2026-09-29)
+
+
+### Features
+
+* **server:** migrate the opencode integration to opencode 2 ([#238](https://github.com/alexandre-schaffner/revv/issues/238)) ([8a5ec85](https://github.com/alexandre-schaffner/revv/commit/8a5ec8558c3b4c46b16253c570ffeae6b3c0f121))
+* **web:** redesign the settings modal as one pane at a time ([#240](https://github.com/alexandre-schaffner/revv/issues/240)) ([92b44d6](https://github.com/alexandre-schaffner/revv/commit/92b44d6aca66950ac1ca46944e5ab4dcba886696))
+
+
+### Bug Fixes
+
+* **server:** stop a failed Jev call from 500ing walkthrough start ([#237](https://github.com/alexandre-schaffner/revv/issues/237)) ([7e452e6](https://github.com/alexandre-schaffner/revv/commit/7e452e6327985301251a05ba4d4884c292f147cc))
+* **web:** stop revv:// deep links hanging the review page on "Loading…" ([#241](https://github.com/alexandre-schaffner/revv/issues/241)) ([a8ca213](https://github.com/alexandre-schaffner/revv/commit/a8ca213122262a380f780b58b43308d0372513cf))
+
+## [0.27.0](https://github.com/alexandre-schaffner/revv/compare/v0.26.1...v0.27.0) (2026-09-25)
+
+
+### Features
+
+* explain add-repo 404s from GitHub App access, and fix stuck deep links ([#235](https://github.com/alexandre-schaffner/revv/issues/235)) ([3247488](https://github.com/alexandre-schaffner/revv/commit/3247488aa11138c6fbd9f268e48c28858099c895))
+
+
+### Bug Fixes
+
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([2b5708b](https://github.com/alexandre-schaffner/revv/commit/2b5708b01ec312839bbeaab1759fdc1b5c4a3651))
+* **web:** keep a deep-linked PR on screen when a list reload drops it ([50f11f4](https://github.com/alexandre-schaffner/revv/commit/50f11f4ad0409de2c7a15bbf2d484727f7c37b41))
+
+## [0.26.1](https://github.com/alexandre-schaffner/revv/compare/v0.26.0...v0.26.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **ci:** give the migration-upgrade replay test a 60s budget ([#232](https://github.com/alexandre-schaffner/revv/issues/232)) ([4e1d089](https://github.com/alexandre-schaffner/revv/commit/4e1d08940aea0f330678f59baa4f2c577be61b32))
+
+## [0.26.0](https://github.com/alexandre-schaffner/revv/compare/v0.25.1...v0.26.0) (2026-09-23)
+
+
+### Features
+
+* **jev:** add TypeSafe-guided review judgments ([#228](https://github.com/alexandre-schaffner/revv/issues/228)) ([4dc0747](https://github.com/alexandre-schaffner/revv/commit/4dc0747b9eaebd8266383b34b7b35a9c37b33bf1))
+
+
+### Bug Fixes
+
+* **walkthrough:** merged stamp tracks the content column; quieter ink grain ([#229](https://github.com/alexandre-schaffner/revv/issues/229)) ([055e3b7](https://github.com/alexandre-schaffner/revv/commit/055e3b75aee767b352e0e4242d6ddfbcb22fbd18))
+
+## [0.25.1](https://github.com/alexandre-schaffner/revv/compare/v0.25.0...v0.25.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* interleave chat tool calls with prose; keep issue-card header on one line ([#225](https://github.com/alexandre-schaffner/revv/issues/225)) ([9576eb0](https://github.com/alexandre-schaffner/revv/commit/9576eb0f23e471e25803a3da5751b0319e7a1645))
+
+## [0.25.0](https://github.com/alexandre-schaffner/revv/compare/v0.24.0...v0.25.0) (2026-09-18)
+
+
+### Features
+
+* **recaps, review:** calendar/window recap views, merged stamp, diff-anchor fitting ([960834a](https://github.com/alexandre-schaffner/revv/commit/960834a4cbdad0870c763634ad46663183655a8d))
+* **recaps:** fetch recap grids by month and merge into one cache ([e2af0a7](https://github.com/alexandre-schaffner/revv/commit/e2af0a76c2901e58304bb793c49a5015330785ff))
+* **recaps:** promote the UTC period-window math into a tested module ([608e6bf](https://github.com/alexandre-schaffner/revv/commit/608e6bf16c94b87cec4260738c1cd28736f2dd07))
+* **recaps:** range-filter the recap list by period window ([cbb5ed9](https://github.com/alexandre-schaffner/revv/commit/cbb5ed9d59fdf39c06194200d8c58ec06d73d03c))
+* **recaps:** replace the recap archive list with a month calendar ([5d78e50](https://github.com/alexandre-schaffner/revv/commit/5d78e5073e7877ebe9836cf7969cc8099ac51f9b))
+* **ui:** give the chat pane a Slack-style responsive layout ([#223](https://github.com/alexandre-schaffner/revv/issues/223)) ([05cad9f](https://github.com/alexandre-schaffner/revv/commit/05cad9f9ee59fae2c6a0cc9627040f53432a8980))
+
+
+### Bug Fixes
+
+* **agent:** let the isolated Claude config reach the user's own toolbox ([91c0226](https://github.com/alexandre-schaffner/revv/commit/91c022687b2a49cf1b78b43a7342b4e49f384194))
+* **chat-push:** stop a stale claim wedging the push, and say why CI pushes fail ([a46ad94](https://github.com/alexandre-schaffner/revv/commit/a46ad94f7a779ba137cc6c573ecd8858c5ab7ed9))
+* **chat:** open the command menu for a slash anywhere in the message ([e9a04c1](https://github.com/alexandre-schaffner/revv/commit/e9a04c1ac30d5d85f5548aabb2f2eb0641c71238))
+* **recaps:** make historical recap windows actually historical ([8dadc5a](https://github.com/alexandre-schaffner/revv/commit/8dadc5aae7e1051eb55c436e28e2c8e23b4b4a10))
+* **updater:** make dismissing an update stick ([5c53fd3](https://github.com/alexandre-schaffner/revv/commit/5c53fd3bb7a1f511725e6ae792619dffc4b8ef91))
+* **walkthrough:** make Stop terminal and Regenerate actually regenerate ([cd39880](https://github.com/alexandre-schaffner/revv/commit/cd39880dbe12bcc5fb9cf7d5b4ef284ac6bc30df))
+
+## [0.24.0](https://github.com/alexandre-schaffner/revv/compare/v0.23.3...v0.24.0) (2026-09-17)
+
+
+### Features
+
+* **home:** derive the PR queue client-side and stack repos into a feed ([548b4f0](https://github.com/alexandre-schaffner/revv/commit/548b4f0e66a06aefe0db1967bb78c10e3038940f))
+* PR Lens diagram renderer, plus chat-push, sync and homepage work ([4c6981c](https://github.com/alexandre-schaffner/revv/commit/4c6981c3d3cd17e60f34aa7e9d784f849d232bd2))
+* **ui:** put every icon on one phosphor system ([d9c53d6](https://github.com/alexandre-schaffner/revv/commit/d9c53d6af26d18de1b625f033fba793a57ab30bb))
+* **walkthrough:** put review copy, artifacts and triage under stated contracts ([403f887](https://github.com/alexandre-schaffner/revv/commit/403f887537f2082fe3cd25861dc62ee1b9c7a2f7))
+* **walkthrough:** replace Mermaid with the PR Lens diagram renderer ([c09ca67](https://github.com/alexandre-schaffner/revv/commit/c09ca67f6fe4badf7903b96c86102bc8ac07ad2f))
+
+
+### Bug Fixes
+
+* **chat:** make the push path safe in a repo the user also works in ([ace5e02](https://github.com/alexandre-schaffner/revv/commit/ace5e0291f4a892d95953c4bbb298b510a0df77b))
+* **review:** close the gaps two review passes found ([2d512ba](https://github.com/alexandre-schaffner/revv/commit/2d512ba8f15dcc2d6f875796e2c03a0ee4e2df2d))
+* **sync:** keep baseSha with headSha in the stale-read mask ([1e329f6](https://github.com/alexandre-schaffner/revv/commit/1e329f6a63357669c7ee545f8cda98611a2ad482))
+* **sync:** stop stale GitHub reads rewinding heads and losing comments ([4b45946](https://github.com/alexandre-schaffner/revv/commit/4b45946f936b811e97d9dd7e607eb551deb0880c))
+* **ui:** cut the theme swap, the caret loss and the double update toast ([9d72431](https://github.com/alexandre-schaffner/revv/commit/9d724310b95268e130758bea035c7de1af4d79f5))
+
+## [0.23.3](https://github.com/alexandre-schaffner/revv/compare/v0.23.2...v0.23.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* update fallback Rust toolchain handling ([#218](https://github.com/alexandre-schaffner/revv/issues/218)) ([8cc54f4](https://github.com/alexandre-schaffner/revv/commit/8cc54f4ecde5b0706686d6470e934d6f6571f07b))
+
+## [0.23.2](https://github.com/alexandre-schaffner/revv/compare/v0.23.1...v0.23.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* **review:** pull the fresh diff before reviewing new commits ([#217](https://github.com/alexandre-schaffner/revv/issues/217)) ([3da1e40](https://github.com/alexandre-schaffner/revv/commit/3da1e4088cc002d2cfdc8e634062f2a5baedd7fa))
+
+
+### Performance Improvements
+
+* **github:** stop re-fetching diffs and cut poll/sync API cost ([#215](https://github.com/alexandre-schaffner/revv/issues/215)) ([33b99ae](https://github.com/alexandre-schaffner/revv/commit/33b99aec8f2b0665517318c02dabddc9345e2eb9))
+
+## [0.23.1](https://github.com/alexandre-schaffner/revv/compare/v0.23.0...v0.23.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **acp:** send Claude Code effort level, add Claude Opus 5 ([#191](https://github.com/alexandre-schaffner/revv/issues/191)) ([35d54fe](https://github.com/alexandre-schaffner/revv/commit/35d54fe6f9d77f84b6296c71b17337c9627f13ce))
+* discover bundled Codex CLI ([#213](https://github.com/alexandre-schaffner/revv/issues/213)) ([bcb6267](https://github.com/alexandre-schaffner/revv/commit/bcb6267dc9be4bee61b4623ae75d09e0fe7cda91))
+* **updater:** address Thermos review findings on the update-check pipeline ([#212](https://github.com/alexandre-schaffner/revv/issues/212)) ([ba98bf4](https://github.com/alexandre-schaffner/revv/commit/ba98bf4c1904d91bbfcec58d20ef571417a827bc))
+* **updater:** publish signed release manifests and honour the channel ([#210](https://github.com/alexandre-schaffner/revv/issues/210)) ([19eb0d6](https://github.com/alexandre-schaffner/revv/commit/19eb0d6aa568876a29d125d6fa144e92409354b2))
+
+## [0.23.0](https://github.com/alexandre-schaffner/revv/compare/v0.22.0...v0.23.0) (2026-08-11)
+
+
+### Features
+
+* add new models Claude and Codex ([8f68941](https://github.com/alexandre-schaffner/revv/commit/8f68941c2275fadabf1732b26676fcacc58f3cad))
+* add nez models Claude and Codex ([e47fe9e](https://github.com/alexandre-schaffner/revv/commit/e47fe9eaf256e512ce363ebd65042eb8ec509fee))
+
+## [0.22.0](https://github.com/alexandre-schaffner/revv/compare/v0.21.2...v0.22.0) (2026-08-11)
+
+
+### Features
+
+* better display add agent auth recovery ([a3202c1](https://github.com/alexandre-schaffner/revv/commit/a3202c16edd59a470a467f774c832a8d0be03588))
+* better display agent reconnect ([6fba922](https://github.com/alexandre-schaffner/revv/commit/6fba922b108336fbd82dc4ca3e4ab034d7e07c5a))
+
+## [0.21.2](https://github.com/alexandre-schaffner/revv/compare/v0.21.1...v0.21.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* chat keyboard input ([439a74a](https://github.com/alexandre-schaffner/revv/commit/439a74a04e1aeeb406cf879b0cbb844b6d9723f2))
+* chat keyboard input ([e923fd2](https://github.com/alexandre-schaffner/revv/commit/e923fd289ad2ac01c65faeab262fc6214ad22be9))
+
+## [0.21.1](https://github.com/alexandre-schaffner/revv/compare/v0.21.0...v0.21.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **server:** zero-touch acquirePrWorktree fast path ([061195c](https://github.com/alexandre-schaffner/revv/commit/061195c58ff13bf3e6bf32500fb01ab54e098d66))
+* **server:** zero-touch acquirePrWorktree fast path for healthy worktrees ([056f767](https://github.com/alexandre-schaffner/revv/commit/056f7679ce6275ecfbe600adc3a728940271c49f))
+
+## [0.21.0](https://github.com/alexandre-schaffner/revv/compare/v0.20.0...v0.21.0) (2026-08-03)
+
+
+### Features
+
+* **server:** isolate Claude agent sessions in a private config dir ([91e8c5e](https://github.com/alexandre-schaffner/revv/commit/91e8c5e04ee8ed7fdb571cf3a24d394c91dfc6d1))
+* **server:** isolate Claude agent sessions in a private config dir ([cbb299e](https://github.com/alexandre-schaffner/revv/commit/cbb299e9010cde8020fb200af485d940a2b89a36))
+
+## [0.20.0](https://github.com/alexandre-schaffner/revv/compare/v0.19.5...v0.20.0) (2026-07-31)
+
+
+### Features
+
+* (server) reap stale PR review worktrees and branches ([d28cf1d](https://github.com/alexandre-schaffner/revv/commit/d28cf1d8bbf7c7f1b3685db5201b87dd4a15065b))
+
+## [0.19.5](https://github.com/alexandre-schaffner/revv/compare/v0.19.4...v0.19.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* ACP launch without npx ([2bbc3af](https://github.com/alexandre-schaffner/revv/commit/2bbc3af552391252bbf9c65af7cfe6ed7350f37e))
+
+## [0.19.4](https://github.com/alexandre-schaffner/revv/compare/v0.19.3...v0.19.4) (2026-07-29)
+
+
+### Bug Fixes
+
+* repo relink upsert ([b085eb3](https://github.com/alexandre-schaffner/revv/commit/b085eb30b6b8c929a62e77693d95a94bfd7a4a8f))
+
+## [0.19.3](https://github.com/alexandre-schaffner/revv/compare/v0.19.2...v0.19.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* duplicate diff cache writes ([bba1509](https://github.com/alexandre-schaffner/revv/commit/bba1509cd100a1356abcb6bce7a235fece3150a5))
+
+## [0.19.2](https://github.com/alexandre-schaffner/revv/compare/v0.19.1...v0.19.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* enable provider setup recovery in settings ([879ba8a](https://github.com/alexandre-schaffner/revv/commit/879ba8aac807f22ae1e241b6005df3973f6cbed3))
+* enable provider setup recovery in settings ([cbed3a8](https://github.com/alexandre-schaffner/revv/commit/cbed3a8cf02856cf85917e4ae7a74c0d7c88d09c))
+
+## [0.19.1](https://github.com/alexandre-schaffner/revv/compare/v0.19.0...v0.19.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **auth:** never apply a BYO GHE client_id to github.com ([#185](https://github.com/alexandre-schaffner/revv/issues/185)) ([0a87246](https://github.com/alexandre-schaffner/revv/commit/0a872468dd54b8253e5398dc20efd32e377cabbd))
+* debug large report crashes ([#182](https://github.com/alexandre-schaffner/revv/issues/182)) ([cf14520](https://github.com/alexandre-schaffner/revv/commit/cf1452086c59c8b5a21b067615c17fd275613b3e))
+
+## [0.19.0](https://github.com/alexandre-schaffner/revv/compare/v0.18.1...v0.19.0) (2026-07-22)
+
+
+### Features
+
+* **walkthrough:** add issue bug bar and sharpen severity definitions ([#150](https://github.com/alexandre-schaffner/revv/issues/150)) ([e6b4a6e](https://github.com/alexandre-schaffner/revv/commit/e6b4a6ecd8b33a043c70967e382ba955c96370a3))
+
+
+### Bug Fixes
+
+* **chat:** correct file-pill color and window the Read tool peek ([#152](https://github.com/alexandre-schaffner/revv/issues/152)) ([262f0c6](https://github.com/alexandre-schaffner/revv/commit/262f0c6477647c46907225b018320e28b22fd611))
+
+## [0.18.1](https://github.com/alexandre-schaffner/revv/compare/v0.18.0...v0.18.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* onboarding flow was not reopening correctly after an update ([4070207](https://github.com/alexandre-schaffner/revv/commit/407020797681d6b3317da1a128160fc97aaa5f2e))
+* onboarding flow when update ([36d0752](https://github.com/alexandre-schaffner/revv/commit/36d0752b271d9dc4c3899dd3a164d2e6b812b69f))
+
+## [0.18.0](https://github.com/alexandre-schaffner/revv/compare/v0.17.2...v0.18.0) (2026-07-15)
+
+
+### Features
+
+* set default model ([8d96872](https://github.com/alexandre-schaffner/revv/commit/8d968722b68a0cddd1214aa254a78d016e824c26))
+* set default model ([fd880e5](https://github.com/alexandre-schaffner/revv/commit/fd880e5ce84c40602053d04f40056cac0eddd99d))
+
+
+### Bug Fixes
+
+* rebase ([1726c46](https://github.com/alexandre-schaffner/revv/commit/1726c46713612967e9a1de08b64a2ead69728835))
+
+## [0.17.2](https://github.com/alexandre-schaffner/revv/compare/v0.17.1...v0.17.2) (2026-07-13)
+
+
+### Performance Improvements
+
+* **server:** make walkthrough rounds endpoint DB-only ([#174](https://github.com/alexandre-schaffner/revv/issues/174)) ([12d2415](https://github.com/alexandre-schaffner/revv/commit/12d24151e12d0c06e62b3d873bc8c0bce8756f6e))
+
+## [0.17.1](https://github.com/alexandre-schaffner/revv/compare/v0.17.0...v0.17.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **server:** bind API to loopback only + loopback request guard ([#171](https://github.com/alexandre-schaffner/revv/issues/171)) ([5350516](https://github.com/alexandre-schaffner/revv/commit/53505164faa6ac390853a6ecf69c110ef0b0bae0))
+
+## [0.17.0](https://github.com/alexandre-schaffner/revv/compare/v0.16.1...v0.17.0) (2026-07-09)
+
+
+### Features
+
+* add incremental walkthrough review rounds ([#141](https://github.com/alexandre-schaffner/revv/issues/141)) ([f90d117](https://github.com/alexandre-schaffner/revv/commit/f90d117b4a96257eb896dda62044bfb04d743102))
+
+## [0.16.1](https://github.com/alexandre-schaffner/revv/compare/v0.16.0...v0.16.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **acp:** inject stored agent credentials so packaged installs authenticate ([c873b7e](https://github.com/alexandre-schaffner/revv/commit/c873b7e16d62e9ec844ca51cdb56bebe0a1bd612))
+* **acp:** inject stored agent credentials so packaged installs authenticate ([1528945](https://github.com/alexandre-schaffner/revv/commit/15289457f548673bcb16bc82c7fc6118b9f33b46))
+* Revert [#158](https://github.com/alexandre-schaffner/revv/issues/158) (fix/acp-agent-credential-injection) ([4e7d6e9](https://github.com/alexandre-schaffner/revv/commit/4e7d6e94ea1ada781e59a5d746ba66793a0383a8))
+
+## [0.16.0](https://github.com/alexandre-schaffner/revv/compare/v0.15.3...v0.16.0) (2026-07-07)
+
+
+### Features
+
+* Worktree filter closed prs by creator ([#159](https://github.com/alexandre-schaffner/revv/issues/159)) ([a00d3d9](https://github.com/alexandre-schaffner/revv/commit/a00d3d96a29bd791b131a36ea8d57015e32851d9))
+
+## [0.15.3](https://github.com/alexandre-schaffner/revv/compare/v0.15.2...v0.15.3) (2026-07-07)
+
+
+### Bug Fixes
+
+* **cli:** read DB from app-data dir, not INSTALL_DIR ([#162](https://github.com/alexandre-schaffner/revv/issues/162)) ([4febd34](https://github.com/alexandre-schaffner/revv/commit/4febd349b609f7bc25642e9fb8e6922a5419fd4c))
+
+## [0.15.2](https://github.com/alexandre-schaffner/revv/compare/v0.15.1...v0.15.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* Recover missing GHE client ID during reauth ([#160](https://github.com/alexandre-schaffner/revv/issues/160)) ([f139bcd](https://github.com/alexandre-schaffner/revv/commit/f139bcd3a9ca9ae1560b58d6327bb16a7a98d7d0))
+
+## [0.15.1](https://github.com/alexandre-schaffner/revv/compare/v0.15.0...v0.15.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* persist DB in app-data dir so updates don't reset onboarding ([#155](https://github.com/alexandre-schaffner/revv/issues/155)) ([b985e5c](https://github.com/alexandre-schaffner/revv/commit/b985e5c350440e4bd2c0ca765ff59d60ba38ddbd))
+
+## [0.15.0](https://github.com/alexandre-schaffner/revv/compare/v0.14.1...v0.15.0) (2026-07-06)
+
+
+### Features
+
+* self comment + comment-only review action ([#143](https://github.com/alexandre-schaffner/revv/issues/143)) ([e05833b](https://github.com/alexandre-schaffner/revv/commit/e05833b4315abae025df2960dec631ecc4442c8e))
+
+## [0.14.1](https://github.com/alexandre-schaffner/revv/compare/v0.14.0...v0.14.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **chat:** stop merge-of-main from ballooning proposed commits ([#149](https://github.com/alexandre-schaffner/revv/issues/149)) ([3a53d0c](https://github.com/alexandre-schaffner/revv/commit/3a53d0cc639b7613ed8f7195f3cd67322c1762ae))
+
+## [0.14.0](https://github.com/alexandre-schaffner/revv/compare/v0.13.0...v0.14.0) (2026-06-26)
+
+
+### Features
+
+* add chat attachments and composer shortcuts ([#148](https://github.com/alexandre-schaffner/revv/issues/148)) ([4785960](https://github.com/alexandre-schaffner/revv/commit/4785960bbf7f80ed7e1eccb0322e33766731cbca))
+* add onboarding local repo linking ([#139](https://github.com/alexandre-schaffner/revv/issues/139)) ([b944870](https://github.com/alexandre-schaffner/revv/commit/b944870c971eed3c32821f44efd1da08e7c3abd0))
+* **onboarding:** robust agent detection + generalized OS-aware install ([#147](https://github.com/alexandre-schaffner/revv/issues/147)) ([6658b31](https://github.com/alexandre-schaffner/revv/commit/6658b3151622b190cc4444537651315aa3e32c4d))
+
+
+### Bug Fixes
+
+* **chat:** resolve chat-push session by configured ACP agent id ([#142](https://github.com/alexandre-schaffner/revv/issues/142)) ([7267e75](https://github.com/alexandre-schaffner/revv/commit/7267e75bc9fe3b02ff965abbb6a76857a110b9f9))
+* **filetree:** replace LOC sticky-badge overlay with truncation + fixed gutter ([#146](https://github.com/alexandre-schaffner/revv/issues/146)) ([55850fa](https://github.com/alexandre-schaffner/revv/commit/55850fa066a741896435b55e1779bd222d70cc8a))
+* **mcp:** return 202 for notification-only HTTP MCP requests ([#145](https://github.com/alexandre-schaffner/revv/issues/145)) ([9ce52f1](https://github.com/alexandre-schaffner/revv/commit/9ce52f1a006638b60c291d8e09d39cb282ea2d15))
+
+## [0.13.0](https://github.com/alexandre-schaffner/revv/compare/v0.12.1...v0.13.0) (2026-06-18)
+
+
+### Features
+
+* add author self-review mode across the review session ([#129](https://github.com/alexandre-schaffner/revv/issues/129)) ([41e42e2](https://github.com/alexandre-schaffner/revv/commit/41e42e2783a2c1b69426aa8fcc88e7ccf809a061))
+* **chat:** single ACP transport for the chat panel, plus UI fixes ([#138](https://github.com/alexandre-schaffner/revv/issues/138)) ([69ab44a](https://github.com/alexandre-schaffner/revv/commit/69ab44afc31ed676096dde46937d3e511ddd1762))
+* **chat:** use map-trifold icon for plan mode and prevent text overflow ([#134](https://github.com/alexandre-schaffner/revv/issues/134)) ([5cef066](https://github.com/alexandre-schaffner/revv/commit/5cef066fff76602bcdb0b4820cb78b5b8436a26f))
+
+
+### Bug Fixes
+
+* context token usage gauge ([#118](https://github.com/alexandre-schaffner/revv/issues/118)) ([b42317c](https://github.com/alexandre-schaffner/revv/commit/b42317c9bf331c088a43c1b4f7d5f85f2c66dc77))
+
+## [0.12.1](https://github.com/alexandre-schaffner/revv/compare/v0.12.0...v0.12.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* creator and team filters + search by creator ([#135](https://github.com/alexandre-schaffner/revv/issues/135)) ([34f1633](https://github.com/alexandre-schaffner/revv/commit/34f1633c624163cd6db7d1676de93bfdd4e3f344))
+
+## [0.12.0](https://github.com/alexandre-schaffner/revv/compare/v0.11.0...v0.12.0) (2026-06-11)
+
+
+### Features
+
+* **auth:** bring-your-own GitHub App for arbitrary Enterprise hosts ([#130](https://github.com/alexandre-schaffner/revv/issues/130)) ([7f8644b](https://github.com/alexandre-schaffner/revv/commit/7f8644bd6c29d689c1b2ca0c5cde5d1a1bb30bf8))
+
+## [0.11.0](https://github.com/alexandre-schaffner/revv/compare/v0.10.0...v0.11.0) (2026-06-10)
+
+
+### Features
+
+* **walkthrough:** render Mermaid diagrams in walkthroughs ([#124](https://github.com/alexandre-schaffner/revv/issues/124)) ([e55a632](https://github.com/alexandre-schaffner/revv/commit/e55a632d97e7e048ac91675179adda2ebb87de27))
+
+## [0.10.0](https://github.com/alexandre-schaffner/revv/compare/v0.9.0...v0.10.0) (2026-06-10)
+
+
+### Features
+
+* filter PR by teams or creators ([#117](https://github.com/alexandre-schaffner/revv/issues/117)) ([b11fd60](https://github.com/alexandre-schaffner/revv/commit/b11fd602fa91e7db5bff70f8c095aeba2e34973a))
+* **web:** unify markdown rendering on @tailwindcss/typography ([#121](https://github.com/alexandre-schaffner/revv/issues/121)) ([9f5906d](https://github.com/alexandre-schaffner/revv/commit/9f5906db21369838170cd4af88658a352034e122))
+
+
+### Bug Fixes
+
+* **diff:** show all comments in unified view after SSR hydrate ([#114](https://github.com/alexandre-schaffner/revv/issues/114)) ([#122](https://github.com/alexandre-schaffner/revv/issues/122)) ([715aa77](https://github.com/alexandre-schaffner/revv/commit/715aa774664faf82d521a8bda1be156067c2c491))
+* update panel keyboard shortcuts ([#119](https://github.com/alexandre-schaffner/revv/issues/119)) ([f2b7b3b](https://github.com/alexandre-schaffner/revv/commit/f2b7b3b2cd127b5bd789f50921c59d3da6602ad0))
+* **web:** instant pane toggles + repair Cmd+Option+B shortcut ([#123](https://github.com/alexandre-schaffner/revv/issues/123)) ([a6be2d0](https://github.com/alexandre-schaffner/revv/commit/a6be2d081496c598476468538ec31ad01048b8d1))
+
+
+### Performance Improvements
+
+* **server:** cut GitHub poll rate-limit pressure ([#125](https://github.com/alexandre-schaffner/revv/issues/125)) ([4a7f0a7](https://github.com/alexandre-schaffner/revv/commit/4a7f0a7570721883b11937c9751388d554444626))
+
+## [0.9.0](https://github.com/alexandre-schaffner/revv/compare/v0.8.0...v0.9.0) (2026-06-03)
+
+
+### Features
+
+* link existing local clones and redesign the add-repo modal ([#115](https://github.com/alexandre-schaffner/revv/issues/115)) ([e5c6085](https://github.com/alexandre-schaffner/revv/commit/e5c6085abc14b50ee87be0c51f6145d8964ff616))
+
+## [0.8.0](https://github.com/alexandre-schaffner/revv/compare/v0.7.0...v0.8.0) (2026-06-02)
+
+
+### Features
+
+* improve Pierre diff rendering and reconcile docs ([#113](https://github.com/alexandre-schaffner/revv/issues/113)) ([b67d4eb](https://github.com/alexandre-schaffner/revv/commit/b67d4ebfad8649793d579ea514bf2100b1104cf4))
+
+
+### Bug Fixes
+
+* handle GitHub rate limits and ETag caching ([#109](https://github.com/alexandre-schaffner/revv/issues/109)) ([921a603](https://github.com/alexandre-schaffner/revv/commit/921a603784e08bac31adbceaf387d814733e8130))
+* **walkthrough:** serve current walkthrough from local head SHA, not live GitHub ([#111](https://github.com/alexandre-schaffner/revv/issues/111)) ([c2a8b06](https://github.com/alexandre-schaffner/revv/commit/c2a8b06210fc5ac861cef8c3646d31b65d310115))
+
+## [0.7.0](https://github.com/alexandre-schaffner/revv/compare/v0.6.0...v0.7.0) (2026-06-01)
+
+
+### Features
+
+* add Codex as a third AI agent provider ([#105](https://github.com/alexandre-schaffner/revv/issues/105)) ([56f1e08](https://github.com/alexandre-schaffner/revv/commit/56f1e089fb87f231680237834e53ef98d15dd196))
+
+
+### Bug Fixes
+
+* **web:** wire Revv warm diff palette into Pierre shadow DOM ([#108](https://github.com/alexandre-schaffner/revv/issues/108)) ([787fd8b](https://github.com/alexandre-schaffner/revv/commit/787fd8bc67916d1d6bdf4235098687cd1c6d6cbc))
+
+## [0.6.0](https://github.com/alexandre-schaffner/revv/compare/v0.5.0...v0.6.0) (2026-06-01)
+
+
+### Features
+
+* **install:** quiet installer output with spinner and verbose mode ([94b92f9](https://github.com/alexandre-schaffner/revv/commit/94b92f92877122a9898d0d8ad4680f346fc81723))
+* **install:** quiet installer output with spinner and verbose mode ([888b749](https://github.com/alexandre-schaffner/revv/commit/888b74996ebc261e4a5ce088ce2758fbb84f8f56))
+* move GitHub tokens to OS secure store with transparent refresh ([#103](https://github.com/alexandre-schaffner/revv/issues/103)) ([a266678](https://github.com/alexandre-schaffner/revv/commit/a2666781c466820be738837726aac6fac371aaad))
+* **web:** change brand accent from deep naval to tidewater teal ([#101](https://github.com/alexandre-schaffner/revv/issues/101)) ([1dcab70](https://github.com/alexandre-schaffner/revv/commit/1dcab70e3724d4fddc2369a82881ddff44272f09))
+
+
+### Bug Fixes
+
+* stop diff-tab comments from duplicating on re-render ([bc71b98](https://github.com/alexandre-schaffner/revv/commit/bc71b98f26c07161551cd49875c5ba55e265cd95))
+* stop diff-tab comments from duplicating on re-render ([7e672f5](https://github.com/alexandre-schaffner/revv/commit/7e672f532f03ef1d6a5f6f85af1313b8f4819510))
+
+## [0.5.0](https://github.com/alexandre-schaffner/revv/compare/v0.4.0...v0.5.0) (2026-05-28)
+
+
+### Features
+
+* Isolate dev and prod runtime channels ([098a025](https://github.com/alexandre-schaffner/revv/commit/098a0254ccff668fe479cbeabf2c588f8a664eb9))
+* isolate dev prod runtime ([8848dbe](https://github.com/alexandre-schaffner/revv/commit/8848dbed4591ccc2954be9063ae00b72c0aaadba))
+* **server:** add OpenTelemetry tracing instrumentation ([d256466](https://github.com/alexandre-schaffner/revv/commit/d256466f5d11a92367caeba50f9940aeacd0a28e))
+
+## [0.4.0](https://github.com/alexandre-schaffner/revv/compare/v0.3.5...v0.4.0) (2026-05-26)
+
+
+### Features
+
+* **walkthrough:** remove tool-calls collapsible during generation ([1a3e635](https://github.com/alexandre-schaffner/revv/commit/1a3e63517e336da72dc5068ab8489195c2164663))
+
+
+### Bug Fixes
+
+* **ci:** remove unused exports and non-existent hooks entry to pass knip ([cdb8e98](https://github.com/alexandre-schaffner/revv/commit/cdb8e9893a7bfd2ca1c30584d7f8e510d7352cab))
+
+## [0.3.5](https://github.com/alexandre-schaffner/revv/compare/v0.3.4...v0.3.5) (2026-05-26)
+
+
+### Bug Fixes
+
+* bash 3.2-safe array expansion in install.sh template ([f16a021](https://github.com/alexandre-schaffner/revv/commit/f16a0214421add45f42859d0590b543846d707d8))
+
+## [0.3.4](https://github.com/alexandre-schaffner/revv/compare/v0.3.3...v0.3.4) (2026-05-26)
+
+
+### Bug Fixes
+
+* avoid unbound variable on bash 3.2 (macOS) when INSTALLER_ARGS is empty under set -u ([c9e7e16](https://github.com/alexandre-schaffner/revv/commit/c9e7e162879f397dec312e588ca943bab376ac98))
+
+## [0.3.3](https://github.com/alexandre-schaffner/revv/compare/v0.3.2...v0.3.3) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** harden verified install flow ([99e6f78](https://github.com/alexandre-schaffner/revv/commit/99e6f78a31e97d2ed1405f0c68312a17855c38c9))
+* **web:** resolve build warnings ([ab5117a](https://github.com/alexandre-schaffner/revv/commit/ab5117a9b905691b08f7c4c9daff7cc7cd484e83))
+
+## [0.3.2](https://github.com/alexandre-schaffner/revv/compare/v0.3.1...v0.3.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** embed full release installer ([1663b22](https://github.com/alexandre-schaffner/revv/commit/1663b2292d3d78d4fff6b471f420a1e998feacb1))
+* **installer:** install server from release script ([f2c8916](https://github.com/alexandre-schaffner/revv/commit/f2c8916c3d64ac1f8942793b6ee58470901462af))
+
+## [0.3.1](https://github.com/alexandre-schaffner/revv/compare/v0.3.0...v0.3.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **installer:** use .jsonl extension for attestation bundle temp file ([f658ce7](https://github.com/alexandre-schaffner/revv/commit/f658ce7868e299efce29641befeae08d5e7b0289))
+
+## [0.3.0](https://github.com/alexandre-schaffner/revv/compare/v0.2.5...v0.3.0) (2026-05-26)
+
+
+### Features
+
+* **cache:** switch team cache auth to Application Default Credentials ([78a744a](https://github.com/alexandre-schaffner/revv/commit/78a744a1e2967e2ee173176c85d08d2eb1d3e727))
+
+
+### Bug Fixes
+
+* **installer:** replace bash 4+ uppercase expansion for macOS 3.2 compat ([1bd1d22](https://github.com/alexandre-schaffner/revv/commit/1bd1d2258dc1c61085d870cf5d47f3492128d25e))
+
+## [0.2.5](https://github.com/alexandre-schaffner/revv/compare/v0.2.4...v0.2.5) (2026-05-26)
+
+
+### Features
+
+* **cache:** switch team cache auth to Application Default Credentials (ADC). Removes manual service-account JSON/path inputs. Adds `GET /api/settings/cache/adc-status` and `POST /api/settings/cache/adc-login` endpoints. UI now probes ADC, shows sign-in state, and can launch `gcloud auth application-default login` directly from Settings.
+
+### Bug Fixes
+
+* remove unused RecapToolSpec export ([bc8fa02](https://github.com/alexandre-schaffner/revv/commit/bc8fa020a21f13d1aeb4c8993ab00b7af6c42f46))
+* resolve all 23 lint warnings ([e68fdaa](https://github.com/alexandre-schaffner/revv/commit/e68fdaa917750772f931ab8db159c66918dc81cc))
+* resolve typecheck errors from lint fixes ([a94a376](https://github.com/alexandre-schaffner/revv/commit/a94a37618bbcdc237b502f9b2de0f8d75f956a70))
+* use browser_download_url as sed range end for digest extraction ([0a4ac9c](https://github.com/alexandre-schaffner/revv/commit/0a4ac9cf1e34d36a5c54ae882b13843fa78592ad))
+
+## [0.2.4](https://github.com/alexandre-schaffner/revv/compare/v0.2.3...v0.2.4) (2026-05-26)
+
+
+### Bug Fixes
+
+* parse GitHub release digest as object instead of string ([31efb1b](https://github.com/alexandre-schaffner/revv/commit/31efb1b848da1589c39371584ad7a97c62fc23a7))
+
+## [0.2.3](https://github.com/alexandre-schaffner/revv/compare/v0.2.2...v0.2.3) (2026-05-26)
+
+
+### Bug Fixes
+
+* remove biome-ignore comments, use method-bivariant typing instead ([7e4ffd6](https://github.com/alexandre-schaffner/revv/commit/7e4ffd6353f261f1632bf4fd7cb5184669d9362b))
+* resolve CI lint annotations (Node 20 actions, noExplicitAny, noNonNullAssertion) ([b139689](https://github.com/alexandre-schaffner/revv/commit/b139689568edb100e7f7ca5dc4e8cfd75402d808))
+* resolve CI lint annotations (Node 20 actions, noExplicitAny, noNonNullAssertion) ([b4c9d39](https://github.com/alexandre-schaffner/revv/commit/b4c9d39d128515cf5292c17378798a5e46516a5f))
+* stop exporting unused ChatEditToolSpec type ([#86](https://github.com/alexandre-schaffner/revv/issues/86)) ([6da66b9](https://github.com/alexandre-schaffner/revv/commit/6da66b9ceafa4a59ec8050cb253f08948ddd42f8))
+
+## [0.2.2](https://github.com/alexandre-schaffner/revv/compare/v0.2.1...v0.2.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **ci:** add GH_REPO env to gh release edit steps ([c64bcc4](https://github.com/alexandre-schaffner/revv/commit/c64bcc4aaa343e21bbc50df3f2179a024a82a9bc))
+
+## [0.2.1](https://github.com/alexandre-schaffner/revv/compare/v0.2.0...v0.2.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **release:** create tags for draft releases ([a0f468c](https://github.com/alexandre-schaffner/revv/commit/a0f468cfef08ce8c725499af21871b8f413b28ab))
+
+## [0.2.0](https://github.com/alexandre-schaffner/revv/compare/v0.1.1...v0.2.0) (2026-05-25)
+
+
+### Features
+
+* add Discard and Cherry-pick actions to proposed-changes strip ([9122d56](https://github.com/alexandre-schaffner/revv/commit/9122d56bbce6d9b9b1cf3b417fc75cb323705a35))
+* add shimmer on generate changes button ([b0a408e](https://github.com/alexandre-schaffner/revv/commit/b0a408e8679d8af414d3bdd8465f04874964aece))
+* auto-update ([01ff498](https://github.com/alexandre-schaffner/revv/commit/01ff4985f7991370a45a882d16ac11b1cf9fe467))
+* awesome ui improvements ([8e35d8d](https://github.com/alexandre-schaffner/revv/commit/8e35d8ddc25194767f1da4af43c4ab6d966e737b))
+* better walkthrough ([71529ed](https://github.com/alexandre-schaffner/revv/commit/71529edc432f52c4ce216966a6e45d8080646742))
+* big clean 2 ([34c10a1](https://github.com/alexandre-schaffner/revv/commit/34c10a15ab350f19add4ed6b475856bd0cc36381))
+* big improvements ([3db8847](https://github.com/alexandre-schaffner/revv/commit/3db8847f8cdb9abbb73f072cc3f132a955528dfa))
+* bigcleaning ([318a93a](https://github.com/alexandre-schaffner/revv/commit/318a93a1705e5ff5e28750f191d4de8208cfc4e3))
+* **cache:** SSHSIG-anchored team cache integrity ([#74](https://github.com/alexandre-schaffner/revv/issues/74)) ([4b9bfae](https://github.com/alexandre-schaffner/revv/commit/4b9bfaef42005951c5d0fd8ee0f3fc4734846147))
+* **chat:** float composer over conversation and fix initial textarea sizing ([#25](https://github.com/alexandre-schaffner/revv/issues/25)) ([07ca0cf](https://github.com/alexandre-schaffner/revv/commit/07ca0cfd8eec59d134e514288bd49b1ae3590ecf))
+* **chat:** reattach queue + composer on a shared glass surface ([#28](https://github.com/alexandre-schaffner/revv/issues/28)) ([fbab266](https://github.com/alexandre-schaffner/revv/commit/fbab2665d3fb28f459d80b7a76bc16544c7c9856))
+* CI ([35298f3](https://github.com/alexandre-schaffner/revv/commit/35298f3e1b99f38e68bce1394f33dc638ab0de40))
+* clean pt2 ([c15c45c](https://github.com/alexandre-schaffner/revv/commit/c15c45cdb04d8eef05e0e285e9c77e5c7acc789c))
+* full renaming ([28e8103](https://github.com/alexandre-schaffner/revv/commit/28e8103067406fd53ff354ce647e8e866c9b4738))
+* gradient text overlay for repo avatars ([ead0618](https://github.com/alexandre-schaffner/revv/commit/ead0618f3328aafa02fb02a51f6db643931383d0))
+* instrumentation ([cb15c63](https://github.com/alexandre-schaffner/revv/commit/cb15c63fdac771ec7b665081e9bdcb701ca9b8b6))
+* left pane rework ([198e950](https://github.com/alexandre-schaffner/revv/commit/198e950b4c666f9118839e86997174300163f573))
+* left pane rework ([d71368e](https://github.com/alexandre-schaffner/revv/commit/d71368e6eb9229540ecdbd8da0765fca375620e3))
+* merge button ([001da9b](https://github.com/alexandre-schaffner/revv/commit/001da9b99472cff5e300596f35f077c96edc5a1a))
+* merge button ([a26877e](https://github.com/alexandre-schaffner/revv/commit/a26877e6e943fee2904c4e2359a5eefce35a0678))
+* merge button ([bb2f39c](https://github.com/alexandre-schaffner/revv/commit/bb2f39c36e114f99d68e96f77e0b9b4d8867bfb9))
+* migrate OpenCode provider to @opencode-ai/sdk ([8308745](https://github.com/alexandre-schaffner/revv/commit/83087451737b1d2ba63c1fbcb4e04d9a6ea96456))
+* migrate OpenCode provider to @opencode-ai/sdk ([1467877](https://github.com/alexandre-schaffner/revv/commit/14678771aca57a3186cefbdb4575e45e52480fd6))
+* multi-account ([871fd11](https://github.com/alexandre-schaffner/revv/commit/871fd110612ecaf20ef4ee2d551eb22a689e3331))
+* onoarding ([8c7339c](https://github.com/alexandre-schaffner/revv/commit/8c7339c426586c068b35a5718b430b099bc0f40a))
+* owner-hue fluid SVG gradient avatars ([fc37d18](https://github.com/alexandre-schaffner/revv/commit/fc37d18164c883870df33016ce1673419bf42ad3))
+* phosphore ([d5037ab](https://github.com/alexandre-schaffner/revv/commit/d5037abe64d749de9f3aa1764143e5fd2eaf6faf))
+* pin PRs ([064bb9b](https://github.com/alexandre-schaffner/revv/commit/064bb9baa72371c55abec7d41ce480c288853675))
+* **prs:** one-week retention for archived PRs with poll-time backfill ([7097e0d](https://github.com/alexandre-schaffner/revv/commit/7097e0d3ab553dc0f8f58562775e5b70c5950e1f))
+* **prs:** one-week retention for archived PRs with poll-time backfill ([d32f4d4](https://github.com/alexandre-schaffner/revv/commit/d32f4d4c3ddcdac63bd2b9114df19639b7373ee9))
+* **prs:** optimistic mutations for owner PR actions ([d0b1091](https://github.com/alexandre-schaffner/revv/commit/d0b1091216cd1ad9a7aff9ba3d2d59cbcc4e53c8))
+* **prs:** optimistic mutations for owner PR actions with entity-scoped rollback ([29cc984](https://github.com/alexandre-schaffner/revv/commit/29cc984a418c8f7ed5a8f9f890870d5140d7b9cd))
+* **recaps:** chapter rewrite + per-theme summaries + aligned action bars ([#33](https://github.com/alexandre-schaffner/revv/issues/33)) ([ba88ed4](https://github.com/alexandre-schaffner/revv/commit/ba88ed4e1be1c58a266f81930af2079cd39b7f85))
+* redesigned score cards ([c0acdea](https://github.com/alexandre-schaffner/revv/commit/c0acdea97b8b25628222db5e191a972e5ccbe44d))
+* redesigned score cards ([b4668ff](https://github.com/alexandre-schaffner/revv/commit/b4668ff0e90f2d5ad4a530334a866bdd58a74e85))
+* **release:** release-please + Sigstore-signed installer artifacts ([#72](https://github.com/alexandre-schaffner/revv/issues/72)) ([5834195](https://github.com/alexandre-schaffner/revv/commit/58341955a98d18f3a1ea3ad52a28697fbea5deb0))
+* relooking ([52ce7fd](https://github.com/alexandre-schaffner/revv/commit/52ce7fd1784fb0c6957865da1e566273c562f992))
+* relooking ([61ffd42](https://github.com/alexandre-schaffner/revv/commit/61ffd42a7b2ec2efe07a136fe246516f7f4dd162))
+* remote cache ([e817e9c](https://github.com/alexandre-schaffner/revv/commit/e817e9cd4e1a70b38102835bf3b2d243f15a1cf5))
+* remote cache ([10cd0d2](https://github.com/alexandre-schaffner/revv/commit/10cd0d2ec6fd26be630fae1deb64d000815f0a77))
+* remote cache ([94b030f](https://github.com/alexandre-schaffner/revv/commit/94b030fed61b55b0eab75d9980116d30c1dafab7))
+* remove useless files + minor fixes ([0802b54](https://github.com/alexandre-schaffner/revv/commit/0802b54207f65b66739364d52cf99ac449429b70))
+* settings ([53dcf2e](https://github.com/alexandre-schaffner/revv/commit/53dcf2e4ca0e156792ee7228e8337a2af4e5c60d))
+* switch to GitHub Device Code OAuth flow ([45bc6a6](https://github.com/alexandre-schaffner/revv/commit/45bc6a66bb8f2f84f344315662d821d735c3552b))
+* switch to GitHub Device Code OAuth flow ([df58d1b](https://github.com/alexandre-schaffner/revv/commit/df58d1bbcac0fc8e1099c0b619eeb2e21ebb37ce))
+* **tabs:** ⌘+number shortcut hints on cmd hold ([#27](https://github.com/alexandre-schaffner/revv/issues/27)) ([14427a0](https://github.com/alexandre-schaffner/revv/commit/14427a0cba3303f23cfc3bcedc21dbac5a4633fe))
+* tray app ([6ef5f4d](https://github.com/alexandre-schaffner/revv/commit/6ef5f4d9546b94ea9daea3c2032d1d6bd3b73097))
+* use Newsreader font for avatar letter overlay ([1cd9e92](https://github.com/alexandre-schaffner/revv/commit/1cd9e928b472f6bcd1b85c73dbce827d7a90aa71))
+* various improvements ([bbdac33](https://github.com/alexandre-schaffner/revv/commit/bbdac33bf913adb30931fb389c49196427f527f2))
+* **walkthrough:** shimmer-grouped tool calls + chronological thoughts toggle ([#34](https://github.com/alexandre-schaffner/revv/issues/34)) ([80db63c](https://github.com/alexandre-schaffner/revv/commit/80db63c29b60f9c2e116af5aa9ce7e055ef407b5))
+* windows install ([02f409f](https://github.com/alexandre-schaffner/revv/commit/02f409f230ded857ae0f69e8e246c065d3fa47e7))
+
+
+### Bug Fixes
+
+* agent detection ([c5dbfef](https://github.com/alexandre-schaffner/revv/commit/c5dbfefc0ae50998eb82c95273d6b7d3adf399f0))
+* align release-please manifest with actual version (0.0.1) ([12e5f70](https://github.com/alexandre-schaffner/revv/commit/12e5f70485c64920da2ca78c05fcb869f7f6739c))
+* avatars ([c8610b8](https://github.com/alexandre-schaffner/revv/commit/c8610b81220303960aaa30023eaacb9fee12a7c7))
+* bundled client_id + README update ([c99ed5d](https://github.com/alexandre-schaffner/revv/commit/c99ed5d27ea3607c76cde8301fc2ece1c4a8d3b5))
+* chat ([25da7dc](https://github.com/alexandre-schaffner/revv/commit/25da7dc3837f66facf856cb5bb7021a855a9b729))
+* chat ([1909156](https://github.com/alexandre-schaffner/revv/commit/190915651c28589dda67aa217fbaa3bd9089e5dd))
+* chat ([c7b03e3](https://github.com/alexandre-schaffner/revv/commit/c7b03e33d117d7fa425d192270c4a13d636bda9a))
+* ci ([39dc411](https://github.com/alexandre-schaffner/revv/commit/39dc411b43a90997225f7f10251cd81ea68e8039))
+* CI ([c7cbd33](https://github.com/alexandre-schaffner/revv/commit/c7cbd33db392ab13ffac1bbe2f52b8960f112b13))
+* CI typecheck and lint failures ([d82043c](https://github.com/alexandre-schaffner/revv/commit/d82043cf82d0ba490c4ea1186deaf65c4acbe0ab))
+* **ci:** attest discovered tauri bundles ([48234eb](https://github.com/alexandre-schaffner/revv/commit/48234eb3c96b4cebac4d6b46c476a76990195cd7))
+* **ci:** format release config output ([c553d3b](https://github.com/alexandre-schaffner/revv/commit/c553d3b9afc9cbd2aaa75487b1ed78f9ab3755c9))
+* **ci:** format updater endpoint config ([4f3c2f6](https://github.com/alexandre-schaffner/revv/commit/4f3c2f6fd290bb5c0ec2be607016bcf909b8fd00))
+* **ci:** ignore release-managed tauri config formatting ([703e7c5](https://github.com/alexandre-schaffner/revv/commit/703e7c5c89d633db83291bcf23ba594567f580a6))
+* **ci:** publish nightly as per-SHA tags to sidestep immutable releases ([#77](https://github.com/alexandre-schaffner/revv/issues/77)) ([99fea12](https://github.com/alexandre-schaffner/revv/commit/99fea12c870da8e776845395dc3385ac342e9f5f))
+* **ci:** repair release-please v4 output names + add Tauri upload fallback ([466db2d](https://github.com/alexandre-schaffner/revv/commit/466db2d0aa0b00aa9afe5b7c41cec1472518bf78))
+* **ci:** top-level permissions on release & nightly workflows ([#76](https://github.com/alexandre-schaffner/revv/issues/76)) ([97b566e](https://github.com/alexandre-schaffner/revv/commit/97b566e3f46b7f7866304aca10bcec6b0ec380e1))
+* **ci:** upload release assets before publishing immutable releases ([58e7ce6](https://github.com/alexandre-schaffner/revv/commit/58e7ce66c3ab5c421a68987392082cb9b35ec8d6))
+* **ci:** use existing tauri-action tag ([58c03cd](https://github.com/alexandre-schaffner/revv/commit/58c03cd06b4dbc7feada8f8970cdfce520599de3))
+* comments not showing in diff ([67abbb4](https://github.com/alexandre-schaffner/revv/commit/67abbb41cce6d7303a789ffefb59c9f6c923d79d))
+* commit sync ([84fd85e](https://github.com/alexandre-schaffner/revv/commit/84fd85edade73a3fabaac2338a5f1f2040054b17))
+* **db:** remove fallback account assignment in pre-squash recovery ([4a994ff](https://github.com/alexandre-schaffner/revv/commit/4a994ff606576ee1fa96387885e6bf0a79fc6a8b))
+* **db:** repair migration journal so stock drizzle migrator works for every install state ([#24](https://github.com/alexandre-schaffner/revv/issues/24)) ([b974bf4](https://github.com/alexandre-schaffner/revv/commit/b974bf43c5ee0fc6bd90536af8033c28dddf91cb))
+* **db:** tighten remoteUsers joins to include provider predicate ([c032995](https://github.com/alexandre-schaffner/revv/commit/c03299589190e0bd15b4c1d4c5ca5d13ce3d446c))
+* default gh host ([32cb3b0](https://github.com/alexandre-schaffner/revv/commit/32cb3b086bf058123031cccf6ea0cb5a5ff4f74a))
+* **desktop:** use secure updater endpoint ([bba3f1d](https://github.com/alexandre-schaffner/revv/commit/bba3f1d2a8b36cfdfc82fdeada371cdd571d5964))
+* duplicate recap content ([88909bd](https://github.com/alexandre-schaffner/revv/commit/88909bd721495e3d1fe9836c3c19aa1a083991e1))
+* gc stale walkthrough worktrees, switch to pr-N branches ([9b180e7](https://github.com/alexandre-schaffner/revv/commit/9b180e73a498210b83405fdaadb4d53424db6949))
+* harden CORS origin and reject unauthenticated WS connections ([3bc3e1d](https://github.com/alexandre-schaffner/revv/commit/3bc3e1dec7e029eac4c67deb674326dbaf6c329e))
+* **identity:** fork avatar upsert to background on /identity cold start ([5e32b6e](https://github.com/alexandre-schaffner/revv/commit/5e32b6e7cd5e2757c9383e5d0bce5709f108283e))
+* improve avatar letter contrast with near-white gradient ([dd0bd33](https://github.com/alexandre-schaffner/revv/commit/dd0bd337e6d887844811712353c65b816d03e58e))
+* improve loading looks ([b731d3b](https://github.com/alexandre-schaffner/revv/commit/b731d3ba682036f233c5f128f2d0eae6f4f7e532))
+* include head commit in PR commits dropdown ([3387d2b](https://github.com/alexandre-schaffner/revv/commit/3387d2b29c6ab2342faa8012c9ef83a3d19c3308))
+* install ([a8a5bbf](https://github.com/alexandre-schaffner/revv/commit/a8a5bbf1b716795731daed5784e55fa74a8f91e5))
+* install ([e2a59e9](https://github.com/alexandre-schaffner/revv/commit/e2a59e93e0f7cebb759fa41e2b871bdb0790100f))
+* install ([3323215](https://github.com/alexandre-schaffner/revv/commit/33232158d3a20838f8a7f41f8fbc15959de362d8))
+* install ([9f0c050](https://github.com/alexandre-schaffner/revv/commit/9f0c050e7e413f521ac775911b1d85ae75d92e6c))
+* install ([ade0cbf](https://github.com/alexandre-schaffner/revv/commit/ade0cbf760f9b40472a8fb2a4797641fa4f5c6fd))
+* install ([7377016](https://github.com/alexandre-schaffner/revv/commit/73770169c7238a51d66a41b3aa04a53617d5b759))
+* installation ([d2adc05](https://github.com/alexandre-schaffner/revv/commit/d2adc05e31c9cc129ce2d54b73281bc335ce499c))
+* **install:** lowercase PLATFORM via tr for bash 3.2 compatibility ([2d4ee41](https://github.com/alexandre-schaffner/revv/commit/2d4ee414e9c60ace7282726ec10b9a69e2888f5e))
+* **install:** use release bundles for desktop app ([b15b661](https://github.com/alexandre-schaffner/revv/commit/b15b661460a2a45b26118557a5e1375dbadde00f))
+* **install:** verify workspace deps landed + warn about stale dev DBs ([a24c728](https://github.com/alexandre-schaffner/revv/commit/a24c728ca508747026b231fe6dbdbe53b18ec431))
+* **layout:** slide right panel in from outside viewport ([#29](https://github.com/alexandre-schaffner/revv/issues/29)) ([eae034b](https://github.com/alexandre-schaffner/revv/commit/eae034bb0dc4a1c291af0e355c6acd6db5515b0c))
+* make avatar letter gradient text fully opaque ([b4bda14](https://github.com/alexandre-schaffner/revv/commit/b4bda14e13f5abdb786b256eaa5634f7043b8276))
+* make avatar letter gradient text visible ([2d44d0c](https://github.com/alexandre-schaffner/revv/commit/2d44d0cdd46ad00d6fee10d475a119abf340764b))
+* make commits dropdown scrollable ([2110fbb](https://github.com/alexandre-schaffner/revv/commit/2110fbb0d36a0e96c4017cfb781d214b4f998b90))
+* minor fixes ([7c9c102](https://github.com/alexandre-schaffner/revv/commit/7c9c102283b5c40da51ab0ddf0fd749b6948b955))
+* missing deps ([8f7e0e2](https://github.com/alexandre-schaffner/revv/commit/8f7e0e2489811134a541d6fa06c3db8276ac1f23))
+* onboarding ([3d64fbe](https://github.com/alexandre-schaffner/revv/commit/3d64fbea66f13993fe9ec098ee47736e90ba1ac9))
+* onboarding ([a92e22a](https://github.com/alexandre-schaffner/revv/commit/a92e22abb32baee396d001ed282bc2afd14acad5))
+* onboarding resume, sidebar org filter, empty repo display ([09c4b94](https://github.com/alexandre-schaffner/revv/commit/09c4b946e6c188844a7b742b64a0ad59db3afd7c))
+* opencode agent ([c436bd4](https://github.com/alexandre-schaffner/revv/commit/c436bd4a69e9e360cf55bd9e742e5ba132b4e86f))
+* pin LOC badge to right edge of file tree on horizontal scroll ([dafefc3](https://github.com/alexandre-schaffner/revv/commit/dafefc33e97c4246251751cac5a90c357a9f3b3e))
+* pr fetching ([bd3f835](https://github.com/alexandre-schaffner/revv/commit/bd3f835426f578d56f4e3867a09bc0082988a998))
+* PR not taken in account when using in-app merge button ([dff3dae](https://github.com/alexandre-schaffner/revv/commit/dff3dae6eb6d5c68ee1851757f6902e4b86b349c))
+* PR not taken in account when using in-app merge button ([85d7f41](https://github.com/alexandre-schaffner/revv/commit/85d7f414907328c69ab74c85dc62f96c059f0bd4))
+* prevent walkthrough race conditions and consolidate per-PR state ([f8f970b](https://github.com/alexandre-schaffner/revv/commit/f8f970b45db944ad6cf33363109f9270d8c114af))
+* pull button ([3a2102e](https://github.com/alexandre-schaffner/revv/commit/3a2102ef42b9e775eeb881f9ed771bebff2f4169))
+* recap ([b309f35](https://github.com/alexandre-schaffner/revv/commit/b309f35ecbd1b81663f0cf8ec289fe828e6e0d93))
+* recap ([d14da1d](https://github.com/alexandre-schaffner/revv/commit/d14da1d0f6f9aea2e45256a05b00e236df1292bd))
+* **release:** configure release-please root package ([12cbe23](https://github.com/alexandre-schaffner/revv/commit/12cbe23880585ad41ba50577952c13f7a724a355))
+* **remote-user:** preserve providerUserId when caller passes empty string ([c386bc6](https://github.com/alexandre-schaffner/revv/commit/c386bc66b0bef4efaf4c26ddf1d45a3ce3319371))
+* remove invalid bootstrap-sha input from release-please-action v4 ([f47a5c7](https://github.com/alexandre-schaffner/revv/commit/f47a5c7b1d74ba0c97a8a82f4a5832ea0d2214f6))
+* retry/resume walkthrough ([deb7cee](https://github.com/alexandre-schaffner/revv/commit/deb7ceedafb6bdb9061ebf111038693daf0638a7))
+* **server:** let setStatus errors propagate instead of swallowing ([fbdb74f](https://github.com/alexandre-schaffner/revv/commit/fbdb74f68ef85ee8e6aac701fe0428987b3747db))
+* **server:** recover repos per-account during pre-squash migration ([f6906b8](https://github.com/alexandre-schaffner/revv/commit/f6906b857341219e3f97f77189274e6a457aa0e7))
+* sidebar search offset ([#79](https://github.com/alexandre-schaffner/revv/issues/79)) ([e219b7d](https://github.com/alexandre-schaffner/revv/commit/e219b7d7ac21d62a0b2620332de97ed6a39395ed))
+* simple vertical gradient text for avatar letters ([4857c7d](https://github.com/alexandre-schaffner/revv/commit/4857c7d902af6fc9ad5c3102560766af313a6e3f))
+* small fixes ([9b5203f](https://github.com/alexandre-schaffner/revv/commit/9b5203faa7c3e36494e1762892784c0a78e66195))
+* stepper ([f0ea76f](https://github.com/alexandre-schaffner/revv/commit/f0ea76f04f51807ee29ac2d5a92dec039cd96647))
+* strengthen avatar letter tint visibility ([6bd6023](https://github.com/alexandre-schaffner/revv/commit/6bd60233ca7755c9656188ca65e2591b31155462))
+* strengthen avatar letter visibility ([4baf79e](https://github.com/alexandre-schaffner/revv/commit/4baf79e106af2c248a9eaca8469c859caaf80428))
+* timeout during walkthrough generation when using opencode ([2d843ad](https://github.com/alexandre-schaffner/revv/commit/2d843adf1c28ce69fc592cf37f34b9174b39329e))
+* typo ([c67f68d](https://github.com/alexandre-schaffner/revv/commit/c67f68d91a36632251aead22d9b3ab0e25947a4a))
+* unstable opportunity search ([ec201b8](https://github.com/alexandre-schaffner/revv/commit/ec201b8480aa4503c752251e7075154ad9536bcf))
+* use body font for avatar letter overlay ([8311d30](https://github.com/alexandre-schaffner/revv/commit/8311d309c0e7f176b976c98c420ab8c4e53ca60e))
+* use mono font for avatar letter overlay ([4817049](https://github.com/alexandre-schaffner/revv/commit/4817049da05c0cadd47cd4280541e1bca2e2d2d3))
+* various fixes ([897dd58](https://github.com/alexandre-schaffner/revv/commit/897dd583ea5475dc40680e98ee52d610ae49f893))
+* vivid pastel gradient text for avatar letters ([0a68da8](https://github.com/alexandre-schaffner/revv/commit/0a68da81652727aa060aa33a3746ea14e0ae63b8))
+* walkthrough concurrency and stale resource cleanup ([273ea46](https://github.com/alexandre-schaffner/revv/commit/273ea46fff061526db1fb4db61aef536780aeedd))
+* walkthrough gen false positive timeout ([babbbec](https://github.com/alexandre-schaffner/revv/commit/babbbec0b8b4c906a31139112c3feed6c1516b3c))
+* **web:** align sidebar search below header ([#78](https://github.com/alexandre-schaffner/revv/issues/78)) ([215464e](https://github.com/alexandre-schaffner/revv/commit/215464ebfe497459fb9e707ffb16e967aea015b0))
+* **web:** extract RAIL_WIDTH to shared constant module ([5192224](https://github.com/alexandre-schaffner/revv/commit/51922242dfc9f5cfefa10a79f3e8282fbc5b54fc))
+* **web:** remove dead code from orgs and sidebar stores ([6b7bf39](https://github.com/alexandre-schaffner/revv/commit/6b7bf399d9e52652dea388730073b14955fcf6c2))
+
+## [0.1.1](https://github.com/alexandre-schaffner/revv/compare/v0.1.0...v0.1.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **ci:** attest discovered tauri bundles ([48234eb](https://github.com/alexandre-schaffner/revv/commit/48234eb3c96b4cebac4d6b46c476a76990195cd7))
+* **ci:** format release config output ([c553d3b](https://github.com/alexandre-schaffner/revv/commit/c553d3b9afc9cbd2aaa75487b1ed78f9ab3755c9))
+* **ci:** format updater endpoint config ([4f3c2f6](https://github.com/alexandre-schaffner/revv/commit/4f3c2f6fd290bb5c0ec2be607016bcf909b8fd00))
+* **ci:** repair release-please v4 output names + add Tauri upload fallback ([466db2d](https://github.com/alexandre-schaffner/revv/commit/466db2d0aa0b00aa9afe5b7c41cec1472518bf78))
+* **ci:** upload release assets before publishing immutable releases ([58e7ce6](https://github.com/alexandre-schaffner/revv/commit/58e7ce66c3ab5c421a68987392082cb9b35ec8d6))
+* **ci:** use existing tauri-action tag ([58c03cd](https://github.com/alexandre-schaffner/revv/commit/58c03cd06b4dbc7feada8f8970cdfce520599de3))
+* **desktop:** use secure updater endpoint ([bba3f1d](https://github.com/alexandre-schaffner/revv/commit/bba3f1d2a8b36cfdfc82fdeada371cdd571d5964))
+* **install:** use release bundles for desktop app ([b15b661](https://github.com/alexandre-schaffner/revv/commit/b15b661460a2a45b26118557a5e1375dbadde00f))
+* **install:** verify workspace deps landed + warn about stale dev DBs ([a24c728](https://github.com/alexandre-schaffner/revv/commit/a24c728ca508747026b231fe6dbdbe53b18ec431))
+* **release:** configure release-please root package ([12cbe23](https://github.com/alexandre-schaffner/revv/commit/12cbe23880585ad41ba50577952c13f7a724a355))
+* sidebar search offset ([#79](https://github.com/alexandre-schaffner/revv/issues/79)) ([e219b7d](https://github.com/alexandre-schaffner/revv/commit/e219b7d7ac21d62a0b2620332de97ed6a39395ed))
+* **web:** align sidebar search below header ([#78](https://github.com/alexandre-schaffner/revv/issues/78)) ([215464e](https://github.com/alexandre-schaffner/revv/commit/215464ebfe497459fb9e707ffb16e967aea015b0))
+
+## [0.1.0](https://github.com/alexandre-schaffner/revv/compare/v0.0.1...v0.1.0) (2026-05-25)
+
+
+### Features
+
+* add Discard and Cherry-pick actions to proposed-changes strip ([9122d56](https://github.com/alexandre-schaffner/revv/commit/9122d56bbce6d9b9b1cf3b417fc75cb323705a35))
+* add shimmer on generate changes button ([b0a408e](https://github.com/alexandre-schaffner/revv/commit/b0a408e8679d8af414d3bdd8465f04874964aece))
+* auto-update ([01ff498](https://github.com/alexandre-schaffner/revv/commit/01ff4985f7991370a45a882d16ac11b1cf9fe467))
+* awesome ui improvements ([8e35d8d](https://github.com/alexandre-schaffner/revv/commit/8e35d8ddc25194767f1da4af43c4ab6d966e737b))
+* better walkthrough ([71529ed](https://github.com/alexandre-schaffner/revv/commit/71529edc432f52c4ce216966a6e45d8080646742))
+* big clean 2 ([34c10a1](https://github.com/alexandre-schaffner/revv/commit/34c10a15ab350f19add4ed6b475856bd0cc36381))
+* big improvements ([3db8847](https://github.com/alexandre-schaffner/revv/commit/3db8847f8cdb9abbb73f072cc3f132a955528dfa))
+* bigcleaning ([318a93a](https://github.com/alexandre-schaffner/revv/commit/318a93a1705e5ff5e28750f191d4de8208cfc4e3))
+* **cache:** SSHSIG-anchored team cache integrity ([#74](https://github.com/alexandre-schaffner/revv/issues/74)) ([4b9bfae](https://github.com/alexandre-schaffner/revv/commit/4b9bfaef42005951c5d0fd8ee0f3fc4734846147))
+* **chat:** float composer over conversation and fix initial textarea sizing ([#25](https://github.com/alexandre-schaffner/revv/issues/25)) ([07ca0cf](https://github.com/alexandre-schaffner/revv/commit/07ca0cfd8eec59d134e514288bd49b1ae3590ecf))
+* **chat:** reattach queue + composer on a shared glass surface ([#28](https://github.com/alexandre-schaffner/revv/issues/28)) ([fbab266](https://github.com/alexandre-schaffner/revv/commit/fbab2665d3fb28f459d80b7a76bc16544c7c9856))
+* CI ([35298f3](https://github.com/alexandre-schaffner/revv/commit/35298f3e1b99f38e68bce1394f33dc638ab0de40))
+* clean pt2 ([c15c45c](https://github.com/alexandre-schaffner/revv/commit/c15c45cdb04d8eef05e0e285e9c77e5c7acc789c))
+* full renaming ([28e8103](https://github.com/alexandre-schaffner/revv/commit/28e8103067406fd53ff354ce647e8e866c9b4738))
+* gradient text overlay for repo avatars ([ead0618](https://github.com/alexandre-schaffner/revv/commit/ead0618f3328aafa02fb02a51f6db643931383d0))
+* instrumentation ([cb15c63](https://github.com/alexandre-schaffner/revv/commit/cb15c63fdac771ec7b665081e9bdcb701ca9b8b6))
+* left pane rework ([198e950](https://github.com/alexandre-schaffner/revv/commit/198e950b4c666f9118839e86997174300163f573))
+* left pane rework ([d71368e](https://github.com/alexandre-schaffner/revv/commit/d71368e6eb9229540ecdbd8da0765fca375620e3))
+* merge button ([001da9b](https://github.com/alexandre-schaffner/revv/commit/001da9b99472cff5e300596f35f077c96edc5a1a))
+* merge button ([a26877e](https://github.com/alexandre-schaffner/revv/commit/a26877e6e943fee2904c4e2359a5eefce35a0678))
+* merge button ([bb2f39c](https://github.com/alexandre-schaffner/revv/commit/bb2f39c36e114f99d68e96f77e0b9b4d8867bfb9))
+* migrate OpenCode provider to @opencode-ai/sdk ([8308745](https://github.com/alexandre-schaffner/revv/commit/83087451737b1d2ba63c1fbcb4e04d9a6ea96456))
+* migrate OpenCode provider to @opencode-ai/sdk ([1467877](https://github.com/alexandre-schaffner/revv/commit/14678771aca57a3186cefbdb4575e45e52480fd6))
+* multi-account ([871fd11](https://github.com/alexandre-schaffner/revv/commit/871fd110612ecaf20ef4ee2d551eb22a689e3331))
+* onoarding ([8c7339c](https://github.com/alexandre-schaffner/revv/commit/8c7339c426586c068b35a5718b430b099bc0f40a))
+* owner-hue fluid SVG gradient avatars ([fc37d18](https://github.com/alexandre-schaffner/revv/commit/fc37d18164c883870df33016ce1673419bf42ad3))
+* phosphore ([d5037ab](https://github.com/alexandre-schaffner/revv/commit/d5037abe64d749de9f3aa1764143e5fd2eaf6faf))
+* pin PRs ([064bb9b](https://github.com/alexandre-schaffner/revv/commit/064bb9baa72371c55abec7d41ce480c288853675))
+* **prs:** one-week retention for archived PRs with poll-time backfill ([7097e0d](https://github.com/alexandre-schaffner/revv/commit/7097e0d3ab553dc0f8f58562775e5b70c5950e1f))
+* **prs:** one-week retention for archived PRs with poll-time backfill ([d32f4d4](https://github.com/alexandre-schaffner/revv/commit/d32f4d4c3ddcdac63bd2b9114df19639b7373ee9))
+* **prs:** optimistic mutations for owner PR actions ([d0b1091](https://github.com/alexandre-schaffner/revv/commit/d0b1091216cd1ad9a7aff9ba3d2d59cbcc4e53c8))
+* **prs:** optimistic mutations for owner PR actions with entity-scoped rollback ([29cc984](https://github.com/alexandre-schaffner/revv/commit/29cc984a418c8f7ed5a8f9f890870d5140d7b9cd))
+* **recaps:** chapter rewrite + per-theme summaries + aligned action bars ([#33](https://github.com/alexandre-schaffner/revv/issues/33)) ([ba88ed4](https://github.com/alexandre-schaffner/revv/commit/ba88ed4e1be1c58a266f81930af2079cd39b7f85))
+* redesigned score cards ([c0acdea](https://github.com/alexandre-schaffner/revv/commit/c0acdea97b8b25628222db5e191a972e5ccbe44d))
+* redesigned score cards ([b4668ff](https://github.com/alexandre-schaffner/revv/commit/b4668ff0e90f2d5ad4a530334a866bdd58a74e85))
+* **release:** release-please + Sigstore-signed installer artifacts ([#72](https://github.com/alexandre-schaffner/revv/issues/72)) ([5834195](https://github.com/alexandre-schaffner/revv/commit/58341955a98d18f3a1ea3ad52a28697fbea5deb0))
+* relooking ([52ce7fd](https://github.com/alexandre-schaffner/revv/commit/52ce7fd1784fb0c6957865da1e566273c562f992))
+* relooking ([61ffd42](https://github.com/alexandre-schaffner/revv/commit/61ffd42a7b2ec2efe07a136fe246516f7f4dd162))
+* remote cache ([e817e9c](https://github.com/alexandre-schaffner/revv/commit/e817e9cd4e1a70b38102835bf3b2d243f15a1cf5))
+* remote cache ([10cd0d2](https://github.com/alexandre-schaffner/revv/commit/10cd0d2ec6fd26be630fae1deb64d000815f0a77))
+* remote cache ([94b030f](https://github.com/alexandre-schaffner/revv/commit/94b030fed61b55b0eab75d9980116d30c1dafab7))
+* remove useless files + minor fixes ([0802b54](https://github.com/alexandre-schaffner/revv/commit/0802b54207f65b66739364d52cf99ac449429b70))
+* settings ([53dcf2e](https://github.com/alexandre-schaffner/revv/commit/53dcf2e4ca0e156792ee7228e8337a2af4e5c60d))
+* switch to GitHub Device Code OAuth flow ([45bc6a6](https://github.com/alexandre-schaffner/revv/commit/45bc6a66bb8f2f84f344315662d821d735c3552b))
+* switch to GitHub Device Code OAuth flow ([df58d1b](https://github.com/alexandre-schaffner/revv/commit/df58d1bbcac0fc8e1099c0b619eeb2e21ebb37ce))
+* **tabs:** ⌘+number shortcut hints on cmd hold ([#27](https://github.com/alexandre-schaffner/revv/issues/27)) ([14427a0](https://github.com/alexandre-schaffner/revv/commit/14427a0cba3303f23cfc3bcedc21dbac5a4633fe))
+* tray app ([6ef5f4d](https://github.com/alexandre-schaffner/revv/commit/6ef5f4d9546b94ea9daea3c2032d1d6bd3b73097))
+* use Newsreader font for avatar letter overlay ([1cd9e92](https://github.com/alexandre-schaffner/revv/commit/1cd9e928b472f6bcd1b85c73dbce827d7a90aa71))
+* various improvements ([bbdac33](https://github.com/alexandre-schaffner/revv/commit/bbdac33bf913adb30931fb389c49196427f527f2))
+* **walkthrough:** shimmer-grouped tool calls + chronological thoughts toggle ([#34](https://github.com/alexandre-schaffner/revv/issues/34)) ([80db63c](https://github.com/alexandre-schaffner/revv/commit/80db63c29b60f9c2e116af5aa9ce7e055ef407b5))
+* windows install ([02f409f](https://github.com/alexandre-schaffner/revv/commit/02f409f230ded857ae0f69e8e246c065d3fa47e7))
+
+
+### Bug Fixes
+
+* agent detection ([c5dbfef](https://github.com/alexandre-schaffner/revv/commit/c5dbfefc0ae50998eb82c95273d6b7d3adf399f0))
+* align release-please manifest with actual version (0.0.1) ([12e5f70](https://github.com/alexandre-schaffner/revv/commit/12e5f70485c64920da2ca78c05fcb869f7f6739c))
+* avatars ([c8610b8](https://github.com/alexandre-schaffner/revv/commit/c8610b81220303960aaa30023eaacb9fee12a7c7))
+* bundled client_id + README update ([c99ed5d](https://github.com/alexandre-schaffner/revv/commit/c99ed5d27ea3607c76cde8301fc2ece1c4a8d3b5))
+* chat ([25da7dc](https://github.com/alexandre-schaffner/revv/commit/25da7dc3837f66facf856cb5bb7021a855a9b729))
+* chat ([1909156](https://github.com/alexandre-schaffner/revv/commit/190915651c28589dda67aa217fbaa3bd9089e5dd))
+* chat ([c7b03e3](https://github.com/alexandre-schaffner/revv/commit/c7b03e33d117d7fa425d192270c4a13d636bda9a))
+* ci ([39dc411](https://github.com/alexandre-schaffner/revv/commit/39dc411b43a90997225f7f10251cd81ea68e8039))
+* CI ([c7cbd33](https://github.com/alexandre-schaffner/revv/commit/c7cbd33db392ab13ffac1bbe2f52b8960f112b13))
+* CI typecheck and lint failures ([d82043c](https://github.com/alexandre-schaffner/revv/commit/d82043cf82d0ba490c4ea1186deaf65c4acbe0ab))
+* **ci:** attest discovered tauri bundles ([48234eb](https://github.com/alexandre-schaffner/revv/commit/48234eb3c96b4cebac4d6b46c476a76990195cd7))
+* **ci:** format updater endpoint config ([4f3c2f6](https://github.com/alexandre-schaffner/revv/commit/4f3c2f6fd290bb5c0ec2be607016bcf909b8fd00))
+* **ci:** publish nightly as per-SHA tags to sidestep immutable releases ([#77](https://github.com/alexandre-schaffner/revv/issues/77)) ([99fea12](https://github.com/alexandre-schaffner/revv/commit/99fea12c870da8e776845395dc3385ac342e9f5f))
+* **ci:** repair release-please v4 output names + add Tauri upload fallback ([466db2d](https://github.com/alexandre-schaffner/revv/commit/466db2d0aa0b00aa9afe5b7c41cec1472518bf78))
+* **ci:** top-level permissions on release & nightly workflows ([#76](https://github.com/alexandre-schaffner/revv/issues/76)) ([97b566e](https://github.com/alexandre-schaffner/revv/commit/97b566e3f46b7f7866304aca10bcec6b0ec380e1))
+* **ci:** upload release assets before publishing immutable releases ([58e7ce6](https://github.com/alexandre-schaffner/revv/commit/58e7ce66c3ab5c421a68987392082cb9b35ec8d6))
+* **ci:** use existing tauri-action tag ([58c03cd](https://github.com/alexandre-schaffner/revv/commit/58c03cd06b4dbc7feada8f8970cdfce520599de3))
+* comments not showing in diff ([67abbb4](https://github.com/alexandre-schaffner/revv/commit/67abbb41cce6d7303a789ffefb59c9f6c923d79d))
+* commit sync ([84fd85e](https://github.com/alexandre-schaffner/revv/commit/84fd85edade73a3fabaac2338a5f1f2040054b17))
+* **db:** remove fallback account assignment in pre-squash recovery ([4a994ff](https://github.com/alexandre-schaffner/revv/commit/4a994ff606576ee1fa96387885e6bf0a79fc6a8b))
+* **db:** repair migration journal so stock drizzle migrator works for every install state ([#24](https://github.com/alexandre-schaffner/revv/issues/24)) ([b974bf4](https://github.com/alexandre-schaffner/revv/commit/b974bf43c5ee0fc6bd90536af8033c28dddf91cb))
+* **db:** tighten remoteUsers joins to include provider predicate ([c032995](https://github.com/alexandre-schaffner/revv/commit/c03299589190e0bd15b4c1d4c5ca5d13ce3d446c))
+* default gh host ([32cb3b0](https://github.com/alexandre-schaffner/revv/commit/32cb3b086bf058123031cccf6ea0cb5a5ff4f74a))
+* **desktop:** use secure updater endpoint ([bba3f1d](https://github.com/alexandre-schaffner/revv/commit/bba3f1d2a8b36cfdfc82fdeada371cdd571d5964))
+* duplicate recap content ([88909bd](https://github.com/alexandre-schaffner/revv/commit/88909bd721495e3d1fe9836c3c19aa1a083991e1))
+* gc stale walkthrough worktrees, switch to pr-N branches ([9b180e7](https://github.com/alexandre-schaffner/revv/commit/9b180e73a498210b83405fdaadb4d53424db6949))
+* harden CORS origin and reject unauthenticated WS connections ([3bc3e1d](https://github.com/alexandre-schaffner/revv/commit/3bc3e1dec7e029eac4c67deb674326dbaf6c329e))
+* **identity:** fork avatar upsert to background on /identity cold start ([5e32b6e](https://github.com/alexandre-schaffner/revv/commit/5e32b6e7cd5e2757c9383e5d0bce5709f108283e))
+* improve avatar letter contrast with near-white gradient ([dd0bd33](https://github.com/alexandre-schaffner/revv/commit/dd0bd337e6d887844811712353c65b816d03e58e))
+* improve loading looks ([b731d3b](https://github.com/alexandre-schaffner/revv/commit/b731d3ba682036f233c5f128f2d0eae6f4f7e532))
+* include head commit in PR commits dropdown ([3387d2b](https://github.com/alexandre-schaffner/revv/commit/3387d2b29c6ab2342faa8012c9ef83a3d19c3308))
+* install ([a8a5bbf](https://github.com/alexandre-schaffner/revv/commit/a8a5bbf1b716795731daed5784e55fa74a8f91e5))
+* install ([e2a59e9](https://github.com/alexandre-schaffner/revv/commit/e2a59e93e0f7cebb759fa41e2b871bdb0790100f))
+* install ([3323215](https://github.com/alexandre-schaffner/revv/commit/33232158d3a20838f8a7f41f8fbc15959de362d8))
+* install ([9f0c050](https://github.com/alexandre-schaffner/revv/commit/9f0c050e7e413f521ac775911b1d85ae75d92e6c))
+* install ([ade0cbf](https://github.com/alexandre-schaffner/revv/commit/ade0cbf760f9b40472a8fb2a4797641fa4f5c6fd))
+* install ([7377016](https://github.com/alexandre-schaffner/revv/commit/73770169c7238a51d66a41b3aa04a53617d5b759))
+* installation ([d2adc05](https://github.com/alexandre-schaffner/revv/commit/d2adc05e31c9cc129ce2d54b73281bc335ce499c))
+* **install:** lowercase PLATFORM via tr for bash 3.2 compatibility ([2d4ee41](https://github.com/alexandre-schaffner/revv/commit/2d4ee414e9c60ace7282726ec10b9a69e2888f5e))
+* **install:** use release bundles for desktop app ([b15b661](https://github.com/alexandre-schaffner/revv/commit/b15b661460a2a45b26118557a5e1375dbadde00f))
+* **install:** verify workspace deps landed + warn about stale dev DBs ([a24c728](https://github.com/alexandre-schaffner/revv/commit/a24c728ca508747026b231fe6dbdbe53b18ec431))
+* **layout:** slide right panel in from outside viewport ([#29](https://github.com/alexandre-schaffner/revv/issues/29)) ([eae034b](https://github.com/alexandre-schaffner/revv/commit/eae034bb0dc4a1c291af0e355c6acd6db5515b0c))
+* make avatar letter gradient text fully opaque ([b4bda14](https://github.com/alexandre-schaffner/revv/commit/b4bda14e13f5abdb786b256eaa5634f7043b8276))
+* make avatar letter gradient text visible ([2d44d0c](https://github.com/alexandre-schaffner/revv/commit/2d44d0cdd46ad00d6fee10d475a119abf340764b))
+* make commits dropdown scrollable ([2110fbb](https://github.com/alexandre-schaffner/revv/commit/2110fbb0d36a0e96c4017cfb781d214b4f998b90))
+* minor fixes ([7c9c102](https://github.com/alexandre-schaffner/revv/commit/7c9c102283b5c40da51ab0ddf0fd749b6948b955))
+* missing deps ([8f7e0e2](https://github.com/alexandre-schaffner/revv/commit/8f7e0e2489811134a541d6fa06c3db8276ac1f23))
+* onboarding ([3d64fbe](https://github.com/alexandre-schaffner/revv/commit/3d64fbea66f13993fe9ec098ee47736e90ba1ac9))
+* onboarding ([a92e22a](https://github.com/alexandre-schaffner/revv/commit/a92e22abb32baee396d001ed282bc2afd14acad5))
+* onboarding resume, sidebar org filter, empty repo display ([09c4b94](https://github.com/alexandre-schaffner/revv/commit/09c4b946e6c188844a7b742b64a0ad59db3afd7c))
+* opencode agent ([c436bd4](https://github.com/alexandre-schaffner/revv/commit/c436bd4a69e9e360cf55bd9e742e5ba132b4e86f))
+* pin LOC badge to right edge of file tree on horizontal scroll ([dafefc3](https://github.com/alexandre-schaffner/revv/commit/dafefc33e97c4246251751cac5a90c357a9f3b3e))
+* pr fetching ([bd3f835](https://github.com/alexandre-schaffner/revv/commit/bd3f835426f578d56f4e3867a09bc0082988a998))
+* PR not taken in account when using in-app merge button ([dff3dae](https://github.com/alexandre-schaffner/revv/commit/dff3dae6eb6d5c68ee1851757f6902e4b86b349c))
+* PR not taken in account when using in-app merge button ([85d7f41](https://github.com/alexandre-schaffner/revv/commit/85d7f414907328c69ab74c85dc62f96c059f0bd4))
+* prevent walkthrough race conditions and consolidate per-PR state ([f8f970b](https://github.com/alexandre-schaffner/revv/commit/f8f970b45db944ad6cf33363109f9270d8c114af))
+* pull button ([3a2102e](https://github.com/alexandre-schaffner/revv/commit/3a2102ef42b9e775eeb881f9ed771bebff2f4169))
+* recap ([b309f35](https://github.com/alexandre-schaffner/revv/commit/b309f35ecbd1b81663f0cf8ec289fe828e6e0d93))
+* recap ([d14da1d](https://github.com/alexandre-schaffner/revv/commit/d14da1d0f6f9aea2e45256a05b00e236df1292bd))
+* **release:** configure release-please root package ([12cbe23](https://github.com/alexandre-schaffner/revv/commit/12cbe23880585ad41ba50577952c13f7a724a355))
+* **remote-user:** preserve providerUserId when caller passes empty string ([c386bc6](https://github.com/alexandre-schaffner/revv/commit/c386bc66b0bef4efaf4c26ddf1d45a3ce3319371))
+* remove invalid bootstrap-sha input from release-please-action v4 ([f47a5c7](https://github.com/alexandre-schaffner/revv/commit/f47a5c7b1d74ba0c97a8a82f4a5832ea0d2214f6))
+* retry/resume walkthrough ([deb7cee](https://github.com/alexandre-schaffner/revv/commit/deb7ceedafb6bdb9061ebf111038693daf0638a7))
+* **server:** let setStatus errors propagate instead of swallowing ([fbdb74f](https://github.com/alexandre-schaffner/revv/commit/fbdb74f68ef85ee8e6aac701fe0428987b3747db))
+* **server:** recover repos per-account during pre-squash migration ([f6906b8](https://github.com/alexandre-schaffner/revv/commit/f6906b857341219e3f97f77189274e6a457aa0e7))
+* sidebar search offset ([#79](https://github.com/alexandre-schaffner/revv/issues/79)) ([e219b7d](https://github.com/alexandre-schaffner/revv/commit/e219b7d7ac21d62a0b2620332de97ed6a39395ed))
+* simple vertical gradient text for avatar letters ([4857c7d](https://github.com/alexandre-schaffner/revv/commit/4857c7d902af6fc9ad5c3102560766af313a6e3f))
+* small fixes ([9b5203f](https://github.com/alexandre-schaffner/revv/commit/9b5203faa7c3e36494e1762892784c0a78e66195))
+* stepper ([f0ea76f](https://github.com/alexandre-schaffner/revv/commit/f0ea76f04f51807ee29ac2d5a92dec039cd96647))
+* strengthen avatar letter tint visibility ([6bd6023](https://github.com/alexandre-schaffner/revv/commit/6bd60233ca7755c9656188ca65e2591b31155462))
+* strengthen avatar letter visibility ([4baf79e](https://github.com/alexandre-schaffner/revv/commit/4baf79e106af2c248a9eaca8469c859caaf80428))
+* timeout during walkthrough generation when using opencode ([2d843ad](https://github.com/alexandre-schaffner/revv/commit/2d843adf1c28ce69fc592cf37f34b9174b39329e))
+* typo ([c67f68d](https://github.com/alexandre-schaffner/revv/commit/c67f68d91a36632251aead22d9b3ab0e25947a4a))
+* unstable opportunity search ([ec201b8](https://github.com/alexandre-schaffner/revv/commit/ec201b8480aa4503c752251e7075154ad9536bcf))
+* use body font for avatar letter overlay ([8311d30](https://github.com/alexandre-schaffner/revv/commit/8311d309c0e7f176b976c98c420ab8c4e53ca60e))
+* use mono font for avatar letter overlay ([4817049](https://github.com/alexandre-schaffner/revv/commit/4817049da05c0cadd47cd4280541e1bca2e2d2d3))
+* various fixes ([897dd58](https://github.com/alexandre-schaffner/revv/commit/897dd583ea5475dc40680e98ee52d610ae49f893))
+* vivid pastel gradient text for avatar letters ([0a68da8](https://github.com/alexandre-schaffner/revv/commit/0a68da81652727aa060aa33a3746ea14e0ae63b8))
+* walkthrough concurrency and stale resource cleanup ([273ea46](https://github.com/alexandre-schaffner/revv/commit/273ea46fff061526db1fb4db61aef536780aeedd))
+* walkthrough gen false positive timeout ([babbbec](https://github.com/alexandre-schaffner/revv/commit/babbbec0b8b4c906a31139112c3feed6c1516b3c))
+* **web:** align sidebar search below header ([#78](https://github.com/alexandre-schaffner/revv/issues/78)) ([215464e](https://github.com/alexandre-schaffner/revv/commit/215464ebfe497459fb9e707ffb16e967aea015b0))
+* **web:** extract RAIL_WIDTH to shared constant module ([5192224](https://github.com/alexandre-schaffner/revv/commit/51922242dfc9f5cfefa10a79f3e8282fbc5b54fc))
+* **web:** remove dead code from orgs and sidebar stores ([6b7bf39](https://github.com/alexandre-schaffner/revv/commit/6b7bf399d9e52652dea388730073b14955fcf6c2))

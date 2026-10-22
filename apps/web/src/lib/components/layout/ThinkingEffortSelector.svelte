@@ -1,41 +1,71 @@
 <script lang="ts">
-import type { AiAgent, ThinkingEffort } from "@revv/shared";
+import {
+  AUTO_SENTINEL,
+  clampThinkingEffort,
+  isAutoSentinel,
+  type ThinkingEffort,
+  type ThinkingEffortSetting,
+} from "@revv/shared";
 import Brain from "phosphor-svelte/lib/Brain";
 import Check from "phosphor-svelte/lib/Check";
+import Sparkle from "phosphor-svelte/lib/Sparkle";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import {
-  agentSupportsThinkingEffort,
-  OPUS_ONLY_EFFORTS,
-  THINKING_EFFORT_OPTIONS,
-} from "$lib/constants/models";
-import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+  getSettings,
+  getThinkingEffortOptions,
+  isAutoEffortOffered,
+  resolveChatAgentId,
+  updateSettings,
+} from "$lib/stores/settings.svelte";
+import { sizingForSelectedPr } from "$lib/stores/walkthrough-sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
-let currentAgent = $derived((getSettings()?.aiAgent ?? "opencode") as AiAgent);
-let currentModel = $derived(getSettings()?.aiModel ?? "");
-let isOpus47 = $derived(currentModel === "claude-opus-4-7");
-let visible = $derived(agentSupportsThinkingEffort(currentAgent));
-let options = $derived(
-  isOpus47
-    ? THINKING_EFFORT_OPTIONS
-    : THINKING_EFFORT_OPTIONS.filter((o) => !OPUS_ONLY_EFFORTS.has(o.value)),
+// Thinking-effort options follow the selected chat agent's capabilities.
+let currentId = $derived(resolveChatAgentId(getSettings()));
+let options = $derived(getThinkingEffortOptions(currentId));
+let visible = $derived(options.length > 0);
+let stored = $derived(getSettings()?.aiThinkingEffort ?? "medium");
+let isAuto = $derived(isAutoSentinel(stored));
+let currentEffort = $derived(
+  isAuto ? null : clampThinkingEffort(currentId, stored as ThinkingEffort, getSettings()?.aiModel),
 );
-let currentEffort = $derived((getSettings()?.aiThinkingEffort ?? "medium") as ThinkingEffort);
-let currentLabel = $derived(options.find((o) => o.value === currentEffort)?.label ?? "High");
 
-// If a restricted effort is selected and model changes away from Opus 4.7, reset to 'high'
-$effect(() => {
-  if (!isOpus47 && OPUS_ONLY_EFFORTS.has(currentEffort)) {
-    updateSettings({ aiThinkingEffort: "high" });
-  }
-});
+let autoOffered = $derived(isAutoEffortOffered());
 
-function select(value: ThinkingEffort) {
+// What Auto resolves to for this PR at its current head; tracking the SHA re-sizes on pull.
+const selectedSizing = sizingForSelectedPr(() => isAuto && autoOffered);
+let sizing = $derived(selectedSizing.sizing);
+
+let autoEffort = $derived(
+  isAuto && sizing?.status === "ready" ? (sizing.thinkingEffort ?? null) : null,
+);
+let autoResolvedLabel = $derived(
+  autoEffort === null ? null : (options.find((o) => o.value === autoEffort)?.label ?? autoEffort),
+);
+let effectiveEffort = $derived(autoEffort ?? currentEffort);
+let currentLabel = $derived(
+  isAuto
+    ? `Auto${autoResolvedLabel ? ` · ${autoResolvedLabel}` : ""}`
+    : (options.find((o) => o.value === effectiveEffort)?.label ?? options[0]?.label ?? "High"),
+);
+let triggerTitle = $derived(
+  isAuto
+    ? "Sized for this pull request, from how much deliberation the change deserves. Pick a tier to choose it yourself."
+    : undefined,
+);
+
+// If the selected effort isn't valid for the current agent (e.g. a Claude-only
+// tier after switching to codex, or any tier after switching to an agent with
+// no thinking-effort knob), the launch path clamps it (see presets.ts). The
+// persisted preference is intentionally left untouched here — switching back
+// to the original agent should restore the original tier, not a clamped one.
+
+function select(value: ThinkingEffortSetting) {
   updateSettings({ aiThinkingEffort: value });
   open = false;
 }
@@ -44,21 +74,42 @@ function select(value: ThinkingEffort) {
 {#if visible}
     <PopoverRoot bind:open>
         <PopoverTrigger>
-            <SelectTrigger label={currentLabel}>
+            <SelectTrigger label={currentLabel} title={triggerTitle}>
                 {#snippet icon()}
-                    <Brain size={12} class="text-text-muted" />
+                    {#if isAuto}
+                        <Sparkle size={12} class="text-text-muted" />
+                    {:else}
+                        <Brain size={12} class="text-text-muted" />
+                    {/if}
                 {/snippet}
             </SelectTrigger>
         </PopoverTrigger>
-        <PopoverContent class="w-40 p-1" align="start" side="top">
+        <PopoverContent class="w-44 p-1" align="start" side="top">
+            {#if autoOffered}
+                <button
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+                    onclick={() => select(AUTO_SENTINEL)}
+                >
+                    <Sparkle size={12} class="shrink-0 text-text-muted" />
+                    <span class="min-w-0 flex-1 truncate text-left">
+                        Auto
+                        {#if autoResolvedLabel}
+                            <span class="text-text-muted">· {autoResolvedLabel}</span>
+                        {/if}
+                    </span>
+                    {#if isAuto}
+                        <Check size={12} class="shrink-0 text-accent" />
+                    {/if}
+                </button>
+            {/if}
             {#each options as opt (opt.value)}
                 <button
                     class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
                     onclick={() => select(opt.value)}
                 >
                     {opt.label}
-                    {#if currentEffort === opt.value}
-                        <Check size={12} weight="regular" class="text-accent" />
+                    {#if !isAuto && effectiveEffort === opt.value}
+                        <Check size={12} class="text-accent" />
                     {/if}
                 </button>
             {/each}

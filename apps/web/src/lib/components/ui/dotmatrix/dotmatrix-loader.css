@@ -44,8 +44,8 @@
   --dmx-opacity-mid: 0.32;
   --dmx-opacity-peak: 1;
   /* Default keyframe cycle. Variants that need a different cadence set
-	   their own animation-duration directly (e.g. square-9 uses 5200ms). */
-  --dmx-cycle: 1500ms;
+	   their own animation-duration directly (e.g. square-9 uses 3500ms). */
+  --dmx-cycle: 1000ms;
 }
 
 .dotmatrix.dotmatrix--size-small {
@@ -315,9 +315,9 @@
   }
 }
 
-/* ── square-9 — Glyph Pulse (braille bits, 5.2s cycle, 52 steps) ─────────── */
+/* ── square-9 — Glyph Pulse (braille bits, 3.5s cycle, 52 steps) ─────────── */
 .dotmatrix.dotmatrix--square-9 .dotmatrix-dot.dmx-square9-bit {
-  animation-duration: 5200ms;
+  animation-duration: 3500ms;
   animation-timing-function: steps(52, end);
   animation-iteration-count: infinite;
 }

@@ -1,4 +1,4 @@
-import type { ThreadMessage } from "@revv/shared";
+import type { ReviewMode, ThreadMessage } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../../runtime";
 import { ReviewService } from "../../../services/Review";
@@ -11,12 +11,16 @@ import { ReviewService } from "../../../services/Review";
  * in a single round-trip, avoiding the N+1 of separate fetches for the
  * session, its threads, and each thread's messages.
  */
-export function activeSessionHandler(prId: string) {
+export function coerceReviewMode(value: unknown): ReviewMode {
+  return value === "author" ? "author" : "reviewer";
+}
+
+export function activeSessionHandler(prId: string, mode: ReviewMode = "reviewer") {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const reviewService = yield* ReviewService;
 
-      const reviewSession = yield* reviewService.getOrCreateActiveSession(prId);
+      const reviewSession = yield* reviewService.getOrCreateActiveSession(prId, mode);
       const threads = yield* reviewService.getThreadsForSession(reviewSession.id);
 
       const messages: Record<string, ThreadMessage[]> = {};

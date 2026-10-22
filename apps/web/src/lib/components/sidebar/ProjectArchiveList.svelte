@@ -1,7 +1,7 @@
 <script lang="ts">
 import Archive from "phosphor-svelte/lib/Archive";
-import ChevronDown from "phosphor-svelte/lib/CaretDown";
-import ChevronRight from "phosphor-svelte/lib/CaretRight";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
+import CaretRight from "phosphor-svelte/lib/CaretRight";
 import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
 import {
   fetchMoreArchived,
@@ -60,9 +60,9 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 			aria-expanded={expanded}
 		>
 			{#if expanded}
-				<ChevronDown size={12} aria-hidden="true" />
+				<CaretDown size={12} aria-hidden="true" />
 			{:else}
-				<ChevronRight size={12} weight="fill" aria-hidden="true" />
+				<CaretRight size={12} aria-hidden="true" />
 			{/if}
 			<Archive size={12} aria-hidden="true" />
 			<span class="archive-label">Show closed</span>
@@ -78,6 +78,7 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 				{:else}
 					{#each archivedPrs as pr, i (pr.id)}
 						<div
+							class="archive-row"
 							in:gsapFadeY={{
 								y: 6,
 								duration: tokens.quick,
@@ -113,6 +114,13 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 	.archive-section {
 		border-top: 1px solid var(--color-border-subtle, var(--color-border));
 		padding: 6px 4px 4px;
+	}
+
+	/* Off-screen rows skip layout / paint — keeps sidebar-width animations
+	   cheap even with hundreds of archived PRs loaded. */
+	.archive-row {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 48px;
 	}
 
 	.archive-toggle {

@@ -1,7 +1,10 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
+import House from "phosphor-svelte/lib/House";
 import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
+import { goto } from "$app/navigation";
+import { page } from "$app/state";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
@@ -20,6 +23,12 @@ type OwnerGroup = {
 
 const repos = $derived(getRepositories());
 const activeRepoId = $derived(getSelectedRepoId());
+const isHome = $derived(page.url.pathname === "/");
+
+async function handleHome(): Promise<void> {
+  if (page.url.pathname === "/") return;
+  await goto("/");
+}
 
 // Group repos by owner (case-insensitive). First-seen owner / first-seen
 // repo order preserves whatever the server returned so grouping doesn't
@@ -48,6 +57,25 @@ function handleAddRepo(): void {
 </script>
 
 <aside class="rail" aria-label="Projects">
+	<div class="rail-home">
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				<button
+					type="button"
+					class="rail-action home-button"
+					class:home-button--active={isHome}
+					onclick={handleHome}
+					aria-label="Home"
+					aria-current={isHome ? 'page' : undefined}
+				>
+					<House size={18} weight={isHome ? 'fill' : 'regular'} />
+				</button>
+			</Tooltip.Trigger>
+			<Tooltip.Content side="right" sideOffset={8}>Home</Tooltip.Content>
+		</Tooltip.Root>
+		<div class="rail-divider" aria-hidden="true"></div>
+	</div>
+
 	<div class="rail-top">
 		{#each ownerGroups as group (group.owner)}
 			{@const collapsed = isOwnerCollapsed(group.owner)}
@@ -89,7 +117,7 @@ function handleAddRepo(): void {
 												/>
 										{:else}
 											<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
-												<User size={14} weight="regular" />
+												<User size={14} />
 											</span>
 										{/if}
 											{#if isMulti}
@@ -108,7 +136,7 @@ function handleAddRepo(): void {
 											/>
 										{:else}
 											<span class="folder-pill-fallback" aria-hidden="true">
-												<User size={14} weight="regular" />
+												<User size={14} />
 											</span>
 										{/if}
 									{/if}
@@ -349,9 +377,10 @@ function handleAddRepo(): void {
 	/* When the active repo lives inside this collapsed folder, hint at
 	   it by tinting the chip toward the accent. Keeps the rail's
 	   "where am I?" answer scannable without resorting to colour-on
-	   every pill. Foreground uses --primary-foreground (white in both
-	   themes) rather than --color-bg-primary, which inverts in dark
-	   mode and would render black text on the accent. */
+	   every pill. Foreground uses --primary-foreground, the app's
+	   on-accent ink: white on light's deep teal, near-black on dark's
+	   luminous one. It is NOT white in both themes — the accent inverts
+	   with the theme, so a fixed white would read 2.4:1 in dark. */
 	.folder-pill--active .folder-pill-count {
 		background: var(--color-accent);
 		color: var(--color-primary-foreground);
@@ -416,6 +445,42 @@ function handleAddRepo(): void {
 	   so the centering reads cleanly. */
 	:global(.folder-pill-content .repo-button--active .avatar) {
 		box-shadow: 0 0 0 2px var(--color-accent, var(--color-text-primary));
+	}
+
+	.rail-home {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+		padding: 0 var(--spacing-inset) 6px;
+	}
+
+	.home-button {
+		position: relative;
+	}
+
+	.home-button--active {
+		background: var(--color-bg-elevated);
+		color: var(--color-text-primary);
+	}
+
+	.home-button--active::before {
+		content: '';
+		position: absolute;
+		left: -8px;
+		top: 8px;
+		bottom: 8px;
+		width: 3px;
+		border-radius: 0 2px 2px 0;
+		background: var(--color-accent, var(--color-text-primary));
+	}
+
+	.rail-divider {
+		width: 24px;
+		height: 1px;
+		flex-shrink: 0;
+		background: var(--color-border-subtle);
 	}
 
 	.rail-action {

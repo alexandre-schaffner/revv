@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
-import GitPullRequestCreateArrow from "phosphor-svelte/lib/GitPullRequest";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
+import CalendarDots from "phosphor-svelte/lib/CalendarDots";
+import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
 interface Props {
@@ -39,7 +39,7 @@ function handleNewPr(): void {
 						href="/repo/{repo.id}/recaps"
 						aria-label="Recaps for {repo.fullName}"
 					>
-						<Sparkles size={13} weight="fill" />
+						<CalendarDots size={13} />
 						<span class="header-link-label">Recaps</span>
 					</a>
 				</Tooltip.Trigger>
@@ -56,7 +56,7 @@ function handleNewPr(): void {
 						onclick={handleNewPr}
 						aria-label="Start a new pull request with the agent"
 					>
-						<GitPullRequestCreateArrow size={13} />
+						<GitPullRequest size={13} />
 						<span class="new-pr-label">New PR</span>
 					</button>
 				</Tooltip.Trigger>

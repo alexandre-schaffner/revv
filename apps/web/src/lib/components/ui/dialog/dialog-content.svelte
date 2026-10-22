@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Dialog as DialogPrimitive } from "bits-ui";
-import XIcon from "phosphor-svelte/lib/X";
+import X from "phosphor-svelte/lib/X";
 import type { ComponentProps, Snippet } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
@@ -30,6 +30,7 @@ let {
 				bind:this={ref}
 				{...props}
 				data-slot="dialog-content"
+				data-glass
 				class={cn(
 					"text-popover-foreground grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 text-sm sm:max-w-sm fixed top-[20%] inset-x-0 mx-auto z-50 w-full outline-none",
 					className
@@ -41,7 +42,7 @@ let {
 					<DialogPrimitive.Close data-slot="dialog-close">
 						{#snippet child({ props: closeProps })}
 							<Button variant="ghost" class="absolute top-3 right-3" size="icon-sm" {...closeProps}>
-								<XIcon />
+								<X />
 								<span class="sr-only">Close</span>
 							</Button>
 						{/snippet}

@@ -1,4 +1,6 @@
+import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
 import type { UpdateChannel } from "./constants";
+import type { JevSettings } from "./jev-settings";
 
 export type PullRequestStatus = "open" | "closed" | "merged";
 
@@ -23,6 +25,7 @@ export interface Repository {
   cloneStatus: CloneStatus;
   clonePath: string | null;
   cloneError: string | null;
+  managed: boolean;
   githubHost: string;
 }
 
@@ -38,6 +41,15 @@ export interface PullRequest {
   /** Raw avatar URL from the provider — used internally during sync to populate remote_users. */
   authorAvatarUrl: string | null;
   requestedReviewers: string[];
+  /**
+   * Logins @-mentioned in the PR body or in any of its review comments.
+   *
+   * Populated on the DB read path only (`rowToPr`); always `[]` when a PR is
+   * mapped straight from a GitHub API payload, since GitHub has no such field
+   * — mentions are parsed out of the body and merged with comment-sourced
+   * mentions during sync.
+   */
+  mentionedUsers: string[];
   status: PullRequestStatus;
   reviewStatus: ReviewStatus;
   /** GitHub draft state — `true` while the PR is in draft. */
@@ -54,6 +66,12 @@ export interface PullRequest {
   updatedAt: string;
   fetchedAt: string;
   closedAt: string | null;
+  /**
+   * GitHub's native stack this PR sits in, or null when it isn't stacked (or
+   * the host predates stacks). Not inferred from branch chains: a merged
+   * bottom PR gets retargeted and drops out of any branch walk.
+   */
+  stack: PrStackPlace | null;
 }
 
 export type IssueState = "open" | "closed";
@@ -98,30 +116,41 @@ export interface Issue {
   assignedToViewer: boolean;
 }
 
-export type ThinkingEffort = "ultrathink" | "max" | "extra-high" | "high" | "medium" | "low";
+export interface PrStackPlace {
+  /** The stack's number, unique within the repo. */
+  number: number;
+  /** 1 sits on the base branch. */
+  position: number;
+}
 
-export type ContextWindow = "200k" | "1m";
+export function sameStack(a: PrStackPlace | null, b: PrStackPlace | null): boolean {
+  return a?.number === b?.number && a?.position === b?.position;
+}
 
-export type AiAgent = "opencode" | "claude";
+/**
+ * Revv's thinking-effort tiers. `extra-high` is Revv's key for the providers'
+ * `xhigh` level (see `presets.ts` for the per-agent mapping). `ultrathink` is
+ * retained only so persisted `user_settings.ai_thinking_effort` rows written
+ * before the tier was retired still parse — no agent offers it, and both the
+ * selector and `applyAgentDefaults` coerce it away on next render.
+ */
+export type ThinkingEffort =
+  | "ultra"
+  | "ultrathink"
+  | "max"
+  | "extra-high"
+  | "high"
+  | "medium"
+  | "low";
 
 /**
  * Per-feature override for which agent generates project recaps.
- * `'auto'` (default) inherits the global `aiAgent`; explicit values pin
- * recap generation to that agent regardless of the global choice. Lets a
- * user run Claude for interactive walkthroughs but keep background recaps
+ * `'auto'` (default) inherits the global `aiAgent`; an explicit ACP agent id
+ * pins recap generation to that agent regardless of the global choice. Lets a
+ * user run Claude Code for interactive walkthroughs but keep background recaps
  * on opencode (cheaper, unattended), or vice versa.
  */
-export type RecapAgentChoice = "auto" | "opencode" | "claude";
-
-/**
- * Which CLI agents are detected on PATH (or pinned via the LaunchAgent
- * `REVV_*_BIN` env vars). Surfaced during onboarding so we can offer to
- * install opencode when neither provider is present.
- */
-export interface AgentAvailability {
-  opencode: boolean;
-  claude: boolean;
-}
+export type RecapAgentChoice = "auto" | AcpAgentId;
 
 /**
  * Event frames emitted over SSE while the server runs the opencode install
@@ -130,6 +159,20 @@ export interface AgentAvailability {
  */
 export type InstallEvent =
   | { type: "log"; line: string }
+  | { type: "done"; success: boolean; error?: string };
+
+/**
+ * Event frames emitted over SSE while the server drives an agent's interactive
+ * CLI login inside a spawned pseudo-terminal (e.g. `codex login`,
+ * `cursor-agent login`). `data` carries a raw terminal chunk to render into an
+ * xterm instance; `auth-url` is the first `https?://…` the CLI printed (so the
+ * UI can open it in the browser); the stream closes after `done`, whose
+ * `success` reflects a fresh auth re-check. On failure the message lives in
+ * `error`. Mirrors {@link InstallEvent}'s lifecycle.
+ */
+export type LoginEvent =
+  | { type: "data"; chunk: string }
+  | { type: "auth-url"; url: string }
   | { type: "done"; success: boolean; error?: string };
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -142,21 +185,31 @@ export interface MergeEligibility {
   canMerge: boolean;
   mergeable: boolean;
   mergeStateStatus: string;
+  /**
+   * The merge methods this repository's settings actually permit. GitHub
+   * answers `PUT /pulls/:n/merge` with a 405 ("Merge commits are not allowed
+   * on this repository.") when the requested method is disabled, so the UI
+   * must offer only these — never the full {@link MergeMethod} set.
+   */
+  allowedMethods: MergeMethod[];
 }
 
 export interface UserSettings {
   id: string;
   aiProvider: string;
   aiModel: string;
-  aiThinkingEffort: ThinkingEffort;
-  aiAgent: AiAgent;
-  aiContextWindow: ContextWindow;
+  aiThinkingEffort: ThinkingEffortSetting;
+  /**
+   * Selected ACP agent id (one of `ACP_AGENTS`, e.g. `claude-code`, `opencode`,
+   * `codex`, `cursor`). The single agent that drives chat, walkthrough, and
+   * recap generation.
+   */
+  aiAgent: AcpAgentId;
   /**
    * Low-cost model used for one-shot, no-tools PR-aware suggestion
    * generation (right-panel empty-state prompts). Follows the global
-   * `aiAgent` — pick from the opencode catalog when `aiAgent='opencode'`,
-   * the Claude catalog when `aiAgent='claude'`. Defaults to a cheap model
-   * (e.g. Haiku for Claude) so generating suggestions for every PR open
+   * `aiAgent` — picked from that agent's catalog. Defaults to a cheap model
+   * (e.g. Haiku for Claude Code) so generating suggestions for every PR open
    * doesn't burn the same tokens as the main review agent.
    */
   aiSuggestionsModel: string;
@@ -182,18 +235,27 @@ export interface UserSettings {
     weeklyEnabled: boolean;
     /**
      * Per-feature agent override. `'auto'` (default) follows the global
-     * `aiAgent`; `'opencode'` / `'claude'` pin recap generation to that
+     * `aiAgent`; an explicit ACP agent id pins recap generation to that
      * agent regardless of the global choice.
      */
     agent: RecapAgentChoice;
   };
   /**
-   * GitHub host the app authenticates against. `'nocturlab.ghe.com'` for
-   * the bundled GHE instance (default) or `'github.com'` for public
-   * GitHub. Picked during onboarding and consumed by the device-flow
-   * routes to build per-host OAuth and API URLs.
+   * GitHub host the app authenticates against. `'github.com'` for public
+   * GitHub (the default), or any GitHub Enterprise host the user enters
+   * during onboarding. Consumed by the device-flow routes to build per-host
+   * OAuth and API URLs.
    */
   githubHost: string;
+  /**
+   * GitHub OAuth/App client ID for a user-added GitHub Enterprise host.
+   * Empty string for `github.com`, whose client ID comes from server config.
+   * When a user points Revv at their own GHE instance they register a GitHub
+   * App there and paste its public client ID here — there is no bundled
+   * registration on a customer's host. An `Iv…` prefix marks a GitHub App
+   * (device flow sends no scope); `Ov…` marks a classic OAuth App.
+   */
+  githubClientId: string;
   /**
    * Team-shared walkthrough cache settings. Backed by a single GCS
    * bucket — IAM grants are the team boundary. When `enabled` is off,
@@ -204,13 +266,30 @@ export interface UserSettings {
   cache: {
     enabled: boolean;
     bucket: string;
-    /** Service-account JSON. V1 stores plaintext in DB. */
-    credentialsJson: string;
-    /** Alternative: filesystem path to SA JSON file. */
-    credentialsPath: string;
     uploadsEnabled: boolean;
     downloadsEnabled: boolean;
+    /**
+     * SSHSIG-based content signing. Signs blobs on push and verifies
+     * on fetch using the uploader's GitHub SSH key and repo-level
+     * collaborator permission as the trust anchor.
+     */
+    signing: {
+      /** `'strict'` (default) rejects unsigned/invalid blobs; `'permissive'` warns but accepts; `'off'` skips crypto entirely. */
+      mode: "off" | "permissive" | "strict";
+      /** Path to the SSH private key. Empty string = auto-detect from `~/.ssh/`. */
+      keyPath: string;
+      /** GitHub hosts whose signers are trusted. Defaults to the user's authenticated hosts. */
+      trustedSignerHosts: string[];
+    };
   };
+  /**
+   * TypeSafe System One (Jev) — calibrated decisions for closed-set judgments
+   * the pipeline would otherwise spend an agent turn on. Every hook degrades
+   * to today's behaviour when Jev is off, unconfigured, or unreachable.
+   * Per-feature switches, not one master flag, since each hook is
+   * independently reversible.
+   */
+  jev: JevSettings;
   /**
    * Release channel the in-app updater (and `revv update` CLI) reads from.
    * `'stable'` (default) tracks the latest `vX.Y.Z` tag published by
@@ -225,6 +304,59 @@ export interface UserSettings {
 
 export type SessionStatus = "active" | "completed" | "abandoned";
 
+/**
+ * Review perspective for a PR. Two things carry one:
+ *   - a review session (comments, threads, GitHub sync) — always derived from
+ *     identity: `author` when the signed-in user is the PR's creator
+ *     (self-review), otherwise `reviewer`;
+ *   - a walkthrough — the user's pick, defaulting to that same identity answer.
+ * Const-object "enum" (mirrors `PIERRE_THEME`) so the
+ * values are referenced as `REVIEW_MODE.author` rather than bare strings,
+ * while the persisted/wire value stays a plain string.
+ */
+export const REVIEW_MODE = {
+  reviewer: "reviewer",
+  author: "author",
+} as const;
+
+export type ReviewMode = (typeof REVIEW_MODE)[keyof typeof REVIEW_MODE];
+
+export const REVIEW_MODES: readonly ReviewMode[] = [REVIEW_MODE.reviewer, REVIEW_MODE.author];
+
+/**
+ * Compare two provider logins. GitHub logins are case-insensitive, so `"Alex"`
+ * and `"alex"` are the same account; either being absent is never a match.
+ */
+export function loginsMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The review mode for a PR, given its author and the signed-in viewer.
+ *
+ * **This is the only implementation.** Review sessions are keyed on
+ * `(pullRequestId, mode)`, so the web (which requests `?mode=`) and the
+ * background workers (which write into a session) must derive the identical
+ * answer from the identical inputs. A second copy of this rule that disagreed
+ * on casing or on which login column it read is what sent synced GitHub
+ * comments into a session the UI never loads — unrecoverably, since comments
+ * dedupe globally by external id.
+ *
+ * `viewerLogin` is nullable because identity resolves asynchronously on both
+ * sides. Unknown answers `reviewer`: the historical default and the right
+ * answer for every PR the viewer did not write. Callers that would *act*
+ * destructively on the result must distinguish "unknown" themselves rather
+ * than reading a `reviewer` verdict as confirmation — see
+ * `resolveReviewModeForPr` on the server.
+ */
+export function reviewModeFor(
+  authorLogin: string | null | undefined,
+  viewerLogin: string | null | undefined,
+): ReviewMode {
+  return loginsMatch(authorLogin, viewerLogin) ? REVIEW_MODE.author : REVIEW_MODE.reviewer;
+}
+
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 
 export type AuthorRole = "reviewer" | "coder" | "ai_agent";
@@ -236,6 +368,7 @@ export type HunkDecisionType = "accepted" | "rejected";
 export interface ReviewSession {
   id: string;
   pullRequestId: string;
+  mode: ReviewMode;
   startedAt: string;
   completedAt: string | null;
   status: SessionStatus;
@@ -281,11 +414,32 @@ export interface UserIdentity {
    * the moment CI publishes them — the 48h stable cooldown is bypassed.
    */
   isMaintainer: boolean;
+  /**
+   * `true` when the active account's GitHub token is invalid and could not be
+   * silently refreshed — the client gates the app behind a re-sign-in modal.
+   * Authoritative reconcile source for `auth:reauth-required` SSE signals on
+   * boot / SSE reconnect. `host` is the account's GitHub host, used to drive
+   * the re-auth device flow against the right instance.
+   */
+  reauthRequired: boolean;
+  host: string | null;
 }
 
 export interface Org {
   login: string;
   avatarUrl: string | null;
+}
+
+export interface Team {
+  /** GitHub team slug — unique within the org, used as the stable key. */
+  slug: string;
+  /** Human-readable team name. */
+  name: string;
+  /**
+   * Logins of the team's members. Currently capped at the first 100 members
+   * per team (and the first 100 teams per org) — see `listTeamsForOrg`.
+   */
+  memberLogins: string[];
 }
 
 export interface ThreadMessage {

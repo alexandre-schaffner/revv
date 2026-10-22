@@ -1,12 +1,12 @@
 <script lang="ts">
 import type { ProjectRecap, ProjectRecapSummary, RecapPeriod } from "@revv/shared";
-import Sparkles from "phosphor-svelte/lib/Sparkle";
-import Loader2 from "phosphor-svelte/lib/Spinner";
+import PenNib from "phosphor-svelte/lib/PenNib";
+import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
+import { goto } from "$app/navigation";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
-import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
   abortRecapStream,
   getRecapStreamEntry,
@@ -25,7 +25,10 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import PreviousRecaps from "./PreviousRecaps.svelte";
+import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
+import DotMatrixLoader from "./DotMatrixLoader.svelte";
+import { pickLatestByWindow, recapWindowIsStale } from "./period-window";
+import RecapArchivePopover from "./RecapArchivePopover.svelte";
 import RecapDetail from "./RecapDetail.svelte";
 
 interface Props {
@@ -44,7 +47,7 @@ const periodLabelLower = $derived(period === "daily" ? "daily" : "weekly");
 // user's current period, not a regeneration of the displayed one.
 const currentPeriodLabel = $derived(period === "daily" ? "today's" : "this week's");
 
-// Fetch the recap list for this repo. The list reducer hydrates from WS
+// Fetch the recap list for this repo. The list reducer hydrates from SSE
 // envelopes so navigating between periods doesn't re-hit the network.
 $effect(() => {
   const id = repoId;
@@ -56,11 +59,10 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const listLoading = $derived(getRecapLoading(repoId));
 
-// Latest non-superseded recap for this period. The store keeps the list
-// newest-first by generatedAt, so the first match is the most recent.
-const latest = $derived<ProjectRecapSummary | null>(
-  recaps.find((r) => r.period === period && r.status !== "superseded") ?? null,
-);
+// Latest non-superseded recap for this period — by *window*, not by
+// generation time. Generating a recap for a day three weeks back would
+// otherwise hijack this hero the moment it finished.
+const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps, period));
 const latestId = $derived(latest?.id ?? null);
 
 // Hydrate the full markdown for the latest recap whenever the id changes.
@@ -86,7 +88,7 @@ $effect(() => {
   }
 });
 
-// SSE `done` should reveal the final persisted markdown even if the WS
+// SSE `done` should reveal the final persisted markdown even if the
 // completion broadcast arrives late or was missed while reconnecting.
 $effect(() => {
   const id = latestId;
@@ -137,39 +139,8 @@ const periodEyebrow = $derived.by(() => {
   return `${DAY_SHORT_FMT.format(start)} → ${DAY_SHORT_FMT.format(now)} · UTC`;
 });
 
-function utcDayKey(iso: string | Date): string {
-  const s = typeof iso === "string" ? iso : iso.toISOString();
-  return s.slice(0, 10);
-}
-
-function utcDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function utcMondayKey(d: Date): string {
-  const daysFromMonday = (d.getUTCDay() + 6) % 7;
-  const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
-  return new Date(mondayMs).toISOString().slice(0, 10);
-}
-
-function isClosedFullPeriod(r: ProjectRecap): boolean {
-  const start = new Date(r.periodStart).getTime();
-  const end = new Date(r.periodEnd).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  const duration = r.period === "daily" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  return end - start === duration;
-}
-
-function recapIsOutOfDate(r: ProjectRecap): boolean {
-  if (r.status !== "complete") return false;
-  if (isClosedFullPeriod(r)) return true;
-  if (r.period === "daily") {
-    return utcDayKey(r.periodStart) !== utcDateKey(new Date());
-  }
-  // Weekly windows are labelled and generated in UTC, so compare against
-  // the current UTC week's Monday.
-  return utcDayKey(r.periodStart) !== utcMondayKey(new Date());
-}
+// Whether the newest recap still covers the current day/week window.
+const latestIsStale = $derived(latestDetail ? recapWindowIsStale(latestDetail) : false);
 
 type RecapUiKind = "generating" | "stopped" | "error" | "complete" | "outdated" | "hidden";
 
@@ -179,8 +150,7 @@ const recapUiKind: RecapUiKind = $derived.by(() => {
   if (latestDetail.status === "error") {
     return latestDetail.errorMessage === "Cancelled by user" ? "stopped" : "error";
   }
-  if (latestDetail.status === "complete")
-    return recapIsOutOfDate(latestDetail) ? "outdated" : "complete";
+  if (latestDetail.status === "complete") return latestIsStale ? "outdated" : "complete";
   return "hidden";
 });
 
@@ -195,6 +165,9 @@ const genActionState = $derived.by((): GenActionState | null => {
       return { kind: "error" };
     case "complete":
       return { kind: "complete" };
+    // Rerunning a past window is only offered here. The archive calendar used
+    // to carry it, but a date click now navigates straight to that date's
+    // recap, so a filled slot never reaches a confirmation step.
     case "outdated":
       return { kind: "stale", label: "Rerun this recap" };
     default:
@@ -202,9 +175,29 @@ const genActionState = $derived.by((): GenActionState | null => {
   }
 });
 
-// Show the floating Generate pill when there's no recap yet.
-// When a recap exists, show the Regenerate/Stop/Resume bar instead.
-const showGenerateFab = $derived(!latestDetail);
+// The floating pill exists for one case: an older recap is rendered above and
+// the current window has none, so the CTA has to stay reachable over a body
+// that can run thousands of pixels long. A stopped or errored recap from an
+// earlier week otherwise leaves only Resume/Regenerate, which both re-run
+// *that* window; there'd be no way to ask for the current one. While a
+// generation is in flight the bar's Stop is the only sensible action.
+//
+// With nothing rendered above, the CTA belongs in the hero instead — floating
+// it there put the page's primary action at the bottom of the window, 500px
+// below the empty state explaining why you'd want it, and duplicated the
+// calendar's own generate button for the same window.
+const showGenerateFab = $derived(
+  latestDetail !== null && latestIsStale && latestDetail.status !== "generating",
+);
+
+// Always names the window. "Generate weekly recap" left the user to work out
+// which week, next to a calendar offering six of them.
+const generateNoun = $derived(currentPeriodLabel);
+const generateTitle = $derived(
+  latestDetail
+    ? `Write a brand-new recap for ${currentPeriodLabel} ${periodLabelLower} window. The recap below stays as-is.`
+    : `Have the agent write a fresh ${periodLabelLower} recap`,
+);
 
 async function onGenerate(): Promise<void> {
   if (generating) return;
@@ -228,6 +221,8 @@ async function onStop(): Promise<void> {
   if (!id) return;
   await stopRecap(id);
 }
+
+const actionsFloatStyle = $derived(getActionsFloatStyle());
 </script>
 
 <div class="period-view">
@@ -235,17 +230,17 @@ async function onStop(): Promise<void> {
 		<RecapDetail
 			recap={latestDetail}
 			loading={detailLoading}
+			{period}
 			{stream}
+			archive={archivePopover}
 		/>
 	{:else if latest && detailLoading}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-			<p>Loading {periodLabelLower} recap…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading {periodLabelLower} recap" />
 		</div>
 	{:else if listLoading && recaps.length === 0}
-		<div class="period-loading">
-			<Loader2 size={20} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-			<p>Loading recaps…</p>
+		<div class="loader-fullscreen">
+			<DotMatrixLoader label="Loading recaps" />
 		</div>
 	{:else}
 		<header class="period-hero">
@@ -254,67 +249,64 @@ async function onStop(): Promise<void> {
 			<p class="period-lede">
 				{#if period === "daily"}
 					A snapshot of every pull request that opened, moved, or shipped
-					today — written by the agent, ready in a minute.
+					today, written by the agent and ready in a minute.
 				{:else}
-					A week of pull-request activity distilled into one read — what
+					A week of pull-request activity distilled into one read: what
 					shipped, what's still in flight, where the risk sits.
 				{/if}
 			</p>
+			<div class="period-cta">
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title={generateTitle}
+				>
+					{#if generating}
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
+					{:else}
+						<PenNib size={16} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating
+							? `Generating ${generateNoun} recap…`
+							: `Generate ${generateNoun} recap`}
+					</Shimmer>
+				</GlassPill>
+				{@render archivePopover()}
+			</div>
 		</header>
 	{/if}
+</div>
 
-	<PreviousRecaps
+{#snippet archivePopover()}
+	<RecapArchivePopover
 		{repoId}
 		{period}
 		{recaps}
-		loading={listLoading}
-		excludeRecapId={latestId}
+		activeRecapId={latestId}
 	/>
-</div>
+{/snippet}
 
 {#if showGenerateFab || genActionState}
-	<div
-		class="actions-float"
-		in:gsapFadeY={{ duration: tokens.quick, y: 8 }}
-		out:gsapFade={{ duration: tokens.snap }}
-	>
+	<div class="actions-float" style={actionsFloatStyle}>
 		<div class="actions-row" role="toolbar" aria-label="Recap actions">
 			{#if showGenerateFab}
 				<GlassPill
 					variant="accent"
 					onclick={onGenerate}
 					disabled={generating}
-					title="Have the agent write a fresh {periodLabelLower} recap"
+					title={generateTitle}
 				>
 					{#if generating}
-						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
 					{:else}
-						<Sparkles size={16} weight="fill" aria-hidden="true" />
+						<PenNib size={16} aria-hidden="true" />
 					{/if}
 					<Shimmer active={!generating}>
 						{generating
-							? `Generating ${periodLabelLower} recap…`
-							: `Generate ${periodLabelLower} recap`}
-					</Shimmer>
-				</GlassPill>
-			{/if}
-
-			{#if recapUiKind === 'outdated'}
-				<GlassPill
-					variant="accent"
-					onclick={onGenerate}
-					disabled={generating}
-					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
-				>
-					{#if generating}
-						<Loader2 size={14} weight="regular" class="motion-essential-spin" aria-hidden="true" />
-					{:else}
-						<Sparkles size={16} weight="fill" aria-hidden="true" />
-					{/if}
-					<Shimmer active={!generating}>
-						{generating
-							? `Generating ${currentPeriodLabel} recap…`
-							: `Generate ${currentPeriodLabel} recap`}
+							? `Generating ${generateNoun} recap…`
+							: `Generate ${generateNoun} recap`}
 					</Shimmer>
 				</GlassPill>
 			{/if}
@@ -336,24 +328,18 @@ async function onStop(): Promise<void> {
 	.period-view {
 		display: flex;
 		flex-direction: column;
-		max-width: 56rem;
-		margin: 0 auto;
 		width: 100%;
-		padding: 1rem 1.25rem 4rem;
 	}
 
-	.period-loading {
-		display: flex;
-		gap: 0.625rem;
-		align-items: center;
-		padding: 1rem 1.25rem;
-		background: var(--color-bg-secondary);
-		border-radius: 0.5rem;
-		color: var(--color-text-secondary);
-	}
-
-	.period-loading p {
-		margin: 0;
+	/* Center the loader vertically + horizontally in the available viewport
+	   while the recap (or the recap list) is loading. Approximate viewport
+	   height by subtracting the app shell chrome so the loader sits in the
+	   visual middle of the page area, not the middle of the document. */
+	.loader-fullscreen {
+		display: grid;
+		place-items: center;
+		min-height: calc(100vh - 8rem);
+		width: 100%;
 	}
 
 	/* Editorial empty state. Mono eyebrow → display heading → lede.
@@ -361,8 +347,12 @@ async function onStop(): Promise<void> {
 	.period-hero {
 		display: flex;
 		flex-direction: column;
+		align-items: flex-start;
 		gap: 0.75rem;
-		padding: 3.5rem 0.25rem 1.5rem;
+		max-width: calc(var(--recap-measure) + 4rem);
+		margin: 0 auto;
+		width: 100%;
+		padding: 2.5rem 2rem 4rem;
 	}
 
 	.period-eyebrow {
@@ -376,11 +366,18 @@ async function onStop(): Promise<void> {
 
 	.period-title {
 		margin: 0;
-		font-size: clamp(2rem, 4vw, 2.75rem);
+		text-wrap: balance;
+		font-size: 2.5rem;
 		font-weight: 500;
-		letter-spacing: -0.035em;
+		letter-spacing: -0.02em;
 		line-height: 1.02;
 		color: var(--color-text-primary);
+	}
+
+	@media (max-width: 720px) {
+		.period-title {
+			font-size: 2rem;
+		}
 	}
 
 	.period-lede {
@@ -389,5 +386,19 @@ async function onStop(): Promise<void> {
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 		max-width: 34rem;
+		text-wrap: pretty;
 	}
+
+	/* The page's primary action, with the archive trigger beside it — on an
+	   empty repo there is no date header to hang the archive off, so it rides
+	   here instead. No helper line under them: both ledes already say the
+	   agent is quick. */
+	.period-cta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.75rem;
+	}
+
 </style>

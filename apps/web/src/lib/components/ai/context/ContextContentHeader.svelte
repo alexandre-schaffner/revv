@@ -22,6 +22,9 @@ export type ContextContentHeaderProps = {
 	const ratio = $derived(
 		state().maxTokens > 0 ? state().usedTokens / state().maxTokens : 0,
 	);
+	// Clamp for the bar width — occupancy can momentarily exceed the (possibly
+	// fallback) window. The percent label clamps independently via formatPercent.
+	const barPercent = $derived(Math.round(Math.max(0, Math.min(1, ratio)) * 100));
 	const usedLabel = $derived(formatTokens(state().usedTokens));
 	const maxLabel = $derived(formatTokens(state().maxTokens));
 	const percentLabel = $derived(formatPercent(ratio));
@@ -38,6 +41,6 @@ export type ContextContentHeaderProps = {
 				{maxLabel}
 			</span>
 		</div>
-		<Progress value={Math.round(ratio * 100)} class="h-1.5" />
+		<Progress value={barPercent} class="h-1.5" />
 	{/if}
 </div>

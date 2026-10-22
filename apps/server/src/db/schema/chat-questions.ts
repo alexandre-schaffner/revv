@@ -34,7 +34,7 @@ export const chatQuestions = sqliteTable(
       .notNull()
       .references(() => chatSessions.id, { onDelete: "cascade" }),
     turnId: text("turn_id").notNull(),
-    // 'claude' | 'opencode'
+    // Transport that produced the row: always 'acp'.
     source: text("source").notNull(),
     providerRequestId: text("provider_request_id").notNull(),
     // opencode-only — links back to the tool call that issued the question

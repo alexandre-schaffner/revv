@@ -4,11 +4,13 @@ import type {
   HunkDecision,
   HunkDecisionType,
   MessageType,
+  ReviewMode,
   ReviewSession,
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
-import { and, eq } from "drizzle-orm";
+import { canUserModifyComment } from "@revv/shared";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
 import { hunkDecisions } from "../db/schema/hunk-decisions";
@@ -18,6 +20,7 @@ import { threadMessages } from "../db/schema/thread-messages";
 import { ReviewError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
 import type { DbService } from "./Db";
+import { resolveReviewModeForPr } from "./review-mode";
 
 // ── Row-to-domain converters ─────────────────────────────────────────────────
 
@@ -25,6 +28,7 @@ function rowToSession(row: typeof reviewSessions.$inferSelect): ReviewSession {
   return {
     id: row.id,
     pullRequestId: row.pullRequestId,
+    mode: (row.mode ?? "reviewer") as ReviewMode,
     startedAt: row.startedAt,
     completedAt: row.completedAt ?? null,
     status: row.status as ReviewSession["status"],
@@ -104,15 +108,28 @@ export interface CreateMessageParams {
 
 // ── Service definition ───────────────────────────────────────────────────────
 
-export class ReviewService extends Context.Tag("ReviewService")<
+export class ReviewService extends Context.Service<
   ReviewService,
   {
     // Sessions
     readonly getOrCreateActiveSession: (
       prId: string,
+      mode?: ReviewMode,
+    ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    /**
+     * The session the UI reads for this PR: keyed on the identity-derived
+     * mode (see `resolveReviewModeForPr`), never on a walkthrough's
+     * perspective. An author who generates a reviewer-perspective walkthrough
+     * still reads their PR through the author session, so its issues and
+     * threads must land there. An unresolved identity falls back to
+     * `reviewer`, the same answer the web gives before it knows the viewer.
+     */
+    readonly getOrCreateIdentitySession: (
+      prId: string,
     ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
     readonly getActiveSession: (
       prId: string,
+      mode?: ReviewMode,
     ) => Effect.Effect<ReviewSession | null, ReviewError, DbService>;
     readonly completeSession: (
       id: string,
@@ -136,6 +153,26 @@ export class ReviewService extends Context.Tag("ReviewService")<
       sessionId: string,
       externalCommentId: string,
     ) => Effect.Effect<CommentThread | null, ReviewError, DbService>;
+    /**
+     * Re-parent this PR's GitHub-sourced threads (`externalCommentId != null`)
+     * that landed in one of its *other* review sessions into `sessionId`.
+     * Returns how many moved.
+     *
+     * A PR has exactly one conversation on GitHub, but review sessions are
+     * keyed on `(pullRequestId, mode)`. The comment sync used to write into
+     * whichever session `getOrCreateActiveSession` defaulted to (`reviewer`),
+     * so on a PR the user authored — where the UI only ever loads the `author`
+     * session — every incoming reviewer comment landed in a session nothing
+     * displays. Re-pulling can't repair that: comments are deduped globally by
+     * external id, so an already-ingested comment is never re-created.
+     *
+     * Only externally-sourced threads move. Drafts the user has not submitted
+     * (no external id) stay in the session they were written in.
+     */
+    readonly adoptExternalThreads: (
+      prId: string,
+      sessionId: string,
+    ) => Effect.Effect<number, ReviewError, DbService>;
     readonly updateThreadStatus: (
       threadId: string,
       status: ThreadStatus,
@@ -155,6 +192,10 @@ export class ReviewService extends Context.Tag("ReviewService")<
       authorRole: AuthorRole,
     ) => Effect.Effect<CommentThread, ReviewError, DbService>;
     readonly deleteThread: (threadId: string) => Effect.Effect<void, ReviewError, DbService>;
+    readonly deleteThreadAsUser: (
+      threadId: string,
+      actorLogin: string | null,
+    ) => Effect.Effect<void, ReviewError, DbService>;
 
     // Messages
     readonly addMessage: (
@@ -179,6 +220,7 @@ export class ReviewService extends Context.Tag("ReviewService")<
     readonly editMessage: (
       messageId: string,
       body: string,
+      actorLogin: string | null,
     ) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
     /**
      * Delete a reply message that hasn't been synced to GitHub yet.
@@ -191,6 +233,7 @@ export class ReviewService extends Context.Tag("ReviewService")<
      */
     readonly deleteMessage: (
       messageId: string,
+      actorLogin: string | null,
     ) => Effect.Effect<{ threadId: string }, ReviewError, DbService>;
     readonly findMessageByExternalId: (
       externalId: string,
@@ -212,51 +255,74 @@ export class ReviewService extends Context.Tag("ReviewService")<
       sessionId: string,
     ) => Effect.Effect<HunkDecision[], ReviewError, DbService>;
   }
->() {}
+>()("ReviewService") {}
 
 // ── Live implementation ──────────────────────────────────────────────────────
+
+const getOrCreateActiveSession = (
+  prId: string,
+  mode: ReviewMode = "reviewer",
+): Effect.Effect<ReviewSession, ReviewError, DbService> =>
+  Effect.gen(function* () {
+    const existing = yield* tryDb("find active session", (db) =>
+      db
+        .select()
+        .from(reviewSessions)
+        .where(
+          and(
+            eq(reviewSessions.pullRequestId, prId),
+            eq(reviewSessions.mode, mode),
+            eq(reviewSessions.status, "active"),
+          ),
+        )
+        .get(),
+    );
+
+    if (existing) return rowToSession(existing);
+
+    const id = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+
+    yield* tryDb("create session", (db) =>
+      db
+        .insert(reviewSessions)
+        .values({ id, pullRequestId: prId, mode, startedAt, status: "active" })
+        .run(),
+    );
+
+    return {
+      id,
+      pullRequestId: prId,
+      mode,
+      startedAt,
+      completedAt: null,
+      status: "active" as const,
+    };
+  });
 
 export const ReviewServiceLive = Layer.succeed(ReviewService, {
   // ── Sessions ──────────────────────────────────────────────────────────────
 
-  getOrCreateActiveSession: (prId) =>
-    Effect.gen(function* () {
-      const existing = yield* tryDb("find active session", (db) =>
-        db
-          .select()
-          .from(reviewSessions)
-          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
-          .get(),
-      );
+  getOrCreateActiveSession,
 
-      if (existing) return rowToSession(existing);
+  getOrCreateIdentitySession: (prId) =>
+    resolveReviewModeForPr(prId).pipe(
+      Effect.flatMap(({ mode }) => getOrCreateActiveSession(prId, mode)),
+    ),
 
-      const id = crypto.randomUUID();
-      const startedAt = new Date().toISOString();
-
-      yield* tryDb("create session", (db) =>
-        db
-          .insert(reviewSessions)
-          .values({ id, pullRequestId: prId, startedAt, status: "active" })
-          .run(),
-      );
-
-      return {
-        id,
-        pullRequestId: prId,
-        startedAt,
-        completedAt: null,
-        status: "active" as const,
-      };
-    }),
-
-  getActiveSession: (prId) =>
+  getActiveSession: (prId, mode = "reviewer") =>
     Effect.gen(function* () {
       const row = yield* tryDb("find active session", (db) =>
         db
           .select()
           .from(reviewSessions)
-          .where(and(eq(reviewSessions.pullRequestId, prId), eq(reviewSessions.status, "active")))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              eq(reviewSessions.mode, mode),
+              eq(reviewSessions.status, "active"),
+            ),
+          )
           .get(),
       );
       return row ? rowToSession(row) : null;
@@ -352,6 +418,39 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       return row ? rowToThread(row) : null;
     }),
 
+  adoptExternalThreads: (prId, sessionId) =>
+    Effect.gen(function* () {
+      const strays = yield* tryDb("find strayed external threads", (db) =>
+        db
+          .select({ id: commentThreads.id })
+          .from(commentThreads)
+          .innerJoin(reviewSessions, eq(reviewSessions.id, commentThreads.reviewSessionId))
+          .where(
+            and(
+              eq(reviewSessions.pullRequestId, prId),
+              ne(commentThreads.reviewSessionId, sessionId),
+              isNotNull(commentThreads.externalCommentId),
+            ),
+          )
+          .all(),
+      );
+      if (strays.length === 0) return 0;
+
+      yield* tryDb("adopt strayed external threads", (db) =>
+        db
+          .update(commentThreads)
+          .set({ reviewSessionId: sessionId })
+          .where(
+            inArray(
+              commentThreads.id,
+              strays.map((t) => t.id),
+            ),
+          )
+          .run(),
+      );
+      return strays.length;
+    }),
+
   setThreadExternalIds: (threadId, ids) =>
     Effect.gen(function* () {
       const setObj: Partial<typeof commentThreads.$inferInsert> = {};
@@ -403,6 +502,53 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
   deleteThread: (threadId) =>
     Effect.gen(function* () {
+      yield* tryDb("delete thread", (db) =>
+        db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run(),
+      );
+    }),
+
+  deleteThreadAsUser: (threadId, actorLogin) =>
+    Effect.gen(function* () {
+      const thread = yield* tryDb("find thread for discard", (db) =>
+        db.select().from(commentThreads).where(eq(commentThreads.id, threadId)).get(),
+      );
+      if (!thread) {
+        return yield* Effect.fail(
+          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
+        );
+      }
+      if (thread.externalCommentId !== null) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "Cannot discard a thread already synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+
+      const firstMessage = yield* tryDb("find first message for discard", (db) =>
+        db
+          .select()
+          .from(threadMessages)
+          .where(eq(threadMessages.threadId, threadId))
+          .orderBy(threadMessages.createdAt)
+          .limit(1)
+          .get(),
+      );
+      if (!firstMessage) {
+        return yield* Effect.fail(
+          new ReviewError({ message: "Thread has no message", code: "NOT_FOUND" }),
+        );
+      }
+      if (!canUserModifyComment(firstMessage, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only discard your own comments or comments left by Revv",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+
       yield* tryDb("delete thread", (db) =>
         db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run(),
       );
@@ -486,13 +632,31 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
 
       yield* tryDb("add message", (db) => db.insert(threadMessages).values(row).run());
 
+      // Resolve the author's cached avatar (same join getMessages/getMessage
+      // use) so the returned message carries it immediately. The client
+      // renders this object optimistically and loadSession may short-circuit,
+      // so returning null here would leave the just-posted comment avatar-less
+      // until the next full hydration.
+      const login = params.authorLogin ?? null;
+      let authorAvatarContent: string | null = null;
+      if (login) {
+        const avatarRow = yield* tryDb("resolve message avatar", (db) =>
+          db
+            .select({ avatarContent: remoteUsers.avatarContent })
+            .from(remoteUsers)
+            .where(and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, login)))
+            .get(),
+        );
+        authorAvatarContent = avatarRow?.avatarContent ?? null;
+      }
+
       return {
         id,
         threadId,
         authorRole: params.authorRole as ThreadMessage["authorRole"],
         authorName: params.authorName,
         authorLogin: params.authorLogin ?? null,
-        authorAvatarContent: null,
+        authorAvatarContent,
         body: params.body,
         messageType: params.messageType as ThreadMessage["messageType"],
         codeSuggestion: params.codeSuggestion ?? null,
@@ -566,7 +730,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         .run(),
     ).pipe(Effect.asVoid),
 
-  editMessage: (messageId, body) =>
+  editMessage: (messageId, body, actorLogin) =>
     Effect.gen(function* () {
       const msgRow = yield* tryDb("find message for edit", (db) =>
         db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
@@ -578,20 +742,18 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         );
       }
 
-      const threadRow = yield* tryDb("find thread for edit", (db) =>
-        db.select().from(commentThreads).where(eq(commentThreads.id, msgRow.threadId)).get(),
-      );
-
-      if (!threadRow) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Thread not found", code: "NOT_FOUND" }),
-        );
-      }
-
-      if (threadRow.externalCommentId !== null) {
+      if (msgRow.externalId !== null) {
         return yield* Effect.fail(
           new ReviewError({
             message: "Cannot edit a message that has already been synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+      if (!canUserModifyComment(msgRow, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only edit your own comments or comments left by Revv",
             code: "FORBIDDEN",
           }),
         );
@@ -610,7 +772,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       return rowToMessage({ ...msgRow, body, editedAt });
     }),
 
-  deleteMessage: (messageId) =>
+  deleteMessage: (messageId, actorLogin) =>
     Effect.gen(function* () {
       const msgRow = yield* tryDb("find message for delete", (db) =>
         db.select().from(threadMessages).where(eq(threadMessages.id, messageId)).get(),
@@ -626,6 +788,14 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         return yield* Effect.fail(
           new ReviewError({
             message: "Cannot discard a reply already synced to GitHub",
+            code: "FORBIDDEN",
+          }),
+        );
+      }
+      if (!canUserModifyComment(msgRow, actorLogin)) {
+        return yield* Effect.fail(
+          new ReviewError({
+            message: "You can only discard your own comments or comments left by Revv",
             code: "FORBIDDEN",
           }),
         );

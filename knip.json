@@ -2,13 +2,14 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/**/*.ts"],
+      "entry": ["scripts/**/*.ts", "integrations/external-mcp-bridge/*.ts"],
       "ignoreDependencies": ["@tauri-apps/cli", "concurrently"]
     },
     "apps/web": {
       "entry": [
         "src/routes/**/+{page,layout,server,error,page.load,layout.load}.svelte",
         "src/routes/**/+{page,layout}.ts",
+        "src/**/*.test.ts",
         "src/app.html",
         "src/app.d.ts",
         "src/hooks.server.ts",
@@ -29,25 +30,31 @@
       ]
     },
     "apps/server": {
-      "entry": ["src/index.ts"],
+      "entry": [
+        "src/index.ts",
+        "src/**/*.test.ts",
+        "src/observability/profiling-preload.ts",
+        "scripts/*.ts"
+      ],
       "ignoreDependencies": ["bun-types", "drizzle-kit"]
+    },
+    "apps/collector": {
+      "entry": ["src/index.ts", "src/**/*.test.ts"],
+      "ignoreDependencies": ["bun-types"]
     },
     "packages/shared": {
       "entry": ["src/index.ts"]
-    },
-    "packages/ui": {
-      "entry": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["@radix-ui/react-popover", "class-variance-authority"]
-    },
-    "packages/app": {
-      "entry": ["src/root.tsx", "src/routes/**/*.{ts,tsx}", "vite.config.ts", "app.config.ts"]
     }
   },
   "ignore": [
+    ".context/**",
     "apps/server/src/cache/CacheLayer.ts",
     "apps/server/src/cache/Key.ts",
     "apps/server/src/cache/backends/**",
-    "apps/server/src/cache/policies/**"
+    "apps/server/src/cache/policies/**",
+    "apps/server/src/cache/index.ts",
+    "apps/web/src/lib/components/ui/**/index.ts",
+    "apps/web/src/lib/components/ai/**/index.ts"
   ],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["biome", "turbo", "knip"]

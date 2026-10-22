@@ -8,7 +8,7 @@ export type QuestionHeaderProps = HTMLAttributes<HTMLDivElement>;
 	import { getContext } from "svelte";
 	import Check from "phosphor-svelte/lib/Check";
 import Clock from "phosphor-svelte/lib/Clock";
-import ShieldX from "phosphor-svelte/lib/ShieldWarning";
+import ShieldSlash from "phosphor-svelte/lib/ShieldSlash";
 	import type { Component } from "svelte";
 	import { cn } from "$lib/utils.js";
 	import { QUESTION_CTX_KEY, type QuestionContext } from "./context.js";
@@ -30,7 +30,7 @@ import ShieldX from "phosphor-svelte/lib/ShieldWarning";
 	};
 	const config: Record<Exclude<QuestionContext["status"], "pending">, BadgeConfig> = {
 		answered: { label: "Answered", icon: Check, tone: "answered" },
-		rejected: { label: "Skipped", icon: ShieldX, tone: "rejected" },
+		rejected: { label: "Skipped", icon: ShieldSlash, tone: "rejected" },
 		superseded: {
 			label: "No longer needed",
 			icon: Clock,
