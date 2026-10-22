@@ -3,8 +3,11 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { REPO_CACHE_TTL_MS } from "../constants";
 import { AppRuntime } from "../runtime";
+import { CacheService } from "../services/Cache";
 import { GitHubGateway } from "../services/GitHub";
 import { handleAppError, withAccount } from "./middleware";
+
+const TEAMS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /** Simple in-memory cache for the user's GitHub repos, keyed by resolved host. */
 let repoCache: { data: Repository[]; fetchedAt: number; host: string } | null = null;
@@ -73,8 +76,14 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
       const teams = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const github = yield* GitHubGateway;
+          const cache = yield* CacheService;
           const token = ctx.account.accessToken;
-          return yield* github.repos.teamsForOrg(ctx.params.org, token);
+          return yield* cache.getOrFetch(
+            "github-teams",
+            `${ctx.account.accountId}:${ctx.params.org.toLowerCase()}`,
+            () => github.repos.teamsForOrg(ctx.params.org, token),
+            { ttlMs: TEAMS_CACHE_TTL_MS },
+          );
         }),
       );
       return { teams };

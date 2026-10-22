@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Layer, Result } from "effect";
 import { createDb, type Db } from "../db/index";
 import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../domain/errors";
+import { STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
@@ -358,7 +359,7 @@ describe("GitHubGateway error classification", () => {
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
-    expect(prs).toHaveLength(1);
+    expect(prs.prs).toHaveLength(1);
     expect(calls).toHaveLength(2);
   });
 
@@ -427,7 +428,7 @@ describe("listPrs", () => {
 
     const result = await listOpen(db);
 
-    expect(Result.isSuccess(result) && result.success.map((pr) => pr.externalId)).toEqual([
+    expect(Result.isSuccess(result) && result.success.prs.map((pr) => pr.externalId)).toEqual([
       2, 1, 3,
     ]);
     expect(bodies).toHaveLength(2);
@@ -466,7 +467,7 @@ describe("listPrs", () => {
 
     expect(Result.isSuccess(result)).toBe(true);
     if (!Result.isSuccess(result)) return;
-    const [bot, ghost] = result.success;
+    const [bot, ghost] = result.success.prs;
     expect(bot).toMatchObject({
       id: "repo-1:1",
       repositoryId: "repo-1",
@@ -483,6 +484,110 @@ describe("listPrs", () => {
       changedFiles: 0,
     });
     expect(ghost).toMatchObject({ authorLogin: "ghost", body: "Fixes #1", isDraft: true });
+  });
+
+  it("maps native stack membership", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() =>
+      responseJson(
+        gqlPrPage([
+          gqlPr(1, { stack: { number: 12 }, stackEntry: { position: 3 } }),
+          gqlPr(2, { stack: null, stackEntry: null }),
+        ]),
+      ),
+    );
+
+    const result = await listOpen(db);
+
+    expect(Result.isSuccess(result)).toBe(true);
+    if (!Result.isSuccess(result)) return;
+    expect(result.success.hostPredatesStacks).toBe(false);
+    const [stacked, plain] = result.success.prs;
+    expect(stacked?.stack).toEqual(stackSeen({ number: 12, position: 3 }));
+    expect(plain?.stack).toEqual(stackSeen(null));
+  });
+
+  const listWith = (db: ReturnType<typeof createDb>, withStacks?: boolean) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.listOpen(
+          "octo/repo",
+          "repo-1",
+          "token",
+          "https://ghe.test",
+          withStacks === undefined ? {} : { withStacks },
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+  const stubStackRefusal = (stackError: { message: string; path?: string[] }) => {
+    const queries: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      queries.push(query);
+      return query.includes("stackEntry")
+        ? responseJson({ errors: [stackError] })
+        : responseJson(gqlPrPage([gqlPr(1)]));
+    }) as typeof fetch;
+    return queries;
+  };
+
+  // GraphQL rejects a whole query over one unknown field, so a host that
+  // predates stacks would otherwise list nothing, every cycle.
+  it("asks again without stacks on a host that predates them", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message: "Field 'stack' doesn't exist on type 'PullRequest'",
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.hostPredatesStacks).toBe(true);
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("asks again without stacks when GitHub refuses them for any other reason", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message: "Resource not accessible by integration",
+      path: ["repository", "pullRequests", "nodes", "0", "stack"],
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.hostPredatesStacks).toBe(false);
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("asks once without stacks when the stack query times out on GitHub's side", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({
+      message:
+        "Something went wrong while executing your query. This may be the result of a timeout.",
+    });
+
+    const listing = await listWith(db);
+
+    expect(listing.hostPredatesStacks).toBe(false);
+    expect(listing.prs.map((pr) => pr.externalId)).toEqual([1]);
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("skips the stack fields when told to", async () => {
+    const db = createDb(":memory:");
+    const queries = stubStackRefusal({ message: "unreachable" });
+
+    const listing = await listWith(db, false);
+
+    expect(listing.hostPredatesStacks).toBe(false);
+    expect(listing.prs[0]?.stack).toEqual(STACK_UNSEEN);
+    expect(queries).toHaveLength(1);
   });
 
   it("classifies a GraphQL RATE_LIMITED answer as a rate limit", async () => {

@@ -1,16 +1,19 @@
-import { describe, expect, it } from "bun:test";
-import type { PullRequest } from "@revv/shared";
+import { afterEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
+import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { DiffCacheService, DiffCacheServiceLive } from "./DiffCache";
+import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
+import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import {
   type ListArchivedPrsParams,
   PullRequestService,
   PullRequestServiceLive,
 } from "./PullRequest";
+import { SettingsServiceLive } from "./Settings";
 
 const ACCOUNT_ID = "acc-1";
 const REPO_ID = "repo-1";
@@ -163,7 +166,7 @@ describe("listArchivedPrs author filter", () => {
 // prior values must survive that.
 
 /** A PR as it arrives from the *list* endpoint: real metadata, zeroed stats. */
-function listSourcedPr(overrides: Partial<PullRequest> = {}): PullRequest {
+function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
   return {
     id: "pr-open-alice",
     externalId: 1,
@@ -190,6 +193,7 @@ function listSourcedPr(overrides: Partial<PullRequest> = {}): PullRequest {
     updatedAt: "2026-02-01T00:00:00Z",
     fetchedAt: "2026-02-01T00:00:00Z",
     closedAt: null,
+    stack: STACK_UNSEEN,
     ...overrides,
   };
 }
@@ -466,5 +470,181 @@ describe("listOpenPrsAsOfWindow", () => {
       .map((r) => r.id)
       .sort();
     expect(ids).toEqual(openNow);
+  });
+});
+
+describe("upsertPrs stack membership", () => {
+  const storedStack = (db: Db) => {
+    const row = readRow(db, "pr-open-alice");
+    return { number: row.stackNumber, position: row.stackPosition };
+  };
+  const seedStacked = (db: Db) =>
+    db
+      .update(pullRequests)
+      .set({ stackNumber: 7, stackPosition: 3 })
+      .where(eq(pullRequests.id, "pr-open-alice"))
+      .run();
+
+  it("records a stack on first insert", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    await runSvc(db, (svc) =>
+      svc.upsertPrs([
+        listSourcedPr({
+          id: "pr-stacked",
+          externalId: 98,
+          stack: stackSeen({ number: 7, position: 2 }),
+        }),
+      ]),
+    );
+    const row = readRow(db, "pr-stacked");
+    expect(row.stackNumber).toBe(7);
+    expect(row.stackPosition).toBe(2);
+  });
+
+  it("never erases a stored stack on conflict from a source that didn't see stacks", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedStacked(db);
+
+    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr()]));
+
+    expect(storedStack(db)).toEqual({ number: 7, position: 3 });
+    expect(readRow(db, "pr-open-alice").title).toBe("updated title");
+  });
+
+  it.each([
+    ["moves", { number: 7, position: 1 }, { number: 7, position: 1 }],
+    ["clears", null, { number: null, position: null }],
+  ] as const)("%s a stored stack on conflict when the row saw it", async (_, stack, want) => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedStacked(db);
+
+    await runSvc(db, (svc) => svc.upsertPrs([listSourcedPr({ stack: stackSeen(stack) })]));
+
+    expect(storedStack(db)).toEqual(want);
+  });
+
+  describe("through the gateway", () => {
+    const realFetch = globalThis.fetch;
+    afterEach(() => {
+      globalThis.fetch = realFetch;
+    });
+
+    it("keeps a stored stack through a REST detail and a detail-batch refresh", async () => {
+      const db = createDb(":memory:");
+      seed(db);
+      seedStacked(db);
+      const node = {
+        number: 1,
+        title: "refreshed",
+        body: "",
+        isDraft: false,
+        url: "https://github.test/pull/1",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-02-01T00:00:00Z",
+        closedAt: null,
+        headRefName: "feature",
+        baseRefName: "main",
+        headRefOid: "head",
+        baseRefOid: "base",
+        author: { __typename: "User", login: "alice" },
+        reviewRequests: { nodes: [] },
+        state: "OPEN",
+        mergedAt: null,
+        additions: 1,
+        deletions: 1,
+        changedFiles: 1,
+      };
+      const rest = {
+        number: 1,
+        user: { login: "alice", avatar_url: null },
+        head: { ref: "feature", sha: "head" },
+        base: { ref: "main", sha: "base" },
+        requested_reviewers: [],
+        title: "refreshed",
+        body: null,
+        state: "open",
+        merged_at: null,
+        draft: false,
+        html_url: "https://github.test/pull/1",
+        additions: 1,
+        deletions: 1,
+        changed_files: 1,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-02-01T00:00:00Z",
+        closed_at: null,
+      };
+      globalThis.fetch = Object.assign(
+        async (input: RequestInfo | URL) =>
+          new Response(
+            JSON.stringify(
+              String(input).endsWith("/graphql") ? { data: { repository: { p0: node } } } : rest,
+            ),
+          ),
+        { preconnect: realFetch.preconnect },
+      );
+      const dbLayer = Layer.succeed(DbService, { db });
+      const layer = Layer.mergeAll(GitHubGatewayLive, PullRequestServiceLive).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive).pipe(
+            Layer.provideMerge(dbLayer),
+          ),
+        ),
+      );
+      const apiBase = "https://api.github.test";
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const github = yield* GitHubGateway;
+          const svc = yield* PullRequestService;
+          const detail = yield* github.prs.get("acme/web", 1, "t", apiBase);
+          yield* svc.upsertPrs([{ ...detail, id: "pr-open-alice", repositoryId: REPO_ID }]);
+          expect(storedStack(db)).toEqual({ number: 7, position: 3 });
+
+          const batch = yield* github.prs.getMany("acme/web", REPO_ID, [1], "t", apiBase);
+          yield* svc.upsertPrs([...batch.values()].map((pr) => ({ ...pr, id: "pr-open-alice" })));
+        }).pipe(Effect.orDie, Effect.provide(layer)),
+      );
+
+      expect(storedStack(db)).toEqual({ number: 7, position: 3 });
+      expect(readRow(db, "pr-open-alice").title).toBe("refreshed");
+    });
+  });
+
+  it("takes each row's stack on its own in a mixed batch", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    seedStacked(db);
+
+    await runSvc(db, (svc) =>
+      svc.upsertPrs([
+        listSourcedPr(),
+        listSourcedPr({
+          id: "pr-new",
+          externalId: 97,
+          stack: stackSeen({ number: 2, position: 1 }),
+        }),
+      ]),
+    );
+
+    expect(storedStack(db)).toEqual({ number: 7, position: 3 });
+    expect(readRow(db, "pr-new").stackNumber).toBe(2);
+  });
+});
+
+describe("setPrDraft", () => {
+  it("flips only the targeted row's draft flag", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+
+    await runSvc(db, (svc) => svc.setPrDraft("pr-open-alice", true));
+    expect(readRow(db, "pr-open-alice").isDraft).toBe(true);
+    expect(readRow(db, "pr-open-alice").status).toBe("open");
+    expect(readRow(db, "pr-merged-bob").isDraft).toBe(false);
+
+    await runSvc(db, (svc) => svc.setPrDraft("pr-open-alice", false));
+    expect(readRow(db, "pr-open-alice").isDraft).toBe(false);
   });
 });

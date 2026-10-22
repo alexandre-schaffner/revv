@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { repositories } from "../db/schema";
 import { GitHubAuthError, type GitHubError, type NotFoundError } from "../domain/errors";
+import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
 import { DiffCacheService, hasCompleteCachedFiles, toCachedDiffFiles } from "./DiffCache";
@@ -100,17 +101,13 @@ export class PrContextService extends Context.Service<
       token: string,
       apiBase?: string,
     ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Full PR fetch by number. Thin forward to the GitHub gateway. Used by
-     * the recap backfill path to hydrate PRs that never landed in the local
-     * mirror.
-     */
-    readonly fetchPr: (
+    readonly fetchPrs: (
       repoFullName: string,
-      externalId: number,
+      repositoryId: string,
+      externalIds: readonly number[],
       token: string,
       apiBase?: string,
-    ) => Effect.Effect<PullRequest, GitHubError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<Map<number, ObservedPr>, GitHubError, SettingsService>;
     /**
      * Search for PRs closed (or merged) in a time window. Thin forward to the
      * GitHub gateway's issue-search path — note the narrower requirement
@@ -266,8 +263,13 @@ export const PrContextServiceLive = Layer.effect(
       github.prs.meta(repoFullName, externalId, token, apiBase);
     const prFiles = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
       github.prs.files(repoFullName, externalId, token, apiBase);
-    const fetchPr = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
-      github.prs.get(repoFullName, externalId, token, apiBase);
+    const fetchPrs = (
+      repoFullName: string,
+      repositoryId: string,
+      externalIds: readonly number[],
+      token: string,
+      apiBase?: string,
+    ) => github.prs.getMany(repoFullName, repositoryId, externalIds, token, apiBase);
     const searchClosedPrs = (
       repoFullName: string,
       sinceIso: string,
@@ -296,7 +298,7 @@ export const PrContextServiceLive = Layer.effect(
       resolveWithDiff,
       prMeta,
       prFiles,
-      fetchPr,
+      fetchPrs,
       searchClosedPrs,
       resolveRepoToken,
       getRepo,

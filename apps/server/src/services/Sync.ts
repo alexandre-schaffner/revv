@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
+import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -51,6 +52,7 @@ export class SyncService extends Context.Service<
     readonly pushThreadStatus: (
       threadId: string,
     ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+    /** One pull per PR at a time: a call while one is in flight for the same PR joins it. */
     readonly pullComments: (
       prId: string,
     ) => Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
@@ -316,7 +318,7 @@ export const SyncServiceLive = Layer.effect(
         return summary;
       }).pipe(Effect.mapError(toSyncError()));
 
-    const pullComments = (
+    const pullCommentsFromGitHub = (
       prId: string,
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
@@ -569,6 +571,12 @@ export const SyncServiceLive = Layer.effect(
 
         return { newThreads, newMessages, statusChanges, edits, changed };
       }).pipe(Effect.mapError(toSyncError()));
+
+    const pullOnce = keyedSingleFlight<string, PullResult, SyncError>();
+    const pullComments = (
+      prId: string,
+    ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+      pullOnce(prId, pullCommentsFromGitHub(prId));
 
     const syncThreads = (
       prId: string,

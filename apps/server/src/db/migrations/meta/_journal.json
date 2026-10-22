@@ -330,6 +330,13 @@
       "when": 1779720000000,
       "tag": "0430_external_walkthrough_generate_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1791897823334,
+      "tag": "0440_pr_stack_membership",
+      "breakpoints": true
     }
   ]
 }

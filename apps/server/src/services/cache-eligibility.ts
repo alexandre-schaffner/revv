@@ -140,7 +140,7 @@ export const CacheEligibilityLive = Layer.effect(
         .pipe(Effect.catch(() => Effect.succeed("none" as PermLevel)));
 
     // Invalidate on settings changes (host set may change).
-    yield* Effect.forkChild(
+    yield* Effect.forkScoped(
       settingsSvc
         .settingsChanges()
         .pipe(Stream.runForEach(() => Effect.sync(() => permCache.clear()))),

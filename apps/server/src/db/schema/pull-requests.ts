@@ -73,6 +73,13 @@ export const pullRequests = sqliteTable(
      * "tagged on" even when not a requested reviewer.
      */
     mentionedUsers: text("mentioned_users").notNull().default("[]"),
+    /**
+     * GitHub's native stack this PR belongs to (`PullRequest.stack.number`)
+     * and its place in it (`stackEntry.position`, 1 sits on the base branch).
+     * Null when the PR isn't stacked, or the host predates stacks.
+     */
+    stackNumber: integer("stack_number"),
+    stackPosition: integer("stack_position"),
   },
   (t) => ({
     /**

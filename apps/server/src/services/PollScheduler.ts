@@ -1,6 +1,6 @@
 import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
 import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
-import { Cause, Context, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
 import { repositories } from "../db/schema";
 import { pullRequests } from "../db/schema/pull-requests";
 import {
@@ -10,6 +10,7 @@ import {
   type NotFoundError,
   type ValidationError,
 } from "../domain/errors";
+import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { Broadcaster } from "./Broadcaster";
@@ -36,10 +37,10 @@ import {
 import { announceSyncChanges, collectSyncChanges } from "./poll-notifications";
 import {
   archiveClosedPrs,
-  findUnchangedRepos,
   type ListedSignature,
   movedRangePrIds,
   openListMoved,
+  probeRepos,
   syncRepoOpenPrs,
 } from "./poll-open-prs";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
@@ -111,6 +112,45 @@ const FRESHEN_MIN_INTERVAL_MS = 2 * 60 * 1000;
  */
 type SyncTrigger = "periodic" | "manual" | "freshen";
 
+const THREAD_SWEEP_MAX_PRS = 20;
+
+/**
+ * How often the sweep re-reads a PR whose `updatedAt` hasn't moved but which
+ * still has an unresolved thread. GitHub doesn't bump `updatedAt` on a
+ * resolve/unresolve, so such a PR can only be caught by asking again; opening
+ * the PR syncs its threads on demand, so this only bounds how stale the list's
+ * counts get.
+ */
+const THREAD_RECHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+export interface ThreadSweepMark {
+  readonly updatedAt: string;
+  readonly sweptAt: number;
+}
+
+export function rankThreadSweep<P extends Pick<PullRequest, "id" | "updatedAt">>(
+  openPrs: readonly P[],
+  marks: ReadonlyMap<string, ThreadSweepMark>,
+  now: number,
+): Array<{ readonly pr: P; readonly recheck: boolean }> {
+  const moved: P[] = [];
+  const unseen: P[] = [];
+  const recheck: Array<{ readonly pr: P; readonly sweptAt: number }> = [];
+  for (const pr of openPrs) {
+    const mark = marks.get(pr.id);
+    if (mark === undefined) unseen.push(pr);
+    else if (mark.updatedAt !== pr.updatedAt) moved.push(pr);
+    else if (now - mark.sweptAt >= THREAD_RECHECK_INTERVAL_MS) {
+      recheck.push({ pr, sweptAt: mark.sweptAt });
+    }
+  }
+  recheck.sort((a, b) => a.sweptAt - b.sweptAt);
+  return [
+    ...[...moved, ...unseen].map((pr) => ({ pr, recheck: false })),
+    ...recheck.map(({ pr }) => ({ pr, recheck: true })),
+  ];
+}
+
 export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
@@ -158,6 +198,7 @@ export const PollSchedulerLive = Layer.effect(
     // reconstructible cache: empty after a restart, so the first cycle lists
     // every repo.
     const listedSignatures = new Map<string, ListedSignature>();
+    const stacklessUntil = new Map<string, number>();
 
     // Bind the captured db handle for convenience
     const withDb = <A, E>(eff: Effect.Effect<A, E, DbService>) => withDbHelper(db, eff);
@@ -219,8 +260,7 @@ export const PollSchedulerLive = Layer.effect(
         { discard: true },
       );
 
-    // Fiber ref for the running poll loop — null when stopped
-    const fiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
+    const syncLoop = yield* makeRestartableLoop;
 
     // ── Cycle phases ──────────────────────────────────────────────────────
     // Each is one step of `syncAllRepos`, reading the cycle's account context
@@ -257,17 +297,22 @@ export const PollSchedulerLive = Layer.effect(
         for (const repoId of listedSignatures.keys()) {
           if (!liveRepoIds.has(repoId)) listedSignatures.delete(repoId);
         }
-        const unchangedRepoIds =
-          trigger === "manual"
-            ? new Set<string>()
-            : yield* findUnchangedRepos(deps, cycle, allRepos, listedSignatures);
+        const probed = yield* probeRepos(
+          deps,
+          cycle,
+          allRepos,
+          listedSignatures,
+          trigger !== "manual",
+        );
 
         const ctx = {
           existingMap,
           existingByRepo: Map.groupBy(existingPrs, (pr) => pr.repositoryId),
           diffStatsHeadByPrId: new Map(diffStatsHeadRows.map((row) => [row.id, row.headSha])),
-          unchangedRepoIds,
+          unchangedRepoIds: probed.unchanged,
+          probedSignatures: probed.signatures,
           listedSignatures,
+          stacklessUntil,
         };
         const results = yield* Effect.forEach(
           allRepos,
@@ -364,14 +409,13 @@ export const PollSchedulerLive = Layer.effect(
     const backfillArchiveIfDue = (
       cycle: SyncCycle,
       allRepos: readonly Repository[],
-      existingPrs: readonly PullRequest[],
     ): Effect.Effect<boolean, never, GitHubInfra> =>
       Effect.suspend(() => {
         if (Date.now() - lastArchiveBackfillAt < ARCHIVE_BACKFILL_INTERVAL_MS) {
           return Effect.succeed(false);
         }
         lastArchiveBackfillAt = Date.now();
-        return backfillArchive(deps, cycle, allRepos, existingPrs);
+        return backfillArchive(deps, cycle, allRepos);
       });
 
     // The core sync effect — all services are plain values captured from the closure.
@@ -469,7 +513,7 @@ export const PollSchedulerLive = Layer.effect(
             new Map(allPrs.map((pr) => [pr.id, pr])),
             new Map(allRepos.map((r) => [r.id, r])),
           );
-          const archiveChanged = yield* backfillArchiveIfDue(cycle, allRepos, existingPrs);
+          const archiveChanged = yield* backfillArchiveIfDue(cycle, allRepos);
 
           // The maintenance passes can move what a client shows (repo avatars,
           // PRs the backfill pulled into the archive) after the list went out,
@@ -627,24 +671,16 @@ export const PollSchedulerLive = Layer.effect(
         yield* broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
       });
 
-    const stopFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const fiber = yield* Ref.get(fiberRef);
-      if (fiber !== null) {
-        yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-        yield* Ref.set(fiberRef, null);
-      }
-    });
-
     // ── Thread sync loop ──────────────────────────────────────────────────
     // Separate fiber that periodically reconciles threads for open PRs.
     // Opening a PR triggers an immediate targeted sync, so this background
     // sweep stays intentionally slow to avoid GitHub rate-limit bursts.
-    const threadFiberRef = yield* Ref.make<Fiber.Fiber<number, never> | null>(null);
+    const threadLoop = yield* makeRestartableLoop;
 
-    // `pr.updatedAt` as of the last sweep that reconciled this PR. Purely a
-    // cost optimisation and fully reconstructible — losing it on restart just
+    // What each open PR looked like when the sweep last reconciled it. Purely
+    // a cost optimisation and fully reconstructible — losing it on restart just
     // means one extra sweep per PR.
-    const lastThreadSweepUpdatedAt = new Map<string, string>();
+    const threadSweepMarks = new Map<string, ThreadSweepMark>();
 
     const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {
       const prs = yield* withDb(prService.listPrs()).pipe(
@@ -657,45 +693,44 @@ export const PollSchedulerLive = Layer.effect(
       // GitHub bumps `updated_at` when a review comment is added, edited, or
       // deleted, so an unchanged `updated_at` means no comment activity. The one
       // thing it does NOT cover is a resolve/unresolve, which changes thread
-      // state without touching the PR — so any PR that still has an unresolved
-      // local thread is always swept.
+      // state without touching the PR — so a PR that still has an unresolved
+      // local thread is re-read now and then regardless.
       //
       // This matters because the reconcile needs a GraphQL call, and GraphQL has
       // no conditional-request equivalent: unlike the REST half of the sweep,
       // where a 304 is free, every one of those is billed. Sweeping every open
       // PR every tick made the GraphQL fan-out scale with the size of the PR
       // list rather than with the set of PRs anyone is actually reviewing.
+      const now = Date.now();
       const candidates: PullRequest[] = [];
-      for (const pr of openPrs) {
-        const lastSeen = lastThreadSweepUpdatedAt.get(pr.id);
-        if (lastSeen === undefined || lastSeen !== pr.updatedAt) {
-          candidates.push(pr);
-          continue;
+      for (const { pr, recheck } of rankThreadSweep(openPrs, threadSweepMarks, now)) {
+        if (candidates.length >= THREAD_SWEEP_MAX_PRS) break;
+        if (recheck) {
+          const summary = yield* withDb(syncService.getThreadSummary(pr.id, null)).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (summary !== null && summary.total === summary.resolved) {
+            threadSweepMarks.set(pr.id, { updatedAt: pr.updatedAt, sweptAt: now });
+            continue;
+          }
         }
-        const summary = yield* withDb(syncService.getThreadSummary(pr.id, null)).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        if (summary === null || summary.total > summary.resolved) candidates.push(pr);
+        candidates.push(pr);
       }
 
-      const skipped = openPrs.length - candidates.length;
-      if (skipped > 0) {
+      if (candidates.length < openPrs.length) {
         debug(
           "PollScheduler",
-          `thread sweep: ${candidates.length}/${openPrs.length} PRs need a reconcile (${skipped} unchanged and fully resolved)`,
+          `thread sweep: reconciling ${candidates.length}/${openPrs.length} open PRs`,
         );
       }
 
-      // Sequential on purpose: each PR-sync is lightweight (REST + a small
-      // GraphQL call), and running them concurrently is what trips GitHub's
-      // secondary (abuse) rate limit.
       yield* Effect.forEach(
         candidates,
         (pr) =>
           provideInfra(syncService.syncThreads(pr.id)).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
-                lastThreadSweepUpdatedAt.set(pr.id, pr.updatedAt);
+                threadSweepMarks.set(pr.id, { updatedAt: pr.updatedAt, sweptAt: Date.now() });
               }),
             ),
             Effect.asVoid,
@@ -716,10 +751,10 @@ export const PollSchedulerLive = Layer.effect(
 
       // Drop watermarks for PRs that are no longer open so the map can't grow
       // without bound across a long-running process.
-      if (lastThreadSweepUpdatedAt.size > openPrs.length) {
+      if (threadSweepMarks.size > openPrs.length) {
         const openIds = new Set(openPrs.map((p) => p.id));
-        for (const id of lastThreadSweepUpdatedAt.keys()) {
-          if (!openIds.has(id)) lastThreadSweepUpdatedAt.delete(id);
+        for (const id of threadSweepMarks.keys()) {
+          if (!openIds.has(id)) threadSweepMarks.delete(id);
         }
       }
     }).pipe(
@@ -731,67 +766,53 @@ export const PollSchedulerLive = Layer.effect(
       ),
     );
 
-    const stopThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const fiber = yield* Ref.get(threadFiberRef);
-      if (fiber !== null) {
-        yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
-        yield* Ref.set(threadFiberRef, null);
-      }
-    });
-
-    const startThreadFiber: Effect.Effect<void> = Effect.gen(function* () {
-      const schedule = Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS));
-      // Delay the FIRST background thread sweep by one interval. At boot the
-      // PR-sync fiber already fires immediately (repo metadata + user avatars +
-      // listOpen per repo + archive backfill), and running the all-open-PRs
-      // thread sweep concurrently on top of that produces a request burst that
-      // trips GitHub's *secondary* (abuse) rate limit — the "rate limited as
-      // soon as I open Revv" symptom, made worse when an IDE shares the
-      // account. Opening a PR force-syncs its threads on demand, so this delay
-      // never affects the PR the user is actually looking at.
-      const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
-        syncThreadsForOpenPrs.pipe(
-          Effect.repeat(schedule),
-          Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
-        ),
-      );
-      yield* Ref.set(threadFiberRef, fiber);
-    });
+    // Delay the FIRST background thread sweep by one interval. At boot the
+    // PR-sync fiber already fires immediately (repo metadata + user avatars +
+    // listOpen per repo + archive backfill), and running the thread sweep
+    // concurrently on top of that produces a request burst that trips
+    // GitHub's *secondary* (abuse) rate limit — the "rate limited as soon as I
+    // open Revv" symptom, made worse when an IDE shares the account. Opening a
+    // PR force-syncs its threads on demand, so this delay never affects the PR
+    // the user is actually looking at.
+    const threadSweepLoop = syncThreadsForOpenPrs.pipe(
+      Effect.repeat(Schedule.spaced(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS))),
+      Effect.delay(Duration.seconds(THREAD_SYNC_INTERVAL_SECONDS)),
+    );
 
     const startWithInterval = (intervalMinutes: number): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        if (intervalMinutes <= 0) return;
-        // Run immediately on start, then repeat at the given interval
-        const schedule = Schedule.spaced(Duration.minutes(intervalMinutes));
-        const fiber: Fiber.Fiber<number, never> = yield* Effect.forkChild(
-          provideInfra(runSyncOnce("periodic").pipe(Effect.repeat(schedule))),
-        );
-        yield* Ref.set(fiberRef, fiber);
-      });
+      intervalMinutes <= 0
+        ? Effect.void
+        : // Run immediately on start, then repeat at the given interval
+          syncLoop.start(
+            provideInfra(
+              runSyncOnce("periodic").pipe(
+                Effect.repeat(Schedule.spaced(Duration.minutes(intervalMinutes))),
+              ),
+            ),
+          );
 
     return {
       start: () =>
         Effect.gen(function* () {
           // Guard: don't start duplicate fibers if already running
-          const existingFiber = yield* Ref.get(threadFiberRef);
-          if (existingFiber !== null) return;
+          if (yield* threadLoop.isRunning) return;
 
           const s = yield* withDb(settingsService.getSettings()).pipe(
             Effect.orElseSucceed(() => ({ autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL })),
           );
           yield* startWithInterval(s.autoFetchInterval);
-          yield* startThreadFiber;
+          yield* threadLoop.start(threadSweepLoop);
         }),
 
       stop: () =>
         Effect.gen(function* () {
-          yield* stopFiber;
-          yield* stopThreadFiber;
+          yield* syncLoop.stop;
+          yield* threadLoop.stop;
         }),
 
       restart: (minutes) =>
         Effect.gen(function* () {
-          yield* stopFiber;
+          yield* syncLoop.stop;
           yield* startWithInterval(minutes);
         }),
 

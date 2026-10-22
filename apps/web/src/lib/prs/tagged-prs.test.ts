@@ -37,6 +37,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   updatedAt: "2026-09-01T00:00:00.000Z",
   fetchedAt: "2026-09-01T00:00:00.000Z",
   closedAt: null,
+  stack: null,
   ...over,
 });
 

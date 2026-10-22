@@ -560,35 +560,47 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
 
   .post("/:id/sync-threads", async (ctx) => {
     try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(SyncService, (s) => s.syncThreads(ctx.params.id)),
+      await AppRuntime.runPromise(
+        Effect.flatMap(PollScheduler, (s) => s.syncThreadsNow(ctx.params.id)),
       );
+      return { success: true };
     } catch (e) {
       return handleAppError(e, ctx);
     }
   })
 
-  .get("/:id/thread-summary", async (ctx) => {
-    try {
-      // Look up the current user's GitHub login for role-aware counts.
-      const rows = await db
-        .select({ githubLogin: user.githubLogin })
-        .from(user)
-        .where(eq(user.id, ctx.session.user.id));
-      const login = rows[0]?.githubLogin ?? null;
+  .post(
+    "/thread-summaries",
+    async (ctx) => {
+      try {
+        const rows = await db
+          .select({ githubLogin: user.githubLogin })
+          .from(user)
+          .where(eq(user.id, ctx.session.user.id));
+        const login = rows[0]?.githubLogin ?? null;
 
-      return await AppRuntime.runPromise(
-        Effect.flatMap(SyncService, (s) => s.getThreadSummary(ctx.params.id, login)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+        const summaries = await AppRuntime.runPromise(
+          Effect.flatMap(SyncService, (s) =>
+            Effect.forEach(ctx.body.prIds, (prId) =>
+              s.getThreadSummary(prId, login).pipe(
+                Effect.map((summary) => ({ prId, summary })),
+                Effect.orElseSucceed(() => null),
+              ),
+            ),
+          ),
+        );
+        return { summaries: summaries.filter((entry) => entry !== null) };
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    { body: t.Object({ prIds: t.Array(t.String(), { maxItems: 200 }) }) },
+  )
 
   // ── Owner-only PR mutations (draft toggle, close) ─────────────────────
   //
   // All three endpoints follow the same shape: resolve PR + repo + token,
-  // run the GitHub mutation, refresh the local row from a fresh GET, and
+  // run the GitHub mutation, record its outcome on the local row, and
   // broadcast `prs:updated` so other clients see the new state without
   // waiting for the next poll cycle.
   .post("/:id/convert-to-draft", async (ctx) => {
@@ -668,19 +680,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             const mergeMethod = (ctx.body?.mergeMethod ??
               "merge") as import("@revv/shared").MergeMethod;
             yield* github.prs.merge(repo.fullName, pr.externalId, mergeMethod, token);
-            // The merge succeeded, so we know the PR is merged. Do not trust
-            // github.getPr here — it goes through the ETag cache and can return
-            // the stale pre-merge body because the merge PUT and the PR GET are
-            // different cache keys. Construct the updated row locally instead.
-            const now = new Date().toISOString();
-            const refreshed = {
-              ...pr,
-              status: "merged" as const,
-              closedAt: now,
-              updatedAt: now,
-              fetchedAt: now,
-            };
-            yield* prService.upsertPrs([refreshed]);
+            yield* prService.markPrsClosed([
+              { id: pr.id, status: "merged", closedAt: new Date().toISOString() },
+            ]);
             const all = yield* prService.listPrs(accountId);
             yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });
           }),
@@ -883,7 +885,7 @@ type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 /**
  * Shared executor for the three owner-only PR mutations above. Each one is
  * a thin wrapper over a single GitHubGateway call, so the
- * resolve → mutate → refresh-row → broadcast scaffolding is identical and
+ * resolve → mutate → record → broadcast scaffolding is identical and
  * lifted here.
  */
 function mutatePr(prId: string, userId: string, accountId: string, action: PrMutationAction) {
@@ -897,20 +899,16 @@ function mutatePr(prId: string, userId: string, accountId: string, action: PrMut
 
     if (action === "convert-to-draft") {
       yield* github.prs.convertToDraft(repo.fullName, pr.externalId, token);
+      yield* prService.setPrDraft(pr.id, true);
     } else if (action === "ready-for-review") {
       yield* github.prs.markReadyForReview(repo.fullName, pr.externalId, token);
+      yield* prService.setPrDraft(pr.id, false);
     } else {
       yield* github.prs.close(repo.fullName, pr.externalId, token);
+      yield* prService.markPrsClosed([
+        { id: pr.id, status: "closed", closedAt: new Date().toISOString() },
+      ]);
     }
-
-    // Refresh from a fresh GET so isDraft / status reflect GitHub's new
-    // state — the mutation responses don't return the full PR shape we
-    // store, and the conditional cache would otherwise replay the
-    // pre-mutation body on the next read.
-    const refreshed = yield* github.prs
-      .get(repo.fullName, pr.externalId, token)
-      .pipe(Effect.map((p) => ({ ...p, id: pr.id, repositoryId: pr.repositoryId })));
-    yield* prService.upsertPrs([refreshed]);
 
     const all = yield* prService.listPrs(accountId);
     yield* broadcaster.broadcastToAccount(accountId, { type: "prs:updated", data: all });

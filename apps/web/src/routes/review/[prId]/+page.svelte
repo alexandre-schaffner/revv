@@ -44,6 +44,11 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
+const threadSyncPrId = $derived(pr && pr.id === page.params.prId ? pr.id : null);
+$effect(() => {
+  const id = threadSyncPrId;
+  if (id) untrack(() => requestThreadSync(id));
+});
 // Review lens is derived from identity (author vs. signed-in user) — see
 // `getReviewModeForPr`. No manual override; the file fetch + session load
 // below resolve through it.
@@ -234,7 +239,6 @@ $effect(() => {
 
     setSelectedPrId(prId);
     switchPrViewState(prId);
-    requestThreadSync(prId);
 
     // Short-circuit: same PR, recent load, files still in memory —
     // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)

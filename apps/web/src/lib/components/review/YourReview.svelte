@@ -3,6 +3,7 @@ import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
+import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import {
   deleteThread,
   getReviewFiles,
@@ -228,6 +229,9 @@ async function submit(action: Action): Promise<void> {
           : `HTTP ${error.status}`;
       throw new Error(msg);
     }
+    acceptWriteResult(prId, {
+      conversation: data && "conversation" in data ? data.conversation : null,
+    });
 
     // Push unsynced replies: messages in synced threads that have no externalId
     const syncedThreads = threads.filter((t) => t.externalCommentId != null);

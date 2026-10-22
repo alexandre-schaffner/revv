@@ -1,6 +1,7 @@
 import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
 import { Effect, Option } from "effect";
 import type { GitHubError, ValidationError } from "../domain/errors";
+import { asStored, type ObservedPr } from "../domain/observed-pr";
 
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
   readonly findRepository: (
@@ -12,9 +13,9 @@ interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite
   readonly fetchPullRequest: (
     repository: Repository,
     number: number,
-  ) => Effect.Effect<PullRequest, GitHubError, RRemote>;
+  ) => Effect.Effect<ObservedPr, GitHubError, RRemote>;
   readonly upsertPullRequest: (
-    pullRequest: PullRequest,
+    pullRequest: ObservedPr,
   ) => Effect.Effect<void, ValidationError, RWrite>;
 }
 
@@ -23,9 +24,9 @@ export function localPullRequestId(repositoryId: string, number: number): string
 }
 
 export function remapPullRequestToLocalRepository(
-  pullRequest: PullRequest,
+  pullRequest: ObservedPr,
   repositoryId: string,
-): PullRequest {
+): ObservedPr {
   return {
     ...pullRequest,
     id: localPullRequestId(repositoryId, pullRequest.externalId),
@@ -54,6 +55,9 @@ export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
     const remote = yield* operations.fetchPullRequest(repository, locator.number);
     const local = remapPullRequestToLocalRepository(remote, repository.id);
     yield* operations.upsertPullRequest(local);
-    return { status: "resolved", pullRequest: local } as const;
+    return {
+      status: "resolved",
+      pullRequest: asStored(local, Option.getOrUndefined(cached)),
+    } as const;
   }).pipe(Effect.withSpan("resolvePullRequestLink"));
 }
