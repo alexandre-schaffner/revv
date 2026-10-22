@@ -63,9 +63,7 @@ export const mcpRecapRoute = bindHttp({
   resolveContext,
   logInbound: true,
   traceAnchorKey: (meta) => meta.recapId,
-  beforeToolCall: ({ toolName, ctx }) => {
-    ctx.toolCalls?.add(toolName);
-  },
+  beforeToolCall: ({ toolName, ctx }) => ctx.onToolCall(toolName),
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), recapId=${meta.recapId}`,
 });
