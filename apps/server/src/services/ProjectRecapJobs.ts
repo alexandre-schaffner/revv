@@ -430,7 +430,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         // round-trip. Failure is non-fatal — we still return the diff.
         yield* provideDb(
           diffCache.cacheFiles(
-            pr.id,
+            pr,
             fetched.map((f) => ({
               path: f.filename,
               oldPath: f.previousFilename,

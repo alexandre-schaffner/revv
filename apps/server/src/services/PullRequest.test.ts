@@ -232,7 +232,7 @@ function seedDiffStats(
     Effect.gen(function* () {
       const svc = yield* DiffCacheService;
       yield* svc.cacheFiles(
-        prId,
+        readRow(db, prId),
         files.map((f) => ({
           path: f.path,
           oldPath: null,

@@ -33,6 +33,13 @@ export {
   normalizeToolName,
 } from "./activity";
 export type {
+  AgentProgressFrame,
+  BaseConflictFrame,
+  BaseConflictStrategy,
+  BaseConflictsCheck,
+} from "./base-conflicts";
+export { BASE_CONFLICT_STRATEGIES, DEFAULT_BASE_CONFLICT_STRATEGY } from "./base-conflicts";
+export type {
   CacheSigningMode,
   GeneratedBy,
   GenerationProviderConfig,

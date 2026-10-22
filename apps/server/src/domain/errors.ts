@@ -213,6 +213,28 @@ export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
   readonly rejection: StackRejection;
 }> {}
 
+/** Another push (a chat push or a base sync) already holds the PR's push lock. */
+export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
+  readonly prId: string;
+}> {}
+
+/**
+ * Why bringing a PR up to date with its base was refused:
+ *   busy        — another push or base sync holds the PR.
+ *   stale       — the PR head moved since the user looked.
+ *   invalid     — the ask can't be met as the PR stands (closed, a fork,
+ *                 unpushed agent commits a rebase would strand).
+ *   unavailable — the clone or the history isn't there to work with.
+ *   failed      — git failed.
+ */
+export type BaseConflictsRejection = "busy" | "stale" | "invalid" | "unavailable" | "failed";
+
+/** A base-conflict resolve refused before the agent ran; `message` is the user's to read. */
+export class BaseConflictsRejectedError extends Data.TaggedError("BaseConflictsRejectedError")<{
+  readonly message: string;
+  readonly reason: BaseConflictsRejection;
+}> {}
+
 /**
  * A caller pinned the head it wants reviewed (`startJob`'s `expectedHeadSha`)
  * and GitHub serves a different one — typically a push GitHub hasn't caught

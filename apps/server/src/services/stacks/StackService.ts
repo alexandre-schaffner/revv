@@ -1,7 +1,6 @@
 import type { PrStackDetail, RiskLevel, StackBrief, WalkthroughStackSnapshot } from "@revv/shared";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { prDiffFiles } from "../../db/schema/pr-diff-files";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
@@ -19,6 +18,7 @@ import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
+import { readCurrentHeadFiles } from "../DiffCache";
 import { githubGraphql, githubGraphqlPartial, withSchemaFallback } from "../github-rest";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
 import { fingerprintFiles, stackSignature } from "./fingerprint";
@@ -215,29 +215,7 @@ export function readStackFacts(
           }
         }
 
-        // The poll drops a PR's cached files before its new head lands, so
-        // whatever `pr_diff_files` holds belongs to the current head.
-        const fingerprintable = prRows.filter((r) => r.headSha !== null).map((r) => r.id);
-        const filesByPr = new Map<
-          string,
-          { filename: string; status: string; patch: string | null }[]
-        >();
-        if (fingerprintable.length > 0) {
-          for (const f of db
-            .select({
-              prId: prDiffFiles.prId,
-              path: prDiffFiles.path,
-              status: prDiffFiles.status,
-              patch: prDiffFiles.patch,
-            })
-            .from(prDiffFiles)
-            .where(inArray(prDiffFiles.prId, fingerprintable))
-            .all()) {
-            const list = filesByPr.get(f.prId) ?? [];
-            list.push({ filename: f.path, status: f.status, patch: f.patch });
-            filesByPr.set(f.prId, list);
-          }
-        }
+        const filesByPr = readCurrentHeadFiles(db, prIds);
 
         const toFact = (w: (typeof wtRows)[number]): WalkthroughFact => {
           const counts = issueCounts.get(w.id);
@@ -263,8 +241,12 @@ export function readStackFacts(
           const files = filesByPr.get(pr.id);
           tracked.set(pr.externalId, {
             prId: pr.id,
-            currentFingerprint: files ? fingerprintFiles(files) : null,
-            files: files ? files.map((f) => f.filename) : null,
+            currentFingerprint: files
+              ? fingerprintFiles(
+                  files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
+                )
+              : null,
+            files: files ? files.map((f) => f.path) : null,
             current: current ? toFact(current) : null,
             latestComplete: latestComplete ? toFact(latestComplete) : null,
           });

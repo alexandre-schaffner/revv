@@ -163,12 +163,6 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
         },
       },
     },
-    diffCache: {
-      invalidateFilesForPrs: (ids: string[]) =>
-        Effect.sync(() => {
-          fakes.log.push(`invalidate:${ids.join(",")}`);
-        }),
-    },
     prService: {
       upsertPrs: (rows: readonly ObservedPr[]) =>
         Effect.sync(() => {
@@ -224,27 +218,6 @@ function context(existing: PullRequest[], overrides: Partial<RepoListingContext>
 }
 
 describe("syncRepoOpenPrs", () => {
-  it("drops a moved PR's cached diff before its new head lands", async () => {
-    const { db, deps, log, openCycle } = setup({
-      listOpen: () =>
-        Effect.succeed([pr(1, { headSha: "new", updatedAt: "2026-01-02T00:00:00Z" })]),
-    });
-
-    const result = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openCycle();
-          return yield* syncRepoOpenPrs(deps, cycle, context([pr(1, { headSha: "old" })]), REPO);
-        }),
-      ),
-    );
-
-    expect(result?.listed).toBe(true);
-    expect(log.indexOf("invalidate:repo-1:1")).toBeGreaterThan(-1);
-    expect(log.indexOf("invalidate:repo-1:1")).toBeLessThan(log.indexOf("upsert:new"));
-  });
-
   it("falls back to the REST list when the GraphQL budget runs out", async () => {
     const { db, deps, log, openCycle } = setup({
       listOpen: () =>

@@ -1,5 +1,6 @@
 import type {
   AcpAgentId,
+  BaseConflictStrategy,
   DiffViewMode,
   RecapAgentChoice,
   SettingsUpdate,
@@ -10,6 +11,8 @@ import type {
 } from "@revv/shared";
 import {
   AUTO_FETCH_DEFAULT_INTERVAL,
+  BASE_CONFLICT_STRATEGIES,
+  DEFAULT_BASE_CONFLICT_STRATEGY,
   DEFAULT_JEV_SETTINGS,
   DEFAULT_UPDATE_CHANNEL,
   isAcpAgentId,
@@ -62,6 +65,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   },
   jev: DEFAULT_JEV_SETTINGS,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
+  baseConflictStrategy: DEFAULT_BASE_CONFLICT_STRATEGY,
 };
 
 const VALID_UPDATE_CHANNELS: ReadonlySet<UpdateChannel> = new Set(UPDATE_CHANNELS);
@@ -69,6 +73,10 @@ function coerceUpdateChannel(value: unknown): UpdateChannel {
   return typeof value === "string" && VALID_UPDATE_CHANNELS.has(value as UpdateChannel)
     ? (value as UpdateChannel)
     : DEFAULT_SETTINGS.updateChannel;
+}
+
+function coerceBaseConflictStrategy(value: unknown): BaseConflictStrategy {
+  return BASE_CONFLICT_STRATEGIES.find((s) => s === value) ?? DEFAULT_BASE_CONFLICT_STRATEGY;
 }
 
 function isRecapAgentChoice(value: unknown): value is RecapAgentChoice {
@@ -157,6 +165,7 @@ function normalize(raw: unknown): UserSettings {
     cache: coerceCache(r.cache),
     jev: coerceJev(r.jev),
     updateChannel: coerceUpdateChannel(r.updateChannel),
+    baseConflictStrategy: coerceBaseConflictStrategy(r.baseConflictStrategy),
   };
 }
 
@@ -285,6 +294,7 @@ function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
       hasApiKey: false,
     },
     updateChannel: coerceUpdateChannel(row.updateChannel),
+    baseConflictStrategy: coerceBaseConflictStrategy(row.baseConflictStrategy),
   };
 }
 
@@ -313,6 +323,7 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
     updateChannel: s.updateChannel,
+    baseConflictStrategy: s.baseConflictStrategy,
     cacheSigningMode: s.cache.signing.mode,
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
@@ -420,6 +431,7 @@ export const SettingsServiceLive = Layer.effect(
             jev: { ...merged.jev, hasApiKey: false },
             aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
             updateChannel: coerceUpdateChannel(merged.updateChannel),
+            baseConflictStrategy: coerceBaseConflictStrategy(merged.baseConflictStrategy),
           };
 
           yield* Effect.tryPromise({

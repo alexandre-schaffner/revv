@@ -6,6 +6,9 @@ import { t } from "elysia";
 
 const channelLiteral = t.Union([t.Literal("stable"), t.Literal("nightly")]);
 
+/** `baseConflictStrategy` inside a `PATCH /api/settings` body. */
+export const baseConflictStrategySchema = t.Union([t.Literal("merge"), t.Literal("rebase")]);
+
 export const updateChannelSchema = {
   /** Optional inside a `PATCH /api/settings` body. */
   optional: channelLiteral,

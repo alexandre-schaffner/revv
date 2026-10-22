@@ -156,6 +156,12 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     keywords: ["limit", "tool calls", "budget", "steps"],
   },
   {
+    id: "ai-base-conflict-strategy",
+    pane: "ai",
+    label: "Resolve base conflicts by",
+    keywords: ["merge", "rebase", "conflicts", "base branch", "update branch", "force push"],
+  },
+  {
     id: "ai-keychain",
     pane: "ai",
     label: "Keychain access",

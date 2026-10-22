@@ -12,7 +12,7 @@ import { PollScheduler } from "../services/PollScheduler";
 import { RecapScheduler } from "../services/RecapScheduler";
 import { SettingsService } from "../services/Settings";
 import { handleAppError } from "./middleware";
-import { updateChannelSchema } from "./schemas";
+import { baseConflictStrategySchema, updateChannelSchema } from "./schemas";
 import { settingsJevRoutes } from "./settings-jev";
 
 /**
@@ -128,6 +128,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
           ),
           jev: t.Partial(t.Object({ enabled: t.Boolean() })),
           updateChannel: updateChannelSchema.optional,
+          baseConflictStrategy: baseConflictStrategySchema,
         }),
       ),
     },

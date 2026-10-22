@@ -1,9 +1,9 @@
 import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { prDiffFiles } from "../../../db/schema/pr-diff-files";
 import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
+import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
 import { isCompleteReview, readBriefLayers } from "../../../services/stacks/reads";
 import {
@@ -169,19 +169,7 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
 
   const prIds = brief.snapshot.layers.map((l) => l.prId).filter((id): id is string => id !== null);
 
-  const filesByPr = new Map<string, string[]>();
-  if (prIds.length > 0) {
-    for (const f of ctx.db
-      .select({ prId: prDiffFiles.prId, path: prDiffFiles.path })
-      .from(prDiffFiles)
-      .where(inArray(prDiffFiles.prId, prIds))
-      .orderBy(prDiffFiles.path)
-      .all()) {
-      const list = filesByPr.get(f.prId) ?? [];
-      list.push(f.path);
-      filesByPr.set(f.prId, list);
-    }
-  }
+  const filesByPr = readCurrentHeadFiles(ctx.db, prIds);
 
   const reviews =
     prIds.length === 0
@@ -205,7 +193,12 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
           .filter(isCompleteReview);
 
   const layers = brief.snapshot.layers.map((layer) => {
-    const files = layer.prId ? (filesByPr.get(layer.prId) ?? []) : [];
+    const files = layer.prId
+      ? (filesByPr
+          .get(layer.prId)
+          ?.map((f) => f.path)
+          .toSorted() ?? null)
+      : null;
     const forPr = reviews.filter((w) => w.prId === layer.prId);
     const review = forPr.find((w) => w.prHeadSha === layer.headSha) ?? forPr[0];
     let walkthrough = null;
@@ -244,8 +237,8 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
       deletions: layer.deletions,
       changedFiles: layer.changedFiles,
       bodyExcerpt: layer.body,
-      files: files.slice(0, LAYER_FILES_MAX),
-      filesTruncated: files.length > LAYER_FILES_MAX,
+      files: files?.slice(0, LAYER_FILES_MAX) ?? null,
+      filesTruncated: (files?.length ?? 0) > LAYER_FILES_MAX,
       walkthrough,
     };
   });
@@ -256,7 +249,7 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
       layers,
       merged: brief.snapshot.merged,
       instructions:
-        "Layers are bottom first: each one's diff is against the layer below. `walkthrough` is Revv's review of the layer (null when none exists); `current: false` means it read an older head. An empty `files` list means Revv hasn't fetched that layer's diff, not that it changes nothing. Describe only what this data shows.",
+        "Layers are bottom first: each one's diff is against the layer below. `walkthrough` is Revv's review of the layer (null when none exists); `current: false` means it read an older head. `files: null` means Revv hasn't fetched that layer's diff. Describe only what this data shows.",
     }),
   );
 };

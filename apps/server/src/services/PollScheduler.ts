@@ -465,8 +465,8 @@ export const PollSchedulerLive = Layer.effect(
           // produced anything worth broadcasting at all.
           const existingPrs = yield* withDb(prService.listPrs());
           const existingMap = new Map(existingPrs.map((pr) => [pr.id, pr]));
-          // Taken before the lists land: the list phase drops the cached diff
-          // of every PR whose range moved, and these are the ones to re-fill.
+          // Taken before the lists land, which leave a moved PR's cached diff
+          // stale: these are the ones to re-fill.
           const cachedDiffPrIds = new Set(yield* withDb(diffCache.getPrIdsWithCachedDiffs()));
 
           const { allPrs, listedRepoIds } = yield* syncOpenPrLists(
@@ -609,10 +609,8 @@ export const PollSchedulerLive = Layer.effect(
     /**
      * Reconcile a single PR against GitHub's PR *detail* endpoint.
      *
-     * Repeats the poll's follow-through on a head-SHA move — invalidate the
-     * cached diff, supersede walkthroughs pinned to the old SHA — because
-     * without it a refresh would leave the UI showing a new head SHA against
-     * the previous commit's diff.
+     * Repeats the poll's follow-through on a head-SHA move: supersede
+     * walkthroughs pinned to the old SHA.
      */
     const refreshPr = (
       prId: string,
@@ -649,9 +647,6 @@ export const PollSchedulerLive = Layer.effect(
         // row we had. Without it a lagging read cancels the walkthrough
         // generating at the real head.
         const headMoved = row.headSha !== null && isTrustedHeadShaMove(existing, row);
-        // Drop the old head's diff before the new head lands, so nothing can
-        // read the new head against it (see `syncRepoOpenPrs`).
-        if (headMoved) yield* withDb(diffCache.invalidateFiles(prId));
         yield* withDb(prService.upsertPrs([row]));
         if (headMoved && row.headSha !== null) {
           yield* walkthroughJobs
