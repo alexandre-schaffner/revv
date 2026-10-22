@@ -81,6 +81,7 @@ import {
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
 import { AiService, type ContinuationContext } from "./Ai";
@@ -1316,7 +1317,10 @@ export const WalkthroughJobsLive = Layer.effect(
             }),
           );
 
-          const fiber = yield* Effect.forkDetach(scopedBody);
+          const fiber = yield* scopedBody.pipe(
+            withGitHubOrigin("walkthrough:job"),
+            Effect.forkDetach,
+          );
           job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
         }),
       );

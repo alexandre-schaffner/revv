@@ -2,12 +2,15 @@ import { cors } from "@elysiajs/cors";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
-import { auth } from "./auth";
+import { auth, db } from "./auth";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
 import { isLoopbackAddress } from "./net";
+import { configuredGitHubHosts, githubLedgerPath } from "./observability/github-ledger/config";
+import { enterOrigin, relabelOrigin } from "./observability/github-ledger/origin";
+import { installGitHubLedger } from "./observability/github-ledger/record";
 import { recordSpan } from "./observability/tracer";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
@@ -52,6 +55,13 @@ const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.cha
 
 logError("server", `starting on port ${port}`);
 
+const ledgerPath = githubLedgerPath();
+if (ledgerPath !== null) {
+  installGitHubLedger({ path: ledgerPath, enterpriseHosts: () => configuredGitHubHosts(db) });
+}
+
+const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");
+
 const app = new Elysia()
   .use(
     cors({
@@ -76,6 +86,11 @@ const app = new Elysia()
   .onRequest((ctx) => {
     // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
+    const { pathname } = new URL(ctx.request.url);
+    enterOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request");
+  })
+  .onTransform({ as: "global" }, ({ request, route }) => {
+    if (route) relabelOrigin(`${request.method} ${route}`);
   })
   .onAfterHandle(({ request, store, set }) => {
     const startMs = (store as { _revvStartMs?: number })._revvStartMs;
@@ -146,6 +161,8 @@ const app = new Elysia()
   });
 
 logError("server", `listening on http://${serverEnv.host}:${port}`);
+
+enterOrigin("boot", "boot");
 
 // Migrate any plaintext GitHub tokens left in the `account` table into the OS
 // secure store, then null the columns. Awaited before the sync scheduler boots

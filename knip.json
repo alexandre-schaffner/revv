@@ -30,7 +30,12 @@
       ]
     },
     "apps/server": {
-      "entry": ["src/index.ts", "src/**/*.test.ts", "src/observability/profiling-preload.ts"],
+      "entry": [
+        "src/index.ts",
+        "src/**/*.test.ts",
+        "src/observability/profiling-preload.ts",
+        "scripts/*.ts"
+      ],
       "ignoreDependencies": ["bun-types", "drizzle-kit"]
     },
     "apps/collector": {

@@ -4,6 +4,7 @@ import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
@@ -818,7 +819,7 @@ const prsGateway: GitHubGatewayService["prs"] = {
       const params = new URLSearchParams({ q, per_page: "100", sort: "updated", order: "desc" });
       const firstPath = `/search/issues?${params.toString()}`;
 
-      const items = yield* Effect.tryPromise({
+      const items = yield* githubTryPromise({
         try: async () => {
           const collected: Array<{ number: number; closedAt: string; merged: boolean }> = [];
           let url: string | null = `${apiBase}${firstPath}`;
@@ -1522,7 +1523,7 @@ const reposGateway: GitHubGatewayService["repos"] = {
         // non-membership) GitHub answers 200 with `organization: null` and a
         // top-level `errors` array. The helper rejects on any `errors`; here
         // we tolerate the partial response and let the REST fallback decide.
-        const response = yield* Effect.tryPromise({
+        const response = yield* githubTryPromise({
           try: async () => {
             const res = await fetch(`${apiBase}/graphql`, {
               method: "POST",
@@ -1634,7 +1635,7 @@ const filesGateway: GitHubGatewayService["files"] = {
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const url = `${apiBase}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${ref}`;
-      return yield* Effect.tryPromise({
+      return yield* githubTryPromise({
         try: async () => {
           // `application/vnd.github.raw` flips the response from a base64
           // JSON envelope to the literal blob. The other GitHub headers

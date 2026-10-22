@@ -9,6 +9,7 @@ import {
   GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../domain/errors";
+import { githubTryPromise } from "../observability/github-ledger/origin";
 import type { DbService } from "./Db";
 import { buildCacheKey, GitHubEtagCache } from "./GitHubEtagCache";
 
@@ -190,7 +191,7 @@ export function githubFetch(
     attributes: { path, method: "GET" },
   })(
     Effect.gen(function* () {
-      const res = yield* Effect.tryPromise({
+      const res = yield* githubTryPromise({
         try: () => githubHttpFetch(`${apiBase}${path}`, { headers: githubHeaders(token) }, path),
         catch: toGitHubError,
       });
@@ -217,7 +218,7 @@ export function githubFetchStatus(
   return Effect.withSpan("GitHub.fetch", {
     attributes: { path, method: "GET" },
   })(
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const res = await githubHttpFetch(
           `${apiBase}${path}`,
@@ -234,7 +235,7 @@ export function githubFetchStatus(
 }
 
 export function githubFetchDataUrl(url: string): Effect.Effect<string, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(url, {}, url);
       if (!res.ok) {
@@ -264,7 +265,7 @@ export function conditionalFetch(
       const cacheKey = cacheKeyForRequest(apiBase, path, token);
       const cached = yield* cache.get(cacheKey);
 
-      const result = yield* Effect.tryPromise({
+      const result = yield* githubTryPromise({
         try: async () => {
           const headers: Record<string, string> = githubHeaders(token);
           if (cached) {
@@ -339,7 +340,7 @@ export function conditionalFetchPaginated(
       const cacheKey = cacheKeyForRequest(apiBase, path, token);
       const cached = yield* cache.get(cacheKey);
 
-      const result = yield* Effect.tryPromise({
+      const result = yield* githubTryPromise({
         try: async () => {
           const headers: Record<string, string> = githubHeaders(token);
           if (cached) {
@@ -442,7 +443,7 @@ export function githubPost(
     attributes: { path, method: "POST" },
   })(
     Effect.gen(function* () {
-      const res = yield* Effect.tryPromise({
+      const res = yield* githubTryPromise({
         try: () =>
           githubHttpFetch(
             `${apiBase}${path}`,
@@ -477,7 +478,7 @@ export function githubPatch(
   body: Record<string, unknown>,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -505,7 +506,7 @@ export function githubPut(
   body: Record<string, unknown>,
   apiBase: string,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -540,7 +541,7 @@ export function githubDelete(
   apiBase: string,
   body?: Record<string, unknown>,
 ): Effect.Effect<unknown, GitHubError> {
-  return Effect.tryPromise({
+  return githubTryPromise({
     try: async () => {
       const res = await githubHttpFetch(
         `${apiBase}${path}`,
@@ -577,7 +578,7 @@ export function githubFetchRedirectText(
   return Effect.withSpan("GitHub.fetchRedirectText", {
     attributes: { path, method: "GET" },
   })(
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const res = await githubHttpFetch(
           `${apiBase}${path}`,
@@ -660,7 +661,7 @@ function postGraphql<T>(
   return Effect.withSpan("GitHub.graphql", {
     attributes: { operationName },
   })(
-    Effect.tryPromise({
+    githubTryPromise({
       try: async () => {
         const res = await githubHttpFetch(
           `${apiBase}/graphql`,
@@ -870,7 +871,7 @@ export function githubFetchPaginated(
         const next = yield* Effect.withSpan("GitHub.page", {
           attributes: { path, page },
         })(
-          Effect.tryPromise({
+          githubTryPromise({
             try: async () => {
               const res = await githubHttpFetch(pageUrl, { headers: githubHeaders(token) }, path);
               assertGitHubOk(res, path);

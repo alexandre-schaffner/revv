@@ -13,6 +13,7 @@ import {
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { debug, logError } from "../logger";
+import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
@@ -599,6 +600,7 @@ export const PollSchedulerLive = Layer.effect(
         if (claim === "fresh-enough") return;
         yield* syncAllRepos(trigger).pipe(
           Effect.ensuring(Ref.update(cycleGateRef, (gate) => ({ ...gate, inFlight: false }))),
+          withGitHubOrigin(`poll:sync:${trigger}`),
         );
       });
 
@@ -764,6 +766,7 @@ export const PollSchedulerLive = Layer.effect(
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
       ),
+      withGitHubOrigin("poll:threads"),
     );
 
     // Delay the FIRST background thread sweep by one interval. At boot the

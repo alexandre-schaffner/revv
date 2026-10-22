@@ -25,6 +25,7 @@ apps/desktop/target/
 *.db-shm
 *.db.pid
 *.db.*.pid
+github-ledger.*.jsonl*
 
 # Turbo
 .turbo/
