@@ -1,12 +1,19 @@
-import { isOpenLayer } from "@revv/shared";
+import {
+  isOpenLayer,
+  type StackMergePlan,
+  type StackMergeRun,
+  type StackRebaseResult,
+} from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { getOrFetchDiffFiles } from "../services/DiffCache";
 import { PullRequestService } from "../services/PullRequest";
 import { RepositoryService } from "../services/Repository";
 import { StackHeadlineService } from "../services/stacks/StackHeadlines";
+import { StackMergeService } from "../services/stacks/StackMerge";
+import { StackRebaseService } from "../services/stacks/StackRebase";
 import { StackService } from "../services/stacks/StackService";
 import { handleAppError, withAccount } from "./middleware";
 
@@ -86,3 +93,87 @@ export const repoStackRoutes = new Elysia({ prefix: "/api/repos" })
       return handleAppError(e, ctx);
     }
   });
+
+type Rejection = ReturnType<typeof handleAppError>;
+
+const mergeMethod = t.Union([t.Literal("merge"), t.Literal("squash"), t.Literal("rebase")]);
+
+export const stackMergeRoutes = new Elysia({ prefix: "/api" })
+  .use(withAccount)
+  .get("/prs/:id/stack/merge-plan", async (ctx): Promise<StackMergePlan | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) =>
+          s.plan(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post(
+    "/prs/:id/stack/merge",
+    async (ctx): Promise<StackMergeRun | Rejection> => {
+      try {
+        return await AppRuntime.runPromise(
+          Effect.flatMap(StackMergeService, (s) =>
+            s.start(ctx.params.id, ctx.session.user.id, ctx.account.accountId, ctx.body),
+          ),
+        );
+      } catch (e) {
+        return handleAppError(e, ctx);
+      }
+    },
+    {
+      body: t.Object({
+        throughPosition: t.Integer({ minimum: 1 }),
+        method: mergeMethod,
+        expectedHeads: t.Record(t.String(), t.String()),
+      }),
+    },
+  )
+  .post("/stack-merges/:id/cancel", async (ctx): Promise<StackMergeRun | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) => s.cancel(ctx.params.id, ctx.account.accountId)),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  })
+  .post("/stack-merges/:id/continue", async (ctx): Promise<StackMergeRun | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackMergeService, (s) =>
+          s.continueRun(ctx.params.id, ctx.account.accountId),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  });
+
+export const stackRebaseRoutes = new Elysia({ prefix: "/api" }).use(withAccount).post(
+  "/prs/:id/stack/rebase",
+  async (ctx): Promise<StackRebaseResult | Rejection> => {
+    try {
+      return await AppRuntime.runPromise(
+        Effect.flatMap(StackRebaseService, (s) =>
+          s.rebase(
+            ctx.params.id,
+            ctx.session.user.id,
+            ctx.account.accountId,
+            ctx.body.expectedHeads,
+          ),
+        ),
+      );
+    } catch (e) {
+      return handleAppError(e, ctx);
+    }
+  },
+  {
+    body: t.Object({
+      expectedHeads: t.Record(t.String(), t.String()),
+    }),
+  },
+);

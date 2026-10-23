@@ -1,7 +1,8 @@
 <script lang="ts">
-import { isOpenLayer } from "@revv/shared";
+import { isOpenLayer, loginsMatch } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
+import GitMerge from "phosphor-svelte/lib/GitMerge";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import { gsapFadeY } from "$lib/motion";
@@ -14,6 +15,9 @@ import {
   RISK_LABEL,
   readableBrief,
 } from "$lib/stacks/stack-layer-facts";
+import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getNeighbour, getStack } from "$lib/stores/stacks.svelte";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
@@ -30,6 +34,7 @@ const brief = $derived(readableBrief(stack?.brief ?? null));
 const nextRole = $derived(next ? layerRole(next, brief) : null);
 const nextFacts = $derived(next ? layerFacts(next) : []);
 
+const isOwner = $derived(loginsMatch(getPrById(prId)?.authorLogin, getCurrentUserLogin()));
 const atTop = $derived(stack !== null && here !== null && next === null);
 const allReviewed = $derived(
   stack?.layers.filter(isOpenLayer).every((l) => l.review.kind === "complete" && !needsReview(l)) ??
@@ -86,7 +91,16 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 	<section class="handoff handoff--end" aria-labelledby="stack-end-{prId}" in:gsapFadeY={{ y: 6 }}>
 		<p class="eyebrow" id="stack-end-{prId}">End of stack</p>
 		<div class="handoff-body">
-			<p class="end-text">Every open layer has a review of its current head.</p>
+			<p class="end-text">
+				Every open layer has a review of its current head.
+				{#if !isOwner}The author merges the stack from here.{/if}
+			</p>
+			{#if isOwner}
+				<Button variant="outline" onclick={() => openStackMergeSheet(prId)}>
+					<GitMerge size={14} aria-hidden="true" />
+					Merge stack…
+				</Button>
+			{/if}
 		</div>
 	</section>
 {/if}

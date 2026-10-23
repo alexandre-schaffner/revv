@@ -13,6 +13,8 @@ import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { getToken } from "$lib/stores/auth.svelte";
+import { loadConversation } from "$lib/stores/conversation.svelte";
 import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
 import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
@@ -50,6 +52,13 @@ import {
 import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
+
+const routePrId = $derived(page.params.prId ?? null);
+const signedIn = $derived(getToken() !== null);
+$effect(() => {
+  const id = routePrId;
+  if (id && signedIn) untrack(() => void loadConversation(id));
+});
 const threadSyncPrId = $derived(pr && pr.id === page.params.prId ? pr.id : null);
 $effect(() => {
   const id = threadSyncPrId;

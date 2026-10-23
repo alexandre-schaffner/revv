@@ -404,11 +404,35 @@ export interface GitHubGatewayService {
      * Merge a pull request via the REST API. GitHub returns 405 when the PR
      * is not mergeable (conflicts, failing checks, or not approved); 422 when
      * the merge method is not enabled for the repo.
+     *
+     * `options.sha` pins the merge to the head the caller saw: GitHub answers
+     * 409 (`GitHubApiError` with `status: 409`) when the head moved since.
      */
     readonly merge: (
       repoFullName: string,
       prNumber: number,
       mergeMethod: MergeMethod,
+      token: string,
+      apiBase?: string,
+      options?: { readonly sha?: string },
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+    readonly updateBase: (
+      repoFullName: string,
+      prNumber: number,
+      base: string,
+      token: string,
+      apiBase?: string,
+    ) => Effect.Effect<void, GitHubError, SettingsService>;
+    /**
+     * Hand a PR to GitHub's auto-merge, which merges it once its requirements
+     * pass, whether or not Revv is running. `expectedHeadOid` pins it: GitHub
+     * refuses to enable it, and drops it later, when the head moved. Takes the
+     * GraphQL node id, the only handle the mutation accepts.
+     */
+    readonly enableAutoMerge: (
+      nodeId: string,
+      mergeMethod: MergeMethod,
+      expectedHeadOid: string,
       token: string,
       apiBase?: string,
     ) => Effect.Effect<void, GitHubError, SettingsService>;
@@ -1059,17 +1083,22 @@ const prsGateway: GitHubGatewayService["prs"] = {
       // pill would vanish rather than degrade. Ask once with them; on a schema
       // complaint, ask again without, and an unreported method counts as
       // allowed.
+      // `viewerCanMergeAsAdmin` is newer still and gets the same treatment on
+      // its own, so a host that knows the merge methods but not it keeps
+      // them; without it, an ADMIN permission stands in for the answer.
       const MERGE_METHOD_FIELDS = [
         "mergeCommitAllowed",
         "squashMergeAllowed",
         "rebaseMergeAllowed",
       ];
-      const buildQuery = (withMergeMethods: boolean): string => `
+      const ADMIN_MERGE_FIELDS = ["viewerCanMergeAsAdmin"];
+      const buildQuery = (withAdminMerge: boolean, withMergeMethods: boolean): string => `
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
               mergeable
               mergeStateStatus
+              ${withAdminMerge ? ADMIN_MERGE_FIELDS.join("\n              ") : ""}
             }
             viewerPermission
             ${withMergeMethods ? MERGE_METHOD_FIELDS.join("\n            ") : ""}
@@ -1081,6 +1110,7 @@ const prsGateway: GitHubGatewayService["prs"] = {
           pullRequest: {
             mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
             mergeStateStatus: string | null;
+            viewerCanMergeAsAdmin?: boolean | null;
           } | null;
           viewerPermission: "ADMIN" | "MAINTAIN" | "WRITE" | "READ" | "NONE" | null;
           mergeCommitAllowed: boolean | null;
@@ -1088,14 +1118,21 @@ const prsGateway: GitHubGatewayService["prs"] = {
           rebaseMergeAllowed: boolean | null;
         } | null;
       }
-      const ask = (withMergeMethods: boolean) =>
-        githubGraphql<Resp>(
-          buildQuery(withMergeMethods),
-          { owner, repo, number: prNumber },
-          token,
-          apiBase,
-        );
-      const { value: data } = yield* withSchemaFallback(ask, MERGE_METHOD_FIELDS);
+      const ask = (withAdminMerge: boolean) =>
+        withSchemaFallback(
+          (withMergeMethods: boolean) =>
+            githubGraphql<Resp>(
+              buildQuery(withAdminMerge, withMergeMethods),
+              { owner, repo, number: prNumber },
+              token,
+              apiBase,
+            ),
+          MERGE_METHOD_FIELDS,
+        ).pipe(Effect.map(({ value }) => value));
+      const { value: data, modern: adminMergeAsked } = yield* withSchemaFallback(
+        ask,
+        ADMIN_MERGE_FIELDS,
+      );
       const pr = data.repository?.pullRequest;
       if (!pr) {
         return yield* Effect.fail(
@@ -1107,6 +1144,12 @@ const prsGateway: GitHubGatewayService["prs"] = {
       }
       const perm = data.repository?.viewerPermission;
       const canMerge = perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE";
+      // GitHub's own answer covers bypass lists and rulesets that a
+      // permission level can't see; the ADMIN guess is only for hosts that
+      // can't give it.
+      const canBypassProtections = adminMergeAsked
+        ? pr.viewerCanMergeAsAdmin === true
+        : perm === "ADMIN";
       // Repos routinely disable merge strategies (squash-only is the common
       // house style). Offering a disabled one earns a 405 from the merge
       // endpoint, so the allowed set travels with the eligibility answer.
@@ -1116,20 +1159,43 @@ const prsGateway: GitHubGatewayService["prs"] = {
       if (data.repository?.rebaseMergeAllowed !== false) allowedMethods.push("rebase");
       return {
         canMerge,
+        canBypassProtections,
         mergeable: pr.mergeable === "MERGEABLE",
         mergeStateStatus: pr.mergeStateStatus ?? "unknown",
         allowedMethods,
       };
     }),
 
-  merge: (repoFullName, prNumber, mergeMethod, token, explicitApiBase) =>
+  merge: (repoFullName, prNumber, mergeMethod, token, explicitApiBase, options) =>
     Effect.gen(function* () {
       const apiBase = explicitApiBase ?? (yield* resolveApiBase);
       const { owner, repo } = yield* parseRepoFullName(repoFullName);
       yield* githubPut(
         `/repos/${owner}/${repo}/pulls/${prNumber}/merge`,
         token,
-        { merge_method: mergeMethod },
+        { merge_method: mergeMethod, ...(options?.sha ? { sha: options.sha } : {}) },
+        apiBase,
+      );
+    }),
+
+  updateBase: (repoFullName, prNumber, base, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      const { owner, repo } = yield* parseRepoFullName(repoFullName);
+      yield* githubPatch(`/repos/${owner}/${repo}/pulls/${prNumber}`, token, { base }, apiBase);
+    }),
+
+  enableAutoMerge: (nodeId, mergeMethod, expectedHeadOid, token, explicitApiBase) =>
+    Effect.gen(function* () {
+      const apiBase = explicitApiBase ?? (yield* resolveApiBase);
+      yield* githubGraphql(
+        `mutation($id: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID!) {
+          enablePullRequestAutoMerge(
+            input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head }
+          ) { clientMutationId }
+        }`,
+        { id: nodeId, method: mergeMethod.toUpperCase(), head: expectedHeadOid },
+        token,
         apiBase,
       );
     }),

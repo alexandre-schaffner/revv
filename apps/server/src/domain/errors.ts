@@ -188,6 +188,32 @@ export class CloneInProgressError extends Data.TaggedError("CloneInProgressError
 }> {}
 
 /**
+ * Why Revv won't carry out a stack merge or rebase as asked; nothing was
+ * merged or pushed.
+ *
+ *   stale           — a layer got new commits since the user looked.
+ *   busy            — another merge run or rebase holds the stack, or the run
+ *                     isn't in a state the ask applies to.
+ *   replay-conflict — a layer doesn't replay cleanly; `files` says where.
+ *   lease-lost      — a layer moved while Revv rebased; the leased push was refused.
+ *   invalid         — the ask can't be met as the stack stands.
+ *   failed          — git or the push failed.
+ */
+export type StackRejection =
+  | { readonly reason: "stale" }
+  | { readonly reason: "busy" }
+  | { readonly reason: "replay-conflict"; readonly files: readonly string[] }
+  | { readonly reason: "lease-lost" }
+  | { readonly reason: "invalid" }
+  | { readonly reason: "failed" };
+
+/** A stack merge or rebase refused; `message` is the user's to read. */
+export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
+  readonly message: string;
+  readonly rejection: StackRejection;
+}> {}
+
+/**
  * A caller pinned the head it wants reviewed (`startJob`'s `expectedHeadSha`)
  * and GitHub serves a different one — typically a push GitHub hasn't caught
  * up with yet. Nothing was cancelled or started.

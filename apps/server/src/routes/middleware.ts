@@ -17,6 +17,8 @@ import {
   isReviewError,
   NotFoundError,
   RepoNotAccessibleError,
+  StackRejectedError,
+  type StackRejection,
   SyncError,
   ValidationError,
 } from "../domain/errors";
@@ -128,6 +130,15 @@ export function unwrapEffectError(e: unknown): unknown {
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
+const STACK_REJECTION_STATUS = {
+  stale: 409,
+  busy: 409,
+  "replay-conflict": 409,
+  "lease-lost": 409,
+  invalid: 400,
+  failed: 422,
+} as const satisfies Record<StackRejection["reason"], number>;
+
 /**
  * Maps tagged Effect domain errors to HTTP responses.
  * Unwraps FiberFailure first, then checks instanceof.
@@ -137,7 +148,12 @@ export function unwrapEffectError(e: unknown): unknown {
 export function handleAppError(
   raw: unknown,
   ctx: { set: { status?: number | string } },
-): { error: string; detail?: string; action?: { label: string; url: string } } {
+): {
+  error: string;
+  detail?: string;
+  action?: { label: string; url: string };
+  files?: readonly string[];
+} {
   const e = unwrapEffectError(raw);
 
   if (e instanceof NotFoundError) {
@@ -173,6 +189,14 @@ export function handleAppError(
   if (e instanceof ValidationError) {
     ctx.set.status = 400;
     return { error: e.message };
+  }
+
+  if (e instanceof StackRejectedError) {
+    const { rejection } = e;
+    ctx.set.status = STACK_REJECTION_STATUS[rejection.reason];
+    return rejection.reason === "replay-conflict"
+      ? { error: e.message, files: rejection.files }
+      : { error: e.message };
   }
 
   if (e instanceof ExternalIntegrationError) {

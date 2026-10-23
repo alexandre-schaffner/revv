@@ -9,6 +9,7 @@ import {
 } from "./sidebar.svelte";
 import {
   getStackView,
+  mergeOpenStack,
   moveInStack,
   openNextUnreviewedLayer,
   reviewRemainingLayers,
@@ -64,6 +65,14 @@ const STACK_COMMANDS: Command[] = [
     keywords: ["walkthrough", "generate", "remaining", "queue"],
     available: inStack,
     action: () => void reviewRemainingLayers(),
+  },
+  {
+    id: "stack:merge",
+    label: "Stack: Merge Stack\u2026",
+    category: "Stack",
+    keywords: ["merge", "land", "ship"],
+    available: inStack,
+    action: () => mergeOpenStack(),
   },
 ];
 

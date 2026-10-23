@@ -1,9 +1,13 @@
 <script lang="ts">
 import type { PrStackDetail, StackEntryStatus, StackLayer } from "@revv/shared";
+import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
+import RebaseStackConfirm from "$lib/components/stack/RebaseStackConfirm.svelte";
 import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
 import StackLayerList from "$lib/components/stack/StackLayerList.svelte";
+import { Button } from "$lib/components/ui/button";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 
 // The stack this PR belongs to, top of the stack first and the base branch
 // last, the way GitHub draws it: you read down toward what lands first.
@@ -29,6 +33,26 @@ const entries = $derived(stack.layers);
 const baseRefName = $derived(stack.baseRefName);
 const topFirst = $derived([...entries].reverse());
 
+const need = $derived(rebaseNeed(stack));
+const rebase = $derived(getStackRebase(stack));
+const rebasing = $derived(rebase.status === "loading");
+let confirmingRebase = $state(false);
+
+const needText = $derived.by(() => {
+  if (!need) return "";
+  const n = `#${need.layer.number}`;
+  switch (need.kind) {
+    case "behind":
+      return need.by === null
+        ? `${n} is behind ${need.layer.baseRef}`
+        : `${n} is ${need.by} ${need.by === 1 ? "commit" : "commits"} behind ${need.layer.baseRef}`;
+    case "conflicts":
+      return `${n} conflicts with ${need.layer.baseRef}`;
+    case "merged-below":
+      return `${n} still sits on a merged layer`;
+  }
+});
+
 function open(entry: StackLayer): void {
   if (!selectedId) return;
   openStackLayer(selectedId, entry);
@@ -40,6 +64,36 @@ function open(entry: StackLayer): void {
 		<h3 id="side-stack">Stack #{stack.number}</h3>
 		<span class="stack-count">{entries.length} pull requests</span>
 	</header>
+	{#if need}
+		<div class="stack-rebase" role="status">
+			<span class="stack-rebase-text">{needText}</span>
+			{#if stack.viewerCanPush && selectedId}
+				{@const prId = selectedId}
+				<Button
+					variant="outline"
+					size="xs"
+					disabled={rebasing}
+					onclick={() => (confirmingRebase = true)}
+					title="Replay every open layer onto the one below it, the bottom onto {baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile."
+				>
+					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
+					{rebasing ? 'Rebasing…' : 'Rebase stack'}
+				</Button>
+				<RebaseStackConfirm
+					open={confirmingRebase}
+					{stack}
+					onOpenChange={(open) => (confirmingRebase = open)}
+					onConfirm={() => {
+						confirmingRebase = false;
+						void rebaseStack(prId, stack);
+					}}
+				/>
+			{/if}
+		</div>
+		{#if rebase.status === 'error'}
+			<p class="stack-rebase-error">{rebase.error}</p>
+		{/if}
+	{/if}
 	<StackLayerList layers={topFirst} {baseRefName} --stack-spine-bottom="10px">
 		{#snippet row(entry)}
 			{@const current = entry.number === number}
@@ -84,6 +138,31 @@ function open(entry: StackLayer): void {
 	.stack-count {
 		font-size: 0.75rem;
 		color: var(--color-text-muted);
+	}
+
+	.stack-rebase {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 6px;
+		padding: 6px 8px;
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+	}
+
+	.stack-rebase-text {
+		min-width: 0;
+		font-size: 0.75rem;
+		color: var(--color-warning);
+	}
+
+	.stack-rebase-error {
+		margin: 0 0 6px;
+		padding: 0 8px;
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: var(--color-danger);
 	}
 
 	.stack-entry {

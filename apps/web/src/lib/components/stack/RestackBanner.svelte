@@ -12,9 +12,11 @@ import StackSimple from "phosphor-svelte/lib/StackSimple";
 import Warning from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
 import { gsapFadeY } from "$lib/motion";
+import { getStackRebase, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 import { getLayer, getStack } from "$lib/stores/stacks.svelte";
 import { getWalkthroughUiState, regenerate } from "$lib/stores/walkthrough.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
+import RebaseStackConfirm from "./RebaseStackConfirm.svelte";
 
 interface Props {
   prId: string;
@@ -81,6 +83,9 @@ const dismissKey = $derived.by(() => {
 
 const visible = $derived(banner !== null && dismissKey !== null && !dismissed.has(dismissKey));
 
+let confirmingRebase = $state(false);
+const rebasing = $derived(stack ? getStackRebase(stack).status === "loading" : false);
+
 function reviewWhatsNew(): void {
   void regenerate(prId, undefined, "incremental");
 }
@@ -139,6 +144,26 @@ function fileCount(n: number): string {
 			</button>
 		{:else if banner.kind === 'layer-changed'}
 			<button type="button" class="action" onclick={reviewWhatsNew}>Review what's new</button>
+		{:else if banner.kind === 'needs-rebase' && stack?.viewerCanPush}
+			{@const current = stack}
+			<button
+				type="button"
+				class="action"
+				disabled={rebasing}
+				title="Replay every open layer onto the one below it and force-push them together"
+				onclick={() => (confirmingRebase = true)}
+			>
+				{rebasing ? 'Rebasing…' : 'Rebase stack'}
+			</button>
+			<RebaseStackConfirm
+				open={confirmingRebase}
+				stack={current}
+				onOpenChange={(open) => (confirmingRebase = open)}
+				onConfirm={() => {
+					confirmingRebase = false;
+					void rebaseStack(prId, current);
+				}}
+			/>
 		{/if}
 
 		<button type="button" class="close" aria-label="Dismiss" title="Dismiss" onclick={dismiss}>
@@ -221,6 +246,11 @@ function fileCount(n: number): string {
 
 	.action:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+	}
+
+	.action:disabled {
+		cursor: default;
+		opacity: 0.6;
 	}
 
 	.close {
