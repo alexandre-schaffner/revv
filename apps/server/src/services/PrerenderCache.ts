@@ -2,11 +2,11 @@ import { Buffer } from "node:buffer";
 import type { DiffLineAnnotation, FileDiffOptions } from "@pierre/diffs";
 import { preloadHighlighter } from "@pierre/diffs";
 import { preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
-import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_THEMES } from "@revv/shared";
+import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_HIGHLIGHTER, PIERRE_THEMES } from "@revv/shared";
 
 /**
  * Server-side SSR cache for `@pierre/diffs`. Calls `preloadPatchFile` /
- * `preloadFile` inline (Shiki is fast once the shared highlighter is warm)
+ * `preloadFile` inline (Highlights is fast once the shared highlighter is warm)
  * and memoizes the rendered HTML in an LRU.
  *
  * No DB, no Effect service — these are plain async functions consumed by
@@ -43,7 +43,7 @@ let highlighterReady: Promise<void> | null = null;
 
 /**
  * Idempotent. First call kicks off `preloadHighlighter`; concurrent callers
- * await the same promise so we don't spin up Shiki twice. Called at server
+ * await the same promise so we don't spin up the highlighter twice. Called at server
  * boot and defensively at the top of each prerender call (boot might still
  * be racing the first walkthrough emit).
  */
@@ -52,6 +52,7 @@ export function ensureHighlighter(): Promise<void> {
     highlighterReady = preloadHighlighter({
       themes: [...PIERRE_THEMES],
       langs: [...PIERRE_DIFF_PRELOAD_LANGS],
+      preferredHighlighter: PIERRE_HIGHLIGHTER,
     });
   }
   return highlighterReady;
@@ -112,6 +113,7 @@ export type SsrDiffOptions = Pick<
   | "expandUnchanged"
   | "lineHoverHighlight"
   | "overflow"
+  | "preferredHighlighter"
 >;
 
 /**

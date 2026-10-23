@@ -1,5 +1,5 @@
 import { getOrCreateWorkerPoolSingleton } from "@pierre/diffs/worker";
-import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_THEME } from "@revv/shared";
+import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_HIGHLIGHTER, PIERRE_THEME } from "@revv/shared";
 
 function getWorkerPoolSize(): number {
   const cores = navigator.hardwareConcurrency;
@@ -20,6 +20,7 @@ export const workerManager =
         highlighterOptions: {
           langs: [...PIERRE_DIFF_PRELOAD_LANGS],
           theme: PIERRE_THEME,
+          preferredHighlighter: PIERRE_HIGHLIGHTER,
         },
       })
     : undefined;

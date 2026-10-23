@@ -27,7 +27,7 @@
     "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@opentelemetry/sdk-trace-web": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
-    "@pierre/diffs": "^1.5.1",
+    "@pierre/diffs": "^1.6.1",
     "@revv/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.52",
     "@typesafe-ai/sdk": "^0.6.0",

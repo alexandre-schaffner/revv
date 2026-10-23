@@ -190,6 +190,7 @@ export type { GitPatchHeaderFile, PrDiffRenderOptions } from "./pierre-diffs";
 export {
   buildGitPatchHeader,
   PIERRE_DIFF_PRELOAD_LANGS,
+  PIERRE_HIGHLIGHTER,
   PIERRE_THEME,
   PIERRE_THEMES,
   PR_DIFF_RENDER_OPTIONS,
