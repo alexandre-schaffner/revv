@@ -309,10 +309,10 @@ AppRuntime.runPromise(Effect.flatMap(DbMaintenance, (svc) => svc.start())).catch
   logError("db-maintenance", "start failed on boot:", err);
 });
 
-// Warm the shared Shiki highlighter used by every @pierre/diffs/ssr call.
+// Warm the shared highlighter used by every @pierre/diffs/ssr call.
 // Idempotent and defensively re-awaited inside each prerender call, so a
 // slow boot doesn't block the listen() above; we just want the first real
-// walkthrough emit to hit a warm cache instead of paying Shiki's startup.
+// walkthrough emit to hit a warm cache instead of paying the highlighter's startup.
 ensureHighlighter()
   .then(() => logError("prerender", "highlighter preloaded"))
   .catch((err) => logError("prerender", "ensureHighlighter failed on boot:", err));

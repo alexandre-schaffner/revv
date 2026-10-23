@@ -16,6 +16,11 @@ export const PIERRE_DIFF_PRELOAD_LANGS = [
 export const PIERRE_THEME = { dark: "pierre-dark", light: "pierre-light" } as const;
 export const PIERRE_THEMES = [PIERRE_THEME.dark, PIERRE_THEME.light] as const;
 
+// Pierre's WebAssembly lexers instead of Shiki: same themes, a fraction of the
+// cost. A process runs one backend at a time, so the server's SSR highlighter
+// and the web worker pool must agree, or hydrated diffs re-tokenize.
+export const PIERRE_HIGHLIGHTER = "highlights";
+
 export type PrDiffRenderOptions = {
   readonly diffStyle: "unified";
   readonly theme: typeof PIERRE_THEME;
@@ -26,6 +31,7 @@ export type PrDiffRenderOptions = {
   readonly expandUnchanged: boolean;
   readonly lineHoverHighlight: "both";
   readonly hunkSeparators: "line-info";
+  readonly preferredHighlighter: typeof PIERRE_HIGHLIGHTER;
 };
 
 export const PR_DIFF_RENDER_OPTIONS: PrDiffRenderOptions = {
@@ -41,6 +47,7 @@ export const PR_DIFF_RENDER_OPTIONS: PrDiffRenderOptions = {
   expandUnchanged: false,
   lineHoverHighlight: "both",
   hunkSeparators: "line-info",
+  preferredHighlighter: PIERRE_HIGHLIGHTER,
 } as const;
 
 export interface GitPatchHeaderFile {
