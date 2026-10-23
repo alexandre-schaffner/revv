@@ -1,9 +1,9 @@
-import { and, asc, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../db";
-import { prDiffFiles } from "../../db/schema/pr-diff-files";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
+import { readCurrentHeadPatch } from "../../services/DiffCache";
 import { fitAnchorToPatch } from "../../services/diff-anchors";
 import type { IssueCandidate } from "./contracts";
 
@@ -24,19 +24,15 @@ function hunkFor(
   candidate: IssueCandidate,
 ): { readonly hunk: string | null; readonly offDiff: boolean } {
   if (candidate.filePath === null) return { hunk: null, offDiff: false };
-  const row = db
-    .select({ patch: prDiffFiles.patch })
-    .from(prDiffFiles)
-    .where(and(eq(prDiffFiles.prId, prId), eq(prDiffFiles.path, candidate.filePath)))
-    .get();
-  if (!row?.patch) return { hunk: null, offDiff: false };
-  if (candidate.startLine === null) return { hunk: row.patch, offDiff: false };
-  const fit = fitAnchorToPatch(row.patch, {
+  const patch = readCurrentHeadPatch(db, prId, candidate.filePath);
+  if (!patch) return { hunk: null, offDiff: false };
+  if (candidate.startLine === null) return { hunk: patch, offDiff: false };
+  const fit = fitAnchorToPatch(patch, {
     startLine: candidate.startLine,
     endLine: candidate.endLine ?? candidate.startLine,
     side: "RIGHT",
   });
-  return { hunk: row.patch, offDiff: !fit.ok };
+  return { hunk: patch, offDiff: !fit.ok };
 }
 
 /** Gather the stable DB context a single judgment depends on. */

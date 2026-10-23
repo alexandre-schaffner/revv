@@ -3,6 +3,7 @@ import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
 import { AgentLoginServiceLive } from "./AgentLogin";
 import { AiServiceLive } from "./Ai";
 import { BroadcasterLive } from "./Broadcaster";
+import { BaseConflictsServiceLive } from "./base-conflicts/BaseConflicts";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
 import { ChatChangesPushServiceLive } from "./ChatChangesPush";
@@ -26,6 +27,7 @@ import { PrContextServiceLive } from "./PrContext";
 import { PrConversationServiceLive } from "./PrConversation";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
+import { PrPushLockServiceLive } from "./PrPushLock";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RecapSchedulerLive } from "./RecapScheduler";
 import { RemoteUserServiceLive } from "./RemoteUser";
@@ -103,6 +105,7 @@ const BaseLayers = Layer.mergeAll(
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
+  PrPushLockServiceLive,
   ExternalIntegrationsWithDeps,
   // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
   // publishers yet; CacheStats is ready for per-namespace registrations as
@@ -246,6 +249,12 @@ const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
 );
 
+// BaseConflicts shares the per-PR push lock with ChatChangesPush through
+// BaseLayers, and runs the same one-shot conflict-resolve agent.
+const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
+  Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps)),
+);
+
 // AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
   BaseLayers,
@@ -267,6 +276,7 @@ export const AppLayer = Layer.mergeAll(
   StackRebaseServiceWithDeps,
   DbMaintenanceWithDeps,
   ChatChangesPushServiceWithDeps,
+  BaseConflictsServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so
   // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)
   // can resolve them directly.

@@ -25,6 +25,7 @@ import { mcpStackBriefRoute } from "./routes/mcp/stack-brief";
 import { mcpWalkthroughRoute } from "./routes/mcp/walkthrough";
 import { onboardingRoutes } from "./routes/onboarding";
 import { prRoutes } from "./routes/prs";
+import { prBaseConflictsRoutes } from "./routes/prs-base-conflicts";
 import { prConversationRoutes } from "./routes/prs-conversation";
 import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
@@ -133,6 +134,7 @@ const app = new Elysia()
   .use(githubRoutes)
   .use(prRoutes)
   .use(prConversationRoutes)
+  .use(prBaseConflictsRoutes)
   .use(stackRoutes)
   .use(repoStackRoutes)
   .use(stackReviewRoutes)

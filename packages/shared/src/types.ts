@@ -1,4 +1,5 @@
 import type { AcpAgentId, ThinkingEffortSetting } from "./acp-agents";
+import type { BaseConflictStrategy } from "./base-conflicts";
 import type { UpdateChannel } from "./constants";
 import type { JevSettings } from "./jev-settings";
 
@@ -263,6 +264,8 @@ export interface UserSettings {
    * they're notified of new builds instantly.
    */
   updateChannel: UpdateChannel;
+  /** How "Resolve with agent" brings a conflicting PR up to date with its base. */
+  baseConflictStrategy: BaseConflictStrategy;
 }
 
 // ── Review domain types ──────────────────────────────────────────────────────

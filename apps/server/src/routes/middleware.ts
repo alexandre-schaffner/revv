@@ -3,6 +3,8 @@ import { Elysia, status } from "elysia";
 import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
+  BaseConflictsRejectedError,
+  type BaseConflictsRejection,
   CloneError,
   CloneInProgressError,
   CloneNotReadyError,
@@ -139,6 +141,14 @@ const STACK_REJECTION_STATUS = {
   failed: 422,
 } as const satisfies Record<StackRejection["reason"], number>;
 
+const BASE_CONFLICTS_REJECTION_STATUS = {
+  busy: 409,
+  stale: 409,
+  invalid: 422,
+  unavailable: 503,
+  failed: 500,
+} as const satisfies Record<BaseConflictsRejection, number>;
+
 /**
  * Maps tagged Effect domain errors to HTTP responses.
  * Unwraps FiberFailure first, then checks instanceof.
@@ -197,6 +207,11 @@ export function handleAppError(
     return rejection.reason === "replay-conflict"
       ? { error: e.message, files: rejection.files }
       : { error: e.message };
+  }
+
+  if (e instanceof BaseConflictsRejectedError) {
+    ctx.set.status = BASE_CONFLICTS_REJECTION_STATUS[e.reason];
+    return { error: e.message };
   }
 
   if (e instanceof ExternalIntegrationError) {
@@ -303,6 +318,12 @@ export function mapErrorToSSEResponse(raw: unknown): Response {
   }
   if (isReviewError(e)) {
     return jsonResponse({ code: "REVIEW_ERROR", message: e.message }, 500);
+  }
+  if (e instanceof BaseConflictsRejectedError) {
+    return jsonResponse(
+      { code: e.reason.toUpperCase(), message: e.message },
+      BASE_CONFLICTS_REJECTION_STATUS[e.reason],
+    );
   }
 
   const message = e instanceof Error ? e.message : "Internal server error";

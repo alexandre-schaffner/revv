@@ -62,6 +62,8 @@ export const userSettings = sqliteTable("user_settings", {
    * the 48-hour stable cooldown.
    */
   updateChannel: text("update_channel").notNull().default("stable"),
+  /** `'merge' | 'rebase'` — how "Resolve with agent" brings a PR up to date with its base. */
+  baseConflictStrategy: text("base_conflict_strategy").notNull().default("merge"),
   // ── SSH cache signing ─────────────────────────────────────────────────────
   /** `'off' | 'permissive' | 'strict'`. Default `'strict'` (on by default). */
   cacheSigningMode: text("cache_signing_mode").notNull().default("strict"),

@@ -3,12 +3,14 @@ import {
   ACP_AGENTS,
   type AcpAgentId,
   AUTO_SENTINEL,
+  type BaseConflictStrategy,
   getAgentKeychainAuth,
   type ThinkingEffortSetting,
 } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
+import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
 import type { ModelOption } from "$lib/constants/models";
 import { resetAgentSetup } from "$lib/stores/agent-setup.svelte";
@@ -37,6 +39,19 @@ import AgentProviderList from "./AgentProviderList.svelte";
 
 const MAX_TURNS_MIN = 10;
 const MAX_TURNS_MAX = 500;
+
+const conflictStrategy = $derived<BaseConflictStrategy>(
+  getSettings()?.baseConflictStrategy ?? "merge",
+);
+const conflictStrategyOptions: SegmentedOption<BaseConflictStrategy>[] = [
+  { value: "merge", label: "Merge" },
+  { value: "rebase", label: "Rebase" },
+];
+const conflictStrategyHints: Record<BaseConflictStrategy, string> = {
+  merge: "Merges the base branch into the PR and pushes. History is kept; a merge commit is added.",
+  rebase:
+    "Replays the PR onto the base branch and force-pushes (with lease). History is rewritten.",
+};
 
 const aiAgent = $derived(getSettings()?.aiAgent ?? "opencode");
 const agentLabel = $derived(ACP_AGENTS.find((a) => a.id === aiAgent)?.label ?? "agent");
@@ -236,6 +251,21 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 					max={MAX_TURNS_MAX}
 					step={10}
 					onCommit={(n) => void updateSettings({ aiMaxTurns: n })}
+				/>
+			{/snippet}
+		</SettingsRow>
+
+		<SettingsRow
+			id="ai-base-conflict-strategy"
+			label="Resolve base conflicts by"
+			hint={conflictStrategyHints[conflictStrategy]}
+		>
+			{#snippet control()}
+				<SegmentedControl
+					aria-label="Resolve base conflicts by"
+					options={conflictStrategyOptions}
+					value={conflictStrategy}
+					onValueChange={(v) => void updateSettings({ baseConflictStrategy: v })}
 				/>
 			{/snippet}
 		</SettingsRow>

@@ -206,7 +206,7 @@ export const refreshAccountIdentities = (
   );
 
 /**
- * Re-fill the cached diffs the list phase dropped when their PR's range moved.
+ * Re-fill the cached diffs of PRs whose range moved.
  * Sequential, to avoid rate-limit bursts.
  */
 export const refetchDiffs = (
@@ -254,7 +254,7 @@ export const refetchDiffs = (
 
         yield* Effect.annotateCurrentSpan("files", files.length);
         // `cacheFiles` also records the PR's real diff size from this list.
-        yield* withDb(deps.db, deps.diffCache.cacheFiles(prId, files)).pipe(
+        yield* withDb(deps.db, deps.diffCache.cacheFiles(pr, files)).pipe(
           Effect.orElseSucceed(() => undefined),
         );
       }).pipe(

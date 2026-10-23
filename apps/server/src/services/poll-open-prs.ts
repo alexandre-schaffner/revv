@@ -371,7 +371,7 @@ export const syncRepoOpenPrs = (
   repo: Repository,
 ): Effect.Effect<RepoListing | null, never, GitHubInfra> =>
   Effect.gen(function* () {
-    const { db, github, prService, remoteUserService, diffCache } = deps;
+    const { db, github, prService, remoteUserService } = deps;
     const live = cycle.liveAccountForRepo(repo.id);
     if (!live) {
       // Surface the rare data-consistency case ("repo row with no account
@@ -451,27 +451,6 @@ export const syncRepoOpenPrs = (
       const stats = diffStats?.get(pr.externalId);
       return stats === undefined ? pr : { ...pr, ...stats };
     });
-
-    // Drop the cached diff of every PR whose range moved *before* the new
-    // head lands: from the moment the row says "new head", nothing may serve
-    // it the old head's files. A read in between misses the cache and fetches
-    // GitHub's current files, which already belong to the new head. The
-    // re-fetch of the dropped diffs happens later in the cycle.
-    const movedIds = movedRangePrIds(rows, ctx.existingMap);
-    if (movedIds.length > 0) {
-      const invalidated = yield* withDb(db, diffCache.invalidateFilesForPrs(movedIds)).pipe(
-        Effect.as(true),
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            logError("PollScheduler", `diff invalidation failed for ${repo.fullName}:`, cause);
-            return false;
-          }),
-        ),
-      );
-      // Writing the new heads now would pair them with the old diffs. Leave
-      // the repo's rows alone; the next cycle tries again.
-      if (!invalidated) return null;
-    }
 
     const upserted = yield* withDb(db, prService.upsertPrs(rows)).pipe(
       Effect.as(true),
