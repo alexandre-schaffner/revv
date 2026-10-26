@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.32.0](https://github.com/alexandre-schaffner/revv/compare/v0.31.0...v0.32.0) (2026-10-26)
+
+
+### Features
+
+* engraved repo hero and a year of repo activity on the homepage ([#259](https://github.com/alexandre-schaffner/revv/issues/259)) ([e78acc9](https://github.com/alexandre-schaffner/revv/commit/e78acc9bf7dea000cc7fccfba72b155f3f0ba1b4))
+* highlight diffs with Pierre's Highlights instead of Shiki ([#265](https://github.com/alexandre-schaffner/revv/issues/265)) ([0988ea0](https://github.com/alexandre-schaffner/revv/commit/0988ea014cf48baed24eafbdc81f98a6061ad994))
+* merge and rebase GitHub PR stacks ([#262](https://github.com/alexandre-schaffner/revv/issues/262)) ([892a699](https://github.com/alexandre-schaffner/revv/commit/892a699297636c889bd6535aa4a93d1dbe426ac7))
+* **observability:** add local Grafana telemetry and CPU profiles ([#251](https://github.com/alexandre-schaffner/revv/issues/251)) ([53fb37d](https://github.com/alexandre-schaffner/revv/commit/53fb37d5c4d9f0a0c2f557b7b918b7888857bbd4))
+* review GitHub PR stacks layer by layer ([#261](https://github.com/alexandre-schaffner/revv/issues/261)) ([96be8a5](https://github.com/alexandre-schaffner/revv/commit/96be8a570de0e75997f1dc58d7e0541fce29530e))
+* **server:** record every GitHub call with the route or loop that caused it ([#258](https://github.com/alexandre-schaffner/revv/issues/258)) ([1977917](https://github.com/alexandre-schaffner/revv/commit/1977917b8aff361734f59b630550ad49bbf99d68))
+* **server:** split the GitHub gateway, poll only what moved, and sync native stack membership ([#257](https://github.com/alexandre-schaffner/revv/issues/257)) ([0c6b89b](https://github.com/alexandre-schaffner/revv/commit/0c6b89b57febf0a158cfe4b7e4dccc5650cbd6b4))
+* show base-branch conflicts in the Conversation tab and resolve them with the agent ([#263](https://github.com/alexandre-schaffner/revv/issues/263)) ([762aec5](https://github.com/alexandre-schaffner/revv/commit/762aec528f696310219f4c32877e336aab945a15))
+* **web:** crossfade theme switches and tint the chat user bubble ([#255](https://github.com/alexandre-schaffner/revv/issues/255)) ([e2f5723](https://github.com/alexandre-schaffner/revv/commit/e2f572311c70976dae22ace4cfc37da151e6f018))
+* **web:** group GitHub PR stacks on the repo homepage queue ([#260](https://github.com/alexandre-schaffner/revv/issues/260)) ([8ee7630](https://github.com/alexandre-schaffner/revv/commit/8ee7630c67f4c1b57905d95cfa1876672121fa91))
+
+
+### Bug Fixes
+
+* **server:** enable the user's Claude plugins in the isolated config dir ([#252](https://github.com/alexandre-schaffner/revv/issues/252)) ([b658de1](https://github.com/alexandre-schaffner/revv/commit/b658de11acaa01a599c253cf5d863a30421d9e33))
+
 ## [0.31.0](https://github.com/alexandre-schaffner/revv/compare/v0.30.0...v0.31.0) (2026-10-13)
 
 
