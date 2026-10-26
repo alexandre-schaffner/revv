@@ -101,6 +101,18 @@ export interface RawPrStackAnswer {
   } | null;
 }
 
+export const PR_STATE_QUERY = `
+  query PrMergeState($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) { state }
+    }
+  }
+`;
+
+export interface RawPrState {
+  readonly repository: { readonly pullRequest: { readonly state: string } | null } | null;
+}
+
 // The stack query can't say whether a layer still sits on its base's tip:
 // `mergeStateStatus` reports BEHIND only under strict branch protection, and
 // `viewerCanUpdateBranch` is false on stacked PRs. `Ref.compare` answers it,

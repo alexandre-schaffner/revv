@@ -32,7 +32,7 @@ import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
 import { stackReviewRoutes } from "./routes/stack-review";
-import { repoStackRoutes, stackRoutes } from "./routes/stacks";
+import { repoStackRoutes, stackMergeRoutes, stackRebaseRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
@@ -47,6 +47,7 @@ import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
 import { RecapScheduler } from "./services/RecapScheduler";
 import { RepoCloneService } from "./services/RepoClone";
 import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
+import { StackMergeService } from "./services/stacks/StackMerge";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
@@ -135,6 +136,8 @@ const app = new Elysia()
   .use(stackRoutes)
   .use(repoStackRoutes)
   .use(stackReviewRoutes)
+  .use(stackMergeRoutes)
+  .use(stackRebaseRoutes)
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)
@@ -280,6 +283,12 @@ AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePend
 AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
   (err) => {
     logError("stack-brief", "resumePending failed on boot:", err);
+  },
+);
+
+AppRuntime.runPromise(Effect.flatMap(StackMergeService, (svc) => svc.expireStale())).catch(
+  (err) => {
+    logError("stack-merge", "expireStale failed on boot:", err);
   },
 );
 
