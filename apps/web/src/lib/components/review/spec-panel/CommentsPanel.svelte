@@ -89,8 +89,6 @@ const keys = createRowKeys({ order: () => groupPaths, toggleAll: () => expand.to
             </ul>
         {/if}
     </SpecPanel>
-{:else}
-    <SpecPanel label="Unresolved comments" empty="no unresolved comment threads" />
 {/if}
 
 <style>

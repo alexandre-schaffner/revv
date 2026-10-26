@@ -161,8 +161,6 @@ const keys = createRowKeys({
             </div>
         {/if}
     </SpecPanel>
-{:else}
-    <SpecPanel label="Walkthrough issues" empty="no issues flagged by walkthrough" />
 {/if}
 
 <style>
