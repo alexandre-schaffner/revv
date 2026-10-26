@@ -13,6 +13,7 @@ import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewStatus from "$lib/components/review/chrome/ReviewStatus.svelte";
 import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { readStackPlace } from "$lib/stacks/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
 import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
@@ -26,6 +27,7 @@ import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
 import { getPrRiskTier } from "$lib/walkthrough/sizing.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 // The decoded route param: PR ids are `<repoId>:<number>`.
 const prId = $derived(page.params.prId ?? "");
@@ -104,7 +106,15 @@ useShellChrome(() => ({
 	>
 		<div class="page-title-section review-columns">
 			<h1 class="page-title">{pr.title}</h1>
-			<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
+			<span class="page-subtitle">
+				#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}
+				{#if activeTab === 'conversation'}
+					{@const opened = new Date(pr.createdAt)}
+					· <time datetime={opened.toISOString()} title={opened.toLocaleString()}>
+						opened {formatRelativeTime(opened.toISOString())}
+					</time>
+				{/if}
+			</span>
 			{#if stackPlace}
 				<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
 			{/if}
@@ -116,6 +126,11 @@ useShellChrome(() => ({
 				>
 					{walkthroughRiskLevel} risk
 				</Badge>
+			{/if}
+			{#if activeTab === 'conversation'}
+				<div class="title-avatar">
+					<Avatar src={pr.authorAvatarContent} name={pr.authorLogin} size={28} fallback="user" />
+				</div>
 			{/if}
 			{#if stackPlace}
 				<div class="title-stack-thumb"><StackThumbIndex place={stackPlace} /></div>
@@ -207,8 +222,22 @@ useShellChrome(() => ({
 		min-width: 0;
 	}
 
+	/* Conversation: the author hangs in the gutter beside the title, so the
+	   title text keeps the same x as on the walkthrough tab. Centred on the
+	   first line (38.4px line box, 28px avatar). */
+	.page-title-section > .title-avatar {
+		grid-row: 1;
+		grid-column: 2;
+		align-self: start;
+		display: flex;
+		justify-content: flex-end;
+		height: 0;
+		padding: 5px 12px 0 0;
+	}
+
 	@container review (max-width: 1335px) {
-		.page-title-section > .title-stack-thumb {
+		.page-title-section > .title-stack-thumb,
+		.page-title-section > .title-avatar {
 			grid-column: 1;
 		}
 

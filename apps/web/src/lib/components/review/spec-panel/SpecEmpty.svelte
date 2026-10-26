@@ -3,15 +3,13 @@
 import type { Snippet } from "svelte";
 
 interface Props {
-  /** The whole panel is this line, rather than a gap under the summary bar. */
-  quiet?: boolean;
   children: Snippet;
 }
 
-let { quiet = false, children }: Props = $props();
+let { children }: Props = $props();
 </script>
 
-<div class="empty-state" class:empty-state--quiet={quiet}>{@render children()}</div>
+<div class="empty-state">{@render children()}</div>
 
 <style>
     .empty-state {
@@ -20,9 +18,5 @@ let { quiet = false, children }: Props = $props();
         font-size: 12px;
         color: var(--color-text-muted);
         font-style: italic;
-    }
-
-    .empty-state--quiet {
-        padding: 10px 12px;
     }
 </style>

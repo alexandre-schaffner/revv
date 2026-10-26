@@ -41,6 +41,13 @@ class FakeEventSource {
 }
 
 const windowListeners: Array<() => void> = [];
+// Restored after this file: other suites load DOM libraries (prosemirror-view)
+// that probe `document` at import time.
+const realGlobals = {
+  EventSource: globalThis.EventSource,
+  document: globalThis.document,
+  window: globalThis.window,
+};
 Object.assign(globalThis, {
   EventSource: FakeEventSource,
   document: { visibilityState: "visible", addEventListener: () => {} },
@@ -114,6 +121,7 @@ beforeEach(() => {
 afterAll(() => {
   events.disconnect();
   setSystemTime();
+  Object.assign(globalThis, realGlobals);
 });
 
 describe("catch-up after a gap", () => {
