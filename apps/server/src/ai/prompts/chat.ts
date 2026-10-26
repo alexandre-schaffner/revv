@@ -22,6 +22,14 @@ const CHAT_RESOLVE_CONFLICTS_TEMPLATE: string = readFileSync(
   `${import.meta.dir}/chat-resolve-conflicts.md`,
   "utf-8",
 );
+const CHAT_RESOLVE_BASE_MERGE_TEMPLATE: string = readFileSync(
+  `${import.meta.dir}/chat-resolve-base-merge.md`,
+  "utf-8",
+);
+const CHAT_RESOLVE_BASE_REBASE_TEMPLATE: string = readFileSync(
+  `${import.meta.dir}/chat-resolve-base-rebase.md`,
+  "utf-8",
+);
 
 export interface ChatWalkthroughIssue {
   readonly severity: string; // 'info' | 'warning' | 'critical'
@@ -194,30 +202,51 @@ export function buildChatUserMessage(params: ChatUserMessageParams): string {
   return lines.join("\n");
 }
 
-export interface ResolveConflictsPromptParams {
-  readonly agentBranch: string;
-  readonly sourceBranch: string;
-  readonly conflictFiles: ReadonlyArray<string>;
-}
+/**
+ * What a one-shot conflict-resolve run is resolving:
+ *   push-merge  — the chat agent's branch merged into the PR's source branch
+ *                 (the chat panel's "Push" hit a conflict);
+ *   base-merge  — the PR's target branch merged into the PR branch;
+ *   base-rebase — the PR branch replayed onto its target branch.
+ */
+export type ResolveConflictsTask =
+  | { readonly kind: "push-merge"; readonly agentBranch: string; readonly sourceBranch: string }
+  | { readonly kind: "base-merge"; readonly baseBranch: string; readonly sourceBranch: string }
+  | { readonly kind: "base-rebase"; readonly baseBranch: string; readonly sourceBranch: string };
 
 /**
- * Build the one-shot system prompt for the merge-conflict resolver agent.
- * Substitutes the agent branch, source branch, and conflicting file list into
- * `chat-resolve-conflicts.md`. The resulting prompt is non-conversational and
- * is NOT persisted into the chat session — see {@link AiService.resolveMergeConflict}.
+ * Build the one-shot system prompt for the conflict resolver agent: the
+ * task's template with its branches and the conflicting file list filled in.
+ * The prompt is non-conversational and is NOT persisted into the chat
+ * session — see {@link AiService.resolveMergeConflict}.
  */
-export function buildResolveConflictsPrompt(params: ResolveConflictsPromptParams): string {
+export function buildResolveConflictsPrompt(
+  task: ResolveConflictsTask,
+  conflictFiles: ReadonlyArray<string>,
+): string {
   const fileLines =
-    params.conflictFiles.length === 0
+    conflictFiles.length === 0
       ? "_(no specific files listed — check `git status` to find them)_"
-      : params.conflictFiles.map((f) => `- \`${f}\``).join("\n");
+      : conflictFiles.map((f) => `- \`${f}\``).join("\n");
 
-  return CHAT_RESOLVE_CONFLICTS_TEMPLATE.replace("{{AGENT_BRANCH}}", params.agentBranch)
-    .replace("{{SOURCE_BRANCH}}", params.sourceBranch)
+  if (task.kind === "push-merge") {
+    return CHAT_RESOLVE_CONFLICTS_TEMPLATE.replace("{{AGENT_BRANCH}}", task.agentBranch)
+      .replace("{{SOURCE_BRANCH}}", task.sourceBranch)
+      .replace("{{CONFLICT_FILES}}", fileLines);
+  }
+  const template =
+    task.kind === "base-merge"
+      ? CHAT_RESOLVE_BASE_MERGE_TEMPLATE
+      : CHAT_RESOLVE_BASE_REBASE_TEMPLATE;
+  return template
+    .replaceAll("{{BASE_BRANCH}}", task.baseBranch)
+    .replaceAll("{{SOURCE_BRANCH}}", task.sourceBranch)
     .replace("{{CONFLICT_FILES}}", fileLines);
 }
 
 /** Initial user message that nudges the agent into the resolve-conflicts task. */
-export function buildResolveConflictsUserMessage(): string {
-  return "Resolve the merge conflicts described in your system prompt, then run `git merge --continue`.";
+export function buildResolveConflictsUserMessage(task: ResolveConflictsTask): string {
+  return task.kind === "base-rebase"
+    ? "Resolve the rebase conflicts described in your system prompt, continuing the rebase until it completes."
+    : "Resolve the merge conflicts described in your system prompt, then run `git merge --continue`.";
 }

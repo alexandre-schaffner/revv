@@ -3,6 +3,7 @@ import type { StackBriefStatus } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles } from "../../../db/schema/pr-diff-files";
+import { pullRequests } from "../../../db/schema/pull-requests";
 import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
@@ -307,6 +308,23 @@ describe("get_stack_layers", () => {
   it("joins each tracked layer's files and latest walkthrough, bounded", async () => {
     const db = seed();
     const now = new Date().toISOString();
+    db.insert(pullRequests)
+      .values({
+        id: "repo-1:121",
+        externalId: 121,
+        repositoryId: "repo-1",
+        title: "Schema",
+        authorLogin: "a",
+        sourceBranch: "schema",
+        targetBranch: "main",
+        url: "https://github.com/o/r/pull/121",
+        headSha: "aaa",
+        diffFilesHeadSha: "aaa",
+        createdAt: now,
+        updatedAt: now,
+        fetchedAt: now,
+      })
+      .run();
     for (let i = 0; i < 85; i++) {
       db.insert(prDiffFiles)
         .values({
@@ -357,7 +375,7 @@ describe("get_stack_layers", () => {
     expect(schema.walkthrough.openIssues).toBe(8);
     expect(schema.walkthrough.openIssueTitles).toHaveLength(6);
     expect(route.tracked).toBe(false);
-    expect(route.files).toEqual([]);
+    expect(route.files).toBeNull();
     expect(route.walkthrough).toBeNull();
     expect(route.bodyExcerpt).toBe("Serves it.");
   });

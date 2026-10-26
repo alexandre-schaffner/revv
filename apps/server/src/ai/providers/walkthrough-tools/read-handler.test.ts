@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughStackSnapshot } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../../../db/index";
 import { prDiffFiles, pullRequests, walkthroughIssues, walkthroughs } from "../../../db/schema";
 import { TOOL_SPECS } from "./index";
@@ -117,6 +118,10 @@ function seed(stackContext: WalkthroughStackSnapshot | null): Db {
       .values({ id: `pr-122\0${path}`, prId: "pr-122", path, status: "modified", fetchedAt: NOW })
       .run();
   }
+  db.update(pullRequests)
+    .set({ headSha: "c", diffFilesHeadSha: "c" })
+    .where(eq(pullRequests.id, "pr-122"))
+    .run();
   return db;
 }
 
@@ -171,6 +176,15 @@ describe("get_stack_context", () => {
       tracked: false,
       files: null,
     });
+  });
+
+  it("reads a tracked upper layer whose diff Revv hasn't fetched as files: null", async () => {
+    const db = seed(STACK);
+    db.delete(prDiffFiles).run();
+    const [above] = (await read(db)).upperLayers;
+    expect(above.tracked).toBe(true);
+    expect(above.files).toBeNull();
+    expect(above.fileCount).toBeNull();
   });
 
   it("says so when the PR isn't stacked", async () => {

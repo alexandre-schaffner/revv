@@ -1,0 +1,1 @@
+ALTER TABLE `user_settings` ADD `base_conflict_strategy` text DEFAULT 'merge' NOT NULL;

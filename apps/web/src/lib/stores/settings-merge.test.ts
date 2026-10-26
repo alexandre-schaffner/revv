@@ -27,6 +27,7 @@ const CURRENT: UserSettings = {
     hasApiKey: true,
   },
   updateChannel: "stable",
+  baseConflictStrategy: "merge",
 };
 
 describe("mergeSettingsUpdate", () => {

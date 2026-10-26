@@ -25,6 +25,8 @@
 // Anything else that wants to reason about *meaning* rather than *arguments*
 // belongs in its caller.
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { Data } from "effect";
 import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
 
@@ -608,6 +610,33 @@ export { redactGitAuth } from "./git-runner";
 export type PushFailureKind = "auth" | "remote-moved" | "rejected";
 
 /**
+ * The message a server-side push rejection carries to the UI, where it lands
+ * in a toast.
+ *
+ * Git's stderr is the right thing to show for most rejections — a pre-receive
+ * hook or a push rule says something only the remote knows. The one rejection
+ * worth translating is the workflow-permission refusal: its wording ("refusing
+ * to allow a GitHub App to create or update workflow `x.yml` without
+ * `workflows` permission") describes GitHub's internals, holds no hint that
+ * this is a standing limit of Revv's credential rather than a transient fault,
+ * and names no way out — so users retry it, which cannot work. Neither auth
+ * path can push CI (see {@link workflowPermissionRejection}), so the two real
+ * ways out go in the message.
+ *
+ * Callers log the raw stderr before calling this.
+ */
+export function describePushRejection(stderr: string): string {
+  const workflow = workflowPermissionRejection(stderr);
+  if (!workflow) return stderr || "git push failed";
+  const what = workflow.path ?? "files under .github/workflows/";
+  return (
+    `GitHub won't let Revv's credential change ${what} — pushing CI needs a permission ` +
+    "Revv doesn't hold. Push these commits over SSH from your own checkout, or push only " +
+    "the commits that leave workflow files alone."
+  );
+}
+
+/**
  * GitHub's refusal when a push would create or update a file under
  * `.github/workflows/` with a credential that carries no workflow-write
  * authority. Returns the workflow path GitHub named (`null` when it named
@@ -814,4 +843,95 @@ export async function pushAtomicWithLeases(
     ],
     timeoutMs,
   );
+}
+
+// ── Base-sync primitives ─────────────────────────────────────────────────────
+//
+// For `base-conflicts/git.ts`, which brings a PR up to date with its base in a
+// scratch worktree. Like the stack-rebase primitives above, these never throw.
+
+/**
+ * `git merge-tree --write-tree` of `head` into `base`, touching neither the
+ * index nor a worktree. Exit 0 is a clean merge, 1 a conflicted one; anything
+ * else is a failure (no merge base, or a git older than 2.38).
+ */
+export async function mergeTreeWriteTree(
+  cwd: string,
+  base: string,
+  head: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }> {
+  const r = await spawnGit(
+    ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head],
+    { cwd, timeoutMs: 60_000, captureStdout: true },
+  );
+  return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderrTail, timedOut: r.timedOut };
+}
+
+/**
+ * Asks git where the rebase state lives rather than probing `.git/`, which is
+ * a file in a linked worktree (see {@link isMergeInProgress}).
+ */
+export async function isRebaseInProgress(cwd: string): Promise<boolean> {
+  for (const dir of ["rebase-merge", "rebase-apply"]) {
+    const r = await attempt(cwd, ["rev-parse", "--git-path", dir], 10_000);
+    if (r.ok && r.stdout.length > 0 && existsSync(resolve(cwd, r.stdout))) return true;
+  }
+  return false;
+}
+
+/** The commit's parents, in order; empty when it can't be read. */
+export async function commitParents(cwd: string, rev: string): Promise<string[]> {
+  const r = await attempt(cwd, ["rev-list", "--parents", "-n", "1", rev], 10_000);
+  return r.ok ? r.stdout.split(/\s+/).slice(1) : [];
+}
+
+/** Every commit in `range`, merges included; null when git can't count it. */
+export async function revListCount(cwd: string, range: string): Promise<number | null> {
+  const r = await attempt(cwd, ["rev-list", "--count", range], 30_000);
+  const n = Number.parseInt(r.stdout, 10);
+  return r.ok && Number.isFinite(n) ? n : null;
+}
+
+/** Paths under `pathspec` that differ between `a` and `b`. */
+export async function changedPaths(
+  cwd: string,
+  a: string,
+  b: string,
+  pathspec: string,
+): Promise<string[]> {
+  const r = await attempt(cwd, ["diff", "--name-only", a, b, "--", pathspec], 30_000);
+  return r.ok ? r.stdout.split("\n").filter((l) => l.length > 0) : [];
+}
+
+/** `git merge --no-ff` of `ref` into the detached HEAD, without the user's hooks. */
+export async function mergeUnattended(
+  cwd: string,
+  ref: string,
+  message: string,
+  timeoutMs: number,
+): Promise<GitAttempt> {
+  return attempt(
+    cwd,
+    [...UNATTENDED, "merge", "--no-ff", "--no-edit", "-m", message, ref],
+    timeoutMs,
+  );
+}
+
+export async function abortDetachedMerge(cwd: string): Promise<boolean> {
+  return (await attempt(cwd, [...UNATTENDED, "merge", "--abort"], 30_000)).ok;
+}
+
+/** Whether any of `paths` still carries a conflict marker line at `rev`. */
+export async function hasConflictMarkers(
+  cwd: string,
+  rev: string,
+  paths: readonly string[],
+): Promise<boolean> {
+  if (paths.length === 0) return false;
+  const r = await attempt(
+    cwd,
+    ["grep", "-l", "-E", "^(<{7}|>{7})( |$)", rev, "--", ...paths],
+    30_000,
+  );
+  return r.ok && r.stdout.length > 0;
 }

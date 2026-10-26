@@ -45,24 +45,24 @@
 //   - if not, `git merge --abort` so the worktree returns to a clean
 //     `pr-{N}` checkout and the user can decide what to do.
 
-import { ACP_AGENT_IDS } from "@revv/shared";
+import { ACP_AGENT_IDS, type AgentProgressFrame } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
 import { serverEnv } from "../config";
 import { CHAT_IDLE_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
+  type ConcurrentPushError,
   GitHubAuthError,
   type GitHubError,
   type NotFoundError,
 } from "../domain/errors";
-import { STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
 import { AiService } from "./Ai";
+import { pumpAgentFrames, queueToStream } from "./agent-frame-pump";
 import { Broadcaster } from "./Broadcaster";
 import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
 import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
-import { DiffCacheService } from "./DiffCache";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
   abortCherryPick,
@@ -74,6 +74,7 @@ import {
   checkoutDetachedAt,
   cherryPick,
   classifyPushFailure,
+  describePushRejection,
   fetchRefspec,
   forceBranchTo,
   forceBranchToBestEffort,
@@ -96,13 +97,15 @@ import {
   revParse,
   unmergedPaths,
   unstagedOutsideMerge,
-  workflowPermissionRejection,
   workingTreeIsClean,
 } from "./GitOps";
 import { PrContextService } from "./PrContext";
+import { PrPushLockService } from "./PrPushLock";
 import { PullRequestService } from "./PullRequest";
+import { makePrHeadRefresh } from "./pr-head-refresh";
 import { SettingsService } from "./Settings";
 
+export { ConcurrentPushError } from "../domain/errors";
 // The lease a chat turn holds on its worktree, re-exported so the chat route
 // can type the handle this service hands it without reaching past the service.
 export type { ChatStreamLease } from "./chat-stream-leases";
@@ -115,34 +118,6 @@ export {
   PushRejectedError,
   RefAlreadyExistsError,
 } from "./GitOps";
-
-/**
- * The message a server-side push rejection carries to the UI, where it lands
- * in a toast.
- *
- * Git's stderr is the right thing to show for most rejections — a pre-receive
- * hook or a push rule says something only the remote knows. The one rejection
- * worth translating is the workflow-permission refusal: its wording ("refusing
- * to allow a GitHub App to create or update workflow `x.yml` without
- * `workflows` permission") describes GitHub's internals, holds no hint that
- * this is a standing limit of Revv's credential rather than a transient fault,
- * and names no way out — so users retry it, which cannot work. Neither auth
- * path can push CI (see {@link workflowPermissionRejection}), so the two real
- * ways out go in the message.
- *
- * The raw stderr is not lost: `readPushFailure` logs it unconditionally before
- * this runs.
- */
-const rejectionMessage = (stderr: string): string => {
-  const workflow = workflowPermissionRejection(stderr);
-  if (!workflow) return stderr || "git push failed";
-  const what = workflow.path ?? "files under .github/workflows/";
-  return (
-    `GitHub won't let Revv's credential change ${what} — pushing CI needs a permission ` +
-    "Revv doesn't hold. Push these commits over SSH from your own checkout, or push only " +
-    "the commits that leave workflow files alone."
-  );
-};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -161,10 +136,6 @@ const resolveGitHost: Effect.Effect<string, never, SettingsService> = Effect.gen
 
 export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
   readonly message: string;
-}> {}
-
-export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
-  readonly prId: string;
 }> {}
 
 export class ChatStreamingConflictError extends Data.TaggedError("ChatStreamingConflictError")<{
@@ -225,14 +196,7 @@ export type AttemptPushResult =
 export type ResolvePushFrame =
   | { readonly kind: "status"; readonly message: string }
   | { readonly kind: "conflict-files"; readonly files: readonly string[] }
-  | { readonly kind: "agent-text"; readonly data: string }
-  | {
-      readonly kind: "agent-activity";
-      readonly activityKind: string;
-      readonly toolName: string | null;
-      readonly summary: string;
-      readonly payload?: unknown;
-    }
+  | AgentProgressFrame
   | {
       readonly kind: "result";
       readonly status: "pushed";
@@ -320,11 +284,10 @@ export const ChatChangesPushServiceLive = Layer.effect(
     const chatSessions = yield* ChatSessionService;
     const broadcaster = yield* Broadcaster;
     const prService = yield* PullRequestService;
-    const diffCache = yield* DiffCacheService;
     const ai = yield* AiService;
+    const pushLock = yield* PrPushLockService;
+    const headRefresh = makePrHeadRefresh({ prService, prCtx, broadcaster });
 
-    // Per-PR push lock — refuses overlap.
-    const inFlight = new Set<string>();
     // Worktree claims held by in-flight chat turns. The expiry is the agent's
     // own chat idle deadline, deliberately the same constant the chat stream
     // guard arms itself with: past it the turn has already been killed
@@ -514,19 +477,11 @@ export const ChatChangesPushServiceLive = Layer.effect(
           }),
       });
 
+    // Per-PR push lock, shared with the base-conflict sync — refuses overlap.
     const beginPush = (prId: string): Effect.Effect<void, ConcurrentPushError> =>
-      Effect.suspend(() => {
-        if (inFlight.has(prId)) {
-          return Effect.fail(new ConcurrentPushError({ prId }));
-        }
-        inFlight.add(prId);
-        return Effect.void;
-      });
+      pushLock.acquire(prId, "chat-push");
 
-    const releasePush = (prId: string) =>
-      Effect.sync(() => {
-        inFlight.delete(prId);
-      });
+    const releasePush = (prId: string) => pushLock.release(prId);
 
     const restoreToAgentBranch = (params: { worktreePath: string; branchName: string }) =>
       Effect.promise(async () => {
@@ -598,7 +553,9 @@ export const ChatChangesPushServiceLive = Layer.effect(
               }),
             );
           case "rejected":
-            return yield* Effect.fail(new PushRejectedError({ message: rejectionMessage(stderr) }));
+            return yield* Effect.fail(
+              new PushRejectedError({ message: describePushRejection(stderr) }),
+            );
         }
       });
 
@@ -687,55 +644,18 @@ export const ChatChangesPushServiceLive = Layer.effect(
       newTip: string;
     }) =>
       Effect.gen(function* () {
-        const fresh = yield* prService
-          .listPrs()
-          .pipe(Effect.map((prs) => prs.find((p) => p.id === params.pr.id) ?? null));
-        if (fresh) {
-          const metaOpt = yield* prCtx
-            .prMeta(params.repo.fullName, params.prExternalId, params.token)
-            .pipe(Effect.option);
-          const headSha = metaOpt._tag === "Some" ? metaOpt.value.headSha : params.newTip;
-          const now = new Date().toISOString();
-          // Advance `updatedAt` with the head, never one without the other.
-          // `fresh` is the DB row, so its `updatedAt` predates this push; a row
-          // left at `(newHead, oldUpdatedAt)` is exactly the shape
-          // `preserveHeadOnStaleRead` reads as "the incoming payload is newer",
-          // so the next cache-lagged list body would be allowed to rewind
-          // `head_sha` — and `isTrustedHeadShaMove` would then supersede the
-          // walkthrough generating at the real head. GitHub bumped its own
-          // `updated_at` on this push and `PrMeta` doesn't carry it, so stamp
-          // now: at worst a few seconds ahead of GitHub's value, which errs
-          // toward rejecting stale reads rather than accepting them.
-          const updatedAt = headSha === fresh.headSha ? fresh.updatedAt : now;
-          // The cached diff belongs to the old head. Drop it before the new
-          // head lands, or the review page pairs the new head with the old
-          // files until the next poll notices.
-          if (headSha !== fresh.headSha) yield* diffCache.invalidateFiles(params.pr.id);
-          yield* prService
-            .upsertPrs([
-              {
-                ...fresh,
-                stack: STACK_UNSEEN,
-                headSha,
-                updatedAt,
-                fetchedAt: now,
-              },
-            ])
-            .pipe(Effect.catch(() => Effect.void));
-        }
-
+        yield* headRefresh.recordPushedHead({
+          prId: params.pr.id,
+          repoFullName: params.repo.fullName,
+          prExternalId: params.prExternalId,
+          token: params.token,
+          newTip: params.newTip,
+        });
         yield* chatSessions.updatePrHeadSha({
           chatSessionId: params.sessionId,
           prHeadSha: params.newTip,
         });
-
-        const pr = yield* prService.getPr(params.pr.id);
-        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
-        const prs = yield* prService.listPrs(accountId);
-        yield* broadcaster.broadcastToAccount(accountId, {
-          type: "prs:updated",
-          data: prs,
-        });
+        yield* headRefresh.broadcastPrsUpdated(params.pr.id);
       });
 
     const completePush = (params: {
@@ -983,7 +903,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           }
           return yield* Effect.fail(
             new PushRejectedError({
-              message: rejectionMessage(stderr),
+              message: describePushRejection(stderr),
             }),
           );
         }
@@ -1006,13 +926,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        const pr = yield* prService.getPr(params.ctx.pr.id);
-        const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
-        const prs = yield* prService.listPrs(accountId);
-        yield* broadcaster.broadcastToAccount(accountId, {
-          type: "prs:updated",
-          data: prs,
-        });
+        yield* headRefresh.broadcastPrsUpdated(params.ctx.pr.id);
 
         return {
           status: "pushed" as const,
@@ -1204,8 +1118,11 @@ export const ChatChangesPushServiceLive = Layer.effect(
         const agentStream = yield* ai
           .resolveMergeConflict({
             cwd: ctx.session.worktreePath,
-            agentBranch: ctx.session.branchName,
-            sourceBranch: ctx.pr.sourceBranch,
+            task: {
+              kind: "push-merge",
+              agentBranch: ctx.session.branchName,
+              sourceBranch: ctx.pr.sourceBranch,
+            },
             conflictFiles,
             prId: ctx.pr.id,
             userId: params.userId,
@@ -1239,34 +1156,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
               message: "Asking the agent to resolve conflicts and run git merge --continue.",
             });
 
-            const reader = agentStream.getReader();
-
-            const readNext = (): Effect.Effect<
-              { done: false; value: unknown } | { done: true },
-              never
-            > =>
-              Effect.tryPromise({
-                try: () =>
-                  reader.read() as Promise<{ done: false; value: unknown } | { done: true }>,
-                catch: () => ({ done: true }) as { done: true },
-              }).pipe(Effect.orElseSucceed(() => ({ done: true }) as { done: true }));
-
-            let chunk = yield* readNext();
-            while (!chunk.done) {
-              const value = chunk.value as { kind: string; [key: string]: unknown };
-              if (value.kind === "text") {
-                yield* Queue.offer(queue, { kind: "agent-text", data: value.data as string });
-              } else if (value.kind === "activity") {
-                yield* Queue.offer(queue, {
-                  kind: "agent-activity",
-                  activityKind: value.activityKind as string,
-                  toolName: (value.toolName ?? null) as string | null,
-                  summary: value.summary as string,
-                  ...(value.payload !== undefined ? { payload: value.payload } : {}),
-                });
-              }
-              chunk = yield* readNext();
-            }
+            yield* pumpAgentFrames(agentStream, (frame) => Queue.offer(queue, frame));
 
             if (yield* Effect.promise(() => isMergeInProgress(ctx.session.worktreePath))) {
               yield* Effect.promise(() =>
@@ -1371,18 +1261,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           ),
         );
 
-        return new ReadableStream<ResolvePushFrame>({
-          async start(controller) {
-            try {
-              while (true) {
-                const frame = await Effect.runPromise(Queue.take(queue));
-                controller.enqueue(frame);
-              }
-            } catch {
-              controller.close();
-            }
-          },
-        });
+        return queueToStream(queue);
       });
 
     const cherryPickAndPush = (params: {
@@ -1766,7 +1645,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       resolveConflictsAndPush,
       cherryPickAndPush,
       batchCherryPickAndPush,
-      isPushing: (prId: string) => inFlight.has(prId),
+      isPushing: (prId: string) => pushLock.holder(prId) !== null,
       beginChatStream: (prId: string): ChatStreamLease => chatStreams.begin(prId),
     };
   }),
