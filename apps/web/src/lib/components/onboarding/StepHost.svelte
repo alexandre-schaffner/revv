@@ -311,7 +311,7 @@ async function handleContinue() {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 17px;
 		font-weight: 400;
 		line-height: 1.6;
@@ -427,7 +427,7 @@ async function handleContinue() {
 	}
 
 	.option-name {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 20px;
 		color: var(--ob-text-heading);
 		letter-spacing: -0.005em;
@@ -469,7 +469,7 @@ async function handleContinue() {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 16px;
 		font-weight: 500;
@@ -558,7 +558,7 @@ async function handleContinue() {
 
 	.field-hint {
 		margin: 0;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 13.5px;
 		line-height: 1.55;
 		color: var(--ob-text-muted);
@@ -566,7 +566,7 @@ async function handleContinue() {
 
 	.field-error {
 		margin: 0;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 13.5px;
 		line-height: 1.45;
 		color: var(--ob-error);

@@ -135,7 +135,7 @@ const header = $derived(buildRecapHeader(recap, period));
 
 .date {
   margin: 0;
-  font-family: "Newsreader", Georgia, serif;
+  font-family: var(--font-serif);
   font-size: 2.75rem;
   font-weight: 500;
   letter-spacing: -0.02em;

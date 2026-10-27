@@ -116,7 +116,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 
 	.eyebrow {
 		margin: 0 0 0.5rem;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 12.5px;
 		font-weight: 500;

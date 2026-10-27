@@ -52,7 +52,7 @@ let { title, description, children }: Props = $props();
 	}
 
 	.pane-title {
-		font-family: "Newsreader", Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 22px;
 		font-weight: 500;
 		letter-spacing: -0.015em;

@@ -79,7 +79,7 @@ onMount(() => {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 18px;
 		font-weight: 400;
 		font-style: italic;
@@ -103,7 +103,7 @@ onMount(() => {
 	}
 
 	.label {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 14px;
 		color: var(--ob-text-label);
