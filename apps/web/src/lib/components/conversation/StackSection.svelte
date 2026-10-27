@@ -1,10 +1,8 @@
 <script lang="ts">
 import type { PrStackDetail, StackEntryStatus, StackLayer } from "@revv/shared";
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import RebaseStackConfirm from "$lib/components/stack/RebaseStackConfirm.svelte";
 import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
 import StackLayerList from "$lib/components/stack/StackLayerList.svelte";
-import { Button } from "$lib/components/ui/button";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
 import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
@@ -69,16 +67,15 @@ function open(entry: StackLayer): void {
 			<span class="stack-rebase-text">{needText}</span>
 			{#if stack.viewerCanPush && selectedId}
 				{@const prId = selectedId}
-				<Button
-					variant="outline"
-					size="xs"
+				<button
+					type="button"
+					class="stack-rebase-action"
 					disabled={rebasing}
 					onclick={() => (confirmingRebase = true)}
 					title="Replay every open layer onto the one below it, the bottom onto {baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile."
 				>
-					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
 					{rebasing ? 'Rebasing…' : 'Rebase stack'}
-				</Button>
+				</button>
 				<RebaseStackConfirm
 					open={confirmingRebase}
 					{stack}
@@ -142,19 +139,48 @@ function open(entry: StackLayer): void {
 
 	.stack-rebase {
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		margin-bottom: 6px;
-		padding: 6px 8px;
-		border-radius: 6px;
-		background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 12px;
+		margin-bottom: 8px;
+		font-size: 13px;
+		line-height: 1.6;
 	}
 
 	.stack-rebase-text {
 		min-width: 0;
-		font-size: 0.75rem;
-		color: var(--color-warning);
+		color: var(--color-text-secondary);
+		overflow-wrap: anywhere;
+	}
+
+	.stack-rebase-action {
+		flex-shrink: 0;
+		padding: 0;
+		border: none;
+		border-radius: 2px;
+		background: transparent;
+		font: inherit;
+		font-weight: 400;
+		color: var(--color-text-primary);
+		text-decoration: underline;
+		text-decoration-color: var(--color-border);
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+
+	.stack-rebase-action:hover:not(:disabled) {
+		text-decoration-color: currentColor;
+	}
+
+	.stack-rebase-action:disabled {
+		color: var(--color-text-subtle);
+		text-decoration: none;
+		cursor: default;
+	}
+
+	.stack-rebase-action:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 4px;
 	}
 
 	.stack-rebase-error {

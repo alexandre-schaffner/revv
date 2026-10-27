@@ -19,7 +19,6 @@ import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
 import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
-import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
 import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -77,8 +76,6 @@ import {
   markIssueAnimated,
   pollCloneUntilResolved,
   prepareEntry,
-  regenerate,
-  resume,
   selectWalkthroughReport,
   startWalkthrough,
   stopClonePoll,
@@ -280,7 +277,7 @@ $effect(() => {
     id: `walkthrough-error-${prId}`,
     description: isAgentAuthRecoveryError(streamError)
       ? agentAuthRecoveryDescription(streamError)
-      : streamError,
+      : "The walkthrough stopped before finishing. Retry to continue.",
     ...(isAgentAuthRecoveryError(streamError)
       ? {
           action: {
@@ -1072,16 +1069,23 @@ async function handleRetryClone(): Promise<void> {
     retryingClone = false;
   }
 }
-
-// ── Regenerate ──────────────────────────────────────────────────────
-function handleRegenerate(): void {
-  regenerate(prId, selectedMode);
-}
-
-function handleResume(): void {
-  resume(prId, selectedMode);
-}
 </script>
+
+{#snippet generationError()}
+	<div class="generation-error">
+		<div class="generation-error-actions">
+			<p role="status">Walkthrough stopped before finishing.</p>
+			{#if isAgentAuthRecoveryError(streamError)}
+				<button type="button" class="recovery-action" onclick={() => openSettings('ai')}>Open agent settings</button>
+
+			{/if}
+		</div>
+		<details class="error-details">
+			<summary>Error details</summary>
+			<p>{streamError}</p>
+		</details>
+	</div>
+{/snippet}
 
 {#snippet firstPassRibbon()}
 	<FirstPassRibbon rows={firstPass.rows} />
@@ -1109,10 +1113,6 @@ function handleResume(): void {
 		<div class="merged-stamp-row">
 			<MergedStamp {prId} {mergedAt} />
 		</div>
-	{/if}
-
-	{#if stack.isStacked}
-		<StackOverviewRow {prId} />
 	{/if}
 
 
@@ -1153,11 +1153,7 @@ function handleResume(): void {
 					{/each}
 				</div>
 			{/if}
-			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
-				<ArrowsClockwise size={16} />
-				Retry
-			</Button>
+			{@render generationError()}
 		</div>
 	{:else if cloneInProgress && !summary && blocks.length === 0}
 		<!-- Clone-in-progress state: show indeterminate progress bar + Retry
@@ -1243,16 +1239,7 @@ function handleResume(): void {
 			onanimationend={(e) => lockContainerAnimation('content', e)}
 		>
 			{#if streamError}
-				<div class="partial-error" role="status">
-					<div class="partial-error-copy">
-						<Warning size={14} weight="fill" />
-						<span>{streamError}</span>
-					</div>
-					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
-						<ArrowsClockwise size={14} />
-						Retry
-					</Button>
-				</div>
+				<div class="partial-error">{@render generationError()}</div>
 			{/if}
 
 			<!-- Issues — bucketed by severity (Critical → Warning → Info) so the
@@ -2101,32 +2088,63 @@ function handleResume(): void {
 		margin-top: 8px;
 	}
 
-	.partial-error {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		/* Wrap the button under the copy rather than letting the copy shrink to
-		   nothing — `overflow-wrap: anywhere` below would otherwise break the
-		   message one character per line. */
-		flex-wrap: wrap;
-		gap: 12px;
-		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
-		color: var(--color-danger);
-		padding: 10px 12px;
-		font-size: 12px;
-		line-height: 1.45;
-	}
-
-	.partial-error-copy {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
+	.generation-error {
 		min-width: 0;
+		text-align: left;
+		font-size: 13px;
+		line-height: 1.6;
+		color: var(--color-text-secondary);
 	}
 
-	.partial-error-copy span {
+	.generation-error-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: 12px;
+		row-gap: 4px;
+	}
+
+	.generation-error p {
+		margin: 0;
+	}
+
+	.recovery-action {
+		padding: 0;
+		border: none;
+		border-radius: 2px;
+		background: transparent;
+		font: inherit;
+		font-weight: 400;
+		color: var(--color-text-primary);
+		text-decoration: underline;
+		text-decoration-color: var(--color-border);
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+
+	.recovery-action:hover {
+		text-decoration-color: currentColor;
+	}
+
+	.recovery-action:focus-visible,
+	.error-details summary:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 4px;
+	}
+
+	.error-details {
+		margin-top: 4px;
+		color: var(--color-text-subtle);
+	}
+
+	.error-details summary {
+		width: fit-content;
+		cursor: pointer;
+	}
+
+	.error-details p {
+		margin-top: 8px;
+		max-width: 70ch;
 		overflow-wrap: anywhere;
 	}
 

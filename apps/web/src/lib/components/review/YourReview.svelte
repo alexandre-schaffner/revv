@@ -407,11 +407,11 @@ $effect(() => {
 				<div class="review-empty-actions">
 					{#if walkthroughStatus !== 'complete'}
 						<Button variant="outline" size="sm" onclick={() => setActiveTab('walkthrough')}>
-							<BookOpenText />Open walkthrough
+							<BookOpenText aria-hidden="true" />Open walkthrough
 						</Button>
 					{/if}
 					<Button variant="outline" size="sm" onclick={() => setActiveTab('diff')}>
-						<GitDiff />Open diff
+						<GitDiff aria-hidden="true" />Open diff
 					</Button>
 				</div>
 			</div>
@@ -496,10 +496,12 @@ $effect(() => {
 		flex-direction: column;
 		gap: 2px;
 		min-width: 0;
-		padding-top: 6px;
 	}
 
 	.review-empty-title {
+		display: flex;
+		align-items: center;
+		min-height: 32px;
 		margin: 0;
 		font-size: 0.875rem;
 		font-weight: 500;
