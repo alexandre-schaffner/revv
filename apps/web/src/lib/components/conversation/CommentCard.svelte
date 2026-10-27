@@ -10,12 +10,8 @@ import { openExternal } from "$lib/utils/open-external";
 import MarkdownBody from "./MarkdownBody.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 
-// A markdown post in the conversation: the PR description (verb "opened")
-// or a comment. Editing swaps the body for the editor in place.
-
 interface Props {
   author: ConversationActor;
-  verb: string;
   createdAt: string;
   body: string;
   url: string;
@@ -30,7 +26,6 @@ interface Props {
 
 let {
   author,
-  verb,
   createdAt,
   body,
   url,
@@ -60,18 +55,19 @@ async function confirmDelete(): Promise<void> {
 }
 </script>
 
-<article class="card">
-	<header class="card-head">
-		<Avatar handle={author.login} avatarContent={author.avatarContent} size={22} />
-		<p class="card-byline">
-			<span class="card-author">{author.login}</span>
-			{#if author.kind === 'bot'}<span class="card-tag">bot</span>{/if}
-			{#if isAuthor}<span class="card-tag">author</span>{/if}
-			<span class="card-verb">{verb}</span>
+<article class="comment">
+	<header class="comment-head">
+		<span class="comment-avatar">
+			<Avatar handle={author.login} avatarContent={author.avatarContent} size={24} />
+		</span>
+		<p class="comment-byline">
+			<span class="comment-author">{author.login}</span>
+			{#if author.kind === 'bot'}<span class="comment-tag">bot</span>{/if}
+			{#if isAuthor}<span class="comment-tag">author</span>{/if}
 			<time datetime={createdAt} title={absolute}>{formatRelativeTime(createdAt)}</time>
-			{#if edited}<span class="card-verb">· edited</span>{/if}
+			{#if edited}<span>· edited</span>{/if}
 		</p>
-		<div class="card-actions">
+		<div class="comment-actions" class:comment-actions--pinned={confirmingDelete}>
 			{#if confirmingDelete}
 				<Button variant="destructive" size="xs" onclick={() => void confirmDelete()}>
 					Delete comment
@@ -116,89 +112,116 @@ async function confirmDelete(): Promise<void> {
 	</header>
 
 	{#if editing && onsave}
-		<div class="card-editor">
+		<div class="comment-body comment-body--editing">
 			<MarkdownEditor
 				initial={body}
-				placeholder={verb === 'opened' ? 'Describe this pull request' : 'Edit your comment'}
+				placeholder="Edit your comment"
 				submitLabel="Save"
-				allowEmpty={verb === 'opened'}
 				autofocus
 				onsubmit={save}
 				oncancel={() => (editing = false)}
 			/>
 		</div>
 	{:else if body.trim()}
-		<div class="card-body"><MarkdownBody source={body} /></div>
+		<div class="comment-body"><MarkdownBody source={body} /></div>
 	{:else if emptyText}
-		<p class="card-body card-empty">{emptyText}</p>
+		<p class="comment-body comment-empty">{emptyText}</p>
 	{/if}
 </article>
 
 <style>
-	.card {
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
+	.comment {
 		min-width: 0;
 	}
 
-	.card-head {
+	/* Same geometry as an event line: a 24px node on the rail, its text
+	   10px to the right, so a comment's byline reads as one more line of the
+	   activity rather than the top of a box. */
+	.comment-head {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		min-height: 40px;
-		padding: 6px 8px 6px 12px;
-		border-bottom: 1px solid var(--color-border-subtle);
-		background: var(--color-bg-secondary);
-		border-radius: var(--radius-card) var(--radius-card) 0 0;
+		gap: 10px;
+		min-height: 28px;
 	}
 
-	.card-byline {
+	.comment-avatar {
+		position: relative;
+		z-index: 1;
+		display: grid;
+		flex-shrink: 0;
+		border-radius: 50%;
+		box-shadow: 0 0 0 3px var(--color-bg-primary);
+	}
+
+	.comment-byline {
 		display: flex;
 		align-items: baseline;
 		flex-wrap: wrap;
-		gap: 0 5px;
+		gap: 0 6px;
 		flex: 1;
 		min-width: 0;
 		margin: 0;
-		font-size: 0.8125rem;
-		color: var(--color-text-secondary);
+		font-size: 13px;
+		color: var(--color-text-muted);
 	}
 
-	.card-author {
+	.comment-author {
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
 
-	.card-tag {
+	.comment-tag {
 		padding: 0 5px;
-		border: 1px solid var(--color-border);
-		border-radius: 999px;
+		border-radius: 4px;
+		background: var(--color-bg-tertiary);
 		font-size: 0.6875rem;
 		line-height: 16px;
 		color: var(--color-text-secondary);
 	}
 
-	.card-actions {
+	/* Chrome stays out of the reading until the pointer or focus is on the
+	   comment; a pending delete confirmation holds it open. */
+	.comment-actions {
 		display: flex;
 		align-items: center;
 		gap: 2px;
 		flex-shrink: 0;
-		color: var(--color-text-secondary);
+		color: var(--color-text-muted);
+		opacity: 0;
 	}
 
-	.card-body {
-		padding: 12px 16px 14px;
+	.comment:hover .comment-actions,
+	.comment:focus-within .comment-actions,
+	.comment-actions--pinned {
+		opacity: 1;
 	}
 
-	.card-empty {
-		margin: 0;
-		font-size: 0.875rem;
+	.comment-body {
+		width: fit-content;
+		max-width: min(100% - 34px, 70ch + 32px);
+		margin: 6px 0 0 34px;
+		padding: 12px 16px;
+		border-radius: 4px 16px 16px;
+		background: color-mix(in srgb, var(--color-bg-secondary) 60%, var(--color-bg-tertiary));
+	}
+
+	.comment-body--editing {
+		width: auto;
+		max-width: none;
+		padding: 0;
+		border-radius: 0;
+		background: none;
+	}
+
+	.comment-empty {
+		font-size: 14px;
 		font-style: italic;
 		color: var(--color-text-muted);
 	}
 
-	.card-editor {
-		padding: 10px;
+	@media (hover: none) {
+		.comment-actions {
+			opacity: 1;
+		}
 	}
 </style>

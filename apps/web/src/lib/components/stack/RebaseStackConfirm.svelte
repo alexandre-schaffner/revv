@@ -1,7 +1,6 @@
 <script lang="ts">
 import { isOpenLayer, loginsMatch, type PrStackDetail } from "@revv/shared";
 import { AlertDialog } from "bits-ui";
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import { buttonVariants } from "$lib/components/ui/button/index.js";
 import { bitsAnim, dialogSpringIn, dialogSpringOut } from "$lib/motion";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
@@ -34,40 +33,36 @@ const othersOwn = $derived(
 					class="confirm-content"
 					use:bitsAnim={{ inPreset: dialogSpringIn, outPreset: dialogSpringOut }}
 				>
-					<div class="confirm-header">
-						<span class="confirm-icon" aria-hidden="true">
-							<ArrowsClockwise size={16} />
-						</span>
-						<AlertDialog.Title>
-							{#snippet child({ props: titleProps })}
-								<h2 {...titleProps} class="confirm-title">Rebase stack #{stack.number}?</h2>
-							{/snippet}
-						</AlertDialog.Title>
-					</div>
+					<AlertDialog.Title>
+						{#snippet child({ props: titleProps })}
+							<h2 {...titleProps} class="confirm-title">Rebase stack #{stack.number}</h2>
+						{/snippet}
+					</AlertDialog.Title>
 
 					<AlertDialog.Description>
 						{#snippet child({ props: descProps })}
 							<p {...descProps} class="confirm-description">
-								Revv replays each open layer onto the one below it, the bottom onto
-								<code>{stack.baseRefName}</code>, and force-pushes {pushed.length === 1
-									? 'its branch'
-									: `these ${pushed.length} branches`} together. Nothing is pushed if a layer
-								conflicts or moved meanwhile.
+								Replay each open layer onto the one below it, starting from
+								<code>{stack.baseRefName}</code>, then force-push {plural(pushed.length, 'branch', 'branches')}.
 							</p>
 						{/snippet}
 					</AlertDialog.Description>
 
-					<ul class="confirm-branches">
+					<ul class="confirm-branches" aria-label="Branches to force-push">
 						{#each pushed as layer (layer.number)}
 							<li>
-								<code class="branch">{layer.headRef}</code>
-								<span class="owner">
-									#{layer.number}{#if layer.authorLogin && !loginsMatch(layer.authorLogin, viewer)}
-										· {layer.authorLogin}'s{/if}
-								</span>
+								<span class="pr-number">#{layer.number}</span>
+								<div class="branch-info">
+									<code class="branch">{layer.headRef}</code>
+									{#if layer.authorLogin && !loginsMatch(layer.authorLogin, viewer)}
+										<span class="owner">{layer.authorLogin}</span>
+									{/if}
+								</div>
 							</li>
 						{/each}
 					</ul>
+
+					<p class="confirm-note">Nothing is pushed if a layer conflicts or has changed.</p>
 
 					{#if othersOwn}
 						<p class="confirm-note">
@@ -76,14 +71,13 @@ const othersOwn = $derived(
 					{/if}
 
 					<div class="confirm-actions">
-						<AlertDialog.Cancel class={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+						<AlertDialog.Cancel class={cn(buttonVariants({ variant: 'ghost', size: 'default' }))}>
 							Cancel
 						</AlertDialog.Cancel>
 						<AlertDialog.Action
-							class={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'confirm-push')}
+							class={cn(buttonVariants({ variant: 'default', size: 'default' }))}
 							onclick={onConfirm}
 						>
-							<ArrowsClockwise size={13} />
 							Force-push {plural(pushed.length, 'branch', 'branches')}
 						</AlertDialog.Action>
 					</div>
@@ -99,61 +93,33 @@ const othersOwn = $derived(
 		inset: 0;
 		z-index: 60;
 		background: rgb(0 0 0 / 0.45);
-		backdrop-filter: blur(2px);
-		-webkit-backdrop-filter: blur(2px);
 	}
 
 	.confirm-content {
 		position: fixed;
-		top: 24%;
-		left: 0;
-		right: 0;
+		top: min(20vh, 160px);
+		inset-inline: 0;
 		z-index: 61;
 		display: flex;
-		width: min(440px, calc(100vw - 32px));
-		margin: 0 auto;
 		flex-direction: column;
-		gap: 10px;
-		border: 1px solid var(--color-glass-border);
+		gap: 12px;
+		width: min(520px, calc(100vw - 32px));
+		max-height: calc(100dvh - min(20vh, 160px) - 16px);
+		margin-inline: auto;
+		padding: 24px;
+		overflow-y: auto;
+		border: 1px solid var(--color-border);
 		border-radius: 12px;
-		background: var(--color-glass-bg);
-		padding: 20px;
+		background: var(--color-bg-elevated);
 		color: var(--color-text-primary);
-		backdrop-filter: blur(20px) saturate(1.4);
-		-webkit-backdrop-filter: blur(20px) saturate(1.4);
-		box-shadow:
-			var(--color-shadow-xl),
-			inset 0 0.5px 0 0 var(--color-glass-highlight);
 		outline: none;
-	}
-
-	.confirm-header {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-
-	.confirm-icon {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 30px;
-		height: 30px;
-		flex-shrink: 0;
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--color-warning) 12%, transparent);
-		color: var(--color-warning);
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 22%, transparent);
 	}
 
 	.confirm-title {
 		margin: 0;
-		min-width: 0;
-		color: var(--color-text-primary);
 		font-size: 15px;
 		font-weight: 600;
-		line-height: 1.3;
-		letter-spacing: -0.01em;
+		line-height: 1.4;
 	}
 
 	.confirm-description,
@@ -161,65 +127,63 @@ const othersOwn = $derived(
 		margin: 0;
 		color: var(--color-text-secondary);
 		font-size: 13px;
-		line-height: 1.55;
+		line-height: 1.6;
 		overflow-wrap: anywhere;
-	}
-
-	.confirm-note {
-		font-size: 12px;
-		color: var(--color-text-muted);
 	}
 
 	.confirm-description code {
 		font-family: var(--font-mono);
-		font-size: 0.92em;
+		font-size: inherit;
+		color: var(--color-text-primary);
 	}
 
 	.confirm-branches {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		max-height: 180px;
-		margin: 0;
-		padding: 7px 10px;
+		flex-shrink: 0;
+		max-height: 240px;
+		margin: 4px 0;
+		padding: 4px 0;
 		overflow-y: auto;
 		list-style: none;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 7px;
-		background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+		border-block: 1px solid var(--color-border-subtle);
 	}
 
 	.confirm-branches li {
 		display: flex;
 		align-items: baseline;
-		gap: 8px;
-		min-width: 0;
-		font-size: 12px;
+		gap: 16px;
+		padding-block: 8px;
+		font-size: 13px;
 		line-height: 1.5;
 	}
 
+	.pr-number {
+		flex-shrink: 0;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-text-subtle);
+	}
+
+	.branch-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+
 	.branch {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 11.5px;
-		color: var(--color-text-primary);
+		font-size: inherit;
+		overflow-wrap: anywhere;
 	}
 
 	.owner {
-		flex-shrink: 0;
-		color: var(--color-text-muted);
+		color: var(--color-text-secondary);
 	}
 
 	.confirm-actions {
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: flex-end;
 		gap: 8px;
-		margin-top: 4px;
-	}
-
-	.confirm-content :global(.confirm-push) {
-		gap: 6px;
+		margin-top: 8px;
 	}
 </style>

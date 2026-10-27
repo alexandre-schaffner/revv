@@ -51,7 +51,6 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 			<li class="timeline-post" data-timeline-item>
 				<CommentCard
 					author={item.author}
-					verb="commented"
 					createdAt={item.createdAt}
 					body={item.body}
 					url={item.url}
@@ -147,16 +146,18 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 		background: var(--color-border);
 	}
 
+	/* Comments get more air than event lines: they are the content the
+	   activity is made of, the events its margin notes. */
 	.timeline-post {
 		position: relative;
-		padding: 6px 0;
+		padding: 10px 0 12px;
 	}
 
 	.timeline-note,
 	.timeline-fold {
 		position: relative;
 		padding: 2px 0 2px 34px;
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-muted);
 	}
 
@@ -207,7 +208,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 		flex: 1;
 		margin: 0;
 		padding-top: 2px;
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-secondary);
 	}
 
@@ -242,11 +243,12 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		margin: 6px 0 0 34px;
-		padding: 10px 14px;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
+		width: fit-content;
+		max-width: min(100% - 34px, 70ch + 32px);
+		margin: 6px 0 4px 34px;
+		padding: 12px 16px;
+		border-radius: 4px 16px 16px;
+		background: color-mix(in srgb, var(--color-bg-secondary) 60%, var(--color-bg-tertiary));
 	}
 
 	.review-inline {
@@ -258,7 +260,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
