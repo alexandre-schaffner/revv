@@ -48,7 +48,6 @@ const unfolded = new SvelteSet<string>();
 			<li class="timeline-post">
 				<CommentCard
 					author={item.author}
-					kind="comment"
 					createdAt={item.createdAt}
 					body={item.body}
 					url={item.url}
@@ -144,16 +143,18 @@ const unfolded = new SvelteSet<string>();
 		background: var(--color-border);
 	}
 
+	/* Comments get more air than event lines: they are the content the
+	   activity is made of, the events its margin notes. */
 	.timeline-post {
 		position: relative;
-		padding: 6px 0;
+		padding: 10px 0 12px;
 	}
 
 	.timeline-note,
 	.timeline-fold {
 		position: relative;
 		padding: 2px 0 2px calc(var(--rail-glyph) + var(--rail-gap));
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-muted);
 	}
 
@@ -180,7 +181,7 @@ const unfolded = new SvelteSet<string>();
 		gap: 5px;
 		margin: 0;
 		padding-top: 2px;
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-secondary);
 	}
 
@@ -211,11 +212,12 @@ const unfolded = new SvelteSet<string>();
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		margin-top: 6px;
-		padding: 10px 14px;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
+		width: fit-content;
+		max-width: min(100%, 70ch + 32px);
+		margin: 6px 0 4px;
+		padding: 12px 16px;
+		border-radius: 4px 16px 16px;
+		background: color-mix(in srgb, var(--color-bg-secondary) 60%, var(--color-bg-tertiary));
 	}
 
 	.review-inline {
@@ -227,7 +229,7 @@ const unfolded = new SvelteSet<string>();
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: 13px;
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}

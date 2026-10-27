@@ -1,7 +1,5 @@
 <script lang="ts">
 import type { PrStackDetail, StackLayer } from "@revv/shared";
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import { Button } from "$lib/components/ui/button";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { LAYER_STATUS_LABEL } from "$lib/stacks/stack-layer-facts";
 import { getStackRebase, rebaseNeed } from "$lib/stores/stack-rebase.svelte";
@@ -51,10 +49,9 @@ function open(layer: StackLayer): void {
 		<span class="stack-rebase-text">{needText}</span>
 		<RebaseStackAction {prId} {stack}>
 			{#snippet trigger({ rebasing, title, onclick })}
-				<Button variant="outline" size="xs" disabled={rebasing} {onclick} {title}>
-					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
+				<button type="button" class="stack-rebase-action" disabled={rebasing} {onclick} {title}>
 					{rebasing ? 'Rebasing…' : 'Rebase stack'}
-				</Button>
+				</button>
 			{/snippet}
 		</RebaseStackAction>
 	</div>
@@ -86,19 +83,48 @@ function open(layer: StackLayer): void {
 <style>
 	.stack-rebase {
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		margin-bottom: 6px;
-		padding: 6px 8px;
-		border-radius: 6px;
-		background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 12px;
+		margin-bottom: 8px;
+		font-size: 13px;
+		line-height: 1.6;
 	}
 
 	.stack-rebase-text {
 		min-width: 0;
-		font-size: 0.75rem;
-		color: var(--color-warning);
+		color: var(--color-text-secondary);
+		overflow-wrap: anywhere;
+	}
+
+	.stack-rebase-action {
+		flex-shrink: 0;
+		padding: 0;
+		border: none;
+		border-radius: 2px;
+		background: transparent;
+		font: inherit;
+		font-weight: 400;
+		color: var(--color-text-primary);
+		text-decoration: underline;
+		text-decoration-color: var(--color-border);
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+
+	.stack-rebase-action:hover:not(:disabled) {
+		text-decoration-color: currentColor;
+	}
+
+	.stack-rebase-action:disabled {
+		color: var(--color-text-subtle);
+		text-decoration: none;
+		cursor: default;
+	}
+
+	.stack-rebase-action:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 4px;
 	}
 
 	.stack-rebase-error {

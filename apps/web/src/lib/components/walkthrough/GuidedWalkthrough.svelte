@@ -1,5 +1,4 @@
 <script lang="ts">
-import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Warning from "phosphor-svelte/lib/Warning";
 import { provideActivityPr } from "$lib/components/agent-activity/repo-file";
 import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
@@ -12,12 +11,10 @@ import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
 import { stackCitations } from "$lib/components/stack/margin/stack-citations.svelte";
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
-import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
-import { Button } from "$lib/components/ui/button";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { enterOnce } from "$lib/motion";
 import { openInDiff, scrollToAnchor, walkthroughAnchor } from "$lib/stores/review-nav.svelte";
-import { resume } from "$lib/walkthrough/actions";
+import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { sortBySeverity } from "$lib/walkthrough/issues";
 import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
 import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
@@ -109,11 +106,22 @@ function jumpToSection(elementId: string): void {
 function jumpToLine(filePath: string, line: number): void {
   openInDiff(prId, filePath, line);
 }
-
-function handleResume(): void {
-  void resume(prId);
-}
 </script>
+
+{#snippet generationError()}
+	<div class="generation-error">
+		<div class="generation-error-actions">
+			<p role="status">Walkthrough stopped before finishing.</p>
+			{#if view.authRecovery}
+				<button type="button" class="recovery-action" onclick={() => openSettings('ai')}>Open agent settings</button>
+			{/if}
+		</div>
+		<details class="error-details">
+			<summary>Error details</summary>
+			<p>{view.streamError}</p>
+		</details>
+	</div>
+{/snippet}
 
 {#snippet firstPassRibbon()}
 	<FirstPassRibbon rows={view.firstPass.rows} />
@@ -157,10 +165,6 @@ function handleResume(): void {
 		</div>
 	{/if}
 
-	{#if stack.isStacked}
-		<StackOverviewRow {prId} />
-	{/if}
-
 	{#if view.stepperVisible}
 		<!-- Outside the page states, so it stays mounted from the loading
 		     skeleton through the content and after generation. -->
@@ -190,11 +194,7 @@ function handleResume(): void {
 					{/each}
 				</div>
 			{/if}
-			<p class="loading-text">Walkthrough generation stopped. Check the notification for details.</p>
-			<Button variant="outline" size="lg" style="cursor: pointer;" onclick={handleResume}>
-				<ArrowsClockwise size={16} />
-				Retry
-			</Button>
+			{@render generationError()}
 		</div>
 	{:else if view.page.kind === 'first-pass-only'}
 		<div class="walkthrough-loading review-columns">
@@ -217,16 +217,7 @@ function handleResume(): void {
 			use:enterOnce={{ key: `${enterScope}:content`, look: 'surface', delay: 0.06 }}
 		>
 			{#if view.streamError}
-				<div class="partial-error" role="status">
-					<div class="partial-error-copy">
-						<Warning size={14} weight="fill" />
-						<span>{view.streamError}</span>
-					</div>
-					<Button variant="outline" size="sm" style="cursor: pointer;" onclick={handleResume}>
-						<ArrowsClockwise size={14} />
-						Retry
-					</Button>
-				</div>
+				<div class="partial-error">{@render generationError()}</div>
 			{/if}
 
 			{#if view.issues.length > 0 || view.filteredIssues.length > 0}
@@ -606,31 +597,63 @@ function handleResume(): void {
 		color: var(--color-text-muted);
 	}
 
-	.partial-error {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		/* The button wraps under the copy rather than the copy breaking one
-		   character per line. */
-		flex-wrap: wrap;
-		gap: 12px;
-		border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
-		color: var(--color-danger);
-		padding: 10px 12px;
-		font-size: 12px;
-		line-height: 1.45;
-	}
-
-	.partial-error-copy {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
+	.generation-error {
 		min-width: 0;
+		text-align: left;
+		font-size: 13px;
+		line-height: 1.6;
+		color: var(--color-text-secondary);
 	}
 
-	.partial-error-copy span {
+	.generation-error-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: 12px;
+		row-gap: 4px;
+	}
+
+	.generation-error p {
+		margin: 0;
+	}
+
+	.recovery-action {
+		padding: 0;
+		border: none;
+		border-radius: 2px;
+		background: transparent;
+		font: inherit;
+		font-weight: 400;
+		color: var(--color-text-primary);
+		text-decoration: underline;
+		text-decoration-color: var(--color-border);
+		text-underline-offset: 3px;
+		cursor: pointer;
+	}
+
+	.recovery-action:hover {
+		text-decoration-color: currentColor;
+	}
+
+	.recovery-action:focus-visible,
+	.error-details summary:focus-visible {
+		outline: 2px solid var(--color-accent);
+		outline-offset: 4px;
+	}
+
+	.error-details {
+		margin-top: 4px;
+		color: var(--color-text-subtle);
+	}
+
+	.error-details summary {
+		width: fit-content;
+		cursor: pointer;
+	}
+
+	.error-details p {
+		margin-top: 8px;
+		max-width: 70ch;
 		overflow-wrap: anywhere;
 	}
 
