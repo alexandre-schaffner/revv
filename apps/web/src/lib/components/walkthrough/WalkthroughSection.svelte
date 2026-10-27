@@ -249,7 +249,7 @@ $effect(() => {
 	}
 
 	.section-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 11.5px;
 		font-weight: 500;
@@ -291,7 +291,7 @@ $effect(() => {
 	}
 
 	.section-title {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 22px;
 		font-weight: 500;
 		letter-spacing: -0.012em;

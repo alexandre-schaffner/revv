@@ -233,7 +233,7 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 11.5px;
 		font-weight: 500;
@@ -269,7 +269,7 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-title {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 18px;
 		font-weight: 500;
 		letter-spacing: -0.012em;

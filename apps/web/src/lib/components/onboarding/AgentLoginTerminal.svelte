@@ -293,7 +293,7 @@ onDestroy(() => {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 16px;
 		line-height: 1.6;
 		color: var(--ob-text-body);
