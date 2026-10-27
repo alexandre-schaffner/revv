@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.1](https://github.com/alexandre-schaffner/revv/compare/v0.32.0...v0.32.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **server:** launch package-runner agents outside the reviewed repo ([#267](https://github.com/alexandre-schaffner/revv/issues/267)) ([83bb735](https://github.com/alexandre-schaffner/revv/commit/83bb735e2ccf2a70a1dd140c72ef9e3f6339eb42))
+
 ## [0.32.0](https://github.com/alexandre-schaffner/revv/compare/v0.31.0...v0.32.0) (2026-10-26)
 
 
