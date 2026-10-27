@@ -151,7 +151,7 @@ onMount(() => {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 17px;
 		font-weight: 400;
 		line-height: 1.6;
@@ -166,7 +166,7 @@ onMount(() => {
 	}
 
 	.error {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 14px;
 		color: var(--ob-error);
 		margin: 0;
@@ -191,7 +191,7 @@ onMount(() => {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 16px;
 		font-weight: 500;
