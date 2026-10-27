@@ -43,6 +43,12 @@ export interface AcpProcessLaunch {
   readonly args: readonly string[];
   readonly env: Readonly<Record<string, string>>;
   readonly sessionModel?: string;
+  /**
+   * True when the agent is fetched and run by a package runner (`npx`, `bunx`,
+   * `bun x`). The caller must spawn it outside the reviewed repo: see
+   * `package-runner-dir.ts`.
+   */
+  readonly viaPackageRunner: boolean;
 }
 
 /**
@@ -140,6 +146,10 @@ function resolvePackageRunner(
   }
 
   return { command: launch.command, args: launch.args };
+}
+
+function isPackageRunner({ command, args }: Pick<AcpLaunch, "command" | "args">): boolean {
+  return command === "npx" || command === "bunx" || (command === "bun" && args[0] === "x");
 }
 
 /**
@@ -280,6 +290,7 @@ export function resolveAcpProcessLaunchById(
     args: runner.args,
     env: buildAcpProcessEnv(id, inheritedEnv, launch.env, path, options),
     ...(launch.sessionModel ? { sessionModel: launch.sessionModel } : {}),
+    viaPackageRunner: isPackageRunner(runner),
   };
 }
 

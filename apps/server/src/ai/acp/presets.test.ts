@@ -175,6 +175,7 @@ describe("ACP launch presets", () => {
 
       expect(launch.command).toBe("npx");
       expect(launch.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp"]);
+      expect(launch.viaPackageRunner).toBe(true);
     });
   });
 
@@ -186,6 +187,7 @@ describe("ACP launch presets", () => {
 
       expect(launch.command).toBe("bunx");
       expect(launch.args).toEqual(["@agentclientprotocol/claude-agent-acp"]);
+      expect(launch.viaPackageRunner).toBe(true);
     });
   });
 
@@ -195,8 +197,17 @@ describe("ACP launch presets", () => {
 
       expect(launch.command).toBe("bun");
       expect(launch.args).toEqual(["x", "@agentclientprotocol/codex-acp"]);
+      expect(launch.viaPackageRunner).toBe(true);
       expect(launch.env.CODEX_CONFIG).toBe(JSON.stringify({ model: "gpt-6-sol" }));
     });
+  });
+
+  it("runs an agent with its own binary outside the package runner", () => {
+    if (serverEnv.acpCommand) return;
+    const launch = resolveAcpProcessLaunchById("opencode", {}, {}, "/usr/bin");
+
+    expect(launch.command).toBe("opencode");
+    expect(launch.viaPackageRunner).toBe(false);
   });
 
   it("injects CLAUDE_CONFIG_DIR for claude-code when the option is set", () => {
