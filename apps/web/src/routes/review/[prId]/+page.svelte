@@ -18,6 +18,7 @@ import { readStackPlace } from "$lib/stacks/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
 import StackPlaceNote from "$lib/components/stack/margin/StackPlaceNote.svelte";
 import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte";
+import RestackStatus from "$lib/components/stack/RestackStatus.svelte";
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
@@ -117,6 +118,9 @@ useShellChrome(() => ({
 			</span>
 			{#if stackPlace}
 				<div class="title-stack-line"><StackPlaceLine place={stackPlace} /></div>
+			{/if}
+			{#if activeTab === 'walkthrough' && pr.stack}
+				<RestackStatus {prId} />
 			{/if}
 			{#if activeTab === 'walkthrough' && walkthroughRiskLevel}
 				<Badge
