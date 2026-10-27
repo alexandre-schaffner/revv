@@ -38,6 +38,17 @@ kill-server: ## Kill any stale dev server processes (uses PID files; safe to run
 	  fi; \
 	  rm -f apps/server/revv-dev.db.dev.pid; \
 	fi
+	@repo_root=$$(pwd); \
+	for port in 5173 45679; do \
+	  for pid in $$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null); do \
+	    cwd=$$(lsof -a -p "$$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); \
+	    case "$$cwd" in \
+	      "$$repo_root"*) \
+	        printf "[kill-server] killing stale listener on :$$port (PID $$pid, $$cwd)…\n"; \
+	        kill "$$pid" 2>/dev/null || true ;; \
+	    esac; \
+	  done; \
+	done
 
 # fake-gcs-server stands in for the team cache's GCS bucket; the server
 # reaches it through REVV_CACHE_API_ENDPOINT (see apps/server/src/config.ts).
