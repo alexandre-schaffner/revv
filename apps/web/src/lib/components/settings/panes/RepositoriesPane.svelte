@@ -19,11 +19,13 @@ const repositories = $derived(getRepositories());
 let removingRepoId = $state<string | null>(null);
 let repoPendingDelete = $state<Repository | null>(null);
 
+// Removal is optimistic and its progress lives in a toast, so the confirm
+// dialog closes immediately rather than idling on a row that's already gone.
 async function handleDeleteRepo(id: string): Promise<void> {
+  repoPendingDelete = null;
   removingRepoId = id;
   try {
     await deleteRepo(id);
-    repoPendingDelete = null;
   } catch {
     // The store restores optimistic state and shows the failure toast.
   } finally {
@@ -93,11 +95,8 @@ function repoHint(repo: Repository): string | undefined {
 <RepoDeleteConfirm
 	repo={repoPendingDelete}
 	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepoId === repoPendingDelete.id : false}
 	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || removingRepoId !== repoPendingDelete.id)) {
-			repoPendingDelete = null;
-		}
+		if (!nextOpen) repoPendingDelete = null;
 	}}
 	onConfirm={() => {
 		if (repoPendingDelete) void handleDeleteRepo(repoPendingDelete.id);
