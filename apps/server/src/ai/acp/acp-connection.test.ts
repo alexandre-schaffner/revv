@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import {
+  agentStartupFailureMessage,
   createSessionSelections,
   type SessionSelectionConnection,
   sanitizeMcpServerName,
   selectAcpAuthMethod,
 } from "./acp-connection";
+import { looksLikeAuthFailure } from "./agent-keychain";
 
 describe("selectAcpAuthMethod", () => {
   it("prefers the ChatGPT session over an API key for Codex", () => {
@@ -21,6 +23,50 @@ describe("selectAcpAuthMethod", () => {
   it("keeps the agent's advertised default for other providers", () => {
     expect(selectAcpAuthMethod("claude-code", [{ id: "api-key" }, { id: "oauth" }])).toBe(
       "api-key",
+    );
+  });
+});
+
+describe("agentStartupFailureMessage", () => {
+  // npx run inside a Bun monorepo that npm can't parse dies before the
+  // adapter starts. That used to surface as "ACP connection closed" plus
+  // Keychain advice, which sent every user to the wrong fix.
+  const npmFailure = [
+    "npm error code EUNSUPPORTEDPROTOCOL",
+    'npm error Unsupported URL Type "catalog:": catalog:v4',
+    "npm error A complete log of this run can be found in: /tmp/npm.log",
+    "",
+  ].join("\n");
+
+  it("names the exit code and keeps what the process printed", () => {
+    expect(agentStartupFailureMessage("claude-code", 1, npmFailure)).toBe(
+      [
+        "The Claude Code agent exited before it started (exit code 1).",
+        "",
+        "npm error code EUNSUPPORTEDPROTOCOL",
+        'npm error Unsupported URL Type "catalog:": catalog:v4',
+        "npm error A complete log of this run can be found in: /tmp/npm.log",
+      ].join("\n"),
+    );
+  });
+
+  it("is not read as an auth failure", () => {
+    expect(looksLikeAuthFailure(agentStartupFailureMessage("claude-code", 1, npmFailure))).toBe(
+      false,
+    );
+  });
+
+  it("keeps only the last lines of a long stderr", () => {
+    const stderr = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const message = agentStartupFailureMessage("codex", 7, stderr);
+
+    expect(message).not.toContain("line 13");
+    expect(message.endsWith("line 14\nline 15\nline 16\nline 17\nline 18\nline 19")).toBe(true);
+  });
+
+  it("stands alone when the process printed nothing", () => {
+    expect(agentStartupFailureMessage("codex", 1, "  \n")).toBe(
+      "The Codex agent exited before it started (exit code 1).",
     );
   });
 });

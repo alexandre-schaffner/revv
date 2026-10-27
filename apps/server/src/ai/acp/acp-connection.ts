@@ -31,10 +31,11 @@ import {
   type SessionUpdate,
   type StopReason,
 } from "@agentclientprotocol/sdk";
-import type { AcpAgentId } from "@revv/shared";
+import { type AcpAgentId, getAcpAgent } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { resolveUserPath } from "../providers/cli-agent";
 import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
+import { ensurePackageRunnerDir } from "./package-runner-dir";
 import { type AcpLaunchConfig, resolveAcpProcessLaunchById } from "./presets";
 import {
   planModelSelection,
@@ -43,6 +44,28 @@ import {
 } from "./session-config";
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
+const STDERR_TAIL_CHARS = 2000;
+const STARTUP_EXIT_GRACE_MS = 1000;
+const STARTUP_STDERR_LINES = 6;
+
+/**
+ * The error for an agent process that exited before the ACP handshake, carrying
+ * the last lines it printed. Deliberately free of "connection closed", so it
+ * isn't mistaken for a login or Keychain problem.
+ */
+export function agentStartupFailureMessage(
+  agent: AcpAgentId,
+  exitCode: number,
+  stderr: string,
+): string {
+  const lines = stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-STARTUP_STDERR_LINES);
+  const head = `The ${getAcpAgent(agent).label} agent exited before it started (exit code ${exitCode}).`;
+  return lines.length > 0 ? `${head}\n\n${lines.join("\n")}` : head;
+}
 
 /**
  * Select the authentication method to request from an ACP agent. Codex's ACP
@@ -230,7 +253,7 @@ async function spawnConnection(
   const claudeConfigDir = resolveClaudeConfigDir(agent);
   if (claudeConfigDir) ensureClaudeConfigDir(claudeConfigDir);
 
-  const { command, args, env, sessionModel } = resolveAcpProcessLaunchById(
+  const { command, args, env, sessionModel, viaPackageRunner } = resolveAcpProcessLaunchById(
     agent,
     config,
     process.env,
@@ -238,7 +261,11 @@ async function spawnConnection(
     { claudeConfigDir },
   );
   const proc = Bun.spawn([command, ...args], {
-    cwd,
+    // A package runner must not run inside the reviewed repo: npm reads that
+    // repo's `package.json` and exits on one it can't parse (see
+    // `package-runner-dir.ts`). The worktree still reaches the agent as the
+    // session `cwd`.
+    cwd: (viaPackageRunner ? ensurePackageRunnerDir() : null) ?? cwd,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -290,16 +317,19 @@ async function spawnConnection(
   };
   entryRef = entry;
 
-  // Drain stderr to the debug log so agent crashes are diagnosable.
-  void (async () => {
+  // Drain stderr to the debug log so agent crashes are diagnosable, keeping a
+  // short tail for the startup-failure message below.
+  let stderrTail = "";
+  const stderrDrained = (async () => {
     const reader = proc.stderr.getReader();
     const decoder = new TextDecoder();
     try {
       while (true) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        const text = decoder.decode(chunk.value, { stream: true }).trim();
-        if (text) debug("acp-connection", `[stderr] ${text}`);
+        const text = decoder.decode(chunk.value, { stream: true });
+        stderrTail = (stderrTail + text).slice(-STDERR_TAIL_CHARS);
+        if (text.trim()) debug("acp-connection", `[stderr] ${text.trim()}`);
       }
     } catch {
       /* reader closed on exit */
@@ -315,17 +345,35 @@ async function spawnConnection(
     debug("acp-connection", `${entry.agent} agent for ${cwd} exited (code=${code ?? "?"})`);
   });
 
-  const initialize = await connection.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      // Advertise NO client fs/terminal: the agent edits + commits natively in
-      // its cwd (the spike confirmed claude-agent-acp does this), which keeps
-      // proposed-commit detection identical to the existing drivers.
-      fs: { readTextFile: false, writeTextFile: false },
-      terminal: false,
-    },
-    clientInfo: { name: "Revv", version: "1.0.0" },
-  });
+  let initialize: Awaited<ReturnType<typeof connection.initialize>>;
+  try {
+    initialize = await connection.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        // Advertise NO client fs/terminal: the agent edits + commits natively in
+        // its cwd (the spike confirmed claude-agent-acp does this), which keeps
+        // proposed-commit detection identical to the existing drivers.
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false,
+      },
+      clientInfo: { name: "Revv", version: "1.0.0" },
+    });
+  } catch (err) {
+    // An agent that dies before answering `initialize` (a package runner that
+    // can't install it, a bad flag) surfaces from the SDK as a bare "ACP
+    // connection closed", which reads as an auth failure. Name the exit and
+    // what the process printed instead.
+    const exitCode = await Promise.race([
+      proc.exited,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), STARTUP_EXIT_GRACE_MS)),
+    ]);
+    if (exitCode === null) {
+      proc.kill();
+      throw err;
+    }
+    await stderrDrained;
+    throw new Error(agentStartupFailureMessage(agent, exitCode, stderrTail));
+  }
 
   entry.loadSessionSupported = initialize.agentCapabilities?.loadSession === true;
   entry.httpMcpSupported = initialize.agentCapabilities?.mcpCapabilities?.http === true;
