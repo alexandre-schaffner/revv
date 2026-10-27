@@ -409,8 +409,9 @@
   --color-warning-fg: var(--revv-warning-fg);
   --color-danger: var(--revv-danger);
   --color-merged: var(--revv-merged);
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Fira Code", monospace;
+  --font-serif: "Newsreader Variable", "Newsreader", Georgia, serif;
 
   /* The one markdown reading scale, consumed by lib/styles/prose.css; also
      generates `text-prose` / `text-prose-dense` utilities. */
@@ -750,6 +751,8 @@ body {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
+  font-optical-sizing: auto;
+  font-kerning: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

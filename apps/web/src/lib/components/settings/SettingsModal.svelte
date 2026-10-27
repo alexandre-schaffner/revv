@@ -302,7 +302,7 @@ function handleKeydown(e: KeyboardEvent): void {
 
 	:global(.settings-title) {
 		padding: 24px 20px 14px;
-		font-family: "Newsreader", Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 22px;
 		font-weight: 500;
 		letter-spacing: -0.015em;

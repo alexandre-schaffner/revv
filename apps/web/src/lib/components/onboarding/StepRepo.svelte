@@ -424,7 +424,7 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.cloning-label {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 17px;
 		color: var(--ob-text-label);
@@ -456,7 +456,7 @@ function handlePathKey(e: KeyboardEvent) {
 		background: transparent;
 		border: 0;
 		outline: 0;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 19px;
 		color: var(--ob-text-heading);
 		padding: 6px 0;
@@ -515,7 +515,7 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.empty {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 14px;
 		color: var(--ob-text-muted);
@@ -533,7 +533,7 @@ function handlePathKey(e: KeyboardEvent) {
 		border: none;
 		padding: 0;
 		margin-left: 4px;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 14px;
 		color: var(--ob-text-label);
@@ -556,7 +556,7 @@ function handlePathKey(e: KeyboardEvent) {
 		border: 0;
 		border-bottom: 1px solid var(--ob-border-subtle);
 		color: var(--ob-text-row);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 17px;
 		text-align: left;
 		cursor: pointer;
@@ -602,7 +602,7 @@ function handlePathKey(e: KeyboardEvent) {
 		gap: 6px;
 		margin: -4px 0 0;
 		color: var(--ob-text-muted);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 14px;
 		line-height: 1.45;
@@ -652,7 +652,7 @@ function handlePathKey(e: KeyboardEvent) {
 		background: none;
 		border: 0;
 		padding: 4px 2px;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 14.5px;
 		color: var(--ob-text-muted);
@@ -708,7 +708,7 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.alt-path-title {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 16px;
 		font-weight: 500;
@@ -725,7 +725,7 @@ function handlePathKey(e: KeyboardEvent) {
 
 	.alt-path-arrow {
 		margin-left: auto;
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 18px;
 		color: var(--ob-text-dimmed);
 		transition:
@@ -782,7 +782,7 @@ function handlePathKey(e: KeyboardEvent) {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 16px;
 		font-weight: 500;

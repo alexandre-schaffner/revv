@@ -209,7 +209,7 @@ const tickerRows = $derived(
 	}
 
 	.chapter-eyebrow {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 11.5px;
 		font-weight: 500;
@@ -244,7 +244,7 @@ const tickerRows = $derived(
 	}
 
 	.chapter-title {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 18px;
 		font-weight: 500;
 		letter-spacing: -0.012em;
