@@ -392,7 +392,6 @@ function prCountFor(
 <RepoDeleteConfirm
 	repo={removal.pending}
 	open={removal.pending !== null}
-	deleting={removal.deleting}
 	onOpenChange={removal.onOpenChange}
 	onConfirm={() => void removal.confirm()}
 />
