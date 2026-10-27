@@ -6,15 +6,19 @@ import ConfirmDialog from "$lib/components/ui/confirm-dialog/ConfirmDialog.svelt
 interface Props {
   repo: Repository | null;
   open?: boolean;
-  deleting?: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Starts the (optimistic) removal; the parent closes the dialog. */
   onConfirm: () => void;
 }
 
-let { repo, open = false, deleting = false, onOpenChange, onConfirm }: Props = $props();
+let { repo, open = false, onOpenChange, onConfirm }: Props = $props();
 
-let clonePath = $derived(repo?.clonePath ?? "the local clone path");
-let unmanaged = $derived(repo?.managed === false);
+// Parents clear `repo` as they close the dialog; keep the last one so the
+// exit animation doesn't flash the "this repository" fallback copy.
+let lastRepo: Repository | null = null;
+const shownRepo = $derived.by(() => (lastRepo = repo ?? lastRepo));
+let clonePath = $derived(shownRepo?.clonePath ?? "the local clone path");
+let unmanaged = $derived(shownRepo?.managed === false);
 </script>
 
 <ConfirmDialog
@@ -22,11 +26,9 @@ let unmanaged = $derived(repo?.managed === false);
 	{onOpenChange}
 	tone="danger"
 	icon={Trash}
-	title="Remove {repo?.fullName ?? 'this repository'}?"
+	title="Remove {shownRepo?.fullName ?? 'this repository'}?"
 	confirmIcon={Trash}
 	confirmLabel="Remove"
-	pending={deleting}
-	pendingLabel="Removing…"
 	{onConfirm}
 >
 	{#snippet description()}
