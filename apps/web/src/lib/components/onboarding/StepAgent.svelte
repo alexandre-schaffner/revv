@@ -378,7 +378,7 @@ function handleSkip(): void {
 	}
 
 	.lede {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 17px;
 		font-weight: 400;
 		line-height: 1.6;
@@ -501,7 +501,7 @@ function handleSkip(): void {
 	}
 
 	.option-name {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 20px;
 		color: var(--ob-text-heading);
 		letter-spacing: -0.005em;
@@ -565,7 +565,7 @@ function handleSkip(): void {
 		border-radius: 2px;
 		background: transparent;
 		color: var(--ob-text-heading);
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 16px;
 		font-weight: 500;
@@ -664,7 +664,7 @@ function handleSkip(): void {
 	}
 
 	.win-hint-text {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-size: 15px;
 		line-height: 1.6;
 		color: var(--ob-text-body);

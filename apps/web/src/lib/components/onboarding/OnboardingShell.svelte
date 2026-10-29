@@ -420,7 +420,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 	}
 
 	.title {
-		font-family: 'Newsreader', Georgia, serif;
+		font-family: var(--font-serif);
 		font-weight: 400;
 		font-size: clamp(34px, 5.2vw, 54px);
 		line-height: 1.08;

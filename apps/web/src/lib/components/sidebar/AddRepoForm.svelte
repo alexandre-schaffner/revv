@@ -180,11 +180,11 @@ async function handleAdd(repoFullName: string) {
 }
 
 async function handleRemove(repoId: string) {
+  repoPendingDelete = null;
   if (removingRepos.has(repoId)) return;
   removingRepos = new Set([...removingRepos, repoId]);
   try {
     await deleteRepo(repoId);
-    repoPendingDelete = null;
   } catch {
     // toast handled by store
   } finally {
@@ -499,11 +499,8 @@ function prCountFor(
 <RepoDeleteConfirm
 	repo={repoPendingDelete}
 	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepos.has(repoPendingDelete.id) : false}
 	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || !removingRepos.has(repoPendingDelete.id))) {
-			repoPendingDelete = null;
-		}
+		if (!nextOpen) repoPendingDelete = null;
 	}}
 	onConfirm={() => {
 		if (repoPendingDelete) void handleRemove(repoPendingDelete.id);

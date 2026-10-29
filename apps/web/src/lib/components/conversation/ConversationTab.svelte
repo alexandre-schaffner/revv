@@ -26,9 +26,9 @@ import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import BaseConflicts from "./BaseConflicts.svelte";
 import CiChecks from "./CiChecks.svelte";
-import CommentCard from "./CommentCard.svelte";
 import ConversationSidebar from "./ConversationSidebar.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
+import PrDescription from "./PrDescription.svelte";
 import Timeline from "./Timeline.svelte";
 
 interface Props {
@@ -41,6 +41,13 @@ let { prId, isActive }: Props = $props();
 const entry = $derived(getConversation(prId));
 const conversation = $derived(entry.request.status === "ok" ? entry.request.data : null);
 const canEdit = $derived(!!conversation?.viewerCanUpdate && !entry.denied.has("edit"));
+// Maintainers may edit anyone's description on GitHub; here only its author
+// can, so a click in someone else's text never rewrites it.
+const canEditBody = $derived(
+  canEdit &&
+    !!conversation &&
+    conversation.viewerLogin.toLowerCase() === conversation.author.login.toLowerCase(),
+);
 const canComment = $derived(!entry.denied.has("edit"));
 const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("rerun"));
 const shouldPollChecks = $derived(
@@ -110,31 +117,8 @@ function onKeydown(e: KeyboardEvent): void {
 				</p>
 			{/if}
 
-			<div class="slot-description">
-				<CommentCard
-					author={conversation.author}
-					verb="opened"
-					createdAt={conversation.createdAt}
-					body={conversation.body}
-					url={conversation.url}
-					emptyText="No description provided."
-					onsave={canEdit ? (body) => editBody(prId, body) : undefined}
-				/>
-			</div>
-
-
-			<div class="slot-timeline">
-				<Timeline
-					{conversation}
-					canEdit={canComment}
-					onEditComment={(id, body) => editComment(prId, id, body)}
-					onDeleteComment={(id) => deleteComment(prId, id)}
-				/>
-			</div>
-
-			<!-- Where CI stands now, after the history that led here: GitHub's merge
-			     box sits in the same place. Each commit above carries its own CI
-			     state in the timeline. -->
+			<!-- Where CI stands now, first thing on the page. Each commit in the
+			     activity below carries its own CI state. -->
 			<div class="slot-checks">
 				<CiChecks
 					rollup={conversation.ci}
@@ -148,21 +132,18 @@ function onKeydown(e: KeyboardEvent): void {
 				/>
 			</div>
 
-			<!-- The other half of GitHub's merge box: conflicts with the base. -->
 			<div class="slot-conflicts">
 				<BaseConflicts {prId} {conversation} />
 			</div>
 
-			{#if canComment && conversation.state === 'open'}
-				<div class="slot-composer">
-					<MarkdownEditor
-						placeholder="Add a comment"
-						submitLabel="Comment"
-						onsubmit={(body) => postComment(prId, body)}
-						bind:textarea={composer}
+			<div class="slot-description">
+				{#key prId}
+					<PrDescription
+						body={conversation.body}
+						onsave={canEditBody ? (body) => editBody(prId, body) : undefined}
 					/>
-				</div>
-			{/if}
+				{/key}
+			</div>
 		{:else if entry.request.status === 'error'}
 			<div class="conversation-error" role="alert">
 				<p>Couldn't load the conversation: {entry.request.error}</p>
@@ -174,21 +155,42 @@ function onKeydown(e: KeyboardEvent): void {
 			</div>
 		{:else}
 			<div class="conversation-skeleton" aria-busy="true" aria-label="Loading conversation">
-				<div class="skeleton-card">
+				<div class="skeleton-card"><span class="skeleton-line skeleton-line--head"></span></div>
+				<div class="skeleton-body">
 					<span class="skeleton-line skeleton-line--head"></span>
 					<span class="skeleton-line"></span>
 					<span class="skeleton-line skeleton-line--short"></span>
 				</div>
-				<div class="skeleton-card skeleton-card--low"><span class="skeleton-line skeleton-line--head"></span></div>
-				<span class="skeleton-line skeleton-line--event"></span>
-				<span class="skeleton-line skeleton-line--event"></span>
 			</div>
 		{/if}
 
-		<section class="slot-review" aria-labelledby="your-review-heading">
-			<h2 id="your-review-heading" class="review-heading">Your review</h2>
+		<section class="slot-section" aria-labelledby="your-review-heading">
+			<h2 id="your-review-heading" class="section-heading">Your review</h2>
 			<YourReview {prId} />
 		</section>
+
+		<!-- The history comes last, ending where the next comment goes. -->
+		{#if conversation}
+			<section class="slot-section" aria-labelledby="activity-heading">
+				<h2 id="activity-heading" class="section-heading">Activity</h2>
+				<Timeline
+					{conversation}
+					canEdit={canComment}
+					onEditComment={(id, body) => editComment(prId, id, body)}
+					onDeleteComment={(id) => deleteComment(prId, id)}
+				/>
+				{#if canComment && conversation.state === 'open'}
+					<div class="activity-composer">
+						<MarkdownEditor
+							placeholder="Add a comment"
+							submitLabel="Comment"
+							onsubmit={(body) => postComment(prId, body)}
+							bind:textarea={composer}
+						/>
+					</div>
+				{/if}
+			</section>
+		{/if}
 	</div>
 
 	<aside class="conversation-side" aria-label="Pull request details">
@@ -255,7 +257,7 @@ function onKeydown(e: KeyboardEvent): void {
 		padding-top: 4px;
 	}
 
-	.slot-review {
+	.slot-section {
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
@@ -264,7 +266,11 @@ function onKeydown(e: KeyboardEvent): void {
 		border-top: 1px solid var(--color-border);
 	}
 
-	.review-heading {
+	.activity-composer {
+		margin-top: 8px;
+	}
+
+	.section-heading {
 		margin: 0;
 		font-size: 0.9375rem;
 		font-weight: 600;
@@ -309,17 +315,17 @@ function onKeydown(e: KeyboardEvent): void {
 		gap: 16px;
 	}
 
-	.skeleton-card {
+	.skeleton-body {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		padding: 16px;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: var(--radius-card);
+		padding-top: 7px;
 	}
 
-	.skeleton-card--low {
+	.skeleton-card {
 		padding: 14px 16px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: var(--radius-card);
 	}
 
 	.skeleton-line {
@@ -335,11 +341,6 @@ function onKeydown(e: KeyboardEvent): void {
 
 	.skeleton-line--short {
 		width: 60%;
-	}
-
-	.skeleton-line--event {
-		width: 50%;
-		margin-left: 34px;
 	}
 
 	.side-github {
@@ -384,8 +385,10 @@ function onKeydown(e: KeyboardEvent): void {
 			display: contents;
 		}
 
-		.slot-description,
-		.conversation-stale {
+		.conversation-stale,
+		.slot-checks,
+		.slot-conflicts,
+		.slot-description {
 			order: 0;
 		}
 
@@ -398,11 +401,7 @@ function onKeydown(e: KeyboardEvent): void {
 			background: var(--color-bg-secondary);
 		}
 
-		.slot-checks,
-		.slot-conflicts,
-		.slot-timeline,
-		.slot-composer,
-		.slot-review,
+		.slot-section,
 		.conversation-error,
 		.conversation-skeleton {
 			order: 2;

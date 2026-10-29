@@ -295,10 +295,6 @@ function onPanelKeydown(e: KeyboardEvent): void {
             </div>
         {/if}
     </section>
-{:else}
-    <section class="issues-panel issues-panel--empty" aria-label="Walkthrough issues">
-        <div class="empty-state empty-state--quiet">no issues flagged by walkthrough</div>
-    </section>
 {/if}
 
 <style>
@@ -325,10 +321,6 @@ function onPanelKeydown(e: KeyboardEvent): void {
         width: 100%;
     }
 
-    .issues-panel--empty {
-        padding: 10px 12px;
-    }
-
     .issue-rows {
         list-style: none;
         padding: 0;
@@ -349,7 +341,4 @@ function onPanelKeydown(e: KeyboardEvent): void {
         font-style: italic;
     }
 
-    .empty-state--quiet {
-        padding: 10px 12px;
-    }
 </style>
