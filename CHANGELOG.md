@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.3](https://github.com/alexandre-schaffner/revv/compare/v0.32.2...v0.32.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* bump tauri-plugin-deep-link from 2.5.0 to 2.6.2 in /apps/desktop ([#275](https://github.com/alexandre-schaffner/revv/issues/275)) ([6fe42df](https://github.com/alexandre-schaffner/revv/commit/6fe42dff0e63e1bedca74535d18068e88b12666e))
+
 ## [0.32.2](https://github.com/alexandre-schaffner/revv/compare/v0.32.1...v0.32.2) (2026-10-29)
 
 
