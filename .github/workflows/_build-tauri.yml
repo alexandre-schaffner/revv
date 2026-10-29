@@ -47,7 +47,7 @@ jobs:
       TARGET: ${{ matrix.target }}
       ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
@@ -63,7 +63,7 @@ jobs:
           workspaces: apps/desktop -> target
           shared-key: release-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: frontend-${{ inputs.source_sha }}
           run-id: ${{ inputs.ci_run_id }}
@@ -86,7 +86,7 @@ jobs:
         run: bunx --no-install tauri build --ci --target "$TARGET" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
       - name: Verify and stage bundles
         run: python3 scripts/release/stage.py "$TARGET" "$ARCH" "$VERSION"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-${{ inputs.tag_name }}-${{ matrix.arch }}
           path: dist/*
@@ -116,12 +116,12 @@ jobs:
       UPDATER_NOTES: ${{ inputs.updater_notes }}
       BUNDLE_DIR: dist
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ${{ inputs.nightly && format('unsigned-{0}-*', inputs.tag_name) || format('unsigned-ci-{0}-*', inputs.source_sha) }}
           run-id: ${{ inputs.nightly && github.run_id || inputs.ci_run_id }}
@@ -146,7 +146,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: python3 scripts/release/publish.py prepare
       - name: Attest application artifacts
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/*.dmg
@@ -154,13 +154,13 @@ jobs:
       - name: Attest installer
         if: ${{ !inputs.nightly }}
         id: installer
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/install.sh
       - name: Attest checksums
         if: ${{ !inputs.nightly }}
         id: checksums
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS
       - name: Stage installer attestations
