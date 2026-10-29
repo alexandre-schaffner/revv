@@ -63,6 +63,11 @@ export const ServerConfig = Config.all({
   ),
   githubHost: Config.String("GITHUB_HOST").pipe(Config.withDefault("github.com")),
   revDebug: Config.Boolean("REV_DEBUG").pipe(Config.withDefault(false)),
+  // Set by a package manager that owns the install (the Nix Home Manager
+  // module sets "nix"). Non-empty turns the in-app updater into a no-op:
+  // `/api/update-manifest` answers 204 so the desktop app never swaps a
+  // bundle out from under the manager that pinned it.
+  updatesManagedBy: Config.String("REVV_UPDATES_MANAGED_BY").pipe(Config.withDefault("")),
   // Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
   // installer's shell (which has the user's full PATH including Homebrew,
   // asdf, mise, nix, etc.) and baked into the LaunchAgent plist's
