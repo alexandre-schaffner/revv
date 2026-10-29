@@ -111,7 +111,7 @@ jobs:
     needs: [check, desktop-changes]
     if: needs.desktop-changes.outputs.required == 'true'
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -122,6 +122,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup # zizmor: ignore[self-repository] current checked-out source
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: '1.95.0'
@@ -129,7 +130,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: apps/desktop -> target
-          key: check-${{ matrix.target }}
+          shared-key: release-${{ matrix.target }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -142,8 +143,24 @@ jobs:
           mkdir -p apps/web/build
           tar -xzf "$ARCHIVE" -C apps/web/build
           test "$(cat apps/web/build/source-sha.txt)" = "$GITHUB_SHA"
-      - name: Check Rust and Tauri integration
-        run: cargo check --locked --manifest-path apps/desktop/Cargo.toml --target "${{ matrix.target }}" --all-targets
+      - name: Build unsigned desktop bundle
+        working-directory: apps/desktop
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bunx --no-install tauri build --ci --target "$TARGET" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+      - name: Verify disk image, version, and architecture
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          arch=aarch64
+          if [[ "$TARGET" == x86_64-apple-darwin ]]; then arch=x64; fi
+          python3 scripts/release/stage.py "$TARGET" "$arch" "$(jq -r .version apps/desktop/tauri.conf.json)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-ci-${{ github.sha }}-${{ matrix.target }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
 
   security:
     permissions:

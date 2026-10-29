@@ -27,7 +27,7 @@ permissions: {}
 jobs:
   build:
     name: Build (${{ matrix.arch }})
-    if: github.ref == 'refs/heads/main'
+    if: inputs.nightly && github.ref == 'refs/heads/main'
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -61,7 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: apps/desktop -> target
-          key: release-${{ matrix.target }}
+          shared-key: release-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -96,12 +96,13 @@ jobs:
   publish:
     name: Sign and publish
     needs: build
-    if: github.ref == 'refs/heads/main'
+    if: ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main' && (needs.build.result == 'success' || !inputs.nightly) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release
     permissions:
       contents: write
+      actions: read
       id-token: write
       attestations: write
     env:
@@ -122,7 +123,9 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: unsigned-${{ inputs.tag_name }}-*
+          pattern: ${{ inputs.nightly && format('unsigned-{0}-*', inputs.tag_name) || format('unsigned-ci-{0}-*', inputs.source_sha) }}
+          run-id: ${{ inputs.nightly && github.run_id || inputs.ci_run_id }}
+          github-token: ${{ github.token }}
           merge-multiple: true
           path: dist
       - name: Validate unsigned artifacts

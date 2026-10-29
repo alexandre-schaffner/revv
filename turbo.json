@@ -16,10 +16,34 @@
     },
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["build/**", "dist/**", ".svelte-kit/**"]
+      "outputs": ["dist/**"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]
+    },
+    "@revv/web#sync": {
+      "cache": false
+    },
+    "@revv/web#build": {
+      "dependsOn": ["^build", "sync"],
+      "outputs": ["build/**", ".svelte-kit/**"],
+      "env": ["REVV_BUILD_SHA", "VITE_*", "TAURI_*"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"]
+    },
+    "@revv/web#typecheck": {
+      "dependsOn": ["^typecheck", "sync"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/server/src/**",
+        "$TURBO_ROOT$/apps/server/tsconfig.json",
+        "$TURBO_ROOT$/bun.lock",
+        ".env*"
+      ],
+      "outputs": [],
+      "env": ["VITE_*", "TAURI_*"]
     }
-  }
+  },
+  "cacheDir": ".turbo/cache",
+  "globalDependencies": ["tsconfig.base.json"],
+  "globalEnv": ["REVV_BUILD_RUNTIME"]
 }

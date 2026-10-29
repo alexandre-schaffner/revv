@@ -1,10 +1,10 @@
 # CI and release operations
 
-CI validates each pull request and main push once. `ci-ok` requires workflow policy checks, typecheck, lint, Knip, builds, tests, dependency security, CodeQL, and any required desktop checks. Main requires this check and a pull request. The desktop filter skips native checks only for pull requests that do not change desktop inputs or workflow policy. Main pushes always check both architectures.
+CI validates each pull request and main push once. `ci-ok` requires workflow policy checks, typecheck, lint, Knip, builds, tests, dependency security, CodeQL, and any required desktop checks. Main requires this check and a pull request. The desktop filter skips native checks only for pull requests that do not change desktop inputs or workflow policy. Main pushes always build and verify unsigned bundles for both architectures.
 
 Release and Nightly consume a successful **push** CI run from this repository's main branch. Before downloading its frontend artifact, `scripts/ci/trusted-run.py` validates the repository, workflow ID, event, branch, completion, conclusion, source SHA, and ancestry. A PR run or fork run cannot release. Superseded main runs are skipped before scheduling release builds.
 
-The frontend is built once in CI and handed to both macOS compilation jobs. Each compilation job has read access and no signing secrets. It builds an unsigned app and DMG, checks the app version and architecture, verifies that the DMG contains the same executable and plist, and uploads one artifact. It does not rebuild the server or development collector.
+The frontend is built once in CI and handed to both macOS compilation jobs. Stable publication reuses CI's already verified native bundles. Nightly recompiles the native wrapper to embed its prerelease version, using the same target-specific dependency cache. Each compilation job has read access and no signing secrets. It builds an unsigned app and DMG, checks the app version and architecture, verifies that the DMG contains the same executable and plist, and uploads one artifact. It does not rebuild the server or development collector.
 
 The separate publisher uses the main-only `release` environment. It installs a pinned official Tauri signer without workspace dependencies or install scripts, then signs each updater archive and verifies it against the public key in the tested source. It stages the updater manifest and stable installer, attests the artifacts, uploads once, checks the exact remote asset set and SHA-256 digests, publishes the draft, and asserts release immutability. Failures leave a draft for recovery. Stale assets on a recovered draft are removed before publication.
 
@@ -26,7 +26,7 @@ Release-please uses `GITHUB_TOKEN`, so it explicitly dispatches CI on its releas
 
 Package downloads are partitioned by OS, architecture, Bun version, and lockfile. Every runner still performs a frozen install. `node_modules` is never copied across platforms. Only trusted main jobs save shared caches.
 
-The Rust cache separates release and check profiles and includes the requested target triple. The cache action also hashes the toolchain, Cargo manifests and lockfile, and compiler flags. Each matrix leg installs only its own target.
+The Rust cache shares the release profile between CI and nightly compilation and separates each requested target triple. The cache action also hashes the toolchain, Cargo manifests and lockfile, and compiler flags. Each matrix leg installs only its own target.
 
 Turbo uses a persistent `.turbo/cache` per checkout. `scripts/turbo.mjs` resolves the commit and actual Bun runtime before task hashing. Root compiler settings, server API source and dependencies, shared types, frontend environment values, and the embedded commit invalidate their affected tasks. SvelteKit sync is uncached so generated configuration exists even when typechecking is cached. Only final portable frontend output crosses from Linux to macOS.
 
