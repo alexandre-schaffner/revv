@@ -191,6 +191,14 @@ jobs:
           # composes it once, after both legs, instead.
           includeUpdaterJson: false
 
+      - name: Verify background server identity
+        if: matrix.arch == 'aarch64'
+        run: |
+          set -euo pipefail
+          helper="$(find apps/desktop/target -type d -path '*/bundle/macos/*.app/Contents/Helpers/Revv.app' -print -quit)"
+          test -n "$helper"
+          python3 apps/desktop/server-launcher/test.py "$helper"
+
       - name: Find bundle artifacts
         id: bundles
         shell: bash

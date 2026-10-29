@@ -483,7 +483,7 @@ _revv_cleanup_release_app_install() {
 # Enterprise installations survive the transition from dev (where the server
 # reads .env directly) to the distributed/installed app (where no .env exists).
 #
-# Usage: write_launch_agent_plist <plist_path> <bun_bin> <project_root> <log_dir>
+# Usage: write_launch_agent_plist <plist_path> <bun_bin> <project_root> <log_dir> <app_path>
 #   Caller may export REVV_GITHUB_HOST and/or REVV_GITHUB_CLIENT_ID beforehand.
 
 # Parse a single KEY=value (or KEY="value") line from a .env file.
@@ -522,11 +522,14 @@ _revv_xml_escape() {
 }
 
 write_launch_agent_plist() {
-  local plist_path="$1" bun_bin="$2" project_root="$3" log_dir="$4"
+  local plist_path="$1" bun_bin="$2" project_root="$3" log_dir="$4" app_path="$5"
   [[ -n "$plist_path"   ]] || fail "write_launch_agent_plist: plist_path required"
   [[ -x "$bun_bin"      ]] || fail "write_launch_agent_plist: bun_bin missing or not executable: $bun_bin"
   [[ -d "$project_root" ]] || fail "write_launch_agent_plist: project_root missing: $project_root"
   [[ -n "$log_dir"      ]] || fail "write_launch_agent_plist: log_dir required"
+
+  local launcher_bin="$app_path/Contents/Helpers/Revv.app/Contents/MacOS/revv-server"
+  [[ -x "$launcher_bin" ]] || fail "Revv server launcher missing or not executable: $launcher_bin"
 
   local claude_bin opencode_bin codex_bin
   claude_bin="$(command -v claude 2>/dev/null || true)"
@@ -605,13 +608,12 @@ write_launch_agent_plist() {
 
     <key>ProgramArguments</key>
     <array>
-        <string>$bun_bin</string>
-        <string>run</string>
-        <string>apps/server/src/index.ts</string>
+        <string>$(_revv_xml_escape "$launcher_bin")</string>
+        <string>$(_revv_xml_escape "$bun_bin")</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>$project_root</string>
+    <string>$(_revv_xml_escape "$project_root")</string>
 
     <key>EnvironmentVariables</key>
     <dict>

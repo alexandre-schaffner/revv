@@ -477,8 +477,10 @@ cmd_update() {
 
   printf "\n"
   spin_start "Quitting Revv…"
-  osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
-  osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
+  if [[ -n "$old_app" ]]; then
+    osascript -e 'on run argv' -e 'tell application (item 1 of argv) to quit' \
+      -e 'end run' "$old_app" 2>/dev/null || true
+  fi
   sleep 1
   spin_stop 1
 
@@ -569,7 +571,8 @@ cmd_update() {
       "$LAUNCH_AGENT_PLIST" \
       "$bun_for_plist" \
       "$INSTALL_DIR" \
-      "$LOG_DIR" >/dev/null 2>&1
+      "$LOG_DIR" \
+      "$dest_app" >/dev/null 2>&1
     launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
     spin_stop 1
   else

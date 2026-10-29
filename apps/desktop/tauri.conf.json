@@ -27,6 +27,9 @@
     "longDescription": "Revv is a desktop application that brings AI-powered intelligence to your code review workflow. Review pull requests with AI assistance, inline comments, and smart suggestions.",
     "copyright": "Copyright 2025 Revv contributors",
     "macOS": {
+      "files": {
+        "Helpers/Revv.app": "target/server-launcher/Revv.app"
+      },
       "minimumSystemVersion": "10.15",
       "dmg": {
         "appPosition": {

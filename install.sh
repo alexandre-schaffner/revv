@@ -328,7 +328,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   [[ -n "$bundle_app" && -d "$bundle_app" ]] \
     || fail "Build finished but no .app was found under $bundle_macos_dir"
   app_name="$(basename "$bundle_app")"
-  app_process_name="${app_name%.app}"
   success "Built $bundle_app"
 
   step "Installing $app_name"
@@ -350,7 +349,8 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
     launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
   fi
-  osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
+  osascript -e 'on run argv' -e 'tell application (item 1 of argv) to quit' \
+    -e 'end run' "$dest_app" 2>/dev/null || true
   sleep 1
 
   [[ -d "$dest_app" ]] && rm -rf "$dest_app"
@@ -360,7 +360,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
 else
   dest_app="$REVV_INSTALLED_APP"
   app_name="$(basename "$dest_app")"
-  app_process_name="${app_name%.app}"
   dest_app_dir="$(dirname "$dest_app")"
   success "Installed → $dest_app"
 fi
@@ -406,7 +405,8 @@ write_launch_agent_plist \
   "$REVV_LAUNCH_AGENT_PLIST" \
   "$bun_bin" \
   "$PROJECT_ROOT" \
-  "$REVV_LOG_DIR"
+  "$REVV_LOG_DIR" \
+  "$dest_app"
 
 launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
 launchctl load -w "$REVV_LAUNCH_AGENT_PLIST"
