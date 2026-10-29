@@ -34,6 +34,7 @@
 
 import { Effect } from "effect";
 import { Elysia } from "elysia";
+import { serverEnv } from "../config";
 import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
 import { updateChannelSchema } from "./schemas";
@@ -130,6 +131,11 @@ async function resolveNightlyManifestUrl(): Promise<NightlyResolution> {
 
 export const updateManifestRoute = new Elysia()
   .get("/api/update-manifest", async () => {
+    // A package manager owns this install (see nix/home-manager.nix): end the
+    // plugin's endpoint walk with "no update" rather than falling through to
+    // GitHub and replacing a bundle the manager pins.
+    if (serverEnv.updatesManagedBy) return new Response(null, { status: 204 });
+
     const channelResult = await AppRuntime.runPromise(
       Effect.gen(function* () {
         const settings = yield* SettingsService;
