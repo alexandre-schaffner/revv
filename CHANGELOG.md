@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.2](https://github.com/alexandre-schaffner/revv/compare/v0.32.1...v0.32.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **installer:** use gh for all release verification ([#269](https://github.com/alexandre-schaffner/revv/issues/269)) ([71dd22d](https://github.com/alexandre-schaffner/revv/commit/71dd22d34c93b91e59e1b57313358b8870a85dff))
+
 ## [0.32.1](https://github.com/alexandre-schaffner/revv/compare/v0.32.0...v0.32.1) (2026-10-27)
 
 
