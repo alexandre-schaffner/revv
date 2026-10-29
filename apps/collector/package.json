@@ -19,7 +19,7 @@
     "elysia": "^1"
   },
   "devDependencies": {
-    "bun-types": "^1.3.14",
+    "bun-types": "^1.4.4",
     "typescript": "^5.7.0"
   }
 }

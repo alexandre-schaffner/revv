@@ -14,10 +14,10 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.1",
     "@coldtea/pr-lens-schema": "^0.6.0",
-    "@effect/opentelemetry": "4.0.3",
+    "@effect/opentelemetry": "4.0.5",
     "@elysiajs/cors": "^1.4.2",
     "@google-cloud/storage": "^8.2.0",
-    "@napi-rs/keyring": "^2.1.0",
+    "@napi-rs/keyring": "^2.1.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/core": "^2.11.0",
     "@opentelemetry/resources": "^2.11.0",
@@ -31,15 +31,15 @@
     "@revv/shared": "workspace:*",
     "@sinclair/typebox": "^0.34.52",
     "@typesafe-ai/sdk": "^0.6.0",
-    "better-auth": "^1.7.6",
-    "drizzle-orm": "^0.45.3",
-    "effect": "4.0.3",
+    "better-auth": "^1.7.12",
+    "drizzle-orm": "^0.45.4",
+    "effect": "4.0.5",
     "elysia": "^1.4.30",
-    "zod": "^4.6.5",
+    "zod": "^4.6.7",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0"
   },
   "devDependencies": {
-    "bun-types": "^1.4.2",
+    "bun-types": "^1.4.4",
     "drizzle-kit": "^0.31.11",
     "typescript": "^6.0.3"
   },
