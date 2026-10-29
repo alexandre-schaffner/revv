@@ -52,6 +52,26 @@ bash install.sh
 
 </details>
 
+<details>
+<summary>Install with Nix (nix-darwin / Home Manager)</summary>
+
+The flake ships the same pieces the installer sets up, as a Home Manager module: the prebuilt `Revv.app` (copied to `~/Applications/Home Manager Apps`), the API server as a launchd agent, and the `revv` CLI.
+
+```nix
+# flake.nix
+inputs.revv.url = "github:alexandre-schaffner/revv";
+
+# Home Manager configuration
+{ inputs, ... }: {
+  imports = [ inputs.revv.homeManagerModules.default ];
+  programs.revv.enable = true;
+}
+```
+
+Coding-agent CLIs installed outside Nix go on the server's PATH with `programs.revv.extraPath`; the installer's `GITHUB_HOST` / `GITHUB_CLIENT_ID` overrides go in `programs.revv.environment`. The in-app updater is off on Nix installs: update with `nix flake update revv` and a rebuild. The app bundle is pinned in [`nix/release.json`](nix/release.json); `nix run .#update-release` moves the pin to the latest release.
+
+</details>
+
 1. **Connect GitHub.** Sign in with the device code shown by Revv.
 2. **Pick your repositories.** Your pull requests start syncing into the app.
 3. **Set up your agent.** Onboarding walks you through provider installation and sign-in.
