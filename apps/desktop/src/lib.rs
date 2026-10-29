@@ -4,6 +4,10 @@ use tauri::{
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	AppHandle, Manager, WindowEvent,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+mod server;
+mod server_config;
 
 const ARTIFACT_HOST_HTML: &str = include_str!("../../web/static/artifact-host.html");
 
@@ -65,8 +69,10 @@ pub fn run() {
 		// it's already running in the tray), this fires in the existing
 		// process instead of spawning a duplicate. Critical for tray-app
 		// UX — without it, every launch would start another PollScheduler.
-		.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-			show_main_window(app);
+		.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+			if !argv.iter().any(|arg| arg == "--hidden") {
+				show_main_window(app);
+			}
 		}))
 		.plugin(tauri_plugin_deep_link::init())
 		.plugin(tauri_plugin_dialog::init())
@@ -102,6 +108,37 @@ pub fn run() {
 
 	builder
 		.setup(|app| {
+			let override_path = std::env::var_os("REVV_DESKTOP_SERVER_CONFIG");
+			if !cfg!(dev) || override_path.is_some() {
+				let config = match override_path {
+					Some(path) => server_config::ServerConfig::load(std::path::Path::new(&path)),
+					None => server_config::load_installed(&app.path().home_dir()?),
+				};
+				let handle = app.handle().clone();
+				let server = config.and_then(|config| {
+					server::ServerProcess::start(config, move |message| {
+						handle
+							.dialog()
+							.message(message)
+							.title("Revv server stopped")
+							.kind(MessageDialogKind::Error)
+							.show(|_| {});
+					})
+				});
+				match server {
+					Ok(server) => {
+						app.manage(server);
+					}
+					Err(error) => {
+						app.dialog()
+							.message(error.to_string())
+							.title("Could not start Revv")
+							.kind(MessageDialogKind::Error)
+							.blocking_show();
+						return Err(error.into());
+					}
+				}
+			}
 			// Tray menu: [ Open Revv | --- | Quit Revv ].
 			// `Open Revv` and left-clicking the tray icon both surface the
 			// window. `Quit Revv` calls `app.exit(0)` which bypasses the
@@ -168,6 +205,13 @@ pub fn run() {
 				}
 			}
 		})
-		.run(tauri::generate_context!())
-		.expect("error while running Revv");
+		.build(tauri::generate_context!())
+		.expect("error while building Revv")
+		.run(|app, event| {
+			if let tauri::RunEvent::Exit = event {
+				if let Some(server) = app.try_state::<server::ServerProcess>() {
+					server.stop();
+				}
+			}
+		});
 }

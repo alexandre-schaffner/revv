@@ -4,7 +4,11 @@ Revv is a local-first review application with three runtime surfaces:
 
 - `apps/web` is the SvelteKit UI hosted by Tauri in production and Vite in development.
 - `apps/server` is the local Elysia API, SQLite journal, GitHub sync engine, and AI orchestration owner.
-- `apps/desktop` is the Tauri shell that owns the desktop window and deep-link bridge.
+- `apps/desktop` is the Tauri shell that owns the desktop window, deep-link bridge, and local server process.
+
+The desktop app launches Bun directly, waits for `/api/health`, and restarts unexpected server exits up to three times per app run. Closing the window hides it to the tray. Quitting or relaunching the app stops the server and its process group. The server also watches its desktop parent so a force-quit triggers shutdown.
+
+Installed server paths and environment overrides live in `~/Library/Application Support/Revv/desktop-server.json`. The app migrates the old `com.revv.server` LaunchAgent configuration on first launch and removes the independent service. Development uses the separate server started by `make dev`.
 
 The server is organized around deep modules: each public interface should be the narrow neck
 that hides provider details, GitHub mechanics, persistence shape, and transport quirks.

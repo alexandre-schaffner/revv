@@ -434,6 +434,7 @@ install_release_app() {
 
   backup_app=""
   if [[ -e "$installed_app" ]]; then
+    quit_revv_app "$installed_app"
     backup_app="${installed_app}.backup.$$"
     if ! rm -rf "$backup_app" || ! mv "$installed_app" "$backup_app"; then
       rm -rf "$tmp_app"
@@ -463,28 +464,25 @@ _revv_cleanup_release_app_install() {
   rm -rf "$mount_point" "$bundle_file"
 }
 
-# ── LaunchAgent plist generator ───────────────────────────────
-#
-# Writes the com.revv.server LaunchAgent plist at $plist_path. Shared between
-# install.sh (first-time install) and scripts/revv cmd_update (refreshes the
-# plist so existing installs pick up new PATH defaults and freshly-detected
-# CLI tool locations without a full reinstall).
-#
-# `command -v claude` / `command -v opencode` run here inherit the caller's
-# shell PATH — the user's full PATH at install time — so any install method
-# (Homebrew, asdf, mise, nix, custom prefix) is captured as an absolute path.
-# The server reads REVV_CLAUDE_BIN / REVV_OPENCODE_BIN via Effect Config and
-# uses those absolute paths directly, bypassing the LaunchAgent's own
-# (necessarily restricted) PATH at runtime.
-#
-# GitHub Enterprise support: the function reads REVV_GITHUB_HOST and
-# REVV_GITHUB_CLIENT_ID from the caller's environment. If those are unset it
-# falls back to grepping $project_root/apps/server/.env so that GitHub
-# Enterprise installations survive the transition from dev (where the server
-# reads .env directly) to the distributed/installed app (where no .env exists).
-#
-# Usage: write_launch_agent_plist <plist_path> <bun_bin> <project_root> <log_dir> <app_path>
-#   Caller may export REVV_GITHUB_HOST and/or REVV_GITHUB_CLIENT_ID beforehand.
+# ── Desktop server configuration ────────────────────────────
+
+quit_revv_app() {
+  local app_path="$1" executable pid command pids="" deadline
+  [[ -d "$app_path" ]] || return 0
+  executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")" \
+    || fail "Cannot read Revv executable from $app_path"
+  while read -r pid command; do
+    [[ "$command" == "$app_path/Contents/MacOS/$executable" ]] && pids+=" $pid"
+  done < <(ps -axo pid=,comm=)
+  osascript -e 'on run argv' -e 'tell application (item 1 of argv) to quit' \
+    -e 'end run' "$app_path" 2>/dev/null || true
+  deadline=$((SECONDS + 15))
+  for pid in $pids; do
+    while kill -0 "$pid" 2>/dev/null && (( SECONDS < deadline )); do sleep 0.2; done
+    kill -0 "$pid" 2>/dev/null && fail "Revv did not quit. Quit the app and retry."
+  done
+  return 0
+}
 
 # Parse a single KEY=value (or KEY="value") line from a .env file.
 # Strips surrounding single- or double-quotes; ignores blank lines and comments.
@@ -510,160 +508,65 @@ _revv_dotenv_get() {
   done < "$env_file"
 }
 
-# XML-escape a value for safe injection into plist XML.
-# Handles &, <, >, and " — the four characters that break XML text nodes.
-_revv_xml_escape() {
-  local v="$1"
-  v="${v//&/&amp;}"
-  v="${v//</&lt;}"
-  v="${v//>/&gt;}"
-  v="${v//\"/&quot;}"
-  printf '%s' "$v"
-}
-
-write_launch_agent_plist() {
-  local plist_path="$1" bun_bin="$2" project_root="$3" log_dir="$4" app_path="$5"
-  [[ -n "$plist_path"   ]] || fail "write_launch_agent_plist: plist_path required"
-  [[ -x "$bun_bin"      ]] || fail "write_launch_agent_plist: bun_bin missing or not executable: $bun_bin"
-  [[ -d "$project_root" ]] || fail "write_launch_agent_plist: project_root missing: $project_root"
-  [[ -n "$log_dir"      ]] || fail "write_launch_agent_plist: log_dir required"
-
-  local launcher_bin="$app_path/Contents/Helpers/Revv.app/Contents/MacOS/revv-server"
-  [[ -x "$launcher_bin" ]] || fail "Revv server launcher missing or not executable: $launcher_bin"
-
-  local claude_bin opencode_bin codex_bin
+# Record the user's tool locations for Finder/login launches, which lack shell setup.
+write_desktop_server_config() {
+  local config_path="$1" bun_bin="$2" project_root="$3" log_dir="$4"
+  local legacy_path="${5:-$HOME/Library/LaunchAgents/com.revv.server.plist}"
+  [[ -x "$bun_bin" ]] || fail "Bun is missing or not executable: $bun_bin"
+  [[ -f "$project_root/apps/server/src/index.ts" ]] || fail "Revv server source is missing: $project_root"
+  local claude_bin opencode_bin codex_bin candidate
   claude_bin="$(command -v claude 2>/dev/null || true)"
   opencode_bin="$(command -v opencode 2>/dev/null || true)"
   codex_bin="$(command -v codex 2>/dev/null || true)"
-  # The Codex desktop app bundles a CLI that shares its ChatGPT session. The
-  # app cannot always install a PATH alias, so persist this known macOS path
-  # when a separately installed CLI is unavailable.
-  if [[ -z "$codex_bin" && -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
-    codex_bin="/Applications/ChatGPT.app/Contents/Resources/codex"
-  elif [[ -z "$codex_bin" && -x "$HOME/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
-    codex_bin="$HOME/Applications/ChatGPT.app/Contents/Resources/codex"
+  if [[ -z "$codex_bin" ]]; then
+    for candidate in "/Applications/ChatGPT.app/Contents/Resources/codex" "$HOME/Applications/ChatGPT.app/Contents/Resources/codex"; do
+      if [[ -x "$candidate" ]]; then codex_bin="$candidate"; break; fi
+    done
   fi
-  [[ -n "$claude_bin"   ]] && info "Detected claude at $claude_bin"
-  [[ -n "$opencode_bin" ]] && info "Detected opencode at $opencode_bin"
-  [[ -n "$codex_bin"    ]] && info "Detected codex at $codex_bin"
+  local github_host="${REVV_GITHUB_HOST:-}" github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
+  [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$REVV_SUPPORT_DIR/github.conf")"
+  [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$REVV_SUPPORT_DIR/github.conf")"
+  [[ -n "$github_host" ]] || github_host="$(_revv_dotenv_get GITHUB_HOST "$project_root/apps/server/.env")"
+  [[ -n "$github_client_id" ]] || github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$project_root/apps/server/.env")"
 
-  # ── GitHub Enterprise env vars ─────────────────────────────
-  # Resolution order (first non-empty value wins):
-  #   1. Caller-exported env vars (REVV_GITHUB_HOST / REVV_GITHUB_CLIENT_ID)
-  #   2. $REVV_SUPPORT_DIR/github.conf  — persisted at install time, readable
-  #      even when no terminal is available (e.g. launchd update triggers)
-  #   3. $project_root/apps/server/.env — dev-checkout fallback
-  #
-  # Ensure REVV_SUPPORT_DIR is set so we can locate the conf file.
-  if [[ -z "${REVV_SUPPORT_DIR:-}" ]]; then
-    revv_paths
-  fi
-  local conf_file="${REVV_SUPPORT_DIR}/github.conf"
-  local dotenv_file="$project_root/apps/server/.env"
-  local github_host="${REVV_GITHUB_HOST:-}"
-  local github_client_id="${REVV_GITHUB_CLIENT_ID:-}"
+  "$bun_bin" --no-env-file -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const [target, executable, projectRoot, logDir, supportDir, claude, opencode, codex, host, clientId, legacy] = process.argv.slice(1);
+    let previousEnv = {};
+    if (fs.existsSync(legacy)) {
+      const migrated = Bun.spawnSync(["/usr/bin/plutil", "-convert", "json", "-o", "-", legacy]);
+      if (migrated.exitCode !== 0) throw new Error("Cannot read legacy Revv server configuration");
+      previousEnv = JSON.parse(migrated.stdout.toString()).EnvironmentVariables;
+    }
+    try { previousEnv = { ...previousEnv, ...JSON.parse(fs.readFileSync(target, "utf8")).env }; }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+    const env = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      REVV_CHANNEL: "prod",
+      PORT: "45678",
+      REVV_DB_PATH: path.join(supportDir, "revv.db"),
+      ...previousEnv,
+      REVV_CLAUDE_BIN: claude || previousEnv.REVV_CLAUDE_BIN || "",
+      REVV_OPENCODE_BIN: opencode || previousEnv.REVV_OPENCODE_BIN || "",
+      REVV_CODEX_BIN: codex || previousEnv.REVV_CODEX_BIN || "",
+      CODEX_PATH: codex || previousEnv.CODEX_PATH || previousEnv.REVV_CODEX_BIN || "",
+    };
+    if (host) env.GITHUB_HOST = host;
+    if (clientId) env.GITHUB_CLIENT_ID = clientId;
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = target + "." + process.pid + ".tmp";
+    fs.writeFileSync(temporary, JSON.stringify({ executable, projectRoot, logDir, env }, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, target);
+  ' "$config_path" "$bun_bin" "$project_root" "$log_dir" "$REVV_SUPPORT_DIR" \
+    "$claude_bin" "$opencode_bin" "$codex_bin" "$github_host" "$github_client_id" "$legacy_path"
+}
 
-  if [[ -z "$github_host" ]]; then
-    github_host="$(_revv_dotenv_get GITHUB_HOST "$conf_file")"
-  fi
-  if [[ -z "$github_client_id" ]]; then
-    github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$conf_file")"
-  fi
-  if [[ -z "$github_host" ]]; then
-    github_host="$(_revv_dotenv_get GITHUB_HOST "$dotenv_file")"
-  fi
-  if [[ -z "$github_client_id" ]]; then
-    github_client_id="$(_revv_dotenv_get GITHUB_CLIENT_ID "$dotenv_file")"
-  fi
-
-  [[ -n "$github_host"      ]] && info "Injecting GITHUB_HOST=$github_host into LaunchAgent plist"
-  [[ -n "$github_client_id" ]] && info "Injecting GITHUB_CLIENT_ID into LaunchAgent plist"
-
-  # XML-escape both values before injecting into the plist heredoc.
-  github_host="$(_revv_xml_escape "$github_host")"
-  github_client_id="$(_revv_xml_escape "$github_client_id")"
-
-  # Build optional XML entries; only include keys whose values are non-empty so
-  # the plist never contains blank <string/> nodes.
-  local extra_env_xml=""
-  if [[ -n "$github_host" ]]; then
-    extra_env_xml+="        <key>GITHUB_HOST</key>
-        <string>$github_host</string>
-"
-  fi
-  if [[ -n "$github_client_id" ]]; then
-    extra_env_xml+="        <key>GITHUB_CLIENT_ID</key>
-        <string>$github_client_id</string>
-"
-  fi
-
-  mkdir -p "$(dirname "$plist_path")"
-  cat > "$plist_path" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.revv.server</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>$(_revv_xml_escape "$launcher_bin")</string>
-        <string>$(_revv_xml_escape "$bun_bin")</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>$(_revv_xml_escape "$project_root")</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>$HOME/.bun/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>HOME</key>
-        <string>$HOME</string>
-        <key>REVV_CHANNEL</key>
-        <string>prod</string>
-        <key>PORT</key>
-        <string>45678</string>
-        <key>REVV_DB_PATH</key>
-        <string>${REVV_SUPPORT_DIR}/revv.db</string>
-        <key>REVV_CLAUDE_BIN</key>
-        <string>$claude_bin</string>
-        <key>REVV_OPENCODE_BIN</key>
-        <string>$opencode_bin</string>
-        <key>REVV_CODEX_BIN</key>
-        <string>$codex_bin</string>
-        <!-- The maintained Codex ACP adapter uses this standard variable to
-             start the user's signed-in desktop/CLI executable. -->
-        <key>CODEX_PATH</key>
-        <string>$codex_bin</string>
-$extra_env_xml    </dict>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-        <key>Crashed</key>
-        <true/>
-    </dict>
-
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-
-    <key>StandardOutPath</key>
-    <string>$log_dir/server.out.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>$log_dir/server.err.log</string>
-</dict>
-</plist>
-PLIST
-
-  if command -v plutil >/dev/null 2>&1; then
-    plutil -lint "$plist_path" >/dev/null \
-      || warn "Generated plist may be malformed — check $plist_path"
+retire_server_launch_agent() {
+  local plist_path="$1"
+  if [[ -f "$plist_path" ]]; then
+    launchctl unload -w "$plist_path" 2>/dev/null || true
+    rm -f "$plist_path"
   fi
 }

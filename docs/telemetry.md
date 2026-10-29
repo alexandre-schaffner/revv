@@ -75,10 +75,10 @@ is sent and ends on the first nonempty text or reasoning delta. Runs without
 streamed text omit it rather than reporting synthetic startup as model output.
 
 On Alex's machine the collector runs as `com.revv.collector` at login, with its
-database and logs in `~/.revv/telemetry/`. The installed server's LaunchAgent
-exports to the same collector. Its older server needed a local OTLP processor
+database and logs in `~/.revv/telemetry/`. The installed server exports to the
+same collector using the environment in `desktop-server.json`. Its older server needed a local OTLP processor
 patch; originals are in `~/.revv/telemetry/backups/`. An app update can replace
-that patch or its LaunchAgent environment; rerun
+that patch or its server configuration; rerun
 `python3 ~/.revv/telemetry/setup.py` after updating until the app ships this
 instrumentation. The collector is an independent bundle and survives workspace
 removal. Prompt text and tool content are not enabled by this setup.
