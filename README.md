@@ -40,6 +40,8 @@ curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/
 
 The installer sets up the desktop app, local background server, and `revv` CLI. The release installer verifies its Sigstore attestation before continuing.
 
+No GitHub CLI installation or login is required. The installer always downloads a pinned verifier, checks its SHA-256 digest, and removes it after verification. Verification uses temporary CLI configuration and cache directories and explicitly targets `github.com`. Your existing `gh` installation and settings stay unchanged.
+
 <details>
 <summary>Download and inspect the installer first</summary>
 
