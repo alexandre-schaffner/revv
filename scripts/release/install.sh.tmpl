@@ -30,56 +30,71 @@ sha256_of() {
   fi
 }
 
-download_gh() {
-  local dir="$1" version="2.103.3" arch expected actual archive stem bin
+download_cosign() {
+  local dir="$1" version="v2.4.3" asset url checksums_url expected actual bin
+  bin="$dir/cosign"
+
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
-      arch="arm64"
-      expected="d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062"
+      asset="cosign-darwin-arm64"
       ;;
     Darwin-x86_64)
-      arch="amd64"
-      expected="a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682"
+      asset="cosign-darwin-amd64"
       ;;
-    *) fail "Revv's installer requires macOS on Apple Silicon or Intel." ;;
+    *) return 1 ;;
   esac
-  stem="gh_${version}_macOS_${arch}"
-  archive="$dir/gh.zip"
-  bin="$dir/gh"
+  url="https://github.com/sigstore/cosign/releases/download/${version}/${asset}"
+  checksums_url="https://github.com/sigstore/cosign/releases/download/${version}/cosign_checksums.txt"
 
-  info "Downloading temporary GitHub CLI v${version} for verification" >&2
-  curl -fsSL "https://github.com/cli/cli/releases/download/v${version}/${stem}.zip" -o "$archive" \
-    || fail "Could not download GitHub CLI for installer verification. Check your connection to github.com and retry."
-  # Pin the archive digest here so it is checked before any downloaded code runs.
-  actual="$(sha256_of "$archive")" || fail "Could not checksum GitHub CLI."
-  [[ "$actual" == "$expected" ]] || fail "GitHub CLI checksum mismatch."
-  unzip -p "$archive" "$stem/bin/gh" > "$bin" \
-    || fail "Could not extract GitHub CLI for installer verification."
-  chmod +x "$bin" || fail "Could not make GitHub CLI executable."
+  info "gh CLI not found; bootstrapping cosign ${version}" >&2
+  curl -fsSL "$url" -o "$bin"
+  chmod +x "$bin"
+  expected="$(curl -fsSL "$checksums_url" | awk -v asset="$asset" '$2 == asset || $2 == "./" asset { print $1; found = 1; exit } END { if (!found) exit 1 }')" \
+    || { rm -f "$bin"; fail "Could not find cosign checksum for ${asset}."; }
+  actual="$(sha256_of "$bin")"
+  [[ "$actual" == "$expected" ]] || fail "cosign checksum mismatch."
   printf '%s' "$bin"
 }
 
-verify_attestation() (
-  local script_path="$1" workdir bundle gh_bin
+verify_attestation() {
+  local script_path="$1" bundle gh_dir cosign_dir cosign_bin
 
   if [[ "${SKIP_VERIFY_FLAG:-0}" == "1" && "$REVV_SKIP_VERIFY" == "1" ]]; then
     warn "Attestation skipped (--skip-verify + REVV_SKIP_VERIFY=1)."
     return 0
   fi
 
-  workdir="$(mktemp -d)" || fail "Could not create installer verification directory."
-  trap 'rm -rf "$workdir"' EXIT
-  bundle="$workdir/install.jsonl"
+  bundle="$(mktemp).jsonl"
   curl -fsSL "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh.sigstore" -o "$bundle" \
-    || fail "Could not fetch installer attestation bundle."
+    || { rm -f "$bundle"; fail "Could not fetch installer attestation bundle."; }
 
-  gh_bin="$(download_gh "$workdir")" || exit 1
+  if command -v gh >/dev/null 2>&1; then
+    gh_dir="$(mktemp -d)" \
+      || { rm -f "$bundle"; fail "Could not create GitHub CLI verification directory."; }
+    info "Verifying installer attestation with gh"
+    GH_CONFIG_DIR="$gh_dir/config" XDG_CACHE_HOME="$gh_dir/cache" \
+      gh attestation verify "$script_path" --hostname github.com --repo "$REPO" --bundle "$bundle" >/dev/null \
+      || { rm -rf "$gh_dir"; rm -f "$bundle"; fail "Installer attestation verification failed."; }
+    rm -rf "$gh_dir"
+    rm -f "$bundle"
+    return 0
+  fi
 
-  info "Verifying installer attestation with pinned gh"
-  GH_CONFIG_DIR="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
-    "$gh_bin" attestation verify "$script_path" --hostname github.com --repo "$REPO" --bundle "$bundle" >/dev/null \
-    || fail "Installer attestation verification failed. See the verifier error above; installation has stopped."
-)
+  cosign_dir="$(mktemp -d)"
+  cosign_bin="$(download_cosign "$cosign_dir")" \
+    || { rm -rf "$cosign_dir"; rm -f "$bundle"; fail "Cannot verify installer without gh or a supported cosign bootstrap."; }
+
+  info "Verifying installer attestation with cosign"
+  "$cosign_bin" verify-blob \
+    --bundle "$bundle" \
+    --certificate-identity-regexp "^https://github.com/${REPO}/" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    "$script_path" >/dev/null \
+    || { rm -rf "$cosign_dir"; rm -f "$bundle"; fail "Installer attestation verification failed."; }
+
+  rm -rf "$cosign_dir"
+  rm -f "$bundle"
+}
 
 if [[ -z "${REVV_PREFLIGHT_DONE:-}" ]]; then
   printf '\n'
@@ -106,9 +121,7 @@ if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
     SELF_PATH="${BASH_SOURCE[0]}"
     verify_attestation "$SELF_PATH"
   else
-    SELF_DIR="$(mktemp -d)" || fail "Could not create installer download directory."
-    trap 'rm -rf "$SELF_DIR"' EXIT
-    SELF_PATH="$SELF_DIR/install.sh"
+    SELF_PATH="$(mktemp)"
     curl -fsSL "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/install.sh" -o "$SELF_PATH" \
       || fail "Could not fetch installer copy for attestation."
 
@@ -120,6 +133,7 @@ if [[ $# -eq 0 || ( " $* " != *" --help "* && " $* " != *" -h "* ) ]]; then
     else
       REVV_PREFLIGHT_DONE=1 REVV_SKIP_BANNER=1 bash "$SELF_PATH" "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" || rc=$?
     fi
+    rm -f "$SELF_PATH"
     exit "$rc"
   fi
 fi

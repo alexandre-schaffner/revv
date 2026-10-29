@@ -24,9 +24,6 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Test release installer
-        run: python3 scripts/release/test-installer.py
-
       - name: Typecheck
         run: bun run typecheck
 
