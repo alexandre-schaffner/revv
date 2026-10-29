@@ -5,33 +5,193 @@ on:
     branches: [main]
   push:
     branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: false
+      - run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+
   check:
     name: Typecheck / Lint / Build
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          bun-version-file: package.json
-
-      - run: bun install --frozen-lockfile
-
+          persist-credentials: false
+      - uses: ./.github/actions/setup # zizmor: ignore[self-repository] local action from the checked-out commit
+        id: setup
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: turbo
+        with:
+          path: .turbo/cache
+          key: turbo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.bun-version }}-${{ hashFiles('bun.lock', 'turbo.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.bun-version }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
       - name: Typecheck
         run: bun run typecheck
-
-      - name: Lint & format (Biome)
+      - name: Lint and migration checks
         run: bun run lint
-
-      - name: Check for unused files, exports, and dependencies (Knip)
+      - name: Unused code and dependencies
         run: bun run knip
-
-      - name: Build
+      - name: Build all packages
         run: bun run build
+      - name: Tests
+        run: bun run test
+      - name: Validate cache invalidation
+        run: |
+          python3 scripts/ci/check-cache.py
+          python3 scripts/ci/check-cache-restore.py
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.turbo.outputs.cache-hit != 'true'
+        with:
+          path: .turbo/cache
+          key: ${{ steps.turbo.outputs.cache-primary-key }}
+      - name: Package portable frontend
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > apps/web/build/source-sha.txt
+          tar -czf frontend.tar.gz -C apps/web/build .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-${{ github.sha }}
+          path: frontend.tar.gz
+          retention-days: 14
+          if-no-files-found: error
+
+  desktop-changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      required: ${{ steps.paths.outputs.required }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select desktop validation
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          required=true
+          if [[ "$EVENT" == pull_request && "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            if ! git diff --name-only "$BASE_SHA" HEAD | grep -Eq '^(apps/desktop/|apps/web/static/artifact-host.html|rust-toolchain.toml|bun.lock|package.json|scripts/release/|.github/)'; then
+              required=false
+            fi
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: Desktop (${{ matrix.target }})
+    needs: [check, desktop-changes]
+    if: needs.desktop-changes.outputs.required == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup # zizmor: ignore[self-repository] current checked-out source
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.95.0'
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/desktop -> target
+          shared-key: release-${{ matrix.target }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: frontend-${{ github.sha }}
+          path: ${{ runner.temp }}/frontend
+      - name: Restore frontend
+        env:
+          ARCHIVE: ${{ runner.temp }}/frontend/frontend.tar.gz
+        run: |
+          mkdir -p apps/web/build
+          tar -xzf "$ARCHIVE" -C apps/web/build
+          test "$(cat apps/web/build/source-sha.txt)" = "$GITHUB_SHA"
+      - name: Build unsigned desktop bundle
+        working-directory: apps/desktop
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bunx --no-install tauri build --ci --target "$TARGET" --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+      - name: Verify disk image, version, and architecture
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          arch=aarch64
+          if [[ "$TARGET" == x86_64-apple-darwin ]]; then arch=x64; fi
+          python3 scripts/release/stage.py "$TARGET" "$arch" "$(jq -r .version apps/desktop/tauri.conf.json)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-ci-${{ github.sha }}-${{ matrix.target }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+
+  security:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/security.yml # zizmor: ignore[self-repository] current workflow commit
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [workflows, check, desktop-changes, desktop, security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every applicable check
+        env:
+          WORKFLOWS: ${{ needs.workflows.result }}
+          CHECK: ${{ needs.check.result }}
+          SECURITY: ${{ needs.security.result }}
+          PATHS: ${{ needs.desktop-changes.result }}
+          DESKTOP_REQUIRED: ${{ needs.desktop-changes.outputs.required }}
+          DESKTOP: ${{ needs.desktop.result }}
+        run: |
+          test "$WORKFLOWS" = success
+          test "$CHECK" = success
+          test "$SECURITY" = success
+          test "$PATHS" = success
+          if [[ "$DESKTOP_REQUIRED" == true ]]; then
+            test "$DESKTOP" = success
+          else
+            test "$DESKTOP_REQUIRED" = false
+            test "$DESKTOP" = skipped
+          fi

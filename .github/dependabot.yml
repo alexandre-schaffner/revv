@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: bun
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+    groups:
+      patches:
+        patterns: ['*']
+        update-types: [patch]
+  - package-ecosystem: cargo
+    directory: /apps/desktop
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+    groups:
+      patches:
+        patterns: ['*']
+        update-types: [patch]
