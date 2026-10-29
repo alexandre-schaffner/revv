@@ -48,13 +48,14 @@ keep running when Pyroscope is down; those profile windows are lost. Changing
 `observability/pyroscope.yaml` requires copying the stack with
 `bun run observability:up` and restarting its Pyroscope container.
 
-On this Mac, `bun run perf:install` configures the existing installed-server
-LaunchAgent and saves its prior configuration in `~/.revv/telemetry/backups/`.
-It takes effect on the next server restart; `--restart` restarts immediately.
+On this Mac, `bun run perf:install` configures the installed server through
+`desktop-server.json` and saves its prior configuration in `~/.revv/telemetry/backups/`.
+It takes effect when Revv restarts; `--restart` restarts the app immediately.
 Older installed builds receive an independent bundled preload under
 `~/.revv/telemetry/profiling/`; the installer removes its own preload once the
 installed source owns `ContinuousProfilingLive`. Rerun after an app update that
-replaces the LaunchAgent. Do not preload it into a build that already starts the
+replaces the server configuration. Installs that have not migrated to desktop
+ownership still use the legacy LaunchAgent. Do not preload it into a build that already starts the
 native layer: JavaScriptCore has one sampling profiler per process.
 
 These are **Bun JavaScript stack samples**, not native stacks of every process.

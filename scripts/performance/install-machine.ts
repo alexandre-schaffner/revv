@@ -2,7 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-if (process.platform !== "darwin") throw new Error("This installer configures a macOS LaunchAgent");
+if (process.platform !== "darwin")
+  throw new Error("This installer configures the macOS Revv server");
 const output = resolve(homedir(), ".revv/telemetry/profiling");
 await mkdir(output, { recursive: true });
 const build = Bun.spawn(

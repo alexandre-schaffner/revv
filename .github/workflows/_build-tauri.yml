@@ -191,6 +191,14 @@ jobs:
           # composes it once, after both legs, instead.
           includeUpdaterJson: false
 
+      - name: Verify desktop server lifecycle
+        if: matrix.arch == 'aarch64'
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path apps/desktop/Cargo.toml --lib server
+          bun test apps/server/src/desktop-parent.test.ts
+          python3 scripts/tests/desktop-server.py
+
       - name: Find bundle artifacts
         id: bundles
         shell: bash

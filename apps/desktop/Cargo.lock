@@ -3356,8 +3356,10 @@ dependencies = [
 
 [[package]]
 name = "revv-desktop"
-version = "0.31.0"
+version = "0.32.2"
 dependencies = [
+ "libc",
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -3369,6 +3371,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
 ]
 
 [[package]]

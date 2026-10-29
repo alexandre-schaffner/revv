@@ -4,14 +4,14 @@
 #
 # Installed by install.sh to ~/.local/bin/revv.
 # Drives the source tree at ~/Library/Application Support/Revv/src
-# and the LaunchAgent at ~/Library/LaunchAgents/com.revv.server.plist.
+# and the desktop app that owns its API server.
 #
 # Commands:
 #   revv update      Pull latest channel; install release bundle or rebuild fallback
 #   revv channel     Print or change the release channel (stable | nightly)
 #   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
-#   revv start       Load + start the server LaunchAgent
-#   revv stop        Unload + stop the server LaunchAgent
+#   revv start       Start Revv in the tray with its API server
+#   revv stop        Quit Revv and stop its API server
 #   revv restart     Stop + start
 #   revv status      Show versions, install paths, server state
 #   revv logs        Tail the server logs
@@ -129,18 +129,15 @@ fi
 # Canonical paths (auth key, support dir, etc.)
 REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
 REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
-# Canonical DB path. The server resolves the SQLite file to the durable
-# app-data dir (`<appDataDir>/revv.db` = `$REVV_SUPPORT_DIR/revv.db`), NOT the
-# cwd/INSTALL_DIR — see apps/server/src/db/index.ts (resolveDbPath). In a prod
-# install the server's REVV_DB_PATH is set in the LaunchAgent plist's
-# EnvironmentVariables, which THIS shell does not inherit — so we read it back
-# from the plist to track whatever the server actually uses, instead of blindly
-# recomputing the default (which only coincidentally matches today). Precedence:
-#   1. REVV_DB_PATH exported in this shell (explicit CLI/dev override)
-#   2. REVV_DB_PATH from the LaunchAgent plist (authoritative server value)
-#   3. default: $REVV_SUPPORT_DIR/revv.db
+SERVER_CONFIG="$REVV_SUPPORT_DIR/desktop-server.json"
+# Match the desktop server configuration, retaining the legacy plist during migration.
 resolve_db_path() {
   if [[ -n "${REVV_DB_PATH:-}" ]]; then printf '%s' "$REVV_DB_PATH"; return; fi
+  if [[ -f "$SERVER_CONFIG" ]]; then
+    local configured
+    configured="$(/usr/bin/plutil -extract env.REVV_DB_PATH raw -o - "$SERVER_CONFIG" 2>/dev/null)" \
+      && [[ -n "$configured" ]] && { printf '%s' "$configured"; return; }
+  fi
   if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
     local p
     p="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:REVV_DB_PATH' \
@@ -272,9 +269,9 @@ ${BOLD}Commands:${RESET}
               ${DIM}flags: --channel <stable|nightly> (one-shot, doesn't persist)${RESET}
   ${CYAN}channel${RESET}     Print or change the release channel (stable | nightly)
   ${CYAN}uninstall${RESET}   Remove ALL Revv artifacts (app, data, config, services, CLI)
-  ${CYAN}start${RESET}       Start the background API server
-  ${CYAN}stop${RESET}        Stop the background API server
-  ${CYAN}restart${RESET}     Restart the background API server
+  ${CYAN}start${RESET}       Start Revv in the tray with its API server
+  ${CYAN}stop${RESET}        Quit Revv and stop its API server
+  ${CYAN}restart${RESET}     Restart Revv and its API server
   ${CYAN}status${RESET}      Show install paths, versions, and server state
   ${CYAN}logs${RESET}        Tail the server log files
   ${CYAN}open${RESET}        Launch Revv.app
@@ -301,7 +298,7 @@ ${BOLD}Data${RESET}
   GitHub config:   $REVV_SUPPORT_DIR/github.conf
 
 ${BOLD}Services${RESET}
-  Server agent:    $LAUNCH_AGENT_PLIST
+  Server config:   $SERVER_CONFIG
   Autostart agent: $HOME/Library/LaunchAgents/${tauri_id}.plist
   Logs:            $LOG_DIR
 
@@ -314,17 +311,37 @@ ${BOLD}Tauri / WebView${RESET}
 EOF
 }
 
+configure_server() {
+  load_bun_path
+  local bun_bin
+  bun_bin="$(command -v bun || true)"
+  [[ -x "$bun_bin" ]] || fail "Cannot locate bun for the Revv server."
+  write_desktop_server_config "$SERVER_CONFIG" "$bun_bin" "$INSTALL_DIR" "$LOG_DIR" "$LAUNCH_AGENT_PLIST"
+  retire_server_launch_agent "$LAUNCH_AGENT_PLIST"
+}
+
+quit_app() {
+  local app
+  app="$(find_app)" || return 0
+  quit_revv_app "$app"
+}
+
 cmd_start() {
-  [[ -f "$LAUNCH_AGENT_PLIST" ]] || fail "LaunchAgent missing at $LAUNCH_AGENT_PLIST. Re-run the installer."
-  launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  sleep 1
-  if server_running; then success "Server is running on $API_URL"; else warn "Server did not come up — check 'revv logs'"; fi
+  local app
+  app="$(find_app)" || fail "Revv.app not found. Re-run the installer."
+  configure_server
+  open -g "$app" --args --hidden
+  if wait_for_server 30; then success "Revv is running with its server on $API_URL"
+  else fail "Revv server did not start. Check 'revv logs'."; fi
 }
 
 cmd_stop() {
-  launchctl unload -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-  sleep 1
-  if server_running; then warn "Server still responds — another process may be on port 45678"; else success "Server stopped"; fi
+  retire_server_launch_agent "$LAUNCH_AGENT_PLIST"
+  quit_app
+  local deadline=$((SECONDS + 15))
+  while server_running && (( SECONDS < deadline )); do sleep 0.2; done
+  if server_running; then fail "A server still responds on $API_URL. Check which process owns the port."
+  else success "Revv and its API server stopped"; fi
 }
 
 cmd_restart() {
@@ -350,16 +367,10 @@ cmd_status() {
     printf "  %sApp:%s         %s(not installed)%s\n" "$BOLD" "$RESET" "$RED" "$RESET"
   fi
 
-  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
-    local pid
-    pid="$(launchctl list 2>/dev/null | awk -v lbl="$LAUNCH_AGENT_LABEL" '$3 == lbl {print $1}')"
-    if [[ -n "$pid" && "$pid" != "-" ]]; then
-      printf "  %sService:%s     running (pid %s)\n" "$BOLD" "$RESET" "$pid"
-    else
-      printf "  %sService:%s     loaded but not running\n" "$BOLD" "$RESET"
-    fi
+  if [[ -f "$SERVER_CONFIG" ]]; then
+    printf "  %sServer:%s      managed by the desktop app\n" "$BOLD" "$RESET"
   else
-    printf "  %sService:%s     %snot installed%s\n" "$BOLD" "$RESET" "$RED" "$RESET"
+    printf "  %sServer:%s      configuration missing, run revv start\n" "$BOLD" "$RESET"
   fi
 
   if server_running; then
@@ -477,9 +488,7 @@ cmd_update() {
 
   printf "\n"
   spin_start "Quitting Revv…"
-  osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
-  osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
-  sleep 1
+  quit_app
   spin_stop 1
 
   step "Desktop app"
@@ -547,45 +556,15 @@ cmd_update() {
     spin_stop 1
   fi
 
-  # ── LaunchAgent ───────────────────────────────────────────
-  local bun_for_plist
-  bun_for_plist="$(command -v bun || true)"
-  [[ -x "$bun_for_plist" ]] || fail "Cannot locate bun for the LaunchAgent."
-
-  if declare -F write_launch_agent_plist >/dev/null 2>&1; then
-    local _github_conf="${REVV_SUPPORT_DIR}/github.conf"
-    if [[ -z "${REVV_GITHUB_HOST:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
-      REVV_GITHUB_HOST="$(_revv_dotenv_get GITHUB_HOST "$_github_conf")"
-    fi
-    if [[ -z "${REVV_GITHUB_CLIENT_ID:-}" ]] && declare -F _revv_dotenv_get >/dev/null 2>&1; then
-      REVV_GITHUB_CLIENT_ID="$(_revv_dotenv_get GITHUB_CLIENT_ID "$_github_conf")"
-    fi
-    export REVV_GITHUB_HOST="${REVV_GITHUB_HOST:-}"
-    export REVV_GITHUB_CLIENT_ID="${REVV_GITHUB_CLIENT_ID:-}"
-    spin_start "Refreshing LaunchAgent…"
-    launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-    # write_launch_agent_plist calls info/success — redirect to suppress mid-spinner noise
-    write_launch_agent_plist \
-      "$LAUNCH_AGENT_PLIST" \
-      "$bun_for_plist" \
-      "$INSTALL_DIR" \
-      "$LOG_DIR" >/dev/null 2>&1
-    launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-    spin_stop 1
-  else
-    warn "write_launch_agent_plist not found in common.sh; keeping existing plist"
-    spin_start "Reloading server…"
-    launchctl unload "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-    launchctl load -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
-    spin_stop 1
-  fi
-
+  # ── App-owned server ─────────────────────────────────────
+  configure_server
+  open -g "$dest_app" --args --hidden
   spin_start "Waiting for API server…"
   if wait_for_server 30; then
     spin_stop 1
   else
     spin_stop 0
-    warn "API server did not respond before launch; opening Revv anyway."
+    warn "API server did not respond; check revv logs."
   fi
 
   # Refresh the CLI itself + helper lib in case they changed upstream.
@@ -669,7 +648,7 @@ ${BOLD}This will permanently remove ALL Revv artifacts:${RESET}
     • Revv.app (all copies in /Applications and ~/Applications)
 
   ${CYAN}Background services${RESET}
-    • $LAUNCH_AGENT_PLIST  (server LaunchAgent)
+    • $LAUNCH_AGENT_PLIST  (legacy server LaunchAgent)
     • $tauri_autostart_plist  (desktop autostart)
 
   ${CYAN}Data${RESET}
@@ -705,9 +684,7 @@ EOF
   launchctl unload -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
   launchctl unload -w "$tauri_autostart_plist" 2>/dev/null || true
 
-  # Quit the app (try both product names)
-  osascript -e 'tell application "Revv" to quit' 2>/dev/null || true
-  osascript -e 'tell application "Revv (Alpha)" to quit' 2>/dev/null || true
+  quit_app
   sleep 1
 
   # ── 2. Unregister revv:// URL scheme ────────────────────────
@@ -823,7 +800,7 @@ cmd_doctor() {
 
   if [[ -d "$INSTALL_DIR/.git" ]]; then success "Source tree present"; else warn "Source tree missing: $INSTALL_DIR"; bump; fi
   if find_app >/dev/null; then success "Revv.app installed: $(find_app)"; else warn "Revv.app not found"; bump; fi
-  if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then success "LaunchAgent installed"; else warn "LaunchAgent missing"; bump; fi
+  if [[ -f "$SERVER_CONFIG" ]]; then success "Desktop server configured"; else warn "Desktop server configuration missing — run revv start"; bump; fi
   if command -v bun >/dev/null 2>&1; then success "bun $(bun --version)"; else warn "bun not on PATH"; bump; fi
   if command -v cargo >/dev/null 2>&1; then success "cargo $(cargo --version | awk '{print $2}')"; else warn "cargo not on PATH"; bump; fi
   if server_running; then success "API server responding on $API_URL"; else warn "API server not responding — try 'revv restart'"; bump; fi

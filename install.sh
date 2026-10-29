@@ -9,7 +9,7 @@
 #
 #   From a checkout (developer, macOS):
 #     ./install.sh --dev       # toolchain + bun install, stop there
-#     ./install.sh             # full install (release .app, LaunchAgent, CLI)
+#     ./install.sh             # full install (release .app, server configuration, CLI)
 #
 # Flags:
 #   --dev            Install the dev toolchain and project deps, nothing more.
@@ -328,7 +328,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   [[ -n "$bundle_app" && -d "$bundle_app" ]] \
     || fail "Build finished but no .app was found under $bundle_macos_dir"
   app_name="$(basename "$bundle_app")"
-  app_process_name="${app_name%.app}"
   success "Built $bundle_app"
 
   step "Installing $app_name"
@@ -350,8 +349,7 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
   if [[ -f "$REVV_LAUNCH_AGENT_PLIST" ]]; then
     launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
   fi
-  osascript -e "tell application \"$app_process_name\" to quit" 2>/dev/null || true
-  sleep 1
+  quit_revv_app "$dest_app"
 
   [[ -d "$dest_app" ]] && rm -rf "$dest_app"
   cp -R "$bundle_app" "$dest_app"
@@ -360,7 +358,6 @@ if ! install_release_app "$release_tag" "$REVV_APP_DIR"; then
 else
   dest_app="$REVV_INSTALLED_APP"
   app_name="$(basename "$dest_app")"
-  app_process_name="${app_name%.app}"
   dest_app_dir="$(dirname "$dest_app")"
   success "Installed → $dest_app"
 fi
@@ -377,7 +374,7 @@ fi
 #     REVV_GITHUB_CLIENT_ID=<your-oauth-app-client-id> bash
 #
 # When set, we persist them to $REVV_SUPPORT_DIR/github.conf so `revv update`
-# regenerates the LaunchAgent plist with the same overrides. When unset, we
+# refreshes the desktop server configuration with the same overrides. When unset, we
 # wipe any stale conf so the bundled defaults win.
 mkdir -p "$REVV_SUPPORT_DIR"
 if [[ -n "${REVV_GITHUB_HOST:-}" || -n "${REVV_GITHUB_CLIENT_ID:-}" ]]; then
@@ -393,38 +390,15 @@ else
   rm -f "$REVV_SUPPORT_DIR/github.conf" 2>/dev/null || true
 fi
 
-# ── 6. LaunchAgent ────────────────────────────────────────────
-step "Installing background service (LaunchAgent)"
-mkdir -p "$(dirname "$REVV_LAUNCH_AGENT_PLIST")" "$REVV_LOG_DIR"
+# ── 6. Configure the app-owned server ────────────────────────
+step "Configuring the Revv server"
 bun_bin="$HOME/.bun/bin/bun"
 [[ -x "$bun_bin" ]] || bun_bin="$(command -v bun || true)"
-[[ -x "$bun_bin" ]] || fail "Cannot locate bun executable for the LaunchAgent."
-server_entry="$PROJECT_ROOT/apps/server/src/index.ts"
-[[ -f "$server_entry" ]] || fail "Server entry point missing: $server_entry"
-
-write_launch_agent_plist \
-  "$REVV_LAUNCH_AGENT_PLIST" \
-  "$bun_bin" \
-  "$PROJECT_ROOT" \
-  "$REVV_LOG_DIR"
-
-launchctl unload "$REVV_LAUNCH_AGENT_PLIST" 2>/dev/null || true
-launchctl load -w "$REVV_LAUNCH_AGENT_PLIST"
-success "LaunchAgent loaded (com.revv.server)"
-
-info "Waiting for API server on http://localhost:45678 …"
-for i in {1..30}; do
-  if curl -fsS --max-time 1 "http://localhost:45678/api/health" >/dev/null 2>&1 \
-     || curl -fsS --max-time 1 "http://localhost:45678/" >/dev/null 2>&1 \
-     || nc -z 127.0.0.1 45678 >/dev/null 2>&1; then
-    success "Server is listening"
-    break
-  fi
-  sleep 1
-  if [[ $i -eq 30 ]]; then
-    warn "Server didn't respond within 30s. Check logs: tail -f '$REVV_LOG_DIR/server.err.log'"
-  fi
-done
+[[ -x "$bun_bin" ]] || fail "Cannot locate bun executable."
+write_desktop_server_config \
+  "$REVV_SUPPORT_DIR/desktop-server.json" "$bun_bin" "$PROJECT_ROOT" "$REVV_LOG_DIR" "$REVV_LAUNCH_AGENT_PLIST"
+retire_server_launch_agent "$REVV_LAUNCH_AGENT_PLIST"
+success "Revv will start and stop its API server with the desktop app"
 
 # ── 7. Install the management CLI ─────────────────────────────
 step "Installing revv CLI"
@@ -480,12 +454,12 @@ printf '%s\n' "$REVV_RESET"
 
 printf '  %sApp:%s        %s\n'    "$REVV_BOLD" "$REVV_RESET" "$dest_app"
 printf '  %sSource:%s     %s\n'    "$REVV_BOLD" "$REVV_RESET" "$PROJECT_ROOT"
-printf '  %sServer:%s     com.revv.server (http://localhost:45678)\n' "$REVV_BOLD" "$REVV_RESET"
+printf '  %sServer:%s     owned by Revv (http://localhost:45678)\n' "$REVV_BOLD" "$REVV_RESET"
 printf '  %sAuth key:%s   %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_AUTH_KEY"
 printf '  %sLogs:%s       %s\n'    "$REVV_BOLD" "$REVV_RESET" "$REVV_LOG_DIR"
 printf '\n  %sManage with the revv CLI:%s\n' "$REVV_BOLD" "$REVV_RESET"
 printf '    %s$%s revv status      show app + server status\n'    "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv update      install the latest channel build\n' "$REVV_DIM" "$REVV_RESET"
-printf '    %s$%s revv restart     restart the API server\n'      "$REVV_DIM" "$REVV_RESET"
+printf '    %s$%s revv restart     restart Revv and its server\n' "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv logs        tail server logs\n'            "$REVV_DIM" "$REVV_RESET"
 printf '    %s$%s revv uninstall   remove everything\n\n'         "$REVV_DIM" "$REVV_RESET"

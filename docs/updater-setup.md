@@ -112,7 +112,7 @@ server. Two endpoints, in order:
    on the next check: no rebuild, no restart.
 2. `https://github.com/alexandre-schaffner/revv/releases/latest/download/latest.json`
    — stable manifest, reached only if the first endpoint errors (e.g. the
-   `com.revv.server` LaunchAgent is stopped). Degrades to stable-channel
+   local server is unavailable). Degrades to stable-channel
    checks rather than failing outright.
 
 The port in endpoint 1 is hard-coded: `tauri.conf.json` is plain JSON read by

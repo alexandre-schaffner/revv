@@ -5,6 +5,7 @@ import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth, db } from "./auth";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
+import { watchDesktopParent } from "./desktop-parent";
 import { CORS_ORIGINS } from "./http-origins";
 import { logError } from "./logger";
 import { isLoopbackAddress } from "./net";
@@ -192,7 +193,7 @@ await AppRuntime.runPromise(
   });
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
-// SIGTERM arrives on bun --watch restarts and launchd stops.
+// SIGTERM arrives on bun --watch restarts and desktop shutdown.
 // SIGINT  arrives on Ctrl-C.
 //
 // Both previously only logged, leaving the process alive — that's why stale
@@ -242,6 +243,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
 process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+watchDesktopParent(serverEnv.desktopPid, () => void gracefulShutdown("desktop exited"));
 
 // Re-launch walkthrough fibers for any rows left in `status='generating'`
 // by a previous run. Runs in the background so boot isn't blocked by slow
