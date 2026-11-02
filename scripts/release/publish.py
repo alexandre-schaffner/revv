@@ -71,12 +71,13 @@ def publish(directory, tag, nightly):
     # Upload once. A failed upload is fatal and leaves the release as a draft.
     assets = [str(p) for p in sorted(directory.iterdir()) if p.is_file()]
     expected = {pathlib.Path(p).name for p in assets}
-    prior = json.loads(gh("release", "view", tag, "--json", "assets"))["assets"]
-    for asset in prior:
+    draft = json.loads(gh("release", "view", tag, "--json", "databaseId,assets"))
+    release_path = f"repos/{os.environ['GH_REPO']}/releases/{draft['databaseId']}"
+    for asset in draft["assets"]:
         if asset["name"] not in expected:
             gh("release", "delete-asset", tag, asset["name"], "--yes")
     gh("release", "upload", tag, *assets, "--clobber")
-    uploaded = json.loads(gh("api", f"repos/{os.environ['GH_REPO']}/releases/tags/{tag}"))["assets"]
+    uploaded = json.loads(gh("api", release_path))["assets"]
     by_name = {asset["name"]: asset for asset in uploaded}
     if set(by_name) != expected:
         raise ValueError("Remote draft assets do not exactly match the verified release")
@@ -85,7 +86,7 @@ def publish(directory, tag, nightly):
         if by_name[file.name]["size"] != file.stat().st_size or by_name[file.name].get("digest") != digest:
             raise ValueError(f"Uploaded asset missing or corrupted: {file.name}")
     gh("release", "edit", tag, "--draft=false", f"--prerelease={str(nightly).lower()}", "--latest=false" if nightly else "--latest")
-    published = json.loads(gh("api", f"repos/{os.environ['GH_REPO']}/releases/tags/{tag}"))
+    published = json.loads(gh("api", release_path))
     if not published.get("immutable"):
         raise ValueError("Release was published mutable; enable immutable releases")
 

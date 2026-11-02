@@ -33,8 +33,8 @@ def main():
     if tag:
         if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
             raise ValueError("Recovery requires a stable version tag")
-        release = api(f"repos/{repo}/releases/tags/{tag}")
-        if not release["draft"]:
+        release = json.loads(subprocess.check_output(["gh", "release", "view", tag, "--repo", repo, "--json", "isDraft"], text=True))
+        if not release["isDraft"]:
             raise ValueError("Recovery can only replace assets on a draft release")
         obj = api(f"repos/{repo}/git/ref/tags/{tag}")["object"]
         while obj["type"] == "tag":

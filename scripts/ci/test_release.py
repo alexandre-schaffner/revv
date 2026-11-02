@@ -125,6 +125,35 @@ class TrustedRun(unittest.TestCase):
         with self.assertRaises(ValueError):
             trusted_run.validate_run(run, "owner/revv", 42)
 
+    def test_recovers_draft_without_published_tag_endpoint(self):
+        self.recover(draft=True)
+
+    def test_recovery_refuses_published_release(self):
+        with self.assertRaisesRegex(ValueError, "draft release"):
+            self.recover(draft=False)
+
+    def recover(self, *, draft):
+        def transport(args, **kwargs):
+            if args[:3] == ["gh", "release", "view"]:
+                return json.dumps({"isDraft": draft})
+            path = args[2]
+            if path.endswith("/actions/workflows/ci.yml"):
+                return json.dumps({"id": 42})
+            if "/git/ref/tags/" in path:
+                return json.dumps({"object": {"type": "commit", "sha": "a" * 40}})
+            if "/actions/workflows/ci.yml/runs?" in path:
+                return json.dumps({"workflow_runs": [dict(self.run, id=123)]})
+            if "/compare/" in path:
+                return json.dumps({"status": "identical"})
+            raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "output"
+            env = {"GH_REPO": "owner/revv", "RECOVERY_TAG": "v1.2.3", "CI_RUN_ID": "", "GITHUB_OUTPUT": str(output)}
+            with mock.patch.dict(os.environ, env), mock.patch.object(trusted_run.subprocess, "check_output", side_effect=transport):
+                trusted_run.main()
+            self.assertEqual(output.read_text(), f"sha={'a' * 40}\nci_run_id=123\n")
+
     def test_rejects_wrong_sha(self):
         with self.assertRaises(ValueError):
             trusted_run.validate_run(self.run, "owner/revv", 42, "b" * 40)
@@ -147,10 +176,13 @@ class Publication(unittest.TestCase):
         def gh(*args):
             self.calls.append(args)
             if args[:2] == ("release", "view"):
-                return json.dumps({"assets": [{"name": "old.dmg"}]})
+                return json.dumps({"databaseId": 42, "assets": [{"name": "old.dmg"}]})
             if args[:2] == ("release", "upload") and upload_failure:
                 raise subprocess.CalledProcessError(1, args)
             if args[0] == "api":
+                # GitHub's tag endpoint returns 404 while the release is a draft.
+                if args[1] != "repos/test/revv/releases/42":
+                    raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
                 assets = [{"name": "asset.dmg", "size": 14, "digest": "sha256:" + hashlib.sha256(b"wrong contents" if corrupt else b"verified bytes").hexdigest()}]
                 if extra_after_upload:
                     assets.append({"name": "unexpected.dmg", "size": 1})
