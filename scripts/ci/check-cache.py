@@ -57,7 +57,9 @@ def main():
             path = checkout / file
             original = path.read_text()
             try:
-                path.write_text(transform(original))
+                updated = transform(original)
+                assert updated != original, f"{file}: cache probe did not change an input"
+                path.write_text(updated)
                 actual = changed(current, hashes())
                 assert expected <= actual, f"{file}: expected invalidation {expected}, got {actual}"
             finally:
@@ -72,8 +74,10 @@ def main():
             data = json.loads(run(direct, "run", "build", "typecheck", "--dry=json", cwd=checkout, env=env))
             return {task["taskId"]: task["hash"] for task in data["tasks"]}
         assert changed(runtime_hashes("linux-x64-bun-1"), runtime_hashes("linux-x64-bun-2")) == set(current)
-        probe("bun.lock", lambda s: s.replace("2.5.14", "2.5.13"), set(current))
-        probe("bun.lock", lambda s: s.replace('"effect@4.0.3"', '"effect@4.0.2"'), {"@revv/server#build", "@revv/server#typecheck", "@revv/web#typecheck"})
+        biome = json.loads((checkout / "package.json").read_text())["devDependencies"]["@biomejs/biome"]
+        probe("bun.lock", lambda s: s.replace(biome, "0.0.0"), set(current))
+        effect = json.loads((checkout / "apps/server/package.json").read_text())["dependencies"]["effect"]
+        probe("bun.lock", lambda s: s.replace(f'"effect@{effect}"', '"effect@0.0.0"'), {"@revv/server#build", "@revv/server#typecheck", "@revv/web#typecheck"})
         assert "@revv/web#build" in changed(hashes({"VITE_API_PORT": "45678"}), hashes({"VITE_API_PORT": "45679"}))
         # Framework inference and generated-file rules must survive future edits.
         config = json.loads((checkout / "turbo.json").read_text())

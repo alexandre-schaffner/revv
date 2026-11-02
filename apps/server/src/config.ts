@@ -22,6 +22,7 @@ import { Config, Effect } from "effect";
  *     The env var is still honored as an escape hatch for dev/CI.
  */
 export const ServerConfig = Config.all({
+  desktopPid: Config.Int("REVV_DESKTOP_PID").pipe(Config.withDefault(0)),
   port: Config.Int("PORT").pipe(Config.withDefault(API_PORT)),
   // Bind interface. Loopback-only by default so the API is unreachable off-box.
   // `REVV_HOST` is the escape hatch for self-hosting; a non-loopback value also
@@ -65,8 +66,8 @@ export const ServerConfig = Config.all({
   revDebug: Config.Boolean("REV_DEBUG").pipe(Config.withDefault(false)),
   // Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
   // installer's shell (which has the user's full PATH including Homebrew,
-  // asdf, mise, nix, etc.) and baked into the LaunchAgent plist's
-  // EnvironmentVariables. Empty string = "not detected at install time" —
+  // asdf, mise, nix, etc.) and saved in desktop-server.json's environment.
+  // Empty string = "not detected at install time" —
   // the server falls back to a runtime `which` lookup. See
   // apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
   claudeBin: Config.String("REVV_CLAUDE_BIN").pipe(Config.withDefault("")),

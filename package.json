@@ -43,12 +43,12 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@effect/language-service": "^0.87.3",
-    "@tauri-apps/cli": "^2.12.0",
-    "bun-types": "1.4.2",
+    "@effect/language-service": "^0.87.5",
+    "@tauri-apps/cli": "^2.12.4",
+    "bun-types": "1.4.4",
     "concurrently": "^10.0.6",
     "knip": "^6.38.0",
-    "turbo": "^2.11.5",
+    "turbo": "^2.11.10",
     "typescript": "^6.0.3"
   },
   "dependencies": {}

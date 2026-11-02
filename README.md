@@ -38,7 +38,7 @@ Available for **macOS**, currently in **alpha**.
 curl -fsSL https://github.com/alexandre-schaffner/revv/releases/latest/download/install.sh | bash
 ```
 
-The installer sets up the desktop app, local background server, and `revv` CLI. The release installer verifies its Sigstore attestation before continuing.
+The installer sets up the desktop app and `revv` CLI. Revv starts its local server when the app opens. Closing the window keeps both running in the tray; quitting Revv stops the server. The release installer verifies its Sigstore attestation before continuing.
 
 <details>
 <summary>Download and inspect the installer first</summary>
@@ -169,7 +169,9 @@ Read the [agent and contributor guide](AGENTS.md), [code conventions](docs/conve
 ```bash
 revv status      # versions, install paths, and server state
 revv update      # update to the latest release
-revv restart     # restart the background server
+revv start       # start Revv in the tray with its server
+revv stop        # quit Revv and stop its server
+revv restart     # restart Revv and its server
 revv logs        # tail server logs
 revv open        # launch the app
 revv uninstall   # remove the install
