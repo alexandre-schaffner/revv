@@ -44,7 +44,7 @@ jobs:
           bun-version-file: package.json
       - name: Audit Bun lockfile
         run: bun audit --audit-level high
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-audit@0.22.2
       - name: Audit Cargo lockfile
