@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.32.3](https://github.com/alexandre-schaffner/revv/compare/v0.32.2...v0.32.3) (2026-11-02)
+
+
+### Bug Fixes
+
+* bump @opentelemetry/api from 1.9.1 to 1.10.0 ([4792e17](https://github.com/alexandre-schaffner/revv/commit/4792e177f52b0c60c79d68ca91b7f037a583ab09))
+* bump @opentelemetry/core from 2.11.0 to 3.0.0 ([9dd9794](https://github.com/alexandre-schaffner/revv/commit/9dd97944cb6599dc3e97de06c194e014f0a4c382))
+* bump @opentelemetry/sdk-metrics from 2.11.0 to 3.0.0 ([7f45112](https://github.com/alexandre-schaffner/revv/commit/7f4511293ac890f524b65fe09e26f70172f57a73))
+* bump marked from 18.0.14 to 18.1.1 ([e658d55](https://github.com/alexandre-schaffner/revv/commit/e658d55d0282c828488cb99c8ed34378c58a28c5))
+* bump tauri-plugin-autostart from 2.6.0 to 2.7.0 in /apps/desktop ([bc0f19f](https://github.com/alexandre-schaffner/revv/commit/bc0f19f1395cb8a8c77a8922517dbad6894808d1))
+* bump tauri-plugin-autostart from 2.6.0 to 2.7.0 in /apps/desktop ([5202edb](https://github.com/alexandre-schaffner/revv/commit/5202edb0357f88b013ed96558c283061ccb2829a))
+* bump tauri-plugin-deep-link from 2.5.0 to 2.6.2 in /apps/desktop ([#275](https://github.com/alexandre-schaffner/revv/issues/275)) ([6fe42df](https://github.com/alexandre-schaffner/revv/commit/6fe42dff0e63e1bedca74535d18068e88b12666e))
+* bump tauri-plugin-opener from 2.6.0 to 2.7.2 in /apps/desktop ([#277](https://github.com/alexandre-schaffner/revv/issues/277)) ([808fe32](https://github.com/alexandre-schaffner/revv/commit/808fe32cea9ba2c6aa056da8e93cf5f0a8e7aa11))
+* bump the patches group across 1 directory with 4 updates ([cec0873](https://github.com/alexandre-schaffner/revv/commit/cec087366b6d312f22cff5bfc6dcff286b1ba04f))
+* bump the patches group across 1 directory with 4 updates ([96a90af](https://github.com/alexandre-schaffner/revv/commit/96a90af9ad48dd6cd1ac2726bc430f34ba8dd590))
+* bump the patches group with 17 updates ([2ecd5f4](https://github.com/alexandre-schaffner/revv/commit/2ecd5f4b4330dfc9529bdaa834ee6ecf158ebc8b))
+* **deps:** include the rebased MCP bridge patch update ([f293b2e](https://github.com/alexandre-schaffner/revv/commit/f293b2ea9a1321f838df236e405b9a7ccdcebe5a))
+* **desktop:** identify SSH requests as Revv ([ec05b1e](https://github.com/alexandre-schaffner/revv/commit/ec05b1e31987391815292a1c8e7cba9da2fe85f4))
+* **desktop:** retry failed server restarts within the budget ([6ddc101](https://github.com/alexandre-schaffner/revv/commit/6ddc101b6d4e1d87c6b4eb8849dfc8f8e59154bc))
+* integrate desktop lifecycle and dependency updates ([10fa8ce](https://github.com/alexandre-schaffner/revv/commit/10fa8cee15c924d3b5fe00e3539d75dfa1a8ffc7))
+* **release:** forward signing secrets and update Cargo lock version ([#286](https://github.com/alexandre-schaffner/revv/issues/286)) ([ca5117f](https://github.com/alexandre-schaffner/revv/commit/ca5117fc628897581ce59eeb28d8ea68b9fea65f))
+* **release:** verify drafts by release ID ([#287](https://github.com/alexandre-schaffner/revv/issues/287)) ([f8bda8f](https://github.com/alexandre-schaffner/revv/commit/f8bda8fa1870eae3e69dde4524be31e4f6b34a21))
+
 ## [0.32.2](https://github.com/alexandre-schaffner/revv/compare/v0.32.1...v0.32.2) (2026-10-29)
 
 
