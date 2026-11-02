@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "revv-desktop"
-version = "0.32.2"
+version = "0.32.3"
 dependencies = [
  "libc",
  "serde",
