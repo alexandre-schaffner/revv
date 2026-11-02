@@ -143,6 +143,12 @@ jobs:
           mkdir -p apps/web/build
           tar -xzf "$ARCHIVE" -C apps/web/build
           test "$(cat apps/web/build/source-sha.txt)" = "$GITHUB_SHA"
+      - name: Verify desktop server lifecycle
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          cargo test --locked --manifest-path apps/desktop/Cargo.toml --lib server
+          bun test apps/server/src/desktop-parent.test.ts
+          python3 scripts/tests/desktop-server.py
       - name: Build unsigned desktop bundle
         working-directory: apps/desktop
         env:

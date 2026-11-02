@@ -1,5 +1,6 @@
-"""Configure the existing macOS Revv LaunchAgent; no application DB writes."""
+"""Configure installed Revv profiling; no application DB writes."""
 from pathlib import Path
+import json
 import os
 import plistlib
 import shutil
@@ -7,6 +8,24 @@ import subprocess
 import sys
 
 base = Path.home() / ".revv/telemetry"
+desktop_config = Path.home() / "Library/Application Support/Revv/desktop-server.json"
+if desktop_config.exists():
+    data = json.loads(desktop_config.read_text())
+    backup = base / "backups/server-before-profiling.json"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    if not backup.exists():
+        shutil.copy2(desktop_config, backup)
+    data.setdefault("env", {})["REVV_PYROSCOPE_ENDPOINT"] = "http://127.0.0.1:4040"
+    temporary = desktop_config.with_suffix(".tmp")
+    temporary.write_text(json.dumps(data, indent=2))
+    temporary.chmod(0o600)
+    temporary.replace(desktop_config)
+    if "--restart" in sys.argv:
+        subprocess.run([str(Path(__file__).resolve().parents[1] / "revv"), "restart"], check=True)
+    print("Installed Revv profiling configured" + (" and restarted" if "--restart" in sys.argv else "; takes effect when Revv restarts"))
+    sys.exit(0)
+
+# Installs that have not launched the new desktop app still use the old service.
 service = Path.home() / "Library/LaunchAgents/com.revv.server.plist"
 data = plistlib.loads(service.read_bytes())
 backup = base / "backups/server-before-profiling.plist"
