@@ -26,7 +26,8 @@
         "svelte-check",
         "mode-watcher",
         "svelte-sonner",
-        "bun-types"
+        "bun-types",
+        "@sinclair/typebox"
       ]
     },
     "apps/server": {

@@ -107,6 +107,67 @@ fn restarts_crashes_with_a_finite_budget() {
 	assert_stopped(descendant);
 }
 
+fn restart_fixture(fail_all_restarts: bool) -> (tempfile::TempDir, ServerConfig) {
+	fixture(&format!(
+		r#"
+const fs = require('node:fs');
+const attempt = fs.existsSync('starts') ? fs.readFileSync('starts', 'utf8').trim().split('\n').length : 0;
+fs.appendFileSync('starts', 'start\n');
+if (attempt === 1 || ({fail_all_restarts} && attempt > 0)) process.exit(1);
+const app = Bun.serve({{port: Number(process.env.PORT), hostname:'127.0.0.1', fetch:()=>new Response('ok')}});
+process.on('SIGTERM', () => {{ app.stop(true); process.exit(0); }});
+if (attempt === 0) setTimeout(() => process.exit(1), 300);
+"#
+	))
+}
+
+#[test]
+fn retries_a_failed_restart_and_recovers() {
+	let (_root, config) = restart_fixture(false);
+	let (failed, result) = mpsc::channel();
+	let server = ServerProcess::start(config.clone(), move |message| {
+		failed.send(message).unwrap();
+	})
+	.unwrap();
+	let address = SocketAddr::from(([127, 0, 0, 1], config.port().unwrap()));
+	let deadline = Instant::now() + Duration::from_secs(10);
+	loop {
+		let starts = fs::read_to_string(config.project_root.join("starts")).unwrap();
+		if starts.lines().count() == 3 && healthy(address) {
+			break;
+		}
+		assert!(
+			Instant::now() < deadline,
+			"server did not recover after failed restart"
+		);
+		thread::sleep(POLL_INTERVAL);
+	}
+	assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+	server.stop();
+	assert!(!healthy(address));
+}
+
+#[test]
+fn failed_restarts_exhaust_the_budget_before_reporting_failure() {
+	let (_root, config) = restart_fixture(true);
+	let (failed, result) = mpsc::channel();
+	let server = ServerProcess::start(config.clone(), move |message| {
+		failed.send(message).unwrap();
+	})
+	.unwrap();
+	let message = result.recv_timeout(Duration::from_secs(15)).unwrap();
+	assert!(message.contains("3 restart attempts"), "{message}");
+	assert_eq!(
+		fs::read_to_string(config.project_root.join("starts"))
+			.unwrap()
+			.lines()
+			.count(),
+		4
+	);
+	server.stop();
+	assert!(result.try_recv().is_err());
+}
+
 #[test]
 fn startup_failure_is_reported_without_leaking_children() {
 	let (_root, config) = fixture("console.error('broken startup'); process.exit(23);");

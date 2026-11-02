@@ -1,7 +1,7 @@
 {
   "name": "revv",
   "private": true,
-  "packageManager": "bun@1.3.5",
+  "packageManager": "bun@1.4.4",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -9,8 +9,8 @@
   "scripts": {
     "prepare": "./scripts/prepare-effect.sh",
     "dev": "bun run observability:up && turbo run dev",
-    "build": "turbo run build",
-    "typecheck": "turbo run typecheck && tsc -p scripts/performance/tsconfig.json",
+    "build": "bun scripts/turbo.mjs run build",
+    "typecheck": "bun scripts/turbo.mjs run typecheck && tsc -p scripts/performance/tsconfig.json",
     "lint": "biome ci . && bun run check:import-boundaries && bun run check:pr-deep-links && bun run check:external-agents && bun run check:migrations",
     "check:import-boundaries": "bun scripts/check-import-boundaries.ts",
     "check:pr-deep-links": "bun scripts/check-pr-deep-link-contract.ts",
@@ -37,14 +37,16 @@
     "perf:test": "bun test scripts/performance",
     "observability:check": "bun scripts/verify-grafana.mjs",
     "observability:up": "bun scripts/observability.ts up",
-    "observability:down": "bun scripts/observability.ts down"
+    "observability:down": "bun scripts/observability.ts down",
+    "test": "bun scripts/ci/test.mjs",
+    "check:ci": "python3 -m unittest discover -s scripts/ci -p \"test_*.py\""
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@effect/language-service": "^0.87.3",
     "@tauri-apps/cli": "^2.12.0",
     "bun-types": "1.4.2",
-    "concurrently": "^10.0.5",
+    "concurrently": "^10.0.6",
     "knip": "^6.38.0",
     "turbo": "^2.11.5",
     "typescript": "^6.0.3"

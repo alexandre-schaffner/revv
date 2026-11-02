@@ -9,15 +9,17 @@ import { defineConfig, type Plugin } from "vite";
 // tauri.conf.json so every build is individually identifiable during the
 // alpha. Falls back to 'unknown' when git isn't available (shallow clone,
 // CI without fetch-depth, source tarballs, …).
-const commitHash = (() => {
-  try {
-    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
-      .toString()
-      .trim();
-  } catch {
-    return "unknown";
-  }
-})();
+const commitHash =
+  process.env.REVV_BUILD_SHA?.slice(0, 7) ||
+  (() => {
+    try {
+      return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim();
+    } catch {
+      return "unknown";
+    }
+  })();
 
 const PR_LENS_CRYPTO_STUB = "\0pr-lens-node-crypto-stub";
 

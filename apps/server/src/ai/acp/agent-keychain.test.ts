@@ -1,13 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { platform } from "node:os";
 import { getAgentKeychainAuth } from "@revv/shared";
 import {
   looksLikeAuthFailure,
   probeAgentKeychainReadable,
   withAgentKeychainHint,
 } from "./agent-keychain";
-
-const isMac = platform() === "darwin";
 
 describe("registry keychainAuth", () => {
   it("declares claude-code as keychain-backed and the file-based agents as not", () => {
@@ -87,7 +84,6 @@ describe("withAgentKeychainHint", () => {
     const out = withAgentKeychainHint("claude-code", "ACP connection closed");
     expect(typeof out).toBe("string");
     expect(out).toContain("ACP connection closed");
-    expect(isMac).toBe(true);
   });
 });
 
@@ -113,6 +109,5 @@ describe("probeAgentKeychainReadable", () => {
   it("falls back to the real detectAgentAuth-based probe when no test seam is supplied (smoke test)", async () => {
     const readable = await probeAgentKeychainReadable("claude-code");
     expect(typeof readable).toBe("boolean");
-    expect(isMac).toBe(true);
   });
 });

@@ -181,25 +181,24 @@ fn supervise(
 			}
 		}
 		drop(child);
-		if restarts >= MAX_RESTARTS {
-			on_failure(format!("The server stopped after {MAX_RESTARTS} restart attempts. See {}. Quit and reopen Revv to try again.", config.log_dir.display()));
-			return;
-		}
-		restarts += 1;
-		if !matches!(
-			commands.recv_timeout(Duration::from_secs(1)),
-			Err(mpsc::RecvTimeoutError::Timeout)
-		) {
-			return;
-		}
-		match RunningServer::start(&config, address, &commands) {
-			Ok(restarted) => child = restarted,
-			Err(error) if error.kind() == io::ErrorKind::Interrupted => return,
-			Err(error) => {
-				on_failure(error.to_string());
+		child = loop {
+			if restarts >= MAX_RESTARTS {
+				on_failure(format!("The server stopped after {MAX_RESTARTS} restart attempts. See {}. Quit and reopen Revv to try again.", config.log_dir.display()));
 				return;
 			}
-		}
+			if !matches!(
+				commands.recv_timeout(Duration::from_secs(1)),
+				Err(mpsc::RecvTimeoutError::Timeout)
+			) {
+				return;
+			}
+			restarts += 1;
+			match RunningServer::start(&config, address, &commands) {
+				Ok(restarted) => break restarted,
+				Err(error) if error.kind() == io::ErrorKind::Interrupted => return,
+				Err(error) => eprintln!("Revv server restart {restarts} failed: {error}"),
+			}
+		};
 	}
 }
 
