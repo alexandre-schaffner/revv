@@ -21,6 +21,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["prepare", "publish"])
     command = parser.parse_args().command
+    if command == "prepare" and not os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip():
+        raise ValueError("Missing release signing key: forward TAURI_SIGNING_PRIVATE_KEY to the reusable workflow and configure it in the release environment")
     tag = os.environ["RELEASE_TAG"]
     version = os.environ["RELEASE_VERSION"]
     sha = os.environ["SOURCE_SHA"]

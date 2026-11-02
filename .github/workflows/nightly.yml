@@ -86,6 +86,9 @@ jobs:
       id-token: write
       attestations: write
     uses: ./.github/workflows/_build-tauri.yml # zizmor: ignore[self-repository] resolves from this trusted workflow commit
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     with:
       tag_name: ${{ needs.prepare.outputs.tag }}
       source_sha: ${{ needs.prepare.outputs.sha }}
