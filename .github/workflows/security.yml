@@ -44,7 +44,7 @@ jobs:
           bun-version-file: package.json
       - name: Audit Bun lockfile
         run: bun audit --audit-level high
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-audit@0.22.2
       - name: Audit Cargo lockfile
@@ -52,7 +52,7 @@ jobs:
       # GitHub reviews Cargo and Actions changes; bun audit above covers Bun transitive dependencies.
       - name: Review newly introduced dependencies
         if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v4
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           comment-summary-in-pr: never
