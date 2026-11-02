@@ -147,10 +147,13 @@ class Publication(unittest.TestCase):
         def gh(*args):
             self.calls.append(args)
             if args[:2] == ("release", "view"):
-                return json.dumps({"assets": [{"name": "old.dmg"}]})
+                return json.dumps({"databaseId": 42, "assets": [{"name": "old.dmg"}]})
             if args[:2] == ("release", "upload") and upload_failure:
                 raise subprocess.CalledProcessError(1, args)
             if args[0] == "api":
+                # GitHub's tag endpoint returns 404 while the release is a draft.
+                if args[1] != "repos/test/revv/releases/42":
+                    raise subprocess.CalledProcessError(1, args, stderr="Not Found (HTTP 404)")
                 assets = [{"name": "asset.dmg", "size": 14, "digest": "sha256:" + hashlib.sha256(b"wrong contents" if corrupt else b"verified bytes").hexdigest()}]
                 if extra_after_upload:
                     assets.append({"name": "unexpected.dmg", "size": 1})
