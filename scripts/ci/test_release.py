@@ -162,6 +162,14 @@ class Publication(unittest.TestCase):
         with mock.patch.object(release_publish, "gh", side_effect=self.transport(**kwargs)), mock.patch.dict(os.environ, {"GH_REPO": "test/revv"}):
             release_publish.publish(self.directory, "v1.2.3", False)
 
+    def test_missing_signing_key_stops_before_external_commands(self):
+        for key in ["", "   "]:
+            with self.subTest(key=key), mock.patch.dict(os.environ, {"TAURI_SIGNING_PRIVATE_KEY": key}), mock.patch.object(sys, "argv", ["publish.py", "prepare"]), mock.patch.object(release_publish.subprocess, "check_output") as check_output, mock.patch.object(release_publish.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "Missing release signing key"):
+                    release_publish.main()
+                check_output.assert_not_called()
+                run.assert_not_called()
+
     def test_removes_stale_draft_assets_before_upload(self):
         self.execute()
         self.assertLess(self.calls.index(("release", "delete-asset", "v1.2.3", "old.dmg", "--yes")), next(i for i, c in enumerate(self.calls) if c[:2] == ("release", "upload")))

@@ -30,6 +30,11 @@
       "path": "apps/desktop/Cargo.toml"
     },
     {
+      "type": "toml",
+      "path": "apps/desktop/Cargo.lock",
+      "jsonpath": "$.package[?(@.name.value == 'revv-desktop')].version"
+    },
+    {
       "type": "json",
       "path": "packages/shared/package.json",
       "jsonpath": "$.version"

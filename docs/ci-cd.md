@@ -6,7 +6,7 @@ Release and Nightly consume a successful **push** CI run from this repository's 
 
 The frontend is built once in CI and handed to both macOS compilation jobs. Stable publication reuses CI's already verified native bundles. Nightly recompiles the native wrapper to embed its prerelease version, using the same target-specific dependency cache. Each compilation job has read access and no signing secrets. It builds an unsigned app and DMG, checks the app version and architecture, verifies that the DMG contains the same executable and plist, and uploads one artifact. It does not rebuild the server or development collector.
 
-The separate publisher uses the main-only `release` environment. It installs a pinned official Tauri signer without workspace dependencies or install scripts, then signs each updater archive and verifies it against the public key in the tested source. It stages the updater manifest and stable installer, attests the artifacts, uploads once, checks the exact remote asset set and SHA-256 digests, publishes the draft, and asserts release immutability. Failures leave a draft for recovery. Stale assets on a recovered draft are removed before publication.
+The separate publisher uses the main-only `release` environment. Both callers explicitly forward the named signing secrets to the reusable workflow. GitHub requires this even for secrets stored only in that environment. It installs a pinned official Tauri signer without workspace dependencies or install scripts, then signs each updater archive and verifies it against the public key in the tested source. It stages the updater manifest and stable installer, attests the artifacts, uploads once, checks the exact remote asset set and SHA-256 digests, publishes the draft, and asserts release immutability. Failures leave a draft for recovery. Stale assets on a recovered draft are removed before publication.
 
 ## Recover a release
 
@@ -19,6 +19,8 @@ gh workflow run release.yml --ref main -f tag=v0.32.3
 ```
 
 Recovery resolves the tag to its tested SHA and requires successful main-push CI for that SHA. If the frontend artifact expired, rerun that original CI run first, then recover the draft. Older drafts created before this pipeline lack its frontend artifact and are not supported by this recovery command. Published immutable releases cannot be recovered in place. Publish a new version instead.
+
+Release-please updates the desktop crate version in both `Cargo.toml` and `Cargo.lock`, so release PRs retain locked builds. Its TOML updater wraps parsed scalar values, which is why the lockfile selector uses `name.value` to find `revv-desktop`.
 
 Release-please uses `GITHUB_TOKEN`, so it explicitly dispatches CI on its release PR branch. Stable publication is serialized. Nightly publication is also serialized to prevent cancellation during signing or upload. A queued nightly skips itself when its tested SHA is no longer current main.
 
