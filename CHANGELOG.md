@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.33.0](https://github.com/alexandre-schaffner/revv/compare/v0.32.3...v0.33.0) (2026-11-03)
+
+
+### Features
+
+* sync the server checkout on launch and test the real agent ([#290](https://github.com/alexandre-schaffner/revv/issues/290)) ([5896562](https://github.com/alexandre-schaffner/revv/commit/5896562aeb9474e6f9707db50cd7e25e2b0567bf))
+
+
+### Bug Fixes
+
+* **desktop:** ship the server inside the app bundle ([#292](https://github.com/alexandre-schaffner/revv/issues/292)) ([1ee3da7](https://github.com/alexandre-schaffner/revv/commit/1ee3da7c3671f23e6428a8f0dab7fc920c48193e))
+* **onboarding:** surface app shell crashes instead of hanging on Fin ([#288](https://github.com/alexandre-schaffner/revv/issues/288)) ([949d227](https://github.com/alexandre-schaffner/revv/commit/949d227a42512abab7b9d9f94b9f92f8686c9d58))
+* **server:** handle SIGTERM that arrives while the server is booting ([#293](https://github.com/alexandre-schaffner/revv/issues/293)) ([a936b7a](https://github.com/alexandre-schaffner/revv/commit/a936b7a956f7a13147a4a033bddf4e21dbb0a5c3))
+* warn when the background service runs an older build than the app ([#289](https://github.com/alexandre-schaffner/revv/issues/289)) ([fa034cc](https://github.com/alexandre-schaffner/revv/commit/fa034cc751287a206566d8762b06b9f54c4e0c4e))
+
 ## [0.32.3](https://github.com/alexandre-schaffner/revv/compare/v0.32.2...v0.32.3) (2026-11-02)
 
 
