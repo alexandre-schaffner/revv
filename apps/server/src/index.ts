@@ -182,23 +182,13 @@ logError("server", `listening on http://${serverEnv.host}:${port}`);
 
 enterOrigin("boot", "boot");
 
-// Migrate any plaintext GitHub tokens left in the `account` table into the OS
-// secure store, then null the columns. Awaited before the sync scheduler boots
-// so the first poll cycle reads tokens from their new home. One-time and
-// idempotent — a no-op once every row has been migrated.
-await AppRuntime.runPromise(
-  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
-)
-  .then((n) => {
-    if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
-  })
-  .catch((err) => {
-    logError("secret-store", "legacy token migration failed:", err);
-  });
-
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 // SIGTERM arrives on bun --watch restarts and desktop shutdown.
 // SIGINT  arrives on Ctrl-C.
+//
+// Registered before the first `await`: the server already answers requests,
+// and building the runtime installs other SIGTERM listeners (git-runner) that
+// suppress Bun's default exit, so a signal landing earlier would be swallowed.
 //
 // Both previously only logged, leaving the process alive — that's why stale
 // instances accumulated.  Now we: stop Elysia, dispose the Effect runtime
@@ -248,6 +238,20 @@ async function gracefulShutdown(signal: string): Promise<void> {
 process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 watchDesktopParent(serverEnv.desktopPid, () => void gracefulShutdown("desktop exited"));
+
+// Migrate any plaintext GitHub tokens left in the `account` table into the OS
+// secure store, then null the columns. Awaited before the sync scheduler boots
+// so the first poll cycle reads tokens from their new home. One-time and
+// idempotent — a no-op once every row has been migrated.
+await AppRuntime.runPromise(
+  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
+)
+  .then((n) => {
+    if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
+  })
+  .catch((err) => {
+    logError("secret-store", "legacy token migration failed:", err);
+  });
 
 // Re-launch walkthrough fibers for any rows left in `status='generating'`
 // by a previous run. Runs in the background so boot isn't blocked by slow
