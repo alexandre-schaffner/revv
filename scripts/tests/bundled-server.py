@@ -59,4 +59,9 @@ with tempfile.TemporaryDirectory() as root:
         print(f"Bundled server healthy at {commit[:7]} with {applied} migrations")
     finally:
         child.terminate()
-        child.wait(timeout=15)
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            log.seek(0)
+            raise SystemExit(f"Bundled server ignored SIGTERM:\n{log.read()}")
