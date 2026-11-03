@@ -9,7 +9,7 @@ describe("agentAuthRecoveryDescription", () => {
     const description = agentAuthRecoveryDescription(
       `ACP connection closed\n\n${KEYCHAIN_REMEDIATION}`,
     );
-    expect(description).toContain("check Keychain access");
+    expect(description).toContain("run the agent test");
     expect(description).toEndWith("Agent error: ACP connection closed");
     expect(description).not.toContain("subscription login");
   });

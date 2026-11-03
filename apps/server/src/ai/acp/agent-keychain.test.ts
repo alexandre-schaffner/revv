@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { getAgentKeychainAuth } from "@revv/shared";
 import {
+  agentFailureGuidance,
   looksLikeAuthFailure,
-  probeAgentKeychainReadable,
   withAgentKeychainHint,
 } from "./agent-keychain";
 
@@ -87,27 +87,15 @@ describe("withAgentKeychainHint", () => {
   });
 });
 
-describe("probeAgentKeychainReadable", () => {
-  // Regression coverage for the bug this fixes: the probe used to run a raw,
-  // unscoped Keychain existence check that couldn't see an isolated
-  // `CLAUDE_CONFIG_DIR`'s own scoped item, so it always reported `false` under
-  // isolation regardless of whether the user was actually logged in. It now
-  // delegates to the SAME context-aware auth check `withAgentKeychainHint`
-  // uses, via the same `isLoggedIn` test seam.
-
-  it("reports the probe's verdict directly for a keychain-backed agent", async () => {
-    expect(await probeAgentKeychainReadable("claude-code", () => true)).toBe(true);
-    expect(await probeAgentKeychainReadable("claude-code", () => false)).toBe(false);
+describe("agentFailureGuidance", () => {
+  it("returns only the guidance, without the raw error", () => {
+    const guidance = agentFailureGuidance("claude-code", "Authentication required", () => true);
+    expect(guidance).toBe(getAgentKeychainAuth("claude-code")?.remediation ?? null);
   });
 
-  it("returns null for agents that aren't keychain-backed, regardless of login state", async () => {
-    expect(await probeAgentKeychainReadable("opencode", () => true)).toBeNull();
-    expect(await probeAgentKeychainReadable("codex", () => false)).toBeNull();
-    expect(await probeAgentKeychainReadable("cursor", () => true)).toBeNull();
-  });
-
-  it("falls back to the real detectAgentAuth-based probe when no test seam is supplied (smoke test)", async () => {
-    const readable = await probeAgentKeychainReadable("claude-code");
-    expect(typeof readable).toBe("boolean");
+  it("returns null for errors that aren't auth-shaped", () => {
+    expect(
+      agentFailureGuidance("claude-code", "You've hit your spend limit", () => true),
+    ).toBeNull();
   });
 });

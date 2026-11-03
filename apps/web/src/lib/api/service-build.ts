@@ -1,7 +1,7 @@
 /**
  * How the server's build compares to the app's. The in-app updater replaces
- * only the `.app`; the server keeps running from the source checkout until
- * `revv update` moves it, so the two can silently drift apart.
+ * only the `.app`; the server runs from a separate source checkout, which the
+ * desktop shell moves to the app's commit on launch when it safely can.
  */
 export type ServiceBuild =
   | { kind: "match" }

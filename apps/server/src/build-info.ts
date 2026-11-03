@@ -2,10 +2,11 @@
 //
 // The desktop app and this server ship separately: the in-app updater swaps
 // the `.app` bundle, but the server runs from the source checkout `install.sh`
-// cloned (`~/Library/Application Support/Revv/src`), which only `revv update`
-// moves. Reporting the checkout's commit on `/api/health` lets the app notice
-// when the two have drifted apart, instead of silently running an old server
-// under a new UI.
+// cloned (`~/Library/Application Support/Revv/src`). The desktop shell moves
+// that checkout to its own commit on launch when it safely can
+// (`apps/desktop/src/server_source.rs`). Reporting the checkout's commit on
+// `/api/health` lets the app notice when that didn't happen, instead of
+// silently running an old server under a new UI.
 
 /**
  * Full commit SHA of the source checkout this server runs from, or `null`
