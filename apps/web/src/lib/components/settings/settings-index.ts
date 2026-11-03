@@ -270,8 +270,14 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   {
     id: "update-build",
     pane: "updates",
-    label: "Current build",
+    label: "App build",
     keywords: ["commit", "version", "hash"],
+  },
+  {
+    id: "update-service-build",
+    pane: "updates",
+    label: "Background service build",
+    keywords: ["server", "commit", "version", "revv update"],
   },
 ];
 
