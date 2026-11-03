@@ -22,7 +22,7 @@ function agentErrorHead(message: string): string {
 
 export function agentAuthRecoveryDescription(message: string): string {
   const hint = KEYCHAIN_PATTERN.test(message)
-    ? "Reconnect the agent in Settings. If it is already connected, check Keychain access there."
+    ? "Reconnect the agent in Settings. If it is already connected, run the agent test there to see what fails."
     : "Reconnect the agent in Settings, then retry.";
   // Keep the raw error visible: the same advice covers several unrelated
   // failures, and without it a report can't tell which one happened.

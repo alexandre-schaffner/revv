@@ -139,7 +139,7 @@ async function copyHash(): Promise<void> {
 			id="update-service-build"
 			label="Background service build"
 			hint={serviceBuild?.mismatch
-				? 'Does not match this app. In-app updates leave the service as is; run "revv update" in Terminal.'
+				? 'Does not match this app. Revv couldn\'t update it on launch; run "revv update" in Terminal.'
 				: 'The commit the service that runs reviews and chat was started from.'}
 		>
 			{#snippet control()}

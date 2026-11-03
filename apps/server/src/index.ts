@@ -14,6 +14,7 @@ import { configuredGitHubHosts, githubLedgerPath } from "./observability/github-
 import { enterOrigin, relabelOrigin } from "./observability/github-ledger/origin";
 import { installGitHubLedger } from "./observability/github-ledger/record";
 import { recordSpan } from "./observability/tracer";
+import { agentCheckRoutes } from "./routes/agent-check";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
@@ -160,6 +161,7 @@ const app = new Elysia()
   .use(mcpChatContextRoute)
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
+  .use(agentCheckRoutes)
   .get("/api/health", () => ({
     status: "ok" as const,
     channel: serverEnv.channel,
