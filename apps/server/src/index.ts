@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth, db } from "./auth";
+import { SOURCE_COMMIT } from "./build-info";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { watchDesktopParent } from "./desktop-parent";
@@ -13,6 +14,7 @@ import { configuredGitHubHosts, githubLedgerPath } from "./observability/github-
 import { enterOrigin, relabelOrigin } from "./observability/github-ledger/origin";
 import { installGitHubLedger } from "./observability/github-ledger/record";
 import { recordSpan } from "./observability/tracer";
+import { agentCheckRoutes } from "./routes/agent-check";
 import { chatRoute } from "./routes/chat";
 import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
@@ -159,9 +161,11 @@ const app = new Elysia()
   .use(mcpChatContextRoute)
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
+  .use(agentCheckRoutes)
   .get("/api/health", () => ({
     status: "ok" as const,
     channel: serverEnv.channel,
+    commit: SOURCE_COMMIT,
     port,
     timestamp: new Date().toISOString(),
   }))

@@ -4,6 +4,8 @@ import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import Download from "phosphor-svelte/lib/Download";
 import Spinner from "phosphor-svelte/lib/Spinner";
+import { fetchRuntimeHealth } from "$lib/api/runtime";
+import { compareServiceBuild } from "$lib/api/service-build";
 import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import { gsapPop } from "$lib/motion";
@@ -16,6 +18,30 @@ import SettingsRow from "../primitives/SettingsRow.svelte";
 import { SETTINGS_PANES } from "../settings-index";
 
 const commitHash = getCommitHash();
+let serviceBuild = $state<{ label: string; mismatch: boolean } | null>(null);
+
+$effect(() => {
+  let cancelled = false;
+  void fetchRuntimeHealth()
+    .then((health) => {
+      if (cancelled) return;
+      const build = compareServiceBuild(commitHash, health.commit);
+      serviceBuild = {
+        label:
+          build.kind === "mismatch"
+            ? (build.serviceCommit ?? "older than this app")
+            : (health.commit?.slice(0, 7) ?? "unknown"),
+        mismatch: build.kind === "mismatch",
+      };
+    })
+    .catch(() => {
+      if (!cancelled) serviceBuild = { label: "unreachable", mismatch: false };
+    });
+  return () => {
+    cancelled = true;
+  };
+});
+
 const channel = $derived<UpdateChannel>(getSettings()?.updateChannel ?? "stable");
 
 const channelOptions: SegmentedOption<UpdateChannel>[] = [
@@ -85,7 +111,7 @@ async function copyHash(): Promise<void> {
 				</Button>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow id="update-build" label="Build" hint="The commit this build was produced from.">
+		<SettingsRow id="update-build" label="App build" hint="The commit this app was built from.">
 			{#snippet control()}
 				<span class="build-hash">{commitHash}</span>
 				<Button
@@ -109,6 +135,19 @@ async function copyHash(): Promise<void> {
 				</Button>
 			{/snippet}
 		</SettingsRow>
+		<SettingsRow
+			id="update-service-build"
+			label="Background service build"
+			hint={serviceBuild?.mismatch
+				? 'Does not match this app. Revv couldn\'t update it on launch; run "revv update" in Terminal.'
+				: 'The commit the service that runs reviews and chat was started from.'}
+		>
+			{#snippet control()}
+				<span class="build-hash" class:build-hash-stale={serviceBuild?.mismatch}>
+					{serviceBuild?.label ?? '…'}
+				</span>
+			{/snippet}
+		</SettingsRow>
 	</SettingsGroup>
 </SettingsPane>
 
@@ -117,6 +156,10 @@ async function copyHash(): Promise<void> {
 		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 		font-size: 12px;
 		color: var(--color-text-secondary);
+	}
+
+	.build-hash-stale {
+		color: var(--color-warning);
 	}
 
 	.copy-slot {

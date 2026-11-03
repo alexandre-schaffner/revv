@@ -4,7 +4,7 @@ import IconContext from "phosphor-svelte/lib/IconContext";
 import { onMount } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
-import { assertRuntimeChannel } from "$lib/api/runtime";
+import { assertRuntimeChannel, fetchRuntimeHealth } from "$lib/api/runtime";
 import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
 import CacheInspector from "$lib/components/dev/CacheInspector.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
@@ -29,6 +29,7 @@ import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
 import { startUpdater, stopUpdater } from "$lib/updater/service";
+import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
 let hydrated = false;
@@ -140,13 +141,18 @@ onMount(() => {
     });
   }
 
-  void assertRuntimeChannel().catch((error: unknown) => {
-    toast.error("Runtime channel unavailable", {
-      id: "runtime-channel-error",
-      description: error instanceof Error ? error.message : String(error),
-      duration: 6000,
+  void fetchRuntimeHealth()
+    .then((health) => {
+      assertRuntimeChannel(health);
+      warnIfServiceOutOfDate(health);
+    })
+    .catch((error: unknown) => {
+      toast.error("Runtime channel unavailable", {
+        id: "runtime-channel-error",
+        description: error instanceof Error ? error.message : String(error),
+        duration: 6000,
+      });
     });
-  });
 
   // On mount: try to restore auth from localStorage.
   // If the token is valid, loadUser() sets the user, which triggers

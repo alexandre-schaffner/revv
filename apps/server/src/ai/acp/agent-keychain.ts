@@ -12,11 +12,9 @@
 // which remediation) comes from the registry, so covering another keychain-using
 // provider is one registry entry — no change here.
 //
-// `probeAgentKeychainReadable` (Settings' manual "Check access" button) no
-// longer probes the Keychain item directly — a raw, unscoped service-name
-// probe can't see an isolated `CLAUDE_CONFIG_DIR`'s own scoped item (see
-// `claude-config.ts`), so it delegates to the same context-aware auth probe
-// the agent spawn itself uses and reports that verdict.
+// Settings' "Test agent" button (`agent-check.ts`) runs a real one-line turn
+// rather than probing the Keychain or `claude auth status`: neither proves the
+// agent subprocess itself can authenticate, and only a real turn does.
 //
 // An auth-shaped failure has TWO real causes that look identical from the raw
 // ACP error alone (401 / "connection closed"): the agent simply isn't logged
@@ -45,13 +43,14 @@ function notLoggedInMessage(agent: AcpAgentId): string {
   const label = getAcpAgent(agent).label;
   return (
     `The ${label} agent isn't logged in for this session. Open Revv Settings → ` +
-    `AI Configuration and sign in to ${label}, then retry.`
+    `AI agent and sign in to ${label}, then retry.`
   );
 }
 
 /**
- * Append a diagnosis to an auth failure. No-op for errors that don't look
- * auth-related, so unrelated failures aren't drowned in advice.
+ * The guidance to show after an auth-shaped agent failure, or `null` when the
+ * error doesn't look auth-related (so unrelated failures aren't drowned in
+ * advice).
  *
  * `isLoggedIn` is checked first to pick the right lead: if the agent isn't
  * authenticated in the active context, that's the credible diagnosis (login
@@ -59,66 +58,35 @@ function notLoggedInMessage(agent: AcpAgentId): string {
  * is keychain-backed, is appended only as an "already signed in?" fallback,
  * since the two causes aren't reliably distinguishable from here. If the
  * agent DOES report authenticated, a lingering auth-shaped failure is the
- * keychain remediation's actual target case, so it's shown alone as before.
+ * keychain remediation's actual target case, so it's shown alone.
  *
  * @param isLoggedIn Test seam for the auth check — defaults to
  * `detectAgentAuth` (context-aware for claude-code, see `claude-config.ts`).
  * Production leaves it at the default.
  */
-export function withAgentKeychainHint(
+export function agentFailureGuidance(
   agent: AcpAgentId,
   rawMessage: string,
   isLoggedIn: (agent: AcpAgentId) => boolean = detectAgentAuth,
-): string {
-  if (!looksLikeAuthFailure(rawMessage)) return rawMessage;
+): string | null {
+  if (!looksLikeAuthFailure(rawMessage)) return null;
 
   const keychainAuth = getAgentKeychainAuth(agent);
 
   if (!isLoggedIn(agent)) {
     const fallbackHint = keychainAuth ? `\n\nAlready signed in? ${keychainAuth.remediation}` : "";
-    return `${rawMessage}\n\n${notLoggedInMessage(agent)}${fallbackHint}`;
+    return `${notLoggedInMessage(agent)}${fallbackHint}`;
   }
 
-  if (!keychainAuth) return rawMessage;
-  return `${rawMessage}\n\n${keychainAuth.remediation}`;
+  return keychainAuth?.remediation ?? null;
 }
 
-/** The agent's keychain remediation text, or `null` if it isn't keychain-backed. */
-export function agentKeychainRemediation(agent: AcpAgentId): string | null {
-  return getAgentKeychainAuth(agent)?.remediation ?? null;
-}
-
-/**
- * Whether the agent can actually authenticate in the ACTIVE context — the
- * source of truth for Settings' manual "Check access" button.
- *
- * This used to run a raw `security find-generic-password -w -s <fixed service
- * name>` readability probe. That check was already only a heuristic (a
- * readable item can be stale — logout doesn't always clear it), but it became
- * outright WRONG once claude-code sessions could isolate into a resolved
- * `CLAUDE_CONFIG_DIR` (see `claude-config.ts`): macOS Keychain storage is
- * scoped PER CONFIG DIR, under an unpublished per-dir service name suffix, so
- * the fixed `<service>` name probe always missed an isolated login and
- * reported `false` regardless of whether the user was actually signed in.
- *
- * There is also no reliable way to distinguish "not logged in" from
- * "logged in but Keychain-ACL-blocked" from any available signal — a blocked
- * read and a logged-out session both surface as "not logged in" from the
- * agent's own status command (documented in the runbook). So rather than keep
- * that false precision, this now delegates to `detectAgentAuth` — the SAME
- * context-aware probe (`claudeStatusCommandEnv` → `resolveClaudeConfigDir`)
- * the agent spawn and the walkthrough-failure diagnosis already rely on — and
- * reports its verdict directly: `true` (authenticated), `false` (not — could
- * be either cause above; the returned remediation text still covers both),
- * or `null` (the agent isn't keychain-backed, so this check doesn't apply).
- *
- * @param isLoggedIn Test seam for the auth check — same contract as
- * {@link withAgentKeychainHint}'s, defaults to `detectAgentAuth`.
- */
-export async function probeAgentKeychainReadable(
+/** Append {@link agentFailureGuidance} to an agent error, after a blank line. */
+export function withAgentKeychainHint(
   agent: AcpAgentId,
+  rawMessage: string,
   isLoggedIn: (agent: AcpAgentId) => boolean = detectAgentAuth,
-): Promise<boolean | null> {
-  if (!getAgentKeychainAuth(agent)) return null;
-  return isLoggedIn(agent);
+): string {
+  const guidance = agentFailureGuidance(agent, rawMessage, isLoggedIn);
+  return guidance ? `${rawMessage}\n\n${guidance}` : rawMessage;
 }

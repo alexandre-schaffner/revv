@@ -5,6 +5,7 @@ export type {
   AcpAgentId,
   AcpAgentKeychainAuth,
   AcpAgentModel,
+  AgentCheckResult,
   AgentStatus,
   AgentStatusReport,
   ThinkingEffortSetting,

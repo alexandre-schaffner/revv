@@ -1,6 +1,7 @@
 import {
   ACP_AGENT_IDS,
   type AcpAgentId,
+  type AgentCheckResult,
   type AgentStatusReport,
   getAgentCapabilities,
   getModelThinkingEfforts,
@@ -332,32 +333,27 @@ export async function fetchAgentStatus(
   }
 }
 
-// ── Agent keychain access (Solution B: guide, don't store) ──────────────────
-// Whether Revv's background service can read a keychain-backed agent's login
-// from the macOS Keychain. `readable: null` = not macOS, the agent isn't
-// keychain-backed, or the probe is unavailable. No credential is ever stored —
-// on a block we surface the remediation steps.
+// ── Agent test ───────────────────────────────────────────────────────────────
+// One real turn through the review path, run by the server (see the server's
+// `agent-check.ts`). Explicit and user-triggered: it starts the agent and
+// spends a few tokens, so opening Settings must never run it.
 
-export interface AgentKeychainResult {
-  readable: boolean | null;
-  remediation: string | null;
-}
-
-/**
- * Explicit check (user-triggered) so opening Settings never fires a surprise
- * keychain prompt. Runs the probe in the server's own context, for the given
- * agent's declared keychain item.
- */
-export async function checkAgentKeychain(agent: AcpAgentId): Promise<AgentKeychainResult> {
+export async function runAgentCheck(agent: AcpAgentId): Promise<AgentCheckResult> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/agent/keychain-check`, {
+    const res = await fetch(`${API_BASE_URL}/api/agent/check`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ agent }),
     });
-    if (!res.ok) return { readable: null, remediation: null };
-    return (await res.json()) as AgentKeychainResult;
-  } catch {
-    return { readable: null, remediation: null };
+    if (!res.ok) {
+      return { ok: false, error: `Revv's service answered HTTP ${res.status}.`, guidance: null };
+    }
+    return (await res.json()) as AgentCheckResult;
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Revv's service is unreachable.",
+      guidance: null,
+    };
   }
 }
