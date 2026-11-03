@@ -90,6 +90,14 @@ function handleFinish() {
 function handleNewAccount() {
   pickerDismissed = true;
 }
+
+function handleAppError(error: unknown): void {
+  console.error("App shell failed to render", error);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 </script>
 
 {#if !ready && restoringSession}
@@ -156,8 +164,35 @@ function handleNewAccount() {
 	</div>
 {:else if ready}
 	{#if showApp}
+		<!-- Without this boundary, an exception while mounting the app shell
+		     aborts the branch swap and leaves the onboarding screen on display
+		     with no visible error. -->
 		<div class="root" in:gsapFade={{ duration: tokens.slow }}>
-			{@render children()}
+			<svelte:boundary onerror={handleAppError}>
+				{@render children()}
+				{#snippet failed(error, reset)}
+					<div class="restore-main crash-root">
+						<div class="restore-status">
+							<div class="restore-status-icon restore-status-icon-error">
+								<WarningCircle size={22} weight="fill" />
+							</div>
+							<div class="restore-copy">
+								<h1>Revv failed to open</h1>
+								<p class="crash-message">{errorMessage(error)}</p>
+							</div>
+							<div class="restore-actions">
+								<Button size="sm" onclick={reset}>
+									<ArrowsClockwise data-icon="inline-start" />
+									Retry
+								</Button>
+								<Button variant="outline" size="sm" onclick={() => location.reload()}>
+									Reload window
+								</Button>
+							</div>
+						</div>
+					</div>
+				{/snippet}
+			</svelte:boundary>
 		</div>
 		<!-- Blocking re-auth gate: overlays the app (kept mounted) when the
 		     active account's GitHub token expired and couldn't be refreshed. -->
@@ -379,6 +414,15 @@ function handleNewAccount() {
 		font-size: 12px;
 		line-height: 1.5;
 		margin: 0;
+	}
+
+	.crash-root {
+		height: 100%;
+	}
+
+	.crash-message {
+		overflow-wrap: anywhere;
+		user-select: text;
 	}
 
 	.restore-actions {
