@@ -379,11 +379,14 @@ cmd_status() {
     printf "  %sAPI:%s         %snot responding on %s%s\n" "$BOLD" "$RESET" "$RED" "$API_URL" "$RESET"
   fi
 
-  # Upstream check
-  if git -C "$INSTALL_DIR" fetch --quiet 2>/dev/null; then
-    local behind
-    behind="$(git -C "$INSTALL_DIR" rev-list --count "HEAD..@{upstream}" 2>/dev/null || echo 0)"
-    if [[ "$behind" -gt 0 ]]; then
+  # Compare against the ref `revv update` would install. The checkout is a
+  # detached release tag, so it has no upstream branch to compare with.
+  if git -C "$INSTALL_DIR" fetch --quiet --tags origin 2>/dev/null; then
+    local behind target_ref
+    target_ref="$(resolve_target_ref "$(read_channel)")"
+    if ! behind="$(git -C "$INSTALL_DIR" rev-list --count "HEAD..$target_ref" 2>/dev/null)"; then
+      printf "  %sUpdate:%s      %sunknown — could not compare with %s%s\n" "$BOLD" "$RESET" "$YELLOW" "$target_ref" "$RESET"
+    elif [[ "$behind" -gt 0 ]]; then
       printf "  %sUpdate:%s      %s%d commit(s) behind — run 'revv update'%s\n" "$BOLD" "$RESET" "$YELLOW" "$behind" "$RESET"
     else
       printf "  %sUpdate:%s      up to date\n" "$BOLD" "$RESET"

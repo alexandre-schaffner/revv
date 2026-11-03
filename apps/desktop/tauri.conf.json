@@ -6,7 +6,10 @@
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web/build",
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": {
+      "script": "bun scripts/build-binary.ts",
+      "cwd": "../server"
+    },
     "beforeDevCommand": ""
   },
   "bundle": {
@@ -28,6 +31,9 @@
     "copyright": "Copyright 2025 Revv contributors",
     "macOS": {
       "minimumSystemVersion": "10.15",
+      "files": {
+        "MacOS/revv-server": "target/revv-server/revv-server"
+      },
       "dmg": {
         "appPosition": {
           "x": 180,

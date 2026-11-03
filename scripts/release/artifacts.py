@@ -9,6 +9,21 @@ import tarfile
 
 
 ARCHES = {"aarch64": 0x0100000C, "x64": 0x01000007}
+# The compiled server the app runs; it ships inside the app so in-app updates
+# replace both together.
+BUNDLED_SERVER = "revv-server"
+
+
+def _check_executable(archive, path, arch, label):
+    try:
+        binary = archive.extractfile(path)
+    except KeyError:
+        binary = None
+    if binary is None:
+        raise ValueError(f"Missing {label}")
+    header = binary.read(8)
+    if len(header) != 8 or struct.unpack("<II", header) != (0xFEEDFACF, ARCHES[arch]):
+        raise ValueError(f"{label} architecture differs from matrix target")
 
 
 def validate_archive(path, version, arch):
@@ -44,12 +59,8 @@ def validate_archive(path, version, arch):
         executable = info.get("CFBundleExecutable", "")
         if not executable or pathlib.PurePosixPath(executable).name != executable:
             raise ValueError("Invalid app executable name")
-        binary = archive.extractfile(f"{root}/Contents/MacOS/{executable}")
-        if binary is None:
-            raise ValueError("Missing app executable")
-        header = binary.read(8)
-        if len(header) != 8 or struct.unpack("<II", header) != (0xFEEDFACF, ARCHES[arch]):
-            raise ValueError("App architecture differs from matrix target")
+        _check_executable(archive, f"{root}/Contents/MacOS/{executable}", arch, "App executable")
+        _check_executable(archive, f"{root}/Contents/MacOS/{BUNDLED_SERVER}", arch, "Bundled server")
 
 
 def validate_set(directory, version, *, prepared=False, nightly=False):

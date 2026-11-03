@@ -6,9 +6,11 @@ Revv is a local-first review application with three runtime surfaces:
 - `apps/server` is the local Elysia API, SQLite journal, GitHub sync engine, and AI orchestration owner.
 - `apps/desktop` is the Tauri shell that owns the desktop window, deep-link bridge, and local server process.
 
-The desktop app launches Bun directly, waits for `/api/health`, and restarts unexpected server exits up to three times per app run. Closing the window hides it to the tray. Quitting or relaunching the app stops the server and its process group. The server also watches its desktop parent so a force-quit triggers shutdown.
+The server ships inside the app. `tauri build` runs `apps/server/scripts/build-binary.ts`, which compiles the server with `bun build --compile` for the target architecture into `Revv.app/Contents/MacOS/revv-server`. Migrations and `integrations/` are embedded in the binary, and the build commit is baked in and reported by `/api/health`. An in-app update therefore replaces the app and its server together; they cannot drift apart. The source checkout at `~/Library/Application Support/Revv/src` is only used by the `revv` CLI and local-build fallbacks.
 
-Installed server paths and environment overrides live in `~/Library/Application Support/Revv/desktop-server.json`. The app migrates the old `com.revv.server` LaunchAgent configuration on first launch and removes the independent service. Development uses the separate server started by `make dev`.
+The desktop app launches that binary directly, waits for `/api/health`, and restarts unexpected server exits up to three times per app run. Because the app spawns it, macOS attributes the server and everything it runs (`git`, `ssh`, agents) to Revv, which is the name permission prompts such as 1Password's show. Closing the window hides it to the tray. Quitting or relaunching the app stops the server and its process group. The server also watches its desktop parent so a force-quit triggers shutdown.
+
+Environment overrides live in `~/Library/Application Support/Revv/desktop-server.json`. Its `executable` and `projectRoot` fields are only kept for older app versions; the checkout, when present, remains the server's working directory. The app migrates the old `com.revv.server` LaunchAgent configuration on first launch and removes the independent service. Development uses the separate server started by `make dev`, which runs from source.
 
 The server is organized around deep modules: each public interface should be the narrow neck
 that hides provider details, GitHub mechanics, persistence shape, and transport quirks.

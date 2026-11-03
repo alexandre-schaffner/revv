@@ -1,12 +1,14 @@
 // ── Server build identity ────────────────────────────────────────────────────
 //
-// The desktop app and this server ship separately: the in-app updater swaps
-// the `.app` bundle, but the server runs from the source checkout `install.sh`
-// cloned (`~/Library/Application Support/Revv/src`). The desktop shell moves
-// that checkout to its own commit on launch when it safely can
-// (`apps/desktop/src/server_source.rs`). Reporting the checkout's commit on
-// `/api/health` lets the app notice when that didn't happen, instead of
-// silently running an old server under a new UI.
+// The desktop app ships this server compiled inside its bundle, so both come
+// from one commit and update together. `/api/health` still reports the
+// server's commit: the app compares it with its own to catch a server it
+// doesn't own answering on its port (a leftover LaunchAgent, a stale dev
+// server), instead of silently running a mismatched UI against it.
+
+// Replaced at compile time by `scripts/build-binary.ts` (`--define`). Absent
+// when the server runs from source with `bun run`.
+declare const __REVV_BUILD_COMMIT__: string | undefined;
 
 /**
  * Full commit SHA of the source checkout this server runs from, or `null`
@@ -27,5 +29,10 @@ export function readSourceCommit(cwd: string = import.meta.dir): string | null {
   }
 }
 
+function compiledCommit(): string | null {
+  if (typeof __REVV_BUILD_COMMIT__ === "undefined") return null;
+  return /^[0-9a-f]{40}$/.test(__REVV_BUILD_COMMIT__) ? __REVV_BUILD_COMMIT__ : null;
+}
+
 /** Read once at boot: a running server keeps the code it started with, even if the checkout moves. */
-export const SOURCE_COMMIT = readSourceCommit();
+export const SOURCE_COMMIT = compiledCommit() ?? readSourceCommit();

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+/// <reference path="../../assets.d.ts" />
 import { isAbsolute, relative } from "node:path";
 import {
   HUNK_SMELL_META,
@@ -16,6 +16,21 @@ import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
 } from "../../services/walkthrough-prompt-files";
+import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };
+import WALKTHROUGH_AUTHOR_PROMPT from "./walkthrough-author.md" with { type: "text" };
+import WALKTHROUGH_COMMON_PROMPT from "./walkthrough-common.md" with { type: "text" };
+import WALKTHROUGH_INCREMENTAL_REFRESH_PROMPT from "./walkthrough-incremental-refresh.md" with {
+  type: "text",
+};
+import WALKTHROUGH_REVIEWER_PROMPT from "./walkthrough-reviewer.md" with { type: "text" };
+import WALKTHROUGH_SHARED_REVIEW_PRINCIPLES from "./walkthrough-shared-review-principles.md" with {
+  type: "text",
+};
+import WALKTHROUGH_SYSTEM_AUTHOR_PROMPT from "./walkthrough-system-author.md" with { type: "text" };
+import WALKTHROUGH_SYSTEM_COMMON_PROMPT from "./walkthrough-system-common.md" with { type: "text" };
+import WALKTHROUGH_SYSTEM_REVIEWER_PROMPT from "./walkthrough-system-reviewer.md" with {
+  type: "text",
+};
 
 // ── Continuation context (imported here to avoid circular deps) ──────────────
 //
@@ -30,29 +45,6 @@ export interface PromptContinuationContext {
 }
 
 // ── MCP-based walkthrough prompt (phase-bound, A→B→C→D) ─────────────────────
-
-const WALKTHROUGH_SYSTEM_COMMON_PROMPT = readFileSync(
-  `${import.meta.dir}/walkthrough-system-common.md`,
-  "utf-8",
-);
-const WALKTHROUGH_SYSTEM_REVIEWER_PROMPT = readFileSync(
-  `${import.meta.dir}/walkthrough-system-reviewer.md`,
-  "utf-8",
-);
-const WALKTHROUGH_SYSTEM_AUTHOR_PROMPT = readFileSync(
-  `${import.meta.dir}/walkthrough-system-author.md`,
-  "utf-8",
-);
-const WALKTHROUGH_ARTIFACTS_PROMPT = readFileSync(
-  `${import.meta.dir}/walkthrough-artifacts.md`,
-  "utf-8",
-);
-const WALKTHROUGH_COMMON_PROMPT = readFileSync(`${import.meta.dir}/walkthrough-common.md`, "utf-8");
-const WALKTHROUGH_REVIEWER_PROMPT = readFileSync(
-  `${import.meta.dir}/walkthrough-reviewer.md`,
-  "utf-8",
-);
-const WALKTHROUGH_AUTHOR_PROMPT = readFileSync(`${import.meta.dir}/walkthrough-author.md`, "utf-8");
 
 // The common system prompt carries this marker where the perspective-specific
 // block belongs (right after the intro, before the pipeline rules) so the mode
@@ -89,16 +81,6 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
     modePrompt.trim(),
   ).replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
 }
-
-const WALKTHROUGH_SHARED_REVIEW_PRINCIPLES: string = readFileSync(
-  `${import.meta.dir}/walkthrough-shared-review-principles.md`,
-  "utf-8",
-);
-
-const WALKTHROUGH_INCREMENTAL_REFRESH_PROMPT: string = readFileSync(
-  `${import.meta.dir}/walkthrough-incremental-refresh.md`,
-  "utf-8",
-);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

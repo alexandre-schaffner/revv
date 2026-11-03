@@ -1,3 +1,4 @@
+/// <reference path="../../assets.d.ts" />
 // ── Chat prompt ─────────────────────────────────────────────────────────────
 //
 // Right-pane AI chat system prompt + user-message builders. The agent runs
@@ -8,28 +9,16 @@
 // The system prompt is sent ONCE on session create — both the Claude Agent
 // SDK (`persistSession: true`) and the opencode daemon retain it for resumes.
 
-import { readFileSync } from "node:fs";
+import CHAT_RESOLVE_BASE_MERGE_TEMPLATE from "./chat-resolve-base-merge.md" with { type: "text" };
+import CHAT_RESOLVE_BASE_REBASE_TEMPLATE from "./chat-resolve-base-rebase.md" with { type: "text" };
+import CHAT_RESOLVE_CONFLICTS_TEMPLATE from "./chat-resolve-conflicts.md" with { type: "text" };
+import CHAT_SYSTEM_TEMPLATE from "./chat-system.md" with { type: "text" };
 import { WALKTHROUGH_ARTIFACT_SPEC } from "./walkthrough";
-
-const CHAT_SYSTEM_TEMPLATE: string = readFileSync(`${import.meta.dir}/chat-system.md`, "utf-8");
 
 const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
 if (!CHAT_SYSTEM_TEMPLATE.includes(ARTIFACT_SPEC_MARKER)) {
   throw new Error(`chat-system.md is missing the ${ARTIFACT_SPEC_MARKER} marker`);
 }
-
-const CHAT_RESOLVE_CONFLICTS_TEMPLATE: string = readFileSync(
-  `${import.meta.dir}/chat-resolve-conflicts.md`,
-  "utf-8",
-);
-const CHAT_RESOLVE_BASE_MERGE_TEMPLATE: string = readFileSync(
-  `${import.meta.dir}/chat-resolve-base-merge.md`,
-  "utf-8",
-);
-const CHAT_RESOLVE_BASE_REBASE_TEMPLATE: string = readFileSync(
-  `${import.meta.dir}/chat-resolve-base-rebase.md`,
-  "utf-8",
-);
 
 export interface ChatWalkthroughIssue {
   readonly severity: string; // 'info' | 'warning' | 'critical'

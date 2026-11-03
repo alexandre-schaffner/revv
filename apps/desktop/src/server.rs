@@ -4,6 +4,7 @@ use std::{
 	io::{self, Read, Write},
 	net::{SocketAddr, TcpStream},
 	os::unix::process::CommandExt,
+	path::{Path, PathBuf},
 	process::{Child, Command, Stdio},
 	sync::{
 		mpsc::{self, Receiver, Sender},
@@ -17,11 +18,46 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESTARTS: usize = 3;
+/// File name of the compiled server inside `Revv.app/Contents/MacOS`.
+const BUNDLED_SERVER: &str = "revv-server";
+
+/// What to run for the server. Production always runs the server compiled
+/// into the app bundle, so an in-app update replaces app and server together.
+#[derive(Clone, Debug)]
+pub struct ServerCommand {
+	pub program: PathBuf,
+	pub args: Vec<String>,
+	pub cwd: PathBuf,
+}
+
+impl ServerCommand {
+	/// The server beside the app executable in `executable_dir`.
+	pub fn bundled(executable_dir: &Path, config: &ServerConfig, home: &Path) -> io::Result<Self> {
+		let program = executable_dir.join(BUNDLED_SERVER);
+		if !program.is_file() {
+			return Err(io::Error::other(
+				"The Revv server is missing from the app bundle. Reinstall Revv.",
+			));
+		}
+		let cwd = config
+			.project_root
+			.as_deref()
+			.filter(|root| root.is_dir())
+			.unwrap_or(home)
+			.to_path_buf();
+		Ok(Self {
+			program,
+			args: Vec::new(),
+			cwd,
+		})
+	}
+}
 
 pub struct ServerProcess(Mutex<Option<(Sender<()>, JoinHandle<()>)>>);
 
 impl ServerProcess {
 	pub fn start(
+		command: ServerCommand,
 		config: ServerConfig,
 		on_failure: impl Fn(String) + Send + 'static,
 	) -> io::Result<Self> {
@@ -39,8 +75,10 @@ impl ServerProcess {
 			thread::sleep(POLL_INTERVAL);
 		}
 		let (stop, commands) = mpsc::channel();
-		let child = RunningServer::start(&config, address, &commands)?;
-		let worker = thread::spawn(move || supervise(child, config, address, commands, on_failure));
+		let child = RunningServer::start(&command, &config, address, &commands)?;
+		let worker = thread::spawn(move || {
+			supervise(child, command, config, address, commands, on_failure)
+		});
 		Ok(Self(Mutex::new(Some((stop, worker)))))
 	}
 
@@ -62,6 +100,7 @@ struct RunningServer(Child);
 
 impl RunningServer {
 	fn start(
+		command: &ServerCommand,
 		config: &ServerConfig,
 		address: SocketAddr,
 		commands: &Receiver<()>,
@@ -73,9 +112,9 @@ impl RunningServer {
 				.append(true)
 				.open(config.log_dir.join(name))
 		};
-		let child = Command::new(&config.executable)
-			.args(["run", "apps/server/src/index.ts"])
-			.current_dir(&config.project_root)
+		let child = Command::new(&command.program)
+			.args(&command.args)
+			.current_dir(&command.cwd)
 			.envs(&config.env)
 			.env("REVV_DESKTOP_PID", std::process::id().to_string())
 			.stdin(Stdio::null())
@@ -159,6 +198,7 @@ fn healthy(address: SocketAddr) -> bool {
 
 fn supervise(
 	mut child: RunningServer,
+	command: ServerCommand,
 	config: ServerConfig,
 	address: SocketAddr,
 	commands: Receiver<()>,
@@ -193,7 +233,7 @@ fn supervise(
 				return;
 			}
 			restarts += 1;
-			match RunningServer::start(&config, address, &commands) {
+			match RunningServer::start(&command, &config, address, &commands) {
 				Ok(restarted) => break restarted,
 				Err(error) if error.kind() == io::ErrorKind::Interrupted => return,
 				Err(error) => eprintln!("Revv server restart {restarts} failed: {error}"),

@@ -183,6 +183,23 @@ describe("install safety", () => {
     expect(Object.keys(openCodeConfig.mcp)).toEqual(["other"]);
   });
 
+  it("lets the compiled desktop server run the bridge like the Bun CLI", () => {
+    const home = temporaryHome();
+    installer("cursor", home).install(input(home, "token"));
+    installer("codex", home).install(input(home, "token"));
+
+    const cursor = JSON.parse(readFileSync(cursorPaths(ACCOUNT_KEY, home).configFile, "utf8")) as {
+      mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+    };
+    const entry = cursor.mcpServers[`revv-${ACCOUNT_KEY}`];
+    expect(entry?.command).toBe("/test/bun");
+    expect(entry?.args[0]).toBe("run");
+    expect(entry?.env).toEqual({ REVV_INTEGRATION_TOKEN: "token", BUN_BE_BUN: "1" });
+    expect(readFileSync(codexPaths(ACCOUNT_KEY, home).configFile, "utf8")).toContain(
+      'BUN_BE_BUN = "1"',
+    );
+  });
+
   it("writes the OpenCode server in the layout opencode 1 and 2 both read", () => {
     const home = temporaryHome();
     const paths = openCodePaths(ACCOUNT_KEY, home);

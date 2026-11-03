@@ -1,7 +1,6 @@
 /**
- * How the server's build compares to the app's. The in-app updater replaces
- * only the `.app`; the server runs from a separate source checkout, which the
- * desktop shell moves to the app's commit on launch when it safely can.
+ * How the server's build compares to the app's. The app bundles and starts
+ * its own server, so a mismatch means another server is answering on its port.
  */
 export type ServiceBuild =
   | { kind: "match" }

@@ -18,13 +18,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
-  copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -52,6 +52,8 @@ export function findIntegrationsDirectory(): string {
   const override = process.env.REVV_INTEGRATIONS_DIR?.trim();
   const candidates = [
     override,
+    // Embedded by the compiled desktop server (`scripts/build-binary.ts`).
+    join(import.meta.dir, "integrations"),
     resolve(import.meta.dir, "../../../../../integrations"),
     resolve(process.cwd(), "integrations"),
   ].filter((candidate): candidate is string => Boolean(candidate));
@@ -82,6 +84,16 @@ export interface BridgeInstallInput {
   readonly runtimeExecutable: string;
   readonly token: string;
   readonly integrationsDirectory: string;
+}
+
+/**
+ * Environment for the bridge process. `runtimeExecutable` is the server's own
+ * executable; in the desktop app that is the compiled Revv server, which only
+ * runs `run <file>` like the Bun CLI when `BUN_BE_BUN` is set. Plain Bun
+ * ignores the variable.
+ */
+function bridgeEnvironment(input: BridgeInstallInput): Record<string, string> {
+  return { REVV_INTEGRATION_TOKEN: input.token, BUN_BE_BUN: "1" };
 }
 
 /** Filesystem/config key that reveals no raw account identifier. */
@@ -133,10 +145,26 @@ function removeManagedDirectory(directory: string): void {
 }
 
 /** Copy the canonical bridge into a staged install directory. */
+// The compiled desktop server embeds `integrations/` in its virtual
+// filesystem, which supports reads but not `copyFile`/`cp`. Copy by content.
+function copyAsset(source: string, target: string): void {
+  writeFileSync(target, readFileSync(source));
+}
+
+function copyAssetTree(source: string, target: string): void {
+  mkdirSync(target, { recursive: true });
+  for (const name of readdirSync(source)) {
+    const from = join(source, name);
+    const to = join(target, name);
+    if (statSync(from).isDirectory()) copyAssetTree(from, to);
+    else copyAsset(from, to);
+  }
+}
+
 function stageBridge(staged: string, integrationsDirectory: string): void {
   const target = join(staged, "server", "revv-mcp.ts");
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync(bridgeSourceFile(integrationsDirectory), target);
+  copyAsset(bridgeSourceFile(integrationsDirectory), target);
   chmodSync(target, 0o600);
 }
 
@@ -233,7 +261,7 @@ function installClaudeCode(
   }
   const pluginRoot = `$${"{CLAUDE_PLUGIN_ROOT}"}`;
   writeManagedDirectory(paths.installDir, (staged) => {
-    cpSync(sourceDirectory, staged, { recursive: true });
+    copyAssetTree(sourceDirectory, staged);
     const manifestFile = join(staged, ".claude-plugin", "plugin.json");
     const manifest: unknown = JSON.parse(readFileSync(manifestFile, "utf8"));
     if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
@@ -256,9 +284,7 @@ function installClaudeCode(
         review: {
           command: input.runtimeExecutable,
           args: ["run", `${pluginRoot}/server/revv-mcp.ts`],
-          env: {
-            REVV_INTEGRATION_TOKEN: input.token,
-          },
+          env: bridgeEnvironment(input),
         },
       },
     };
@@ -309,7 +335,9 @@ function renderCodexManagedBlock(
     `args = ["run", ${tomlBasicString(bridgeFile(installDir))}]`,
     "",
     `[mcp_servers.${serverName}.env]`,
-    `REVV_INTEGRATION_TOKEN = ${tomlBasicString(input.token)}`,
+    ...Object.entries(bridgeEnvironment(input)).map(
+      ([name, value]) => `${name} = ${tomlBasicString(value)}`,
+    ),
     codexBlockEnd(serverName),
   ].join("\n");
 }
@@ -530,9 +558,7 @@ function installOpenCode(
     type: "local",
     command: [input.runtimeExecutable, "run", bridgeFile(paths.installDir)],
     enabled: true,
-    environment: {
-      REVV_INTEGRATION_TOKEN: input.token,
-    },
+    environment: bridgeEnvironment(input),
   });
   writeManagedGuide(
     paths.commandFile,
@@ -570,9 +596,7 @@ function installCursor(input: BridgeInstallInput, paths: CursorPaths, serverName
     type: "stdio",
     command: input.runtimeExecutable,
     args: ["run", bridgeFile(paths.installDir)],
-    env: {
-      REVV_INTEGRATION_TOKEN: input.token,
-    },
+    env: bridgeEnvironment(input),
   });
 }
 
