@@ -381,3 +381,12 @@ export interface AgentStatusReport {
   embeddedLoginSupported: boolean;
   agents: Record<AcpAgentId, AgentStatus>;
 }
+
+/**
+ * Result of Settings' agent test: one real turn through the same ACP path
+ * reviews use, run by the server. `guidance` is the sign-in / Keychain advice
+ * for auth-shaped failures, `null` otherwise.
+ */
+export type AgentCheckResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: string; readonly guidance: string | null };

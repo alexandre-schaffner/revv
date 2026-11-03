@@ -1,10 +1,10 @@
 <script lang="ts">
+import type { AgentCheckResult } from "@revv/shared";
 import {
   ACP_AGENTS,
   type AcpAgentId,
   AUTO_SENTINEL,
   type BaseConflictStrategy,
-  getAgentKeychainAuth,
   type ThinkingEffortSetting,
 } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
@@ -15,9 +15,7 @@ import * as Select from "$lib/components/ui/select";
 import type { ModelOption } from "$lib/constants/models";
 import { resetAgentSetup } from "$lib/stores/agent-setup.svelte";
 import {
-  type AgentKeychainResult,
   cascadeChatAgentChange,
-  checkAgentKeychain,
   fetchAgentStatus,
   fetchModels,
   getAgentStatus,
@@ -27,6 +25,7 @@ import {
   getThinkingEffortOptions,
   isAutoEffortOffered,
   isAutoModelOffered,
+  runAgentCheck,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
@@ -78,19 +77,16 @@ $effect(() => {
   void fetchModels(aiAgent);
 });
 
-// ── Keychain access ───────────────────────────────────────────────────────
-// Shown only for keychain-backed agents (registry-declared); today that's
-// Claude Code, but any provider that adds `keychainAuth` surfaces here.
-const keychainAuth = $derived(getAgentKeychainAuth(aiAgent));
-let keychainChecking = $state(false);
-let keychainResult = $state<AgentKeychainResult | null>(null);
+// ── Agent test ────────────────────────────────────────────────────────────
+let agentChecking = $state(false);
+let agentCheck = $state<AgentCheckResult | null>(null);
 
-async function handleCheckKeychain(): Promise<void> {
-  keychainChecking = true;
+async function handleRunAgentCheck(): Promise<void> {
+  agentChecking = true;
   try {
-    keychainResult = await checkAgentKeychain(aiAgent);
+    agentCheck = await runAgentCheck(aiAgent);
   } finally {
-    keychainChecking = false;
+    agentChecking = false;
   }
 }
 
@@ -101,7 +97,7 @@ $effect(() => {
   const agent = aiAgent;
   if (lastAgent !== null && lastAgent !== agent) resetAgentSetup();
   lastAgent = agent;
-  keychainResult = null;
+  agentCheck = null;
 });
 
 async function handleSelectAgent(agent: AcpAgentId): Promise<void> {
@@ -271,42 +267,39 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		</SettingsRow>
 	</SettingsGroup>
 
-	{#if keychainAuth}
-		<SettingsGroup heading="Keychain access">
-			<SettingsRow
-				id="ai-keychain"
-				label="Background access"
-				hint="Report generation runs in Revv's background service, which needs permission to read your {agentLabel} login from the macOS Keychain."
-			>
-				{#snippet control()}
-					<Button size="sm" variant="secondary" disabled={keychainChecking} onclick={handleCheckKeychain}>
-						{#if keychainChecking}
-							<Spinner size={12} class="motion-essential-spin" />
-							Checking…
-						{:else}
-							Check access
-						{/if}
-					</Button>
-				{/snippet}
-				{#if keychainResult}
-					{#if keychainResult.readable === true}
-						<StatusDot tone="success" label="Revv can read your {agentLabel} login." />
-					{:else if keychainResult.readable === false}
-						<p class="keychain-remediation">
-							<StatusDot tone="warning" label="Revv can't read it yet" />
-							<span>{keychainResult.remediation}</span>
-						</p>
+	<SettingsGroup heading="Connection">
+		<SettingsRow
+			id="ai-agent-test"
+			label="Test the agent"
+			hint="Sends one short prompt with your review model, from Revv's background service, the same way walkthroughs run. Uses a few tokens."
+		>
+			{#snippet control()}
+				<Button size="sm" variant="secondary" disabled={agentChecking} onclick={handleRunAgentCheck}>
+					{#if agentChecking}
+						<Spinner size={12} class="motion-essential-spin" />
+						Testing…
 					{:else}
-						<StatusDot tone="muted" label="Check unavailable on this platform." />
+						Run test
 					{/if}
-				{/if}
-			</SettingsRow>
-		</SettingsGroup>
-	{/if}
+				</Button>
+			{/snippet}
+			{#if agentCheck?.ok}
+				<StatusDot tone="success" label="{agentLabel} answered. Walkthroughs can run." />
+			{:else if agentCheck}
+				<div class="agent-check-failure">
+					<StatusDot tone="warning" label="{agentLabel} couldn't run" />
+					<code class="agent-check-error">{agentCheck.error}</code>
+					{#if agentCheck.guidance}
+						<span class="agent-check-guidance">{agentCheck.guidance}</span>
+					{/if}
+				</div>
+			{/if}
+		</SettingsRow>
+	</SettingsGroup>
 </SettingsPane>
 
 <style>
-	.keychain-remediation {
+	.agent-check-failure {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
@@ -314,5 +307,16 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		font-size: 12px;
 		line-height: 1.45;
 		color: var(--color-text-secondary);
+	}
+
+	.agent-check-error {
+		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		color: var(--color-text-primary);
+	}
+
+	.agent-check-guidance {
+		white-space: pre-line;
 	}
 </style>

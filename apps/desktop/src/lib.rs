@@ -8,6 +8,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 mod server;
 mod server_config;
+mod server_source;
 
 const ARTIFACT_HOST_HTML: &str = include_str!("../../web/static/artifact-host.html");
 
@@ -112,7 +113,16 @@ pub fn run() {
 			if !cfg!(dev) || override_path.is_some() {
 				let config = match override_path {
 					Some(path) => server_config::ServerConfig::load(std::path::Path::new(&path)),
-					None => server_config::load_installed(&app.path().home_dir()?),
+					None => {
+						let home = app.path().home_dir()?;
+						server_config::load_installed(&home).inspect(|config| {
+							server_source::sync(
+								config,
+								&home.join(server_source::MANAGED_CHECKOUT),
+								env!("REVV_SOURCE_SHA"),
+							);
+						})
+					}
 				};
 				let handle = app.handle().clone();
 				let server = config.and_then(|config| {

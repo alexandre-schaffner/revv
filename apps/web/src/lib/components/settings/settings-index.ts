@@ -162,10 +162,10 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     keywords: ["merge", "rebase", "conflicts", "base branch", "update branch", "force push"],
   },
   {
-    id: "ai-keychain",
+    id: "ai-agent-test",
     pane: "ai",
-    label: "Keychain access",
-    keywords: ["macos", "keychain", "background", "credentials"],
+    label: "Test the agent",
+    keywords: ["connection", "keychain", "login", "credentials", "check access"],
   },
   // Recaps
   {
