@@ -100,7 +100,7 @@ jobs:
         run: |
           required=true
           if [[ "$EVENT" == pull_request && "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
-            if ! git diff --name-only "$BASE_SHA" HEAD | grep -Eq '^(apps/desktop/|apps/web/static/artifact-host.html|rust-toolchain.toml|bun.lock|package.json|scripts/release/|.github/)'; then
+            if ! git diff --name-only "$BASE_SHA" HEAD | grep -Eq '^(apps/desktop/|apps/server/scripts/build-binary.ts|integrations/|apps/web/static/artifact-host.html|rust-toolchain.toml|bun.lock|package.json|scripts/release/|.github/)'; then
               required=false
             fi
           fi
@@ -123,6 +123,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup # zizmor: ignore[self-repository] current checked-out source
+      - name: Install native modules for both Mac architectures
+        # The server is compiled into the app per target; cross-compiling needs
+        # the target's optional native packages (the keyring addon).
+        run: bun install --frozen-lockfile --cpu='*' --os=darwin
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: '1.95.0'
@@ -161,6 +165,11 @@ jobs:
           arch=aarch64
           if [[ "$TARGET" == x86_64-apple-darwin ]]; then arch=x64; fi
           python3 scripts/release/stage.py "$TARGET" "$arch" "$(jq -r .version apps/desktop/tauri.conf.json)"
+      - name: Boot the bundled server
+        if: matrix.target == 'aarch64-apple-darwin'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python3 scripts/tests/bundled-server.py apps/desktop/target/"$TARGET"/release/bundle/macos/*.app "$(git rev-parse HEAD)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-ci-${{ github.sha }}-${{ matrix.target }}

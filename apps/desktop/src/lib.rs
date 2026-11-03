@@ -8,7 +8,6 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 mod server;
 mod server_config;
-mod server_source;
 
 const ARTIFACT_HOST_HTML: &str = include_str!("../../web/static/artifact-host.html");
 
@@ -111,22 +110,19 @@ pub fn run() {
 		.setup(|app| {
 			let override_path = std::env::var_os("REVV_DESKTOP_SERVER_CONFIG");
 			if !cfg!(dev) || override_path.is_some() {
+				let home = app.path().home_dir()?;
 				let config = match override_path {
 					Some(path) => server_config::ServerConfig::load(std::path::Path::new(&path)),
-					None => {
-						let home = app.path().home_dir()?;
-						server_config::load_installed(&home).inspect(|config| {
-							server_source::sync(
-								config,
-								&home.join(server_source::MANAGED_CHECKOUT),
-								env!("REVV_SOURCE_SHA"),
-							);
-						})
-					}
+					None => server_config::load_installed(&home),
 				};
 				let handle = app.handle().clone();
 				let server = config.and_then(|config| {
-					server::ServerProcess::start(config, move |message| {
+					let executable = std::env::current_exe()?;
+					let executable_dir = executable
+						.parent()
+						.ok_or_else(|| std::io::Error::other("App executable has no directory"))?;
+					let command = server::ServerCommand::bundled(executable_dir, &config, &home)?;
+					server::ServerProcess::start(command, config, move |message| {
 						handle
 							.dialog()
 							.message(message)

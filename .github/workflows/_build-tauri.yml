@@ -59,6 +59,10 @@ jobs:
       - name: Check source
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: ./.github/actions/setup # zizmor: ignore[self-repository] trusted main source validated by the caller
+      - name: Install native modules for both Mac architectures
+        # The server is compiled into the app per target; cross-compiling needs
+        # the target's optional native packages (the keyring addon).
+        run: bun install --frozen-lockfile --cpu='*' --os=darwin
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: '1.95.0'

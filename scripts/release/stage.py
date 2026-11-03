@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import tarfile
 
-from artifacts import validate_archive
+from artifacts import BUNDLED_SERVER, validate_archive
 
 parser = argparse.ArgumentParser()
 parser.add_argument("target")
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as mount:
     subprocess.run(["hdiutil", "attach", str(dmgs[0]), "-readonly", "-nobrowse", "-mountpoint", mount], check=True, stdout=subprocess.DEVNULL)
     try:
         installed = pathlib.Path(mount) / apps[0].name
-        for relative in ["Contents/Info.plist", "Contents/MacOS/revv-desktop"]:
+        for relative in ["Contents/Info.plist", "Contents/MacOS/revv-desktop", f"Contents/MacOS/{BUNDLED_SERVER}"]:
             if hashlib.sha256((installed / relative).read_bytes()).digest() != hashlib.sha256((apps[0] / relative).read_bytes()).digest():
                 raise ValueError("DMG app differs from updater app")
     finally:

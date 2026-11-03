@@ -82,6 +82,8 @@ function hardenDbFile(dbPath: string): void {
 // squashed migrations with higher timestamps.
 
 const FIRST_SQUASHED_WHEN = 1779000000000;
+// The compiled desktop server embeds this folder at the same relative path
+// (`scripts/build-binary.ts`).
 const MIGRATIONS_FOLDER = fileURLToPath(new URL("./migrations", import.meta.url));
 const GITHUB_CLIENT_ID_MIGRATION_TAG = "0210_github_client_id";
 const GITHUB_CLIENT_ID_MIGRATION_WHEN = 1779590000000;

@@ -24,12 +24,14 @@ trusted_run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trusted_run)
 
 
-def archive(path, version="1.2.3", arch=0x0100000C, extra=None):
+def archive(path, version="1.2.3", arch=0x0100000C, extra=None, server_arch=None, server=True):
     with tarfile.open(path, "w:gz") as output:
         files = {
             "Revv.app/Contents/Info.plist": plistlib.dumps({"CFBundleShortVersionString": version, "CFBundleExecutable": "revv-desktop"}),
             "Revv.app/Contents/MacOS/revv-desktop": struct.pack("<II", 0xFEEDFACF, arch),
         }
+        if server:
+            files["Revv.app/Contents/MacOS/revv-server"] = struct.pack("<II", 0xFEEDFACF, server_arch or arch)
         if extra:
             files.update(extra)
         for name, data in files.items():
@@ -56,6 +58,16 @@ class Artifacts(unittest.TestCase):
     def test_wrong_architecture(self):
         with self.assertRaisesRegex(ValueError, "architecture"):
             validate_archive(self.path, "1.2.3", "x64")
+
+    def test_missing_bundled_server(self):
+        archive(self.path, server=False)
+        with self.assertRaisesRegex(ValueError, "Missing Bundled server"):
+            validate_archive(self.path, "1.2.3", "aarch64")
+
+    def test_bundled_server_for_another_architecture(self):
+        archive(self.path, server_arch=0x01000007)
+        with self.assertRaisesRegex(ValueError, "Bundled server architecture"):
+            validate_archive(self.path, "1.2.3", "aarch64")
 
     def test_unsafe_archive(self):
         archive(self.path, extra={"../outside": b"unsafe"})

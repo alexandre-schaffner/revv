@@ -47,8 +47,8 @@ curl -si http://localhost:45678/api/update-manifest | head -1
 
 The manifest version must match the release, and both architecture URLs must resolve. A missing manifest is a failed release, not evidence that the installed app is current.
 
-## Server source
+## Server
 
-The updater replaces only the `.app`. The server runs from the source checkout `install.sh` cloned to `~/Library/Application Support/Revv/src`. Before starting the server, the app moves that checkout to the commit it was built from and runs `bun install` (`apps/desktop/src/server_source.rs`). It skips a checkout at any other path, or one with local edits other than `bun.lock`. On a fetch or install failure it restores the previous commit. Each update or skip is logged as `[server-source]` in `~/Library/Logs/Revv/server.err.log`.
+The server ships inside the app as `Contents/MacOS/revv-server` (see `docs/architecture.md`), so the updater replaces app and server together. The source checkout `install.sh` cloned to `~/Library/Application Support/Revv/src` only serves the `revv` CLI and local-build fallbacks; `revv update` refreshes it.
 
-`/api/health` reports the server's commit. When it differs from the app's, the app shows a persistent warning, and Settings → Updates shows both builds. `revv update` brings both to the latest build of the user's channel.
+`/api/health` reports the server's commit. When it differs from the app's, which only happens when a server the app doesn't own answers on its port, the app shows a persistent warning, and Settings → Updates shows both builds.

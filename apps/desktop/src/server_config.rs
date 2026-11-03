@@ -9,8 +9,14 @@ use std::{
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
-	pub executable: PathBuf,
-	pub project_root: PathBuf,
+	/// Bun and the source checkout that app versions before the bundled server
+	/// ran. Preserved so a downgraded app still finds them. The checkout also
+	/// stays the server's working directory: installs older than 0.15.1 kept
+	/// `revv.db` there, and the server relocates it from its cwd on boot.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub executable: Option<PathBuf>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub project_root: Option<PathBuf>,
 	pub log_dir: PathBuf,
 	pub env: HashMap<String, String>,
 }
@@ -32,18 +38,6 @@ impl ServerConfig {
 	}
 
 	pub fn validate(&self) -> io::Result<()> {
-		if !self.executable.is_absolute() || !self.executable.is_file() {
-			return Err(io::Error::other(
-				"Bun executable is missing. Run the Revv installer again.",
-			));
-		}
-		if !self.project_root.is_absolute()
-			|| !self.project_root.join("apps/server/src/index.ts").is_file()
-		{
-			return Err(io::Error::other(
-				"Revv source directory is missing. Run the Revv installer again.",
-			));
-		}
 		if !self.log_dir.is_absolute() || self.port()? == 0 {
 			return Err(io::Error::other("Invalid Revv server configuration"));
 		}
@@ -51,7 +45,7 @@ impl ServerConfig {
 	}
 }
 
-/// Preserve installed environment overrides when an in-app update replaces only the .app.
+/// Load the installer's environment overrides, migrating the pre-0.32.3 LaunchAgent once.
 pub fn load_installed(home: &Path) -> io::Result<ServerConfig> {
 	let path = home.join("Library/Application Support/Revv/desktop-server.json");
 	let legacy_path = home.join("Library/LaunchAgents/com.revv.server.plist");
@@ -81,8 +75,8 @@ pub fn load_installed(home: &Path) -> io::Result<ServerConfig> {
 			.first()
 			.ok_or_else(|| io::Error::other("Legacy server command is missing"))?;
 		let config = ServerConfig {
-			executable: executable.into(),
-			project_root: legacy.working_directory,
+			executable: Some(executable.into()),
+			project_root: Some(legacy.working_directory),
 			log_dir: legacy
 				.standard_out_path
 				.parent()

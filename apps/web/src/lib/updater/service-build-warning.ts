@@ -3,17 +3,14 @@ import type { RuntimeHealth } from "$lib/api/runtime";
 import { compareServiceBuild } from "$lib/api/service-build";
 import { getCommitHash } from "./client";
 
-const UPDATE_COMMAND = "revv update";
-
 /**
- * Warn when the background server runs a different build than the app.
+ * Warn when the server answering the app runs a different build.
  *
- * In-app updates replace only the `.app`; on launch the desktop shell moves
- * the installer-managed server checkout to the app's commit (see
- * `server_source.rs`). It leaves the checkout alone when it lives elsewhere or
- * has local edits, and gives up on fetch or install errors, so this is the
- * backstop: without it, server-side fixes look shipped while an old server
- * keeps failing. Dev builds skip it: `make dev` runs both from one tree.
+ * The app ships its server compiled into the bundle and starts it itself, so
+ * the two normally match. A mismatch means a server the app doesn't own is on
+ * its port, such as a LaunchAgent left behind by Revv 0.32.2 or earlier.
+ * Without this, the UI would silently run against code it wasn't built for.
+ * Dev builds skip it: `make dev` runs both from one tree.
  */
 export function warnIfServiceOutOfDate(health: RuntimeHealth): void {
   if (import.meta.env.DEV) return;
@@ -22,19 +19,11 @@ export function warnIfServiceOutOfDate(health: RuntimeHealth): void {
   if (build.kind !== "mismatch") return;
 
   const service = build.serviceCommit ?? "an older build";
-  toast.warning("Revv's background service is out of date", {
+  toast.warning("Revv is connected to a different server build", {
     id: "service-build-mismatch",
     description:
-      `The app is on ${appCommit}, but the service that runs reviews and chat is on ${service}, ` +
-      `so recent fixes may be missing. Revv couldn't update it on launch; the reason is in ` +
-      `~/Library/Logs/Revv/server.err.log. Run "${UPDATE_COMMAND}" in Terminal to bring both ` +
-      `to the same build.`,
+      `The app is on ${appCommit}, but the server that runs reviews and chat is on ${service}. ` +
+      `Quit Revv from the menu bar icon and open it again.`,
     duration: Number.POSITIVE_INFINITY,
-    action: {
-      label: "Copy command",
-      onClick: () => {
-        void navigator.clipboard.writeText(UPDATE_COMMAND).catch(() => {});
-      },
-    },
   });
 }

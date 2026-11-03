@@ -5,8 +5,8 @@ export type RuntimeHealth = {
   status: "ok";
   channel: AppChannel;
   /**
-   * Commit of the source checkout the server runs from; `null` when it can't
-   * be read. Absent on servers that predate this field.
+   * Commit the server was built from; `null` when it can't be read. Absent on
+   * servers that predate this field.
    */
   commit?: string | null;
   port: number;

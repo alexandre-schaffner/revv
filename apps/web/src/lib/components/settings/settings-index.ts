@@ -277,7 +277,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     id: "update-service-build",
     pane: "updates",
     label: "Background service build",
-    keywords: ["server", "commit", "version", "revv update"],
+    keywords: ["server", "commit", "version"],
   },
 ];
 
