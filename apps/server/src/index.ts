@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth, db } from "./auth";
+import { SOURCE_COMMIT } from "./build-info";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { watchDesktopParent } from "./desktop-parent";
@@ -162,6 +163,7 @@ const app = new Elysia()
   .get("/api/health", () => ({
     status: "ok" as const,
     channel: serverEnv.channel,
+    commit: SOURCE_COMMIT,
     port,
     timestamp: new Date().toISOString(),
   }))
