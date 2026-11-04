@@ -106,3 +106,50 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
       nightly: false
       updater_notes: Revv ${{ needs.prepare.outputs.version }} is available.
+
+  nix-pin:
+    name: Pin the Nix flake to the release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Pin nix/release.json
+        run: bash nix/update-release.sh "$TAG"
+      - name: Open the pin pull request
+        run: |
+          if git diff --quiet -- nix/release.json; then
+            echo "nix/release.json already pins $TAG"
+            exit 0
+          fi
+          branch="chore/nix-pin-$TAG"
+          if gh api "repos/$GH_REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
+            echo "$branch already exists"
+            exit 0
+          fi
+          base="$(git rev-parse HEAD)"
+          # Through the API rather than git push: the checkout holds no
+          # credentials, and GitHub signs the commit.
+          gh api "repos/$GH_REPO/git/refs" -f "ref=refs/heads/$branch" -f "sha=$base" >/dev/null
+          gh api -X PUT "repos/$GH_REPO/contents/nix/release.json" \
+            -f "message=chore(nix): pin Revv.app to $TAG" \
+            -f "content=$(base64 -w0 nix/release.json)" \
+            -f "sha=$(git rev-parse "$base:nix/release.json")" \
+            -f "branch=$branch" >/dev/null
+          gh pr create --base main --head "$branch" \
+            --title "chore(nix): pin Revv.app to $TAG" \
+            --body "Moves \`nix/release.json\` to the published $TAG app bundle, so Nix installs pick up this release. Written by \`nix/update-release.sh\` in the Release workflow."
+          # A pull request opened with GITHUB_TOKEN triggers no workflows.
+          gh workflow run ci.yml --ref "$branch"

@@ -49,3 +49,7 @@ apps/collector/*.collector.pid
 # Python CI helpers
 __pycache__/
 *.pyc
+
+# Nix / direnv
+.direnv/
+result
