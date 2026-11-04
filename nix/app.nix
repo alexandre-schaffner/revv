@@ -1,16 +1,17 @@
-# Revv.app, the Tauri desktop shell, taken prebuilt from a GitHub release.
+# Revv.app, taken prebuilt from a GitHub release.
 #
-# This is what install.sh does too: it never builds the desktop app on the
-# user's machine, it downloads the bundle CI built. The release is pinned in
-# release.json; `nix run .#update-release` moves the pin.
+# Since 0.33.0 the bundle carries the compiled API server
+# (Contents/MacOS/revv-server) and the desktop app starts and stops it, so
+# this package is the whole install: there is nothing to build from source.
+# The release is pinned in release.json.
 {
   lib,
   stdenvNoCC,
   fetchurl,
   release,
-  system,
 }:
 let
+  system = stdenvNoCC.hostPlatform.system;
   asset = release.assets.${system} or (throw "Revv has no prebuilt app for ${system}");
 in
 stdenvNoCC.mkDerivation {
@@ -19,27 +20,36 @@ stdenvNoCC.mkDerivation {
 
   src = fetchurl { inherit (asset) url hash; };
 
-  # The tarball is the updater artifact: `Revv (Alpha).app/` at the top level.
+  # The tarball is the updater artifact: one `<product name>.app/` at the top.
   sourceRoot = ".";
   dontConfigure = true;
   dontBuild = true;
-  # Don't let stdenv strip or patch the ad-hoc signed Mach-O binary.
+  # Don't let stdenv strip or patch the signed Mach-O binaries.
   dontFixup = true;
 
   installPhase = ''
     runHook preInstall
+    apps=(*.app)
+    if [ "''${#apps[@]}" -ne 1 ] || [ ! -d "''${apps[0]}" ]; then
+      echo "expected exactly one .app in the release tarball, found: ''${apps[*]}" >&2
+      exit 1
+    fi
+    # An app without its server can't start: releases before 0.33.0 ran it
+    # from a source checkout, which a Nix install doesn't have.
+    if [ ! -x "''${apps[0]}/Contents/MacOS/revv-server" ]; then
+      echo "''${apps[0]} has no bundled server; pin Revv 0.33.0 or later" >&2
+      exit 1
+    fi
     mkdir -p "$out/Applications"
-    cp -R *.app "$out/Applications/"
+    cp -R "''${apps[0]}" "$out/Applications/"
     runHook postInstall
   '';
 
   meta = {
     description = "AI-powered code review desktop app (prebuilt bundle)";
     homepage = "https://github.com/alexandre-schaffner/revv";
-    platforms = [
-      "aarch64-darwin"
-      "x86_64-darwin"
-    ];
+    license = lib.licenses.mit;
+    platforms = builtins.attrNames release.assets;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
 }

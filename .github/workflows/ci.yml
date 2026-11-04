@@ -87,6 +87,7 @@ jobs:
       contents: read
     outputs:
       required: ${{ steps.paths.outputs.required }}
+      nix: ${{ steps.nix-paths.outputs.required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +106,35 @@ jobs:
             fi
           fi
           echo "required=$required" >> "$GITHUB_OUTPUT"
+      - name: Select Nix validation
+        id: nix-paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        # flake.nix reads API_PORT from packages/shared/src/constants.ts.
+        run: |
+          required=true
+          if [[ "$EVENT" == pull_request && "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            if ! git diff --name-only "$BASE_SHA" HEAD | grep -Eq '^(flake\.nix|flake\.lock|shell\.nix|nix/|packages/shared/src/constants\.ts|scripts/ci/nix-check\.sh|.github/)'; then
+              required=false
+            fi
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+  nix:
+    name: Nix flake
+    needs: desktop-changes
+    if: needs.desktop-changes.outputs.nix == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - run: bash scripts/ci/nix-check.sh
 
   desktop:
     name: Desktop (${{ matrix.target }})
@@ -186,7 +216,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [workflows, check, desktop-changes, desktop, security]
+    needs: [workflows, check, desktop-changes, desktop, nix, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}
@@ -199,7 +229,15 @@ jobs:
           PATHS: ${{ needs.desktop-changes.result }}
           DESKTOP_REQUIRED: ${{ needs.desktop-changes.outputs.required }}
           DESKTOP: ${{ needs.desktop.result }}
+          NIX_REQUIRED: ${{ needs.desktop-changes.outputs.nix }}
+          NIX: ${{ needs.nix.result }}
         run: |
+          if [[ "$NIX_REQUIRED" == true ]]; then
+            test "$NIX" = success
+          else
+            test "$NIX_REQUIRED" = false
+            test "$NIX" = skipped
+          fi
           test "$WORKFLOWS" = success
           test "$CHECK" = success
           test "$SECURITY" = success
