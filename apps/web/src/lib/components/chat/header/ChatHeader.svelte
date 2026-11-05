@@ -81,7 +81,7 @@ let { prId, pr, commitCount, hasItems, stacked, onClose }: Props = $props();
 	}
 
 	.panel-title {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		font-weight: 600;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
@@ -91,7 +91,7 @@ let { prId, pr, commitCount, hasItems, stacked, onClose }: Props = $props();
 	}
 
 	.panel-subtitle {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		white-space: nowrap;
 		overflow: hidden;

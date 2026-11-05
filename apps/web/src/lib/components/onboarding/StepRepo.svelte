@@ -365,9 +365,9 @@ function handlePathKey(e: KeyboardEvent) {
 		border: 0;
 		padding: 0;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -395,9 +395,9 @@ function handlePathKey(e: KeyboardEvent) {
 		border: 0;
 		padding: 0;
 		color: var(--ob-text-muted);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -426,7 +426,7 @@ function handlePathKey(e: KeyboardEvent) {
 	.cloning-label {
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 17px;
+		font-size: var(--text-lg);
 		color: var(--ob-text-label);
 		margin: 0;
 	}
@@ -457,7 +457,7 @@ function handlePathKey(e: KeyboardEvent) {
 		border: 0;
 		outline: 0;
 		font-family: var(--font-serif);
-		font-size: 19px;
+		font-size: var(--text-xl);
 		color: var(--ob-text-heading);
 		padding: 6px 0;
 	}
@@ -485,9 +485,9 @@ function handlePathKey(e: KeyboardEvent) {
 		background: transparent;
 		padding: 7px 11px;
 		color: var(--ob-text-label);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.12em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		cursor: pointer;
 		transition:
@@ -517,7 +517,7 @@ function handlePathKey(e: KeyboardEvent) {
 	.empty {
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		color: var(--ob-text-muted);
 		text-align: left;
 		padding: 24px 0;
@@ -535,7 +535,7 @@ function handlePathKey(e: KeyboardEvent) {
 		margin-left: 4px;
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		color: var(--ob-text-label);
 		cursor: pointer;
 		text-decoration: underline;
@@ -557,7 +557,7 @@ function handlePathKey(e: KeyboardEvent) {
 		border-bottom: 1px solid var(--ob-border-subtle);
 		color: var(--ob-text-row);
 		font-family: var(--font-serif);
-		font-size: 17px;
+		font-size: var(--text-lg);
 		text-align: left;
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
@@ -586,10 +586,10 @@ function handlePathKey(e: KeyboardEvent) {
 
 	.row-status {
 		margin-left: auto;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-family: var(--font-mono);
 		font-style: normal;
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-muted);
 		display: inline-flex;
@@ -604,7 +604,7 @@ function handlePathKey(e: KeyboardEvent) {
 		color: var(--ob-text-muted);
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 	}
 
@@ -613,9 +613,9 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.path-hint code {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		font-family: var(--font-mono);
 		font-style: normal;
-		font-size: 11px;
+		font-size: var(--text-ui);
 	}
 
 	.path-hint--danger {
@@ -654,7 +654,7 @@ function handlePathKey(e: KeyboardEvent) {
 		padding: 4px 2px;
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 14.5px;
+		font-size: var(--text-base);
 		color: var(--ob-text-muted);
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
@@ -665,7 +665,7 @@ function handlePathKey(e: KeyboardEvent) {
 	}
 
 	.alt-link-arrow {
-		font-size: 15px;
+		font-size: var(--text-base);
 		color: var(--ob-text-dimmed);
 		transition:
 			transform var(--duration-smooth) var(--ease-out-expo),
@@ -710,15 +710,15 @@ function handlePathKey(e: KeyboardEvent) {
 	.alt-path-title {
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 500;
 		letter-spacing: 0.01em;
 		color: var(--ob-text-heading);
 	}
 
 	.alt-path-sub {
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10px;
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
 		letter-spacing: 0.08em;
 		color: var(--ob-text-muted);
 	}
@@ -726,7 +726,7 @@ function handlePathKey(e: KeyboardEvent) {
 	.alt-path-arrow {
 		margin-left: auto;
 		font-family: var(--font-serif);
-		font-size: 18px;
+		font-size: var(--text-lg);
 		color: var(--ob-text-dimmed);
 		transition:
 			transform var(--duration-smooth) var(--ease-out-expo),
@@ -755,9 +755,9 @@ function handlePathKey(e: KeyboardEvent) {
 		background: none;
 		border: 0;
 		padding: 6px 0;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-dimmed);
 		cursor: pointer;
@@ -784,7 +784,7 @@ function handlePathKey(e: KeyboardEvent) {
 		color: var(--ob-text-heading);
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 500;
 		letter-spacing: 0.01em;
 		cursor: pointer;
@@ -822,9 +822,9 @@ function handlePathKey(e: KeyboardEvent) {
 		background: none;
 		border: 0;
 		padding: 4px 0;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.14em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-dimmed);
 		cursor: pointer;

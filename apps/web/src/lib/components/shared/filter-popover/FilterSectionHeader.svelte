@@ -49,10 +49,8 @@ let { label, count, collapsed, ontoggle }: Props = $props();
 	}
 
 	.section-label {
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 	}
 
 	.section-count {
@@ -62,7 +60,8 @@ let { label, count, collapsed, ontoggle }: Props = $props();
 		padding: 1px 6px;
 		background: var(--color-bg-elevated);
 		color: var(--color-text-muted);
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		font-variant-numeric: tabular-nums;
 		text-align: center;
 	}

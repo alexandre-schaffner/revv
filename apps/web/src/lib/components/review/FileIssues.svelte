@@ -35,10 +35,8 @@ const issues = $derived(getIssueSignal(prId, filePath).shown);
 	}
 
 	.file-issues-label {
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 </style>

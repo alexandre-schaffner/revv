@@ -79,7 +79,7 @@ let { tone, count, label, title, children }: Props = $props();
     }
 
     .count-num {
-        font-weight: 700;
+        font-weight: 600;
     }
 
     .count-label {

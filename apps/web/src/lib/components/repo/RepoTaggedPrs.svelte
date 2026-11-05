@@ -188,10 +188,10 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 	   titles reads as a peer, not a header. */
 	.heading {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--text-lg);
 		font-weight: 600;
 		color: var(--color-text-primary);
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-lg--letter-spacing);
 	}
 
 	.list {
@@ -234,7 +234,7 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		margin: 0;
 		padding: 1rem var(--spacing-inset);
 		text-align: center;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
@@ -245,7 +245,7 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		padding: 0;
 		color: var(--color-accent);
 		font-family: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		cursor: pointer;
 	}
@@ -280,13 +280,13 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 
 	.blank-title {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
 	.blank-hint {
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 	}
 </style>

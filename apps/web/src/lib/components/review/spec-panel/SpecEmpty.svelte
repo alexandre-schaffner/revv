@@ -15,7 +15,7 @@ let { children }: Props = $props();
     .empty-state {
         padding: 14px 16px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         font-style: italic;
     }

@@ -50,14 +50,13 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 }
 
 .verb {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 
 .title {
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--color-text-primary);
   text-decoration-line: underline;
@@ -75,7 +74,7 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 
 .pr-num {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
   letter-spacing: 0.02em;
 }
@@ -83,9 +82,8 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 .diff {
   display: inline-flex;
   gap: 0.35rem;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
 }
 
 .diff .plus {
@@ -98,7 +96,7 @@ const showDiff = $derived(entry.linesAdded > 0 || entry.linesRemoved > 0);
 
 .description {
   margin: 0.25rem 0 0;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   line-height: 1.55;
 }

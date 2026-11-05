@@ -24,7 +24,7 @@ let { label, lead = false, children }: Props = $props();
         gap: 8px;
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 10.5px;
+        font-size: var(--text-ui);
         text-transform: uppercase;
         letter-spacing: 0.08em;
         margin-top: 4px;

@@ -77,7 +77,7 @@ let { label, title, detail, markTone = null, mark, actions, children }: Props = 
 
 	.title {
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		font-weight: 600;
 		line-height: 1.35;
 		color: var(--color-text-primary);
@@ -85,7 +85,7 @@ let { label, title, detail, markTone = null, mark, actions, children }: Props = 
 
 	.detail {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.4;
 		color: var(--color-text-secondary);
 		font-variant-numeric: tabular-nums;

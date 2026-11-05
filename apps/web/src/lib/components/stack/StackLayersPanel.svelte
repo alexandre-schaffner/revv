@@ -87,7 +87,7 @@ function open(layer: StackLayer): void {
 		align-items: baseline;
 		gap: 4px 12px;
 		margin-bottom: 8px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 	}
 
@@ -130,7 +130,7 @@ function open(layer: StackLayer): void {
 	.stack-rebase-error {
 		margin: 0 0 6px;
 		padding: 0 8px;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.4;
 		color: var(--color-danger);
 	}
@@ -181,7 +181,7 @@ function open(layer: StackLayer): void {
 		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-primary);
@@ -196,7 +196,7 @@ function open(layer: StackLayer): void {
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -204,7 +204,8 @@ function open(layer: StackLayer): void {
 		flex-shrink: 0;
 		padding: 0 6px;
 		border-radius: 999px;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		line-height: 18px;
 		color: var(--color-text-secondary);

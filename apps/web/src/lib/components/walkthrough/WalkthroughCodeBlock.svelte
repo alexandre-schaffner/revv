@@ -80,7 +80,7 @@ function offsetLineNumbers(node: HTMLElement): void {
 		border-bottom: 1px solid var(--revv-diff-gutter-border);
 		padding: 6px 12px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--revv-text-muted);
 		width: 100%;
 		border: none;

@@ -184,7 +184,7 @@ async function overwrite(): Promise<void> {
 	}
 
 	.label {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		font-weight: 600;
 		color: var(--color-text-secondary);
 		text-transform: uppercase;
@@ -193,7 +193,7 @@ async function overwrite(): Promise<void> {
 
 	.hint {
 		margin: 0;
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}
@@ -204,7 +204,7 @@ async function overwrite(): Promise<void> {
 
 	.hint code {
 		font-family: var(--font-mono);
-		font-size: 10.5px;
+		font-size: var(--text-ui);
 		background: var(--color-bg-tertiary);
 		border-radius: 3px;
 		padding: 1px 4px;

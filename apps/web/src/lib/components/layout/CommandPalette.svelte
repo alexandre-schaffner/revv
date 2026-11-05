@@ -190,7 +190,7 @@ function handleCommandSelect(run: () => void) {
   :global(.palette-shell [data-command-input]) {
     height: 100%;
     padding: 0;
-    font-size: 14px;
+    font-size: var(--text-sm);
   }
   /* Rows are inset from the shell so the selected highlight reads as a
      rounded pill, not a full-bleed band. Inset (6px) + row radius (6px)
@@ -205,10 +205,8 @@ function handleCommandSelect(run: () => void) {
   :global(.palette-shell [data-command-group-heading]) {
     padding: 6px 10px 4px;
     margin-top: 2px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: var(--text-ui);
+    font-weight: 500;
     color: var(--color-text-muted);
     user-select: none;
   }
@@ -225,7 +223,7 @@ function handleCommandSelect(run: () => void) {
   }
   :global(.palette-shell [data-command-empty]) {
     padding: 18px 10px;
-    font-size: 12px;
+    font-size: var(--text-ui);
     color: var(--color-text-muted);
   }
 
@@ -234,7 +232,7 @@ function handleCommandSelect(run: () => void) {
     justify-content: space-between;
   }
   :global(.palette-shell .palette-cmd-item .cmd-label) {
-    font-size: 13px;
+    font-size: var(--text-sm);
     color: var(--color-text-secondary);
   }
   :global(.palette-shell .palette-cmd-item[data-selected] .cmd-label),
@@ -244,7 +242,7 @@ function handleCommandSelect(run: () => void) {
   :global(.palette-shell .palette-cmd-item .cmd-shortcut) {
     margin-inline-start: auto;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: var(--text-xs);
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--color-bg-tertiary);
@@ -266,7 +264,7 @@ function handleCommandSelect(run: () => void) {
     min-width: 0;
   }
   :global(.palette-shell .palette-pr-item .pr-title) {
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 500;
     color: var(--color-text-primary);
     white-space: nowrap;
@@ -283,10 +281,10 @@ function handleCommandSelect(run: () => void) {
     color: var(--color-tree-active-text);
   }
   :global(.palette-shell .palette-pr-item .pr-status-badge) {
-    font-size: 9px;
+    font-size: var(--text-xs);
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--tracking-caps);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--color-bg-tertiary);
@@ -294,7 +292,8 @@ function handleCommandSelect(run: () => void) {
     flex-shrink: 0;
   }
   :global(.palette-shell .palette-pr-item .pr-meta) {
-    font-size: 11px;
+    font-size: var(--text-ui);
+    letter-spacing: var(--text-ui--letter-spacing);
     color: var(--color-text-muted);
     white-space: nowrap;
     flex-shrink: 0;
@@ -307,7 +306,7 @@ function handleCommandSelect(run: () => void) {
     padding-inline-start: 24px;
   }
   :global(.palette-shell .palette-pr-item .pr-branch) {
-    font-size: 11px;
+    font-size: var(--text-ui);
     font-family: var(--font-mono);
     color: var(--color-text-muted);
     white-space: nowrap;

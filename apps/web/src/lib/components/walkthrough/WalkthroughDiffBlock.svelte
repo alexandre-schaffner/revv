@@ -64,7 +64,7 @@ const fileDiff = $derived(
 		background: var(--revv-diff-bg);
 		padding: 6px 12px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--revv-text-muted);
 		width: 100%;
 		border: none;

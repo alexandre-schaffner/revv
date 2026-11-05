@@ -95,7 +95,7 @@ function toggle(sha: string): void {
 		gap: 5px;
 		margin: 0;
 		padding-top: 2px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -129,7 +129,7 @@ function toggle(sha: string): void {
 		gap: 4px;
 		flex: 1;
 		min-width: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-primary);
 	}
 
@@ -138,7 +138,7 @@ function toggle(sha: string): void {
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		text-align: left;
 		cursor: pointer;
 	}
@@ -163,7 +163,8 @@ function toggle(sha: string): void {
 		align-items: center;
 		gap: 3px;
 		flex-shrink: 0;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		color: var(--color-success);
 	}
@@ -175,7 +176,7 @@ function toggle(sha: string): void {
 		border-radius: 4px;
 		background: none;
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -191,7 +192,7 @@ function toggle(sha: string): void {
 		border-radius: 6px;
 		background: var(--color-bg-secondary);
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 		white-space: pre-wrap;

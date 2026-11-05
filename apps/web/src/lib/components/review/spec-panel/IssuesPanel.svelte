@@ -166,7 +166,7 @@ const keys = createRowKeys({
 <style>
     .count-divider {
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         opacity: 0.4;
     }

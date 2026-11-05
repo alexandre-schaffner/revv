@@ -148,8 +148,8 @@ function handleKeydown(e: KeyboardEvent): void {
 		border-inline: 1px solid var(--color-border-subtle);
 		background: transparent;
 		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 12px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		font-variant-numeric: tabular-nums;
 		text-align: center;
 		outline: none;

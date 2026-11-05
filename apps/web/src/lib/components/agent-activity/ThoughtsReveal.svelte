@@ -67,7 +67,7 @@ const thoughtBlocks = $derived(children ? [] : splitAgentMarkdown(thoughts));
   align-items: center;
   gap: 0.35rem;
   flex-shrink: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 

@@ -171,9 +171,9 @@ function handleCancel(): void {
 		gap: 4px;
 		border-radius: 999px;
 		padding: 2px 8px;
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		letter-spacing: var(--text-ui--letter-spacing);
 		background: color-mix(in srgb, var(--pill-color) 15%, transparent);
 		color: var(--pill-color);
 		border: 1px solid color-mix(in srgb, var(--pill-color) 30%, transparent);
@@ -189,11 +189,9 @@ function handleCancel(): void {
 	}
 
 	.section-label {
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 		margin-bottom: 6px;
 	}
 
@@ -252,7 +250,7 @@ function handleCancel(): void {
 	.thread-preview {
 		display: block;
 		max-width: 100%;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		margin: 0;
 		white-space: nowrap;
@@ -268,7 +266,7 @@ function handleCancel(): void {
 	}
 
 	.issue-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-text-primary);
 		white-space: nowrap;

@@ -3,11 +3,20 @@ import type { PrConversation } from "@revv/shared";
 import { loginsMatch } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import ChatCircleDots from "phosphor-svelte/lib/ChatCircleDots";
+import Robot from "phosphor-svelte/lib/Robot";
 import { SvelteSet } from "svelte/reactivity";
 import Markdown from "$lib/components/markdown/Markdown.svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
-import { groupTimeline } from "$lib/conversation/timeline";
+import {
+  commentGist,
+  dayKey,
+  dayLabel,
+  groupTimeline,
+  type TimelineRow as Row,
+  rowActor,
+  rowTime,
+} from "$lib/conversation/timeline";
 import { VERDICT_VERB } from "$lib/conversation/verdict";
 import { deleteComment, editComment, getAbilities } from "$lib/stores/conversation.svelte";
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
@@ -21,9 +30,11 @@ import VerdictGlyph from "./VerdictGlyph.svelte";
 interface Props {
   prId: string;
   conversation: PrConversation;
+  /** The viewer's last visit: rows from others after it are marked new. */
+  freshSince?: string | null;
 }
 
-let { prId, conversation }: Props = $props();
+let { prId, conversation, freshSince = null }: Props = $props();
 
 const canComment = $derived(getAbilities(prId).canComment);
 
@@ -32,6 +43,34 @@ const EVENT_FOLD = 4;
 
 const rows = $derived(groupTimeline(conversation.timeline));
 const unfolded = new SvelteSet<string>();
+
+interface Placed {
+  readonly row: Row;
+  /** Set on the first row of each calendar day. */
+  readonly day: string | null;
+  /** The first row the viewer hasn't seen: the "new" rule goes above it. */
+  readonly firstFresh: boolean;
+}
+
+const placed = $derived.by((): Placed[] => {
+  const cutoff = freshSince ? Date.parse(freshSince) : null;
+  const me = conversation.viewerLogin.toLowerCase();
+  let previousDay = "";
+  let freshFound = false;
+  return rows.map((row) => {
+    const at = rowTime(row);
+    const key = dayKey(at);
+    const day = key === previousDay ? null : dayLabel(at);
+    previousDay = key;
+    const fresh =
+      !freshFound &&
+      cutoff !== null &&
+      Date.parse(at) > cutoff &&
+      rowActor(row).toLowerCase() !== me;
+    if (fresh) freshFound = true;
+    return { row, day, firstFresh: fresh };
+  });
+});
 </script>
 
 <ol class="timeline" aria-label="Pull request timeline">
@@ -42,8 +81,29 @@ const unfolded = new SvelteSet<string>();
 		</li>
 	{/if}
 
-	{#each rows as row (row.key)}
-		{#if row.kind === 'comment'}
+	{#each placed as { row, day, firstFresh } (row.key)}
+		{#if day}
+			<li class="timeline-rule timeline-rule--day"><span>{day}</span></li>
+		{/if}
+		{#if firstFresh}
+			<li class="timeline-rule timeline-rule--new" data-fresh><span>New since your last visit</span></li>
+		{/if}
+		{#if row.kind === 'comment' && row.item.author.kind === 'bot' && !unfolded.has(row.key)}
+			{@const item = row.item}
+			<!-- Bots post reports; the report's title is the line, the report a click away. -->
+			<TimelineRow>
+				{#snippet glyph()}<Robot size={13} />{/snippet}
+				<p class="bot-text">
+					<Avatar name={item.author.login} src={item.author.avatarContent} size={16} />
+					<strong>{item.author.login}</strong>
+					<span class="bot-gist">{commentGist(item.body) || 'posted a comment'}</span>
+					<RelativeTime iso={item.createdAt} muted />
+				</p>
+				{#snippet actions()}
+					<button type="button" class="bot-open" onclick={() => unfolded.add(row.key)}>Show</button>
+				{/snippet}
+			</TimelineRow>
+		{:else if row.kind === 'comment'}
 			{@const item = row.item}
 			<li class="timeline-post">
 				<CommentCard
@@ -154,7 +214,7 @@ const unfolded = new SvelteSet<string>();
 	.timeline-fold {
 		position: relative;
 		padding: 2px 0 2px calc(var(--rail-glyph) + var(--rail-gap));
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
@@ -174,6 +234,93 @@ const unfolded = new SvelteSet<string>();
 		text-decoration: underline;
 	}
 
+	/* ── Day and "new" rules ────────────────────────────────────────
+	   The label sits on the rail (its paper hides the line behind it); a
+	   hairline runs on to the edge, so a long history reads in days. */
+	.timeline-rule {
+		position: relative;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin-top: 10px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		font-weight: 500;
+		color: var(--color-text-subtle);
+	}
+
+	.timeline-rule:first-child {
+		margin-top: 0;
+	}
+
+	.timeline-rule > span {
+		padding: 2px 8px 2px 0;
+		background: var(--color-bg-primary);
+	}
+
+	.timeline-rule::after {
+		content: "";
+		flex: 1;
+		height: 1px;
+		background: var(--color-border-subtle);
+	}
+
+	.timeline-rule--new {
+		margin-top: 2px;
+		color: var(--color-accent);
+		scroll-margin-top: 96px;
+	}
+
+	.timeline-rule--new::after {
+		background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+	}
+
+	/* ── Bot reports, folded to a line ──────────────────────────────── */
+	.bot-text {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		min-width: 0;
+		margin: 0;
+		padding-top: 2px;
+		font-size: var(--text-sm);
+		color: var(--color-text-secondary);
+	}
+
+	.bot-text strong {
+		flex-shrink: 0;
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+
+	.bot-gist {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.bot-text :global(time) {
+		flex-shrink: 0;
+	}
+
+	.bot-open {
+		flex-shrink: 0;
+		padding: 1px 8px;
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		background: none;
+		font: inherit;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		color: var(--color-text-secondary);
+		cursor: pointer;
+	}
+
+	.bot-open:hover {
+		border-color: var(--color-text-muted);
+		color: var(--color-text-primary);
+	}
+
 	.review-text {
 		display: flex;
 		align-items: center;
@@ -181,7 +328,7 @@ const unfolded = new SvelteSet<string>();
 		gap: 5px;
 		margin: 0;
 		padding-top: 2px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -229,7 +376,7 @@ const unfolded = new SvelteSet<string>();
 		border: none;
 		background: none;
 		font: inherit;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}

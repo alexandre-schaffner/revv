@@ -187,7 +187,7 @@ let {
 		margin: 0;
 		min-width: 0;
 		color: var(--color-text-primary);
-		font-size: 15px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.3;
 		letter-spacing: -0.01em;
@@ -197,7 +197,7 @@ let {
 	.confirm-description {
 		margin: 0;
 		color: var(--color-text-secondary);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.55;
 		overflow-wrap: anywhere;
 	}

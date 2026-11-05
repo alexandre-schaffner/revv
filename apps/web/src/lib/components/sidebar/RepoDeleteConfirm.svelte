@@ -51,8 +51,8 @@ let unmanaged = $derived(shownRepo?.managed === false);
 		border: 1px solid var(--color-border-subtle);
 		padding: 7px 10px;
 		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		overflow-wrap: anywhere;
 	}

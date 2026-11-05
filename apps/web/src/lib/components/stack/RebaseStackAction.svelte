@@ -90,7 +90,7 @@ const othersOwn = $derived(
 <style>
 	.confirm-note {
 		margin: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.55;
 		overflow-wrap: anywhere;
 		color: var(--color-text-muted);
@@ -111,7 +111,7 @@ const othersOwn = $derived(
 		align-items: baseline;
 		gap: 16px;
 		padding-block: 8px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 	}
 

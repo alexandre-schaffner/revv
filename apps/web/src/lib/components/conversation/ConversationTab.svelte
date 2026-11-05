@@ -14,7 +14,10 @@ import {
   postComment,
   watchConversation,
 } from "$lib/stores/conversation.svelte";
+import { getConversationSeenAt, setConversationSeenAt } from "$lib/stores/conversation-seen.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
+import { useMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import BaseConflicts from "./BaseConflicts.svelte";
@@ -22,6 +25,8 @@ import CiChecks from "./CiChecks.svelte";
 import ConversationSidebar from "./ConversationSidebar.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 import PrDescription from "./PrDescription.svelte";
+import PrPulse from "./PrPulse.svelte";
+import { itemsSince, prPulse } from "./pr-pulse";
 import Timeline from "./Timeline.svelte";
 
 interface Props {
@@ -41,6 +46,58 @@ const canEditBody = $derived(
     !!conversation &&
     conversation.viewerLogin.toLowerCase() === conversation.author.login.toLowerCase(),
 );
+
+// ── Overview ────────────────────────────────────────────────────────────
+const pr = $derived(getPrById(prId));
+const baseRef = $derived(pr?.targetBranch ?? "the base branch");
+// Mergeability only means something for an open, ready PR.
+const mergeable = $derived(
+  !!conversation && conversation.state === "open" && !conversation.isDraft,
+);
+const mergeEligibility = useMergeEligibility(
+  () => prId,
+  () => isActive && mergeable,
+);
+const pulse = $derived(
+  conversation ? prPulse(conversation, mergeable ? mergeEligibility.current : null, baseRef) : null,
+);
+
+// What happened since the last visit. The baseline is read once when the tab
+// comes on screen; the store moves on to the newest item straight away, so the
+// marks hold for this visit and the next one starts from here.
+let seenBaseline = $state<string | null>(null);
+$effect(() => {
+  if (!isActive || !prId) return;
+  const id = prId;
+  untrack(() => {
+    seenBaseline = getConversationSeenAt(id);
+  });
+});
+$effect(() => {
+  const newest = conversation?.timeline.at(-1)?.createdAt;
+  if (!isActive || !newest) return;
+  const id = prId;
+  untrack(() => setConversationSeenAt(id, newest));
+});
+const fresh = $derived(
+  conversation ? itemsSince(conversation.timeline, seenBaseline, conversation.viewerLogin) : [],
+);
+
+// Failing or running checks open by themselves; settled ones wait for a click.
+let checksChoice = $state<boolean | null>(null);
+const checksNeedYou = $derived(pulse?.checks.tone === "bad" || pulse?.checks.tone === "pending");
+const checksOpen = $derived(checksChoice ?? checksNeedYou);
+$effect(() => {
+  void prId;
+  checksChoice = null;
+});
+
+function reveal(target: Element | null | undefined): void {
+  target?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+let root = $state<HTMLDivElement | null>(null);
+const find = (selector: string) => root?.querySelector(selector);
 
 let composer = $state<HTMLTextAreaElement | null>(null);
 let reviewersOpen = $state(false);
@@ -108,7 +165,22 @@ useCommands([
 ]);
 </script>
 
-<div class="conversation review-columns">
+<div class="conversation review-columns" bind:this={root}>
+	{#if pulse}
+		<div class="slot-pulse">
+			<PrPulse
+				{pulse}
+				{fresh}
+				seenAt={seenBaseline}
+				{checksOpen}
+				onChecks={() => (checksChoice = !checksOpen)}
+				onReviews={() => reveal(find('#side-reviewers')?.closest('section'))}
+				onMerge={pulse.merge.tone === 'bad' ? () => reveal(find('.slot-conflicts')) : undefined}
+				onActivity={() => reveal(find('#activity-heading'))}
+				onFresh={() => reveal(find('[data-fresh]'))}
+			/>
+		</div>
+	{/if}
 	<div class="conversation-main">
 		{#if conversation}
 			{#if entry.stale}
@@ -122,9 +194,11 @@ useCommands([
 
 			<!-- Where CI stands now, first thing on the page. Each commit in the
 			     activity below carries its own CI state. -->
+			{#if checksOpen}
 			<div class="slot-checks">
 				<CiChecks {prId} {conversation} />
 			</div>
+			{/if}
 
 			<div class="slot-conflicts">
 				<BaseConflicts {prId} {conversation} />
@@ -167,7 +241,7 @@ useCommands([
 		{#if conversation}
 			<section class="slot-section" aria-labelledby="activity-heading">
 				<h2 id="activity-heading" class="section-heading">Activity</h2>
-				<Timeline {prId} {conversation} />
+				<Timeline {prId} {conversation} freshSince={seenBaseline} />
 				{#if abilities.canComment && conversation.state === 'open'}
 					<div class="activity-composer">
 						<MarkdownEditor
@@ -213,6 +287,25 @@ useCommands([
 		display: none;
 	}
 
+	/* The overview spans the reading column and the rail: it's about the
+	   whole PR, and everything under it is the detail. */
+	.slot-pulse {
+		margin-bottom: 28px;
+		container: pulse / inline-size;
+	}
+
+	/* Out-specifies review-columns' placement rules, which put every child in
+	   one column. */
+	.conversation > .slot-pulse {
+		grid-column: 3 / 6;
+		grid-row: 1;
+	}
+
+	.conversation > .conversation-main,
+	.conversation > .conversation-side {
+		grid-row: 2;
+	}
+
 	.conversation-main {
 		display: flex;
 		flex-direction: column;
@@ -243,7 +336,8 @@ useCommands([
 
 	.section-heading {
 		margin: 0;
-		font-size: 0.9375rem;
+		font-size: var(--text-lg);
+		letter-spacing: var(--text-lg--letter-spacing);
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
@@ -256,7 +350,7 @@ useCommands([
 		padding: 6px 6px 6px 12px;
 		border-radius: var(--radius-card);
 		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -267,7 +361,7 @@ useCommands([
 		padding: 16px;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-card);
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -325,7 +419,7 @@ useCommands([
 		background: none;
 		width: 100%;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -354,6 +448,11 @@ useCommands([
 
 		.conversation-main {
 			display: contents;
+		}
+
+		.slot-pulse {
+			order: -1;
+			margin-bottom: 12px;
 		}
 
 		.conversation-stale,
