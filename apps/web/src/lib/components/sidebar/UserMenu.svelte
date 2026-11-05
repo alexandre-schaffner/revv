@@ -230,7 +230,8 @@ async function handleSignOut(): Promise<void> {
 		color: var(--color-text-secondary);
 		cursor: pointer;
 		text-align: left;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		overflow: hidden;
 		transition:
 			gap var(--duration-quick) var(--ease-out-expo),
@@ -321,8 +322,8 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.user-name {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -330,7 +331,7 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.user-email {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -371,7 +372,7 @@ async function handleSignOut(): Promise<void> {
 		color: var(--color-text-secondary);
 		cursor: pointer;
 		text-align: left;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		transition: background-color var(--duration-snap);
 	}
 
@@ -417,8 +418,8 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.acct-login {
-		font-size: 12px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -426,7 +427,8 @@ async function handleSignOut(): Promise<void> {
 	}
 
 	.acct-host {
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -466,7 +468,7 @@ async function handleSignOut(): Promise<void> {
 		color: var(--color-text-secondary);
 		cursor: pointer;
 		text-align: left;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		transition: background-color var(--duration-snap), color var(--duration-snap);
 	}
 

@@ -659,20 +659,21 @@ onDestroy(() => {
 	}
 
 	.page-title {
-		font-size: 32px;
-		font-weight: 700;
+		font-size: var(--text-3xl);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		line-height: 1.2;
-		letter-spacing: -0.02em;
+		letter-spacing: var(--text-3xl--letter-spacing);
+		text-wrap: balance;
 		margin: 0;
 	}
 
 	.page-subtitle {
 		display: block;
-		font-size: 13px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		opacity: 0.5;
+		font-size: var(--text-sm);
+		font-family: var(--font-mono);
+		/* Quiet but legible: muted grey at half opacity measured ~1.6:1. */
+		color: var(--color-text-subtle);
 		line-height: 1.4;
 	}
 
@@ -680,9 +681,9 @@ onDestroy(() => {
 
 	:global(.risk-badge) {
 		display: inline-flex;
-		font-size: 10px;
+		font-size: var(--text-xs);
 		font-weight: 600;
-		letter-spacing: 0.05em;
+		letter-spacing: var(--tracking-caps);
 		text-transform: uppercase;
 		border-radius: 9999px;
 		padding: 1px 6px;
@@ -723,7 +724,7 @@ onDestroy(() => {
 		align-items: center;
 		justify-content: center;
 		gap: 12px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 

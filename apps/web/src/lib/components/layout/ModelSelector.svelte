@@ -165,7 +165,7 @@ function select(value: string) {
 	>
 		{#if autoModelOffered}
 			<button
-				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(AUTO_SENTINEL)}
 			>
 				<Sparkle size={14} class="shrink-0 opacity-60 text-text-secondary" />
@@ -190,13 +190,13 @@ function select(value: string) {
 					<div class="my-1 border-t border-border"></div>
 				{/if}
 				{#if group.label}
-					<div class="px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-wider text-text-muted">
+					<div class="px-2 pt-2 pb-1 text-ui font-medium text-text-muted">
 						{group.label}
 					</div>
 				{/if}
 			{#each group.models as opt (opt.value)}
 				<button
-					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+					class="flex w-full cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
 					onclick={() => select(opt.value)}
 				>
 					<span class="min-w-0 truncate text-left">{opt.label}</span>
@@ -209,7 +209,7 @@ function select(value: string) {
 	{:else}
 		{#each fetchedModels as opt (opt.value)}
 			<button
-				class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-tertiary"
+				class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-ui text-text-secondary transition-colors hover:bg-bg-tertiary"
 				onclick={() => select(opt.value)}
 			>
 				<ProviderIcon provider={getProvider(opt.value)} size={14} class="shrink-0 opacity-60 text-text-secondary" />

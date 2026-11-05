@@ -58,8 +58,8 @@ function focusOnMount(node: HTMLInputElement) {
 		width: 100%;
 		min-width: 0;
 		padding: 0 10px 0 30px;
-		font-size: 12.5px;
-		font-weight: 450;
+		font-size: var(--text-sm);
+		font-weight: 400;
 		color: var(--color-text-primary);
 		background: var(--color-input-bg);
 		border: 1px solid var(--color-border);

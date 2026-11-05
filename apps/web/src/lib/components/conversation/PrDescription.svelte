@@ -1,6 +1,7 @@
 <script lang="ts">
 import { Editor } from "@tiptap/core";
 import { Placeholder } from "@tiptap/extensions";
+import CaretDown from "phosphor-svelte/lib/CaretDown";
 import { onDestroy, onMount, untrack } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { renderUntrustedMarkdown } from "$lib/utils/markdown";
@@ -36,6 +37,13 @@ let source: DescriptionSource | null = null;
 let baseline = "";
 let focused = $state(false);
 let saveState = $state<SaveState>("idle");
+
+// A long description folds to its opening screen so the activity under it
+// stays in reach; the fold opens on demand and whenever the text is edited.
+const FOLD_ABOVE_PX = 640;
+let tall = $state(false);
+let expanded = $state(false);
+const folded = $derived(tall && !expanded && !focused);
 
 // The verbatim blocks render through the same sanitizer as every other
 // GitHub markdown surface, and stay out of the editable text.
@@ -120,7 +128,7 @@ onMount(() => {
     editable,
     editorProps: {
       attributes: {
-        class: "markdown-body prose prose-sm prose-dense description-doc",
+        class: "markdown-body prose prose-reading description-doc",
         role: "textbox",
         "aria-multiline": "true",
         "aria-label": "Pull request description",
@@ -155,6 +163,18 @@ onMount(() => {
       if (!e.isFocused) void save();
     },
   });
+});
+
+// Declared after onMount so the editor's root exists to be observed: the
+// wrapper itself stops resizing once folded, the document inside doesn't.
+$effect(() => {
+  const el = element;
+  if (!el) return;
+  const observer = new ResizeObserver(() => {
+    tall = el.scrollHeight > FOLD_ABOVE_PX;
+  });
+  observer.observe(el.firstElementChild ?? el);
+  return () => observer.disconnect();
 });
 
 // No save on teardown: by then the page may already be showing another PR,
@@ -195,7 +215,23 @@ $effect(() => {
 		{/if}
 	</div>
 
-	<div class="description-body" class:description-body--editable={editable} bind:this={element}></div>
+	<div
+		class="description-body"
+		class:description-body--editable={editable}
+		class:description-body--folded={folded}
+		bind:this={element}
+	></div>
+	{#if tall && !focused}
+		<button
+			type="button"
+			class="description-fold"
+			aria-expanded={expanded}
+			onclick={() => (expanded = !expanded)}
+		>
+			<CaretDown size={12} weight="bold" class={expanded ? 'fold-caret fold-caret--open' : 'fold-caret'} />
+			{expanded ? 'Fold the description' : 'Read the full description'}
+		</button>
+	{/if}
 </section>
 
 <style>
@@ -217,12 +253,49 @@ $effect(() => {
 
 	.description-note {
 		padding-right: 4px;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
 	.description-note--failed {
 		color: var(--color-danger);
+	}
+
+	/* Folded: the opening screen, fading out where it's cut. */
+	.description-body--folded {
+		max-height: 440px;
+		overflow: hidden;
+		mask-image: linear-gradient(to bottom, #000 calc(100% - 120px), transparent);
+	}
+
+	.description-fold {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 8px;
+		padding: 4px 10px 4px 8px;
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		background: var(--color-bg-primary);
+		font: inherit;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		font-weight: 500;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+	}
+
+	.description-fold:hover {
+		border-color: var(--color-text-muted);
+		color: var(--color-text-primary);
+	}
+
+	.description-fold :global(.fold-caret) {
+		transition: rotate var(--duration-quick) var(--ease-out-expo);
+	}
+
+	.description-fold :global(.fold-caret--open) {
+		rotate: 180deg;
 	}
 
 	.description-body :global(.description-doc) {

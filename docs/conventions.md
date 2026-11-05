@@ -626,6 +626,38 @@ complete, so the rule is now convention-only.)
 ---
 
 <a id="components"></a>
+### 5.5 Type comes from the scale
+
+Fonts are Geist and Geist Mono (vendored in `apps/web/src/lib/fonts/geist/`) plus Newsreader
+for the editorial carve-out. Every font size is a `--text-*` step from `app.css`
+(`xs` 12 · `ui` 13 · `sm` 14 · `base` 16 · `lg` 18 · `xl` 20 · `2xl` 24 ·
+`3xl` 32 · `4xl`/`5xl` 36/44): `text-ui` in markup, `font-size: var(--text-ui)` in CSS. Each step
+has a matching `--text-*--letter-spacing`; take it when a rule sets no tracking of its own.
+Uppercase uses `--tracking-caps` (sans) or `--tracking-eyebrow` (mono). Families are only
+`var(--font-sans|mono|serif)`, weights only 400 / 500 / 600, and type at 24px and up stays at
+500, and emphasis in text 14px and under is 500, not 600. `sm` (14) is the default for
+anything read, `ui` (13) the secondary line beside it, `xs` (12) the floor for badges and
+counts; readable text uses `--color-text-subtle` or darker. Never set
+`-webkit-font-smoothing`. Uppercase only on badges and chips (one or two words in a pill);
+labels and section headings are sentence case. Mono only for code, paths, SHAs and PR numbers.
+Headings get `text-wrap: balance` and running text `text-wrap: pretty` from `app.css`.
+Third-party renderers are pointed at the same type: Pierre diffs take `--diffs-font-family`
+(Geist Mono), `--diffs-font-size: var(--text-sm)` on a 22px line, and file trees
+`--trees-font-family-override` / `--trees-font-size-override`; their defaults (SF Mono,
+system-ui, 13px) never reach the screen. A new step goes in `app.css` *and* the `twMergeConfig` in `lib/utils.ts`, or `cn()` and
+`tv()` read `text-<step>` as a colour and drop one of the two classes.
+
+Markdown picks a tier: `prose prose-reading` for documents read top to bottom (walkthrough
+blocks, PR description, sentiment; add `prose-lede` for a chapter's standfirst), `prose prose-sm`
+for conversational or marginal text (chat, annotations, comments), `prose-dense` on top of that
+for side panels. The reading tier carries its own measure, so its container shouldn't cap width.
+
+`bun run check:typography` (part of `bun run lint`) enforces all of this. Exempt by file: avatar
+initials and the onboarding hero (sized off their box or the window) and `MergedStamp` (ink,
+not type).
+
+**Backlog.** None.
+
 ## 6. Svelte Component Patterns
 
 <a id="components-props"></a>

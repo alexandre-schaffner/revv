@@ -203,13 +203,13 @@ function cycleTheme() {
 	}
 
 	.app-name {
-		font-size: 12px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.inline-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 400;
 		color: var(--color-text-secondary);
 		white-space: nowrap;
@@ -427,7 +427,7 @@ function cycleTheme() {
 
 	.title-subtitle {
 		color: var(--color-text-muted);
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 	}
 </style>

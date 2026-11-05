@@ -99,21 +99,21 @@ function handleRetryKey(e: KeyboardEvent) {
 	>
 		<WarningCircle {size} />
 		{#if showLabel}
-			<span class="text-xs font-medium">{label}</span>
+			<span class="text-ui font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'error'}
 	<span class="inline-flex items-center gap-1 text-danger" title={tooltip} aria-label={tooltip}>
 		<WarningCircle {size} />
 		{#if showLabel}
-			<span class="text-xs font-medium">{label}</span>
+			<span class="text-ui font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'cloning'}
 	<span class="inline-flex items-center gap-1 text-accent" title={tooltip} aria-label={tooltip}>
 		<Spinner {size} class="motion-essential-spin" />
 		{#if showLabel}
-			<span class="text-xs font-medium">{label}</span>
+			<span class="text-ui font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'pending'}
@@ -124,7 +124,7 @@ function handleRetryKey(e: KeyboardEvent) {
 	>
 		<Clock {size} />
 		{#if showLabel}
-			<span class="text-xs font-medium">{label}</span>
+			<span class="text-ui font-medium">{label}</span>
 		{/if}
 	</span>
 {:else if status === 'ready' && showSuccess}
@@ -136,7 +136,7 @@ function handleRetryKey(e: KeyboardEvent) {
 	>
 		<Check {size} />
 		{#if showLabel}
-			<span class="text-xs font-medium">{label}</span>
+			<span class="text-ui font-medium">{label}</span>
 		{/if}
 	</span>
 {/if}

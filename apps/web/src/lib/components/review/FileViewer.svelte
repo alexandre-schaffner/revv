@@ -309,14 +309,14 @@ async function handlePushThread(threadId: string) {
 	}
 
 	.placeholder-title {
-		font-size: 14px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 		margin: 0;
 	}
 
 	.placeholder-text {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		margin: 0;
 	}

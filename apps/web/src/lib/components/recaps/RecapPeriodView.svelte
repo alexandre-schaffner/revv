@@ -356,18 +356,16 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 	}
 
 	.period-eyebrow {
-		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-family: var(--font-sans);
+		font-size: var(--text-ui);
 		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.18em;
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 	}
 
 	.period-title {
 		margin: 0;
 		text-wrap: balance;
-		font-size: 2.5rem;
+		font-size: var(--text-4xl);
 		font-weight: 500;
 		letter-spacing: -0.02em;
 		line-height: 1.02;
@@ -376,13 +374,14 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 
 	@media (max-width: 720px) {
 		.period-title {
-			font-size: 2rem;
+			font-size: var(--text-3xl);
+			letter-spacing: var(--text-3xl--letter-spacing);
 		}
 	}
 
 	.period-lede {
 		margin: 0.25rem 0 0;
-		font-size: 0.9375rem;
+		font-size: var(--text-base);
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 		max-width: 34rem;

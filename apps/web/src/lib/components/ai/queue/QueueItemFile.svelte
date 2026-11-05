@@ -18,7 +18,7 @@ export type QueueItemFileProps = HTMLAttributes<HTMLSpanElement>;
 <span
 	data-slot="queue-item-file"
 	class={cn(
-		"flex items-center gap-1 rounded border bg-muted px-2 py-1 text-xs",
+		"flex items-center gap-1 rounded border bg-muted px-2 py-1 text-ui",
 		className,
 	)}
 	{...restProps}

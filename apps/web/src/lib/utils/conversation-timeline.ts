@@ -142,3 +142,84 @@ export function groupTimeline(items: readonly TimelineItem[]): TimelineRow[] {
   }
   return rows;
 }
+
+/** When a row happened: its first item, which is where it sits in time. */
+export function rowTime(row: TimelineRow): string {
+  switch (row.kind) {
+    case "comment":
+    case "review":
+      return row.item.createdAt;
+    case "commits":
+      return row.commits[0]?.createdAt ?? "";
+    case "events": {
+      const line = row.lines[0];
+      if (!line) return "";
+      return line.kind === "single" ? line.event.createdAt : line.createdAt;
+    }
+  }
+}
+
+/** Who a row is by, to tell the viewer's own activity from everyone else's. */
+export function rowActor(row: TimelineRow): string {
+  switch (row.kind) {
+    case "comment":
+    case "review":
+      return row.item.author.login;
+    case "commits":
+      return row.commits[0]?.author.login ?? "";
+    case "events": {
+      const line = row.lines[0];
+      if (!line) return "";
+      return line.kind === "single" ? line.event.actor.login : line.actor.login;
+    }
+  }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "Today", "Yesterday", then "Mon 3 Nov" (with the year once it isn't this one). */
+export function dayLabel(iso: string, now: Date = new Date()): string {
+  const day = new Date(iso);
+  const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = Math.round((start(now) - start(day)) / DAY_MS);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return day.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    ...(day.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+/** Calendar day key, for spotting where the timeline crosses midnight. */
+export function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/**
+ * A bot comment's one-line gist: its first heading, else its first line of
+ * text, with the markdown and HTML taken out. Bots post reports, and the
+ * report's title is what tells one from the next.
+ */
+export function commentGist(body: string, max = 90): string {
+  const lines = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const heading = lines.find((l) => /^#{1,6}\s/.test(l));
+  const raw = heading ?? lines[0] ?? "";
+  const text = raw
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~>|]/g, "")
+    .replace(/:[a-z0-9_+-]+:/g, "")
+    .replace(/\p{Extended_Pictographic}\uFE0F?/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}

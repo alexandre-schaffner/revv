@@ -170,7 +170,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 					</div>
 				{:else}
 					<div
-						class="msg-body msg-body--editable prose prose-sm prose-dense"
+						class="msg-body msg-body--editable prose prose-sm"
 						role="button"
 						tabindex="0"
 						title="Click to edit"
@@ -179,7 +179,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 					>{@html renderMarkdown(msg.body)}</div>
 				{/if}
 			{:else}
-				<div class="msg-body prose prose-sm prose-dense">{@html renderMarkdown(msg.body)}</div>
+				<div class="msg-body prose prose-sm">{@html renderMarkdown(msg.body)}</div>
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
@@ -293,18 +293,18 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 	}
 
 	.author {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.timestamp {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		margin-left: auto;
 	}
 
-	/* Density + body tone come from `prose prose-sm prose-dense`; this only
+	/* Size + body tone come from `prose prose-sm` (14px, level with the code); this only
 	   keeps long unbroken tokens from overflowing the thread column. */
 	.msg-body {
 		word-break: break-word;
@@ -325,7 +325,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		align-items: center;
 		gap: 5px;
 		padding: 5px 9px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		background: var(--color-diff-bg);
 		border-bottom: 1px solid var(--color-border-subtle);
@@ -335,7 +336,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		margin: 0;
 		padding: 8px 12px;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		background: var(--color-diff-bg);
@@ -347,7 +348,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		display: block;
 		width: 100%;
 		padding: 5px 9px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-success);
 		background: color-mix(in srgb, var(--color-success) 8%, transparent);
 		border: none;
@@ -373,7 +375,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		align-items: center;
 		gap: 4px;
 		font-family: inherit;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		background: transparent;
 		border: none;
 		cursor: pointer;
@@ -438,7 +440,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		display: inline-flex;
 		align-items: center;
 		gap: 3px;
-		font-size: 9px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		font-weight: 500;
 		color: var(--color-text-muted);
 		background: var(--color-bg-tertiary);
@@ -478,7 +481,7 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		border-radius: 4px;
 		padding: 6px 8px;
 		font-family: var(--font-sans);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-primary);
 		resize: none;
@@ -496,7 +499,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		justify-content: flex-end;
 	}
 	.edit-save-btn {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		padding: 3px 10px;
 		border-radius: 4px;
 		border: none;
@@ -509,7 +513,8 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		cursor: default;
 	}
 	.edit-cancel-btn {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		padding: 3px 10px;
 		border-radius: 4px;
 		border: 1px solid var(--color-border);

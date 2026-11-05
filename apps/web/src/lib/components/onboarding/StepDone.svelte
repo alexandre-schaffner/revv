@@ -80,7 +80,7 @@ onMount(() => {
 
 	.lede {
 		font-family: var(--font-serif);
-		font-size: 18px;
+		font-size: var(--text-lg);
 		font-weight: 400;
 		font-style: italic;
 		line-height: 1.55;
@@ -105,7 +105,7 @@ onMount(() => {
 	.label {
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		color: var(--ob-text-label);
 		letter-spacing: 0.08em;
 	}

@@ -207,7 +207,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
            "test output under the test name" feel. 2ch ≈ icon column + gap. */
         padding-left: calc(2ch + 14px);
         font-family: var(--font-mono);
-        font-size: 12.5px;
+        font-size: var(--text-sm);
         color: var(--color-text-secondary);
         /* Default to the pre-mixed verdict tint (--c-rating-bg = bg-secondary
            + verdict 4%). The inline list row overrides this with a darker
@@ -252,7 +252,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
         flex-direction: column;
         gap: 4px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         line-height: 1.5;
     }
 
@@ -286,9 +286,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
 
     .er-confidence {
         color: var(--color-text-muted);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         font-variant-numeric: tabular-nums;
-        letter-spacing: 0.02em;
+        letter-spacing: var(--text-ui--letter-spacing);
     }
 
     /* ── Score title (axis name, heads the popover) ──────────────── */
@@ -301,11 +301,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
            flex parent `.expanded-body` already provides `gap: 12px` between
            children. */
         margin: 0;
-        font-family: var(--font-mono);
-        font-size: 12px;
-        font-weight: 600;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
+        font-family: var(--font-sans);
+        font-size: var(--text-ui);
+        font-weight: 500;
         color: var(--c-rating-label);
         display: flex;
         align-items: center;
@@ -329,11 +327,9 @@ function handleJumpToDiff(filePath: string, line: number): void {
         display: flex;
         align-items: center;
         gap: 8px;
-        color: var(--color-text-muted);
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        color: var(--color-text-subtle);
+        font-family: var(--font-sans);
+        font-size: var(--text-ui);
         margin-top: 4px;
     }
 
@@ -381,10 +377,8 @@ function handleJumpToDiff(filePath: string, line: number): void {
        labels rather than prose headings — a deliberate deviation kept here.
        All other markdown styling comes from the app-wide prose layer. */
     .rating-details :global(h3) {
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
+        font-size: var(--text-ui);
+        font-weight: 500;
         color: var(--color-text-muted);
         margin: 12px 0 4px;
     }
@@ -405,7 +399,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
         align-items: center;
         gap: 6px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-secondary);
     }
 
@@ -414,7 +408,7 @@ function handleJumpToDiff(filePath: string, line: number): void {
         content: "at ";
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         letter-spacing: 0.02em;
     }
 
@@ -443,8 +437,8 @@ function handleJumpToDiff(filePath: string, line: number): void {
         background: transparent;
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
+        font-size: var(--text-ui);
+        font-weight: 500;
         letter-spacing: 0.02em;
         text-transform: lowercase;
         cursor: pointer;

@@ -22,7 +22,7 @@ export type ContextContentFooterProps = {
 {#if visible}
 	<div
 		class={cn(
-			'flex w-full items-center justify-between gap-3 bg-bg-tertiary/50 px-3 py-2 text-xs',
+			'flex w-full items-center justify-between gap-3 bg-bg-tertiary/50 px-3 py-2 text-ui',
 			className,
 		)}
 	>

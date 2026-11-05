@@ -167,11 +167,11 @@ $effect(() => {
 	<DropdownMenu.Item
 		disabled={choosing}
 		onSelect={() => chooseReport(round)}
-		class="flex cursor-pointer items-center gap-2 px-3 py-1 text-xs outline-none data-[highlighted]:bg-bg-elevated {active ? 'text-text-primary' : 'text-text-muted'}"
+		class="flex cursor-pointer items-center gap-2 px-3 py-1 text-ui outline-none data-[highlighted]:bg-bg-elevated {active ? 'text-text-primary' : 'text-text-muted'}"
 	>
 		<div class="h-4 w-4 shrink-0"></div>
 		{#if sha !== null}
-			<span class="shrink-0 font-mono text-xs text-text-muted">{sha.slice(0, 7)}</span>
+			<span class="shrink-0 font-mono text-ui text-text-muted">{sha.slice(0, 7)}</span>
 			<span class="flex-1 truncate">{reportLabel(round)}</span>
 		{:else}
 			<span class="flex-1 truncate">Earlier run · {reportLabel(round)}</span>
@@ -185,7 +185,7 @@ $effect(() => {
 <DropdownMenu.Root bind:open>
 	<DropdownMenu.Trigger>
 		<button
-			class="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary"
+			class="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-ui text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary"
 			title={viewingPastReport ? "Viewing an earlier walkthrough" : undefined}
 		>
 			{#if viewingPastReport && displayedRound}
@@ -209,12 +209,12 @@ $effect(() => {
 			class="z-50 max-h-[60vh] min-w-[340px] overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-primary py-1 shadow-lg"
 		>
 			{#if loading}
-				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-text-muted">
+				<div class="flex items-center justify-center gap-2 px-3 py-3 text-ui text-text-muted">
 					<Spinner size={12} class="motion-essential-spin" />
 					<span>Loading commits…</span>
 				</div>
 			{:else if fetchError}
-				<div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-danger">
+				<div class="flex items-center justify-center gap-2 px-3 py-3 text-ui text-danger">
 					<WarningCircle size={12} weight="fill" />
 					<span>Failed to load commits</span>
 				</div>
@@ -234,13 +234,13 @@ $effect(() => {
 							{/if}
 						</div>
 						<!-- short sha -->
-						<span class="shrink-0 font-mono text-xs text-text-muted">{commit.sha.slice(0, 7)}</span>
+						<span class="shrink-0 font-mono text-ui text-text-muted">{commit.sha.slice(0, 7)}</span>
 						<!-- message -->
 						<span class="flex-1 truncate {active ? 'text-text-primary' : 'text-text-secondary'}">
 							{commit.message.split('\n')[0]?.slice(0, 48) ?? ''}
 						</span>
 						<!-- right label -->
-						<span class="shrink-0 text-xs tabular-nums text-text-muted">
+						<span class="shrink-0 text-ui tabular-nums text-text-muted">
 							{#if isLatest}
 								<span class="italic">latest</span>
 							{:else}
@@ -263,7 +263,7 @@ $effect(() => {
 							disabled={choosing}
 							onSelect={() => chooseReport(primary)}
 							title="View the walkthrough at this commit"
-							class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs outline-none data-[highlighted]:bg-bg-elevated {active ? 'bg-bg-elevated' : ''}"
+							class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-ui outline-none data-[highlighted]:bg-bg-elevated {active ? 'bg-bg-elevated' : ''}"
 						>
 							{@render commitRow()}
 						</DropdownMenu.Item>
@@ -272,14 +272,14 @@ $effect(() => {
 							{@render reportRow(round, null)}
 						{/each}
 					{:else}
-						<div class="flex items-center gap-2 px-3 py-1.5 text-xs outline-none">
+						<div class="flex items-center gap-2 px-3 py-1.5 text-ui outline-none">
 							{@render commitRow()}
 						</div>
 					{/if}
 				{/each}
 				{#if orphanedReports.length > 0}
 					<div class="mx-3 my-1 h-px bg-border"></div>
-					<div class="px-3 py-1 text-[10px] uppercase tracking-wide text-text-muted">
+					<div class="px-3 py-1 text-xs text-text-muted">
 						Walkthroughs of rewritten commits
 					</div>
 					{#each orphanedReports as round (round.id)}

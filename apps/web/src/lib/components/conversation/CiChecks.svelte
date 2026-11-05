@@ -345,15 +345,15 @@ async function rerunAll(): Promise<void> {
 
 	.checks-title {
 		margin: 0;
-		font-size: 0.875rem;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-primary);
 	}
 
 	.checks-detail {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.4;
 		color: var(--color-text-secondary);
 		font-variant-numeric: tabular-nums;
@@ -457,7 +457,7 @@ async function rerunAll(): Promise<void> {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -473,7 +473,7 @@ async function rerunAll(): Promise<void> {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -482,14 +482,15 @@ async function rerunAll(): Promise<void> {
 		padding: 0 6px;
 		border: 1px solid var(--color-border);
 		border-radius: 999px;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		line-height: 16px;
 		color: var(--color-text-secondary);
 	}
 
 	.check-time {
 		flex-shrink: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		font-variant-numeric: tabular-nums;
 	}
@@ -509,7 +510,7 @@ async function rerunAll(): Promise<void> {
 
 	.check-fold .check-summary {
 		min-height: 36px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 

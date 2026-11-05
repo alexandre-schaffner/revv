@@ -713,13 +713,13 @@ onDestroy(() => {
 
 	.card-sha {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-accent);
 		flex-shrink: 0;
 	}
 
 	.card-subject {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-primary);
 		flex: 1;
 		min-width: 0;
@@ -729,7 +729,8 @@ onDestroy(() => {
 	}
 
 	.card-files {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		flex-shrink: 0;
 	}
@@ -817,7 +818,8 @@ onDestroy(() => {
 		height: 24px;
 		padding: 0 8px;
 		border-radius: 5px;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 		border: 1px solid var(--color-border-subtle);
 		background: var(--color-bg-tertiary);
@@ -875,7 +877,11 @@ onDestroy(() => {
 		overflow: hidden;
 		--trees-bg-override: var(--color-bg-secondary);
 		--trees-fg-override: var(--color-text-secondary);
-		--trees-fg-muted-override: var(--color-text-muted);
+		--trees-fg-muted-override: var(--color-text-subtle);
+		/* The library falls back to system-ui at 13px; rows are text people read. */
+		--trees-font-family-override: var(--font-sans);
+		--trees-font-size-override: var(--text-sm);
+		--trees-font-weight-semibold-override: 500;
 		--trees-border-color-override: var(--color-border);
 		--trees-selected-bg-override: var(--color-tree-active-bg);
 		--trees-selected-fg-override: var(--color-tree-active-text);
@@ -902,6 +908,13 @@ onDestroy(() => {
 	.diff-block {
 		--diffs-gap-inline: 8px;
 		--diffs-tab-size: 2;
+		/* Pierre falls back to SF Mono and system-ui; the diff speaks the app's type. */
+		--diffs-font-family: var(--font-mono);
+		--diffs-header-font-family: var(--font-sans);
+		/* Code is what a review is read in: the 14px default, on a 22px line so
+		   long runs of it stay easy to track. */
+		--diffs-font-size: var(--text-sm);
+		--diffs-line-height: 1.375rem;
 		--diffs-min-number-column-width: 2ch;
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 6px;
@@ -922,7 +935,7 @@ onDestroy(() => {
 	.empty {
 		padding: 32px;
 		text-align: center;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -934,7 +947,7 @@ onDestroy(() => {
 		gap: 12px;
 		padding: 48px 24px;
 		color: var(--color-text-muted);
-		font-size: 13px;
+		font-size: var(--text-sm);
 	}
 
 	/* ── Footer ──────────────────────────────────────────────────────────── */
@@ -953,7 +966,7 @@ onDestroy(() => {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		min-width: 0;
 	}
@@ -974,7 +987,7 @@ onDestroy(() => {
 		border: 1px solid var(--color-border);
 		background: var(--color-bg-tertiary);
 		color: var(--color-text-muted);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		cursor: not-allowed;
 		flex-shrink: 0;

@@ -403,15 +403,15 @@ function errorMessage(error: unknown): string {
 	}
 
 	.restore-copy h1 {
-		font-size: 14px;
-		font-weight: 620;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		line-height: 1.2;
 		margin: 0;
 	}
 
 	.restore-copy p {
 		color: var(--color-text-secondary);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		margin: 0;
 	}

@@ -135,7 +135,7 @@ const hasReferences = $derived(
            the test name" feel, mirroring RatingExpandedBody. */
         padding-left: calc(2ch + 14px);
         font-family: var(--font-mono);
-        font-size: 12.5px;
+        font-size: var(--text-sm);
         color: var(--color-text-secondary);
         /* Verdict-tinted bg — parent IssueTestRow sets --c-row-bg per severity
            (the same pre-mixed bg token that RatingExpandedBody uses via
@@ -157,7 +157,7 @@ const hasReferences = $derived(
 
     .description-text {
         font-family: var(--font-sans);
-        font-size: 13px;
+        font-size: var(--text-sm);
         line-height: 1.55;
         color: var(--color-text-primary);
         margin: 0;
@@ -180,12 +180,12 @@ const hasReferences = $derived(
     .resolution strong {
         color: var(--color-success);
         font-family: var(--font-sans);
-        font-size: 13px;
+        font-size: var(--text-sm);
     }
 
     .resolution-agent {
         color: var(--color-text-muted);
-        font-size: 12px;
+        font-size: var(--text-ui);
     }
 
     .resolution p,
@@ -208,11 +208,9 @@ const hasReferences = $derived(
         display: flex;
         align-items: center;
         gap: 8px;
-        color: var(--color-text-muted);
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        color: var(--color-text-subtle);
+        font-family: var(--font-sans);
+        font-size: var(--text-ui);
         margin-top: 4px;
     }
 
@@ -250,7 +248,7 @@ const hasReferences = $derived(
         align-items: center;
         gap: 6px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-secondary);
     }
 
@@ -259,7 +257,7 @@ const hasReferences = $derived(
         content: "at ";
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         letter-spacing: 0.02em;
     }
 
@@ -286,8 +284,8 @@ const hasReferences = $derived(
         background: color-mix(in srgb, var(--c-gutter-color) 8%, transparent);
         color: var(--c-gutter-color);
         font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
+        font-size: var(--text-ui);
+        font-weight: 500;
         letter-spacing: 0.02em;
         text-transform: lowercase;
         cursor: pointer;

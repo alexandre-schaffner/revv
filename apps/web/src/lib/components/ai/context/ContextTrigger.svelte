@@ -41,7 +41,7 @@ export type ContextTriggerProps = {
 			role="status"
 			aria-label="Context usage {percentLabel}"
 			class={cn(
-				'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs tabular-nums text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary',
+				'flex items-center gap-1.5 rounded px-1 py-0.5 text-ui tabular-nums text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-secondary',
 				className,
 			)}
 		>

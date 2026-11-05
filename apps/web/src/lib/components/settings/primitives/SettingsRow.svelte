@@ -122,7 +122,7 @@ let {
 
 	.row-label {
 		display: block;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.35;
 		color: var(--color-text-primary);
 		overflow-wrap: anywhere;
@@ -131,15 +131,15 @@ let {
 	.row-hint {
 		margin-top: 3px;
 		max-width: 60ch;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 		overflow-wrap: anywhere;
 	}
 
 	.row-hint :global(code) {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 	}
 
 	.row-hint :global(a) {

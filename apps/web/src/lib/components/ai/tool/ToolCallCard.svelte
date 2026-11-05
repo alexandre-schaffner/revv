@@ -223,7 +223,7 @@ let open = $state(false);
 
 	.tcc-name {
 		flex-shrink: 0;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		line-height: 1.4;
 		color: var(--color-text-primary);
@@ -243,9 +243,9 @@ let open = $state(false);
 		border-radius: 0.3125rem;
 		border: 1px solid var(--color-border);
 		background: color-mix(in srgb, var(--color-muted) 55%, transparent);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.5;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 	}
 
@@ -267,8 +267,8 @@ let open = $state(false);
 		align-items: center;
 		gap: 0.375rem;
 		flex-shrink: 0;
-		font-size: 0.75rem;
-		font-family: var(--font-mono, monospace);
+		font-size: var(--text-ui);
+		font-family: var(--font-mono);
 		font-weight: 500;
 	}
 
@@ -317,8 +317,8 @@ let open = $state(false);
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: color-mix(in srgb, var(--color-muted) 50%, transparent);
-		font-family: var(--font-mono, monospace);
-		font-size: 0.75rem;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		white-space: pre-wrap;
 		word-break: break-word;

@@ -184,10 +184,10 @@ let ledeHtml = $derived.by(() => {
 
 	.recap-card-title {
 		margin: 0;
-		font-size: 0.8125rem;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-sm--letter-spacing);
 	}
 
 	.recap-card-loading {
@@ -197,7 +197,7 @@ let ledeHtml = $derived.by(() => {
 		padding: 0.75rem 1rem;
 		background: var(--color-bg-secondary);
 		border-radius: 0.5rem;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -219,14 +219,14 @@ let ledeHtml = $derived.by(() => {
 
 	.recap-card-empty-body p {
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 	}
 
 	.recap-card-empty-link {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-accent);
 		text-decoration: none;
@@ -262,16 +262,14 @@ let ledeHtml = $derived.by(() => {
 	}
 
 	.recap-card-eyebrow {
-		font-family: var(--font-mono);
-		font-size: 0.625rem;
+		font-family: var(--font-sans);
+		font-size: var(--text-ui);
 		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.15em;
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 	}
 
 	.recap-card-window {
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -291,11 +289,12 @@ let ledeHtml = $derived.by(() => {
 
 	.recap-card-generating p {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 	}
 
 	.recap-card-generating .hint {
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -315,7 +314,7 @@ let ledeHtml = $derived.by(() => {
 	}
 
 	.recap-card-no-content {
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		margin: 0;
 		padding: 0.5rem 0;
@@ -330,7 +329,7 @@ let ledeHtml = $derived.by(() => {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-accent);
 		text-decoration: none;

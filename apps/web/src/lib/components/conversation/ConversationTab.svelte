@@ -4,6 +4,7 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onMount, untrack } from "svelte";
 import YourReview from "$lib/components/review/YourReview.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import { prefersReducedMotion } from "$lib/motion";
 import {
   changeAssignees,
   changeLabels,
@@ -20,15 +21,24 @@ import {
   rerunJob,
   watchChecks,
 } from "$lib/stores/conversation.svelte";
+import { getConversationSeenAt, setConversationSeenAt } from "$lib/stores/conversation-seen.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
+import {
+  askMergeEligibility,
+  getMergeAnswer,
+  mergeQuestionFor,
+} from "$lib/stores/merge-eligibility.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
+import { itemsSince, prPulse } from "$lib/utils/pr-pulse";
 import BaseConflicts from "./BaseConflicts.svelte";
 import CiChecks from "./CiChecks.svelte";
 import ConversationSidebar from "./ConversationSidebar.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 import PrDescription from "./PrDescription.svelte";
+import PrPulse from "./PrPulse.svelte";
 import Timeline from "./Timeline.svelte";
 
 interface Props {
@@ -53,6 +63,59 @@ const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("re
 const shouldPollChecks = $derived(
   isActive && (hasPendingChecks(conversation?.ci) || entry.awaitingRerun),
 );
+
+// ── Overview ────────────────────────────────────────────────────────────
+const pr = $derived(getPrById(prId));
+const baseRef = $derived(pr?.targetBranch ?? "the base branch");
+const mergeQuestion = $derived(
+  conversation && conversation.state === "open" && !conversation.isDraft
+    ? mergeQuestionFor(prId, pr?.headSha ?? null, conversation)
+    : null,
+);
+$effect(() => {
+  const q = mergeQuestion;
+  if (q && isActive) untrack(() => askMergeEligibility(q));
+});
+const pulse = $derived(
+  conversation ? prPulse(conversation, getMergeAnswer(mergeQuestion), baseRef) : null,
+);
+
+// What happened since the last visit. The baseline is read once when the tab
+// comes on screen; the store moves on to the newest item straight away, so the
+// marks hold for this visit and the next one starts from here.
+let seenBaseline = $state<string | null>(null);
+$effect(() => {
+  if (!isActive || !prId) return;
+  const id = prId;
+  untrack(() => {
+    seenBaseline = getConversationSeenAt(id);
+  });
+});
+$effect(() => {
+  const newest = conversation?.timeline.at(-1)?.createdAt;
+  if (!isActive || !newest) return;
+  const id = prId;
+  untrack(() => setConversationSeenAt(id, newest));
+});
+const fresh = $derived(
+  conversation ? itemsSince(conversation.timeline, seenBaseline, conversation.viewerLogin) : [],
+);
+
+// Failing or running checks open by themselves; settled ones wait for a click.
+let checksChoice = $state<boolean | null>(null);
+const checksNeedYou = $derived(pulse?.checks.tone === "bad" || pulse?.checks.tone === "pending");
+const checksOpen = $derived(checksChoice ?? checksNeedYou);
+$effect(() => {
+  void prId;
+  checksChoice = null;
+});
+
+function reveal(target: Element | null | undefined): void {
+  target?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+let root = $state<HTMLDivElement | null>(null);
+const find = (selector: string) => root?.querySelector(selector);
 
 let composer = $state<HTMLTextAreaElement | null>(null);
 let reviewersOpen = $state(false);
@@ -105,7 +168,22 @@ function onKeydown(e: KeyboardEvent): void {
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="conversation">
+<div class="conversation" bind:this={root}>
+	{#if pulse}
+		<div class="slot-pulse">
+			<PrPulse
+				{pulse}
+				{fresh}
+				seenAt={seenBaseline}
+				{checksOpen}
+				onChecks={() => (checksChoice = !checksOpen)}
+				onReviews={() => reveal(find('#side-reviewers')?.closest('section'))}
+				onMerge={pulse.merge.tone === 'bad' ? () => reveal(find('.slot-conflicts')) : undefined}
+				onActivity={() => reveal(find('#activity-heading'))}
+				onFresh={() => reveal(find('[data-fresh]'))}
+			/>
+		</div>
+	{/if}
 	<div class="conversation-main">
 		{#if conversation}
 			{#if entry.stale}
@@ -119,6 +197,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 			<!-- Where CI stands now, first thing on the page. Each commit in the
 			     activity below carries its own CI state. -->
+			{#if checksOpen}
 			<div class="slot-checks">
 				<CiChecks
 					rollup={conversation.ci}
@@ -131,6 +210,7 @@ function onKeydown(e: KeyboardEvent): void {
 					onRerunJob={(jobId) => rerunJob(prId, jobId)}
 				/>
 			</div>
+			{/if}
 
 			<div class="slot-conflicts">
 				<BaseConflicts {prId} {conversation} />
@@ -175,6 +255,7 @@ function onKeydown(e: KeyboardEvent): void {
 				<h2 id="activity-heading" class="section-heading">Activity</h2>
 				<Timeline
 					{conversation}
+					freshSince={seenBaseline}
 					canEdit={canComment}
 					onEditComment={(id, body) => editComment(prId, id, body)}
 					onDeleteComment={(id) => deleteComment(prId, id)}
@@ -240,7 +321,17 @@ function onKeydown(e: KeyboardEvent): void {
 		display: none;
 	}
 
+	/* The overview spans the reading column and the rail: it's about the
+	   whole PR, and everything under it is the detail. */
+	.slot-pulse {
+		grid-column: 3 / 6;
+		grid-row: 1;
+		margin-bottom: 28px;
+		container: pulse / inline-size;
+	}
+
 	.conversation-main {
+		grid-row: 2;
 		grid-column: 3;
 		display: flex;
 		flex-direction: column;
@@ -249,6 +340,7 @@ function onKeydown(e: KeyboardEvent): void {
 	}
 
 	.conversation-side {
+		grid-row: 2;
 		grid-column: 5;
 		display: flex;
 		flex-direction: column;
@@ -272,7 +364,8 @@ function onKeydown(e: KeyboardEvent): void {
 
 	.section-heading {
 		margin: 0;
-		font-size: 0.9375rem;
+		font-size: var(--text-lg);
+		letter-spacing: var(--text-lg--letter-spacing);
 		font-weight: 600;
 		color: var(--color-text-primary);
 	}
@@ -285,7 +378,7 @@ function onKeydown(e: KeyboardEvent): void {
 		padding: 6px 6px 6px 12px;
 		border-radius: var(--radius-card);
 		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -296,7 +389,7 @@ function onKeydown(e: KeyboardEvent): void {
 		padding: 16px;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-card);
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -354,7 +447,7 @@ function onKeydown(e: KeyboardEvent): void {
 		background: none;
 		width: 100%;
 		font: inherit;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -383,6 +476,11 @@ function onKeydown(e: KeyboardEvent): void {
 
 		.conversation-main {
 			display: contents;
+		}
+
+		.slot-pulse {
+			order: -1;
+			margin-bottom: 12px;
 		}
 
 		.conversation-stale,

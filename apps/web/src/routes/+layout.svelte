@@ -1,9 +1,7 @@
 <script lang="ts">
-// Fonts ship with the app (variable, with optical sizing), so type renders
-// the same offline and every weight in the CSS is a real master.
-import "@fontsource-variable/inter/opsz.css";
-import "@fontsource-variable/inter/opsz-italic.css";
-import "@fontsource-variable/jetbrains-mono/index.css";
+// Fonts ship with the app (variable), so type renders the same offline and
+// every weight in the CSS is a real master.
+import "$lib/fonts/geist/geist.css";
 import "@fontsource-variable/newsreader/opsz.css";
 import "@fontsource-variable/newsreader/opsz-italic.css";
 import "../app.css";

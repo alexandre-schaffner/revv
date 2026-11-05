@@ -126,7 +126,7 @@ function fileCount(n: number): string {
 		row-gap: 0.25rem;
 		min-width: 0;
 		margin-top: 6px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 	}

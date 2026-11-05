@@ -182,7 +182,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		display: grid;
 		grid-template-rows: auto 1fr auto;
 		grid-template-columns: 1fr;
-		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
+		font-family: var(--font-sans);
 
 		/* ── Light mode (default) ───────────────────────────────────── */
 		--ob-bg: #faf9f6;
@@ -306,8 +306,8 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		display: inline-flex;
 		align-items: baseline;
 		gap: 4px;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		letter-spacing: 0.12em;
 		color: var(--ob-text-muted);
 	}
@@ -318,7 +318,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 
 	.page-sep {
 		color: var(--ob-text-dimmed);
-		font-weight: 300;
+		font-weight: 400;
 	}
 
 	.theme-btn {
@@ -401,9 +401,9 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		display: flex;
 		align-items: center;
 		gap: 14px;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 10.5px;
-		letter-spacing: 0.28em;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
+		letter-spacing: var(--tracking-eyebrow);
 		text-transform: uppercase;
 		color: var(--ob-text-label);
 	}

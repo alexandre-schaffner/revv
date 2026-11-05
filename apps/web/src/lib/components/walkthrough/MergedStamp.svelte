@@ -190,7 +190,9 @@ $effect(() => {
 	}
 
 	.stamp-word {
-		font-size: 1rem;
+		font-size: var(--text-base);
+		/* A rubber stamp, not type: the heavy weight and wide tracking are the
+		   ink impression, outside the UI weight and tracking rules. */
 		font-weight: 800;
 		line-height: 1;
 		text-transform: uppercase;
@@ -209,8 +211,8 @@ $effect(() => {
 		padding-top: 4px;
 		border-top: 1.5px solid currentColor;
 		font-family: var(--font-mono);
-		font-size: 0.625rem;
-		font-weight: 600;
+		font-size: var(--text-xs);
+		font-weight: 500;
 		line-height: 1;
 		letter-spacing: 0.1em;
 		text-align: center;

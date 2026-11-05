@@ -254,10 +254,10 @@ $effect(() => {
 		background: var(--color-warning);
 		color: var(--color-warning-fg);
 		font-family: inherit;
-		font-size: 11px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		line-height: 1;
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-ui--letter-spacing);
 		white-space: nowrap;
 		cursor: default;
 		box-shadow: 0 1px 2px color-mix(in srgb, var(--color-warning) 40%, transparent);

@@ -503,7 +503,7 @@ $effect(() => {
 		align-items: center;
 		min-height: 32px;
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -511,7 +511,7 @@ $effect(() => {
 	.review-empty-body {
 		max-width: 60ch;
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 		text-wrap: pretty;
 		color: var(--color-text-secondary);
@@ -526,7 +526,7 @@ $effect(() => {
 
 	.review-hint {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 

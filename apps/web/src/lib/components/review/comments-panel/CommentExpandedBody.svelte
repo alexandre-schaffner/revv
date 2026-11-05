@@ -138,8 +138,8 @@ const renderedThreads = $derived.by(() => {
 
     .thread-line {
         font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 600;
+        font-size: var(--text-ui);
+        font-weight: 500;
         color: var(--color-text-muted);
         letter-spacing: 0.02em;
         white-space: nowrap;
@@ -155,10 +155,10 @@ const renderedThreads = $derived.by(() => {
         background: color-mix(in srgb, var(--color-accent) 8%, transparent);
         color: var(--color-accent);
         font-family: var(--font-mono);
-        font-size: 10.5px;
+        font-size: var(--text-ui);
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: var(--tracking-eyebrow);
         cursor: pointer;
         transition:
             background var(--duration-snap) var(--ease-soft),
@@ -192,10 +192,10 @@ const renderedThreads = $derived.by(() => {
         background: color-mix(in srgb, var(--color-danger) 8%, transparent);
         color: var(--color-danger);
         font-family: var(--font-mono);
-        font-size: 10.5px;
+        font-size: var(--text-ui);
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: var(--tracking-eyebrow);
         cursor: pointer;
         transition:
             background var(--duration-snap) var(--ease-soft),
@@ -242,13 +242,13 @@ const renderedThreads = $derived.by(() => {
 
     .turn-name {
         color: var(--color-text-primary);
-        font-size: 13px;
+        font-size: var(--text-sm);
         font-weight: 500;
     }
 
     .turn-time {
         color: var(--color-text-muted);
-        font-size: 12px;
+        font-size: var(--text-ui);
         font-variant-numeric: tabular-nums;
         margin-left: auto;
     }
@@ -271,7 +271,7 @@ const renderedThreads = $derived.by(() => {
 
     .empty-thread {
         margin: 0;
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         font-style: italic;
     }

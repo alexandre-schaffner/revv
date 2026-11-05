@@ -69,7 +69,7 @@ import ShieldSlash from "phosphor-svelte/lib/ShieldSlash";
 	<div class="flex items-center gap-2">
 		<Wrench class="size-4 text-muted-foreground" />
 		<span class="font-medium text-sm">{displayName}</span>
-		<Badge variant="secondary" class="gap-1.5 rounded-full text-xs">
+		<Badge variant="secondary" class="gap-1.5 rounded-full text-ui">
 			<StatusIcon class={cn("size-4", state === "input-available" && "motion-essential-spin")} />
 			{config.label}
 		</Badge>

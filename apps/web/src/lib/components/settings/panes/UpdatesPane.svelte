@@ -153,8 +153,8 @@ async function copyHash(): Promise<void> {
 
 <style>
 	.build-hash {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 12px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 

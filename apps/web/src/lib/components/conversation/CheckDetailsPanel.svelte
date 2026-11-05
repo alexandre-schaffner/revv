@@ -160,7 +160,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		align-items: center;
 		gap: 8px;
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -210,7 +210,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 
 	.annotation-message {
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.25rem;
 		color: var(--color-text-primary);
 		white-space: pre-wrap;
@@ -223,7 +223,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		align-items: baseline;
 		gap: 0 8px;
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -266,7 +266,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 	}
 
 	.log-step {
@@ -291,7 +291,7 @@ async function copyLog(details: CheckDetails): Promise<void> {
 		border-radius: 6px;
 		background: var(--color-diff-bg, var(--color-bg-secondary));
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.55;
 		color: var(--color-text-secondary);
 	}

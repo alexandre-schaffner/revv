@@ -75,7 +75,7 @@ let { layers, baseRefName, row, role, "aria-label": ariaLabel }: Props = $props(
 		border-radius: 4px;
 		background: var(--color-bg-tertiary);
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 </style>

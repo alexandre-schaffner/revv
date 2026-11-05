@@ -172,12 +172,12 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 						if (v) void updateSettings({ aiModel: v });
 					}}
 				>
-					<Select.Trigger class="w-48 text-xs" aria-label="Review model">
+					<Select.Trigger class="w-48 text-ui" aria-label="Review model">
 						<span class="truncate">{labelIn(reviewModelOptions, reviewModel)}</span>
 					</Select.Trigger>
 					<Select.Content class="max-h-80">
 						{#each reviewModelOptions as opt (opt.value)}
-							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+							<Select.Item value={opt.value} class="text-ui">{opt.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
@@ -195,12 +195,12 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 							if (next) void updateSettings({ aiThinkingEffort: next.value });
 						}}
 					>
-						<Select.Trigger class="w-48 text-xs" aria-label="Thinking effort">
+						<Select.Trigger class="w-48 text-ui" aria-label="Thinking effort">
 							<span class="truncate">{labelIn(effortOptions, effort)}</span>
 						</Select.Trigger>
 						<Select.Content>
 							{#each effortOptions as opt (opt.value)}
-								<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+								<Select.Item value={opt.value} class="text-ui">{opt.label}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -221,12 +221,12 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 						if (v) void updateSettings({ aiSuggestionsModel: v });
 					}}
 				>
-					<Select.Trigger class="w-48 text-xs" aria-label="Suggestions model">
+					<Select.Trigger class="w-48 text-ui" aria-label="Suggestions model">
 						<span class="truncate">{labelIn(suggestionsOptions, suggestionsModel)}</span>
 					</Select.Trigger>
 					<Select.Content class="max-h-80">
 						{#each suggestionsOptions as opt (opt.value)}
-							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+							<Select.Item value={opt.value} class="text-ui">{opt.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
@@ -304,13 +304,13 @@ function labelIn(options: readonly { label: string; value: string }[], value: st
 		flex-direction: column;
 		gap: 6px;
 		max-width: 60ch;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
 
 	.agent-check-error {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+		font-family: var(--font-mono);
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 		color: var(--color-text-primary);

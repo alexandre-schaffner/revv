@@ -41,7 +41,10 @@ export const PLAIN_TEXT_FIELD =
  * `walkthrough-system-common.md`; this is only the call-time reminder.
  */
 export const PROSE_VOICE_CONTRACT =
-  "VOICE (full rules in the system prompt's 'Voice — no AI slop'): every sentence must fail the " +
+  "VOICE (full rules in the system prompt's 'Writing style' and 'Voice — no AI slop'): say it the " +
+  "way one engineer explains a change to a teammate out loud, in plain connected sentences with no " +
+  "jargon. Say what happens first, then name the code; never let backticked names carry the " +
+  "explanation, and unpack compressed noun stacks. Every sentence must fail the " +
   "portability test — if it could be pasted unchanged into a review of a different PR, replace it " +
   "with a fact from this diff. Show the fact; never label it critical, subtle, or worth noting. " +
   "No binary contrast ('not just X, it's Y'), colon reveal, faux-insight setup, editorialising " +

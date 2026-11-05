@@ -105,8 +105,8 @@ function handleNewPr(): void {
 	}
 
 	.project-name {
-		font-size: 14px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -115,7 +115,8 @@ function handleNewPr(): void {
 	}
 
 	.project-owner {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -123,13 +124,14 @@ function handleNewPr(): void {
 	}
 
 	.placeholder-title {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
 	.placeholder-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -147,7 +149,8 @@ function handleNewPr(): void {
 		border-radius: 6px;
 		background: transparent;
 		color: var(--color-text-secondary);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-decoration: none;
 		transition: background-color var(--duration-snap), color var(--duration-snap);
 	}
@@ -176,8 +179,9 @@ function handleNewPr(): void {
 		border-radius: 6px;
 		background: var(--color-accent, var(--color-bg-elevated));
 		color: var(--color-accent-foreground, var(--color-text-primary));
-		font-size: 11px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
+		font-weight: 500;
 		cursor: pointer;
 		transition: filter var(--duration-snap), background-color var(--duration-snap);
 	}

@@ -49,7 +49,7 @@ let { body, onEdit, onDelete }: Props = $props();
 		flex: 1;
 		min-width: 0;
 		font-family: var(--font-sans);
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.6;
 		color: var(--color-text-primary);
 		white-space: pre-wrap;

@@ -39,7 +39,7 @@ import Flag from "phosphor-svelte/lib/Flag";
 	{...restProps}
 >
 	<div class="h-px flex-1 bg-border"></div>
-	<div class="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+	<div class="flex shrink-0 items-center gap-1.5 text-ui text-muted-foreground">
 		<Flag class="size-3" />
 		<span>{label ?? "Checkpoint"}</span>
 		{#if onRestore}

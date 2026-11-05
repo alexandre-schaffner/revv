@@ -233,12 +233,10 @@ const isDisabled = $derived(state !== "resolved");
     /* ── Label (uppercase mono axis name) ────────────────────────── */
 
     .cell-label {
-        font-family: var(--font-mono);
-        font-size: 10.5px;
-        font-weight: 600;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color: var(--color-text-muted);
+        font-family: var(--font-sans);
+        font-size: var(--text-ui);
+        font-weight: 500;
+        color: var(--color-text-subtle);
         line-height: 1;
     }
 
@@ -254,8 +252,8 @@ const isDisabled = $derived(state !== "resolved");
         align-items: center;
         gap: 8px;
         font-family: var(--font-sans);
-        font-size: 14px;
-        font-weight: 600;
+        font-size: var(--text-sm);
+        font-weight: 500;
         color: var(--c-rating-label);
         line-height: 1.2;
     }
@@ -311,7 +309,7 @@ const isDisabled = $derived(state !== "resolved");
 
     .cell-synthesis {
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         line-height: 1.35;
         /* Clamp to a single line — citation summaries are structured and

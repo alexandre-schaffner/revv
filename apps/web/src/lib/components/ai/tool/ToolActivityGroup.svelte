@@ -107,7 +107,7 @@ $effect(() => {
     min-width: 0;
     align-items: baseline;
     gap: 0.5rem;
-    font-size: 0.875rem;
+    font-size: var(--text-sm);
     line-height: 1.45;
   }
 

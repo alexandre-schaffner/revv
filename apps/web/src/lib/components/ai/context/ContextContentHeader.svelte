@@ -34,7 +34,7 @@ export type ContextContentHeaderProps = {
 	{#if children}
 		{@render children()}
 	{:else}
-		<div class="flex items-center justify-between gap-3 text-xs">
+		<div class="flex items-center justify-between gap-3 text-ui">
 			<span class="font-medium text-text-primary">{percentLabel}</span>
 			<span class="font-mono text-text-muted">
 				{usedLabel} <span class="opacity-60">/</span>

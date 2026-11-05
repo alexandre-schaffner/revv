@@ -144,10 +144,10 @@ async function handleReplayOnboarding(): Promise<void> {
 		>
 			{#snippet control()}
 				<Select.Root type="single" value={String(interval)} onValueChange={handleIntervalChange}>
-					<Select.Trigger class="w-48 text-xs" aria-label="Refresh interval">{intervalLabel}</Select.Trigger>
+					<Select.Trigger class="w-48 text-ui" aria-label="Refresh interval">{intervalLabel}</Select.Trigger>
 					<Select.Content>
 						{#each intervalOptions as option (option.value)}
-							<Select.Item value={String(option.value)} class="text-xs">{option.label}</Select.Item>
+							<Select.Item value={String(option.value)} class="text-ui">{option.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>

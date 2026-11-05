@@ -65,13 +65,13 @@ function handleClick() {
 
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 			<span
-				class="min-w-0 truncate text-xs leading-tight {variant === 'archived'
+				class="min-w-0 truncate text-ui leading-tight {variant === 'archived'
 					? 'text-text-secondary'
 					: 'text-text-primary'}"
 			>
 				{pr.title}
 			</span>
-			<div class="flex min-w-0 items-center gap-1 truncate text-[11px] leading-tight text-text-muted">
+			<div class="flex min-w-0 items-center gap-1 truncate text-ui leading-tight text-text-muted">
 				<span>#{pr.externalId}</span>
 				<span>·</span>
 				<span>by {pr.authorLogin}</span>

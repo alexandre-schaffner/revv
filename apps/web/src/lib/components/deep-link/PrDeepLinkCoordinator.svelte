@@ -364,8 +364,8 @@ async function copyDeviceCode(): Promise<void> {
   }
 
   :global(.dialog-title) {
-    font-family: var(--font-sans, Inter, sans-serif);
-    font-size: 16px;
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
     font-weight: 600;
     line-height: 1.3;
   }
@@ -374,7 +374,7 @@ async function copyDeviceCode(): Promise<void> {
     align-items: center;
     color: var(--color-text-secondary);
     display: flex;
-    font-size: 13px;
+    font-size: var(--text-sm);
     gap: 10px;
     min-height: 32px;
   }
@@ -428,8 +428,8 @@ async function copyDeviceCode(): Promise<void> {
   }
 
   .account-login {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -437,7 +437,8 @@ async function copyDeviceCode(): Promise<void> {
 
   .account-meta {
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--text-ui);
+    letter-spacing: var(--text-ui--letter-spacing);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -447,7 +448,7 @@ async function copyDeviceCode(): Promise<void> {
     color: var(--color-text-secondary);
     display: flex;
     flex-direction: column;
-    font-size: 12px;
+    font-size: var(--text-ui);
     font-weight: 500;
     gap: 6px;
   }
@@ -459,14 +460,14 @@ async function copyDeviceCode(): Promise<void> {
     border-radius: 8px;
     color: var(--color-text-secondary);
     display: flex;
-    font-size: 12px;
+    font-size: var(--text-ui);
     justify-content: space-between;
     padding: 8px 10px;
   }
 
   .host-confirmation code {
     color: var(--color-text-primary);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-weight: 600;
   }
 
@@ -482,9 +483,9 @@ async function copyDeviceCode(): Promise<void> {
     border: 1px solid var(--color-border);
     border-radius: 8px;
     color: var(--color-text-primary);
-    font-size: 18px;
+    font-size: var(--text-lg);
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: var(--text-lg--letter-spacing);
     padding: 5px 10px;
   }
 
@@ -494,14 +495,14 @@ async function copyDeviceCode(): Promise<void> {
 
   .inline-error {
     color: var(--color-danger);
-    font-size: 12px;
+    font-size: var(--text-ui);
     margin: 0;
   }
 
   .clone-path {
     color: var(--color-text-muted);
-    font-family: var(--font-mono, monospace);
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: var(--text-ui);
     margin: 0 0 0 38px;
     overflow: hidden;
     text-overflow: ellipsis;

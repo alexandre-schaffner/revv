@@ -288,8 +288,8 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 </script>
 
 {#snippet slashRow(item: ChatSessionCommand)}
-	<span class="block font-mono text-xs">/{item.name}</span>
-	<span class="block truncate text-xs text-muted-foreground">{item.description}</span>
+	<span class="block font-mono text-ui">/{item.name}</span>
+	<span class="block truncate text-ui text-muted-foreground">{item.description}</span>
 {/snippet}
 
 {#snippet mentionRow(path: string)}
@@ -319,7 +319,7 @@ export type PromptInputTextareaProps = Omit<HTMLAttributes<HTMLDivElement>, "con
 		items={mentionItems}
 		{activeIndex}
 		key={(path) => path}
-		rowClass="flex items-center gap-2 font-mono text-xs"
+		rowClass="flex items-center gap-2 font-mono text-ui"
 		rowTitle={(path) => path}
 		onselect={applyMention}
 		row={mentionRow}

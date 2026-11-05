@@ -53,7 +53,7 @@ let { title, description, children }: Props = $props();
 
 	.pane-title {
 		font-family: var(--font-serif);
-		font-size: 22px;
+		font-size: var(--text-2xl);
 		font-weight: 500;
 		letter-spacing: -0.015em;
 		line-height: 1.1;
@@ -63,7 +63,7 @@ let { title, description, children }: Props = $props();
 	.pane-description {
 		margin-top: 6px;
 		max-width: 64ch;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}

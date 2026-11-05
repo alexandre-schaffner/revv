@@ -85,7 +85,7 @@ function handleChange(next: string): void {
 		background: transparent;
 		color: var(--color-text-secondary);
 		font: inherit;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		white-space: nowrap;
 		cursor: pointer;

@@ -44,17 +44,15 @@ const sessions = $derived<{ id: string; title: string }[]>(
 
 	.drafts-label {
 		padding: 4px 8px 2px;
-		font-size: 10px;
-		font-family: var(--font-mono, monospace);
-		color: var(--color-text-muted);
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-family: var(--font-sans);
+		color: var(--color-text-subtle);
 	}
 
 	.draft-row {
 		padding: 6px 8px;
 		border-radius: 5px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		text-decoration: none;
 		transition: background-color var(--duration-snap), color var(--duration-snap);

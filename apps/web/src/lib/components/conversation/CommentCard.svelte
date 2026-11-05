@@ -161,7 +161,7 @@ async function confirmDelete(): Promise<void> {
 		flex: 1;
 		min-width: 0;
 		margin: 0;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
@@ -174,7 +174,8 @@ async function confirmDelete(): Promise<void> {
 		padding: 0 5px;
 		border-radius: 4px;
 		background: var(--color-bg-tertiary);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		line-height: 16px;
 		color: var(--color-text-secondary);
 	}
@@ -214,7 +215,7 @@ async function confirmDelete(): Promise<void> {
 	}
 
 	.comment-empty {
-		font-size: 14px;
+		font-size: var(--text-sm);
 		font-style: italic;
 		color: var(--color-text-muted);
 	}

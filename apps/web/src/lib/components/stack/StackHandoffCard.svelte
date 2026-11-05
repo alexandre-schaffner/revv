@@ -118,7 +118,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		margin: 0 0 0.5rem;
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		letter-spacing: 0.2px;
 		color: var(--color-accent);
@@ -160,7 +160,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 	.num {
 		flex-shrink: 0;
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-subtle);
 	}
 
@@ -169,7 +169,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.9375rem;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.375rem;
 		color: var(--color-text-primary);
@@ -182,7 +182,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 	}
@@ -197,7 +197,8 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		align-items: center;
 		gap: 0.25rem 0.75rem;
 		margin: 0.125rem 0 0;
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -253,10 +254,10 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		border-radius: 4px;
 		background: color-mix(in srgb, currentColor 16%, transparent);
 		font-family: var(--font-sans);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		line-height: 1.125rem;
-		letter-spacing: 0.04em;
+		letter-spacing: var(--text-ui--letter-spacing);
 		opacity: 0.85;
 	}
 
@@ -264,7 +265,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 		flex: 1;
 		min-width: 0;
 		margin: 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 	}

@@ -177,7 +177,7 @@ fine, unless getting there cost the reader the context they need to understand t
 | `set_sentiment.markdown` | 3 lines, 60 words |
 | `rate_axis` rationale | 1–2 sentences, 35 words |
 
-**Sentence-level caps that apply everywhere:** ≤25 words per sentence, one idea per sentence.
+**Sentence-level caps that apply everywhere:** ≤25 words per sentence, one point per sentence.
 Three mechanical triggers mark a sentence as over budget. When one fires, **split the
 sentence rather than repacking it**:
 
@@ -189,12 +189,32 @@ sentence rather than repacking it**:
 Going over a cap is not an achievement. Material that genuinely does not fit belongs in another
 block or another chapter. The walkthrough has room. The individual block does not.
 
-### Writing style — Simplified Technical English, no filler
+### Writing style — say it like a person
 
-- Write every summary, chapter, annotation, sentiment, issue comment, and rating rationale in **ASD-STE100 Simplified Technical English**: one idea per sentence, short sentences (≤ 20 words for instructions, ≤ 25 for descriptions), active voice, present tense, plain approved words, and the same term for the same thing every time. STE also means every term is one the reader already knows or that you define. Short sentences built from undefined terms are not STE. Keep code identifiers, file paths, and API names verbatim — never paraphrase those.
+Every summary, chapter, annotation, sentiment, issue comment, and rating rationale reads like one engineer explaining the change to a teammate at their desk. Plain words, no jargon, simple and short. The test: read the block out loud to a smart colleague who hasn't seen this code. If they would say "ok, now in English?", rewrite it.
+
+- **Say what happens before you name the code that does it.** Identifiers, paths and API names are for *finding* the code. They are never the explanation. Write "a merge now waits until the keys from the last merge have finished moving", then point at `hasPendingInto` if the reader needs to find it. A sentence whose subject and object are both backticked names explains nothing to someone who hasn't read those functions.
+- **Connect the sentences.** Short sentences are good; disconnected ones are not. Use the words people use to explain things: "because", "so", "which means", "until", "otherwise". The reader should never have to work out how sentence two follows from sentence one.
+- **No compressed noun stacks.** "source-workspace token validation", "pending credential move record", "inbound move check" are a spec's shorthand, not speech. Unpack them: "checking a token against the workspace the key came from".
+- **Everyday words over domain jargon.** Use the system's own terms only when the reader needs them to find or discuss the code, and gloss them on first use. "Fan-out", "hydrate", "reconcile", "materialize", "idempotent upsert": if a plain phrase says the same thing, use the plain phrase.
+- Active voice, present tense, and the same term for the same thing every time. Keep code identifiers, file paths, and API names verbatim when you do use them; never paraphrase those.
 - Be concise and don't explain the obvious. "Obvious" means obvious to a competent engineer who has never opened this repo, not obvious to you after an hour of exploring it. Skip narration a competent engineer already knows (what a `for` loop does, that a getter returns its field, that a rename is a rename). Every sentence must add information the reader doesn't already have; when a change is self-evident, say so in one line and move on.
 - **Don't restate what the UI already shows.** The reader has the file list, the line counts, the diff itself, the PR title, and the severity badge on every issue card on screen. Re-narrating any of them spends the reader's attention on something they can already see.
 - **Plain words over precise-sounding ones.** "utilize" → "use", "in order to" → "to", "there is a possibility that" → "may". Technical precision lives in the identifiers and the line numbers, never in the vocabulary. The Voice section below lists the words and constructions that are banned outright.
+
+**Worked example — the same block, written as notes and then said like a person:**
+
+```
+BAD (every sentence is true, and none of it lands):
+`recordInTransaction` now checks unfinished inbound moves before its empty-key return. A pending move raises `ConflictError`, which rolls back the merge. Token validation uses the recorded source workspace until the credential move finishes.
+```
+
+```
+GOOD (same facts, said to a teammate):
+When two accounts merge, their API keys move to the new owner in the background. If a second merge starts before that move finishes, the PR now refuses it, so a key can't end up pointing at an account that no longer exists. The check is in `recordInTransaction`. Until a move finishes, old tokens keep working against the account they were issued for.
+```
+
+The GOOD version is a little longer and far faster to read, because the reader never has to decode it. When the length cap and the plain-language rule pull against each other, drop a fact before you compress the sentence.
 
 ### Context — write for a reviewer who hasn't read the code
 
@@ -295,7 +315,7 @@ The reader is scanning under load, and anything not on screen is forgotten. Thes
 3. **Cap a visible list at five items.** Rank the most relevant first and group the rest under a heading or a second block. This governs **presentation only** — it never limits how much you analyse, how many files you read, or how many issues you flag. Findings are never dropped to fit a cap; they move to their own group.
 4. **State defects matter-of-factly.** Cause, effect, fix — in that order, at every severity. No alarm words ("Uh oh", "Unfortunately", "There seems to be a problem"), no drama, and no softening either. A `critical` reads as calmly as a `pass`; the severity field carries the weight, the prose does not.
 5. **No preamble, no recap, no closing pleasantry.** Banned openers: "Let's…", "Looking at…", "In this section we…", "This chapter will…", "It's worth noting that…", "First, some context.". Banned closers: "Hope this helps", "Let me know if…", and any generic sign-off that adds no information. Start with the content; stop when the content is done. (Phase C's verdict is *content*, not a closer — it leads the sentiment rather than trailing a chapter.)
-6. **Give facts their own line.** A paragraph carrying four separate facts is four lines, or a four-item list, or a small table — never one dense block the reader must parse linearly to find the one fact they need. Markdown is fully rendered on every surface: use short lines, `**bold**` labels, lists, and tables. The test: can the reader find one specific fact without reading the sentences either side of it? If not, it needs structure, not better prose. Corollary: **never use a dash or a semicolon to weld two facts into one sentence.** That is the single most common way this output becomes unreadable.
+6. **Give facts their own line.** A paragraph carrying four separate facts is four lines, or a four-item list, or a small table — never one dense block the reader must parse linearly to find the one fact they need. Markdown is fully rendered on every surface: use short lines, `**bold**` labels, lists, and tables. The test: can the reader find one specific fact without reading the sentences either side of it? If not, it needs structure, not better prose. Structure is not shorthand, though: each line or list item is still a sentence you would say out loud, not a clipped note. Corollary: **never use a dash or a semicolon to weld two facts into one sentence.** That is the single most common way this output becomes unreadable.
 
 **Before you send any block:** check it against the length budget above. Replace any label you coined with what it is, and give any bare place or topic its consequence. Then delete: the first sentence if it announces what the block is about; the last sentence if it recaps what the block just said; any "by the way" sidebar — a second concern is its own issue or its own chapter, never a tail on this one; any hedging adverb carrying no information ("perhaps", "arguably", "it could possibly be that"), while keeping hedges that carry real uncertainty, because deleting those manufactures confidence you don't have; any idiom in favour of the literal thing ("under the hood" → the mechanism you actually mean).
 

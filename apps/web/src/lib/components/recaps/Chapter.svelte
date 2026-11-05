@@ -198,9 +198,9 @@ const openGroups = $derived(groupByAuthor(openEntries));
 
 .chapter-title h2 {
   margin: 0;
-  font-size: 1.375rem;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font-size: var(--text-2xl);
+  font-weight: 500;
+  letter-spacing: var(--text-2xl--letter-spacing);
   color: var(--color-text-primary);
   text-wrap: balance;
 }
@@ -215,15 +215,15 @@ const openGroups = $derived(groupByAuthor(openEntries));
 }
 
 .chapter-count {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
 }
 
 .chapter-summary {
   margin: 0.875rem 0 0;
   max-width: 620px;
-  font-size: 0.9375rem;
+  font-size: var(--text-base);
   line-height: 1.55;
   color: var(--color-text-secondary);
   text-wrap: pretty;
@@ -257,15 +257,14 @@ const openGroups = $derived(groupByAuthor(openEntries));
 }
 
 .author-handle {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--color-text-primary);
 }
 
 .author-count {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-ui);
   color: var(--color-text-muted);
   margin-left: auto;
 }
@@ -293,12 +292,10 @@ const openGroups = $derived(groupByAuthor(openEntries));
 }
 
 .subgroup-label {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-ui);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
 }
 
 @media (max-width: 600px) {

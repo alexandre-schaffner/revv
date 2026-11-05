@@ -431,7 +431,7 @@ function onOpenChange(open: boolean): void {
 		border-radius: 4px;
 		background: var(--color-bg-tertiary);
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -440,7 +440,7 @@ function onOpenChange(open: boolean): void {
 		align-items: center;
 		gap: 8px;
 		padding: 16px 4px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-secondary);
 	}
 
@@ -466,7 +466,7 @@ function onOpenChange(open: boolean): void {
 
 	.done p {
 		margin: 0;
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-primary);
 	}
 
@@ -492,14 +492,15 @@ function onOpenChange(open: boolean): void {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-primary);
 	}
 
 	:global(.stack-merge-sheet .layer-meta) {
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -517,7 +518,7 @@ function onOpenChange(open: boolean): void {
 		align-items: flex-start;
 		gap: 6px;
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}

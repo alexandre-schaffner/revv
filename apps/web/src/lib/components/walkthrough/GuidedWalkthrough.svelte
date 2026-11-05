@@ -1431,7 +1431,7 @@ async function handleRetryClone(): Promise<void> {
 							<div class="sentiment-card-header">
 								<h3 class="sentiment-card-title">Overall Sentiment</h3>
 							</div>
-							<div class="sentiment-card-body prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
+							<div class="sentiment-card-body prose prose-reading" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSentiment}</div>
 						</div>
 					{/if}
 					{#if ratings.length > 0 || isStreaming}
@@ -1550,7 +1550,7 @@ async function handleRetryClone(): Promise<void> {
 		margin-top: 1.5rem;
 		padding-top: 0.5rem;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
@@ -1705,8 +1705,8 @@ async function handleRetryClone(): Promise<void> {
 	.exploration-item {
 		display: flex;
 		gap: 8px;
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
+		font-size: var(--text-ui);
+		font-family: var(--font-mono);
 		color: var(--color-text-muted);
 		animation: fadeIn var(--duration-smooth) var(--ease-out-expo);
 		line-height: 1.5;
@@ -1764,11 +1764,9 @@ async function handleRetryClone(): Promise<void> {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.issues-groups {
@@ -1787,10 +1785,8 @@ async function handleRetryClone(): Promise<void> {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
@@ -1838,7 +1834,8 @@ async function handleRetryClone(): Promise<void> {
 		display: grid;
 		grid-column: 1 / -1;
 		grid-template-columns: var(--walkthrough-columns);
-		row-gap: 20px;
+		/* Room around each block, the way an article gives a figure air. */
+		row-gap: 24px;
 		margin-top: 20px;
 		grid-auto-flow: row;
 	}
@@ -2006,12 +2003,12 @@ async function handleRetryClone(): Promise<void> {
 
 	.walkthrough-thought-empty {
 		margin: 0.375rem 0 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.walkthrough-inline-thought {
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-muted);
 		word-break: break-word;
@@ -2055,7 +2052,7 @@ async function handleRetryClone(): Promise<void> {
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
 		padding: 14px 16px;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		/* Allow long identifiers inside inline <code> (e.g. dotted API paths
@@ -2071,19 +2068,20 @@ async function handleRetryClone(): Promise<void> {
 	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
 
 	.loading-text {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.loading-subtext {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		opacity: 0.6;
 		margin: 0;
 	}
 
 	.error-inline {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-danger);
 		margin-top: 8px;
 	}
@@ -2091,7 +2089,7 @@ async function handleRetryClone(): Promise<void> {
 	.generation-error {
 		min-width: 0;
 		text-align: left;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 	}
@@ -2233,20 +2231,13 @@ async function handleRetryClone(): Promise<void> {
 	}
 
 	.sentiment-card-title {
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		color: var(--color-text-primary);
 		margin: 0;
 	}
 
-	.sentiment-card-body {
-		font-size: 14px;
-		line-height: 1.65;
-		color: var(--color-text-secondary);
-	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.sentiment-card-body` only owns base text density. */
+	/* Size, ink and measure come from `prose prose-reading` (lib/styles/prose.css). */
 
 	/* ── Narrow-viewport fallback ────────────────────────────────────────
 	   Below the 1336px geometric minimum (24 left + 48 + 820 + 40 + 380 +
@@ -2339,6 +2330,11 @@ async function handleRetryClone(): Promise<void> {
 		.block-group:not(.block-group--sentiment-stack) {
 			display: block;
 			position: relative;
+		}
+
+		/* The grid's row gap, kept once the blocks stack (see WalkthroughSection). */
+		.block-group + .block-group {
+			margin-top: 24px;
 		}
 
 		.block-step-dot {

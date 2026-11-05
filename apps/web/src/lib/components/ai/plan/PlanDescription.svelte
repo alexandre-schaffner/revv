@@ -25,7 +25,7 @@ export type PlanDescriptionProps = HTMLAttributes<HTMLParagraphElement> & {
 
 <p
 	data-slot="plan-description"
-	class={cn("text-balance text-xs text-muted-foreground", className)}
+	class={cn("text-balance text-ui text-muted-foreground", className)}
 	{...restProps}
 >
 	{#if ctx.isStreaming && text}

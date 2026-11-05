@@ -368,7 +368,7 @@ function parseTrustedHosts(text: string): string[] {
 	.cache-off {
 		max-width: 60ch;
 		padding: 0 4px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 	}
@@ -377,12 +377,12 @@ function parseTrustedHosts(text: string): string[] {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
 	.probe-error {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-danger);
 		overflow-wrap: anywhere;

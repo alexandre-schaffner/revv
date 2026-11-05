@@ -60,11 +60,9 @@ const issueGroups = $derived(groupIssuesBySeverity(issues));
 	}
 
 	.file-issues-label {
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		color: var(--color-text-muted);
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.file-issues-groups {
@@ -83,10 +81,8 @@ const issueGroups = $derived(groupIssuesBySeverity(issues));
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 

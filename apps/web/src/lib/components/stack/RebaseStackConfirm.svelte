@@ -117,7 +117,7 @@ const othersOwn = $derived(
 
 	.confirm-title {
 		margin: 0;
-		font-size: 15px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.4;
 	}
@@ -126,7 +126,7 @@ const othersOwn = $derived(
 	.confirm-note {
 		margin: 0;
 		color: var(--color-text-secondary);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		overflow-wrap: anywhere;
 	}
@@ -152,7 +152,7 @@ const othersOwn = $derived(
 		align-items: baseline;
 		gap: 16px;
 		padding-block: 8px;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 	}
 

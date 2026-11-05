@@ -545,8 +545,8 @@ function prCountFor(
 	.search-shell :global([data-slot="command-input"]) {
 		height: 100%;
 		padding: 0;
-		font-size: 12.5px;
-		font-weight: 450;
+		font-size: var(--text-sm);
+		font-weight: 400;
 		color: var(--color-text-primary);
 	}
 
@@ -576,7 +576,8 @@ function prCountFor(
 		gap: 5px;
 		margin: 6px 2px 0;
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		flex-shrink: 0;
 	}
 
@@ -640,9 +641,9 @@ function prCountFor(
 		align-items: center;
 		gap: 7px;
 		padding: 11px 10px 6px;
-		font-size: 11.5px;
-		font-weight: 600;
-		letter-spacing: 0.01em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-primary);
 		user-select: none;
 	}
@@ -692,7 +693,7 @@ function prCountFor(
 	:global(.add-repo .repo-name) {
 		flex: 1;
 		min-width: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -735,16 +736,17 @@ function prCountFor(
 	}
 
 	:global(.add-repo .import-slug) {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+		font-family: var(--font-mono);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
 	:global(.add-repo .import-hint) {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}
@@ -753,7 +755,8 @@ function prCountFor(
 	:global(.add-repo .meta-badge) {
 		height: 18px;
 		padding: 0 7px;
-		font-size: 10.5px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-weight: 500;
 	}
 
@@ -768,7 +771,8 @@ function prCountFor(
 		align-items: center;
 		gap: 3px;
 		color: var(--color-text-muted);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -823,7 +827,7 @@ function prCountFor(
 		justify-content: center;
 		gap: 12px;
 		padding: 36px 16px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		text-align: center;
 	}
@@ -839,13 +843,14 @@ function prCountFor(
 	}
 
 	.state-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		opacity: 0.8;
 	}
 
 	.kbd-inline {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-		font-size: 10.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		padding: 1px 5px;
 		border-radius: 4px;
 		background: var(--color-glass-active-bg);

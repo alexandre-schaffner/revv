@@ -72,12 +72,12 @@ function handleAgentChange(value: string | undefined): void {
 		>
 			{#snippet control()}
 				<Select.Root type="single" value={agent} onValueChange={handleAgentChange} disabled={!enabled}>
-					<Select.Trigger class="w-48 text-xs" aria-label="Recap agent">
+					<Select.Trigger class="w-48 text-ui" aria-label="Recap agent">
 						<span class="truncate">{agentOptions.find((o) => o.value === agent)?.label ?? 'Follow main agent'}</span>
 					</Select.Trigger>
 					<Select.Content>
 						{#each agentOptions as opt (opt.value)}
-							<Select.Item value={opt.value} class="text-xs">{opt.label}</Select.Item>
+							<Select.Item value={opt.value} class="text-ui">{opt.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>

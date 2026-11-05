@@ -88,7 +88,7 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 		</Select.Trigger>
 		<Select.Content align="end">
 			{#each TAGGED_SORT_OPTIONS as option (option.id)}
-				<Select.Item value={option.id} class="text-xs">{option.label}</Select.Item>
+				<Select.Item value={option.id} class="text-ui">{option.label}</Select.Item>
 			{/each}
 		</Select.Content>
 	</Select.Root>
@@ -128,7 +128,7 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 		   at ink-secondary rather than the 2.6:1 ink-muted. */
 		color: var(--color-text-secondary);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-sm);
 		font-weight: 400;
 		white-space: nowrap;
 		cursor: pointer;
@@ -152,7 +152,7 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 	   per session. */
 	.filter--on {
 		color: var(--color-text-primary);
-		font-weight: 600;
+		font-weight: 500;
 	}
 
 	.filter-count {
@@ -170,7 +170,7 @@ const sortLabel = $derived(sortOptionFor(sortId).label);
 		border: none;
 		background: transparent;
 		color: var(--color-text-secondary);
-		font-size: 0.75rem;
+		font-size: var(--text-sm);
 	}
 
 	:global(.tagged-sort-trigger:hover) {

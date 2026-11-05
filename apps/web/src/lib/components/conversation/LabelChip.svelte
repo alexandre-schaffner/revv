@@ -30,7 +30,7 @@ const hue = $derived(labelHue(label.color));
 		height: 20px;
 		padding: 0 8px;
 		border-radius: 999px;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		line-height: 1;
 		white-space: nowrap;

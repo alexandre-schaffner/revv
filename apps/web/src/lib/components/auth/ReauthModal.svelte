@@ -112,7 +112,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 					<div
 						class="flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-6 py-3"
 					>
-						<span class="font-mono text-2xl font-bold tracking-widest text-text-primary">
+						<span class="font-mono text-2xl font-semibold tracking-widest text-text-primary">
 							{deviceFlow.userCode}
 						</span>
 						<button
@@ -127,13 +127,13 @@ async function saveClientIdAndRetry(): Promise<void> {
 						href={deviceFlow.verificationUri}
 						target="_blank"
 						rel="noopener noreferrer"
-						class="text-xs text-accent hover:underline"
+						class="text-ui text-accent hover:underline"
 					>
 						{deviceFlow.verificationUri}
 					</a>
-					<p class="text-xs text-text-muted">Waiting for authorization…</p>
+					<p class="text-ui text-text-muted">Waiting for authorization…</p>
 					<button
-						class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
+						class="cursor-pointer text-ui text-text-muted underline hover:text-text-secondary"
 						onclick={cancelSignIn}
 					>
 						Cancel
@@ -151,7 +151,7 @@ async function saveClientIdAndRetry(): Promise<void> {
 							void saveClientIdAndRetry();
 						}}
 					>
-						<label class="flex flex-col gap-1.5 text-xs font-medium text-text-secondary">
+						<label class="flex flex-col gap-1.5 text-ui font-medium text-text-secondary">
 							GitHub App client ID for {reauth.host}
 							<input
 								class="h-10 rounded-lg border border-border bg-bg-tertiary px-3 text-sm text-text-primary outline-none focus:border-accent"

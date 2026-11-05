@@ -205,8 +205,8 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
 
     .spec-title {
         font-family: var(--font-mono);
-        font-size: 13px;
-        font-weight: 600;
+        font-size: var(--text-sm);
+        font-weight: 500;
         color: var(--color-text-primary);
         letter-spacing: 0.01em;
     }
@@ -218,7 +218,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
         align-items: center;
         gap: 10px;
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         flex-wrap: wrap;
     }
 
@@ -257,7 +257,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
     }
 
     .count-num {
-        font-weight: 700;
+        font-weight: 600;
     }
 
     .count-label {
@@ -267,7 +267,7 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
 
     .count-divider {
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-muted);
         opacity: 0.4;
     }
@@ -291,10 +291,10 @@ const selectLabel = $derived(allSelected ? "Clear" : "Select all");
         background: transparent;
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 11px;
+        font-size: var(--text-ui);
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: var(--tracking-eyebrow);
         cursor: pointer;
         transition:
             background var(--duration-snap) var(--ease-soft),

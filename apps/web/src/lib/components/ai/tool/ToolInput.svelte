@@ -27,9 +27,9 @@ export type ToolInputProps = HTMLAttributes<HTMLDivElement> & {
 		class={cn("space-y-2 overflow-hidden", className)}
 		{...restProps}
 	>
-		<h4 class="font-medium text-muted-foreground text-xs uppercase tracking-wide">Parameters</h4>
+		<h4 class="font-medium text-muted-foreground text-ui">Parameters</h4>
 		<div class="rounded-md bg-muted/50">
-			<pre class="overflow-x-auto p-3 text-xs font-mono"><code>{formatted}</code></pre>
+			<pre class="overflow-x-auto p-3 text-ui font-mono"><code>{formatted}</code></pre>
 		</div>
 	</div>
 {/if}

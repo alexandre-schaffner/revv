@@ -140,17 +140,17 @@ let unmanaged = $derived(shownRepo?.managed === false);
 		margin: 0;
 		min-width: 0;
 		color: var(--color-text-primary);
-		font-size: 15px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		line-height: 1.3;
-		letter-spacing: -0.01em;
+		letter-spacing: var(--text-base--letter-spacing);
 		overflow-wrap: anywhere;
 	}
 
 	.confirm-description {
 		margin: 0;
 		color: var(--color-text-secondary);
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.55;
 	}
 
@@ -161,8 +161,8 @@ let unmanaged = $derived(shownRepo?.managed === false);
 		border: 1px solid var(--color-border-subtle);
 		padding: 7px 10px;
 		color: var(--color-text-primary);
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-		font-size: 11.5px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		overflow-wrap: anywhere;
 	}

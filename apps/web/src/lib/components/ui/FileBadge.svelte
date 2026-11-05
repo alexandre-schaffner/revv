@@ -82,8 +82,8 @@ const tooltip = $derived(
     border-radius: 6px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-shadcn);
-    font-size: 11.5px;
-    font-family: var(--font-sans, system-ui, sans-serif);
+    font-size: var(--text-ui);
+    font-family: var(--font-sans);
     color: var(--color-text-primary);
     cursor: default;
     transition:
@@ -117,9 +117,9 @@ const tooltip = $derived(
     align-items: center;
     align-self: stretch;
     padding: 0 5px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    letter-spacing: var(--text-xs--letter-spacing);
     background: color-mix(in srgb, currentColor 10%, transparent);
     border-right: 1px solid var(--color-border-shadcn);
     white-space: nowrap;

@@ -105,8 +105,8 @@ function repoHint(repo: Repository): string | undefined {
 
 <style>
 	.repo-count {
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		font-variant-numeric: tabular-nums;
 	}

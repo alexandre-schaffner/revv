@@ -218,8 +218,9 @@ function retryTeams(): void {
 
 	.filter-badge {
 		min-width: 12px;
-		font-size: 10px;
-		font-weight: 600;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
+		font-weight: 500;
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
 		text-align: center;

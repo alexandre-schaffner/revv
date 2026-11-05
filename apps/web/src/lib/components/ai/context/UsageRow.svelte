@@ -17,7 +17,7 @@ export type UsageRowProps = {
 	const costLabel = $derived(formatCost(cost));
 </script>
 
-<div class={cn('flex items-center justify-between gap-3 text-xs', className)}>
+<div class={cn('flex items-center justify-between gap-3 text-ui', className)}>
 	<span class="text-text-muted">{label}</span>
 	<span class="flex items-center gap-2 font-mono tabular-nums text-text-secondary">
 		<span>{tokensLabel}</span>

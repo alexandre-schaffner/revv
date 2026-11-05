@@ -21,7 +21,7 @@ export type QueueItemDescriptionProps = HTMLAttributes<HTMLDivElement> & {
 <div
 	data-slot="queue-item-description"
 	class={cn(
-		"ml-6 text-xs",
+		"ml-6 text-ui",
 		completed
 			? "text-muted-foreground/40 line-through"
 			: "text-muted-foreground",

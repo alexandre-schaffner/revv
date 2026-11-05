@@ -94,7 +94,7 @@ function regenerateFromScratch(next?: T): void {
 
 {#snippet perspectiveRows(close: () => void, run: (next: T) => void)}
 	{#if perspective}
-		<p class="px-2 pt-1.5 pb-1 text-xs font-semibold text-text-secondary">Perspective</p>
+		<p class="px-2 pt-1.5 pb-1 text-ui font-semibold text-text-secondary">Perspective</p>
 		{#each perspective.options as opt (opt.value)}
 			<button
 				type="button"
@@ -105,8 +105,8 @@ function regenerateFromScratch(next?: T): void {
 				}}
 			>
 				<span class="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span class="text-xs font-medium text-text-primary">{opt.label}</span>
-					<span class="text-xs text-text-muted">{opt.description}</span>
+					<span class="text-ui font-medium text-text-primary">{opt.label}</span>
+					<span class="text-ui text-text-muted">{opt.description}</span>
 				</span>
 				{#if opt.value === perspective.value}
 					<Check size={12} class="mt-0.5 shrink-0 text-accent" />
