@@ -80,7 +80,7 @@ const hasStepLinks = $derived(issue.blockIds.some((id) => getStepLabel(prId, id)
 <style>
     .description {
         font-family: var(--font-sans);
-        font-size: 13px;
+        font-size: var(--text-sm);
         line-height: 1.55;
         color: var(--color-text-primary);
         margin: 0;
@@ -103,12 +103,12 @@ const hasStepLinks = $derived(issue.blockIds.some((id) => getStepLabel(prId, id)
     .resolution strong {
         color: var(--color-success);
         font-family: var(--font-sans);
-        font-size: 13px;
+        font-size: var(--text-sm);
     }
 
     .resolution-agent {
         color: var(--color-text-muted);
-        font-size: 12px;
+        font-size: var(--text-ui);
     }
 
     .resolution p,

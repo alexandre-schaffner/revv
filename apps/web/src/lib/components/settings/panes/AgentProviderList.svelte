@@ -215,13 +215,13 @@ async function onLoginDone(): Promise<void> {
 	}
 
 	.provider-name {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-primary);
 	}
 
 	.provider-description {
 		overflow: hidden;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -239,7 +239,7 @@ async function onLoginDone(): Promise<void> {
 	}
 
 	.provider-auth {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -248,7 +248,7 @@ async function onLoginDone(): Promise<void> {
 		align-items: flex-start;
 		gap: 6px;
 		max-width: 60ch;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-warning);
 	}
@@ -271,7 +271,7 @@ async function onLoginDone(): Promise<void> {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -281,8 +281,8 @@ async function onLoginDone(): Promise<void> {
 		gap: 4px;
 		max-height: 132px;
 		overflow: auto;
-		font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-		font-size: 11px;
+		font-family: var(--font-mono);
+		font-size: var(--text-ui);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}

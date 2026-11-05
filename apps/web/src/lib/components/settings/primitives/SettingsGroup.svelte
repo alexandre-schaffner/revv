@@ -53,8 +53,8 @@ let { heading, description, actions, tone = "default", children }: Props = $prop
 	}
 
 	.group-heading {
-		font-size: 12px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
@@ -71,7 +71,7 @@ let { heading, description, actions, tone = "default", children }: Props = $prop
 	.group-description {
 		max-width: 64ch;
 		padding: 0 4px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 	}

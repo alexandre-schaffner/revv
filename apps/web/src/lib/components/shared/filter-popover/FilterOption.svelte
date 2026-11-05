@@ -86,7 +86,8 @@ let { checked, label, title, count, onclick, leading, trailing }: Props = $props
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 	}
 
 	.count {
@@ -95,7 +96,8 @@ let { checked, label, title, count, onclick, leading, trailing }: Props = $props
 		padding: 1px 6px;
 		background: var(--color-bg-elevated);
 		color: var(--color-text-muted);
-		font-size: 10px;
+		font-size: var(--text-xs);
+		letter-spacing: var(--text-xs--letter-spacing);
 		font-variant-numeric: tabular-nums;
 		text-align: center;
 	}

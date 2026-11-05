@@ -72,8 +72,8 @@ let { repo }: Props = $props();
 	}
 
 	.project-name {
-		font-size: 14px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -82,7 +82,8 @@ let { repo }: Props = $props();
 	}
 
 	.project-owner {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -90,13 +91,14 @@ let { repo }: Props = $props();
 	}
 
 	.placeholder-title {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
 	.placeholder-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-muted);
 	}
 
@@ -114,7 +116,8 @@ let { repo }: Props = $props();
 		border-radius: 6px;
 		background: transparent;
 		color: var(--color-text-secondary);
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		text-decoration: none;
 		transition: background-color var(--duration-snap), color var(--duration-snap);
 	}

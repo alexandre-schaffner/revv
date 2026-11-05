@@ -27,7 +27,7 @@ let { children }: Props = $props();
         align-items: center;
         gap: 6px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         color: var(--color-text-secondary);
     }
 
@@ -35,7 +35,7 @@ let { children }: Props = $props();
         content: "at ";
         color: var(--color-text-muted);
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         letter-spacing: 0.02em;
     }
 </style>

@@ -84,7 +84,7 @@ const Icon = $derived(ICONS[described.icon]);
 		min-width: 0;
 		margin: 0;
 		padding-top: 2px;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		line-height: 1.45;
 		color: var(--color-text-secondary);
 	}
@@ -102,7 +102,7 @@ const Icon = $derived(ICONS[described.icon]);
 
 	.event-text code {
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 	}
 

@@ -220,7 +220,7 @@ function choose(layer: StackLayer): void {
 
 	.place {
 		font-family: var(--font-mono);
-		font-size: 10.5px;
+		font-size: var(--text-ui);
 		line-height: 1;
 		color: var(--color-text-subtle);
 		font-variant-numeric: tabular-nums;
@@ -245,13 +245,13 @@ function choose(layer: StackLayer): void {
 	}
 
 	.sheet-title {
-		font-size: 12.5px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.sheet-sub {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-subtle);
 	}
 
@@ -261,7 +261,7 @@ function choose(layer: StackLayer): void {
 
 	.sheet-sub code {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -271,8 +271,8 @@ function choose(layer: StackLayer): void {
 
 	.group-name {
 		padding: 6px 8px 2px;
-		font-size: 11.5px;
-		font-weight: 600;
+		font-size: var(--text-ui);
+		font-weight: 500;
 		color: var(--color-text-secondary);
 	}
 
@@ -289,7 +289,7 @@ function choose(layer: StackLayer): void {
 		border-radius: 6px;
 		background: transparent;
 		font: inherit;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		text-align: left;
 		color: inherit;
 		cursor: pointer;
@@ -313,7 +313,7 @@ function choose(layer: StackLayer): void {
 
 	.item-num {
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-subtle);
 	}
 
@@ -329,7 +329,8 @@ function choose(layer: StackLayer): void {
 	}
 
 	.item-state {
-		font-size: 11px;
+		font-size: var(--text-ui);
+		letter-spacing: var(--text-ui--letter-spacing);
 		color: var(--color-text-subtle);
 		white-space: nowrap;
 	}

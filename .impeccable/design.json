@@ -257,7 +257,7 @@
       "refersTo": "button-primary",
       "description": "Coastal Teal fill on warm-paper canvas. 1px tactile press on :active. The default brand CTA.",
       "html": "<button class=\"ds-btn-primary\">Approve and merge</button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #0f766e; color: #ffffff; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; letter-spacing: 0; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-primary:hover { background: #115e59; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #0f766e; color: #ffffff; border: 1px solid transparent; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; letter-spacing: 0; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-primary:hover { background: #115e59; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
     },
     {
       "name": "Outline Button",
@@ -265,7 +265,7 @@
       "refersTo": "button-outline",
       "description": "Warm-paper background with a paper-edge hairline border. The default chrome action.",
       "html": "<button class=\"ds-btn-outline\">View diff</button>",
-      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #faf9f6; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-outline:hover { background: #f4f1eb; } .ds-btn-outline:active { transform: translateY(1px); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: #faf9f6; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-outline:hover { background: #f4f1eb; } .ds-btn-outline:active { transform: translateY(1px); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
     },
     {
       "name": "Ghost Button",
@@ -273,7 +273,7 @@
       "refersTo": "button-ghost",
       "description": "Transparent at rest, lifts to warm-stone on hover. The most common button variant for chrome actions.",
       "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
-      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: transparent; color: #5a5650; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-ghost:hover { background: #f4f1eb; color: #2a2825; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: transparent; color: #5a5650; border: 1px solid transparent; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-ghost:hover { background: #f4f1eb; color: #2a2825; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
     },
     {
       "name": "Destructive Button",
@@ -281,7 +281,7 @@
       "refersTo": "button-destructive",
       "description": "Considered Red at 10% alpha with Considered Red text. Never a solid red fill; the warning is in the color, not the volume.",
       "html": "<button class=\"ds-btn-destructive\">Discard changes</button>",
-      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: rgba(185, 28, 28, 0.10); color: #b91c1c; border: 1px solid transparent; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-destructive:hover { background: rgba(185, 28, 28, 0.20); } .ds-btn-destructive:active { transform: translateY(1px); } .ds-btn-destructive:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.30); }"
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; background: rgba(185, 28, 28, 0.10); color: #b91c1c; border: 1px solid transparent; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-destructive:hover { background: rgba(185, 28, 28, 0.20); } .ds-btn-destructive:active { transform: translateY(1px); } .ds-btn-destructive:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.30); }"
     },
     {
       "name": "Text Input",
@@ -289,7 +289,7 @@
       "refersTo": "input-default",
       "description": "Warm-stone fill with hairline border; focus glow rather than border-color change.",
       "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Search repos and PRs\" />",
-      "css": ".ds-input { display: block; width: 100%; height: 32px; padding: 8px 12px; background: #f4f1eb; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; line-height: 1; outline: none; transition: box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-input::placeholder { color: #9a958c; } .ds-input:focus-visible { box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
+      "css": ".ds-input { display: block; width: 100%; height: 32px; padding: 8px 12px; background: #f4f1eb; color: #2a2825; border: 1px solid #e4e0d8; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; line-height: 1; outline: none; transition: box-shadow 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-input::placeholder { color: #9a958c; } .ds-input:focus-visible { box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.4); }"
     },
     {
       "name": "Active Tab",
@@ -297,7 +297,7 @@
       "refersTo": "tab-active",
       "description": "The active PR tab in the floating-tab track. Warm-paper fill against a stone-tone track; Indicator shadow lifts it.",
       "html": "<div class=\"ds-tab-track\"><button class=\"ds-tab ds-tab--active\">user-auth.ts</button><button class=\"ds-tab\">middleware.ts</button></div>",
-      "css": ".ds-tab-track { display: inline-flex; gap: 4px; padding: 4px; background: rgba(42, 40, 37, 0.06); border-radius: 12px; } .ds-tab { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; background: transparent; color: #7a756c; border: none; border-radius: 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.8125rem; font-weight: 500; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-tab:hover { background: #eae6de; color: #2a2825; } .ds-tab--active { background: #faf9f6; color: #2a2825; box-shadow: 0 1px 3px rgba(42, 40, 37, 0.08), 0 2px 8px rgba(42, 40, 37, 0.06), 0 0 0 0.5px rgba(42, 40, 37, 0.04); }"
+      "css": ".ds-tab-track { display: inline-flex; gap: 4px; padding: 4px; background: rgba(42, 40, 37, 0.06); border-radius: 12px; } .ds-tab { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; background: transparent; color: #7a756c; border: none; border-radius: 8px; font-family: Geist, system-ui, sans-serif; font-size: 0.8125rem; font-weight: 500; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-tab:hover { background: #eae6de; color: #2a2825; } .ds-tab--active { background: #faf9f6; color: #2a2825; box-shadow: 0 1px 3px rgba(42, 40, 37, 0.08), 0 2px 8px rgba(42, 40, 37, 0.06), 0 0 0 0.5px rgba(42, 40, 37, 0.04); }"
     },
     {
       "name": "Glass Pill",
@@ -305,7 +305,7 @@
       "refersTo": "glass-pill",
       "description": "Floating chrome above the canvas. Warm-paper at 78% alpha with backdrop-blur. Used for the line-action pill, mode toggles, ambient status. Glass is a role, not a default.",
       "html": "<div class=\"ds-glass-pill\"><span>2 of 12 files</span><span class=\"ds-glass-pill__sep\"></span><span>review session</span></div>",
-      "css": ".ds-glass-pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; background: rgba(250, 249, 246, 0.78); color: #2a2825; border: 1px solid rgba(42, 40, 37, 0.09); border-radius: 999px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 6px rgba(42, 40, 37, 0.08); font-family: Inter, system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.01em; } .ds-glass-pill__sep { display: inline-block; width: 1px; height: 12px; background: rgba(42, 40, 37, 0.15); }"
+      "css": ".ds-glass-pill { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; background: rgba(250, 249, 246, 0.78); color: #2a2825; border: 1px solid rgba(42, 40, 37, 0.09); border-radius: 999px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 6px rgba(42, 40, 37, 0.08); font-family: Geist, system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.01em; } .ds-glass-pill__sep { display: inline-block; width: 1px; height: 12px; background: rgba(42, 40, 37, 0.15); }"
     },
     {
       "name": "File Tree Row (Active)",
@@ -313,15 +313,15 @@
       "refersTo": "file-tree-row",
       "description": "A row in the file tree sidebar. Active state uses Coastal Teal *tinted* into the background (10% alpha), not the solid accent. The row whispers the brand.",
       "html": "<div class=\"ds-tree\"><div class=\"ds-tree__row\">apps/web/<wbr>routes/<wbr>+page.svelte</div><div class=\"ds-tree__row ds-tree__row--active\">apps/web/<wbr>routes/<wbr>review/<wbr>+page.svelte</div><div class=\"ds-tree__row\">apps/server/<wbr>src/<wbr>index.ts</div></div>",
-      "css": ".ds-tree { display: flex; flex-direction: column; gap: 1px; padding: 4px; background: #f4f1eb; border-radius: 8px; } .ds-tree__row { padding: 6px 10px; border-radius: 6px; color: #5a5650; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8125rem; line-height: 1.4; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-tree__row:hover { background: #eae6de; color: #2a2825; } .ds-tree__row--active { background: rgba(15, 118, 110, 0.10); color: #115e59; }"
+      "css": ".ds-tree { display: flex; flex-direction: column; gap: 1px; padding: 4px; background: #f4f1eb; border-radius: 8px; } .ds-tree__row { padding: 6px 10px; border-radius: 6px; color: #5a5650; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 0.8125rem; line-height: 1.4; cursor: pointer; transition: background 120ms cubic-bezier(0.16, 1, 0.3, 1), color 120ms cubic-bezier(0.16, 1, 0.3, 1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-tree__row:hover { background: #eae6de; color: #2a2825; } .ds-tree__row--active { background: rgba(15, 118, 110, 0.10); color: #115e59; }"
     },
     {
       "name": "Diff Line (Addition)",
       "kind": "custom",
       "refersTo": "diff-add-line",
-      "description": "A single addition line in the diff canvas. Warm-stone canvas, deepened green tint, JetBrains Mono code at 0.8125rem. The full diff vocabulary lives in app.css.",
+      "description": "A single addition line in the diff canvas. Warm-stone canvas, deepened green tint, Geist Mono code at 0.8125rem. The full diff vocabulary lives in app.css.",
       "html": "<div class=\"ds-diff\"><div class=\"ds-diff__row ds-diff__row--add\"><span class=\"ds-diff__gutter\">+12</span><span class=\"ds-diff__code\">  const session = await auth.verify(token);</span></div><div class=\"ds-diff__row\"><span class=\"ds-diff__gutter\">13</span><span class=\"ds-diff__code\">  if (!session) return new Response(null, { status: 401 });</span></div></div>",
-      "css": ".ds-diff { background: #f4f1eb; border: 1px solid #e4e0d8; border-radius: 8px; overflow: hidden; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8125rem; line-height: 1.5; } .ds-diff__row { display: grid; grid-template-columns: 48px 1fr; align-items: baseline; transition: background 80ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-diff__row:hover { background: #eae6de; } .ds-diff__gutter { padding: 1px 12px 1px 0; color: #9a958c; text-align: right; border-right: 1px solid #e4e0d8; background: #edeae3; user-select: none; font-size: 0.75rem; } .ds-diff__code { padding: 1px 12px; color: #2a2825; white-space: pre; } .ds-diff__row--add { background: #e6f4ec; } .ds-diff__row--add:hover { background: #d0ebd9; } .ds-diff__row--add .ds-diff__gutter { background: #ddf0e3; color: #14532d; } .ds-diff__row--add .ds-diff__code { color: #14532d; }"
+      "css": ".ds-diff { background: #f4f1eb; border: 1px solid #e4e0d8; border-radius: 8px; overflow: hidden; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 0.8125rem; line-height: 1.5; } .ds-diff__row { display: grid; grid-template-columns: 48px 1fr; align-items: baseline; transition: background 80ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-diff__row:hover { background: #eae6de; } .ds-diff__gutter { padding: 1px 12px 1px 0; color: #9a958c; text-align: right; border-right: 1px solid #e4e0d8; background: #edeae3; user-select: none; font-size: 0.75rem; } .ds-diff__code { padding: 1px 12px; color: #2a2825; white-space: pre; } .ds-diff__row--add { background: #e6f4ec; } .ds-diff__row--add:hover { background: #d0ebd9; } .ds-diff__row--add .ds-diff__gutter { background: #ddf0e3; color: #14532d; } .ds-diff__row--add .ds-diff__code { color: #14532d; }"
     },
     {
       "name": "AI Stream Cursor",
@@ -329,7 +329,7 @@
       "refersTo": "stream-cursor",
       "description": "The 1ch-wide blinking cursor that appears while AI is producing tokens. Opt-back-in to motion under prefers-reduced-motion via .motion-essential-blink so the user can always tell the system is alive.",
       "html": "<p class=\"ds-stream\">This change extracts the auth middleware into a reusable Effect layer<span class=\"ds-stream__cursor motion-essential-blink\"></span></p>",
-      "css": ".ds-stream { font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; line-height: 1.5; color: #2a2825; } .ds-stream__cursor { display: inline-block; width: 1ch; height: 1em; margin-left: 2px; vertical-align: -2px; background: #0f766e; border-radius: 1px; box-shadow: 0 0 8px rgba(15, 118, 110, 0.35); } @keyframes ds-stream-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } } .motion-essential-blink { animation: ds-stream-blink 1s steps(2, end) infinite; }"
+      "css": ".ds-stream { font-family: Geist, system-ui, sans-serif; font-size: 0.875rem; line-height: 1.5; color: #2a2825; } .ds-stream__cursor { display: inline-block; width: 1ch; height: 1em; margin-left: 2px; vertical-align: -2px; background: #0f766e; border-radius: 1px; box-shadow: 0 0 8px rgba(15, 118, 110, 0.35); } @keyframes ds-stream-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } } .motion-essential-blink { animation: ds-stream-blink 1s steps(2, end) infinite; }"
     }
   ],
   "narrative": {
@@ -361,7 +361,7 @@
       },
       {
         "name": "The Single-Family Rule",
-        "body": "Inter is the only sans in the system; JetBrains Mono is the only mono. No display serif, no condensed sans, no second body family. Variety comes from weight (400/500/600) and scale, not from font-mixing.",
+        "body": "Geist is the only sans in the system; Geist Mono is the only mono. No display serif, no condensed sans, no second body family. Variety comes from weight (400/500/600) and scale, not from font-mixing.",
         "section": "typography"
       },
       {

@@ -133,7 +133,7 @@ const confidenceLabels: Record<Confidence, string> = {
         flex-direction: column;
         gap: 4px;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         line-height: 1.5;
     }
 
@@ -167,7 +167,7 @@ const confidenceLabels: Record<Confidence, string> = {
 
     .er-confidence {
         color: var(--color-text-muted);
-        font-size: 11.5px;
+        font-size: var(--text-ui);
         font-variant-numeric: tabular-nums;
         letter-spacing: 0.02em;
     }
@@ -175,7 +175,7 @@ const confidenceLabels: Record<Confidence, string> = {
     .score-title {
         margin: 0;
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: var(--text-ui);
         font-weight: 600;
         letter-spacing: 0.1em;
         text-transform: uppercase;
@@ -205,8 +205,8 @@ const confidenceLabels: Record<Confidence, string> = {
     }
 
     .rating-details-host :global(.rating-details h3) {
-        font-size: 12px;
-        font-weight: 700;
+        font-size: var(--text-ui);
+        font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
         color: var(--color-text-muted);

@@ -157,7 +157,7 @@ function stateLabel(row: OwnerRow): string {
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 
@@ -209,7 +209,7 @@ function stateLabel(row: OwnerRow): string {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
@@ -227,7 +227,7 @@ function stateLabel(row: OwnerRow): string {
 
 	.co-count {
 		flex-shrink: 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		font-variant-numeric: tabular-nums;
 	}
@@ -258,7 +258,7 @@ function stateLabel(row: OwnerRow): string {
 		white-space: nowrap;
 		text-align: left;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 		cursor: pointer;
 	}
@@ -270,7 +270,7 @@ function stateLabel(row: OwnerRow): string {
 
 	.co-note {
 		margin: 6px 0 0;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 	}
 </style>

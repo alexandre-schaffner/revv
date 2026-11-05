@@ -138,7 +138,7 @@ async function push(): Promise<void> {
 	.push-pill-main {
 		gap: 6px;
 		padding: 0 9px;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		letter-spacing: 0.01em;
 	}
@@ -165,8 +165,8 @@ async function push(): Promise<void> {
 		border-radius: 8px;
 		background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 		color: var(--color-accent);
-		font-size: 10px;
-		font-weight: 700;
+		font-size: var(--text-xs);
+		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 		line-height: 1;
 	}
@@ -218,13 +218,13 @@ async function push(): Promise<void> {
 	}
 
 	.push-menu-item-title {
-		font-size: 12px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		color: var(--color-text-primary);
 	}
 
 	.push-menu-item-hint {
-		font-size: 11px;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		line-height: 1.4;
 	}

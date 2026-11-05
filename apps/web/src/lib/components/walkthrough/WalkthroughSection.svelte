@@ -103,7 +103,7 @@ $effect(() => {
 			<h3 class="section-title">{section.title}</h3>
 		</div>
 		{#if section.summary}
-			<Markdown class="section-summary" source={section.summary} trust="agent" density="dense" />
+			<Markdown class="section-summary" source={section.summary} trust="agent" density="lede" />
 		{/if}
 	</button>
 
@@ -139,7 +139,7 @@ $effect(() => {
 						use:enterOnce={{ key: `${enterScope}:block:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
 					>
 						{#if block.type === 'markdown'}
-							<Markdown source={block.content} trust="agent" />
+							<Markdown source={block.content} trust="agent" density="reading" />
 						{:else if block.type === 'code'}
 							<WalkthroughCodeBlock {prId} {block} />
 						{:else if block.type === 'diff'}
@@ -205,7 +205,7 @@ $effect(() => {
 	.section-eyebrow {
 		font-family: var(--font-serif);
 		font-style: italic;
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		font-weight: 500;
 		letter-spacing: 0.3px;
 		color: var(--color-accent);
@@ -246,7 +246,7 @@ $effect(() => {
 
 	.section-title {
 		font-family: var(--font-serif);
-		font-size: 22px;
+		font-size: var(--text-2xl);
 		font-weight: 500;
 		letter-spacing: -0.012em;
 		line-height: 1.15;
@@ -278,9 +278,7 @@ $effect(() => {
 		min-width: 0;
 	}
 
-	.walkthrough-section :global(.section-summary) {
-		max-width: 720px;
-	}
+	/* Size, tone and measure come from `prose prose-reading prose-lede`. */
 
 	.section-body,
 	.block-group {
@@ -330,7 +328,7 @@ $effect(() => {
 		border: 1px solid var(--color-border);
 		border-radius: 8px;
 		padding: 14px 16px;
-		font-size: 14px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		overflow-wrap: anywhere;

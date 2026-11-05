@@ -21,19 +21,16 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 
 <header class="hero-big">
   <div class="hero-text">
-    <span class="eyebrow">
-      <span class="ai-mark" aria-hidden="true"></span>
-      <span>{header.eyebrow}</span>
-    </span>
     <div class="date-row">
       <h1 class="date">{header.title}</h1>
       {#if archive}{@render archive()}{/if}
     </div>
-    {#if header.syncedRelative}
-      <span class="time-cap">UTC · synced {header.syncedRelative}{#if recap?.sourceScope?.kind === "all"} · Everything source{#if scopeLabel !== "Everything"} · {scopeLabel} topics{/if}{/if}</span>
-    {:else}
-      <span class="time-cap">UTC</span>
-    {/if}
+    <!-- What kind of recap this is rides under the date, not above it as an
+         eyebrow: the title leads, the facts about it follow. -->
+    <span class="time-cap">
+      <span class="ai-mark" aria-hidden="true"></span>
+      {header.eyebrow} · UTC{#if header.syncedRelative}{' · '}synced {header.syncedRelative}{#if recap?.sourceScope?.kind === "all"} · Everything source{#if scopeLabel !== "Everything"} · {scopeLabel} topics{/if}{/if}{/if}
+    </span>
   </div>
 
   {#if header.stats}
@@ -122,12 +119,9 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-ui);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
 }
 
 .ai-mark {
@@ -141,7 +135,7 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 .date {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 2.75rem;
+  font-size: var(--text-5xl);
   font-weight: 500;
   letter-spacing: -0.02em;
   line-height: 1.05;
@@ -154,15 +148,16 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
    cannot reach a child component's scoped rules. */
 @container recap (max-width: 720px) {
   .date {
-    font-size: 2.25rem;
+    font-size: var(--text-4xl);
   }
 }
 
 .time-cap {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
-  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-ui);
+  color: var(--color-text-subtle);
 }
 
 .stats {
@@ -180,21 +175,17 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 }
 
 .stat dt {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--color-text-muted);
+  font-size: var(--text-ui);
+  color: var(--color-text-subtle);
 }
 
+/* Figures in Geist Sans with tabular digits: mono is for code, not counts. */
 .stat dd {
   margin: 0;
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
-  letter-spacing: -0.005em;
 }
 
 .stat dd[data-warn="true"] {
@@ -221,8 +212,8 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
 }
 
 .themes-eyebrow {
-  font-size: 0.625rem;
-  letter-spacing: 0.16em;
+  font-size: var(--text-xs);
+  letter-spacing: var(--text-xs--letter-spacing);
 }
 
 .themes-list {
@@ -243,7 +234,7 @@ const header = $derived(buildRecapHeader(recap, period, now(60_000)));
   border: 0;
   border-radius: 999px;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
   cursor: pointer;
   transition: background var(--duration-snap) var(--ease-out-expo);

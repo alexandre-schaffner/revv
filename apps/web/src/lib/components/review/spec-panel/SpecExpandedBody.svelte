@@ -22,7 +22,7 @@ let { standalone = false, children }: Props = $props();
         gap: 12px;
         padding: 10px 12px 16px calc(2ch + 14px);
         font-family: var(--font-mono);
-        font-size: 12.5px;
+        font-size: var(--text-sm);
         color: var(--color-text-secondary);
         background: var(--c-row-bg, var(--color-bg-secondary));
     }

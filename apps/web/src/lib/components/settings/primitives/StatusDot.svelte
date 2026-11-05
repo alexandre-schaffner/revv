@@ -27,7 +27,7 @@ let { tone, label, showLabel = true }: Props = $props();
 		align-items: center;
 		gap: 7px;
 		min-width: 0;
-		font-size: 12px;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 

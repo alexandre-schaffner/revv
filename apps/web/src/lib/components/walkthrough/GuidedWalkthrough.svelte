@@ -356,7 +356,7 @@ function jumpToLine(filePath: string, line: number): void {
 								<div class="sentiment-card-header">
 									<h3 class="sentiment-card-title">Overall Sentiment</h3>
 								</div>
-								<Markdown class="sentiment-card-body" source={view.sentiment} trust="agent" />
+								<Markdown class="sentiment-card-body" source={view.sentiment} trust="agent" density="reading" />
 							</div>
 						{/if}
 						{#if view.ratings.length > 0 || view.isStreaming}
@@ -396,7 +396,7 @@ function jumpToLine(filePath: string, line: number): void {
 		margin-top: 1.5rem;
 		padding-top: 0.5rem;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
@@ -477,8 +477,8 @@ function jumpToLine(filePath: string, line: number): void {
 	.exploration-item {
 		display: flex;
 		gap: 8px;
-		font-size: 11px;
-		font-family: var(--font-mono, monospace);
+		font-size: var(--text-ui);
+		font-family: var(--font-mono);
 		color: var(--color-text-muted);
 		line-height: 1.5;
 	}
@@ -513,15 +513,14 @@ function jumpToLine(filePath: string, line: number): void {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--color-text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		font-size: var(--text-ui);
+		font-weight: 500;
+		color: var(--color-text-subtle);
 	}
 
 	.blocks {
-		row-gap: 20px;
+		/* Room around each block, the way an article gives a figure air. */
+		row-gap: 24px;
 		margin-top: 20px;
 	}
 
@@ -581,26 +580,26 @@ function jumpToLine(filePath: string, line: number): void {
 
 	.walkthrough-thought-empty {
 		margin: 0.375rem 0 0;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.walkthrough-activity-entry :global(.walkthrough-inline-thought) {
-		font-size: 0.875rem;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-muted);
 		word-break: break-word;
 	}
 
 	.loading-text {
-		font-size: 13px;
+		font-size: var(--text-sm);
 		color: var(--color-text-muted);
 	}
 
 	.generation-error {
 		min-width: 0;
 		text-align: left;
-		font-size: 13px;
+		font-size: var(--text-sm);
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 	}
@@ -669,17 +668,13 @@ function jumpToLine(filePath: string, line: number): void {
 	}
 
 	.sentiment-card-title {
-		font-size: 16px;
+		font-size: var(--text-base);
 		font-weight: 600;
 		color: var(--color-text-primary);
 		margin: 0;
 	}
 
-	.sentiment-card :global(.sentiment-card-body) {
-		font-size: 14px;
-		line-height: 1.65;
-		color: var(--color-text-secondary);
-	}
+	/* Size, ink and measure come from `prose prose-reading` (lib/styles/prose.css). */
 
 	/* Below the rail breakpoint the issues sit 20px above the blocks. */
 	@container review (max-width: 1335px) {

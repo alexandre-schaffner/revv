@@ -306,7 +306,7 @@ async function toggle(): Promise<void> {
 		gap: 0.5rem;
 		min-height: var(--foot-h);
 		padding: 0.375rem var(--spacing-inset) 0.375rem calc(var(--spacing-inset) + 1.4375rem);
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-secondary);
 	}
 
@@ -350,7 +350,7 @@ async function toggle(): Promise<void> {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		font-family: var(--font-mono);
-		font-size: 0.6875rem;
+		font-size: var(--text-ui);
 		color: var(--color-text-primary);
 	}
 
@@ -421,9 +421,9 @@ async function toggle(): Promise<void> {
 		min-width: 4rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		font-size: 0.8125rem;
+		font-size: var(--text-sm);
 		font-weight: 500;
-		letter-spacing: -0.005em;
+		letter-spacing: var(--text-sm--letter-spacing);
 		color: var(--color-text-primary);
 	}
 
@@ -441,7 +441,7 @@ async function toggle(): Promise<void> {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.75rem;
+		font-size: var(--text-ui);
 		line-height: 1rem;
 		color: var(--color-text-subtle);
 	}

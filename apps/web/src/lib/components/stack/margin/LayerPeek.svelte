@@ -84,7 +84,7 @@ const openable = $derived(layer.number !== place.here.number);
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		line-height: 1;
 		color: var(--color-text-subtle);
 		font-variant-numeric: tabular-nums;
@@ -102,8 +102,8 @@ const openable = $derived(layer.number !== place.here.number);
 
 	.title {
 		margin-top: 8px;
-		font-size: 13px;
-		font-weight: 600;
+		font-size: var(--text-sm);
+		font-weight: 500;
 		line-height: 1.35;
 		color: var(--color-text-primary);
 		text-wrap: pretty;
@@ -116,7 +116,7 @@ const openable = $derived(layer.number !== place.here.number);
 		-webkit-box-orient: vertical;
 		-webkit-line-clamp: 3;
 		line-clamp: 3;
-		font-size: 12.5px;
+		font-size: var(--text-sm);
 		line-height: 1.5;
 		color: var(--color-text-secondary);
 		text-wrap: pretty;
@@ -136,7 +136,7 @@ const openable = $derived(layer.number !== place.here.number);
 		margin-top: 10px;
 		padding-top: 8px;
 		border-top: 1px solid var(--color-border-subtle);
-		font-size: 11.5px;
+		font-size: var(--text-ui);
 		color: var(--color-text-subtle);
 	}
 
