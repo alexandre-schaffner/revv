@@ -27,6 +27,7 @@ import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
 import { PrPushLockServiceLive } from "./PrPushLock";
 import { PullRequestServiceLive } from "./PullRequest";
+import { RealtimeLive } from "./Realtime";
 import { RecapSchedulerLive } from "./RecapScheduler";
 import { RemoteUserServiceLive } from "./RemoteUser";
 import { RemoteWalkthroughCacheLive } from "./RemoteWalkthroughCache";
@@ -47,11 +48,14 @@ import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
 
+const RealtimeWithDeps = RealtimeLive.pipe(
+  Layer.provide(Layer.mergeAll(BroadcasterLive, DbServiceLive)),
+);
+
 // TokenProvider reads token bytes from SecretStore, resolves account rows via
-// DbService, and broadcasts re-auth signals via Broadcaster (token refresh
-// success/failure).
+// DbService, and pushes re-auth signals (token refresh success/failure).
 const TokenProviderWithDeps = TokenProviderLive.pipe(
-  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, BroadcasterLive)),
+  Layer.provide(Layer.mergeAll(DbServiceLive, SecretStoreLive, RealtimeWithDeps)),
 );
 
 const IdentityWithDeps = IdentityLive.pipe(Layer.provide(TokenProviderWithDeps));
@@ -88,6 +92,7 @@ const BaseLayers = Layer.mergeAll(
   GitHubEtagCacheLive,
   GitHubGatewayWithDeps,
   BroadcasterLive,
+  RealtimeWithDeps,
   RepositoryServiceLive,
   PullRequestServiceLive,
   ReviewServiceLive,
@@ -110,7 +115,7 @@ const BaseLayers = Layer.mergeAll(
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
 
 // PrConversation serves the Conversation tab: PrContext for repo + token,
-// plus the kv cache, remote-user avatars, and Broadcaster from BaseLayers.
+// plus the kv cache, remote-user avatars, and Realtime from BaseLayers.
 const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
@@ -129,7 +134,7 @@ const SyncServiceWithDeps = SyncServiceLive.pipe(
 // AiService depends on DbService + SettingsService (both in BaseLayers)
 const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 
-// RepoCloneService depends on DbService + Broadcaster (both in BaseLayers)
+// RepoCloneService depends on DbService + Realtime (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
 // DbMaintenance only needs DbService (already in BaseLayers)
@@ -194,7 +199,7 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
 
 // ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
 // simpler — no worktree / continuation. Depends on BaseLayers for repo,
-// PR, recap service, settings, and Broadcaster.
+// PR, recap service, settings, and Realtime.
 const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );

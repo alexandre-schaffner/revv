@@ -5,11 +5,12 @@ import { Context, Effect, Layer, Semaphore } from "effect";
 import { generateStackHeadline } from "../../ai/providers/stack-headline";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
-import { DbError } from "../../domain/errors";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
-import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
+import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { firstSentence, headlineFromTitles } from "./headline";
 
@@ -58,70 +59,64 @@ export const StackHeadlineServiceLive = Layer.effect(
     const { db } = yield* DbService;
     const cache = yield* CacheService;
     const settings = yield* SettingsService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
 
     const naming = yield* Semaphore.make(1);
     const inflight = new Set<string>();
     const failedUntil = new Map<string, number>();
 
     const readStacks = (repositoryId: string) =>
-      Effect.try({
-        try: () => {
-          const rows = db
-            .select({
-              number: pullRequests.externalId,
-              title: pullRequests.title,
-              body: pullRequests.body,
-              targetBranch: pullRequests.targetBranch,
-              stackNumber: pullRequests.stackNumber,
-              stackPosition: pullRequests.stackPosition,
-            })
-            .from(pullRequests)
-            .where(
-              and(
-                eq(pullRequests.repositoryId, repositoryId),
-                eq(pullRequests.status, "open"),
-                isNotNull(pullRequests.stackNumber),
-              ),
-            )
-            .all();
-          const byStack = Map.groupBy(rows, (r) => r.stackNumber ?? 0);
-          const stacks: StackMembers[] = [];
-          for (const [stackNumber, members] of byStack) {
-            if (members.length < 2) continue;
-            const ordered = members.toSorted(
-              (a, b) => (a.stackPosition ?? 0) - (b.stackPosition ?? 0),
-            );
-            stacks.push({
-              stackNumber,
-              base: ordered[0]?.targetBranch ?? "",
-              layers: ordered.map((m) => ({ number: m.number, title: m.title, body: m.body })),
-            });
-          }
-          return stacks;
-        },
-        catch: (cause) => new DbError({ message: "stack headline read failed", cause }),
+      dbTry("stack headline read", () => {
+        const rows = db
+          .select({
+            number: pullRequests.externalId,
+            title: pullRequests.title,
+            body: pullRequests.body,
+            targetBranch: pullRequests.targetBranch,
+            stackNumber: pullRequests.stackNumber,
+            stackPosition: pullRequests.stackPosition,
+          })
+          .from(pullRequests)
+          .where(
+            and(
+              eq(pullRequests.repositoryId, repositoryId),
+              eq(pullRequests.status, "open"),
+              isNotNull(pullRequests.stackNumber),
+            ),
+          )
+          .all();
+        const byStack = Map.groupBy(rows, (r) => r.stackNumber ?? 0);
+        const stacks: StackMembers[] = [];
+        for (const [stackNumber, members] of byStack) {
+          if (members.length < 2) continue;
+          const ordered = members.toSorted(
+            (a, b) => (a.stackPosition ?? 0) - (b.stackPosition ?? 0),
+          );
+          stacks.push({
+            stackNumber,
+            base: ordered[0]?.targetBranch ?? "",
+            layers: ordered.map((m) => ({ number: m.number, title: m.title, body: m.body })),
+          });
+        }
+        return stacks;
       });
 
     const briefGist = (repositoryId: string, stackNumber: number) =>
-      Effect.try({
-        try: () => {
-          const row = db
-            .select({ arc: stackBriefs.arc })
-            .from(stackBriefs)
-            .where(
-              and(
-                eq(stackBriefs.repositoryId, repositoryId),
-                eq(stackBriefs.stackNumber, stackNumber),
-                eq(stackBriefs.status, "complete"),
-                isNull(stackBriefs.supersededBy),
-              ),
-            )
-            .orderBy(desc(stackBriefs.completedAt))
-            .get();
-          return row ? firstSentence(row.arc) : null;
-        },
-        catch: (cause) => new DbError({ message: "stack brief read failed", cause }),
+      dbTry("stack brief read", () => {
+        const row = db
+          .select({ arc: stackBriefs.arc })
+          .from(stackBriefs)
+          .where(
+            and(
+              eq(stackBriefs.repositoryId, repositoryId),
+              eq(stackBriefs.stackNumber, stackNumber),
+              eq(stackBriefs.status, "complete"),
+              isNull(stackBriefs.supersededBy),
+            ),
+          )
+          .orderBy(desc(stackBriefs.completedAt))
+          .get();
+        return row ? firstSentence(row.arc) : null;
       });
 
     const name = (repositoryId: string, accountId: string, stack: StackMembers, key: string) =>
@@ -145,7 +140,7 @@ export const StackHeadlineServiceLive = Layer.effect(
           return;
         }
         yield* withDb(db, cache.set<NamedStack>(CACHE_NS, key, named, { ttlMs: CACHE_TTL_MS }));
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(accountId, {
           type: "stack:updated",
           data: { repositoryId, stackNumber: stack.stackNumber },
         });

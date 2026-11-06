@@ -4,8 +4,8 @@ import { eq } from "drizzle-orm";
 import { Effect, Layer, Result } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, user } from "../db/schema";
-import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
+import { Realtime } from "./Realtime";
 import { SecretStore, type TokenPair } from "./SecretStore";
 import { TokenProvider, TokenProviderLive } from "./TokenProvider";
 
@@ -39,16 +39,15 @@ function makeFakeStore(initial?: Record<string, TokenPair>) {
 
 function makeFakeHub() {
   const events: Array<{ accountId: string; msg: ServerEventMessage }> = [];
-  const layer = Layer.succeed(Broadcaster, {
-    register: () => Effect.succeed(() => undefined),
-    broadcastToAccount: (accountId: string, msg: ServerEventMessage) =>
-      Effect.sync(() => {
-        events.push({ accountId, msg });
-      }),
-    broadcastAll: (msg: ServerEventMessage) =>
-      Effect.sync(() => {
-        events.push({ accountId: "*", msg });
-      }),
+  const push = (accountId: string, msg: ServerEventMessage) =>
+    Effect.sync(() => {
+      events.push({ accountId, msg });
+    });
+  const layer = Layer.succeed(Realtime, {
+    toAccount: push,
+    toRepo: push,
+    toPr: push,
+    toAll: (msg) => push("*", msg),
   });
   return { layer, events };
 }

@@ -3,7 +3,8 @@ import { isOpenLayer, stackKey } from "@revv/shared";
 import { inArray } from "drizzle-orm";
 import { Cause, Context, Duration, Effect, Layer, Ref } from "effect";
 import { walkthroughs } from "../../db/schema/walkthroughs";
-import { DbError, NotFoundError } from "../../domain/errors";
+import { type DbError, NotFoundError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
@@ -76,16 +77,16 @@ export const StackReviewServiceLive = Layer.effect(
     const generatingCount = (ids: readonly string[]): Effect.Effect<number, DbError> =>
       ids.length === 0
         ? Effect.succeed(0)
-        : Effect.try({
-            try: () =>
+        : dbTry(
+            "stack review poll",
+            () =>
               db
                 .select({ status: walkthroughs.status })
                 .from(walkthroughs)
                 .where(inArray(walkthroughs.id, [...ids]))
                 .all()
                 .filter((w) => w.status === "generating").length,
-            catch: (cause) => new DbError({ message: "stack review poll failed", cause }),
-          });
+          );
 
     const waitUntil = (
       ready: Effect.Effect<boolean, DbError>,

@@ -6,7 +6,6 @@ import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { SyncError } from "../domain/errors";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
-import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { fitAnchorToPatch } from "./diff-anchors";
@@ -14,8 +13,8 @@ import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitH
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
+import { Realtime } from "./Realtime";
 import { RemoteUserService } from "./RemoteUser";
-import { RepositoryService } from "./Repository";
 import { ReviewService } from "./Review";
 import { resolveReviewModeForPr } from "./review-mode";
 import type { SettingsService } from "./Settings";
@@ -94,8 +93,7 @@ export const SyncServiceLive = Layer.effect(
     const prContext = yield* PrContextService;
     const reviewService = yield* ReviewService;
     const remoteUserService = yield* RemoteUserService;
-    const repoService = yield* RepositoryService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const diffCache = yield* DiffCacheService;
 
     // Background-worker PR context — always uses the 'single-user' token.
@@ -287,7 +285,6 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
       Effect.gen(function* () {
         const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
-        const accountId = yield* repoService.getAccountIdForRepo(repo.id);
 
         // Pull into the session the user's UI actually reads. Review sessions
         // are keyed on `(pullRequestId, mode)` and the mode is derived from
@@ -375,7 +372,7 @@ export const SyncServiceLive = Layer.effect(
             ) {
               yield* reviewService.updateMessageBody(existingMsg.id, c.body, c.updatedAt);
               const updatedMsg = yield* reviewService.getMessage(existingMsg.id);
-              yield* broadcaster.broadcastToAccount(accountId, {
+              yield* realtime.toPr(pr.id, {
                 type: "thread:message",
                 data: { threadId: existingMsg.threadId, message: updatedMsg },
               });
@@ -411,7 +408,7 @@ export const SyncServiceLive = Layer.effect(
 
               yield* reviewService.transitionStatus(thread.id, authorRole);
 
-              yield* broadcaster.broadcastToAccount(accountId, {
+              yield* realtime.toPr(pr.id, {
                 type: "threads:new-reply",
                 data: { prId: pr.id, thread, message: msg },
               });
@@ -447,7 +444,7 @@ export const SyncServiceLive = Layer.effect(
 
           yield* reviewService.transitionStatus(thread.id, authorRole);
 
-          yield* broadcaster.broadcastToAccount(accountId, {
+          yield* realtime.toPr(pr.id, {
             type: "threads:new-reply",
             data: { prId: pr.id, thread, message: msg },
           });
@@ -488,14 +485,14 @@ export const SyncServiceLive = Layer.effect(
             const localResolved = isThreadResolved(local.status);
             if (ght.isResolved && !localResolved) {
               const updated = yield* reviewService.updateThreadStatus(local.id, "resolved");
-              yield* broadcaster.broadcastToAccount(accountId, {
+              yield* realtime.toPr(pr.id, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "resolved", resolvedAt: updated.resolvedAt },
               });
               statusChanges++;
             } else if (!ght.isResolved && localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "open");
-              yield* broadcaster.broadcastToAccount(accountId, {
+              yield* realtime.toPr(pr.id, {
                 type: "thread:updated",
                 data: { threadId: local.id, status: "open", resolvedAt: null },
               });
@@ -555,9 +552,7 @@ export const SyncServiceLive = Layer.effect(
         // quiet unless something moved. User-initiated syncs always announce:
         // this envelope is what clears their per-PR spinner.
         if (pulled.changed || opts?.force === true) {
-          const { repo } = yield* resolvePrContext(prId);
-          const accountId = yield* repoService.getAccountIdForRepo(repo.id);
-          yield* broadcaster.broadcastToAccount(accountId, {
+          yield* realtime.toPr(prId, {
             type: "threads:synced",
             data: { prId, summary, timestamp: new Date().toISOString() },
           });

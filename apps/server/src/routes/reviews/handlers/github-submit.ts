@@ -1,13 +1,12 @@
 import { isPublishableDraftComment } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
-import { AppRuntime } from "../../../runtime";
-import { Broadcaster } from "../../../services/Broadcaster";
 import { DiffCacheService } from "../../../services/DiffCache";
 import { fitAnchorToPatch } from "../../../services/diff-anchors";
 import { GitHubGateway } from "../../../services/GitHub";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
+import { Realtime } from "../../../services/Realtime";
 import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -64,242 +63,228 @@ export function isExistingPendingReviewError(error: unknown): boolean {
  * treating our own comments as new and creating duplicate threads.
  */
 export function submitGithubReviewHandler(prId: string, userId: string, body: SubmitReviewInput) {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const prContext = yield* PrContextService;
-      const github = yield* GitHubGateway;
-      const reviewService = yield* ReviewService;
-      const walkthroughService = yield* WalkthroughService;
-      const repoService = yield* RepositoryService;
-      const broadcaster = yield* Broadcaster;
-      const diffCache = yield* DiffCacheService;
-      const conversations = yield* PrConversationService;
+  return Effect.gen(function* () {
+    const prContext = yield* PrContextService;
+    const github = yield* GitHubGateway;
+    const reviewService = yield* ReviewService;
+    const walkthroughService = yield* WalkthroughService;
+    const repoService = yield* RepositoryService;
+    const realtime = yield* Realtime;
+    const diffCache = yield* DiffCacheService;
+    const conversations = yield* PrConversationService;
 
-      const ctx = yield* prContext.resolveBasic(prId, userId);
-      const { pr, repo, token: ghToken } = ctx;
-      const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+    const ctx = yield* prContext.resolveBasic(prId, userId);
+    const { pr, repo, token: ghToken } = ctx;
+    const accountId = yield* repoService.getAccountIdForRepo(repo.id);
 
-      const eventMap = {
-        approve: "APPROVE",
-        request_changes: "REQUEST_CHANGES",
-        comment: "COMMENT",
-      } as const;
+    const eventMap = {
+      approve: "APPROVE",
+      request_changes: "REQUEST_CHANGES",
+      comment: "COMMENT",
+    } as const;
 
-      // Fit every anchor onto the diff before sending. GitHub rejects the
-      // whole review — approve included — with a 422 if a single comment
-      // names a line outside the diff or spanning two hunks, and both of our
-      // anchor sources can do that: the walkthrough agent flags ranges it read
-      // in the full file, and the file viewer lets a reviewer comment anywhere.
-      //
-      // Cache-only, and only ever a judgement on a patch we hold: a path with
-      // no cached patch is sent as-is. The cache trails the PR by a poll cycle
-      // and is capped at PR_FILES_MAX_COUNT, so treating "absent here" as "not
-      // in the diff" would silently drop comments GitHub would have taken.
-      const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
-      const patchByPath = new Map(
-        (cachedFiles ?? []).flatMap((f) =>
-          f.oldPath
-            ? [[f.path, f.patch] as const, [f.oldPath, f.patch] as const]
-            : [[f.path, f.patch] as const],
+    // Fit every anchor onto the diff before sending. GitHub rejects the
+    // whole review — approve included — with a 422 if a single comment
+    // names a line outside the diff or spanning two hunks, and both of our
+    // anchor sources can do that: the walkthrough agent flags ranges it read
+    // in the full file, and the file viewer lets a reviewer comment anywhere.
+    //
+    // Cache-only, and only ever a judgement on a patch we hold: a path with
+    // no cached patch is sent as-is. The cache trails the PR by a poll cycle
+    // and is capped at PR_FILES_MAX_COUNT, so treating "absent here" as "not
+    // in the diff" would silently drop comments GitHub would have taken.
+    const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
+    const patchByPath = new Map(
+      (cachedFiles ?? []).flatMap((f) =>
+        f.oldPath
+          ? [[f.path, f.patch] as const, [f.oldPath, f.patch] as const]
+          : [[f.path, f.patch] as const],
+      ),
+    );
+
+    const inputComments = body.comments ?? [];
+    const skippedComments: Array<{
+      threadId: string;
+      path: string;
+      line: number;
+      reason: string;
+    }> = [];
+    const submittable: Array<{
+      input: SubmitReviewCommentInput;
+      comment: {
+        path: string;
+        body: string;
+        line: number;
+        side: "LEFT" | "RIGHT";
+        startLine?: number;
+        startSide?: "LEFT" | "RIGHT";
+      };
+    }> = [];
+
+    for (const c of inputComments) {
+      const fit = fitAnchorToPatch(patchByPath.get(c.path) ?? null, {
+        startLine: c.startLine ?? c.line,
+        endLine: c.line,
+        side: c.side,
+      });
+      if (!fit.ok) {
+        skippedComments.push({
+          threadId: c.threadId,
+          path: c.path,
+          line: c.line,
+          reason: fit.reason,
+        });
+        continue;
+      }
+      const comment: (typeof submittable)[number]["comment"] = {
+        path: c.path,
+        body: c.body,
+        line: fit.endLine,
+        side: c.side,
+      };
+      if (fit.startLine !== fit.endLine) {
+        comment.startLine = fit.startLine;
+        comment.startSide = c.side;
+      }
+      submittable.push({ input: c, comment });
+    }
+
+    const reviewInput = {
+      event: eventMap[body.action],
+      body: body.body ?? "",
+      comments: submittable.map((s) => s.comment),
+    };
+
+    // Everything the reviewer picked fell outside the diff, leaving a
+    // bodyless COMMENT / REQUEST_CHANGES — which GitHub 422s on its own.
+    // Say why here instead of relaying that.
+    if (
+      body.action !== "approve" &&
+      skippedComments.length > 0 &&
+      reviewInput.comments.length === 0 &&
+      reviewInput.body.trim() === ""
+    ) {
+      return yield* Effect.fail(
+        new ValidationError({
+          message: `Nothing to submit: ${skippedComments.length === 1 ? "the comment's line is" : "every comment's line is"} no longer part of the diff.`,
+        }),
+      );
+    }
+
+    const review = yield* github.reviews
+      .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+      .pipe(
+        Effect.catchIf(isExistingPendingReviewError, () =>
+          Effect.gen(function* () {
+            const reviewer = yield* github.users.authenticatedFresh(ghToken);
+            const pending = yield* github.reviews.findPending(
+              repo.fullName,
+              pr.externalId,
+              reviewer.login,
+              ghToken,
+            );
+            if (!pending) {
+              return yield* Effect.fail(
+                new GitHubNetworkError({
+                  cause:
+                    "GitHub reported an existing pending review, but Revv could not find it for the authenticated user.",
+                }),
+              );
+            }
+
+            yield* github.reviews.deletePending(repo.fullName, pr.externalId, pending.id, ghToken);
+            return yield* github.reviews.submit(repo.fullName, pr.externalId, reviewInput, ghToken);
+          }),
         ),
       );
 
-      const inputComments = body.comments ?? [];
-      const skippedComments: Array<{
-        threadId: string;
-        path: string;
-        line: number;
-        reason: string;
-      }> = [];
-      const submittable: Array<{
-        input: SubmitReviewCommentInput;
-        comment: {
-          path: string;
-          body: string;
-          line: number;
-          side: "LEFT" | "RIGHT";
-          startLine?: number;
-          startSide?: "LEFT" | "RIGHT";
-        };
-      }> = [];
+    // Link local threads to GitHub comment IDs so that the subsequent
+    // sync-threads call doesn't create duplicate entries.
+    if (submittable.length > 0) {
+      const ghComments = yield* github.reviews
+        .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
+        .pipe(Effect.orElseSucceed(() => []));
 
-      for (const c of inputComments) {
-        const fit = fitAnchorToPatch(patchByPath.get(c.path) ?? null, {
-          startLine: c.startLine ?? c.line,
-          endLine: c.line,
-          side: c.side,
-        });
-        if (!fit.ok) {
-          skippedComments.push({
-            threadId: c.threadId,
-            path: c.path,
-            line: c.line,
-            reason: fit.reason,
+      for (const { input, comment } of submittable) {
+        // The fitted line, not the one the thread carries — a clamped anchor
+        // comes back from GitHub on the line we actually sent.
+        const effectiveLine = comment.line;
+        // Prefer an exact path+line+body match; fall back to path+line, then
+        // path+body. The `/reviews/:id/comments` response can return a null
+        // `line` and GitHub may normalize the body, so requiring all three
+        // exactly would miss — leaving the comment unlinked and re-postable.
+        const match =
+          ghComments.find((gh) => {
+            const ghLine = gh.line ?? gh.originalLine;
+            return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
+          }) ??
+          ghComments.find((gh) => {
+            const ghLine = gh.line ?? gh.originalLine;
+            return gh.path === input.path && ghLine === effectiveLine;
+          }) ??
+          ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
+
+        if (!match) {
+          // We couldn't tie this just-pushed comment to its GitHub id (the
+          // review API returns no per-comment ids, and GitHub can normalize
+          // the body, defeating a body match). Rather than leave an unlinked
+          // local draft that a later submit would re-post, delete it — the
+          // sync-threads call that follows re-creates it from GitHub with a
+          // real externalCommentId. Local-only metadata (a freshly authored
+          // comment has none worth keeping) is sacrificed to guarantee no
+          // duplicate ever reaches GitHub.
+          yield* reviewService
+            .deleteThread(input.threadId)
+            .pipe(Effect.orElseSucceed(() => undefined));
+          yield* realtime.toAccount(accountId, {
+            type: "thread:deleted",
+            data: { threadId: input.threadId },
           });
           continue;
         }
-        const comment: (typeof submittable)[number]["comment"] = {
-          path: c.path,
-          body: c.body,
-          line: fit.endLine,
-          side: c.side,
-        };
-        if (fit.startLine !== fit.endLine) {
-          comment.startLine = fit.startLine;
-          comment.startSide = c.side;
-        }
-        submittable.push({ input: c, comment });
-      }
 
-      const reviewInput = {
-        event: eventMap[body.action],
-        body: body.body ?? "",
-        comments: submittable.map((s) => s.comment),
-      };
+        // Set external ID on the thread row
+        yield* reviewService
+          .setThreadExternalIds(input.threadId, {
+            externalCommentId: String(match.id),
+          })
+          .pipe(Effect.orElseSucceed(() => undefined));
 
-      // Everything the reviewer picked fell outside the diff, leaving a
-      // bodyless COMMENT / REQUEST_CHANGES — which GitHub 422s on its own.
-      // Say why here instead of relaying that.
-      if (
-        body.action !== "approve" &&
-        skippedComments.length > 0 &&
-        reviewInput.comments.length === 0 &&
-        reviewInput.body.trim() === ""
-      ) {
-        return yield* Effect.fail(
-          new ValidationError({
-            message: `Nothing to submit: ${skippedComments.length === 1 ? "the comment's line is" : "every comment's line is"} no longer part of the diff.`,
-          }),
-        );
-      }
-
-      const review = yield* github.reviews
-        .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
-        .pipe(
-          Effect.catchIf(isExistingPendingReviewError, () =>
-            Effect.gen(function* () {
-              const reviewer = yield* github.users.authenticatedFresh(ghToken);
-              const pending = yield* github.reviews.findPending(
-                repo.fullName,
-                pr.externalId,
-                reviewer.login,
-                ghToken,
-              );
-              if (!pending) {
-                return yield* Effect.fail(
-                  new GitHubNetworkError({
-                    cause:
-                      "GitHub reported an existing pending review, but Revv could not find it for the authenticated user.",
-                  }),
-                );
-              }
-
-              yield* github.reviews.deletePending(
-                repo.fullName,
-                pr.externalId,
-                pending.id,
-                ghToken,
-              );
-              return yield* github.reviews.submit(
-                repo.fullName,
-                pr.externalId,
-                reviewInput,
-                ghToken,
-              );
-            }),
-          ),
-        );
-
-      // Link local threads to GitHub comment IDs so that the subsequent
-      // sync-threads call doesn't create duplicate entries.
-      if (submittable.length > 0) {
-        const ghComments = yield* github.reviews
-          .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
+        // Link the local draft, whether written by the reviewer or Revv, to
+        // the GitHub comment created under the authenticated user's identity.
+        const messages = yield* reviewService
+          .getMessages(input.threadId)
           .pipe(Effect.orElseSucceed(() => []));
-
-        for (const { input, comment } of submittable) {
-          // The fitted line, not the one the thread carries — a clamped anchor
-          // comes back from GitHub on the line we actually sent.
-          const effectiveLine = comment.line;
-          // Prefer an exact path+line+body match; fall back to path+line, then
-          // path+body. The `/reviews/:id/comments` response can return a null
-          // `line` and GitHub may normalize the body, so requiring all three
-          // exactly would miss — leaving the comment unlinked and re-postable.
-          const match =
-            ghComments.find((gh) => {
-              const ghLine = gh.line ?? gh.originalLine;
-              return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
-            }) ??
-            ghComments.find((gh) => {
-              const ghLine = gh.line ?? gh.originalLine;
-              return gh.path === input.path && ghLine === effectiveLine;
-            }) ??
-            ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
-
-          if (!match) {
-            // We couldn't tie this just-pushed comment to its GitHub id (the
-            // review API returns no per-comment ids, and GitHub can normalize
-            // the body, defeating a body match). Rather than leave an unlinked
-            // local draft that a later submit would re-post, delete it — the
-            // sync-threads call that follows re-creates it from GitHub with a
-            // real externalCommentId. Local-only metadata (a freshly authored
-            // comment has none worth keeping) is sacrificed to guarantee no
-            // duplicate ever reaches GitHub.
-            yield* reviewService
-              .deleteThread(input.threadId)
-              .pipe(Effect.orElseSucceed(() => undefined));
-            yield* broadcaster
-              .broadcastToAccount(accountId, {
-                type: "thread:deleted",
-                data: { threadId: input.threadId },
-              })
-              .pipe(Effect.orElseSucceed(() => undefined));
-            continue;
-          }
-
-          // Set external ID on the thread row
+        const unsyncedMsg = [...messages].reverse().find(isPublishableDraftComment);
+        if (unsyncedMsg) {
           yield* reviewService
-            .setThreadExternalIds(input.threadId, {
-              externalCommentId: String(match.id),
-            })
+            .setMessageExternalId(unsyncedMsg.id, String(match.id))
             .pipe(Effect.orElseSucceed(() => undefined));
-
-          // Link the local draft, whether written by the reviewer or Revv, to
-          // the GitHub comment created under the authenticated user's identity.
-          const messages = yield* reviewService
-            .getMessages(input.threadId)
-            .pipe(Effect.orElseSucceed(() => []));
-          const unsyncedMsg = [...messages].reverse().find(isPublishableDraftComment);
-          if (unsyncedMsg) {
-            yield* reviewService
-              .setMessageExternalId(unsyncedMsg.id, String(match.id))
-              .pipe(Effect.orElseSucceed(() => undefined));
-          }
         }
       }
+    }
 
-      // Persist which walkthrough issues the reviewer just sent so the
-      // "already posted" treatment (grayed-out, unselectable) survives
-      // reloads and PR-switches. Stamped regardless of action — an
-      // approve that happens to include walkthrough issues in the body
-      // also counts as "sent to GitHub."
-      const issueIds = body.issueIds ?? [];
-      const issuesSubmittedAt =
-        issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
+    // Persist which walkthrough issues the reviewer just sent so the
+    // "already posted" treatment (grayed-out, unselectable) survives
+    // reloads and PR-switches. Stamped regardless of action — an
+    // approve that happens to include walkthrough issues in the body
+    // also counts as "sent to GitHub."
+    const issueIds = body.issueIds ?? [];
+    const issuesSubmittedAt =
+      issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;
 
-      const { conversation } = yield* conversations.afterWrite(ctx, accountId);
+    const { conversation } = yield* conversations.afterWrite(ctx, accountId);
 
-      return {
-        id: review.id,
-        htmlUrl: review.htmlUrl,
-        issuesSubmittedAt,
-        submittedIssueIds: issueIds,
-        // Comments GitHub could never have accepted. Their local threads are
-        // left intact so the reviewer can re-anchor or discard them; the UI
-        // names them rather than letting them vanish.
-        skippedComments,
-        conversation,
-      };
-    }),
-  );
+    return {
+      id: review.id,
+      htmlUrl: review.htmlUrl,
+      issuesSubmittedAt,
+      submittedIssueIds: issueIds,
+      // Comments GitHub could never have accepted. Their local threads are
+      // left intact so the reviewer can re-anchor or discard them; the UI
+      // names them rather than letting them vanish.
+      skippedComments,
+      conversation,
+    };
+  });
 }

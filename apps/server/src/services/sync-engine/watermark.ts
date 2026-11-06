@@ -1,10 +1,4 @@
 export type CommentSyncWatermark = string;
-export type ThreadSyncFingerprint = string;
-
-export interface SyncWatermark {
-  readonly commentsSyncedAt: CommentSyncWatermark | null;
-  readonly threadsFingerprint: ThreadSyncFingerprint | null;
-}
 
 export interface UpdatedAtRecord {
   readonly updatedAt: string;

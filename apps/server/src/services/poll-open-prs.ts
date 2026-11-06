@@ -7,8 +7,8 @@ import { type PullRequest, type Repository, sameStack } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { pullRequests } from "../db/schema/pull-requests";
-import { DbError } from "../domain/errors";
 import { asStored } from "../domain/observed-pr";
+import { dbTry } from "../effects/db-try";
 import { withDb } from "../effects/with-db";
 import { logError } from "../logger";
 import {
@@ -21,7 +21,6 @@ import {
 } from "./github-graphql-prs";
 import { apiBaseForHost } from "./github-rest";
 import {
-  broadcastToAccount,
   type GitHubInfra,
   type LiveAccount,
   markStaleAndAnnounceStacks,
@@ -473,27 +472,24 @@ export const syncRepoOpenPrs = (
     }
 
     if (upserted && diffStats !== null) {
-      yield* Effect.try({
-        try: () =>
-          db.transaction(() => {
-            for (const pr of needsStats) {
-              const stats = diffStats.get(pr.externalId);
-              if (stats === undefined) continue;
-              db.update(pullRequests)
-                .set({
-                  additions: stats.additions,
-                  deletions: stats.deletions,
-                  changedFiles: stats.changedFiles,
-                  diffStatsHeadSha: pr.headSha,
-                })
-                .where(eq(pullRequests.id, pr.id))
-                .run();
-              ctx.diffStatsHeadByPrId.set(pr.id, pr.headSha);
-            }
-          }),
-        catch: (cause) =>
-          new DbError({ message: "Failed to persist PR diff-stat watermarks", cause }),
-      }).pipe(
+      yield* dbTry("persist PR diff-stat watermarks", () =>
+        db.transaction(() => {
+          for (const pr of needsStats) {
+            const stats = diffStats.get(pr.externalId);
+            if (stats === undefined) continue;
+            db.update(pullRequests)
+              .set({
+                additions: stats.additions,
+                deletions: stats.deletions,
+                changedFiles: stats.changedFiles,
+                diffStatsHeadSha: pr.headSha,
+              })
+              .where(eq(pullRequests.id, pr.id))
+              .run();
+            ctx.diffStatsHeadByPrId.set(pr.id, pr.headSha);
+          }
+        }),
+      ).pipe(
         Effect.tapError((error) =>
           Effect.sync(() => {
             logError("PollScheduler", "diff-stat watermark write failed:", error);
@@ -638,7 +634,7 @@ export const archiveClosedPrs = (
       if (!pr) continue;
       const accountId = cycle.repoToAccountId.get(pr.repositoryId);
       if (!accountId) continue;
-      yield* broadcastToAccount(deps, accountId, {
+      yield* deps.realtime.toAccount(accountId, {
         type: "pr:archived",
         data: {
           prId: upd.id,

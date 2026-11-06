@@ -12,6 +12,7 @@ import { type GitHubEtagCache, GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { PrContextService, PrContextServiceLive } from "./PrContext";
 import { PrConversationService, PrConversationServiceLive } from "./PrConversation";
 import { PullRequestServiceLive } from "./PullRequest";
+import { RealtimeLive } from "./Realtime";
 import { RemoteUserServiceLive } from "./RemoteUser";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
@@ -83,7 +84,7 @@ function fixture() {
   const base = Layer.mergeAll(
     dbLayer,
     secrets,
-    BroadcasterLive,
+    RealtimeLive.pipe(Layer.provideMerge(BroadcasterLive), Layer.provide(dbLayer)),
     CacheServiceLive,
     GitHubGatewayLive,
     PullRequestServiceLive,

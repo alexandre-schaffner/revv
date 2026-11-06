@@ -5,17 +5,17 @@
 
 import { type Context, Effect } from "effect";
 import { STACK_UNSEEN } from "../domain/observed-pr";
-import type { Broadcaster } from "./Broadcaster";
 import type { PrContextService } from "./PrContext";
 import type { PullRequestService } from "./PullRequest";
+import type { Realtime } from "./Realtime";
 
 interface Deps {
   readonly prService: Context.Service.Shape<typeof PullRequestService>;
   readonly prCtx: Context.Service.Shape<typeof PrContextService>;
-  readonly broadcaster: Context.Service.Shape<typeof Broadcaster>;
+  readonly realtime: Context.Service.Shape<typeof Realtime>;
 }
 
-export const makePrHeadRefresh = ({ prService, prCtx, broadcaster }: Deps) => {
+export const makePrHeadRefresh = ({ prService, prCtx, realtime }: Deps) => {
   /** Record `newTip` (or GitHub's answer, when it has one) as the PR's head. */
   const recordPushedHead = (params: {
     readonly prId: string;
@@ -63,7 +63,7 @@ export const makePrHeadRefresh = ({ prService, prCtx, broadcaster }: Deps) => {
       const pr = yield* prService.getPr(prId);
       const accountId = yield* prCtx.getAccountIdForRepo(pr.repositoryId);
       const prs = yield* prService.listPrs(accountId);
-      yield* broadcaster.broadcastToAccount(accountId, {
+      yield* realtime.toAccount(accountId, {
         type: "prs:updated",
         data: prs,
       });

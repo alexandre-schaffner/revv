@@ -1,3 +1,5 @@
+import type { ApiErrorCode } from "./api-errors";
+
 // ── Streaming responses (SSE) ───────────────────────────────────────────────
 //
 // The chat turn, push-resolution, base-conflict and review streams send one
@@ -17,25 +19,11 @@ export function sseErrorFrame(body: StreamErrorBody): string {
 }
 
 export type StreamErrorCode =
-  // Refused before the turn starts.
+  // An API error (refused before the stream starts, or `GENERATION_ERROR`
+  // mid-stream), or a chat-turn gate.
+  | ApiErrorCode
   | "PLAN_PENDING"
   | "PLAN_NOT_FOUND"
-  | "WORKTREE_BLOCKED"
-  | "AGENT_UNAVAILABLE"
-  // A domain error, mapped by `mapErrorToSSEResponse`.
-  | "NOT_CONFIGURED"
-  | "NOT_FOUND"
-  | "GITHUB_AUTH_ERROR"
-  | "GITHUB_RATE_LIMITED"
-  | "REVIEW_ERROR"
-  | "INTERNAL_ERROR"
-  | "BUSY"
-  | "STALE"
-  | "INVALID"
-  | "UNAVAILABLE"
-  | "FAILED"
-  // The stream broke mid-turn.
-  | "GENERATION_ERROR"
   // The client's own transport failures.
   | "NETWORK_ERROR"
   | "NO_BODY"

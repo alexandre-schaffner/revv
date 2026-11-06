@@ -39,6 +39,7 @@ import { Elysia, t } from "elysia";
 import { serverEnv } from "../config";
 import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
+import { runRoute } from "./middleware";
 import { literalUnion } from "./schemas";
 
 const STABLE_MANIFEST_URL = `https://github.com/${REPO_SLUG}/releases/latest/download/latest.json`;
@@ -137,18 +138,9 @@ export const updateManifestRoute = new Elysia()
     // GitHub and replacing a bundle the manager pins.
     if (serverEnv.updatesManagedBy) return new Response(null, { status: 204 });
 
-    const channelResult = await AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const settings = yield* SettingsService;
-        const s = yield* settings.getSettings();
-        return { kind: "ok", channel: s.updateChannel } as const;
-      }).pipe(Effect.orElseSucceed(() => ({ kind: "error" }) as const)),
+    const { updateChannel: channel } = await AppRuntime.runPromise(
+      Effect.flatMap(SettingsService, (settings) => settings.getSettings()),
     );
-    // Don't default a Settings/DB read failure to "stable" — that would
-    // silently downgrade a nightly user. 502 falls through to the GitHub
-    // stable endpoint instead, same as any other resolution failure below.
-    if (channelResult.kind === "error") return new Response(null, { status: 502 });
-    const channel = channelResult.channel;
 
     let target: string;
     if (channel === "nightly") {
@@ -187,15 +179,12 @@ export const updateManifestRoute = new Elysia()
   })
   .put(
     "/api/update-channel",
-    async (ctx) => {
-      const updated = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const settings = yield* SettingsService;
-          return yield* settings.updateSettings({ updateChannel: ctx.body.channel });
-        }),
-      );
-      return { channel: updated.updateChannel };
-    },
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(SettingsService, (settings) =>
+          settings.updateSettings({ updateChannel: ctx.body.channel }),
+        ).pipe(Effect.map((updated) => ({ channel: updated.updateChannel }))),
+      ),
     {
       body: t.Object({ channel: literalUnion(UPDATE_CHANNELS) }),
     },

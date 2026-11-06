@@ -6,7 +6,6 @@
  * The phase modules (`poll-open-prs`, `poll-maintenance`, `poll-notifications`)
  * take the {@link SyncCycle} this builds and never resolve accounts on their own.
  */
-import type { ServerEventMessage } from "@revv/shared";
 import { inArray } from "drizzle-orm";
 import { type Context, Effect } from "effect";
 import type { Db } from "../db/index";
@@ -15,13 +14,13 @@ import { GitHubAccessDeniedError, GitHubAuthError, GitHubRateLimitError } from "
 import { hostFromProviderId } from "../domain/provider-id";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
-import type { Broadcaster } from "./Broadcaster";
 import type { DbService } from "./Db";
 import type { DiffCacheService } from "./DiffCache";
 import type { GitHubGateway } from "./GitHub";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost, githubFetch } from "./github-rest";
 import type { PullRequestService } from "./PullRequest";
+import type { Realtime } from "./Realtime";
 import type { RemoteUserService } from "./RemoteUser";
 import type { RepoCloneService } from "./RepoClone";
 import type { RepositoryService } from "./Repository";
@@ -34,7 +33,7 @@ import type { WalkthroughJobs } from "./WalkthroughJobs";
 /** The services the poll phases use, captured once at layer construction. */
 export interface PollDeps {
   readonly db: Db;
-  readonly broadcaster: Context.Service.Shape<typeof Broadcaster>;
+  readonly realtime: Context.Service.Shape<typeof Realtime>;
   readonly github: Context.Service.Shape<typeof GitHubGateway>;
   readonly prService: Context.Service.Shape<typeof PullRequestService>;
   readonly remoteUserService: Context.Service.Shape<typeof RemoteUserService>;
@@ -46,14 +45,6 @@ export interface PollDeps {
   readonly tokenProvider: Context.Service.Shape<typeof TokenProvider>;
   readonly stackService: Context.Service.Shape<typeof StackService>;
 }
-
-/** Best-effort account-scoped broadcast; a failed emit never fails the cycle. */
-export const broadcastToAccount = (
-  deps: PollDeps,
-  accountId: string,
-  msg: ServerEventMessage,
-): Effect.Effect<void> =>
-  deps.broadcaster.broadcastToAccount(accountId, msg).pipe(Effect.orElseSucceed(() => undefined));
 
 export const markStaleAndAnnounceStacks = (
   deps: PollDeps,
@@ -67,7 +58,7 @@ export const markStaleAndAnnounceStacks = (
       withDb(deps.db, deps.stackService.markStale(repositoryId, stackNumber)).pipe(
         Effect.orElseSucceed(() => undefined),
         Effect.andThen(
-          broadcastToAccount(deps, accountId, {
+          deps.realtime.toAccount(accountId, {
             type: "stack:updated",
             data: { repositoryId, stackNumber },
           }),
@@ -173,7 +164,7 @@ export const openSyncCycle = (
   repoToAccountId: ReadonlyMap<string, string>,
 ): Effect.Effect<SyncCycle> =>
   Effect.gen(function* () {
-    const { db, tokenProvider, broadcaster } = deps;
+    const { db, tokenProvider, realtime } = deps;
     const { knownBadTokensByAccountId, rateLimitedUntilByAccountId } = pauses;
 
     // ── Hydrate per-repo account context ───────────────────────────────────
@@ -228,15 +219,13 @@ export const openSyncCycle = (
         knownBadTokensByAccountId.delete(meta.id);
       }
       if (meta.reauthRequiredAt && !token) {
-        yield* broadcaster
-          .broadcastToAccount(meta.id, {
-            type: "auth:reauth-required",
-            data: {
-              host: hostFromProviderId(meta.providerId),
-              githubLogin: meta.githubLogin,
-            },
-          })
-          .pipe(Effect.orElseSucceed(() => undefined));
+        yield* realtime.toAccount(meta.id, {
+          type: "auth:reauth-required",
+          data: {
+            host: hostFromProviderId(meta.providerId),
+            githubLogin: meta.githubLogin,
+          },
+        });
       }
       accountRows.push({
         id: meta.id,

@@ -68,13 +68,7 @@ async function resolveContext(
     }
   };
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast(
-      "mcp-walkthrough-route",
-      resolved.prId,
-      "single-user",
-      msg,
-      resolved.accountId,
-    );
+    fireAndForgetThreadEventBroadcast(resolved.prId, msg, resolved.accountId);
   };
 
   // Every Jev hook the Phase-B tools use, resolved via AppRuntime so handlers

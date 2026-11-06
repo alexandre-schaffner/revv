@@ -20,12 +20,12 @@ import {
   AiNotConfiguredError,
   BaseConflictsRejectedError,
   type BaseConflictsRejection,
+  type DbError,
 } from "../../domain/errors";
 import { keyedSingleFlight } from "../../effects/keyed-single-flight";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
 import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
-import { Broadcaster } from "../Broadcaster";
 import { ChatSessionService } from "../ChatSession";
 import { worktreeHolderPath } from "../clone-policy";
 import type { DbService } from "../Db";
@@ -35,6 +35,7 @@ import { type PrContextBasic, type PrContextError, PrContextService } from "../P
 import { PrPushLockService } from "../PrPushLock";
 import { PullRequestService } from "../PullRequest";
 import { makePrHeadRefresh } from "../pr-head-refresh";
+import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import {
   checkTips,
@@ -52,7 +53,11 @@ import {
 /** A check this fresh, for the same PR head, is served from memory. */
 const CHECK_FRESH_MS = 30_000;
 
-export type BaseConflictsError = BaseConflictsRejectedError | AiNotConfiguredError | PrContextError;
+export type BaseConflictsError =
+  | BaseConflictsRejectedError
+  | AiNotConfiguredError
+  | PrContextError
+  | DbError;
 
 export class BaseConflictsService extends Context.Service<
   BaseConflictsService,
@@ -110,14 +115,14 @@ export const BaseConflictsServiceLive = Layer.effect(
     const headRefresh = makePrHeadRefresh({
       prService: yield* PullRequestService,
       prCtx,
-      broadcaster: yield* Broadcaster,
+      realtime: yield* Realtime,
     });
 
     const checks = new Map<
       string,
       { readonly prHeadSha: string | null; readonly at: number; readonly check: BaseConflictsCheck }
     >();
-    const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, never>();
+    const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, DbError>();
 
     const syncRepoOf = (ctx: PrContextBasic): SyncRepo | null => {
       const { pr, repo, token } = ctx;
@@ -170,7 +175,7 @@ export const BaseConflictsServiceLive = Layer.effect(
       checkedAt: new Date().toISOString(),
     });
 
-    const computeCheck = (ctx: PrContextBasic): Effect.Effect<BaseConflictsCheck> =>
+    const computeCheck = (ctx: PrContextBasic): Effect.Effect<BaseConflictsCheck, DbError> =>
       Effect.gen(function* () {
         const unpushed = yield* unpushedAgentCommits(ctx.pr.id);
         const repo = syncRepoOf(ctx);

@@ -462,8 +462,7 @@ async function applyWrite(
   try {
     const { data, error } = await api.api.prs({ id: prId }).conversation.writes.post(write);
     if (error || !data || !("conversation" in data)) {
-      // Eden types only the statuses the route declares; handleAppError
-      // answers GitHub's refusal with a 403 the schema doesn't list.
+      // GitHub's refusal of this write answers 403 (the server's error table).
       const status: number | undefined = error?.status;
       if (status === 403) {
         return fail(

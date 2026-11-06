@@ -27,27 +27,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { Data } from "effect";
 import { runGit, runGitBestEffort, runGitCapture, spawnGit } from "./git-runner";
-
-// ── Errors ────────────────────────────────────────────────────────────────
-
-export class GitOperationError extends Data.TaggedError("GitOperationError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
-
-export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
-  readonly message: string;
-}> {}
-
-export class RefAlreadyExistsError extends Data.TaggedError("RefAlreadyExistsError")<{
-  readonly ref: string;
-}> {}
-
-export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
-  readonly message: string;
-}> {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 

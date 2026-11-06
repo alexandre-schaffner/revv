@@ -1,6 +1,5 @@
 import type { ReviewMode, ThreadMessage } from "@revv/shared";
 import { Effect } from "effect";
-import { AppRuntime } from "../../../runtime";
 import { ReviewService } from "../../../services/Review";
 
 /**
@@ -16,19 +15,17 @@ export function coerceReviewMode(value: unknown): ReviewMode {
 }
 
 export function activeSessionHandler(prId: string, mode: ReviewMode = "reviewer") {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const reviewService = yield* ReviewService;
+  return Effect.gen(function* () {
+    const reviewService = yield* ReviewService;
 
-      const reviewSession = yield* reviewService.getOrCreateActiveSession(prId, mode);
-      const threads = yield* reviewService.getThreadsForSession(reviewSession.id);
+    const reviewSession = yield* reviewService.getOrCreateActiveSession(prId, mode);
+    const threads = yield* reviewService.getThreadsForSession(reviewSession.id);
 
-      const messages: Record<string, ThreadMessage[]> = {};
-      for (const thread of threads) {
-        messages[thread.id] = yield* reviewService.getMessages(thread.id);
-      }
+    const messages: Record<string, ThreadMessage[]> = {};
+    for (const thread of threads) {
+      messages[thread.id] = yield* reviewService.getMessages(thread.id);
+    }
 
-      return { session: reviewSession, threads, messages };
-    }),
-  );
+    return { session: reviewSession, threads, messages };
+  });
 }

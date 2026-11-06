@@ -1,5 +1,6 @@
 export * from "./acp-agents";
 export * from "./activity";
+export * from "./api-errors";
 export * from "./base-conflicts";
 export * from "./chat";
 export * from "./codeowners";

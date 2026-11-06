@@ -19,9 +19,9 @@ export function tryImportCachedWalkthrough(input: {
   readonly headSha: string;
   readonly fetchSnapshot: Effect.Effect<Option.Option<WalkthroughSnapshotV2>>;
   readonly importSnapshot: (snapshot: WalkthroughSnapshotV2) => Effect.Effect<void, ImportError>;
-  readonly markComplete: Effect.Effect<void>;
+  readonly markComplete: Effect.Effect<void, DbError>;
   readonly emitEvent: (event: WalkthroughStreamEvent) => Effect.Effect<unknown>;
-}): Effect.Effect<boolean> {
+}): Effect.Effect<boolean, DbError> {
   if (!input.enabled) return Effect.succeed(false);
   const source = input.source ?? "remote";
 
@@ -68,9 +68,9 @@ export function tryCarryRestackedWalkthrough(input: {
   readonly headSha: string;
   readonly importSnapshot: (snapshot: WalkthroughSnapshotV2) => Effect.Effect<void, ImportError>;
   readonly markCarriedFrom: Effect.Effect<void, DbError>;
-  readonly markComplete: Effect.Effect<void>;
+  readonly markComplete: Effect.Effect<void, DbError>;
   readonly emitEvent: (event: WalkthroughStreamEvent) => Effect.Effect<unknown>;
-}): Effect.Effect<boolean> {
+}): Effect.Effect<boolean, DbError> {
   const { db, fromWalkthroughId, repoFullName, importSnapshot, markCarriedFrom, ...rest } = input;
   return tryImportCachedWalkthrough({
     ...rest,

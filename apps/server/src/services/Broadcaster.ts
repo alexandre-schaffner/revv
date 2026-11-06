@@ -1,44 +1,22 @@
-// ── Broadcaster (Realtime / Events) ─────────────────────────────────────────
+// ── Broadcaster ─────────────────────────────────────────────────────────────
 //
-// The realtime/events narrow neck. Account-scoped pub-sub for the global SSE
-// stream. Each connected client owns
-// one writer registered under the account id resolved from their bearer token;
-// broadcasts fan out to every writer for the target account.
+// The transport under `Realtime`: each client connected to `/api/events` is
+// registered under the account its session resolved to, and a send fans out
+// to that account's clients. Who receives a push is `Realtime`'s business.
 //
-// This is the deep module the module map calls "Realtime/Events": a tiny
-// interface (`register` / `broadcastToAccount`) hides the best-effort fan-out,
-// SSE encoding, and disconnect bookkeeping. Features push events here; they
-// never touch transport internals.
-//
-// Scope: all server -> client realtime envelopes flow through `ServerEventMessage`
-// in `@revv/shared/src/events`. Inbound commands use REST endpoints.
-//
-// Doctrine: commit-first, broadcast-second (invariant #8). This service is
-// the broadcast point — callers MUST commit to SQLite first. Lost
-// broadcasts are reconstructible from DB on reconnect via the snapshot
-// REST endpoints. The interface carries no sequence cursor: the walkthrough
-// emitter owns `bumpSeq` (durable wire cursor) / `nextSeq` (in-memory
-// diagnostic) and stamps `seq` onto the envelope before it reaches here.
+// The interface carries no sequence cursor: the walkthrough emitter owns
+// `bumpSeq` (durable wire cursor) and stamps `seq` onto the envelope before it
+// reaches here.
 
 import type { ServerEventMessage } from "@revv/shared";
 import { Context, Effect, Layer, Ref } from "effect";
+import { logError } from "../logger";
 
-const encoder = new TextEncoder();
-
-/**
- * Minimal writer surface the SSE route exposes to the broadcaster. A writer:
- *   - encodes a JS object as an SSE `data:` frame and enqueues it
- *   - returns false if the underlying controller has been torn down
- *     (client disconnect, controller.close() raced with broadcast, etc.)
- *
- * The route owns lifecycle (controller, heartbeat); the broadcaster only sees
- * this narrow interface so the two concerns stay separable.
- */
-export interface EventWriter {
-  /** Write a JS value as a single `data: <json>\n\n` frame. */
-  send: (event: unknown) => boolean;
-  /** True after the client has disconnected. */
-  isClosed: () => boolean;
+/** A connected client, as the events route hands it over. */
+interface EventWriter {
+  /** False once the client is gone. */
+  readonly send: (event: ServerEventMessage) => boolean;
+  readonly isClosed: () => boolean;
 }
 
 interface Registration {
@@ -75,13 +53,10 @@ export const BroadcasterLive = Layer.effect(
 
     const dispatch = (target: Registration, msg: ServerEventMessage): void => {
       if (target.writer.isClosed()) return;
-      // Per-target encoding keeps the writer surface from leaking SSE encoding
-      // details; broadcasts are account-scoped so the fan-out is small.
       try {
         target.writer.send(msg);
-      } catch {
-        // Writer's `send` already swallows enqueue failures and flips
-        // `isClosed`; if a throw escapes that contract just drop silently.
+      } catch (err) {
+        logError("broadcaster", `${msg.type} not sent:`, err instanceof Error ? err.message : err);
       }
     };
 
@@ -126,19 +101,3 @@ export const BroadcasterLive = Layer.effect(
     };
   }),
 );
-
-// ── SSE frame encoding helpers (used by the route, exported for parity) ─────
-
-/**
- * Encode a JS value as a single SSE `data:` frame, including the double
- * newline terminator. Exported so the route's writer wrapper and tests
- * share one implementation.
- */
-export function encodeSseFrame(payload: unknown): Uint8Array {
-  return encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-/** Encode a named heartbeat event so JS can observe liveness. */
-export function encodeSseHeartbeat(): Uint8Array {
-  return encoder.encode("event: heartbeat\ndata: {}\n\n");
-}

@@ -12,6 +12,7 @@ import { HUNK_SCAN_JOIN_BUDGET_MS, HunkScanService, HunkScanServiceLive } from "
 import { planHunkScan, runHunkScan } from "./hunk-scan-run";
 import { getHunkScan, loadHunkScan, recordHunkSignals } from "./hunk-scan-store";
 import { JevService, type JevState } from "./Jev";
+import { RealtimeLive } from "./Realtime";
 
 /** One file, `count` one-line hunks, each adding a distinct line. */
 function fileOf(filename: string, count: number): FileLike {
@@ -412,12 +413,15 @@ describe("runHunkScan", () => {
   });
 });
 
+const realtimeFor = (db: Db) =>
+  RealtimeLive.pipe(Layer.provide(Layer.merge(BroadcasterLive, withDb(db))));
+
 describe("HunkScanService", () => {
   it("runs one scan per head when the review page and a walkthrough ask at once", async () => {
     const db = makeDb();
     const { layer, asked } = stubJev();
     const service = HunkScanServiceLive.pipe(
-      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), BroadcasterLive)),
+      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), realtimeFor(db))),
     );
     const input = { prId: PR, headSha: "sha-1", files: FILES, filePriorities: null };
     const [fromPage, fromJob] = await Effect.runPromise(
@@ -439,7 +443,7 @@ describe("HunkScanService", () => {
     const gate = Effect.runSync(Deferred.make<void>());
     const { layer } = stubJev({ gate: Deferred.await(gate) });
     const service = HunkScanServiceLive.pipe(
-      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), BroadcasterLive)),
+      Layer.provide(Layer.mergeAll(CacheServiceLive, layer, withDb(db), realtimeFor(db))),
     );
     const input = { prId: PR, headSha: "sha-1", files: FILES, filePriorities: null };
     const rows = await Effect.runPromise(

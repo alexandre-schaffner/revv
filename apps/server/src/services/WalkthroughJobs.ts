@@ -79,18 +79,18 @@ import {
   type CloneError,
   CloneInProgressError,
   CloneNotReadyError,
-  DbError,
+  type DbError,
   type GitHubError,
   HeadShaMismatchError,
   type NotFoundError,
   type ValidationError,
 } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { AiService } from "./Ai";
-import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -99,6 +99,7 @@ import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { PrContextService } from "./PrContext";
+import { Realtime } from "./Realtime";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
@@ -150,10 +151,13 @@ const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUA
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/** Result of an emit attempt — used by callers to observe delivery fate. */
+/**
+ * Result of an emit attempt. `unsequenced`: the seq bump didn't commit, so
+ * the event was not broadcast; clients reconcile from the DB (invariant #8).
+ */
 export type EmitResult =
   | { readonly kind: "delivered"; readonly seq: number }
-  | { readonly kind: "skipped-no-job"; readonly walkthroughId: string };
+  | { readonly kind: "unsequenced"; readonly walkthroughId: string };
 
 interface ActiveJob {
   readonly walkthroughId: string;
@@ -163,7 +167,7 @@ interface ActiveJob {
   readonly userId: string;
   /**
    * Better-auth `account.id` that owns the repo backing this PR. Resolved
-   * once at `startJob` time so `emitEvent` can target `Broadcaster.broadcastToAccount`
+   * once at `startJob` time so `emitEvent` can target `Realtime.broadcastToAccount`
    * without hitting the DB on every event. Empty string when the repo
    * lookup fails (rare — falls back to global broadcast).
    */
@@ -288,9 +292,9 @@ export class WalkthroughJobs extends Context.Service<
      *
      * No-op if the row isn't in `'error'`.
      */
-    readonly reviveFromError: (walkthroughId: string) => Effect.Effect<void>;
+    readonly reviveFromError: (walkthroughId: string) => Effect.Effect<void, DbError>;
 
-    readonly resumePending: () => Effect.Effect<void>;
+    readonly resumePending: () => Effect.Effect<void, DbError>;
 
     /**
      * Cancel any in-flight job for a PR and mark all existing walkthroughs
@@ -311,7 +315,7 @@ export class WalkthroughJobs extends Context.Service<
       prId: string,
       exceptHeadSha?: string,
       mode?: WalkthroughMode,
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<void, DbError>;
 
     /**
      * Stamp an event with the walkthrough's durable seq and broadcast it on
@@ -319,10 +323,7 @@ export class WalkthroughJobs extends Context.Service<
      * the orchestrator for lifecycle events, the MCP tool handlers for
      * content, chat-edit for post-completion edits.
      *
-     * Returns `Effect<EmitResult>` so callers can observe whether the event
-     * was delivered or silently dropped (S1). The `EmitResult` discriminant
-     * (`kind: "delivered" | "skipped-no-job`) lets the MCP tool handler
-     * decide whether to log a skip with full context.
+     * Returns whether the event was broadcast; see {@link EmitResult}.
      */
     readonly emitEvent: (
       walkthroughId: string,
@@ -368,7 +369,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const hunkScanService = yield* HunkScanService;
     const cacheService = yield* CacheService;
     const snapshotImporter = yield* WalkthroughSnapshotImporter;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const stackService = yield* StackService;
 
     const registry = yield* Ref.make(new Map<string, ActiveJob>());
@@ -529,7 +530,7 @@ export const WalkthroughJobsLive = Layer.effect(
     const buildJobBody = (
       job: ActiveJob,
       ctx: ResolvedContext,
-    ): Effect.Effect<void, AiError, Scope.Scope> =>
+    ): Effect.Effect<void, AiError | DbError, Scope.Scope> =>
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -550,10 +551,9 @@ export const WalkthroughJobsLive = Layer.effect(
         // HUNK_SCAN_JOIN_BUDGET_MS, so a large or slow scan never holds Phase A.
         // A resume is prompted with the leads its first run recorded, so it
         // doesn't wait on the scan at all.
-        const resumedLeads = yield* Effect.try({
-          try: () => leadsRecorded(db, job.walkthroughId),
-          catch: (cause) => new DbError({ message: "leadsRecorded failed", cause }),
-        }).pipe(Effect.orElseSucceed(() => false));
+        const resumedLeads = yield* dbTry("leadsRecorded", () =>
+          leadsRecorded(db, job.walkthroughId),
+        ).pipe(Effect.orElseSucceed(() => false));
         const hunkScan = resumedLeads
           ? Effect.succeed([])
           : hunkScanService.run({
@@ -665,7 +665,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const processEvent = (
           state: LoopState,
           event: WalkthroughStreamEvent,
-        ): Effect.Effect<ProcessResult, never, never> =>
+        ): Effect.Effect<ProcessResult, DbError> =>
           Effect.gen(function* () {
             if (event.type === "done") {
               state.accumulatedTokenUsage = accumulateTokenUsage(
@@ -821,7 +821,9 @@ export const WalkthroughJobsLive = Layer.effect(
             missingInlineCommentCount: missingInlineCommentCount(),
           });
 
-        const consumeGenerator = (state: LoopState): Effect.Effect<ProcessResult, AiError> =>
+        const consumeGenerator = (
+          state: LoopState,
+        ): Effect.Effect<ProcessResult, AiError | DbError> =>
           Effect.gen(function* () {
             const next = yield* Effect.tryPromise({
               try: () => state.currentGenerator.next(),
@@ -841,7 +843,7 @@ export const WalkthroughJobsLive = Layer.effect(
         const finishAtBudgetEnd = (
           state: LoopState,
           opts: { readonly stoppedEarlyBecause: string | null },
-        ): Effect.Effect<void, AiError> =>
+        ): Effect.Effect<void, AiError | DbError> =>
           finishWalkthroughAtBudgetEnd({
             state,
             stoppedEarlyBecause: opts.stoppedEarlyBecause,
@@ -857,7 +859,9 @@ export const WalkthroughJobsLive = Layer.effect(
             emitEvent: (event) => emitEvent(job.walkthroughId, event),
           }).pipe(Effect.provideService(JevService, jevService));
 
-        const runWithAutoContinuation = (state: LoopState): Effect.Effect<void, AiError> =>
+        const runWithAutoContinuation = (
+          state: LoopState,
+        ): Effect.Effect<void, AiError | DbError> =>
           Effect.gen(function* () {
             const result = yield* consumeGenerator(state);
             if (result._tag === "returnDone") {
@@ -983,7 +987,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
           // Broadcast `lifecycle:started` so the client can pre-create the
           // sidebar spinner entry before any content event arrives. Goes
-          // through emitEvent → bumpSeq → Broadcaster. Best-
+          // through emitEvent → bumpSeq → Realtime. Best-
           // effort: this is the first emit, so the seq will be 0 in the
           // common case (chat-edits on completed walkthroughs run a separate
           // seq lineage on the same row).
@@ -1000,7 +1004,7 @@ export const WalkthroughJobsLive = Layer.effect(
             },
           }).pipe(Effect.catch(() => Effect.void));
 
-          const handleFailure = (cause: Cause.Cause<AiError>) =>
+          const handleFailure = (cause: Cause.Cause<AiError | DbError>) =>
             Effect.gen(function* () {
               const interruptedOnly = Cause.hasInterruptsOnly(cause);
               const cancelledByUser = job.cancelledByUser;
@@ -1073,9 +1077,20 @@ export const WalkthroughJobsLive = Layer.effect(
                   : "Walkthrough generation failed";
               const code = cancelledByUser ? "Cancelled" : "AiGenerationError";
 
-              yield* setStatus(job.walkthroughId, "error", { errorMessage: message }).pipe(
-                Effect.catch(() => Effect.void),
+              // An `error` that didn't commit isn't announced (invariant #8): the
+              // row stays `generating` and resume-on-boot picks it up.
+              const committed = yield* setStatus(job.walkthroughId, "error", {
+                errorMessage: message,
+              }).pipe(
+                Effect.as(true),
+                Effect.catchTag("DbError", (err) =>
+                  Effect.sync(() => {
+                    logError("walkthrough-jobs", "error status write failed:", err.message);
+                    return false;
+                  }),
+                ),
               );
+              if (!committed) return;
 
               // A superseding cancel has its own announcement coming
               // (`lifecycle:superseded`, emitted by the sweep right after this
@@ -1399,14 +1414,6 @@ export const WalkthroughJobsLive = Layer.effect(
               : {}),
             providerConfig: providerConfigForJob,
           }),
-        ).pipe(
-          Effect.mapError(
-            (err) =>
-              new AiGenerationError({
-                cause: err,
-                message: err instanceof Error ? err.message : String(err),
-              }),
-          ),
         );
 
         if (restack !== null) {
@@ -1531,7 +1538,7 @@ export const WalkthroughJobsLive = Layer.effect(
         }
       });
 
-    const reviveFromError = (walkthroughId: string): Effect.Effect<void> =>
+    const reviveFromError = (walkthroughId: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         // setStatus is the chokepoint (invariant #11). Going through it
         // keeps any future side-effects (broadcasts, audit hooks) in
@@ -1540,7 +1547,7 @@ export const WalkthroughJobsLive = Layer.effect(
         yield* provideDb(walkthroughService.resetResumeAttempts(walkthroughId));
       });
 
-    const resumePending = (): Effect.Effect<void> =>
+    const resumePending = (): Effect.Effect<void, DbError> =>
       Effect.withSpan("WalkthroughJobs.resumePending")(
         Effect.gen(function* () {
           const rows = yield* provideDb(walkthroughService.listGenerating());
@@ -1553,7 +1560,19 @@ export const WalkthroughJobsLive = Layer.effect(
           // the existing dir to the desired SHA in place.
 
           for (const row of rows) {
-            const attempts = yield* provideDb(walkthroughService.incrementResumeAttempts(row.id));
+            // An attempt that can't be counted isn't run: resuming it would
+            // escape the resume budget (invariant #9).
+            const attempts = yield* provideDb(
+              walkthroughService.incrementResumeAttempts(row.id),
+            ).pipe(
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() => {
+                  logError("walkthrough-jobs", `resume of ${row.id} skipped:`, err.message);
+                  return null;
+                }),
+              ),
+            );
+            if (attempts === null) continue;
             if (attempts > WALKTHROUGH_MAX_RESUME_ATTEMPTS) {
               debug(
                 "walkthrough-jobs",
@@ -1562,7 +1581,20 @@ export const WalkthroughJobsLive = Layer.effect(
                 "exceeded resume attempts — marking error",
               );
               const message = "Walkthrough failed after repeated retries. Try regenerating.";
-              yield* setStatus(row.id, "error", { errorMessage: message });
+              const committed = yield* setStatus(row.id, "error", { errorMessage: message }).pipe(
+                Effect.as(true),
+                Effect.catchTag("DbError", (err) =>
+                  Effect.sync(() => {
+                    logError(
+                      "walkthrough-jobs",
+                      `error status write failed for ${row.id}:`,
+                      err.message,
+                    );
+                    return false;
+                  }),
+                ),
+              );
+              if (!committed) continue;
               yield* emitEvent(row.id, {
                 type: "lifecycle:error",
                 data: {
@@ -1657,20 +1689,18 @@ export const WalkthroughJobsLive = Layer.effect(
       if (activeJob) {
         return Effect.succeed({ prId: activeJob.prId, accountId: activeJob.accountId });
       }
-      return Effect.try({
-        try: () =>
-          db
-            .select({
-              prId: walkthroughs.pullRequestId,
-              accountId: repositories.accountId,
-            })
-            .from(walkthroughs)
-            .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
-            .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-            .where(eq(walkthroughs.id, walkthroughId))
-            .get(),
-        catch: (cause) => new DbError({ message: "resolveEventTargets failed", cause }),
-      }).pipe(
+      return dbTry("resolveEventTargets", () =>
+        db
+          .select({
+            prId: walkthroughs.pullRequestId,
+            accountId: repositories.accountId,
+          })
+          .from(walkthroughs)
+          .innerJoin(pullRequests, eq(pullRequests.id, walkthroughs.pullRequestId))
+          .innerJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+          .where(eq(walkthroughs.id, walkthroughId))
+          .get(),
+      ).pipe(
         Effect.map((row) => (row ? { prId: row.prId, accountId: row.accountId } : null)),
         // Best-effort broadcast addressing: a DB read failure here just means
         // we skip this one broadcast — clients reconcile from the DB on
@@ -1692,7 +1722,15 @@ export const WalkthroughJobsLive = Layer.effect(
           //    survives kill -9, resumes, chat edits after completion.
           //    Decoupled from the registry so chat-edits on completed
           //    walkthroughs (no fiber) still get correct cursors.
-          const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId));
+          const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId)).pipe(
+            Effect.catchTag("DbError", (err) =>
+              Effect.sync(() => {
+                logError("walkthrough-jobs", `emitEvent ${event.type} not sequenced:`, err.message);
+                return null;
+              }),
+            ),
+          );
+          if (seq === null) return { kind: "unsequenced" as const, walkthroughId };
 
           // 2. Resolve broadcast targets (fast path = in-memory job, slow
           //    path = DB join for chat-edit-on-completed-walkthrough).
@@ -1701,8 +1739,8 @@ export const WalkthroughJobsLive = Layer.effect(
           if (targets !== null) {
             // Account-scoped so a multi-account user only sees their own
             // walkthrough events.
-            yield* broadcaster
-              .broadcastToAccount(targets.accountId, {
+            yield* realtime
+              .toAccount(targets.accountId, {
                 type: "walkthrough:event",
                 data: {
                   prId: targets.prId,

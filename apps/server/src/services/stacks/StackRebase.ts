@@ -7,18 +7,18 @@ import { join } from "node:path";
 import { isOpenLayer, type StackRebaseResult } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
-  DbError,
   type GitHubError,
   NotFoundError,
   StackRejectedError,
   type StackRejection,
 } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
-import { Broadcaster } from "../Broadcaster";
 import { worktreeHolderPath } from "../clone-policy";
 import { DbService } from "../Db";
 import { GitHubGateway } from "../GitHub";
 import { type PrContextBasic, PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
 import type { SettingsService } from "../Settings";
 import type { GitHubStack } from "./map";
 import { planStackRebase } from "./rebase-plan";
@@ -72,7 +72,7 @@ export const StackRebaseServiceLive = Layer.effect(
     const stacks = yield* StackService;
     const github = yield* GitHubGateway;
     const prContext = yield* PrContextService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
 
     const rebasing = new Set<string>();
 
@@ -210,7 +210,7 @@ export const StackRebaseServiceLive = Layer.effect(
             yield* stacks
               .markStale(ctx.repo.id, stack.number)
               .pipe(Effect.catch(() => Effect.void));
-            yield* broadcaster.broadcastToAccount(accountId, {
+            yield* realtime.toAccount(accountId, {
               type: "stack:updated",
               data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
             });
@@ -220,10 +220,7 @@ export const StackRebaseServiceLive = Layer.effect(
       });
 
     const mergeRunning = (repositoryId: string, stackNumber: number) =>
-      Effect.try({
-        try: () => liveRunFor(db, repositoryId, stackNumber) !== undefined,
-        catch: (cause) => new DbError({ message: "stack merge run read failed", cause }),
-      });
+      dbTry("stack merge run read", () => liveRunFor(db, repositoryId, stackNumber) !== undefined);
 
     const rebase = (
       prId: string,

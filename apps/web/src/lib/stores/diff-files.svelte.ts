@@ -47,7 +47,6 @@ async function fetchFiles(prId: string, mode: ReviewMode): Promise<ReviewFile[]>
     query: active === null ? { mode } : { active, mode },
   });
   if (error) throw new Error(apiErrorMessage(error, "Failed to fetch PR files"));
-  if (!Array.isArray(data)) throw new Error(data.error);
   return data.map((f) => ({
     path: f.path,
     patch: f.patch ?? null,

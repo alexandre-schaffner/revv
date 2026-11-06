@@ -26,7 +26,7 @@ import { REVIEW_MODE, type ReviewMode, reviewModeFor } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { account, pullRequests, repositories, user } from "../db/schema";
-import { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { logError } from "../logger";
 import { DbService } from "./Db";
 
@@ -63,21 +63,19 @@ export const resolveReviewModeForPr = (
     // email only, so an install with more than one identity would otherwise
     // resolve against an arbitrary one. Walking the PR's own repository to its
     // owning account to that account's user is deterministic.
-    const row = yield* Effect.try({
-      try: () =>
-        db
-          .select({
-            authorLogin: pullRequests.authorLogin,
-            viewerLogin: user.githubLogin,
-          })
-          .from(pullRequests)
-          .leftJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
-          .leftJoin(account, eq(account.id, repositories.accountId))
-          .leftJoin(user, eq(user.id, account.userId))
-          .where(eq(pullRequests.id, prId))
-          .get(),
-      catch: (cause) => new DbError({ message: `resolveReviewModeForPr(${prId})`, cause }),
-    });
+    const row = yield* dbTry(`resolveReviewModeForPr(${prId})`, () =>
+      db
+        .select({
+          authorLogin: pullRequests.authorLogin,
+          viewerLogin: user.githubLogin,
+        })
+        .from(pullRequests)
+        .leftJoin(repositories, eq(repositories.id, pullRequests.repositoryId))
+        .leftJoin(account, eq(account.id, repositories.accountId))
+        .leftJoin(user, eq(user.id, account.userId))
+        .where(eq(pullRequests.id, prId))
+        .get(),
+    );
     if (!row?.viewerLogin) return UNRESOLVED;
 
     return { mode: reviewModeFor(row.authorLogin, row.viewerLogin), resolved: true };

@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { createDb, type Db } from "../db";
 import { CloneInProgressError, HeadShaMismatchError } from "../domain/errors";
 import { DbService } from "./Db";
+import { WalkthroughServiceLive } from "./Walkthrough";
 import {
   type StartJobError,
   type StartJobParams,
@@ -110,7 +111,11 @@ function request(db: Db, startJob: StartJob) {
     userId: "user-1",
     headSha: NEW_HEAD,
     generationMode: "incremental",
-  }).pipe(Effect.provideService(WalkthroughJobs, jobs), Effect.provideService(DbService, { db }));
+  }).pipe(
+    Effect.provide(WalkthroughServiceLive),
+    Effect.provideService(WalkthroughJobs, jobs),
+    Effect.provideService(DbService, { db }),
+  );
 }
 
 function recordingStartJob(

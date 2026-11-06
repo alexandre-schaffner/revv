@@ -9,7 +9,7 @@ import {
   type ExternalReviewToolContext,
   hasExternalToolScope,
 } from "../../ai/providers/external-review-tools";
-import { externalIntegrationHttpStatus } from "../../domain/errors";
+import { httpErrorOf } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { DbService } from "../../services/Db";
@@ -62,8 +62,8 @@ async function resolveContext(
     ),
   );
   if (!resolution.ok) {
-    const status = externalIntegrationHttpStatus(resolution.error);
-    return { ok: false, status, message: resolution.error.message };
+    const { status, message } = httpErrorOf(resolution.error);
+    return { ok: false, status, message };
   }
   const resolved = resolution.value;
   const db = await AppRuntime.runPromise(
@@ -102,13 +102,7 @@ async function resolveContext(
   };
 
   const broadcastThreadEvent = (message: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast(
-      LOG_SCOPE,
-      resolved.prId,
-      resolved.userId,
-      message,
-      resolved.accountId,
-    );
+    fireAndForgetThreadEventBroadcast(resolved.prId, message, resolved.accountId);
   };
 
   return {
@@ -158,11 +152,8 @@ async function resolveConnection(request: Request) {
     ),
   );
   if (!resolution.ok) {
-    return {
-      ok: false as const,
-      status: externalIntegrationHttpStatus(resolution.error),
-      message: resolution.error.message,
-    };
+    const { status, message } = httpErrorOf(resolution.error);
+    return { ok: false as const, status, message };
   }
   return { ok: true as const, meta: resolution.value };
 }

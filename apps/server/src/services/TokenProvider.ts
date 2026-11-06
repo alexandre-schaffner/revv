@@ -12,8 +12,8 @@ import {
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
 import { githubTryPromise } from "../observability/github-ledger/origin";
-import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
+import { Realtime } from "./Realtime";
 import { SecretStore, type TokenPair } from "./SecretStore";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -106,7 +106,7 @@ export const TokenProviderLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const secretStore = yield* SecretStore;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
 
     // De-dupe concurrent refreshes of the same account — PollScheduler fans
     // out per-repo and would otherwise fire N parallel refresh grants, each
@@ -197,7 +197,7 @@ export const TokenProviderLive = Layer.effect(
             .run(),
         );
 
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(accountId, {
           type: "auth:reauth-cleared",
           data: { host },
         });
@@ -222,7 +222,7 @@ export const TokenProviderLive = Layer.effect(
             .where(eq(account.id, accountId))
             .run(),
         );
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(accountId, {
           type: "auth:reauth-required",
           data: { host: hostFromProviderId(row.providerId), githubLogin: row.githubLogin ?? null },
         });
@@ -248,7 +248,7 @@ export const TokenProviderLive = Layer.effect(
               .run(),
           );
         }
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(accountId, {
           type: "auth:reauth-cleared",
           data: { host: hostFromProviderId(row.providerId) },
         });

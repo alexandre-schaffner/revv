@@ -10,31 +10,27 @@
 //     snapshot from the DB, then attaches to live events if the job is
 //     still running.
 
-import type { ProjectRecapStatus } from "@revv/shared";
+import type { ProjectRecap, ProjectRecapStatus, RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
 import { AppRuntime } from "../../runtime";
 import { ProjectRecapService } from "../../services/ProjectRecap";
 import { ProjectRecapJobs } from "../../services/ProjectRecapJobs";
-import { createSseStream, sseHeaders } from "../reviews/sse";
+import { openSse, type SseChannel } from "../sse";
 
-function emitSnapshot(
-  writer: { send: (event: import("@revv/shared").RecapStreamEvent) => void },
-  row: import("@revv/shared").ProjectRecap,
-): void {
+function emitSnapshot(channel: SseChannel<RecapStreamEvent>, row: ProjectRecap): void {
   if (row.lede) {
-    writer.send({ type: "lede", data: { lede: row.lede } });
+    channel.send({ type: "lede", data: { lede: row.lede } });
   }
   for (const entry of row.entries) {
-    writer.send({ type: "entry", data: { entry } });
+    channel.send({ type: "entry", data: { entry } });
   }
   for (const summary of row.themeSummaries) {
-    writer.send({ type: "theme_summary", data: { summary } });
+    channel.send({ type: "theme_summary", data: { summary } });
   }
 }
 
 export function recapStreamHandler(ctx: { params: { id: string } }): Response {
-  const { stream, writer, stopHeartbeat, onCancel } = createSseStream();
-  onCancel(() => stopHeartbeat());
+  const { response, channel } = openSse<RecapStreamEvent>();
 
   void (async () => {
     try {
@@ -47,38 +43,38 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
 
       // Terminal: complete.
       if (status === "complete") {
-        emitSnapshot(writer, row);
-        writer.send({ type: "done", data: { recapId: row.id } });
-        writer.sendDone();
+        emitSnapshot(channel, row);
+        channel.send({ type: "done", data: { recapId: row.id } });
+        channel.done();
         return;
       }
 
       if (status === "stopped") {
-        writer.send({ type: "stopped", data: { recapId: row.id } });
-        writer.close();
+        channel.send({ type: "stopped", data: { recapId: row.id } });
+        channel.close();
         return;
       }
 
       // Terminal: error.
       if (status === "error") {
-        writer.send({
+        channel.send({
           type: "error",
           data: {
             code: "RecapGenerationError",
             message: row.errorMessage ?? "Recap generation failed",
           },
         });
-        writer.close();
+        channel.close();
         return;
       }
 
       // Terminal: superseded.
       if (status === "superseded") {
-        writer.send({
+        channel.send({
           type: "error",
           data: { code: "Superseded", message: "This recap has been superseded." },
         });
-        writer.close();
+        channel.close();
         return;
       }
 
@@ -99,11 +95,11 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
       ).catch(() => null);
 
       if (!started) {
-        writer.send({
+        channel.send({
           type: "error",
           data: { code: "StartFailed", message: "Could not start or attach to recap job." },
         });
-        writer.close();
+        channel.close();
         return;
       }
 
@@ -111,9 +107,9 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
       const sub = await AppRuntime.runPromise(
         Effect.flatMap(ProjectRecapJobs, (jobs) =>
           jobs.subscribe(row.id, (event) => {
-            writer.send(event);
+            channel.send(event);
             if (event.type === "done" || event.type === "stopped" || event.type === "error") {
-              writer.close();
+              channel.close();
             }
           }),
         ),
@@ -126,12 +122,12 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
           Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
         );
         if (finalRow.status === "complete") {
-          emitSnapshot(writer, finalRow);
-          writer.send({ type: "done", data: { recapId: finalRow.id } });
+          emitSnapshot(channel, finalRow);
+          channel.send({ type: "done", data: { recapId: finalRow.id } });
         } else if (finalRow.status === "stopped") {
-          writer.send({ type: "stopped", data: { recapId: finalRow.id } });
+          channel.send({ type: "stopped", data: { recapId: finalRow.id } });
         } else if (finalRow.status === "error") {
-          writer.send({
+          channel.send({
             type: "error",
             data: {
               code: "RecapGenerationError",
@@ -139,11 +135,11 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
             },
           });
         }
-        writer.close();
+        channel.close();
         return;
       }
 
-      onCancel(sub.unsubscribe);
+      channel.onClose(sub.unsubscribe);
 
       // Flush buffered events (delivered through the subscriber callback
       // in arrival order) BEFORE reading the snapshot. Then re-read the
@@ -155,13 +151,13 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
       ).catch(() => row);
 
-      emitSnapshot(writer, snapshot);
+      emitSnapshot(channel, snapshot);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      writer.send({ type: "error", data: { code: "SetupError", message } });
-      writer.close();
+      channel.send({ type: "error", data: { code: "SetupError", message } });
+      channel.close();
     }
   })();
 
-  return new Response(stream, { headers: sseHeaders });
+  return response;
 }

@@ -1,6 +1,5 @@
 import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
-import { AppRuntime } from "../../../runtime";
 import { PrContextService } from "../../../services/PrContext";
 import { resolveReviewModeForPr } from "../../../services/review-mode";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -44,76 +43,74 @@ export function getCurrentWalkthroughHandler(
   userId: string,
   requestedMode?: WalkthroughMode,
 ) {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const prContext = yield* PrContextService;
-      const walkthroughService = yield* WalkthroughService;
-      const jobs = yield* WalkthroughJobs;
+  return Effect.gen(function* () {
+    const prContext = yield* PrContextService;
+    const walkthroughService = yield* WalkthroughService;
+    const jobs = yield* WalkthroughJobs;
 
-      const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
-      const mode =
-        requestedMode ??
-        (yield* walkthroughService.getLatestMode(pr.id)) ??
-        (yield* resolveReviewModeForPr(pr.id)).mode;
-      const headSha = pr.headSha;
-      // No synced head SHA → nothing to match a walkthrough against. The PR
-      // row hasn't fully synced yet; the client shows the Generate button and
-      // a later `prs:updated` + component-mount re-hydration recovers.
-      if (!headSha) return { status: "not_found" as const, mode };
+    const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
+    const mode =
+      requestedMode ??
+      (yield* walkthroughService.getLatestMode(pr.id)) ??
+      (yield* resolveReviewModeForPr(pr.id)).mode;
+    const headSha = pr.headSha;
+    // No synced head SHA → nothing to match a walkthrough against. The PR
+    // row hasn't fully synced yet; the client shows the Generate button and
+    // a later `prs:updated` + component-mount re-hydration recovers.
+    if (!headSha) return { status: "not_found" as const, mode };
 
-      // 1. Complete walkthrough — best case, no SSE needed.
-      const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
-      if (complete) {
-        const seqAt = yield* walkthroughService.getSeqAt(complete.id);
+    // 1. Complete walkthrough — best case, no SSE needed.
+    const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
+    if (complete) {
+      const seqAt = yield* walkthroughService.getSeqAt(complete.id);
+      return {
+        status: "complete" as const,
+        walkthrough: complete,
+        seqAt,
+      };
+    }
+
+    // 2. In-progress or errored walkthrough — hydrate partial state.
+    const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
+    if (partial) {
+      const seqAt = yield* walkthroughService.getSeqAt(partial.id);
+      return {
+        status: partial.status,
+        walkthrough: partial,
+        seqAt,
+      };
+    }
+
+    // 3. No local row — probe the team cache. On a hit the cache importer
+    //    creates a complete row, so we re-query and return it as complete.
+    const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
+    if (hydrated) {
+      const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
+      if (fromCache) {
+        const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
         return {
           status: "complete" as const,
-          walkthrough: complete,
+          walkthrough: fromCache,
           seqAt,
         };
       }
+    }
 
-      // 2. In-progress or errored walkthrough — hydrate partial state.
-      const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
-      if (partial) {
-        const seqAt = yield* walkthroughService.getSeqAt(partial.id);
-        return {
-          status: partial.status,
-          walkthrough: partial,
-          seqAt,
-        };
-      }
+    // 4. New commits have invalidated the latest generated row, but the
+    //    user has not started the incremental walkthrough yet. Keep the
+    //    last reviewed artifact visible and mark it stale so the action bar
+    //    offers "Review new commits" instead of making the page feel empty.
+    const latest = yield* walkthroughService.getLatestDisplayable(pr.id, mode);
+    if (latest && latest.prHeadSha !== headSha) {
+      const seqAt = yield* walkthroughService.getSeqAt(latest.id);
+      return {
+        status: "complete" as const,
+        walkthrough: latest,
+        seqAt,
+        stale: true as const,
+      };
+    }
 
-      // 3. No local row — probe the team cache. On a hit the cache importer
-      //    creates a complete row, so we re-query and return it as complete.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
-      if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
-        if (fromCache) {
-          const seqAt = yield* walkthroughService.getSeqAt(fromCache.id);
-          return {
-            status: "complete" as const,
-            walkthrough: fromCache,
-            seqAt,
-          };
-        }
-      }
-
-      // 4. New commits have invalidated the latest generated row, but the
-      //    user has not started the incremental walkthrough yet. Keep the
-      //    last reviewed artifact visible and mark it stale so the action bar
-      //    offers "Review new commits" instead of making the page feel empty.
-      const latest = yield* walkthroughService.getLatestDisplayable(pr.id, mode);
-      if (latest && latest.prHeadSha !== headSha) {
-        const seqAt = yield* walkthroughService.getSeqAt(latest.id);
-        return {
-          status: "complete" as const,
-          walkthrough: latest,
-          seqAt,
-          stale: true as const,
-        };
-      }
-
-      return { status: "not_found" as const, mode };
-    }),
-  );
+    return { status: "not_found" as const, mode };
+  });
 }

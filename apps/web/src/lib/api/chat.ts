@@ -187,7 +187,11 @@ export async function approvePlan(prId: string, planId: string): Promise<void> {
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error((body.message as string | undefined) ?? `Approve failed: ${res.status}`);
+    throw new Error(
+      (body.message as string | undefined) ??
+        (body.error as string | undefined) ??
+        `Approve failed: ${res.status}`,
+    );
   }
 }
 
@@ -198,7 +202,11 @@ export async function rejectPlan(prId: string, planId: string): Promise<void> {
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error((body.message as string | undefined) ?? `Reject failed: ${res.status}`);
+    throw new Error(
+      (body.message as string | undefined) ??
+        (body.error as string | undefined) ??
+        `Reject failed: ${res.status}`,
+    );
   }
 }
 

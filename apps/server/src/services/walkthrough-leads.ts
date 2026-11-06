@@ -21,7 +21,7 @@ import { type HunkLead, hunkScanLeads } from "../ai/jev/hunk-scan";
 import type { Db } from "../db";
 import { walkthroughLeads } from "../db/schema/walkthrough-leads";
 import { walkthroughs } from "../db/schema/walkthroughs";
-import { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { logError } from "../logger";
 import type { PromptFilesResult } from "./walkthrough-prompt-files";
 
@@ -204,15 +204,13 @@ export function prepareFirstPassLeads(
   prompt: PromptFilesResult,
 ): Effect.Effect<WalkthroughLead[]> {
   const shown = rowsInPrompt(scanRows, prompt);
-  return Effect.try({
-    try: () =>
-      recordWalkthroughLeads(
-        db,
-        walkthroughId,
-        hunkScanLeads(shown, new Set(shown.map((row) => row.filePath))),
-      ),
-    catch: (cause) => new DbError({ message: "recordWalkthroughLeads failed", cause }),
-  }).pipe(
+  return dbTry("recordWalkthroughLeads", () =>
+    recordWalkthroughLeads(
+      db,
+      walkthroughId,
+      hunkScanLeads(shown, new Set(shown.map((row) => row.filePath))),
+    ),
+  ).pipe(
     Effect.catch((e) =>
       Effect.sync(() => {
         logError("walkthrough-jobs", "recording first-pass leads failed", e);

@@ -1,6 +1,6 @@
 // The one client for the server's fetch-SSE streams (chat turns, recaps,
 // base-conflict and push-conflict runs, agent install/login). The server
-// heartbeats most of them (`: keepalive` / `: ping` every 15 s), so a stretch
+// heartbeats most of them (`: ping` every 15 s), so a stretch
 // with no bytes at all means the connection is dead, not that the agent is
 // thinking. A silent close (server crash, the OS reclaiming the WKWebView
 // socket) never resolves a pending read, so only a timer can notice it.

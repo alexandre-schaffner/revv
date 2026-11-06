@@ -102,7 +102,12 @@ const seenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: stackSeen(pr
 function makeDeps(db: Db, fakes: Fakes): PollDeps {
   const deps = {
     db,
-    broadcaster: { broadcastToAccount: () => Effect.void, broadcastAll: () => Effect.void },
+    realtime: {
+      toAccount: () => Effect.void,
+      toRepo: () => Effect.void,
+      toPr: () => Effect.void,
+      toAll: () => Effect.void,
+    },
     tokenProvider: {
       getTokenByAccountId: () => Effect.succeed("token"),
       refreshAccountToken: () => Effect.fail(new Error("no refresh")),

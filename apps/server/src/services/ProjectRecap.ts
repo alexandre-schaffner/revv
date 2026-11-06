@@ -29,7 +29,8 @@ import {
   recapThemeSummaries,
   remoteUsers,
 } from "../db/schema/index";
-import { RecapNotFoundError, ValidationError } from "../domain/errors";
+import { type DbError, RecapNotFoundError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 
 function parseStats(json: string): RecapSummaryStats {
@@ -203,23 +204,23 @@ export class ProjectRecapService extends Context.Service<
      */
     readonly createPartial: (
       params: CreatePartialRecapParams,
-    ) => Effect.Effect<ProjectRecap, ValidationError, DbService>;
+    ) => Effect.Effect<ProjectRecap, DbError, DbService>;
 
     readonly getById: (
       id: string,
-    ) => Effect.Effect<ProjectRecap, RecapNotFoundError | ValidationError, DbService>;
+    ) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError, DbService>;
 
     /** Look up a complete-or-generating recap for a specific period. */
     readonly findActiveForPeriod: (
       repoId: string,
       period: RecapPeriod,
       periodStart: string,
-    ) => Effect.Effect<ProjectRecap | null, ValidationError, DbService>;
+    ) => Effect.Effect<ProjectRecap | null, DbError, DbService>;
 
     readonly listForRepo: (
       repoId: string,
       params: ListForRepoParams,
-    ) => Effect.Effect<ListForRepoResult, ValidationError, DbService>;
+    ) => Effect.Effect<ListForRepoResult, DbError, DbService>;
 
     /**
      * Most-recent complete recaps for a repo. Used by the walkthrough agent's
@@ -229,7 +230,7 @@ export class ProjectRecapService extends Context.Service<
     readonly getLatestForRepo: (
       repoId: string,
       params: { period?: RecapPeriod; limit?: number },
-    ) => Effect.Effect<ReadonlyArray<ProjectRecap>, ValidationError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError, DbService>;
 
     /**
      * Orchestrator-only status transition. Stamps `completedAt = now()`
@@ -240,10 +241,7 @@ export class ProjectRecapService extends Context.Service<
       recapId: string,
       status: ProjectRecapStatus,
       options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
-    ) => Effect.Effect<void, never, DbService>;
-
-    /** Mark `oldId` superseded with `supersededBy = newId`. */
-    readonly supersede: (oldId: string, newId: string) => Effect.Effect<void, never, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
 
     /**
      * Fill in a recap for a historical window that held no activity at all.
@@ -255,7 +253,7 @@ export class ProjectRecapService extends Context.Service<
      * through. The orchestrator short-circuits precisely to avoid spending
      * tokens on an empty window.
      */
-    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, ValidationError, DbService>;
+    readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, DbError, DbService>;
 
     /**
      * Reset an existing row for an in-place rerun. Clears all content /
@@ -268,7 +266,7 @@ export class ProjectRecapService extends Context.Service<
     readonly resetForRerun: (
       recapId: string,
       newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
-    ) => Effect.Effect<void, RecapNotFoundError | ValidationError, DbService>;
+    ) => Effect.Effect<void, RecapNotFoundError | DbError, DbService>;
 
     /**
      * Enumerate rows still in `status='generating'` for boot-time resume.
@@ -282,11 +280,13 @@ export class ProjectRecapService extends Context.Service<
         readonly periodEnd: string;
         readonly resumeAttempts: number;
       }>,
-      never,
+      DbError,
       DbService
     >;
 
-    readonly incrementResumeAttempts: (recapId: string) => Effect.Effect<number, never, DbService>;
+    readonly incrementResumeAttempts: (
+      recapId: string,
+    ) => Effect.Effect<number, DbError, DbService>;
   }
 >()("ProjectRecapService") {}
 
@@ -297,31 +297,28 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       const id = params.id ?? crypto.randomUUID();
       const generatedAt = new Date().toISOString();
 
-      const inserted = yield* Effect.try({
-        try: () => {
-          const values: typeof projectRecaps.$inferInsert = {
-            id,
-            repositoryId: params.repositoryId,
-            period: params.period,
-            periodStart: params.periodStart,
-            periodEnd: params.periodEnd,
-            status: "generating",
-            generatedAt,
-            tokenUsage: "{}",
-            sourcePrIds: "[]",
-            sourceWalkthroughIds: "[]",
-            summaryStats: "{}",
-            resumeAttempts: 0,
-          };
-          if (params.modelUsed !== undefined) values.modelUsed = params.modelUsed;
-          db.insert(projectRecaps).values(values).run();
-          const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
-          if (!row) {
-            throw new Error(`Failed to read back inserted recap ${id}`);
-          }
-          return rowToRecap(row);
-        },
-        catch: (e) => new ValidationError({ message: `createPartial: ${String(e)}` }),
+      const inserted = yield* dbTry("createPartial", () => {
+        const values: typeof projectRecaps.$inferInsert = {
+          id,
+          repositoryId: params.repositoryId,
+          period: params.period,
+          periodStart: params.periodStart,
+          periodEnd: params.periodEnd,
+          status: "generating",
+          generatedAt,
+          tokenUsage: "{}",
+          sourcePrIds: "[]",
+          sourceWalkthroughIds: "[]",
+          summaryStats: "{}",
+          resumeAttempts: 0,
+        };
+        if (params.modelUsed !== undefined) values.modelUsed = params.modelUsed;
+        db.insert(projectRecaps).values(values).run();
+        const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
+        if (!row) {
+          throw new Error(`Failed to read back inserted recap ${id}`);
+        }
+        return rowToRecap(row);
       });
 
       return inserted;
@@ -330,41 +327,33 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   getById: (id) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = yield* Effect.try({
-        try: () => db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
-        catch: (e) => new ValidationError({ message: `getById: ${String(e)}` }),
-      });
+      const row = yield* dbTry("getById", () =>
+        db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get(),
+      );
       if (!row) {
         return yield* Effect.fail(new RecapNotFoundError({ recapId: id }));
       }
-      const entryRows = yield* Effect.try({
-        try: () =>
-          db
-            .select()
-            .from(recapPrEntries)
-            .where(eq(recapPrEntries.recapId, id))
-            .orderBy(asc(recapPrEntries.position))
-            .all(),
-        catch: (e) => new ValidationError({ message: `getById entries: ${String(e)}` }),
-      });
+      const entryRows = yield* dbTry("getById entries", () =>
+        db
+          .select()
+          .from(recapPrEntries)
+          .where(eq(recapPrEntries.recapId, id))
+          .orderBy(asc(recapPrEntries.position))
+          .all(),
+      );
       const logins = Array.from(new Set(entryRows.map((r) => r.prAuthorLogin).filter(Boolean)));
-      const avatarsByLogin = yield* Effect.try({
-        try: () => {
-          if (logins.length === 0) return new Map<string, string | null>();
-          const rows = db
-            .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
-            .from(remoteUsers)
-            .where(and(eq(remoteUsers.provider, "github"), inArray(remoteUsers.login, logins)))
-            .all();
-          return new Map(rows.map((r) => [r.login, r.avatarContent ?? null]));
-        },
-        catch: (e) => new ValidationError({ message: `getById avatars: ${String(e)}` }),
+      const avatarsByLogin = yield* dbTry("getById avatars", () => {
+        if (logins.length === 0) return new Map<string, string | null>();
+        const rows = db
+          .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
+          .from(remoteUsers)
+          .where(and(eq(remoteUsers.provider, "github"), inArray(remoteUsers.login, logins)))
+          .all();
+        return new Map(rows.map((r) => [r.login, r.avatarContent ?? null]));
       });
-      const themeSummaryRows = yield* Effect.try({
-        try: () =>
-          db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
-        catch: (e) => new ValidationError({ message: `getById theme summaries: ${String(e)}` }),
-      });
+      const themeSummaryRows = yield* dbTry("getById theme summaries", () =>
+        db.select().from(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, id)).all(),
+      );
       return rowToRecap(
         row,
         entryRows.map((r) => entryRowToEntry(r, avatarsByLogin.get(r.prAuthorLogin) ?? null)),
@@ -375,31 +364,28 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   findActiveForPeriod: (repoId, period, periodStart) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      return yield* Effect.try({
-        try: () => {
-          const row = db
-            .select()
-            .from(projectRecaps)
-            .where(
-              and(
-                eq(projectRecaps.repositoryId, repoId),
-                eq(projectRecaps.period, period),
-                eq(projectRecaps.periodStart, periodStart),
-                // Active = anything that hasn't been superseded. Even an
-                // `error` row counts as active here — the scheduler should
-                // not silently retry it on the next tick, since
-                // `resumePending` handles bounded retries.
-              ),
-            )
-            .orderBy(desc(projectRecaps.generatedAt))
-            .all();
-          // Prefer rows whose `supersededBy` is null. There can be many
-          // historical rows if the user regenerated repeatedly; only one
-          // is the "current" one.
-          const current = row.find((r) => r.supersededBy === null);
-          return current ? rowToRecap(current) : null;
-        },
-        catch: (e) => new ValidationError({ message: `findActiveForPeriod: ${String(e)}` }),
+      return yield* dbTry("findActiveForPeriod", () => {
+        const row = db
+          .select()
+          .from(projectRecaps)
+          .where(
+            and(
+              eq(projectRecaps.repositoryId, repoId),
+              eq(projectRecaps.period, period),
+              eq(projectRecaps.periodStart, periodStart),
+              // Active = anything that hasn't been superseded. Even an
+              // `error` row counts as active here — the scheduler should
+              // not silently retry it on the next tick, since
+              // `resumePending` handles bounded retries.
+            ),
+          )
+          .orderBy(desc(projectRecaps.generatedAt))
+          .all();
+        // Prefer rows whose `supersededBy` is null. There can be many
+        // historical rows if the user regenerated repeatedly; only one
+        // is the "current" one.
+        const current = row.find((r) => r.supersededBy === null);
+        return current ? rowToRecap(current) : null;
       });
     }),
 
@@ -411,49 +397,46 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         MAX_RECAP_PAGE_LIMIT,
       );
 
-      return yield* Effect.try({
-        try: () => {
-          const conditions = [eq(projectRecaps.repositoryId, repoId)];
-          if (params.period !== undefined) {
-            conditions.push(eq(projectRecaps.period, params.period));
-          }
-          if (params.cursor !== undefined) {
-            conditions.push(lt(projectRecaps.generatedAt, params.cursor));
-          }
-          // String comparison is valid here because `period_start` is always
-          // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
-          // lexicographic order *is* chronological order. Load-bearing: swap
-          // in a local-offset or non-padded format and these predicates go
-          // quietly wrong. The `(repository_id, period, period_start)` index
-          // covers them.
-          if (params.from !== undefined) {
-            conditions.push(gte(projectRecaps.periodStart, params.from));
-          }
-          if (params.to !== undefined) {
-            conditions.push(lt(projectRecaps.periodStart, params.to));
-          }
-          if (!params.includeSuperseded) {
-            conditions.push(isNull(projectRecaps.supersededBy));
-          }
+      return yield* dbTry("listForRepo", () => {
+        const conditions = [eq(projectRecaps.repositoryId, repoId)];
+        if (params.period !== undefined) {
+          conditions.push(eq(projectRecaps.period, params.period));
+        }
+        if (params.cursor !== undefined) {
+          conditions.push(lt(projectRecaps.generatedAt, params.cursor));
+        }
+        // String comparison is valid here because `period_start` is always
+        // stored as a normalised ISO UTC instant (`…T00:00:00.000Z`), so
+        // lexicographic order *is* chronological order. Load-bearing: swap
+        // in a local-offset or non-padded format and these predicates go
+        // quietly wrong. The `(repository_id, period, period_start)` index
+        // covers them.
+        if (params.from !== undefined) {
+          conditions.push(gte(projectRecaps.periodStart, params.from));
+        }
+        if (params.to !== undefined) {
+          conditions.push(lt(projectRecaps.periodStart, params.to));
+        }
+        if (!params.includeSuperseded) {
+          conditions.push(isNull(projectRecaps.supersededBy));
+        }
 
-          const rows = db
-            .select()
-            .from(projectRecaps)
-            .where(and(...conditions))
-            .orderBy(desc(projectRecaps.generatedAt))
-            .limit(limit + 1)
-            .all();
+        const rows = db
+          .select()
+          .from(projectRecaps)
+          .where(and(...conditions))
+          .orderBy(desc(projectRecaps.generatedAt))
+          .limit(limit + 1)
+          .all();
 
-          const hasMore = rows.length > limit;
-          const trimmed = hasMore ? rows.slice(0, limit) : rows;
-          const lastRow = trimmed[trimmed.length - 1];
-          const nextCursor = hasMore && lastRow ? lastRow.generatedAt : null;
-          return {
-            recaps: trimmed.map(rowToSummary),
-            nextCursor,
-          };
-        },
-        catch: (e) => new ValidationError({ message: `listForRepo: ${String(e)}` }),
+        const hasMore = rows.length > limit;
+        const trimmed = hasMore ? rows.slice(0, limit) : rows;
+        const lastRow = trimmed[trimmed.length - 1];
+        const nextCursor = hasMore && lastRow ? lastRow.generatedAt : null;
+        return {
+          recaps: trimmed.map(rowToSummary),
+          nextCursor,
+        };
       });
     }),
 
@@ -461,28 +444,25 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const limit = Math.min(Math.max(1, params.limit ?? 3), 10);
-      return yield* Effect.try({
-        try: () => {
-          const conditions = [
-            eq(projectRecaps.repositoryId, repoId),
-            eq(projectRecaps.status, "complete"),
-          ];
-          if (params.period !== undefined) {
-            conditions.push(eq(projectRecaps.period, params.period));
-          }
-          const rows = db
-            .select()
-            .from(projectRecaps)
-            .where(and(...conditions))
-            .orderBy(desc(projectRecaps.completedAt))
-            .limit(limit)
-            .all();
-          // `.map(rowToRecap)` would invoke with (row, index) and the index
-          // would conflict with our optional `entries` second arg. Use an
-          // explicit arrow to drop the index.
-          return rows.map((r) => rowToRecap(r));
-        },
-        catch: (e) => new ValidationError({ message: `getLatestForRepo: ${String(e)}` }),
+      return yield* dbTry("getLatestForRepo", () => {
+        const conditions = [
+          eq(projectRecaps.repositoryId, repoId),
+          eq(projectRecaps.status, "complete"),
+        ];
+        if (params.period !== undefined) {
+          conditions.push(eq(projectRecaps.period, params.period));
+        }
+        const rows = db
+          .select()
+          .from(projectRecaps)
+          .where(and(...conditions))
+          .orderBy(desc(projectRecaps.completedAt))
+          .limit(limit)
+          .all();
+        // `.map(rowToRecap)` would invoke with (row, index) and the index
+        // would conflict with our optional `entries` second arg. Use an
+        // explicit arrow to drop the index.
+        return rows.map((r) => rowToRecap(r));
       });
     }),
 
@@ -500,118 +480,89 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       const modelPatch = options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {};
       const errorPatch =
         options?.errorMessage !== undefined ? { errorMessage: options.errorMessage } : {};
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(projectRecaps)
-            .set({ status, ...completedAtPatch, ...tokenPatch, ...modelPatch, ...errorPatch })
-            .where(eq(projectRecaps.id, recapId))
-            .run(),
-        catch: (e) => new ValidationError({ message: `setStatus: ${String(e)}` }),
-      });
-    }).pipe(Effect.catch(() => Effect.void)),
-
-  supersede: (oldId, newId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(projectRecaps)
-            .set({ status: "superseded", supersededBy: newId })
-            .where(eq(projectRecaps.id, oldId))
-            .run(),
-        catch: (e) => new ValidationError({ message: `supersede: ${String(e)}` }),
-      });
-    }).pipe(Effect.catch(() => Effect.void)),
+      yield* dbTry("setStatus", () =>
+        db
+          .update(projectRecaps)
+          .set({ status, ...completedAtPatch, ...tokenPatch, ...modelPatch, ...errorPatch })
+          .where(eq(projectRecaps.id, recapId))
+          .run(),
+      );
+    }),
 
   markEmptyWindow: (recapId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () =>
-          db
-            .update(projectRecaps)
-            .set({
-              lede: RECAP_EMPTY_WINDOW_LEDE,
-              summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
-              sourcePrIds: "[]",
-              sourceWalkthroughIds: "[]",
-              errorMessage: null,
-            })
-            .where(eq(projectRecaps.id, recapId))
-            .run(),
-        catch: (e) => new ValidationError({ message: `markEmptyWindow: ${String(e)}` }),
-      });
+      yield* dbTry("markEmptyWindow", () =>
+        db
+          .update(projectRecaps)
+          .set({
+            lede: RECAP_EMPTY_WINDOW_LEDE,
+            summaryStats: JSON.stringify(EMPTY_RECAP_STATS),
+            sourcePrIds: "[]",
+            sourceWalkthroughIds: "[]",
+            errorMessage: null,
+          })
+          .where(eq(projectRecaps.id, recapId))
+          .run(),
+      );
     }),
 
   resetForRerun: (recapId, newBoundaries) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      yield* Effect.try({
-        try: () => {
-          const exists = db
-            .select({ id: projectRecaps.id })
-            .from(projectRecaps)
-            .where(eq(projectRecaps.id, recapId))
-            .get();
-          if (!exists) {
-            throw new Error(`recap ${recapId} not found`);
-          }
-          const patch: Record<string, unknown> = {
-            lede: "",
-            status: "generating",
-            completedAt: null,
-            errorMessage: null,
-            resumeAttempts: 0,
-            generatedAt: new Date().toISOString(),
-            sourcePrIds: "[]",
-            sourceWalkthroughIds: "[]",
-            summaryStats: "{}",
-            tokenUsage: "{}",
-          };
-          if (newBoundaries?.periodStart !== undefined) {
-            patch.periodStart = newBoundaries.periodStart;
-          }
-          if (newBoundaries?.periodEnd !== undefined) {
-            patch.periodEnd = newBoundaries.periodEnd;
-          }
-          // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
-          db.transaction(() => {
-            db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
-            db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
-            db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
-          });
-        },
-        catch: (e) => {
-          const msg = String(e);
-          if (msg.includes("not found")) {
-            return new RecapNotFoundError({ recapId });
-          }
-          return new ValidationError({ message: `resetForRerun: ${msg}` });
-        },
-      });
+      const exists = yield* dbTry("resetForRerun lookup", () =>
+        db
+          .select({ id: projectRecaps.id })
+          .from(projectRecaps)
+          .where(eq(projectRecaps.id, recapId))
+          .get(),
+      );
+      if (!exists) return yield* Effect.fail(new RecapNotFoundError({ recapId }));
+      const patch: Record<string, unknown> = {
+        lede: "",
+        status: "generating",
+        completedAt: null,
+        errorMessage: null,
+        resumeAttempts: 0,
+        generatedAt: new Date().toISOString(),
+        sourcePrIds: "[]",
+        sourceWalkthroughIds: "[]",
+        summaryStats: "{}",
+        tokenUsage: "{}",
+      };
+      if (newBoundaries?.periodStart !== undefined) {
+        patch.periodStart = newBoundaries.periodStart;
+      }
+      if (newBoundaries?.periodEnd !== undefined) {
+        patch.periodEnd = newBoundaries.periodEnd;
+      }
+      // Atomic so a crash can't strand the row in 'generating' with stale entries (invariant #1).
+      yield* dbTry("resetForRerun", () =>
+        db.transaction(() => {
+          db.update(projectRecaps).set(patch).where(eq(projectRecaps.id, recapId)).run();
+          db.delete(recapPrEntries).where(eq(recapPrEntries.recapId, recapId)).run();
+          db.delete(recapThemeSummaries).where(eq(recapThemeSummaries.recapId, recapId)).run();
+        }),
+      );
     }),
 
   listGenerating: () =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const rows = yield* Effect.try({
-        try: () =>
-          db
-            .select({
-              id: projectRecaps.id,
-              repositoryId: projectRecaps.repositoryId,
-              period: projectRecaps.period,
-              periodStart: projectRecaps.periodStart,
-              periodEnd: projectRecaps.periodEnd,
-              resumeAttempts: projectRecaps.resumeAttempts,
-            })
-            .from(projectRecaps)
-            .where(eq(projectRecaps.status, "generating"))
-            .all(),
-        catch: (e) => new ValidationError({ message: `listGenerating: ${String(e)}` }),
-      });
+      const rows = yield* dbTry("listGenerating", () =>
+        db
+          .select({
+            id: projectRecaps.id,
+            repositoryId: projectRecaps.repositoryId,
+            period: projectRecaps.period,
+            periodStart: projectRecaps.periodStart,
+            periodEnd: projectRecaps.periodEnd,
+            resumeAttempts: projectRecaps.resumeAttempts,
+          })
+          .from(projectRecaps)
+          .where(eq(projectRecaps.status, "generating"))
+          .all(),
+      );
       return rows.map((r) => ({
         id: r.id,
         repositoryId: r.repositoryId,
@@ -620,27 +571,24 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         periodEnd: r.periodEnd,
         resumeAttempts: r.resumeAttempts,
       }));
-    }).pipe(Effect.catch(() => Effect.succeed([] as never[]))),
+    }),
 
   incrementResumeAttempts: (recapId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const next = yield* Effect.try({
-        try: () => {
-          const row = db
-            .select({ resumeAttempts: projectRecaps.resumeAttempts })
-            .from(projectRecaps)
-            .where(eq(projectRecaps.id, recapId))
-            .get();
-          const value = (row?.resumeAttempts ?? 0) + 1;
-          db.update(projectRecaps)
-            .set({ resumeAttempts: value })
-            .where(eq(projectRecaps.id, recapId))
-            .run();
-          return value;
-        },
-        catch: (e) => new ValidationError({ message: `incrementResumeAttempts: ${String(e)}` }),
+      const next = yield* dbTry("incrementResumeAttempts", () => {
+        const row = db
+          .select({ resumeAttempts: projectRecaps.resumeAttempts })
+          .from(projectRecaps)
+          .where(eq(projectRecaps.id, recapId))
+          .get();
+        const value = (row?.resumeAttempts ?? 0) + 1;
+        db.update(projectRecaps)
+          .set({ resumeAttempts: value })
+          .where(eq(projectRecaps.id, recapId))
+          .run();
+        return value;
       });
       return next;
-    }).pipe(Effect.catch(() => Effect.succeed(0))),
+    }),
 });

@@ -14,9 +14,8 @@ import type { HunkScanEventMessage, HunkScanRow, HunkScanSnapshot } from "@revv/
 import { eq } from "drizzle-orm";
 import { Context, Deferred, Effect, Exit, type Fiber, Layer, Option, Semaphore } from "effect";
 import { pullRequests, repositories } from "../db/schema";
-import { DbError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { debug } from "../logger";
-import { Broadcaster } from "./Broadcaster";
 import type { CacheService } from "./Cache";
 import { DbService } from "./Db";
 import {
@@ -27,6 +26,7 @@ import {
 } from "./hunk-scan-run";
 import { loadHunkScan } from "./hunk-scan-store";
 import type { JevService } from "./Jev";
+import { Realtime } from "./Realtime";
 
 /**
  * Scans calling Jev at once. They share one request quota, so more would only
@@ -74,7 +74,7 @@ export const HunkScanServiceLive = Layer.effect(
   Effect.gen(function* () {
     const context = yield* Effect.context<JevService | CacheService | DbService>();
     const { db } = Context.get(context, DbService);
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const callSlots = yield* Semaphore.make(MAX_CONCURRENT_HUNK_SCANS);
 
     /** By PR id: one run per PR at a time. */
@@ -82,16 +82,16 @@ export const HunkScanServiceLive = Layer.effect(
 
     /** The account that owns the PR's repo — the SSE scope for its events. */
     const accountIdFor = (prId: string) =>
-      Effect.try({
-        try: () =>
+      dbTry(
+        "hunk-scan account lookup",
+        () =>
           db
             .select({ accountId: repositories.accountId })
             .from(pullRequests)
             .innerJoin(repositories, eq(pullRequests.repositoryId, repositories.id))
             .where(eq(pullRequests.id, prId))
             .get()?.accountId ?? null,
-        catch: (cause) => new DbError({ message: "hunk-scan account lookup failed", cause }),
-      });
+      );
 
     const snapshot = (prId: string, headSha: string) =>
       loadHunkScan({ prId, headSha }).pipe(Effect.provide(context));
@@ -128,7 +128,7 @@ export const HunkScanServiceLive = Layer.effect(
               ),
             );
             const emit = (event: HunkScanEventMessage) =>
-              accountId === null ? Effect.void : broadcaster.broadcastToAccount(accountId, event);
+              accountId === null ? Effect.void : realtime.toAccount(accountId, event);
             return yield* runHunkScan({
               prId: input.prId,
               headSha: input.headSha,

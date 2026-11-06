@@ -38,7 +38,7 @@ import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
 import { signOutRoute } from "./routes/sign-out";
 import { stackReviewRoutes } from "./routes/stack-review";
-import { repoStackRoutes, stackMergeRoutes, stackRebaseRoutes, stackRoutes } from "./routes/stacks";
+import { repoStackRoutes, stackMergeRunRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
@@ -147,8 +147,7 @@ const app = new Elysia()
   .use(stackRoutes)
   .use(repoStackRoutes)
   .use(stackReviewRoutes)
-  .use(stackMergeRoutes)
-  .use(stackRebaseRoutes)
+  .use(stackMergeRunRoutes)
   .use(recapRoutes)
   .use(reviewRoutes)
   .use(threadRoutes)

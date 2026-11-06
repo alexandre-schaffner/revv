@@ -102,16 +102,16 @@ service files; no raw `throw new Error(...)` in Effect-returning methods.
 chasing definitions across the tree. Throwing raw Errors converts a typed failure into a defect
 (uncaught fiber crash); Effect can recover from `Effect.fail` but only crashes on `Effect.die`.
 
-**Canonical example.** `apps/server/src/domain/errors.ts:1–105` declares every error class
-used by the server, grouped by domain (GitHub, Auth, Clone, AI, Review, Sync) and re-exported
-as union types. Consumers `catchTag` against the string tag (e.g. `Effect.catchTag("GitHubAuthError", ...)`).
+**Canonical example.** `apps/server/src/domain/errors.ts` declares every error class used by
+the server, grouped by domain, and ends with the table that gives each one its HTTP status,
+`ApiErrorCode` and message (`httpErrorOf`). Adding a class means adding its row; the table is
+typed over the class union, so a missing row doesn't compile. Consumers `catchTag` against the
+string tag (e.g. `Effect.catchTag("GitHubAuthError", ...)`).
 
 **Anti-pattern.** Defining a one-off `class LocalError extends Data.TaggedError(...)` inline in
 a service file, or returning `Effect.fail(new Error("..."))` (untagged — defeats `catchTag`).
-Also: `apps/server/src/services/OpencodeSupervisor.ts:576` wraps the actionable failure as
-`new AiGenerationError({ cause: new Error("selected agent is '${agent}'...") })`. Reusing
-`AiGenerationError` for an "agent-selection mismatch" semantically distinct failure dilutes
-what the tag means; a dedicated `OpencodeNotSelectedError` would let callers branch.
+A free-string `code` field that routes match on (the old `ReviewError.code === "NOT_FOUND"`)
+is the same smell: use `NotFoundError` / `ForbiddenError`.
 
 **Backlog.** [`E-003`](./conventions-backlog.md#e-003).
 
@@ -127,16 +127,13 @@ constraint violations, locked tables, schema drift, SQLite IO errors. An unwrapp
 `Effect.gen` lets the throw escape as an Effect *defect*, not a *failure*: callers expecting to
 `catchTag` on a typed DB error get a fiber crash instead.
 
-**Canonical example.** `apps/server/src/services/PollScheduler.ts:176–184` wraps a
-`db.update(user).set(...).where(...).run()` chain with
-`Effect.try({ try: ..., catch: (e) => new Error(String(e)) }).pipe(Effect.orElseSucceed(...))`.
-The `.orElseSucceed` is the deliberate fallback for "this update is best-effort"; replace it with
-`Effect.fail(new <DbError>(...))` when the caller should care.
+**Canonical example.** `apps/server/src/effects/db-try.ts`: `dbTry(label, () => db…)` for code
+that holds its `db` handle, `tryDb(label, (db) => db…)` to read it from `DbService`. Both fail
+with `DbError`, which answers HTTP 500. A best-effort write says so at the call site
+(`Effect.catch` + log), never by the helper inventing a value.
 
-**Anti-pattern.** `apps/server/src/services/Cache.ts:119–126`, `:136–138`, and `:170–182` call
-`db.select(...).get()`, `db.delete(...).run()`, and `db.insert(...).onConflictDoUpdate(...).run()`
-directly inside `Effect.gen` bodies — any synchronous throw bypasses Effect's error channel.
-Same pattern in `Walkthrough.ts` and `Db.ts` consumers.
+**Anti-pattern.** Calling `db.select(...).get()` directly inside an `Effect.gen` body, or
+mapping a Drizzle failure to some other tag (`ValidationError` turned DB faults into HTTP 400s).
 
 **Backlog.** [`E-004`](./conventions-backlog.md#e-004), [`E-005`](./conventions-backlog.md#e-005).
 
@@ -196,6 +193,24 @@ the route that wrote it. Web caches whose answers depend on settings put those s
 
 **Why.** A field used to be hand-added in 5–7 files, and a write that bypassed the route skipped
 the scheduler restarts.
+
+<a id="http-edge"></a>
+### 2.6 Routes run through `runRoute`; streams through `routes/sse.ts`
+
+**Rule.** A route handler hands its work to `runRoute` (`routes/middleware.ts`) as an Effect.
+`runRoute` answers with the value, or with the failure's row of `httpErrorOf` as a typed
+`status(code, ApiErrorBody)`, so Eden types every error status a route can answer. A stream
+opens through `routes/sse.ts` (`openSse`, `pipeToSse`, `runStream` for a refusal before the
+stream starts). A router whose paths carry resource ids registers `ownedBy({ id: "pull request" })`
+(`routes/ownership.ts`) right after its auth plugin.
+
+**Why.** One table means a REST route, a stream refusal and the external agent's MCP route
+answer the same error the same way. A guard on the router, not each handler, is what keeps a
+new route from forgetting the ownership check.
+
+**Anti-pattern.** `try { await AppRuntime.runPromise(…) } catch (e) { … }` in a handler, a
+hand-written `ctx.set.status = 404` for a condition a domain error already names, or a
+hand-rolled `ReadableStream` of `data:` frames.
 
 ---
 
@@ -282,27 +297,28 @@ state and "kinda" carries deltas needs custom handler logic per consumer.
 full list and sometimes carries one repo. Receivers can't tell whether to replace or merge.
 
 **Broadcast contract.** All broadcasts are best-effort and lossy. The broadcaster's contract is
-documented in code at `apps/server/src/services/Broadcaster.ts:16–21`: commit to SQLite first,
+documented in code at `apps/server/src/services/Realtime.ts`: commit to SQLite first,
 broadcast second; receivers reconcile from the DB on reconnect (the snapshot REST endpoints) and
 never derive authoritative display state exclusively from stream messages. This is CLAUDE.md
 invariant #8.
 
 <a id="event-scope-targeting"></a>
-### 3.4 Account-scoped by default; `broadcastAll` only for server-global signals
+### 3.4 Account-scoped by default; `toAll` only for server-global signals
 
-**Rule.** Feature events carry per-account data and MUST be sent with
-`broadcastToAccount(accountId, msg)`. `broadcastAll(msg)` fans out to every registered writer
-regardless of account and is reserved for server-global sync-lifecycle signals — today the
-`prs:sync-started` / `prs:sync-complete` spinners and the generic `error` envelope used for
-sync failures (`SYNC_ERROR` / `THREAD_SYNC_ERROR` codes), all emitted from
-`PollScheduler.ts`.
+**Rule.** Features send through `Realtime` (`services/Realtime.ts`), never `Broadcaster`
+(enforced by `check:import-boundaries`). Feature events carry per-account data and MUST be
+addressed to an account: `toAccount(accountId, msg)`, or `toRepo(repoId, msg)` /
+`toPr(prId, msg)`, which resolve the owning account in one place. `toAll(msg)` fans out to every
+connected client and is reserved for server-global sync-lifecycle signals — today the generic
+`error` envelope used for sync failures (`SYNC_ERROR` / `THREAD_SYNC_ERROR` codes), emitted
+from `PollScheduler.ts`.
 
 **Why.** A data-bearing envelope (`prs:updated`, recap, thread, walkthrough) sent with
-`broadcastAll` leaks one account's data to every connected client. Scoping is a security
+`toAll` leaks one account's data to every connected client. Scoping is a security
 boundary, not a perf optimization.
 
 **Anti-pattern.** Routing `prs:updated` (carries a specific account's `PullRequest[]`) through
-`broadcastAll`.
+`toAll`, or resolving the account at the call site (`getAccountIdForRepo` then a send).
 
 **Backlog.** None — current canon is clean.
 

@@ -1,6 +1,6 @@
 import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
 import { Effect, Option } from "effect";
-import type { GitHubError, ValidationError } from "../domain/errors";
+import type { DbError, GitHubError } from "../domain/errors";
 import { asStored, type ObservedPr } from "../domain/observed-pr";
 
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
@@ -14,9 +14,7 @@ interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite
     repository: Repository,
     number: number,
   ) => Effect.Effect<ObservedPr, GitHubError, RRemote>;
-  readonly upsertPullRequest: (
-    pullRequest: ObservedPr,
-  ) => Effect.Effect<void, ValidationError, RWrite>;
+  readonly upsertPullRequest: (pullRequest: ObservedPr) => Effect.Effect<void, DbError, RWrite>;
 }
 
 export function localPullRequestId(repositoryId: string, number: number): string {

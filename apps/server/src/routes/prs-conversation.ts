@@ -5,9 +5,9 @@
 import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, type Static, t } from "elysia";
-import { AppRuntime } from "../runtime";
 import { PrConversationService } from "../services/PrConversation";
-import { handleAppError, withAccount } from "./middleware";
+import { runRoute, withAccount } from "./middleware";
+import { ownedBy } from "./ownership";
 
 const names = t.Array(t.String({ minLength: 1 }), { minItems: 1, maxItems: 50 });
 const someNames = t.Array(t.String({ minLength: 1 }), { maxItems: 50 });
@@ -41,132 +41,97 @@ void writeBodyMatchesShared;
 
 export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)
-  .get("/:id/conversation", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.load(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .onBeforeHandle(ownedBy({ id: "pull request" }))
+  .get("/:id/conversation", (ctx) =>
+    runRoute(
+      Effect.flatMap(PrConversationService, (s) =>
+        s.load(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+      ),
+    ),
+  )
 
   // The cached snapshot only, for an instant first paint; null on a miss.
-  .get("/:id/conversation/cached", async (ctx) => {
-    try {
-      const conversation = await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.cached(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-      return { conversation };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/:id/conversation/cached", (ctx) =>
+    runRoute(
+      Effect.flatMap(PrConversationService, (s) =>
+        s.cached(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+      ).pipe(Effect.map((conversation) => ({ conversation }))),
+    ),
+  )
 
   .post(
     "/:id/conversation/writes",
     async (ctx) => {
-      try {
-        const body = ctx.body;
-        return await AppRuntime.runPromise(
-          Effect.flatMap(PrConversationService, (s) =>
-            s.write(ctx.params.id, ctx.session.user.id, ctx.account.accountId, body),
-          ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
+      const body = ctx.body;
+      return runRoute(
+        Effect.flatMap(PrConversationService, (s) =>
+          s.write(ctx.params.id, ctx.session.user.id, ctx.account.accountId, body),
+        ),
+      );
     },
     { body: writeBody },
   )
 
-  .get("/:id/checks", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.checks(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/:id/checks", (ctx) =>
+    runRoute(
+      Effect.flatMap(PrConversationService, (s) =>
+        s.checks(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+      ),
+    ),
+  )
 
   .get(
     "/:id/checks/:checkRunId",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(PrConversationService, (s) =>
-            s.checkDetails(
-              ctx.params.id,
-              ctx.session.user.id,
-              ctx.account.accountId,
-              ctx.params.checkRunId,
-            ),
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(PrConversationService, (s) =>
+          s.checkDetails(
+            ctx.params.id,
+            ctx.session.user.id,
+            ctx.account.accountId,
+            ctx.params.checkRunId,
           ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+        ),
+      ),
     { params: t.Object({ id: t.String(), checkRunId: t.Numeric({ minimum: 1 }) }) },
   )
 
-  .get("/:id/label-options", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(PrConversationService, (s) =>
-          s.labelOptions(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-        ),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
+  .get("/:id/label-options", (ctx) =>
+    runRoute(
+      Effect.flatMap(PrConversationService, (s) =>
+        s.labelOptions(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+      ),
+    ),
+  )
 
   .get(
     "/:id/assignee-options",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(PrConversationService, (s) =>
-            s.assigneeOptions(
-              ctx.params.id,
-              ctx.session.user.id,
-              ctx.account.accountId,
-              ctx.query.q ?? "",
-            ),
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(PrConversationService, (s) =>
+          s.assigneeOptions(
+            ctx.params.id,
+            ctx.session.user.id,
+            ctx.account.accountId,
+            ctx.query.q ?? "",
           ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+        ),
+      ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },
   )
 
   .get(
     "/:id/reviewer-options",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(PrConversationService, (s) =>
-            s.reviewerOptions(
-              ctx.params.id,
-              ctx.session.user.id,
-              ctx.account.accountId,
-              ctx.query.q ?? "",
-            ),
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(PrConversationService, (s) =>
+          s.reviewerOptions(
+            ctx.params.id,
+            ctx.session.user.id,
+            ctx.account.accountId,
+            ctx.query.q ?? "",
           ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
+        ),
+      ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },
   );

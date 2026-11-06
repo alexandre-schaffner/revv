@@ -112,7 +112,7 @@ export const announceSyncChanges = (
       (c) => changeAccountByPrId.get(c.prId) ?? "unknown",
     );
     for (const [accountId, accountChanges] of changesByAccount) {
-      yield* deps.broadcaster.broadcastToAccount(accountId, {
+      yield* deps.realtime.toAccount(accountId, {
         type: "prs:sync-summary",
         data: accountChanges,
       });
@@ -124,8 +124,19 @@ export const announceSyncChanges = (
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);
       if (!pr || pr.headSha === null) continue;
-      const cached = yield* withDb(deps.db, deps.walkthroughService.getCached(pr.id, pr.headSha));
-      if (cached !== null) continue;
+      const uncached = yield* withDb(
+        deps.db,
+        deps.walkthroughService.getCached(pr.id, pr.headSha),
+      ).pipe(
+        Effect.map((cached) => cached === null),
+        Effect.catchTag("DbError", (err) =>
+          Effect.sync(() => {
+            logError("PollScheduler", `auto-walkthrough skipped for PR ${pr.id}:`, err.message);
+            return false;
+          }),
+        ),
+      );
+      if (!uncached) continue;
       yield* Effect.forkDetach(
         deps.walkthroughJobs
           .startJob({

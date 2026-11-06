@@ -70,7 +70,7 @@ async function resolveContext(
   };
 
   const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast("mcp-chat-context", resolved.prId, resolved.userId, msg);
+    fireAndForgetThreadEventBroadcast(resolved.prId, msg);
   };
 
   return {

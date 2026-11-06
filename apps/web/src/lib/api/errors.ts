@@ -1,6 +1,6 @@
 /**
- * The server's own wording for a failed Eden call (`handleAppError` answers
- * `{ error }`, Elysia's validator `{ message }`), else `fallback` with the
+ * The server's own wording for a failed Eden call (the error table answers
+ * `{ error, code }`, Elysia's validator `{ message }`), else `fallback` with the
  * status. GitHub's refusals are only legible in that body: a bare "HTTP 405"
  * hides "Merge commits are not allowed on this repository."
  */

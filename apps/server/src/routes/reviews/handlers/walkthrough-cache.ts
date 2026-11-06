@@ -1,7 +1,6 @@
 import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { NotFoundError } from "../../../domain/errors";
-import { AppRuntime } from "../../../runtime";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
@@ -39,12 +38,10 @@ export function coerceWalkthroughMode(value: unknown): WalkthroughMode {
  * silently resumed the abandoned draft instead of starting a fresh one.
  */
 export function regenerateWalkthroughHandler(prId: string) {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const jobs = yield* WalkthroughJobs;
-      yield* jobs.supersedeForPr(prId);
-    }),
-  );
+  return Effect.gen(function* () {
+    const jobs = yield* WalkthroughJobs;
+    yield* jobs.supersedeForPr(prId);
+  });
 }
 
 /**
@@ -74,29 +71,24 @@ export function regenerateWalkthroughHandler(prId: string) {
  * 404 when no resumable row exists — the partial was superseded by a
  * head-SHA advance or never created. Regenerate is the right next action.
  */
-export function resumeWalkthroughHandler(
-  prId: string,
-  mode?: WalkthroughMode,
-): Promise<{ walkthroughId: string }> {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const jobs = yield* WalkthroughJobs;
-      const service = yield* WalkthroughService;
-      const row = yield* service.findResumable(prId, mode);
-      if (!row) {
-        return yield* Effect.fail(new NotFoundError({ resource: "walkthrough", id: prId }));
-      }
-      if (row.status === "error") {
-        yield* jobs.reviveFromError(row.id);
-      }
-      return yield* jobs.startJob({
-        prId,
-        userId: "single-user",
-        trigger: "resume",
-        walkthroughId: row.id,
-        mode: mode ?? row.mode,
-        generationMode: row.generationMode,
-      });
-    }),
-  );
+export function resumeWalkthroughHandler(prId: string, mode?: WalkthroughMode) {
+  return Effect.gen(function* () {
+    const jobs = yield* WalkthroughJobs;
+    const service = yield* WalkthroughService;
+    const row = yield* service.findResumable(prId, mode);
+    if (!row) {
+      return yield* Effect.fail(new NotFoundError({ resource: "walkthrough", id: prId }));
+    }
+    if (row.status === "error") {
+      yield* jobs.reviveFromError(row.id);
+    }
+    return yield* jobs.startJob({
+      prId,
+      userId: "single-user",
+      trigger: "resume",
+      walkthroughId: row.id,
+      mode: mode ?? row.mode,
+      generationMode: row.generationMode,
+    });
+  });
 }
