@@ -50,6 +50,7 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 
 - **Effect system** throughout: services use `Effect.gen`, `Context.Service`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
 - **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`, `TokenProvider`
+- **Git**: only `services/git/` runs git, through one runner that disables the user's hooks and signing on every command (the clone is often the user's own repo). One push per remote branch (`BranchPushLock`); never `git worktree prune`, never move a branch the user owns. The chat agent's per-PR worktree belongs to `PrWorkspace` (`services/workspace/`); the chat turn is `ChatTurnService` (`services/chat/`).
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
 - **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
 - **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Server broadcasts `prs:updated`, `repos:updated`, etc. via `Broadcaster` (account-scoped fan-out). Inbound commands use REST endpoints.
@@ -298,8 +299,14 @@ agent tomorrow). Any change that violates them is wrong by construction — push
 9. **Bounded retries with explicit budgets.** `WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`,
    `MAX_AUTO_CONTINUATIONS = 2`, `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row
    terminal (`error`) and stops.
-10. **Per-job resource scoping.** Each job owns a dedicated git worktree at `head_sha`,
-    registered as a scope finalizer so cleanup happens on every exit path.
+10. **Per-job resource scoping.** Each walkthrough job owns a dedicated detached git
+    worktree at `head_sha` (`RepoClone.acquireReviewWorktree`, keyed on the walkthrough id),
+    removed by a scope finalizer on every exit path; a resumed job clears what its killed run
+    left, and the worktree sweep removes those of walkthroughs no longer generating. Generation
+    never reads the PR's agent worktree (`pr-N` on `revv/pr-N`), which belongs to the chat
+    agent: `PrWorkspace` holds one claim per PR for it, so a chat turn, a push of the agent's
+    commits and an edit of them never overlap, and the server refuses the second rather than
+    racing in the worktree.
 11. **Status transitions are orchestrator-only.** Agents never write `status` or
     `last_completed_phase` directly. MCP tool handlers update phase fields as a side-effect
     of their own writes; `status ∈ {generating, complete, error, superseded}` is only ever
