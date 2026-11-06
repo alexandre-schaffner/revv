@@ -10,6 +10,7 @@ import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semanti
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { semanticStepId } from "../../../services/walkthrough/content";
 import { decodePlainText } from "../agent-text";
+import { fail } from "../mcp-tool-gateway";
 import {
   blockContentError,
   blockVariantCount,
@@ -17,7 +18,7 @@ import {
   writeBlock,
 } from "../walkthrough-blocks";
 import { unwrapJsonWrappedString } from "../walkthrough-tools/helpers";
-import { fail, runChatEdit, scrubBlockReferences } from "./helpers";
+import { runChatEdit, scrubBlockReferences } from "./helpers";
 import type {
   AddBlockInput,
   AddSemanticStepEditInput,

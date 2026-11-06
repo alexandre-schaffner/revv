@@ -31,23 +31,8 @@ import {
   setThemeSummarySchema,
 } from "./spec";
 
-export type {
-  RecapSourcePrDiff,
-  RecapSourcePrDiffFile,
-  RecapToolContext,
-  RecapToolResult,
-} from "./spec";
-export {
-  addPrEntryHandler,
-  completeRecapHandler,
-  getPrDiffHandler,
-  getRecapStateHandler,
-  getRepoContextHandler,
-  listOpenPrsHandler,
-  recapCompletionBlocker,
-  setLedeHandler,
-  setThemeSummaryHandler,
-};
+export type { RecapSourcePrDiff, RecapSourcePrDiffFile, RecapToolContext } from "./spec";
+export { recapCompletionBlocker };
 
 export const RECAP_TOOL_SPECS: RecapToolSpecRecord[] = [
   {

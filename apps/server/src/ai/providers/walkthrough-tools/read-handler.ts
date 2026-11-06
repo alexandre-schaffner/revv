@@ -28,7 +28,8 @@ import {
   isRatedAxis,
 } from "../../../services/walkthrough/content";
 import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
-import { errorResult, loadWalkthroughRow } from "./helpers";
+import { fail } from "../mcp-tool-gateway";
+import { loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
   GetRepoContextInput,
@@ -48,7 +49,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
 ) => {
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
-    return errorResult(
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found. The orchestrator should have created it before the agent ran — check WalkthroughJobs.`,
     );
   }
@@ -300,7 +301,7 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
 ) => {
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
-    return errorResult(
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found. The orchestrator should have created it before the agent ran — check WalkthroughJobs.`,
     );
   }
@@ -372,7 +373,7 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
 ) => {
   const walkthroughRow = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!walkthroughRow) {
-    return errorResult(
+    return fail(
       `Walkthrough ${ctx.walkthroughId} not found — cannot resolve repo for context lookup.`,
     );
   }
@@ -468,7 +469,7 @@ const STACK_FILES_PER_LAYER = 60;
 export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput> = async (ctx) => {
   const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
   if (!row) {
-    return errorResult(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
+    return fail(`Walkthrough ${ctx.walkthroughId} not found — cannot resolve its stack.`);
   }
   const stack = row.stackContext;
   const repo = ctx.db

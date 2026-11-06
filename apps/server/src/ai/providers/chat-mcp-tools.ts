@@ -22,13 +22,13 @@ import {
   loadIssueThreads,
 } from "../../services/walkthrough/content";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
-import { fail, ok } from "./chat-edit-tools/helpers";
 import type {
   ChatEditToolHandler,
   ChatEditToolSpecRecord,
   ChatWalkthroughEditContext,
 } from "./chat-edit-tools/spec";
 import type { McpToolResult, ToolSpecBundle } from "./mcp-tool-gateway";
+import { fail, ok } from "./mcp-tool-gateway";
 
 interface ParsedBlock {
   readonly orderIndex: number;

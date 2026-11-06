@@ -12,7 +12,8 @@ import {
   loadContentRows,
   loadIssueThreads,
 } from "../../../services/walkthrough/content";
-import { fail, NO_COMPLETE_WALKTHROUGH, ok } from "./helpers";
+import { fail, ok } from "../mcp-tool-gateway";
+import { NO_COMPLETE_WALKTHROUGH } from "./helpers";
 import type { ChatEditToolHandler, GetWalkthroughForEditInput } from "./spec";
 
 export const getWalkthroughForEditHandler: ChatEditToolHandler<GetWalkthroughForEditInput> = async (

@@ -10,6 +10,7 @@ import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
 import { isCompleteReview, readBriefLayers } from "../../../services/stacks/reads";
+import { fail, ok } from "../mcp-tool-gateway";
 import {
   ARC_MAX_CHARS,
   BUILDS_ON_MAX,
@@ -29,14 +30,6 @@ import {
 const LAYER_FILES_MAX = 80;
 const ISSUE_TITLES_MAX = 6;
 const SENTIMENT_EXCERPT_CHARS = 400;
-
-function ok(text: string): StackBriefToolResult {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function err(text: string): StackBriefToolResult {
-  return { content: [{ type: "text" as const, text }], isError: true };
-}
 
 type Db = StackBriefToolContext["db"];
 
@@ -60,7 +53,7 @@ function loadBrief(db: Db, briefId: string, action: string): LoadedBrief | Stack
     .from(stackBriefs)
     .where(eq(stackBriefs.id, briefId))
     .get();
-  return row ?? err(`Stack brief ${briefId} not found. Aborting ${action}.`);
+  return row ?? fail(`Stack brief ${briefId} not found. Aborting ${action}.`);
 }
 
 function isToolResult(v: LoadedBrief | StackBriefToolResult): v is StackBriefToolResult {
@@ -75,7 +68,9 @@ function loadGenerating(
   const brief = loadBrief(db, briefId, action);
   if (isToolResult(brief)) return brief;
   if (brief.status !== "generating") {
-    return err(`Stack brief is no longer generating (status=${brief.status}). Aborting ${action}.`);
+    return fail(
+      `Stack brief is no longer generating (status=${brief.status}). Aborting ${action}.`,
+    );
   }
   return brief;
 }
@@ -259,11 +254,11 @@ export const getStackLayersHandler: StackBriefToolHandler<GetStackLayersInput> =
 
 export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = async (ctx, input) => {
   const role = oneLine(input.role, "role");
-  if ("error" in role) return err(`Error: ${role.error}`);
+  if ("error" in role) return fail(`Error: ${role.error}`);
   const focus = oneLine(input.review_focus, "review_focus");
-  if ("error" in focus) return err(`Error: ${focus.error}`);
+  if ("error" in focus) return fail(`Error: ${focus.error}`);
   const chapter = oneLine(input.chapter, "chapter", CHAPTER_MAX_CHARS);
-  if ("error" in chapter) return err(`Error: ${chapter.error}`);
+  if ("error" in chapter) return fail(`Error: ${chapter.error}`);
 
   return ctx.db.transaction(() => {
     const brief = loadGenerating(ctx.db, ctx.briefId, "set_layer_role");
@@ -271,13 +266,13 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
     const layer = brief.snapshot.layers.find((l) => l.position === input.position);
     if (!layer) {
       const valid = brief.snapshot.layers.map((l) => `${l.position} (#${l.number})`).join(", ");
-      return err(
+      return fail(
         `Error: no open layer at position ${input.position}. Valid positions: ${valid}. Merged layers take no role.`,
       );
     }
 
     const links = checkBuildsOn(input.builds_on, layer, brief.snapshot);
-    if ("error" in links) return err(`Error: ${links.error}`);
+    if ("error" in links) return fail(`Error: ${links.error}`);
     const buildsOn = links.value;
 
     const existing = ctx.db
@@ -347,9 +342,9 @@ export const setLayerRoleHandler: StackBriefToolHandler<SetLayerRoleInput> = asy
 
 export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, input) => {
   const arc = input.arc_markdown.trim();
-  if (arc.length === 0) return err("Error: arc_markdown is empty.");
+  if (arc.length === 0) return fail("Error: arc_markdown is empty.");
   if (arc.length > ARC_MAX_CHARS) {
-    return err(
+    return fail(
       `Error: arc_markdown is ${arc.length} characters; the limit is ${ARC_MAX_CHARS}. Two or three sentences.`,
     );
   }
@@ -359,7 +354,7 @@ export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, inp
     if (isToolResult(brief)) return brief;
     const missing = missingLayers(ctx.db, ctx.briefId, brief.snapshot);
     if (missing.length > 0) {
-      return err(
+      return fail(
         `Error: set_arc needs every layer's role first. Call set_layer_role for: ${missing.join(", ")}.`,
       );
     }
@@ -371,7 +366,7 @@ export const setArcHandler: StackBriefToolHandler<SetArcInput> = async (ctx, inp
       new Set(given).size === given.length &&
       given.every((n) => expected.includes(n));
     if (!isPermutation) {
-      return err(
+      return fail(
         `Error: review_order must list each open layer's PR number exactly once: [${expected.join(", ")}] in some order. Got [${given.join(", ")}].`,
       );
     }
@@ -413,7 +408,7 @@ export const completeStackBriefHandler: StackBriefToolHandler<CompleteStackBrief
   ctx,
 ) => {
   const blocker = stackBriefCompletionBlocker(ctx.db, ctx.briefId);
-  if (blocker) return err(blocker);
+  if (blocker) return fail(blocker);
   ctx.onCompleted();
   return ok("Stack brief complete. The orchestrator will finalize it. You may stop.");
 };
