@@ -3,12 +3,7 @@
 // on GitHub, then bringing the local session back in line with what GitHub
 // now holds.
 
-import {
-  type IssueSeverity,
-  isPublishableDraftComment,
-  isThreadResolved,
-  type WalkthroughIssue,
-} from "@revv/shared";
+import type { WalkthroughIssue } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
@@ -16,70 +11,12 @@ import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
+import { reviewBody, reviewComments } from "./review-payload";
 
 export type ReviewAction = "approve" | "request_changes" | "comment";
 
-interface ReviewComment {
-  path: string;
-  body: string;
-  line: number;
-  side: "LEFT" | "RIGHT";
-  startLine?: number;
-  threadId: string;
-}
-
-// Plain-text tags: the posted markdown stays icon-free.
-function severityTag(s: IssueSeverity): string {
-  return s === "critical" ? "`[CRITICAL]`" : s === "warning" ? "`[WARNING]`" : "`[INFO]`";
-}
-
-function reviewBody(issues: readonly WalkthroughIssue[]): string {
-  if (issues.length === 0) return "";
-  const lines = issues.map((issue) => {
-    const range =
-      issue.endLine != null && issue.endLine !== issue.startLine ? `–${issue.endLine}` : "";
-    const loc =
-      issue.filePath && issue.startLine != null
-        ? ` (\`${issue.filePath}:${issue.startLine}${range}\`)`
-        : issue.filePath
-          ? ` (\`${issue.filePath}\`)`
-          : "";
-    return `- ${severityTag(issue.severity)} **${issue.title}**${loc}\n  ${issue.description}`;
-  });
-  return ["### Walkthrough issues", ...lines].join("\n\n");
-}
-
-/** Unresolved threads not yet on GitHub, as new review comments. */
-function reviewComments(): ReviewComment[] {
-  // A pending comment whose file left the diff would make GitHub reject the
-  // whole review (422); it stays a local draft the user can discard. Before
-  // the diff has loaded nothing is known to be stale, so nothing is dropped.
-  const diffPaths = new Set(
-    getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path])),
-  );
-  const out: ReviewComment[] = [];
-  for (const thread of getThreads()) {
-    if (isThreadResolved(thread.status)) continue;
-    // Threads already on GitHub get their replies pushed instead; posting
-    // them here would duplicate the thread on every submit.
-    if (thread.externalCommentId != null) continue;
-    if (diffPaths.size > 0 && !diffPaths.has(thread.filePath)) continue;
-    const body = getThreadMessages(thread.id)
-      .filter(isPublishableDraftComment)
-      .map((m) => m.body)
-      .filter((b) => b.trim().length > 0)
-      .join("\n\n");
-    if (!body) continue;
-    out.push({
-      path: thread.filePath,
-      body,
-      line: thread.endLine,
-      side: thread.diffSide === "old" ? "LEFT" : "RIGHT",
-      threadId: thread.id,
-      ...(thread.startLine !== thread.endLine ? { startLine: thread.startLine } : {}),
-    });
-  }
-  return out;
+function diffPaths(): Set<string> {
+  return new Set(getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path])));
 }
 
 /** Push reviewer replies on threads GitHub already has. Resolves how many failed. */
