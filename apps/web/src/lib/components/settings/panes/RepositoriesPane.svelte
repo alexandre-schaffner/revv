@@ -6,7 +6,8 @@ import Trash from "phosphor-svelte/lib/Trash";
 import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte";
 import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { deleteRepo, getRepositories } from "$lib/stores/prs.svelte";
+import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
+import { getRepositories } from "$lib/stores/prs.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import { openAddRepoDialog } from "$lib/stores/sidebar.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
@@ -16,20 +17,7 @@ import { SETTINGS_PANES } from "../settings-index";
 
 const repositories = $derived(getRepositories());
 
-let removingRepoId = $state<string | null>(null);
-let repoPendingDelete = $state<Repository | null>(null);
-
-async function handleDeleteRepo(id: string): Promise<void> {
-  removingRepoId = id;
-  try {
-    await deleteRepo(id);
-    repoPendingDelete = null;
-  } catch {
-    // The store restores optimistic state and shows the failure toast.
-  } finally {
-    removingRepoId = null;
-  }
-}
+const removal = new RepoRemoval();
 
 // The add-repo dialog lives in the sidebar; hand over to it rather than
 // stacking a second modal on this one.
@@ -72,12 +60,12 @@ function repoHint(repo: Repository): string | undefined {
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							disabled={removingRepoId === repo.id}
-							onclick={() => (repoPendingDelete = repo)}
+							disabled={removal.isRemoving(repo.id)}
+							onclick={() => removal.request(repo)}
 							aria-label="Remove {repo.fullName}"
 							title="Remove repository"
 						>
-							{#if removingRepoId === repo.id}
+							{#if removal.isRemoving(repo.id)}
 								<Spinner size={13} class="motion-essential-spin" />
 							{:else}
 								<Trash size={13} />
@@ -91,17 +79,11 @@ function repoHint(repo: Repository): string | undefined {
 </SettingsPane>
 
 <RepoDeleteConfirm
-	repo={repoPendingDelete}
-	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepoId === repoPendingDelete.id : false}
-	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || removingRepoId !== repoPendingDelete.id)) {
-			repoPendingDelete = null;
-		}
-	}}
-	onConfirm={() => {
-		if (repoPendingDelete) void handleDeleteRepo(repoPendingDelete.id);
-	}}
+	repo={removal.pending}
+	open={removal.pending !== null}
+	deleting={removal.deleting}
+	onOpenChange={removal.onOpenChange}
+	onConfirm={() => void removal.confirm()}
 />
 
 <style>
