@@ -93,7 +93,7 @@ from the DB on reconnect via the snapshot REST endpoints. The interface carries 
 the walkthrough emitter owns `bumpSeq` (durable wire cursor) and `nextSeq` (in-memory diagnostic)
 and stamps `seq` onto the envelope before it reaches the broadcaster.
 
-PR / repo / auth / thread / chat / recap / new-PR-session envelopes all flow through this same
+PR / repo / auth / thread / chat / recap envelopes all flow through this same
 SSE channel. Client-initiated sync requests are REST commands; server-to-client updates are
 `ServerEventMessage` envelopes broadcast by `Broadcaster`.
 

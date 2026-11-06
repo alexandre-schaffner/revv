@@ -6,7 +6,6 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import AddRepoDialog from "$lib/components/sidebar/AddRepoDialog.svelte";
 import AuthorFilter from "$lib/components/sidebar/AuthorFilter.svelte";
 import ProjectArchiveList from "$lib/components/sidebar/ProjectArchiveList.svelte";
-import ProjectDraftsList from "$lib/components/sidebar/ProjectDraftsList.svelte";
 import ProjectHeader from "$lib/components/sidebar/ProjectHeader.svelte";
 import ProjectPrList from "$lib/components/sidebar/ProjectPrList.svelte";
 import SearchFilter from "$lib/components/sidebar/SearchFilter.svelte";
@@ -366,7 +365,6 @@ function handleKeydown(e: KeyboardEvent) {
 
 			<div class="pr-list" bind:this={prListEl} onscroll={handlePrListScroll}>
 				{#if displayRepo}
-					<ProjectDraftsList repoId={displayRepo.id} />
 					<ProjectPrList repoId={displayRepo.id} />
 					<ProjectArchiveList repoId={displayRepo.id} />
 				{:else if !hasRepos}

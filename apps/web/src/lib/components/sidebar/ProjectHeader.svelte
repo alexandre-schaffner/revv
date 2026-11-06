@@ -1,25 +1,13 @@
 <script lang="ts">
 import type { Repository } from "@revv/shared";
 import CalendarDots from "phosphor-svelte/lib/CalendarDots";
-import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
 interface Props {
   repo: Repository | null;
-  onNewPr?: () => void;
 }
 
-let { repo, onNewPr }: Props = $props();
-
-// New-PR backend lands in a follow-up. Until then the button is disabled
-// with a tooltip explaining the gap, so the affordance is visible but
-// non-functional.
-const newPrEnabled = $derived(typeof onNewPr === "function" && repo !== null);
-
-function handleNewPr(): void {
-  if (!newPrEnabled) return;
-  onNewPr?.();
-}
+let { repo }: Props = $props();
 </script>
 
 <header class="project-header" data-active-repo={repo?.id ?? ""}>
@@ -44,27 +32,6 @@ function handleNewPr(): void {
 					</a>
 				</Tooltip.Trigger>
 				<Tooltip.Content side="bottom" sideOffset={6}>Daily &amp; weekly recaps</Tooltip.Content>
-			</Tooltip.Root>
-
-			<Tooltip.Root>
-				<Tooltip.Trigger>
-					<button
-						type="button"
-						class="new-pr-button"
-						class:new-pr-button--disabled={!newPrEnabled}
-						disabled={!newPrEnabled}
-						onclick={handleNewPr}
-						aria-label="Start a new pull request with the agent"
-					>
-						<GitPullRequest size={13} />
-						<span class="new-pr-label">New PR</span>
-					</button>
-				</Tooltip.Trigger>
-				<Tooltip.Content side="bottom" sideOffset={6} align="end">
-					{newPrEnabled
-						? 'Start a new PR. Chat with the agent in a worktree.'
-						: 'Coming soon: agent-driven PR creation.'}
-				</Tooltip.Content>
 			</Tooltip.Root>
 		</div>
 	{:else}
@@ -164,40 +131,5 @@ function handleNewPr(): void {
 
 	.header-link-label {
 		font-weight: 500;
-	}
-
-	.new-pr-button {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--spacing-island-half);
-		margin-left: auto;
-		padding: 4px 10px;
-		border: none;
-		border-radius: 6px;
-		background: var(--color-accent, var(--color-bg-elevated));
-		color: var(--color-accent-foreground, var(--color-text-primary));
-		font-size: 11px;
-		font-weight: 600;
-		cursor: pointer;
-		transition: filter var(--duration-snap), background-color var(--duration-snap);
-	}
-
-	.new-pr-button:hover:not(:disabled) {
-		filter: brightness(1.08);
-	}
-
-	.new-pr-button:focus-visible {
-		outline: 2px solid var(--color-accent);
-		outline-offset: 2px;
-	}
-
-	.new-pr-button--disabled {
-		background: var(--color-bg-elevated);
-		color: var(--color-text-muted);
-		cursor: not-allowed;
-	}
-
-	.new-pr-label {
-		line-height: 1;
 	}
 </style>

@@ -1,6 +1,6 @@
 // ── GitOps ───────────────────────────────────────────────────────────────
 //
-// Shared git command surface for the chat-push / new-PR-session flows, plus
+// Shared git command surface for the chat-push flow, plus
 // the small set of tagged errors that go with them. This is the Local Git
 // module seam for command shapes that don't need RepoCloneService worktree
 // acquisition: same git args, same timeouts, same security-conscious helpers
@@ -465,9 +465,6 @@ export async function isMergeInProgress(worktreePath: string): Promise<boolean> 
  * Used as:
  *   - The lease guard for force-with-lease pushes against an existing
  *     branch (chat flow).
- *   - The idempotency check before creating a new branch on the remote
- *     (new-PR flow): "if the ref already exists, the previous push
- *     succeeded — short-circuit to success".
  */
 export async function lsRemoteHead(
   clonePath: string,
@@ -525,8 +522,7 @@ export async function pushNewBranch(
  * `remote-changed` (re-fetch and ask the user how to proceed).
  *
  * Used by the chat-push flow when the agent commits land on top of the
- * PR's source branch. New-PR sessions don't use this (their branch is
- * brand new), but it lives here so both flows share one push module.
+ * PR's source branch.
  */
 export async function pushWithLease(
   worktreePath: string,

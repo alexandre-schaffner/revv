@@ -187,13 +187,6 @@ export {
   MENTION_PATH_PATTERN,
   type MentionTrigger,
 } from "./mentions";
-export type {
-  NewPrCommit,
-  NewPrMessage,
-  NewPrSession,
-  NewPrSessionSnapshot,
-  NewPrSessionStatus,
-} from "./new-pr-session";
 export type { GitPatchHeaderFile, PrDiffRenderOptions } from "./pierre-diffs";
 export {
   buildGitPatchHeader,

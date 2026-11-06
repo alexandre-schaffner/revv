@@ -226,7 +226,7 @@ so the frontend can reuse the walkthrough reducer code path — this is consiste
 
 **Rule.** Message type strings use colon-separated namespace and action segments. Segments are
 lowercase ASCII letters with hyphens between words. The namespace is the entity (`prs`, `thread`,
-`threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `new-pr-session`, `error`);
+`threads`, `walkthrough`, `repos`, `user`, `chat`, `recap`, `auth`, `error`);
 the action is the verb (`updated`, `created`, `sync-started`, `clone-status`, `question-resolved`).
 
 **Why.** Easy to grep, easy to scan, no Ambiguity-About-Casing arguments. Bonus: `:` is illegal

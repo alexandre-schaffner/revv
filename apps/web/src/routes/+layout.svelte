@@ -85,13 +85,8 @@ $effect(() => {
 // Re-runs only when selectedPrId changes, so a manual swipe-back to the
 // PR list while staying on /review/[prId] (Esc / 'h' / breadcrumb) is
 // not clobbered.
-//
-// New-PR chat sessions also live in files-mode: the left pane shows the
-// worktree file tree while the main pane hosts the agent chat.
 $effect(() => {
-  const id = getSelectedPrId();
-  const onNewPr = /^\/repo\/[^/]+\/new-pr\/[^/]+/.test(page.url.pathname);
-  setSidebarView(id || onNewPr ? "files" : "prs");
+  setSidebarView(getSelectedPrId() ? "files" : "prs");
 });
 
 $effect(() => {

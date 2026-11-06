@@ -7,13 +7,6 @@
 // REST endpoints instead of this stream.
 
 import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
-import type {
-  NewPrCommit,
-  NewPrMessage,
-  NewPrSession,
-  NewPrSessionSnapshot,
-  NewPrSessionStatus,
-} from "./new-pr-session";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
 import type { StackBriefStatus, StackMergeRun } from "./stacks";
 import type {
@@ -288,84 +281,6 @@ export interface RecapAddedEnvelope {
   data: { recap: ProjectRecap };
 }
 
-export interface NewPrSessionCreatedEnvelope {
-  type: "new-pr-session:created";
-  data: { snapshot: NewPrSessionSnapshot };
-}
-
-export interface NewPrSessionMessageAppendedEnvelope {
-  type: "new-pr-session:message-appended";
-  data: { sessionId: string; message: NewPrMessage };
-}
-
-export interface NewPrSessionAgentTurnStartedEnvelope {
-  type: "new-pr-session:agent-turn-started";
-  data: { sessionId: string; turnId: string };
-}
-
-export interface NewPrSessionAgentTurnEndedEnvelope {
-  type: "new-pr-session:agent-turn-ended";
-  data: {
-    sessionId: string;
-    turnId: string;
-    status: "completed" | "interrupted" | "error";
-    errorMessage?: string;
-  };
-}
-
-export interface NewPrSessionCommitRecordedEnvelope {
-  type: "new-pr-session:commit-recorded";
-  data: { sessionId: string; commit: NewPrCommit };
-}
-
-export interface NewPrSessionMetadataUpdatedEnvelope {
-  type: "new-pr-session:metadata-updated";
-  data: {
-    sessionId: string;
-    title?: string | null;
-    body?: string | null;
-  };
-}
-
-export interface NewPrSessionWorktreeChangedEnvelope {
-  type: "new-pr-session:worktree-changed";
-  data: { sessionId: string; changedPaths: ReadonlyArray<string> };
-}
-
-export interface NewPrSessionSyncedEnvelope {
-  type: "new-pr-session:synced";
-  data: { sessionId: string; newBaseSha: string };
-}
-
-export interface NewPrSessionSyncConflictedEnvelope {
-  type: "new-pr-session:sync-conflicted";
-  data: { sessionId: string; conflictedPaths: ReadonlyArray<string> };
-}
-
-export interface NewPrSessionStatusChangedEnvelope {
-  type: "new-pr-session:status-changed";
-  data: {
-    sessionId: string;
-    status: NewPrSessionStatus;
-    errorMessage?: string;
-  };
-}
-
-export interface NewPrSessionPrOpenedEnvelope {
-  type: "new-pr-session:pr-opened";
-  data: {
-    sessionId: string;
-    prId: string;
-    externalId: number;
-    url: string;
-  };
-}
-
-export interface NewPrSessionUpdatedEnvelope {
-  type: "new-pr-session:updated";
-  data: { session: NewPrSession };
-}
-
 export type ThreadEventMessage =
   | ThreadCreatedEnvelope
   | ThreadUpdatedEnvelope
@@ -398,16 +313,4 @@ export type ServerEventMessage =
   | PrsSyncSummaryEnvelope
   | ChatQuestionResolvedEnvelope
   | RecapStatusChangedEnvelope
-  | RecapAddedEnvelope
-  | NewPrSessionCreatedEnvelope
-  | NewPrSessionMessageAppendedEnvelope
-  | NewPrSessionAgentTurnStartedEnvelope
-  | NewPrSessionAgentTurnEndedEnvelope
-  | NewPrSessionCommitRecordedEnvelope
-  | NewPrSessionMetadataUpdatedEnvelope
-  | NewPrSessionWorktreeChangedEnvelope
-  | NewPrSessionSyncedEnvelope
-  | NewPrSessionSyncConflictedEnvelope
-  | NewPrSessionStatusChangedEnvelope
-  | NewPrSessionPrOpenedEnvelope
-  | NewPrSessionUpdatedEnvelope;
+  | RecapAddedEnvelope;

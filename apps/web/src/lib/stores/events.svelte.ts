@@ -386,22 +386,6 @@ function dispatch(msg: ServerEventMessage): void {
     case "recap:added":
       onRecapAdded(msg.data);
       break;
-    case "new-pr-session:created":
-    case "new-pr-session:message-appended":
-    case "new-pr-session:agent-turn-started":
-    case "new-pr-session:agent-turn-ended":
-    case "new-pr-session:commit-recorded":
-    case "new-pr-session:metadata-updated":
-    case "new-pr-session:worktree-changed":
-    case "new-pr-session:synced":
-    case "new-pr-session:sync-conflicted":
-    case "new-pr-session:status-changed":
-    case "new-pr-session:pr-opened":
-    case "new-pr-session:updated":
-      if (import.meta.env.DEV) {
-        console.debug("[events] new-pr-session envelope received", msg.type, msg.data);
-      }
-      break;
     default: {
       const _exhaustive: never = msg;
       console.warn("[events] unhandled message", (_exhaustive as { type: string }).type);
