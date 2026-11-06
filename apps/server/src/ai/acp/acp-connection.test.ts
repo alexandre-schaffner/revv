@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import {
+  acpErrorMessage,
   agentStartupFailureMessage,
   createSessionSelections,
   type SessionSelectionConnection,
@@ -24,6 +25,40 @@ describe("selectAcpAuthMethod", () => {
     expect(selectAcpAuthMethod("claude-code", [{ id: "api-key" }, { id: "oauth" }])).toBe(
       "api-key",
     );
+  });
+});
+
+describe("acpErrorMessage", () => {
+  it("names the cause the SDK tucks into data.details", () => {
+    expect(acpErrorMessage("Internal error", { details: "Model overloaded" })).toBe(
+      "Internal error: Model overloaded",
+    );
+  });
+
+  it("keeps a message that already carries the detail", () => {
+    expect(
+      acpErrorMessage("Internal error: You've hit your limit", {
+        details: "You've hit your limit",
+      }),
+    ).toBe("Internal error: You've hit your limit");
+  });
+
+  it("leaves other structured data, such as an adapter's errorKind, to the caller", () => {
+    expect(acpErrorMessage("Internal error", { errorKind: "billing_error" })).toBe(
+      "Internal error",
+    );
+  });
+
+  it("leaves the message alone when data is absent or empty", () => {
+    expect(acpErrorMessage("Internal error", undefined)).toBe("Internal error");
+    expect(acpErrorMessage("Internal error", {})).toBe("Internal error");
+    expect(acpErrorMessage("Internal error", { details: "  " })).toBe("Internal error");
+  });
+
+  it("clips a long detail", () => {
+    const message = acpErrorMessage("Internal error", { details: "x".repeat(2000) });
+    expect(message.length).toBeLessThan(600);
+    expect(message.endsWith("…")).toBe(true);
   });
 });
 
@@ -180,5 +215,41 @@ describe("createSessionSelections", () => {
     });
     await selections.setMode("s1", "plan");
     expect(calls).toEqual([{ method: "setSessionMode", modeId: "plan" }]);
+  });
+
+  const CLAUDE_MODES = [
+    { id: "default", name: "Default" },
+    { id: "acceptEdits", name: "Accept Edits" },
+    { id: "plan", name: "Plan" },
+    { id: "auto", name: "Auto" },
+  ];
+
+  it("moves a Claude session out of Auto mode into Revv's session mode", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, undefined, "claude-code");
+    const { modes } = await selections.adopt("s1", {
+      modes: { currentModeId: "auto", availableModes: CLAUDE_MODES },
+    });
+    expect(calls).toEqual([{ method: "setSessionMode", modeId: "default" }]);
+    expect(modes?.currentModeId).toBe("default");
+  });
+
+  it("leaves a Claude session already in Revv's session mode alone", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, undefined, "claude-code");
+    await selections.adopt("s1", {
+      modes: { currentModeId: "default", availableModes: CLAUDE_MODES },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps the starting mode of an agent with no session mode", async () => {
+    const { connection, calls } = recordingConnection();
+    const selections = createSessionSelections(connection, undefined, "codex");
+    const { modes } = await selections.adopt("s1", {
+      modes: { currentModeId: "auto", availableModes: [{ id: "auto", name: "Auto" }] },
+    });
+    expect(calls).toEqual([]);
+    expect(modes?.currentModeId).toBe("auto");
   });
 });
