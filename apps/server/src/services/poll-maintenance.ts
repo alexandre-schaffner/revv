@@ -107,7 +107,7 @@ export const refreshRepoMetadata = (
         (r) => cycle.repoToAccountId.get(r.id) ?? "unknown",
       );
       for (const [accountId, accountRepos] of reposByAccount) {
-        yield* deps.broadcaster.broadcastToAccount(accountId, {
+        yield* deps.realtime.toAccount(accountId, {
           type: "repos:updated",
           data: accountRepos,
         });
@@ -140,7 +140,7 @@ export const refreshAccountIdentities = (
     cycle.accountRows,
     (acc) =>
       Effect.gen(function* () {
-        const { db, github, broadcaster } = deps;
+        const { db, github, realtime } = deps;
         const live = cycle.liveAccount(acc, "core");
         if (!live) return;
         // ...ForHost, not the settings-derived variant: each account carries
@@ -210,7 +210,7 @@ export const refreshAccountIdentities = (
         // Broadcast scoped to this account's SSE clients so only the sessions
         // actually authenticated against `acc` see the avatar swap. The full
         // broadcast path would leak A's avatar to B.
-        yield* broadcaster.broadcastToAccount(acc.id, {
+        yield* realtime.toAccount(acc.id, {
           type: "user:updated",
           data: {
             id: userRow.id,

@@ -12,7 +12,6 @@ import {
   type WorktreeBlockedByUnpushedCommits,
 } from "../domain/errors";
 import { debug, logError } from "../logger";
-import { Broadcaster } from "./Broadcaster";
 import {
   assertSafeManagedClonePath,
   CLONE_BASE_DIR,
@@ -36,6 +35,7 @@ import {
   runGitCapture,
   runGitCloneWithTimeout,
 } from "./git-runner";
+import { Realtime } from "./Realtime";
 import { TokenProvider } from "./TokenProvider";
 
 /** Maximum time to wait for a git clone to complete. */
@@ -496,7 +496,7 @@ export const RepoCloneServiceLive = Layer.effect(
   RepoCloneService,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const tokenProvider = yield* TokenProvider;
 
     // Install the signal handlers eagerly so even an early crash (before
@@ -646,7 +646,7 @@ export const RepoCloneServiceLive = Layer.effect(
 
                     debug("repo-clone", `clone ready for ${repo.fullName} at ${cloneDir}`);
 
-                    yield* broadcaster.broadcastToAccount(accountId, {
+                    yield* realtime.toAccount(accountId, {
                       type: "repos:clone-status",
                       data: { repoId: repo.id, status: "ready" },
                     });
@@ -678,7 +678,7 @@ export const RepoCloneServiceLive = Layer.effect(
                     // happens to be disconnected at the moment of failure).
                     logError("repo-clone", `clone failed for ${repo.fullName}: ${errorMessage}`);
 
-                    yield* broadcaster.broadcastToAccount(accountId, {
+                    yield* realtime.toAccount(accountId, {
                       type: "repos:clone-status",
                       data: {
                         repoId: repo.id,
@@ -727,7 +727,7 @@ export const RepoCloneServiceLive = Layer.effect(
               })
               .where(eq(repositories.id, repo.id))
               .run();
-            await broadcaster.broadcastToAccount(accountId, {
+            await realtime.toAccount(accountId, {
               type: "repos:clone-status",
               data: { repoId: repo.id, status: "error", error },
             });
@@ -763,7 +763,7 @@ export const RepoCloneServiceLive = Layer.effect(
             })
             .where(eq(repositories.id, repo.id))
             .run();
-          await broadcaster.broadcastToAccount(accountId, {
+          await realtime.toAccount(accountId, {
             type: "repos:clone-status",
             data: { repoId: repo.id, status: "ready" },
           });

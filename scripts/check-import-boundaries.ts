@@ -46,6 +46,16 @@ const gitRunnerAllowedImporters = new Set([
   "apps/server/src/services/GitOps.ts",
 ]);
 
+// ── Realtime boundary ───────────────────────────────────────────────────────
+// `Broadcaster` only moves bytes to connected clients. Features address a push
+// through `Realtime`, which resolves the receiving account in one place.
+const broadcasterModule = "apps/server/src/services/Broadcaster";
+const broadcasterAllowedImporters = new Set([
+  "apps/server/src/services/Realtime.ts",
+  "apps/server/src/services/AppLayer.ts",
+  "apps/server/src/routes/events.ts",
+]);
+
 function listTsFiles(dir: string): string[] {
   const entries = readdirSync(dir);
   const files: string[] = [];
@@ -93,6 +103,14 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
       identityForbiddenImports.has(target)
     ) {
       violations.push(`${rel} imports ${specifier}; use Identity instead`);
+    }
+
+    if (
+      target === broadcasterModule &&
+      !broadcasterAllowedImporters.has(rel) &&
+      !/\.test\.ts$/.test(rel)
+    ) {
+      violations.push(`${rel} imports ${specifier}; send pushes through Realtime`);
     }
 
     if (target === gitRunnerModule && !gitRunnerAllowedImporters.has(rel)) {

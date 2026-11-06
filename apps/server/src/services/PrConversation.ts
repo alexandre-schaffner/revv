@@ -32,7 +32,6 @@ import {
 } from "../domain/errors";
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import {
   fetchCheckDetails,
@@ -48,6 +47,7 @@ import { runWrite } from "./conversation/writes";
 import type { DbService } from "./Db";
 import type { GitHubEtagCache } from "./GitHubEtagCache";
 import { type PrContextBasic, type PrContextError, PrContextService } from "./PrContext";
+import { Realtime } from "./Realtime";
 import { RemoteUserService } from "./RemoteUser";
 
 const CACHE_NS = "pr-conversation";
@@ -169,7 +169,7 @@ export const PrConversationServiceLive = Layer.effect(
     const prContext = yield* PrContextService;
     const cache = yield* CacheService;
     const remoteUsers = yield* RemoteUserService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
 
     const resolveAvatars = (logins: Iterable<string>) => remoteUsers.getAvatarContents([...logins]);
 
@@ -302,7 +302,7 @@ export const PrConversationServiceLive = Layer.effect(
             }),
           ),
         );
-        yield* broadcaster.broadcastToAccount(accountId, {
+        yield* realtime.toAccount(accountId, {
           type: "pr:conversation-updated",
           data: { prId, fetchedAt: conversation?.fetchedAt ?? null },
         });

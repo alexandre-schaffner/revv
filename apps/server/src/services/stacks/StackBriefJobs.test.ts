@@ -9,9 +9,9 @@ import {
 } from "../../ai/providers/stack-brief-tools";
 import { createDb, type Db } from "../../db/index";
 import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
-import { Broadcaster } from "../Broadcaster";
 import { DbService } from "../Db";
 import { PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { StackBriefJobs, StackBriefJobsLive } from "./StackBriefJobs";
 import { StackService } from "./StackService";
@@ -64,15 +64,17 @@ function seedBrief(db: Db, id: string, resumeAttempts = 0): StackBriefToolContex
 
 function resume(db: Db) {
   const events: ServerEventMessage[] = [];
+  const record = (msg: ServerEventMessage) =>
+    Effect.sync(() => {
+      events.push(msg);
+    });
   const deps = Layer.mergeAll(
     Layer.succeed(DbService, { db }),
-    Layer.succeed(Broadcaster, {
-      register: () => Effect.succeed(() => undefined),
-      broadcastToAccount: (_accountId: string, msg: ServerEventMessage) =>
-        Effect.sync(() => {
-          events.push(msg);
-        }),
-      broadcastAll: () => Effect.void,
+    Layer.succeed(Realtime, {
+      toAccount: (_accountId, msg) => record(msg),
+      toRepo: (_repoId, msg) => record(msg),
+      toPr: (_prId, msg) => record(msg),
+      toAll: () => Effect.void,
     }),
     Layer.succeed(PrContextService, {
       getAccountIdForRepo: () => Effect.succeed("acct-1"),

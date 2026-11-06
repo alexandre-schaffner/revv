@@ -3,18 +3,12 @@ import { THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
 import { Cause, Context, Duration, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { repositories } from "../db/schema";
 import { pullRequests } from "../db/schema/pull-requests";
-import {
-  DbError,
-  type GitHubAuthError,
-  type GitHubError,
-  type NotFoundError,
-  type ValidationError,
-} from "../domain/errors";
+import type { DbError, GitHubAuthError, GitHubError, NotFoundError } from "../domain/errors";
+import { dbTry } from "../effects/db-try";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb as withDbHelper } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
-import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubGateway } from "./GitHub";
@@ -22,7 +16,6 @@ import { GitHubEtagCache } from "./GitHubEtagCache";
 import { apiBaseForHost } from "./github-rest";
 import { PullRequestService } from "./PullRequest";
 import {
-  broadcastToAccount as broadcastToAccountWith,
   type GitHubInfra,
   makeAccountPauses,
   openSyncCycle,
@@ -45,6 +38,7 @@ import {
   syncRepoOpenPrs,
 } from "./poll-open-prs";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
+import { Realtime } from "./Realtime";
 import { RemoteUserService } from "./RemoteUser";
 import { RepoCloneService } from "./RepoClone";
 import { RepositoryService } from "./Repository";
@@ -85,7 +79,7 @@ type PollSchedulerService = {
    */
   readonly refreshPr: (
     prId: string,
-  ) => Effect.Effect<void, NotFoundError | ValidationError | GitHubAuthError | GitHubError>;
+  ) => Effect.Effect<void, NotFoundError | DbError | GitHubAuthError | GitHubError>;
   readonly syncThreadsNow: (prId: string) => Effect.Effect<void>;
 };
 
@@ -156,7 +150,7 @@ export const PollSchedulerLive = Layer.effect(
   PollScheduler,
   Effect.gen(function* () {
     // Capture all dependencies once at layer construction time
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const github = yield* GitHubGateway;
     const prService = yield* PullRequestService;
     const diffCache = yield* DiffCacheService;
@@ -169,7 +163,7 @@ export const PollSchedulerLive = Layer.effect(
     const { db } = yield* DbService;
     const deps: PollDeps = {
       db,
-      broadcaster,
+      realtime,
       github,
       prService,
       remoteUserService: yield* RemoteUserService,
@@ -220,10 +214,6 @@ export const PollSchedulerLive = Layer.effect(
     // The first periodic sync is used as baseline — we don't know what
     // changed vs the prior server run, so we skip notifications for it.
     const hasPeriodicSyncedOnceRef = yield* Ref.make(false);
-    const broadcastGlobal = (msg: ServerEventMessage) =>
-      broadcaster.broadcastAll(msg).pipe(Effect.orElseSucceed(() => undefined));
-    const broadcastToAccount = (accountId: string, msg: ServerEventMessage) =>
-      broadcastToAccountWith(deps, accountId, msg);
 
     /**
      * Fan a data-bearing sync envelope out to every account with repos, one
@@ -236,7 +226,7 @@ export const PollSchedulerLive = Layer.effect(
       accountIds: readonly string[],
       msg: (accountId: string) => ServerEventMessage,
     ): Effect.Effect<void> =>
-      Effect.forEach(accountIds, (id) => broadcastToAccount(id, msg(id)), {
+      Effect.forEach(accountIds, (id) => realtime.toAccount(id, msg(id)), {
         discard: true,
       });
 
@@ -257,7 +247,7 @@ export const PollSchedulerLive = Layer.effect(
         (accountId) =>
           Effect.gen(function* () {
             const accountPrs = yield* withDb(prService.listPrs(accountId));
-            yield* broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+            yield* realtime.toAccount(accountId, { type: "prs:updated", data: accountPrs });
           }),
         { discard: true },
       );
@@ -285,15 +275,12 @@ export const PollSchedulerLive = Layer.effect(
       GitHubInfra
     > =>
       Effect.gen(function* () {
-        const diffStatsHeadRows = yield* Effect.try({
-          try: () =>
-            db
-              .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
-              .from(pullRequests)
-              .all(),
-          catch: (cause) =>
-            new DbError({ message: "Failed to read PR diff-stat watermarks", cause }),
-        });
+        const diffStatsHeadRows = yield* dbTry("read PR diff-stat watermarks", () =>
+          db
+            .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
+            .from(pullRequests)
+            .all(),
+        );
 
         const liveRepoIds = new Set(allRepos.map((r) => r.id));
         for (const repoId of listedSignatures.keys()) {
@@ -386,7 +373,13 @@ export const PollSchedulerLive = Layer.effect(
           if (!isTrustedHeadShaMove(existing, pr)) return Effect.void;
           return walkthroughJobs
             .supersedeForPr(pr.id, pr.headSha)
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() =>
+                  logError("PollScheduler", "walkthrough supersede failed:", err.message),
+                ),
+              ),
+            );
         },
         { discard: true },
       );
@@ -559,7 +552,7 @@ export const PollSchedulerLive = Layer.effect(
           }),
         ),
         Effect.catchCause((cause) =>
-          broadcastGlobal({
+          realtime.toAll({
             type: "error",
             data: { code: "SYNC_ERROR", message: String(cause) },
           }),
@@ -615,7 +608,7 @@ export const PollSchedulerLive = Layer.effect(
       prId: string,
     ): Effect.Effect<
       void,
-      NotFoundError | ValidationError | GitHubAuthError | GitHubError,
+      NotFoundError | DbError | GitHubAuthError | GitHubError,
       DbService | GitHubEtagCache | SettingsService
     > =>
       Effect.gen(function* () {
@@ -650,11 +643,17 @@ export const PollSchedulerLive = Layer.effect(
         if (headMoved && row.headSha !== null) {
           yield* walkthroughJobs
             .supersedeForPr(prId, row.headSha)
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() =>
+                  logError("PollScheduler", "walkthrough supersede failed:", err.message),
+                ),
+              ),
+            );
         }
 
         if (row.status !== "open") {
-          yield* broadcastToAccount(accountId, {
+          yield* realtime.toAccount(accountId, {
             type: "pr:archived",
             data: {
               prId: row.id,
@@ -666,7 +665,7 @@ export const PollSchedulerLive = Layer.effect(
         }
 
         const accountPrs = yield* withDb(prService.listPrs(accountId));
-        yield* broadcastToAccount(accountId, { type: "prs:updated", data: accountPrs });
+        yield* realtime.toAccount(accountId, { type: "prs:updated", data: accountPrs });
       });
 
     // ── Thread sync loop ──────────────────────────────────────────────────
@@ -757,7 +756,7 @@ export const PollSchedulerLive = Layer.effect(
       }
     }).pipe(
       Effect.catchCause((cause) =>
-        broadcastGlobal({
+        realtime.toAll({
           type: "error",
           data: { code: "THREAD_SYNC_ERROR", message: String(cause) },
         }),
@@ -881,21 +880,9 @@ export const PollSchedulerLive = Layer.effect(
               [detail, defectStr, pretty].filter(Boolean).join("\n"),
             );
             const userMessage = detail ?? "Unknown error";
-            return Effect.gen(function* () {
-              const prRow = yield* withDb(prService.getPr(prId)).pipe(
-                Effect.catch(() => Effect.succeed(null)),
-              );
-              if (!prRow) return;
-              const accountId = yield* withDb(
-                repoService.getAccountIdForRepo(prRow.repositoryId),
-              ).pipe(Effect.catch(() => Effect.succeed(null)));
-              if (!accountId) return;
-              yield* broadcaster
-                .broadcastToAccount(accountId, {
-                  type: "threads:sync-error",
-                  data: { prId, message: userMessage },
-                })
-                .pipe(Effect.orElseSucceed(() => undefined));
+            return realtime.toPr(prId, {
+              type: "threads:sync-error",
+              data: { prId, message: userMessage },
             });
           }),
         ),

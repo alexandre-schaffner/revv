@@ -6,21 +6,22 @@ import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import {
-  DbError,
+  type DbError,
   type GitHubError,
   GitHubNetworkError,
   GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
 import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
-import { Broadcaster } from "../Broadcaster";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
 import { readCurrentHeadFiles } from "../DiffCache";
 import { githubGraphql, githubGraphqlPartial, withSchemaFallback } from "../github-rest";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
 import { fingerprintFiles, stackSignature } from "./fingerprint";
 import {
   type GitHubStack,
@@ -151,114 +152,111 @@ export function readStackFacts(
 ): Effect.Effect<RevvStackFacts, DbError, DbService> {
   return Effect.gen(function* () {
     const { db } = yield* DbService;
-    return yield* Effect.try({
-      try: (): RevvStackFacts => {
-        const numbers = stack.layers.map((l) => l.number);
-        const prRows = db
+    return yield* dbTry("stack facts read", (): RevvStackFacts => {
+      const numbers = stack.layers.map((l) => l.number);
+      const prRows = db
+        .select({
+          id: pullRequests.id,
+          externalId: pullRequests.externalId,
+          headSha: pullRequests.headSha,
+        })
+        .from(pullRequests)
+        .where(
+          and(
+            eq(pullRequests.repositoryId, repositoryId),
+            inArray(pullRequests.externalId, numbers),
+          ),
+        )
+        .all();
+      const prIds = prRows.map((r) => r.id);
+
+      const wtRows =
+        prIds.length === 0
+          ? []
+          : db
+              .select({
+                id: walkthroughs.id,
+                prId: walkthroughs.pullRequestId,
+                status: walkthroughs.status,
+                phase: walkthroughs.lastCompletedPhase,
+                completedAt: walkthroughs.completedAt,
+                prHeadSha: walkthroughs.prHeadSha,
+                riskLevel: walkthroughs.riskLevel,
+                summary: walkthroughs.summary,
+                stackContext: walkthroughs.stackContext,
+                diffFingerprint: walkthroughs.diffFingerprint,
+                carriedFrom: walkthroughs.carriedFromWalkthroughId,
+              })
+              .from(walkthroughs)
+              .where(inArray(walkthroughs.pullRequestId, prIds))
+              .orderBy(desc(walkthroughs.generatedAt))
+              .all();
+
+      const wtIds = wtRows.map((w) => w.id);
+      const issueCounts = new Map<string, { open: number; critical: number }>();
+      if (wtIds.length > 0) {
+        const counts = db
           .select({
-            id: pullRequests.id,
-            externalId: pullRequests.externalId,
-            headSha: pullRequests.headSha,
+            walkthroughId: walkthroughIssues.walkthroughId,
+            open: sql<number>`count(*)`,
+            critical: sql<number>`sum(case when ${walkthroughIssues.severity} = 'critical' then 1 else 0 end)`,
           })
-          .from(pullRequests)
+          .from(walkthroughIssues)
           .where(
             and(
-              eq(pullRequests.repositoryId, repositoryId),
-              inArray(pullRequests.externalId, numbers),
+              inArray(walkthroughIssues.walkthroughId, wtIds),
+              eq(walkthroughIssues.resolutionStatus, "open"),
             ),
           )
+          .groupBy(walkthroughIssues.walkthroughId)
           .all();
-        const prIds = prRows.map((r) => r.id);
-
-        const wtRows =
-          prIds.length === 0
-            ? []
-            : db
-                .select({
-                  id: walkthroughs.id,
-                  prId: walkthroughs.pullRequestId,
-                  status: walkthroughs.status,
-                  phase: walkthroughs.lastCompletedPhase,
-                  completedAt: walkthroughs.completedAt,
-                  prHeadSha: walkthroughs.prHeadSha,
-                  riskLevel: walkthroughs.riskLevel,
-                  summary: walkthroughs.summary,
-                  stackContext: walkthroughs.stackContext,
-                  diffFingerprint: walkthroughs.diffFingerprint,
-                  carriedFrom: walkthroughs.carriedFromWalkthroughId,
-                })
-                .from(walkthroughs)
-                .where(inArray(walkthroughs.pullRequestId, prIds))
-                .orderBy(desc(walkthroughs.generatedAt))
-                .all();
-
-        const wtIds = wtRows.map((w) => w.id);
-        const issueCounts = new Map<string, { open: number; critical: number }>();
-        if (wtIds.length > 0) {
-          const counts = db
-            .select({
-              walkthroughId: walkthroughIssues.walkthroughId,
-              open: sql<number>`count(*)`,
-              critical: sql<number>`sum(case when ${walkthroughIssues.severity} = 'critical' then 1 else 0 end)`,
-            })
-            .from(walkthroughIssues)
-            .where(
-              and(
-                inArray(walkthroughIssues.walkthroughId, wtIds),
-                eq(walkthroughIssues.resolutionStatus, "open"),
-              ),
-            )
-            .groupBy(walkthroughIssues.walkthroughId)
-            .all();
-          for (const c of counts) {
-            issueCounts.set(c.walkthroughId, { open: c.open, critical: c.critical ?? 0 });
-          }
+        for (const c of counts) {
+          issueCounts.set(c.walkthroughId, { open: c.open, critical: c.critical ?? 0 });
         }
+      }
 
-        const filesByPr = readCurrentHeadFiles(db, prIds);
+      const filesByPr = readCurrentHeadFiles(db, prIds);
 
-        const toFact = (w: (typeof wtRows)[number]): WalkthroughFact => {
-          const counts = issueCounts.get(w.id);
-          return {
-            id: w.id,
-            status: w.status,
-            prHeadSha: w.prHeadSha,
-            riskLevel: (w.riskLevel as RiskLevel | null) ?? null,
-            summary: w.summary,
-            openIssues: counts?.open ?? 0,
-            criticalIssues: counts?.critical ?? 0,
-            stackContext: w.stackContext,
-            fingerprint: w.diffFingerprint,
-            carried: w.carriedFrom !== null,
-          };
-        };
-
-        const tracked = new Map<number, TrackedLayer>();
-        for (const pr of prRows) {
-          const rows = wtRows.filter((w) => w.prId === pr.id);
-          const current = rows.find((w) => w.status !== "superseded" && w.prHeadSha === pr.headSha);
-          const latestComplete = rows.find(isCompleteReview);
-          const files = filesByPr.get(pr.id);
-          tracked.set(pr.externalId, {
-            prId: pr.id,
-            currentFingerprint: files
-              ? fingerprintFiles(
-                  files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
-                )
-              : null,
-            files: files ? files.map((f) => f.path) : null,
-            current: current ? toFact(current) : null,
-            latestComplete: latestComplete ? toFact(latestComplete) : null,
-          });
-        }
-
+      const toFact = (w: (typeof wtRows)[number]): WalkthroughFact => {
+        const counts = issueCounts.get(w.id);
         return {
-          repositoryId,
-          tracked,
-          brief: readBrief(db, repositoryId, stack),
+          id: w.id,
+          status: w.status,
+          prHeadSha: w.prHeadSha,
+          riskLevel: (w.riskLevel as RiskLevel | null) ?? null,
+          summary: w.summary,
+          openIssues: counts?.open ?? 0,
+          criticalIssues: counts?.critical ?? 0,
+          stackContext: w.stackContext,
+          fingerprint: w.diffFingerprint,
+          carried: w.carriedFrom !== null,
         };
-      },
-      catch: (cause) => new DbError({ message: "stack facts read failed", cause }),
+      };
+
+      const tracked = new Map<number, TrackedLayer>();
+      for (const pr of prRows) {
+        const rows = wtRows.filter((w) => w.prId === pr.id);
+        const current = rows.find((w) => w.status !== "superseded" && w.prHeadSha === pr.headSha);
+        const latestComplete = rows.find(isCompleteReview);
+        const files = filesByPr.get(pr.id);
+        tracked.set(pr.externalId, {
+          prId: pr.id,
+          currentFingerprint: files
+            ? fingerprintFiles(
+                files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
+              )
+            : null,
+          files: files ? files.map((f) => f.path) : null,
+          current: current ? toFact(current) : null,
+          latestComplete: latestComplete ? toFact(latestComplete) : null,
+        });
+      }
+
+      return {
+        repositoryId,
+        tracked,
+        brief: readBrief(db, repositoryId, stack),
+      };
     });
   });
 }
@@ -269,37 +267,35 @@ function readMirror(
 ): Effect.Effect<MirroredLayer[], DbError, DbService> {
   return Effect.gen(function* () {
     const { db } = yield* DbService;
-    return yield* Effect.try({
-      try: () =>
-        db
-          .select({
-            number: pullRequests.externalId,
-            position: pullRequests.stackPosition,
-            title: pullRequests.title,
-            url: pullRequests.url,
-            status: pullRequests.status,
-            isDraft: pullRequests.isDraft,
-            sourceBranch: pullRequests.sourceBranch,
-            targetBranch: pullRequests.targetBranch,
-            headSha: pullRequests.headSha,
-            additions: pullRequests.additions,
-            deletions: pullRequests.deletions,
-            changedFiles: pullRequests.changedFiles,
-            authorLogin: pullRequests.authorLogin,
-            closedAt: pullRequests.closedAt,
-            fetchedAt: pullRequests.fetchedAt,
-          })
-          .from(pullRequests)
-          .where(
-            and(
-              eq(pullRequests.repositoryId, repositoryId),
-              eq(pullRequests.stackNumber, stackNumber),
-            ),
-          )
-          .all()
-          .flatMap((row) => (row.position === null ? [] : [{ ...row, position: row.position }])),
-      catch: (cause) => new DbError({ message: "stack mirror read failed", cause }),
-    });
+    return yield* dbTry("stack mirror read", () =>
+      db
+        .select({
+          number: pullRequests.externalId,
+          position: pullRequests.stackPosition,
+          title: pullRequests.title,
+          url: pullRequests.url,
+          status: pullRequests.status,
+          isDraft: pullRequests.isDraft,
+          sourceBranch: pullRequests.sourceBranch,
+          targetBranch: pullRequests.targetBranch,
+          headSha: pullRequests.headSha,
+          additions: pullRequests.additions,
+          deletions: pullRequests.deletions,
+          changedFiles: pullRequests.changedFiles,
+          authorLogin: pullRequests.authorLogin,
+          closedAt: pullRequests.closedAt,
+          fetchedAt: pullRequests.fetchedAt,
+        })
+        .from(pullRequests)
+        .where(
+          and(
+            eq(pullRequests.repositoryId, repositoryId),
+            eq(pullRequests.stackNumber, stackNumber),
+          ),
+        )
+        .all()
+        .flatMap((row) => (row.position === null ? [] : [{ ...row, position: row.position }])),
+    );
   });
 }
 
@@ -367,7 +363,7 @@ export const StackServiceLive = Layer.effect(
     const { db } = yield* DbService;
     const prContext = yield* PrContextService;
     const cache = yield* CacheService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const revalidating = new Set<string>();
 
     const fetchFresh = (ctx: PrContextBasic) =>
@@ -391,7 +387,7 @@ export const StackServiceLive = Layer.effect(
       return fetchFresh(ctx).pipe(
         Effect.flatMap((stack) =>
           stack
-            ? broadcaster.broadcastToAccount(accountId, {
+            ? realtime.toAccount(accountId, {
                 type: "stack:updated",
                 data: { repositoryId: ctx.repo.id, stackNumber: stack.number },
               })

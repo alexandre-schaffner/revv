@@ -46,19 +46,27 @@
 //     `pr-{N}` checkout and the user can decide what to do.
 
 import { ACP_AGENT_IDS, type AgentProgressFrame } from "@revv/shared";
-import { Context, Data, Effect, Layer, Queue } from "effect";
+import { Context, Effect, Layer, Queue } from "effect";
 import { CHAT_IDLE_TIMEOUT_MS } from "../ai/agent-stream";
 import {
   type AiError,
+  ChatStreamingConflictError,
   type ConcurrentPushError,
+  type DbError,
+  DirtyWorktreeError,
   GitHubAuthError,
   type GitHubError,
+  GitOperationError,
+  InvalidBranchNameError,
+  NoChangesError,
+  NoChatSessionError,
   type NotFoundError,
+  PushRejectedError,
+  type RefAlreadyExistsError,
 } from "../domain/errors";
 import { logError } from "../logger";
 import { AiService } from "./Ai";
 import { pumpAgentFrames, queueToStream } from "./agent-frame-pump";
-import { Broadcaster } from "./Broadcaster";
 import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
 import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
@@ -77,19 +85,15 @@ import {
   fetchRefspec,
   forceBranchTo,
   forceBranchToBestEffort,
-  GitOperationError,
-  InvalidBranchNameError,
   isMergeInProgress,
   isValidSha,
   lsRemoteHead,
   merge as mergeBranch,
-  PushRejectedError,
   proposedCommitCount,
   proposedCommitShas,
   pushFastForward,
   pushNewBranch,
   pushWithLease,
-  type RefAlreadyExistsError,
   rebaseOnto,
   redactGitAuth,
   resolveProposedBaseSha,
@@ -102,46 +106,16 @@ import { PrContextService } from "./PrContext";
 import { PrPushLockService } from "./PrPushLock";
 import { PullRequestService } from "./PullRequest";
 import { makePrHeadRefresh } from "./pr-head-refresh";
+import { Realtime } from "./Realtime";
 import { SettingsService } from "./Settings";
 
-export { ConcurrentPushError } from "../domain/errors";
 // The lease a chat turn holds on its worktree, re-exported so the chat route
 // can type the handle this service hands it without reaching past the service.
 export type { ChatStreamLease } from "./chat-stream-leases";
 
-// Re-export the GitOps errors so existing callers that destructured them
-// from this module keep working without import churn.
-export {
-  GitOperationError,
-  InvalidBranchNameError,
-  PushRejectedError,
-  RefAlreadyExistsError,
-} from "./GitOps";
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const resolveGitHost = Effect.flatMap(SettingsService, (s) => s.githubHost());
-
-// ── Errors ──────────────────────────────────────────────────────────────────
-
-export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
-  readonly message: string;
-}> {}
-
-export class ChatStreamingConflictError extends Data.TaggedError("ChatStreamingConflictError")<{
-  readonly prId: string;
-}> {}
-
-export class NoChangesError extends Data.TaggedError("NoChangesError")<{
-  readonly prId: string;
-}> {}
-
-export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
-  readonly prId: string;
-}> {}
-
-// GitOperationError, PushRejectedError, RefAlreadyExistsError, and
-// InvalidBranchNameError are defined in `./GitOps` and re-exported above.
 
 export type ChatPushError =
   | DirtyWorktreeError
@@ -156,7 +130,8 @@ export type ChatPushError =
   | NotFoundError
   | GitHubAuthError
   | GitHubError
-  | AiError;
+  | AiError
+  | DbError;
 
 // ── Result shape ─────────────────────────────────────────────────────────────
 
@@ -272,11 +247,11 @@ export const ChatChangesPushServiceLive = Layer.effect(
   Effect.gen(function* () {
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const prService = yield* PullRequestService;
     const ai = yield* AiService;
     const pushLock = yield* PrPushLockService;
-    const headRefresh = makePrHeadRefresh({ prService, prCtx, broadcaster });
+    const headRefresh = makePrHeadRefresh({ prService, prCtx, realtime });
 
     // Worktree claims held by in-flight chat turns. The expiry is the agent's
     // own chat idle deadline, deliberately the same constant the chat stream

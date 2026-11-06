@@ -11,14 +11,15 @@ import {
 } from "../../ai/providers/stack-brief-tools";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
-import { DbError } from "../../domain/errors";
+import type { DbError } from "../../domain/errors";
+import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";
-import { Broadcaster } from "../Broadcaster";
 import { DbService } from "../Db";
 import { analyzeJobFailure } from "../job-failure";
 import { makeStartJobMutex } from "../job-mutex";
 import { PrContextService } from "../PrContext";
+import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import { makeSessionTokenStore } from "../session-token-store";
 import { resolveWalkthroughLaunch } from "../walkthrough-job-context";
@@ -100,7 +101,7 @@ export const StackBriefJobsLive = Layer.effect(
   StackBriefJobs,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const prCtx = yield* PrContextService;
     const settingsService = yield* SettingsService;
     const stacks = yield* StackService;
@@ -110,25 +111,16 @@ export const StackBriefJobsLive = Layer.effect(
     const stackMutex = yield* makeStartJobMutex();
     const sessions = yield* makeSessionTokenStore<StackBriefToolContext>(SESSION_TOKEN_TTL_MS);
 
-    const dbTry = <A>(message: string, run: () => A): Effect.Effect<A, DbError> =>
-      Effect.try({ try: run, catch: (cause) => new DbError({ message, cause }) });
-
     const announce = (
       repositoryId: string,
       stackNumber: number,
       briefId: string,
       status: StackBriefStatus,
     ): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const accountId = yield* withDb(db, prCtx.getAccountIdForRepo(repositoryId));
-        yield* broadcaster.broadcastToAccount(accountId, {
-          type: "stack-brief:status-changed",
-          data: { repositoryId, stackNumber, briefId, status },
-        });
-      }).pipe(
-        Effect.timeout("5 seconds"),
-        Effect.catch(() => Effect.void),
-      );
+      realtime.toRepo(repositoryId, {
+        type: "stack-brief:status-changed",
+        data: { repositoryId, stackNumber, briefId, status },
+      });
 
     const finish = (
       briefId: string,
@@ -136,7 +128,7 @@ export const StackBriefJobsLive = Layer.effect(
       options: { readonly modelUsed?: string; readonly errorMessage?: string } = {},
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const [moved] = yield* dbTry("stack brief status update failed", () =>
+        const [moved] = yield* dbTry("stack brief status update", () =>
           db
             .update(stackBriefs)
             .set({
@@ -171,7 +163,7 @@ export const StackBriefJobsLive = Layer.effect(
 
     const runJob = (job: ActiveBriefJob): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        const row = yield* dbTry("stack brief read failed", () =>
+        const row = yield* dbTry("stack brief read", () =>
           db.select().from(stackBriefs).where(eq(stackBriefs.id, job.briefId)).get(),
         );
         if (row?.status !== "generating") return;
@@ -241,7 +233,7 @@ export const StackBriefJobsLive = Layer.effect(
         if (job.superseded) return;
         const blocker = outcome.validated
           ? null
-          : yield* dbTry("stack brief completion check failed", () =>
+          : yield* dbTry("stack brief completion check", () =>
               stackBriefCompletionBlocker(db, job.briefId),
             );
         if (blocker === null) {
@@ -318,7 +310,7 @@ export const StackBriefJobsLive = Layer.effect(
         const mutex = yield* stackMutex.acquire(`${repositoryId}:${stack.number}`);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
-            const active = yield* dbTry("stack brief lookup failed", () =>
+            const active = yield* dbTry("stack brief lookup", () =>
               db
                 .select({
                   id: stackBriefs.id,
@@ -341,7 +333,7 @@ export const StackBriefJobsLive = Layer.effect(
               return current.id;
             }
 
-            const tracked = yield* dbTry("stack layer read failed", () =>
+            const tracked = yield* dbTry("stack layer read", () =>
               db
                 .select({
                   id: pullRequests.id,
@@ -367,7 +359,7 @@ export const StackBriefJobsLive = Layer.effect(
 
             const briefId = randomUUID();
             const retired = active.map((b) => b.id);
-            yield* dbTry("stack brief create failed", () =>
+            yield* dbTry("stack brief create", () =>
               db.transaction(() => {
                 if (retired.length > 0) {
                   db.update(stackBriefs)
@@ -403,7 +395,7 @@ export const StackBriefJobsLive = Layer.effect(
 
     const resumePending = (): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const rows = yield* dbTry("stack brief resume scan failed", () =>
+        const rows = yield* dbTry("stack brief resume scan", () =>
           db
             .select({ id: stackBriefs.id, attempts: stackBriefs.resumeAttempts })
             .from(stackBriefs)
@@ -412,7 +404,7 @@ export const StackBriefJobsLive = Layer.effect(
         );
         debug("stack-brief", `resumePending: ${rows.length} row(s)`);
         for (const row of rows) {
-          const blocker = yield* dbTry("stack brief completion check failed", () =>
+          const blocker = yield* dbTry("stack brief completion check", () =>
             stackBriefCompletionBlocker(db, row.id),
           );
           if (blocker === null) {
@@ -420,7 +412,7 @@ export const StackBriefJobsLive = Layer.effect(
             continue;
           }
           const attempts = row.attempts + 1;
-          yield* dbTry("stack brief resume count failed", () =>
+          yield* dbTry("stack brief resume count", () =>
             db
               .update(stackBriefs)
               .set({ resumeAttempts: attempts })

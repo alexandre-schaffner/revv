@@ -40,13 +40,13 @@ import {
   recapCompletionBlocker,
 } from "../ai/providers/recap-tools";
 import { recapPrDigests } from "../db/schema/index";
-import { DbError, type RecapNotFoundError, ValidationError } from "../domain/errors";
+import type { DbError, RecapNotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
+import { dbTry } from "../effects/db-try";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
-import { Broadcaster } from "./Broadcaster";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubEtagCache } from "./GitHubEtagCache";
@@ -56,6 +56,7 @@ import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers
 import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
+import { Realtime } from "./Realtime";
 import { planRecapRequest, type RecapIntent } from "./recap-request";
 import {
   attachRecapDigests,
@@ -121,7 +122,7 @@ export interface RecapRequest {
   readonly intent: RecapIntent;
 }
 
-export type StartRecapJobError = ValidationError | RecapNotFoundError;
+export type StartRecapJobError = DbError | RecapNotFoundError;
 
 export type EmitResult =
   | { readonly kind: "delivered"; readonly seq: number }
@@ -157,7 +158,7 @@ export class ProjectRecapJobs extends Context.Service<
     readonly cancel: (recapId: string) => Effect.Effect<void>;
 
     /** Re-launch any rows left in `status='generating'` by a prior process. */
-    readonly resumePending: () => Effect.Effect<void>;
+    readonly resumePending: () => Effect.Effect<void, DbError>;
 
     /**
      * Subscribe to live events for a generating recap. Buffered mode so
@@ -184,7 +185,7 @@ export const ProjectRecapJobsLive = Layer.effect(
   ProjectRecapJobs,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const broadcaster = yield* Broadcaster;
+    const realtime = yield* Realtime;
     const recapService = yield* ProjectRecapService;
     const prService = yield* PullRequestService;
     const prCtx = yield* PrContextService;
@@ -218,18 +219,6 @@ export const ProjectRecapJobsLive = Layer.effect(
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    const broadcastRecapToRepoAccount = (
-      repoId: string,
-      msg: import("@revv/shared").ServerEventMessage,
-    ): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const accountId = yield* provideDb(prCtx.getAccountIdForRepo(repoId));
-        yield* broadcaster.broadcastToAccount(accountId, msg);
-      }).pipe(
-        Effect.timeout("5 seconds"),
-        Effect.catch(() => Effect.void),
-      );
-
     /**
      * Provide the trio of services {@link PrContextService}'s GitHub-read
      * passthroughs need at execution time (etag cache, db handle, settings
@@ -252,8 +241,18 @@ export const ProjectRecapJobsLive = Layer.effect(
       options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        yield* provideDb(recapService.setStatus(recap.id, status, options));
-        // Reload completedAt so the broadcast payload is accurate.
+        // A status write that didn't commit must not be broadcast (invariant
+        // #8); the row keeps its old status and resume-on-boot picks it up.
+        const committed = yield* provideDb(recapService.setStatus(recap.id, status, options)).pipe(
+          Effect.as(true),
+          Effect.catchTag("DbError", (err) =>
+            Effect.sync(() => {
+              logError("recap-jobs", `status write ${status} failed for ${recap.id}:`, err.message);
+              return false;
+            }),
+          ),
+        );
+        if (!committed) return;
         const fresh = yield* provideDb(recapService.getById(recap.id)).pipe(
           Effect.catch(() => Effect.succeed(null)),
         );
@@ -277,14 +276,14 @@ export const ProjectRecapJobsLive = Layer.effect(
           data.completedAt = fresh.completedAt;
           data.errorMessage = fresh.errorMessage;
         }
-        yield* broadcastRecapToRepoAccount(recap.repositoryId, {
+        yield* realtime.toRepo(recap.repositoryId, {
           type: "recap:status-changed",
           data,
         });
         // For 'complete', also broadcast the fresh row so the UI can render
         // immediately without re-fetching.
         if (status === "complete" && fresh) {
-          yield* broadcastRecapToRepoAccount(recap.repositoryId, {
+          yield* realtime.toRepo(recap.repositoryId, {
             type: "recap:added",
             data: { recap: fresh },
           });
@@ -730,41 +729,33 @@ export const ProjectRecapJobsLive = Layer.effect(
                 Effect.catch(() => Effect.succeed(null)),
               );
               const digest = buildDigestForRecapPr(row.pr, diff);
-              yield* Effect.try({
-                try: () => {
-                  db.insert(recapPrDigests)
-                    .values({
-                      id: `${job.recapId}:${row.pr.id}`,
-                      recapId: job.recapId,
-                      prId: row.pr.id,
-                      source: digest.source,
-                      digest: digest.digest,
-                      files: JSON.stringify(digest.files),
-                      note: digest.note,
-                      generatedAt: new Date().toISOString(),
-                    })
-                    .onConflictDoUpdate({
-                      target: [recapPrDigests.recapId, recapPrDigests.prId],
-                      set: {
-                        source: sql`excluded.source`,
-                        digest: sql`excluded.digest`,
-                        files: sql`excluded.files`,
-                        note: sql`excluded.note`,
-                        generatedAt: sql`excluded.generated_at`,
-                      },
-                    })
-                    .run();
-                },
-                catch: (e) => new ValidationError({ message: String(e) }),
-              }).pipe(
-                Effect.catch((err) =>
-                  Effect.sync(() => {
-                    logError(
-                      "recap-jobs",
-                      `failed to persist recap digest for ${row.pr.id}:`,
-                      err instanceof Error ? err.message : String(err),
-                    );
-                  }),
+              yield* dbTry("persist recap digest", () =>
+                db
+                  .insert(recapPrDigests)
+                  .values({
+                    id: `${job.recapId}:${row.pr.id}`,
+                    recapId: job.recapId,
+                    prId: row.pr.id,
+                    source: digest.source,
+                    digest: digest.digest,
+                    files: JSON.stringify(digest.files),
+                    note: digest.note,
+                    generatedAt: new Date().toISOString(),
+                  })
+                  .onConflictDoUpdate({
+                    target: [recapPrDigests.recapId, recapPrDigests.prId],
+                    set: {
+                      source: sql`excluded.source`,
+                      digest: sql`excluded.digest`,
+                      files: sql`excluded.files`,
+                      note: sql`excluded.note`,
+                      generatedAt: sql`excluded.generated_at`,
+                    },
+                  })
+                  .run(),
+              ).pipe(
+                Effect.catchTag("DbError", (err) =>
+                  Effect.sync(() => logError("recap-jobs", err.message)),
                 ),
               );
               return [row.pr.id, digest] as const;
@@ -863,10 +854,7 @@ export const ProjectRecapJobsLive = Layer.effect(
 
         const blocker = outcome.validated
           ? null
-          : yield* Effect.try({
-              try: () => recapCompletionBlocker(db, job.recapId),
-              catch: (cause) => new DbError({ message: "recap completion check failed", cause }),
-            });
+          : yield* dbTry("recap completion check", () => recapCompletionBlocker(db, job.recapId));
         if (blocker === null) {
           yield* setStatus(
             {
@@ -1126,7 +1114,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 Effect.catch(() => Effect.succeed(null)),
               );
               if (refreshed) {
-                yield* broadcastRecapToRepoAccount(repoId, {
+                yield* realtime.toRepo(repoId, {
                   type: "recap:added",
                   data: { recap: refreshed },
                 });
@@ -1142,7 +1130,7 @@ export const ProjectRecapJobsLive = Layer.effect(
             const created = yield* provideDb(
               recapService.createPartial({ repositoryId: repoId, period, ...window }),
             );
-            yield* broadcastRecapToRepoAccount(repoId, {
+            yield* realtime.toRepo(repoId, {
               type: "recap:added",
               data: { recap: created },
             });
@@ -1151,13 +1139,23 @@ export const ProjectRecapJobsLive = Layer.effect(
         );
       });
 
-    const resumePending = (): Effect.Effect<void> =>
+    const resumePending = (): Effect.Effect<void, DbError> =>
       Effect.withSpan("ProjectRecapJobs.resumePending")(
         Effect.gen(function* () {
           const rows = yield* provideDb(recapService.listGenerating());
           debug("recap-jobs", `resumePending: ${rows.length} row(s)`);
           for (const row of rows) {
-            const attempts = yield* provideDb(recapService.incrementResumeAttempts(row.id));
+            // An attempt that can't be counted isn't run: resuming it would
+            // escape the resume budget (invariant #9).
+            const attempts = yield* provideDb(recapService.incrementResumeAttempts(row.id)).pipe(
+              Effect.catchTag("DbError", (err) =>
+                Effect.sync(() => {
+                  logError("recap-jobs", `resume of ${row.id} skipped:`, err.message);
+                  return null;
+                }),
+              ),
+            );
+            if (attempts === null) continue;
             if (attempts > RECAP_MAX_RESUME_ATTEMPTS) {
               debug("recap-jobs", `recap ${row.id} exceeded resume attempts — marking error`);
               yield* setStatus(
