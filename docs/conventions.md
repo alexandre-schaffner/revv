@@ -297,25 +297,27 @@ boundary, not a perf optimization.
 ## 4. Web Store Patterns
 
 Svelte 5 stores under `apps/web/src/lib/stores/` are how reactive state crosses component
-boundaries. The canon below is what `walkthrough.svelte.ts`, `prs.svelte.ts`, and `auth.svelte.ts`
-already do; `review.svelte.ts` and `sync.svelte.ts` are the remaining migration targets.
+boundaries. Stores sit below the session layer (`apps/web/src/lib/session/`): the bearer token
+is the leaf `session/token.svelte.ts`, and `session/lifecycle.svelte.ts` starts, switches and
+ends the signed-in session. No store imports the lifecycle back.
 
 <a id="stores-singleton"></a>
 ### 4.1 Singleton module + getX/setX exports
 
 **Rule.** A store is a module that declares its reactive state at module-scope (with `$state`)
 and exposes it through named `get<Field>()` getters and `set<Field>()` / verb-prefixed action
-exports. No factory functions, no classes, no `useFoo()` hooks. Action exports are verb-first
-(`setSelectedPrId`, `markThreadsSyncing`); read accessors are noun-first (`getThreads`,
-`getActiveTab`).
+exports. No factory functions, no classes, no `useFoo()` hooks, no `$effect` inside a store.
+Action exports are verb-first (`setSelectedPrId`, `requestSync`); read accessors are noun-first
+(`getThreads`, `getActiveTab`). A component that wants a fetch to follow reactive inputs runs
+the `$effect` itself and calls the store's action (`ensureSelectedPrSizing`).
 
 **Why.** Svelte 5 runes mean modules ARE the reactive boundary. Wrapping that in a factory
 imports a React mental model that the framework doesn't share. The getter/setter split keeps
 consumers from importing `$state` proxies directly, which would let components mutate stores
 in ways the store doesn't control.
 
-**Canonical example.** `apps/web/src/lib/stores/sync.svelte.ts:5–22` declares module-scope
-`$state` and exposes only `getSummary`, `getLastSyncAt`, `markThreadsSyncing`, etc.
+**Canonical example.** `apps/web/src/lib/stores/sync.svelte.ts` declares module-scope
+`$state` and exposes only `getLastSyncAt`, `getThreadsSyncing`, `requestSync`, etc.
 `apps/web/src/lib/stores/walkthrough.svelte.ts:144` exports a single `store` object as the
 reactive root — also acceptable for stores with many related fields, but the getter discipline
 still applies (`getBlocks`, `getIssues`, etc. at `:188`+).
@@ -391,11 +393,10 @@ illegal states like `{ isLoading: true, error: "foo", data: T }`. A tagged union
 exhaustive `switch (state.status)` handling in components and produces narrower types
 downstream.
 
-**Canonical example.** Today, no store in the codebase uses a `RequestState<T>` type — this
-rule is forward-looking. The closest existing shape is the enum + string error pair in
-`apps/web/src/lib/stores/review.svelte.ts:70–76` (`repoFileStatus` enum +
-`repoFileError: string | null`), which approximates the pattern but does not bundle the data
-into the same value.
+**Canonical example.** Every per-key fetch made through `createResource` (§4.7) is a
+`RequestState<T>` per key — `apps/web/src/lib/stores/repo-activity.svelte.ts` hands it straight
+to the component. `stacks.svelte.ts` and `conversation.svelte.ts` keep `RequestState` inside
+their own entries.
 
 **Anti-pattern.** Boolean + nullable shape from
 `apps/web/src/lib/stores/walkthrough.svelte.ts:48–49`: `isStreaming: boolean; streamError: string | null`
@@ -407,23 +408,28 @@ possible combinations; only ~4 are legal.
 <a id="stores-event-handlers"></a>
 ### 4.5 Event handlers in stores are named `on<EventName>`
 
-**Rule.** Functions exported from a store for the SSE dispatcher
+**Rule.** Functions exported from a store for the SSE router
 (`apps/web/src/lib/stores/events.svelte.ts`) to call follow the form `on<EventName>` where
 `<EventName>` is the event message `type` with the colon dropped and segments PascalCased
 (`thread:created` → `onThreadCreated`; `chat:question-resolved` → `onChatQuestionResolved`).
-One handler per event message arm.
+Each takes the envelope's `data` whole, and the store filters on its fields itself (the review
+store drops `thread:created` for a session it isn't showing). Several stores may handle one
+message, each with its own `on<EventName>`; the router lists them all in the message's arm.
+
+The router knows nothing else about a store. A store whose state comes from the stream also
+owns its catch-up, by exporting `onEventsOpened` (every connect), `onEventsReconnected`
+(events sent while the stream was down are lost) or `onWindowForeground`, which the router
+lists in its `ON_OPEN` / `ON_RECONNECT` / `ON_FOREGROUND` arrays.
 
 **Why.** Reading the dispatcher should make it obvious which store owns which message. The
 legacy `*FromWs` suffix style buried the event identity in the middle of the name and pluralized
 inconsistently (`updateThreadStatusFromWs` vs the event type `thread:updated`).
 
-**Canonical example.** `apps/web/src/lib/stores/review.svelte.ts:559` (`onThreadUpdated`),
-`:576` (`onThreadCreated`), `:699` (`onThreadMessageEdited`);
-`apps/web/src/lib/stores/walkthrough.svelte.ts:609` (`onWalkthroughEvent`); and
-`apps/web/src/lib/stores/chat.svelte.ts:1555` (`onChatQuestionResolved`) match the event
-message types `thread:updated`, `thread:created`, `thread:message:edited`, `walkthrough:event`,
-and `chat:question-resolved`. The `events.svelte.ts:184` dispatch reads as a flat list of these
-`on*` calls.
+**Canonical example.** `apps/web/src/lib/stores/review.svelte.ts` (`onThreadUpdated`,
+`onThreadCreated`, `onThreadMessageEdited`) and `walkthrough.svelte.ts` / `stacks.svelte.ts`
+(both `onWalkthroughEvent`) match the event message types `thread:updated`, `thread:created`,
+`thread:message:edited` and `walkthrough:event`. The `dispatch` switch in `events.svelte.ts`
+reads as a flat list of these `on*` calls.
 
 **Anti-pattern.** The retired `*FromWs` suffix style — `updateThreadStatusFromWs`,
 `addThreadFromWs`, `resolveQuestionFromWs`. No occurrences remain in the codebase.
@@ -466,6 +472,44 @@ entity-scoped removal — capture the removed repo, the removed PR ids, and the 
 pinned ids — and inverse them on rollback rather than restoring the whole world.
 
 **Backlog.** [`S-005`](./conventions-backlog.md#s-005).
+
+<a id="stores-resource"></a>
+### 4.7 Per-key fetches go through `createResource`
+
+**Rule.** A store that fetches something per key (a PR, a repo, a head SHA) does it through
+`createResource` from `apps/web/src/lib/stores/resource.ts`, not a hand-rolled in-flight Map,
+freshness timestamp, generation counter or retry loop. The key carries every input the answer
+depends on — `(prId, headSha, agent, model)` for the sizing preview — so a settings change
+needs no cross-store invalidation: the next read simply misses. A server answer that is still
+`pending` is re-asked on the resource's bounded `retryDelaysMs` schedule.
+
+**Why.** Ten stores each had their own de-dupe, freshness window and backoff, with drifted
+semantics (some re-asked while a retry was scheduled, some cached errors forever). One
+primitive gives one answer to "is this in flight, fresh, retrying, superseded or reset".
+
+**Canonical example.** `apps/web/src/lib/stores/merge-eligibility.svelte.ts` (versioned by the
+question, re-asked while GitHub settles), `repo-activity.svelte.ts` (escalating backoff,
+keeps data on error), `walkthrough-sizing.svelte.ts` (key includes the routing settings).
+`stacks.svelte.ts` and `hunk-scan.svelte.ts` keep their own entries and use a resource only to
+schedule asks.
+
+**Anti-pattern.** A module-level `const inFlight = new Map<string, Promise<void>>()` next to a
+`loadedAt` timestamp.
+
+<a id="stores-session-reset"></a>
+### 4.8 Account-scoped stores export `reset()`, called by the session lifecycle
+
+**Rule.** A store that holds data of the signed-in account exports `reset()`, which drops that
+data and stops anything still writing it (streams, timers, retries). `resetAccountStores()` in
+`apps/web/src/lib/session/lifecycle.svelte.ts` calls every one of them, in one list, on account
+switch, sign-out and account removal. Stores never import the auth store to tear themselves down.
+
+**Why.** Three hand-written teardown lists in `auth.svelte.ts` had drifted apart, and most
+stores were on none of them, so an account switch left the previous account's chat, walkthrough
+and recap streams writing into the new session.
+
+**Canonical example.** `apps/web/src/lib/stores/chat.svelte.ts` `reset()` aborts in-flight turns
+before clearing its maps; `stacks.svelte.ts` `reset()` resets its resource and debounce timers.
 
 ---
 
