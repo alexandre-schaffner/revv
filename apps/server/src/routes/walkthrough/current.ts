@@ -1,9 +1,9 @@
 import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
-import { PrContextService } from "../../../services/PrContext";
-import { resolveReviewModeForPr } from "../../../services/review-mode";
-import { WalkthroughService } from "../../../services/Walkthrough";
-import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
+import { PrContextService } from "../../services/PrContext";
+import { WalkthroughService } from "../../services/Walkthrough";
+import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import { walkthroughPerspective } from "../../services/walkthrough/perspective";
 
 /**
  * GET /api/reviews/:id/walkthrough/current — full current state for the PR.
@@ -22,11 +22,7 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *                              not_found, so a cache hit returns `complete`.)
  *                              Carries the perspective Generate should default to.
  *
- * `mode` is optional. Without it the server picks the perspective: the one the
- * PR's newest walkthrough was written in (the user's last pick, superseded rows
- * included, so a stale walkthrough keeps its perspective), else the
- * identity-derived default. Only one perspective is active per PR at a time
- * (see `WalkthroughJobs.startJobBody`), so this is the walkthrough on screen.
+ * `mode` is optional; without it the server picks `walkthroughPerspective`.
  *
  * The head SHA is read from the locally-synced PR row (`pr.headSha`), NOT a
  * live GitHub call. This endpoint serves locally-cached content and must not
@@ -38,21 +34,14 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  * new-commit detection / superseding is the PollScheduler's job, not this
  * read path's. (Doctrine: SQLite is authoritative.)
  */
-export function getCurrentWalkthroughHandler(
-  prId: string,
-  userId: string,
-  requestedMode?: WalkthroughMode,
-) {
+export function currentWalkthrough(prId: string, userId: string, requestedMode?: WalkthroughMode) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const walkthroughService = yield* WalkthroughService;
     const jobs = yield* WalkthroughJobs;
 
     const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
-    const mode =
-      requestedMode ??
-      (yield* walkthroughService.getLatestMode(pr.id)) ??
-      (yield* resolveReviewModeForPr(pr.id)).mode;
+    const mode = requestedMode ?? (yield* walkthroughPerspective(pr.id));
     const headSha = pr.headSha;
     // No synced head SHA → nothing to match a walkthrough against. The PR
     // row hasn't fully synced yet; the client shows the Generate button and

@@ -42,7 +42,7 @@ import { repoStackRoutes, stackMergeRunRoutes, stackRoutes } from "./routes/stac
 import { threadRoutes } from "./routes/threads";
 import { updateManifestRoute } from "./routes/update-manifest";
 import { userRoutes } from "./routes/user";
-import { walkthroughsRoute } from "./routes/walkthroughs";
+import { walkthroughRoutes } from "./routes/walkthrough";
 import { AppRuntime } from "./runtime";
 import { appDatabase } from "./services/Db";
 import { DbMaintenance } from "./services/DbMaintenance";
@@ -157,7 +157,7 @@ const app = new Elysia()
   .use(deviceAuthRoutes)
   .use(onboardingRoutes)
   .use(userRoutes)
-  .use(walkthroughsRoute)
+  .use(walkthroughRoutes)
   .use(eventsRoute)
   .use(debugRoutes)
   .use(mcpWalkthroughRoute)
