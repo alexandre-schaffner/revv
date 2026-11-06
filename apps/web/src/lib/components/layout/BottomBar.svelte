@@ -20,6 +20,8 @@ import {
   requestFullSync,
 } from "$lib/stores/sync.svelte";
 import { getTokenUsage } from "$lib/stores/walkthrough.svelte";
+import { now } from "$lib/utils/clock.svelte";
+import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import AgentSelector from "./AgentSelector.svelte";
 import CommitsDropdown from "./CommitsDropdown.svelte";
 import ModelSelector from "./ModelSelector.svelte";
@@ -40,27 +42,8 @@ const FALLBACK_CONTEXT_WINDOW = 1_000_000;
 const maxContext = $derived(usage.contextWindowTokens ?? FALLBACK_CONTEXT_WINDOW);
 const showUsage = $derived(selectedPrId !== null);
 
-let tick = $state(0);
-$effect(() => {
-  const id = setInterval(() => tick++, 1000);
-  return () => clearInterval(id);
-});
-
-function formatSyncAge(iso: string | null): string {
-  if (!iso) return "";
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 10) return "just now";
-  if (diff < 60) return `${diff}s ago`;
-  const mins = Math.floor(diff / 60);
-  if (mins < 60) return `${mins}m ago`;
-  return `${Math.floor(mins / 60)}h ago`;
-}
-
 const syncLabel = $derived(
-  (() => {
-    void tick;
-    return formatSyncAge(lastSyncAt);
-  })(),
+  lastSyncAt ? formatRelativeTime(lastSyncAt, { now: now(1000), seconds: true }) : "",
 );
 
 function handleRetrySync() {

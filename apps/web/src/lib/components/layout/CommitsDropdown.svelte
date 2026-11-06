@@ -112,15 +112,6 @@ function cacheKey(prId: string, headSha: string | null): string {
   return `${prId}@${headSha ?? ""}`;
 }
 
-function relativeDate(iso: string | null): string {
-  if (!iso) return "";
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
 async function fetchData(prId: string, headSha: string | null) {
   const key = cacheKey(prId, headSha);
   if (cachedKey === key) return;
@@ -244,7 +235,7 @@ $effect(() => {
 							{#if isLatest}
 								<span class="italic">latest</span>
 							{:else}
-								{relativeDate(commit.date)}
+								{commit.date ? formatRelativeTime(commit.date) : ""}
 							{/if}
 						</span>
 						<!-- walkthrough marker: the commit a report reviewed up to -->
