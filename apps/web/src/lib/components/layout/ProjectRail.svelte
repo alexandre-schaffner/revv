@@ -10,6 +10,7 @@ import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import { bitsAnim, collapsibleClose, collapsibleOpen } from "$lib/motion";
+import { groupByOwner } from "$lib/repos/add-repo";
 import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
 import {
   isOwnerCollapsed,
@@ -32,26 +33,18 @@ async function handleHome(): Promise<void> {
   await goto("/");
 }
 
-// Group repos by owner (case-insensitive). First-seen owner / first-seen
-// repo order preserves whatever the server returned so grouping doesn't
-// reshuffle the rail on every render. `avatarUrl` is the GitHub owner
-// avatar lifted from the first non-null repo in the group.
-const ownerGroups = $derived.by((): OwnerGroup[] => {
-  const groups = new Map<string, OwnerGroup>();
-  for (const repo of repos) {
-    const key = repo.owner.toLowerCase();
-    const existing = groups.get(key);
-    if (existing) {
-      existing.repos.push(repo);
-      if (existing.avatarUrl === null && repo.avatarUrl !== null) {
-        existing.avatarUrl = repo.avatarUrl;
-      }
-    } else {
-      groups.set(key, { owner: repo.owner, avatarUrl: repo.avatarUrl, repos: [repo] });
-    }
-  }
-  return [...groups.values()];
-});
+// Server order is kept, so grouping doesn't reshuffle the rail on every
+// render. `avatarUrl` is the owner's avatar from the group's first repo that
+// has one.
+const ownerGroups = $derived(
+  [...groupByOwner(repos)].map(
+    ([owner, grouped]): OwnerGroup => ({
+      owner,
+      avatarUrl: grouped.find((repo) => repo.avatarUrl !== null)?.avatarUrl ?? null,
+      repos: grouped,
+    }),
+  ),
+);
 
 function handleAddRepo(): void {
   setAddRepoDialogOpen(true);
