@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { resolveGenerationModel } from "../ai/acp/presets";
 import type { Db } from "../db";
 import { account } from "../db/schema/auth";
-import { remoteUsers } from "../db/schema/remote-users";
+import { avatarOfHostLogin } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import type { GeneratedBy, GenerationProviderConfig } from "./walkthrough-cache-format";
 
@@ -70,7 +70,7 @@ export function resolveWalkthroughOwner(
   repoId: string,
 ): { readonly accountId: string; readonly generatedBy?: GeneratedBy } {
   const repoRow = db
-    .select({ accountId: repositories.accountId })
+    .select({ accountId: repositories.accountId, githubHost: repositories.githubHost })
     .from(repositories)
     .where(eq(repositories.id, repoId))
     .get();
@@ -86,9 +86,9 @@ export function resolveWalkthroughOwner(
   const parsedUserId = Number(owner.accountId);
   const avatarContent =
     db
-      .select({ avatarContent: remoteUsers.avatarContent })
-      .from(remoteUsers)
-      .where(eq(remoteUsers.login, owner.githubLogin))
+      .select({ avatarContent: avatarOfHostLogin(owner.githubLogin, repoRow.githubHost) })
+      .from(repositories)
+      .where(eq(repositories.id, repoId))
       .get()?.avatarContent ?? null;
 
   return {

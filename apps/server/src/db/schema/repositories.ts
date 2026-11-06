@@ -11,12 +11,10 @@ export const repositories = sqliteTable(
     name: text("name").notNull(),
     fullName: text("full_name").notNull(),
     defaultBranch: text("default_branch").notNull().default("main"),
-    /** Raw owner avatar URL from the provider. For GitHub Enterprise this is a
-     *  signed, short-lived URL whose token expires — kept only for change
-     *  detection, never served to the client directly. */
+    /** Raw owner avatar URL from the provider. On GitHub Enterprise it is signed
+     *  and expires, so it is served only for github.com repos. */
     avatarUrl: text("avatar_url"),
-    /** Base64 data URL of the fetched owner avatar so the client never depends
-     *  on an expiring signed `avatar_url`. Mirrors `remote_users.avatar_content`. */
+    /** Retired: owner avatars are cached in `remote_users` (migration 0490). */
     avatarContent: text("avatar_content"),
     addedAt: text("added_at").notNull(),
     cloneStatus: text("clone_status").notNull().default("pending").$type<CloneStatus>(),

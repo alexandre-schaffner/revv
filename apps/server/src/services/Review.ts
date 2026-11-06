@@ -11,7 +11,7 @@ import { canUserModifyComment, isThreadResolved } from "@revv/shared";
 import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
-import { remoteUsers } from "../db/schema/remote-users";
+import { avatarOfThreadLogin } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
 import { type DbError, ForbiddenError, NotFoundError } from "../domain/errors";
@@ -547,9 +547,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       if (login) {
         const avatarRow = yield* tryDb("resolve message avatar", (db) =>
           db
-            .select({ avatarContent: remoteUsers.avatarContent })
-            .from(remoteUsers)
-            .where(and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, login)))
+            .select({ avatarContent: avatarOfThreadLogin(login, threadId) })
+            .from(threadMessages)
+            .where(eq(threadMessages.id, id))
             .get(),
         );
         authorAvatarContent = avatarRow?.avatarContent ?? null;
@@ -577,16 +577,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db
           .select({
             msg: threadMessages,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfThreadLogin(threadMessages.authorLogin, threadMessages.threadId),
           })
           .from(threadMessages)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, threadMessages.authorLogin),
-            ),
-          )
           .where(eq(threadMessages.threadId, threadId))
           .orderBy(threadMessages.createdAt)
           .all(),
@@ -600,16 +593,9 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db
           .select({
             msg: threadMessages,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfThreadLogin(threadMessages.authorLogin, threadMessages.threadId),
           })
           .from(threadMessages)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, threadMessages.authorLogin),
-            ),
-          )
           .where(eq(threadMessages.id, messageId))
           .get(),
       );

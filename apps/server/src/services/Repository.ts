@@ -1,29 +1,30 @@
 import type { Repository } from "@revv/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import type { Db } from "../db/index";
 import { repositories } from "../db/schema/index";
-import { NotFoundError, ValidationError } from "../domain/errors";
-import { githubPromise } from "../observability/github-ledger/origin";
+import { avatarOfHostLogin } from "../db/schema/remote-users";
+import { type DbError, NotFoundError, ValidationError } from "../domain/errors";
+import { isPublicGitHub } from "../domain/github-host";
+import { tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
 
-/**
- * Fetch an image URL and return it as a base64 data URL, or null on any
- * failure. Used to cache owner avatars locally so the client never depends on
- * an expiring signed `avatar_url`.
- */
-async function fetchAvatarAsDataUrl(url: string): Promise<string | null> {
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const contentType = resp.headers.get("content-type") ?? "image/png";
-    const base64 = Buffer.from(await resp.arrayBuffer()).toString("base64");
-    return `data:${contentType};base64,${base64}`;
-  } catch {
-    return null;
-  }
+function readRepo(db: Db, id: string) {
+  return db.select(repoColumns).from(repositories).where(eq(repositories.id, id)).get();
 }
 
-function rowToRepo(row: typeof repositories.$inferSelect): Repository {
+const repoColumns = {
+  row: repositories,
+  ownerAvatar: avatarOfHostLogin(repositories.owner, repositories.githubHost),
+};
+
+function rowToRepo({
+  row,
+  ownerAvatar,
+}: {
+  readonly row: typeof repositories.$inferSelect;
+  readonly ownerAvatar: string | null;
+}): Repository {
   return {
     id: row.id,
     provider: row.provider,
@@ -31,12 +32,13 @@ function rowToRepo(row: typeof repositories.$inferSelect): Repository {
     name: row.name,
     fullName: row.fullName,
     defaultBranch: row.defaultBranch,
-    // Prefer the cached data URL — it never expires. Fall back to the raw
-    // (possibly signed/expiring) URL, then to the GitHub default-by-owner URL.
+    // The cached bytes, else — on github.com only, where avatar URLs aren't
+    // signed — the raw URL or GitHub's by-owner URL.
     avatarUrl:
-      row.avatarContent ??
-      row.avatarUrl ??
-      (row.provider === "github" ? `https://avatars.githubusercontent.com/${row.owner}` : null),
+      ownerAvatar ??
+      (isPublicGitHub(row.githubHost)
+        ? (row.avatarUrl ?? `https://avatars.githubusercontent.com/${row.owner}`)
+        : null),
     addedAt: row.addedAt,
     cloneStatus: row.cloneStatus,
     clonePath: row.clonePath ?? null,
@@ -77,6 +79,8 @@ export class RepositoryService extends Context.Service<
     readonly getAccountIdForRepo: (
       repoId: string,
     ) => Effect.Effect<string, NotFoundError, DbService>;
+    /** The owning account of every tracked repository, by repository id. */
+    readonly accountIdsByRepo: () => Effect.Effect<Map<string, string>, DbError, DbService>;
     readonly updateRepoMetadata: (
       id: string,
       data: { readonly avatarUrl?: string | null; readonly defaultBranch?: string },
@@ -90,8 +94,12 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
     Effect.gen(function* () {
       const { db } = yield* DbService;
       const rows = accountId
-        ? db.select().from(repositories).where(eq(repositories.accountId, accountId)).all()
-        : db.select().from(repositories).all();
+        ? db
+            .select(repoColumns)
+            .from(repositories)
+            .where(eq(repositories.accountId, accountId))
+            .all()
+        : db.select(repoColumns).from(repositories).all();
       return rows.map(rowToRepo);
     }),
 
@@ -129,7 +137,6 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
                 name: sql`excluded.name`,
                 defaultBranch: sql`excluded.default_branch`,
                 avatarUrl: sql`excluded.avatar_url`,
-                avatarContent: sql`CASE WHEN ${repositories.avatarUrl} IS NOT excluded.avatar_url THEN NULL ELSE ${repositories.avatarContent} END`,
                 addedAt: sql`excluded.added_at`,
                 githubHost: sql`excluded.github_host`,
                 managed: sql`excluded.managed`,
@@ -138,11 +145,14 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
                 cloneError: sql`excluded.clone_error`,
               },
             })
-            .returning()
+            .returning({ id: repositories.id })
             .get(),
         catch: (e) => new ValidationError({ message: String(e) }),
       });
-      return rowToRepo(saved);
+      const stored = readRepo(db, saved.id);
+      if (!stored)
+        return yield* Effect.fail(new ValidationError({ message: "repository not saved" }));
+      return rowToRepo(stored);
     }),
 
   deleteRepo: (id, accountId) =>
@@ -162,14 +172,11 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   getRepoById: (id, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const row = db.select().from(repositories).where(eq(repositories.id, id)).get();
-      if (!row) {
+      const found = readRepo(db, id);
+      if (!found || (accountId && found.row.accountId !== accountId)) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
-      if (accountId && row.accountId !== accountId) {
-        return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
-      }
-      return rowToRepo(row);
+      return rowToRepo(found);
     }),
 
   getRepoByFullName: (fullName, accountId) =>
@@ -179,7 +186,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       // so the same repo can legitimately be tracked by several accounts.
       // Filtering on `full_name` alone returns an arbitrary account's row.
       const row = db
-        .select()
+        .select(repoColumns)
         .from(repositories)
         .where(and(eq(repositories.fullName, fullName), eq(repositories.accountId, accountId)))
         .get();
@@ -201,6 +208,14 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       return row.accountId;
     }),
 
+  accountIdsByRepo: () =>
+    tryDb("read repository owners", (db) =>
+      db
+        .select({ id: repositories.id, accountId: repositories.accountId })
+        .from(repositories)
+        .all(),
+    ).pipe(Effect.map((rows) => new Map(rows.map((r) => [r.id, r.accountId])))),
+
   updateRepoMetadata: (id, data, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
@@ -213,31 +228,14 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       }
       const updates: Partial<typeof repositories.$inferInsert> = {};
       if (data.defaultBranch !== undefined) updates.defaultBranch = data.defaultBranch;
-
-      // Re-fetch the avatar bytes when the raw URL changed (GitHub Enterprise
-      // signed URLs rotate hourly) or when we never cached them. The fetch is
-      // best-effort: on failure we keep whatever is already cached so a
-      // transient network blip never blanks the icon.
-      if (data.avatarUrl !== undefined && data.avatarUrl !== existing.avatarUrl) {
-        updates.avatarUrl = data.avatarUrl;
+      if (data.avatarUrl !== undefined) updates.avatarUrl = data.avatarUrl;
+      if (Object.keys(updates).length > 0) {
+        yield* Effect.try({
+          try: () => db.update(repositories).set(updates).where(eq(repositories.id, id)).run(),
+          catch: (e) => new Error(String(e)),
+        }).pipe(Effect.orDie);
       }
-      const rawUrl = data.avatarUrl !== undefined ? data.avatarUrl : existing.avatarUrl;
-      const urlChanged = data.avatarUrl !== undefined && data.avatarUrl !== existing.avatarUrl;
-      if (rawUrl && (urlChanged || existing.avatarContent == null)) {
-        const fetched = yield* githubPromise(() => fetchAvatarAsDataUrl(rawUrl));
-        if (fetched !== null && fetched !== existing.avatarContent) {
-          updates.avatarContent = fetched;
-        }
-      }
-
-      if (Object.keys(updates).length === 0) {
-        return rowToRepo(existing);
-      }
-      yield* Effect.try({
-        try: () => db.update(repositories).set(updates).where(eq(repositories.id, id)).run(),
-        catch: (e) => new Error(String(e)),
-      }).pipe(Effect.orDie);
-      const updated = db.select().from(repositories).where(eq(repositories.id, id)).get();
+      const updated = readRepo(db, id);
       if (!updated) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }

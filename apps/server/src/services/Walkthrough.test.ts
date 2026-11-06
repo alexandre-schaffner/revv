@@ -4,7 +4,7 @@ import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { reviewRounds, walkthroughs } from "../db/schema";
 import { DbService } from "./Db";
-import type { PrCommit } from "./GitHub";
+import type { PrCommit } from "./github/pulls";
 import { __walkthroughTest, WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 
 function commit(sha: string, message: string): PrCommit {
