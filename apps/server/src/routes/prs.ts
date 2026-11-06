@@ -150,7 +150,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     "/resolve-link",
     async (ctx) => {
       const expectedHost = ctx.body.githubHost.toLowerCase();
-      const activeHost = (ctx.account.host ?? "github.com").toLowerCase();
+      const activeHost = ctx.account.host.toLowerCase();
 
       // This branch must stay before AppRuntime/service access. A mismatched
       // account is a recovery state, not permission to probe another

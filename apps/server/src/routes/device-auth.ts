@@ -6,6 +6,11 @@ import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
 import {
+  hostFromProviderId,
+  LEGACY_GITHUB_PROVIDER_ID,
+  providerIdForHost,
+} from "../domain/provider-id";
+import {
   clientIdForHost,
   clientIdIsGitHubApp,
   InvalidGitHubClientIdError,
@@ -355,7 +360,7 @@ async function upsertUserAndSession(
   // Upsert account by providerId + accountId. Token bytes go to the secure
   // store keyed on the account row id — never the DB columns. Expiry
   // timestamps and the cleared `reauthRequiredAt` flag stay on the row.
-  const providerId = `github:${urls.host}`;
+  const providerId = providerIdForHost(urls.host);
   const existingAccounts = await db.select().from(account).where(eq(account.accountId, accountId));
   const existingAccount = existingAccounts.find((a) => a.providerId === providerId);
   const accountRowId = existingAccount?.id ?? crypto.randomUUID();
@@ -416,7 +421,7 @@ async function upsertAccountForUser(
   userId: string,
 ): Promise<void> {
   const githubUser = await retryFetch(() => fetchGitHubUser(tokens.accessToken, urls), 2, 1000);
-  const providerId = `github:${urls.host}`;
+  const providerId = providerIdForHost(urls.host);
   const accountId = githubUser.id.toString();
   const now = new Date();
 
@@ -502,8 +507,7 @@ const publicAuthRoutes = new Elysia()
       Array<{ host: string; githubLogin: string | null; avatarUrl: string | null }>
     >();
     for (const acc of accounts) {
-      const host = acc.providerId.split(":")[1];
-      if (!host) continue;
+      const host = hostFromProviderId(acc.providerId);
       const existing = accountsByUserId.get(acc.userId) ?? [];
       existing.push({
         host,
@@ -712,8 +716,7 @@ const protectedAuthRoutes = new Elysia()
 
     const byHost = new Map<string, { githubLogin: string | null; avatarUrl: string | null }>();
     for (const r of rows) {
-      const host = r.providerId.split(":")[1];
-      if (!host) continue;
+      const host = hostFromProviderId(r.providerId);
       byHost.set(host, { githubLogin: r.githubLogin ?? null, avatarUrl: r.avatarUrl ?? null });
     }
 
@@ -732,7 +735,10 @@ const protectedAuthRoutes = new Elysia()
     "/api/auth/accounts/disconnect",
     async (ctx) => {
       const { host } = ctx.body;
-      const providerId = `github:${host}`;
+      const providerIds =
+        host === serverEnv.githubHost
+          ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
+          : [providerIdForHost(host)];
       const userId = ctx.session.user.id;
 
       // We cannot revoke the grant on GitHub's side: the only OAuth flow Revv
@@ -743,16 +749,15 @@ const protectedAuthRoutes = new Elysia()
       // operation: delete the account row and wipe its stored tokens. Users who
       // want to revoke the grant upstream do so from their GitHub app
       // connections page (linked from the settings UI).
-      const accountRow = await db
+      const accountRows = await db
         .select({ id: account.id })
         .from(account)
-        .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
-        .then((r) => r[0] ?? null);
+        .where(and(inArray(account.providerId, providerIds), eq(account.userId, userId)));
 
       await db
         .delete(account)
-        .where(and(eq(account.providerId, providerId), eq(account.userId, userId)));
-      if (accountRow) {
+        .where(and(inArray(account.providerId, providerIds), eq(account.userId, userId)));
+      for (const accountRow of accountRows) {
         await AppRuntime.runPromise(
           Effect.flatMap(Identity, (identity) => identity.deleteAccountTokens(accountRow.id)),
         );

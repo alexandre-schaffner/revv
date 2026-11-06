@@ -10,7 +10,7 @@ import {
   SshSignatureInvalid,
   SshSigningUnavailable,
 } from "../../domain/errors";
-import { extractHostFromProviderId } from "../../domain/provider-id";
+import { hostFromProviderId } from "../../domain/provider-id";
 import { debug } from "../../logger";
 import { githubTryPromise } from "../../observability/github-ledger/origin";
 import { DbService } from "../Db";
@@ -77,7 +77,7 @@ function findAccountWithLoginSync(
   for (const row of rows) {
     if (row.githubLogin && row.accountId) {
       return {
-        host: extractHostFromProviderId(row.providerId),
+        host: hostFromProviderId(row.providerId),
         login: row.githubLogin,
         githubUserId: row.accountId,
       };

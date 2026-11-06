@@ -15,7 +15,7 @@
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
 import { account, user } from "../db/schema";
-import { extractHostFromProviderId } from "../domain/provider-id";
+import { hostFromProviderId } from "../domain/provider-id";
 import { debug } from "../logger";
 import { DbService } from "./Db";
 import { GitHubGateway } from "./GitHub";
@@ -109,7 +109,7 @@ export const CacheEligibilityLive = Layer.effect(
 
       for (const row of rows) {
         if (!row.githubLogin) continue;
-        const host = extractHostFromProviderId(row.providerId);
+        const host = hostFromProviderId(row.providerId);
         if (host === targetHost) {
           return { accountId: row.id, login: row.githubLogin };
         }
@@ -125,7 +125,7 @@ export const CacheEligibilityLive = Layer.effect(
         .from(account)
         .where(eq(account.userId, firstUser.id))
         .all();
-      return new Set(rows.map((r) => extractHostFromProviderId(r.providerId)));
+      return new Set(rows.map((r) => hostFromProviderId(r.providerId)));
     }
 
     const fetchPermission = (

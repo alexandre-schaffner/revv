@@ -148,11 +148,11 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
               .from(account)
               .where(eq(account.id, resolved.accountId))
               .get();
-            const host = resolved.providerId.split(":")[1] ?? null;
+            const { host } = resolved;
             if (accountRow?.reauthRequiredAt) {
               const github = yield* GitHubGateway;
               const tokenStillWorks = yield* github.users
-                .authenticatedFreshForHost(resolved.accessToken, host ?? "github.com")
+                .authenticatedFreshForHost(resolved.accessToken, host)
                 .pipe(
                   Effect.as(true),
                   Effect.orElseSucceed(() => false),

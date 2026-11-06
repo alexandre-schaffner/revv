@@ -20,7 +20,7 @@ export const githubRoutes = new Elysia({ prefix: "/api/github" })
     try {
       const repos = await AppRuntime.runPromise(
         Effect.gen(function* () {
-          const host = ctx.account.host ?? "github.com";
+          const host = ctx.account.host;
 
           if (
             !force &&
