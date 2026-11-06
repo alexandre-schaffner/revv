@@ -54,7 +54,7 @@ export async function submitReview(
     const { data, error } = await api.api.reviews({ id: prId })["github-submit"].post({
       action,
       body: reviewBody(issues),
-      comments: reviewComments(),
+      comments: reviewComments(getThreads(), getThreadMessages, diffPaths()),
       issueIds,
     });
     if (error) throw new Error(apiErrorMessage(error, "Failed to submit review"));
