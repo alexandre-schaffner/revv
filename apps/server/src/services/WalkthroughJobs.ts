@@ -78,7 +78,6 @@ import {
   type GitHubError,
   HeadShaMismatchError,
   type NotFoundError,
-  type ReviewError,
   type ValidationError,
 } from "../domain/errors";
 import { withDb } from "../effects/with-db";
@@ -241,7 +240,7 @@ export type StartJobError =
   | GitHubError
   | HeadShaMismatchError
   | NotFoundError
-  | ReviewError
+  | DbError
   | ValidationError;
 
 // ── Service tag ──────────────────────────────────────────────────────────────

@@ -56,7 +56,7 @@ import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
-import { DbError, ReviewError } from "../domain/errors";
+import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
 import type { DiffFingerprint } from "./stacks/fingerprint";
@@ -386,7 +386,7 @@ export class WalkthroughService extends Context.Service<
       risk?: { readonly level: RiskLevel; readonly confidence: number };
       stackContext?: WalkthroughStackSnapshot | null;
       diffFingerprint?: DiffFingerprint | null;
-    }) => Effect.Effect<string, ReviewError, DbService>;
+    }) => Effect.Effect<string, DbError, DbService>;
 
     readonly getStackInputs: (walkthroughId: string) => Effect.Effect<
       {
@@ -821,10 +821,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               .run();
             return { id: newId };
           }),
-        catch: (e) =>
-          new ReviewError({
-            message: `Failed to create walkthrough: ${String(e)}`,
-          }),
+        catch: (cause) =>
+          new DbError({ message: `Failed to create walkthrough: ${String(cause)}`, cause }),
       });
 
       return result.id;

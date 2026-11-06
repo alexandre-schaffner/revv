@@ -1,29 +1,22 @@
 import { Effect } from "effect";
 import type { Db } from "../db/index";
-import { ReviewError } from "../domain/errors";
+import { DbError } from "../domain/errors";
 import { DbService } from "../services/Db";
 
 /**
- * Wrap a synchronous Drizzle call in an Effect that fails with a tagged
- * {@link ReviewError} instead of a raw thrown exception. Centralizes the
- * repetitive `Effect.try({ try, catch })` blocks across services into
- * a single one-liner.
+ * Run a synchronous Drizzle call, failing with a tagged {@link DbError}
+ * instead of throwing. The `label` becomes the message prefix on failure.
  *
  * @example
  * ```ts
  * yield* tryDb('insert thread', (db) => db.insert(commentThreads).values(row).run());
  * ```
- *
- * The `label` becomes the message prefix on failure.
  */
-export const tryDb = <A>(
-  label: string,
-  run: (db: Db) => A,
-): Effect.Effect<A, ReviewError, DbService> =>
+export const tryDb = <A>(label: string, run: (db: Db) => A): Effect.Effect<A, DbError, DbService> =>
   Effect.gen(function* () {
     const { db } = yield* DbService;
     return yield* Effect.try({
       try: () => run(db),
-      catch: (e) => new ReviewError({ message: `Failed to ${label}: ${String(e)}` }),
+      catch: (cause) => new DbError({ message: `Failed to ${label}: ${String(cause)}`, cause }),
     });
   });

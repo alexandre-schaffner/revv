@@ -207,7 +207,6 @@ export function describeWalkthroughRequestError(error: WalkthroughRequestError):
       return error.message ?? "Walkthrough generation could not start.";
     case "GitHubAccessDeniedError":
     case "CloneError":
-    case "ReviewError":
     case "ValidationError":
     case "DbError":
       return error.message;

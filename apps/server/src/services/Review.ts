@@ -14,7 +14,7 @@ import { commentThreads } from "../db/schema/comment-threads";
 import { remoteUsers } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
-import { ReviewError } from "../domain/errors";
+import { type DbError, ReviewError } from "../domain/errors";
 import { tryDb } from "../effects/db-try";
 import type { DbService } from "./Db";
 import { resolveReviewModeForPr } from "./review-mode";
@@ -101,7 +101,7 @@ export class ReviewService extends Context.Service<
     readonly getOrCreateActiveSession: (
       prId: string,
       mode?: ReviewMode,
-    ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    ) => Effect.Effect<ReviewSession, DbError, DbService>;
     /**
      * The session the UI reads for this PR: keyed on the identity-derived
      * mode (see `resolveReviewModeForPr`), never on a walkthrough's
@@ -112,25 +112,27 @@ export class ReviewService extends Context.Service<
      */
     readonly getOrCreateIdentitySession: (
       prId: string,
-    ) => Effect.Effect<ReviewSession, ReviewError, DbService>;
+    ) => Effect.Effect<ReviewSession, DbError, DbService>;
     readonly getActiveSession: (
       prId: string,
       mode?: ReviewMode,
-    ) => Effect.Effect<ReviewSession | null, ReviewError, DbService>;
+    ) => Effect.Effect<ReviewSession | null, DbError, DbService>;
 
     // Threads
     readonly createThread: (
       sessionId: string,
       params: CreateThreadParams,
-    ) => Effect.Effect<CommentThread, ReviewError, DbService>;
-    readonly getThread: (threadId: string) => Effect.Effect<CommentThread, ReviewError, DbService>;
+    ) => Effect.Effect<CommentThread, DbError, DbService>;
+    readonly getThread: (
+      threadId: string,
+    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
     readonly getThreadsForSession: (
       sessionId: string,
-    ) => Effect.Effect<CommentThread[], ReviewError, DbService>;
+    ) => Effect.Effect<CommentThread[], DbError, DbService>;
     readonly getThreadByExternalCommentId: (
       sessionId: string,
       externalCommentId: string,
-    ) => Effect.Effect<CommentThread | null, ReviewError, DbService>;
+    ) => Effect.Effect<CommentThread | null, DbError, DbService>;
     /**
      * Re-parent this PR's GitHub-sourced threads (`externalCommentId != null`)
      * that landed in one of its *other* review sessions into `sessionId`.
@@ -150,15 +152,15 @@ export class ReviewService extends Context.Service<
     readonly adoptExternalThreads: (
       prId: string,
       sessionId: string,
-    ) => Effect.Effect<number, ReviewError, DbService>;
+    ) => Effect.Effect<number, DbError, DbService>;
     readonly updateThreadStatus: (
       threadId: string,
       status: ThreadStatus,
-    ) => Effect.Effect<CommentThread, ReviewError, DbService>;
+    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
     readonly setThreadExternalIds: (
       threadId: string,
       ids: { externalThreadId?: string; externalCommentId?: string; lastSyncedAt?: string },
-    ) => Effect.Effect<void, ReviewError, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
     /**
      * Apply the status-machine transition for a reply by `authorRole`.
      * Reviewer → pending_coder; Coder → pending_reviewer; AI → unchanged.
@@ -168,38 +170,36 @@ export class ReviewService extends Context.Service<
     readonly transitionStatus: (
       threadId: string,
       authorRole: AuthorRole,
-    ) => Effect.Effect<CommentThread, ReviewError, DbService>;
-    readonly deleteThread: (threadId: string) => Effect.Effect<void, ReviewError, DbService>;
+    ) => Effect.Effect<CommentThread, ReviewError | DbError, DbService>;
+    readonly deleteThread: (threadId: string) => Effect.Effect<void, DbError, DbService>;
     readonly deleteThreadAsUser: (
       threadId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<void, ReviewError, DbService>;
+    ) => Effect.Effect<void, ReviewError | DbError, DbService>;
 
     // Messages
     readonly addMessage: (
       threadId: string,
       params: CreateMessageParams,
-    ) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
-    readonly getMessages: (
-      threadId: string,
-    ) => Effect.Effect<ThreadMessage[], ReviewError, DbService>;
+    ) => Effect.Effect<ThreadMessage, DbError, DbService>;
+    readonly getMessages: (threadId: string) => Effect.Effect<ThreadMessage[], DbError, DbService>;
     readonly getMessage: (
       messageId: string,
-    ) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
+    ) => Effect.Effect<ThreadMessage, ReviewError | DbError, DbService>;
     readonly setMessageExternalId: (
       messageId: string,
       externalId: string,
-    ) => Effect.Effect<void, ReviewError, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
     readonly updateMessageBody: (
       messageId: string,
       body: string,
       editedAt: string,
-    ) => Effect.Effect<void, ReviewError, DbService>;
+    ) => Effect.Effect<void, DbError, DbService>;
     readonly editMessage: (
       messageId: string,
       body: string,
       actorLogin: string | null,
-    ) => Effect.Effect<ThreadMessage, ReviewError, DbService>;
+    ) => Effect.Effect<ThreadMessage, ReviewError | DbError, DbService>;
     /**
      * Delete a reply message that hasn't been synced to GitHub yet.
      * Guards:
@@ -212,10 +212,10 @@ export class ReviewService extends Context.Service<
     readonly deleteMessage: (
       messageId: string,
       actorLogin: string | null,
-    ) => Effect.Effect<{ threadId: string }, ReviewError, DbService>;
+    ) => Effect.Effect<{ threadId: string }, ReviewError | DbError, DbService>;
     readonly findMessageByExternalId: (
       externalId: string,
-    ) => Effect.Effect<ThreadMessage | null, ReviewError, DbService>;
+    ) => Effect.Effect<ThreadMessage | null, DbError, DbService>;
   }
 >()("ReviewService") {}
 
@@ -224,7 +224,7 @@ export class ReviewService extends Context.Service<
 const getOrCreateActiveSession = (
   prId: string,
   mode: ReviewMode = "reviewer",
-): Effect.Effect<ReviewSession, ReviewError, DbService> =>
+): Effect.Effect<ReviewSession, DbError, DbService> =>
   Effect.gen(function* () {
     const existing = yield* tryDb("find active session", (db) =>
       db
