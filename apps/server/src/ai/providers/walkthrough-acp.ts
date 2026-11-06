@@ -41,25 +41,18 @@ import type {
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "../../config";
-import {
-  AGENT_IDLE_TIMEOUT_MS,
-  CLI_WALKTHROUGH_TIMEOUT_MS,
-  WALKTHROUGH_HEARTBEAT_MS,
-} from "../../constants";
 import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
-import {
-  recordWalkthroughToken,
-  startWalkthroughPrompt,
-} from "../../observability/walkthrough-metrics";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
 import type { AcpLaunchConfig } from "../acp/presets";
 import {
+  AGENT_IDLE_TIMEOUT_MS,
   buildActivity,
+  CLI_WALKTHROUGH_TIMEOUT_MS,
   decodeAcpSessionUpdate,
   makeAcpDecodeState,
   makeActivityBeacon,
@@ -74,8 +67,15 @@ import {
   buildWalkthroughSystemPrompt,
   type WalkthroughPromptHints,
 } from "../prompts/walkthrough";
+import { recordWalkthroughToken, startWalkthroughPrompt } from "./walkthrough-metrics";
 
 /** Avoid "Internal error.. Nothing had been written" when joining clauses. */
+/** Cadence at which each provider pushes a `phase` heartbeat into its event queue
+ *  while the prompt is in flight. Keeps the stream guard's inactivity timer reset
+ *  even when the model is thinking deeply between tool calls or SSE reasoning-delta
+ *  events are temporarily silent. */
+const WALKTHROUGH_HEARTBEAT_MS = 45_000; // 45 seconds
+
 function trimTrailingPeriod(message: string): string {
   return message.replace(/\.\s*$/, "");
 }

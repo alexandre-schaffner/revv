@@ -47,7 +47,7 @@
 
 import { ACP_AGENT_IDS, type AgentProgressFrame } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
-import { CHAT_IDLE_TIMEOUT_MS } from "../constants";
+import { CHAT_IDLE_TIMEOUT_MS } from "../ai/agent-stream";
 import {
   type AiError,
   type ConcurrentPushError,

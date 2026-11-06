@@ -3,8 +3,9 @@
  * after the open-PR list has gone out, because nothing on screen waits on it.
  */
 import type { PullRequest, Repository } from "@revv/shared";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 import { Effect } from "effect";
+import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { account, user } from "../db/schema/auth";
 import { pullRequests } from "../db/schema/pull-requests";
 import { DbError } from "../domain/errors";
@@ -14,7 +15,25 @@ import { apiBaseForHost } from "./github-rest";
 import type { GitHubInfra, PollDeps, SyncCycle } from "./poll-cycle";
 import type { SettingsService } from "./Settings";
 
-const ARCHIVE_BACKFILL_DAYS = 7;
+/** The local archive holds the last week of closed and merged PRs. */
+const ARCHIVE_DAYS = 7;
+
+/** Deleting a PR cascades to its walkthroughs, sessions, chats, diff files and pins. */
+export const prArchiveRetention: RetentionPolicy = {
+  table: "pull_requests",
+  sweep: (db, now) =>
+    db
+      .delete(pullRequests)
+      .where(
+        and(
+          inArray(pullRequests.status, ["closed", "merged"]),
+          isNotNull(pullRequests.closedAt),
+          lt(pullRequests.closedAt, daysBefore(now, ARCHIVE_DAYS)),
+        ),
+      )
+      .returning({ id: pullRequests.id })
+      .all().length,
+};
 /**
  * Sized to cover the full backfill window in a single cycle for an active repo
  * (~13 closed PRs/day × 7 days ≈ 90, with headroom). The search returns the
@@ -267,9 +286,9 @@ export const refetchDiffs = (
 /**
  * Catch closed/merged PRs that never made it into the local mirror — e.g.
  * closed before the user added the repo to Revv, or while the server was
- * offline for longer than one poll interval. Bounded to the same 7-day window
- * the DbMaintenance sweep uses for retention, so the local archive converges on
- * "last week of activity" from GitHub. Per-repo fetch cap defends against
+ * offline for longer than one poll interval. Bounded to the archive window
+ * (`ARCHIVE_DAYS`), so the local archive converges on "last week of activity"
+ * from GitHub. Per-repo fetch cap defends against
  * bursty repos. Failures are non-fatal — we degrade silently to whatever the
  * local mirror already has.
  *
@@ -283,7 +302,7 @@ export const backfillArchive = (
   Effect.gen(function* () {
     const { db, github, prService } = deps;
     const backfillSinceIso = new Date(
-      Date.now() - ARCHIVE_BACKFILL_DAYS * 24 * 60 * 60 * 1000,
+      Date.now() - ARCHIVE_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
     const backfillUntilIso = new Date().toISOString();
 

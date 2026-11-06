@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { readSpans, TracingLive } from "./tracer";
+import { readSpans, TracingLive } from "../../observability/tracer";
 import {
   recordWalkthroughToken,
   startWalkthroughPrompt,

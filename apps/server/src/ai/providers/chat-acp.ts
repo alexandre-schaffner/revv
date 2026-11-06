@@ -21,7 +21,6 @@ import {
   type ThinkingEffort,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CHAT_IDLE_TIMEOUT_MS, CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants";
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
 import { type AcpSessionState, getAcpConnection } from "../acp/acp-connection";
@@ -29,6 +28,8 @@ import { withAgentKeychainHint } from "../acp/agent-keychain";
 import { findPlanModeId, modeToExitPlan } from "../acp/session-config";
 import {
   buildActivity,
+  CHAT_IDLE_TIMEOUT_MS,
+  CLI_CHAT_TURN_TIMEOUT_MS,
   decodeAcpSessionUpdate,
   fluidEmit,
   makeAcpDecodeState,

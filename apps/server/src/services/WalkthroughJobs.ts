@@ -52,6 +52,7 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../ai/agent-stream";
 import {
   accumulateTokenUsage,
   addThroughput,
@@ -63,8 +64,8 @@ import { resolveJobStart } from "../ai/jev/job-start-resolution";
 import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
 import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
+import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
@@ -85,7 +86,6 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
-import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
 import { AiService, type ContinuationContext } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";

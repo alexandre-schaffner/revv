@@ -1,11 +1,13 @@
 import type { Repository } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { REPO_CACHE_TTL_MS } from "../constants";
 import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
 import { GitHubGateway } from "../services/GitHub";
 import { handleAppError, withAccount } from "./middleware";
+
+/** TTL for the in-memory GitHub repo list cache. */
+const REPO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const TEAMS_CACHE_TTL_MS = 10 * 60 * 1000;
 

@@ -21,6 +21,7 @@ import { resolveThinkingEffort } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../ai/agent-stream";
 import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   type RecapSourcePrDiff,
@@ -29,7 +30,6 @@ import {
   type RecapToolContext,
   recapCompletionBlocker,
 } from "../ai/providers/recap-tools";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
 import { DbError, type RecapError, ValidationError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";

@@ -9,8 +9,10 @@ import {
   type AgentStatusReport,
 } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { CLI_CACHE_TTL_MS } from "../../constants";
 import { resolveClaudeConfigDir } from "../acp/claude-config";
+
+/** TTL for the cached CLI agent availability check. */
+const CLI_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // ── CLI agent detection ──────────────────────────────────────────────────────
 //

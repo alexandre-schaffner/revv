@@ -1,8 +1,19 @@
 import { and, eq, lt } from "drizzle-orm";
 import { Context, Effect, type Exit, Layer } from "effect";
+import type { RetentionPolicy } from "../db/retention";
 import { kvCache } from "../db/schema/index";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
+
+export const kvCacheRetention: RetentionPolicy = {
+  table: "kv_cache",
+  sweep: (db, now) =>
+    db
+      .delete(kvCache)
+      .where(lt(kvCache.expiresAt, now.toISOString()))
+      .returning({ key: kvCache.key })
+      .all().length,
+};
 
 /**
  * Options governing a single `set` (or `getOrFetch`) write.
