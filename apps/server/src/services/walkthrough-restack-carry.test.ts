@@ -4,10 +4,10 @@ import {
   RATING_AXES,
   type WalkthroughStackSnapshot,
   type WalkthroughStreamEvent,
+  ZERO_TOKEN_USAGE,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
-import { ZERO_TOKEN_USAGE } from "../ai/providers/walkthrough-token-usage";
 import { createDb, type Db } from "../db/index";
 import {
   walkthroughBlocks,

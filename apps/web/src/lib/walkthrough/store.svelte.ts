@@ -21,6 +21,7 @@ import type {
   WalkthroughReviewRoundsResponse,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
@@ -42,7 +43,6 @@ import {
   type WalkthroughEntry,
   type WalkthroughUiState,
   walkthroughUiState,
-  ZERO_TOKEN_USAGE,
 } from "./reducer";
 import { wtTrace } from "./trace";
 

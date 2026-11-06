@@ -16,6 +16,7 @@ import {
   isExternalAgentProvider,
   isLowSignalScore,
   isResolvedIssueStatus,
+  normalizeTokenUsage,
   type RatingAxis,
   type RatingCitation,
   type ThreadMessage,
@@ -25,9 +26,9 @@ import {
   type WalkthroughRating,
   type WalkthroughSemanticStep,
   type WalkthroughTokenUsage,
+  ZERO_TOKEN_USAGE,
 } from "@revv/shared";
 import { and, asc, desc, eq, inArray, isNotNull, type SQL } from "drizzle-orm";
-import { ZERO_TOKEN_USAGE } from "../../ai/providers/walkthrough-token-usage";
 import type { Db } from "../../db";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { threadMessages } from "../../db/schema/thread-messages";
@@ -206,33 +207,11 @@ export function decodeRating(row: RatingRow): WalkthroughRating {
 
 export function decodeTokenUsage(raw: string | null): WalkthroughTokenUsage {
   if (!raw) return ZERO_TOKEN_USAGE;
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    return normalizeTokenUsage(JSON.parse(raw));
   } catch {
     return ZERO_TOKEN_USAGE;
   }
-  if (!isRecord(parsed)) return ZERO_TOKEN_USAGE;
-  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  const inputTokens = num(parsed.inputTokens);
-  const outputTokens = num(parsed.outputTokens);
-  const cacheReadInputTokens = num(parsed.cacheReadInputTokens);
-  const cacheCreationInputTokens = num(parsed.cacheCreationInputTokens);
-  const contextWindowTokens = num(parsed.contextWindowTokens);
-  // Walkthroughs from before context occupancy was tracked carry no
-  // `contextTokens`; the throughput sum keeps their gauge populated.
-  const contextTokens =
-    typeof parsed.contextTokens === "number" && Number.isFinite(parsed.contextTokens)
-      ? parsed.contextTokens
-      : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  return {
-    inputTokens,
-    outputTokens,
-    cacheReadInputTokens,
-    cacheCreationInputTokens,
-    contextTokens,
-    ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
-  };
 }
 
 /**

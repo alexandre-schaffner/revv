@@ -26,12 +26,12 @@ import {
   type WalkthroughGenerationMode,
   type WalkthroughMode,
   type WalkthroughStreamEvent,
+  ZERO_TOKEN_USAGE,
 } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
 import { eq } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Option } from "effect";
 import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
-import { ZERO_TOKEN_USAGE } from "../ai/providers/walkthrough-token-usage";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { walkthroughs } from "../db/schema/walkthroughs";

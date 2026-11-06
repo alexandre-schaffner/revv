@@ -6,6 +6,7 @@ import {
   type WalkthroughIssue,
   type WalkthroughRating,
   type WalkthroughStreamEvent,
+  ZERO_TOKEN_USAGE,
 } from "@revv/shared";
 import {
   applyEvents,
@@ -69,12 +70,22 @@ function snapshot(over: Partial<WalkthroughSnapshot> = {}): WalkthroughSnapshot 
     status: "complete",
     walkthrough: {
       id: "w1",
+      reviewSessionId: "s1",
+      pullRequestId: "pr1",
+      mode: "reviewer",
       summary: "snap summary",
       riskLevel: "medium",
+      sentiment: null,
+      semanticSteps: [],
       blocks: [block("b1", 0)],
       issues: [],
       ratings: [],
-      tokenUsage: {},
+      leads: null,
+      lastCompletedPhase: "D",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      modelUsed: "model",
+      tokenUsage: ZERO_TOKEN_USAGE,
+      prHeadSha: "abc",
     },
     ...over,
   };

@@ -10,13 +10,13 @@ import type {
   WalkthroughStreamEvent,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { Effect } from "effect";
 import { judgeArtifact } from "../../ai/jev/artifact-quality";
 import { judgeIssue } from "../../ai/jev/issue-relevance";
 import { applyJudgment } from "../../ai/jev/issue-relevance-persistence";
 import { type JudgmentTracker, makeJudgmentTracker } from "../../ai/jev/pending";
 import { judgeProse, makeProseMailbox } from "../../ai/jev/prose-voice";
-import { ZERO_TOKEN_USAGE } from "../../ai/providers/walkthrough-token-usage";
 import type { WalkthroughToolContext } from "../../ai/providers/walkthrough-tools";
 import type { Db } from "../../db";
 import { logError } from "../../logger";

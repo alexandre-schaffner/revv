@@ -14,6 +14,7 @@ import type {
   WalkthroughMode,
   WalkthroughTokenUsage,
 } from "@revv/shared";
+import { ZERO_TOKEN_USAGE } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
 import type { PrFileMeta } from "../../services/github/pulls";
@@ -34,7 +35,7 @@ import {
   type WalkthroughReviewMode,
 } from "../prompts/walkthrough";
 import { recordWalkthroughToken, startWalkthroughPrompt } from "./walkthrough-metrics";
-import { mergeContextOccupancy, ZERO_TOKEN_USAGE } from "./walkthrough-token-usage";
+import { mergeContextOccupancy } from "./walkthrough-token-usage";
 
 /** A `phase` heartbeat while the prompt is in flight, so the client's stall watchdog sees a live run through long thinking gaps. */
 const WALKTHROUGH_HEARTBEAT_MS = 45_000;

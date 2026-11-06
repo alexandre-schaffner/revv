@@ -22,15 +22,6 @@
 
 import type { WalkthroughTokenUsage } from "@revv/shared";
 
-/** Throughput and occupancy both at zero — the identity for accumulation. */
-export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadInputTokens: 0,
-  cacheCreationInputTokens: 0,
-  contextTokens: 0,
-});
-
 const isPositiveFinite = (v: number | undefined): v is number =>
   typeof v === "number" && Number.isFinite(v) && v > 0;
 
