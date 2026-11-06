@@ -62,7 +62,7 @@ async function confirmDelete(): Promise<void> {
 
 <article class="card">
 	<header class="card-head">
-		<Avatar handle={author.login} avatarContent={author.avatarContent} size={22} />
+		<Avatar name={author.login} src={author.avatarContent} size={22} />
 		<p class="card-byline">
 			<span class="card-author">{author.login}</span>
 			{#if author.kind === 'bot'}<span class="card-tag">bot</span>{/if}

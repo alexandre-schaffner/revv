@@ -4,16 +4,19 @@ import X from "phosphor-svelte/lib/X";
 import type { Snippet } from "svelte";
 import { setSearchQuery } from "$lib/stores/prs.svelte";
 import {
-  expandOrSelect,
-  getFocusedId,
+  focusFirst,
+  isFocusedVisible,
   moveDown,
   moveUp,
-  setFocusedId,
+  openFocused,
 } from "$lib/stores/sidebar-nav.svelte";
 
-// `trailing` renders inline to the right of the search input — the creator
-// filter button lives here so it reads as part of the search row.
-let { trailing }: { trailing?: Snippet } = $props();
+interface Props {
+  /** Inline to the right of the input — the creator filter button. */
+  trailing?: Snippet;
+}
+
+let { trailing }: Props = $props();
 
 let inputEl: HTMLInputElement;
 let inputValue = $state("");
@@ -36,67 +39,28 @@ function flushSearch(): void {
   setSearchQuery(inputValue);
 }
 
-// Repo groups default to collapsed, so on a fresh search the only
-// data-sidebar-nav nodes in the PR pane are the repo headers. We
-// land the highlight on an actual PR row (data-nav-type="pr"); if
-// none are mounted because every group is closed, we click the
-// first repo header to expand it and walk the DOM again on the next
-// frame.
-function highlightFirstPr(): boolean {
-  const pr = document.querySelector<HTMLElement>('.view-pane--prs [data-nav-type="pr"]');
-  const id = pr?.getAttribute("data-sidebar-nav");
-  if (!id) return false;
-  setFocusedId(id);
-  return true;
-}
-
-function jumpToFirstResult(): void {
-  if (highlightFirstPr()) return;
-  const firstGroup = document.querySelector<HTMLElement>('.view-pane--prs [data-nav-type="repo"]');
-  if (!firstGroup) return;
-  firstGroup.click();
-  requestAnimationFrame(() => {
-    highlightFirstPr();
-  });
-}
-
-// Returns whether the currently-focused sidebar-nav id still points
-// at a rendered DOM node — i.e. the keyboard cursor is on something
-// real that moveDown/moveUp can step from. False on the very first
-// arrow press, and false again if the active query filtered the
-// focused PR out.
-function focusedItemRendered(): boolean {
-  const id = getFocusedId();
-  if (!id) return false;
-  return document.querySelector(`[data-sidebar-nav="${CSS.escape(id)}"]`) !== null;
-}
-
-// Keyboard nav from the search input.
-//
-// First press lands the cursor on the first matching PR (auto-
-// expanding the lead repo group if needed). Subsequent presses step
-// through the list via the shared sidebar-nav store, so DOM focus
-// stays on the input — the user can keep typing while navigating.
-// Enter activates whatever the cursor is on (selects the PR via the
-// nav-store's expandOrSelect, which clicks the focused button).
+// Keyboard nav from the search input. The first press lands the cursor on
+// the first matching PR; later presses step through the list, so DOM focus
+// stays on the input and the user can keep typing. Enter opens whatever the
+// cursor is on.
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key !== "Enter" && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   e.preventDefault();
 
   if (e.key === "Enter") {
-    if (focusedItemRendered()) {
-      expandOrSelect();
+    if (isFocusedVisible()) {
+      openFocused();
     } else {
       flushSearch();
-      requestAnimationFrame(jumpToFirstResult);
+      focusFirst();
     }
     inputEl?.blur();
     return;
   }
 
-  if (focusedItemRendered()) {
+  if (isFocusedVisible()) {
     if (e.key === "ArrowDown") moveDown();
-    else if (e.key === "ArrowUp") moveUp();
+    else moveUp();
     return;
   }
 
@@ -105,7 +69,13 @@ function handleKeydown(e: KeyboardEvent): void {
   if (e.key === "ArrowUp") return;
 
   flushSearch();
-  requestAnimationFrame(jumpToFirstResult);
+  focusFirst();
+}
+
+/** Focus the field and select its text (the sidebar's `/` shortcut). */
+export function focus(): void {
+  inputEl?.focus();
+  inputEl?.select();
 }
 
 function handleClear() {

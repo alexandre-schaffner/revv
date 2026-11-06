@@ -5,10 +5,11 @@ import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { Shimmer } from "$lib/components/ai/shimmer";
-import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { recapWindowIsStale, utcDayKey } from "$lib/components/recaps/period-window";
 import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
+import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import {
   abortRecapStream,
@@ -27,7 +28,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");
@@ -76,7 +76,9 @@ const stream = $derived(getRecapStreamEntry(recapId));
 const recaps = $derived(getRecapsForRepo(repoId));
 const pendingAction = $derived(getRecapPendingAction(recapId));
 
-const actionsFloatStyle = $derived(getActionsFloatStyle());
+useShellChrome(() => ({
+  actions: showGenerateFab || genActionState ? recapActions : undefined,
+}));
 
 const periodLabelLower = $derived(recap?.period === "weekly" ? "weekly" : "daily");
 const currentPeriodLabel = $derived(recap?.period === "weekly" ? "this week's" : "today's");
@@ -150,6 +152,41 @@ async function onGenerate(): Promise<void> {
 }
 </script>
 
+{#snippet recapActions()}
+	<div class="actions-float">
+		<div class="actions-row" role="toolbar" aria-label="Recap actions">
+			{#if showGenerateFab}
+				<GlassPill
+					variant="accent"
+					onclick={onGenerate}
+					disabled={generating}
+					title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
+				>
+					{#if generating}
+						<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
+					{:else}
+						<PenNib size={16} aria-hidden="true" />
+					{/if}
+					<Shimmer active={!generating}>
+						{generating
+							? `Generating ${currentPeriodLabel} recap…`
+							: `Generate ${currentPeriodLabel} recap`}
+					</Shimmer>
+				</GlassPill>
+			{/if}
+			{#if genActionState}
+				<GenActionBar
+					uiState={genActionState}
+					pendingAction={pendingAction}
+					{onStop}
+					onResume={onRegenerate}
+					onRegenerate={onRegenerate}
+				/>
+			{/if}
+		</div>
+	</div>
+{/snippet}
+
 <div class="recap-route">
 	<div class="page">
 		<RecapDetail
@@ -173,48 +210,9 @@ async function onGenerate(): Promise<void> {
 			/>
 		{/if}
 	{/snippet}
-
-	{#if showGenerateFab || genActionState}
-		<div class="actions-float" style={actionsFloatStyle}>
-			<div class="actions-row" role="toolbar" aria-label="Recap actions">
-				{#if showGenerateFab}
-					<GlassPill
-						variant="accent"
-						onclick={onGenerate}
-						disabled={generating}
-						title="Write a brand-new recap for {currentPeriodLabel} {periodLabelLower} window. The recap below stays as-is."
-					>
-						{#if generating}
-							<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-						{:else}
-							<PenNib size={16} aria-hidden="true" />
-						{/if}
-						<Shimmer active={!generating}>
-							{generating
-								? `Generating ${currentPeriodLabel} recap…`
-								: `Generate ${currentPeriodLabel} recap`}
-						</Shimmer>
-					</GlassPill>
-				{/if}
-				{#if genActionState}
-					<GenActionBar
-						uiState={genActionState}
-						pendingAction={pendingAction}
-						{onStop}
-						onResume={onRegenerate}
-						onRegenerate={onRegenerate}
-					/>
-				{/if}
-			</div>
-		</div>
-	{/if}
 </div>
 
 <style>
-	/* Positioning context for the floating action bar — mirrors the role
-	   .main-area plays for the PR walkthrough actions in AppShell. The
-	   scroll container (.page) lives inside this wrapper so the absolutely
-	   positioned bar is never a descendant of the scroll container. */
 	.recap-route {
 		position: relative;
 		height: 100%;

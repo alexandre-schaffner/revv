@@ -10,6 +10,7 @@ import {
   getArchivedNextCursor,
   getSelectedPrId,
 } from "$lib/stores/prs.svelte";
+import { isArchiveOpen, toggleArchiveOpen } from "$lib/stores/sidebar.svelte";
 import PrItem from "./PrItem.svelte";
 
 interface Props {
@@ -19,26 +20,8 @@ interface Props {
 let { repoId }: Props = $props();
 
 const STAGGER_CAP = 20;
-const STORAGE_PREFIX = "revv:archive-open:";
 
-let expanded = $state(false);
-
-// Per-repo persistence — different repos have different archive states,
-// and "I left it open last time" is the user's intent. Localstorage
-// rather than the store because it's chrome state, not data state.
-$effect(() => {
-  if (typeof localStorage === "undefined") return;
-  const stored = localStorage.getItem(`${STORAGE_PREFIX}${repoId}`);
-  expanded = stored === "1";
-});
-
-function toggle(): void {
-  expanded = !expanded;
-  if (typeof localStorage !== "undefined") {
-    if (expanded) localStorage.setItem(`${STORAGE_PREFIX}${repoId}`, "1");
-    else localStorage.removeItem(`${STORAGE_PREFIX}${repoId}`);
-  }
-}
+const expanded = $derived(isArchiveOpen(repoId));
 
 const archivedPrs = $derived(getArchivedByRepo().get(repoId) ?? []);
 const selectedPrId = $derived(getSelectedPrId());
@@ -56,7 +39,7 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 			type="button"
 			class="archive-toggle"
 			class:archive-toggle--expanded={expanded}
-			onclick={toggle}
+			onclick={() => toggleArchiveOpen(repoId)}
 			aria-expanded={expanded}
 		>
 			{#if expanded}
@@ -89,7 +72,6 @@ const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 								{pr}
 								isSelected={selectedPrId === pr.id}
 								variant="archived"
-								navPrefix="archive"
 							/>
 						</div>
 					{/each}

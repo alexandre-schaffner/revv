@@ -5,6 +5,7 @@ import Gear from "phosphor-svelte/lib/Gear";
 import SignOut from "phosphor-svelte/lib/SignOut";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import {
   Content as PopoverContent,
   Root as PopoverRoot,
@@ -14,6 +15,7 @@ import { signOut, switchSession } from "$lib/session/lifecycle.svelte";
 import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { toggleSettings } from "$lib/stores/settingsModal.svelte";
+import { githubHostLabel } from "$lib/utils/github-host";
 
 interface Props {
   collapsed?: boolean;
@@ -32,9 +34,6 @@ type SwitcherEntry = {
 };
 
 let open = $state(false);
-let _lastAvatar = $state<string | null>(null);
-let _avatarFailedForUrl = $state<string | null>(null);
-let _acctAvatarFailedUrls = $state(new Set<string>());
 let switchingId = $state<string | null>(null);
 
 const user = $derived(getUser());
@@ -42,9 +41,6 @@ const localAccounts = $derived(getLocalAccounts());
 const isSwitching = $derived(getIsSwitching());
 
 const displayAvatar = $derived(user?.image ?? null);
-
-// avatarFailed is true only when the current URL has previously errored
-const avatarFailed = $derived(_avatarFailedForUrl === displayAvatar && displayAvatar !== null);
 
 // When isSwitching drops to false, clear the per-row switching tracker
 const _switchingActive = $derived(isSwitching ? switchingId : null);
@@ -63,11 +59,6 @@ const switcherEntries = $derived(
     })),
   ),
 );
-
-function hostLabel(host: string): string {
-  if (host === "github.com") return "GitHub";
-  return host;
-}
 
 function isEntryActive(entry: SwitcherEntry): boolean {
   const currentHost = getGithubHost();
@@ -107,24 +98,13 @@ async function handleSignOut(): Promise<void> {
 <PopoverRoot bind:open>
 	<PopoverTrigger class={collapsed ? 'user-trigger user-trigger--collapsed' : 'user-trigger'}>
 		<span class="user-avatar-wrap" class:user-avatar-wrap--switching={isSwitching}>
-			{#if displayAvatar && !avatarFailed}
-				<img
-					src={displayAvatar}
-					alt=""
-					class={collapsed ? 'user-avatar user-avatar--collapsed' : 'user-avatar'}
-					referrerpolicy="no-referrer"
-					onerror={() => (_avatarFailedForUrl = displayAvatar)}
-				/>
-			{:else}
-				<span
-					class={collapsed
-						? 'user-avatar user-avatar--collapsed user-avatar--fallback'
-						: 'user-avatar user-avatar--fallback'}
-					aria-hidden="true"
-				>
-					<User size={collapsed ? 14 : 16} />
-				</span>
-			{/if}
+			<Avatar
+				src={displayAvatar}
+				size={28}
+				fallback="user"
+				glyphSize={collapsed ? 14 : 16}
+				class="user-avatar"
+			/>
 			{#if isSwitching}
 				<span class="user-avatar-spinner" aria-hidden="true">
 					<Spinner size={collapsed ? 12 : 14} class="spin-icon motion-essential-spin" />
@@ -158,25 +138,18 @@ async function handleSignOut(): Promise<void> {
 				disabled={isSwitching}
 				aria-pressed={active}
 			>
-				<!-- Avatar -->
 				<span class="acct-avatar-wrap">
-					{#if avatar && !_acctAvatarFailedUrls.has(avatar)}
-						<img
-							src={avatar}
-							alt=""
-							class="acct-avatar"
-							referrerpolicy="no-referrer"
-							onerror={() => { _acctAvatarFailedUrls = new Set([..._acctAvatarFailedUrls, avatar]); }}
-						/>
-					{:else}
-						<User size={13} class="acct-icon" />
-					{/if}
+					<Avatar src={avatar} size={18}>
+						{#snippet fallback()}
+							<User size={13} class="acct-icon" />
+						{/snippet}
+					</Avatar>
 				</span>
 
 				<!-- Identity -->
 				<span class="acct-body">
 					<span class="acct-login">{entry.githubLogin ?? entry.userName}</span>
-					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {hostLabel(entry.host)}</span>
+					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {githubHostLabel(entry.host)}</span>
 				</span>
 
 				<!-- Status indicator -->
@@ -256,7 +229,7 @@ async function handleSignOut(): Promise<void> {
 		display: inline-flex;
 	}
 
-	.user-avatar-wrap--switching .user-avatar {
+	.user-avatar-wrap--switching :global(.user-avatar) {
 		opacity: 0.4;
 	}
 
@@ -270,23 +243,6 @@ async function handleSignOut(): Promise<void> {
 
 	:global(.spin-icon) {
 		color: var(--color-text-muted);
-	}
-
-	.user-avatar {
-		width: 28px;
-		height: 28px;
-		border-radius: 50%;
-		object-fit: cover;
-		flex-shrink: 0;
-	}
-
-	.user-avatar--fallback {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		background: var(--color-bg-elevated);
-		color: var(--color-text-muted);
-		border-radius: 50%;
 	}
 
 	.user-text {
@@ -390,13 +346,6 @@ async function handleSignOut(): Promise<void> {
 		justify-content: center;
 		width: 20px;
 		height: 20px;
-	}
-
-	.acct-avatar {
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		object-fit: cover;
 	}
 
 	:global(.acct-icon) {

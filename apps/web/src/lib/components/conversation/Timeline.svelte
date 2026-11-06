@@ -73,7 +73,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 						<VerdictGlyph verdict={review.verdict} size={14} />
 					</span>
 					<p class="review-text">
-						<Avatar handle={review.author.login} avatarContent={review.author.avatarContent} size={16} />
+						<Avatar name={review.author.login} src={review.author.avatarContent} size={16} />
 						<strong>{review.author.login}</strong>
 						{REVIEW_VERB[review.verdict]}
 						<time datetime={review.createdAt} title={new Date(review.createdAt).toLocaleString()}>

@@ -2,10 +2,13 @@
 import { isPublishableDraftComment } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import {
   deleteThread,
+  getActiveTab,
   getReviewFiles,
   getThreadMessages,
   getThreads,
@@ -13,11 +16,6 @@ import {
   jumpToWalkthroughBlock,
   loadSession,
 } from "$lib/stores/review.svelte";
-import {
-  resetReviewBar,
-  setReviewBarHandlers,
-  setReviewBarState,
-} from "$lib/stores/reviewBar.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import { getBlocks, getIssues, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
@@ -334,32 +332,27 @@ function toggleAllIssues() {
   }
 }
 
-// Register reactive state and handlers into the shared RC actions store so
-// AppShell can render the float pill as a direct child of .app-shell.
-$effect(() => {
-  setReviewBarState({
-    submitting,
-    selectedCount,
-    canComment,
-    approveBlockerSummary,
-  });
-});
-
-$effect(() => {
-  setReviewBarHandlers({
-    onGenerateChanges: generateChanges,
-    // One submit posts everything in a single GitHub review. The review event
-    // is decided by content: selecting walkthrough issues means "request
-    // changes"; with none it's a plain comment review. Either way the line
-    // comments ride along. Read `.size` live so the decision reflects the
-    // selection at click time, not when this handler was registered.
-    onSubmitReview: () => void submit(selectedCount > 0 ? "request_changes" : "comment"),
-    onComment: () => void submit("comment"),
-    onApprove: handleApproveClick,
-  });
-  return resetReviewBar;
-});
+useShellChrome(() => ({
+  actions: getActiveTab() === "conversation" ? reviewActions : undefined,
+}));
 </script>
+
+{#snippet reviewActions()}
+	<!-- One submit posts everything in a single GitHub review. The review event
+	     is decided by content: selecting walkthrough issues means "request
+	     changes"; with none it's a plain comment review. Either way the line
+	     comments ride along. -->
+	<ReviewActionBar
+		{submitting}
+		{selectedCount}
+		{canComment}
+		{approveBlockerSummary}
+		onGenerateChanges={generateChanges}
+		onSubmitReview={() => void submit(selectedCount > 0 ? 'request_changes' : 'comment')}
+		onComment={() => void submit('comment')}
+		onApprove={handleApproveClick}
+	/>
+{/snippet}
 
 <div class="your-review">
 	<IssuesPanel

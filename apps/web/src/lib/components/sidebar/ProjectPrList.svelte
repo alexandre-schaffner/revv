@@ -44,7 +44,6 @@ const filtered = $derived(hasActivePrListFilter());
 				<PrItem
 					{pr}
 					isSelected={selectedPrId === pr.id}
-					navPrefix="pr"
 				/>
 			</div>
 		{/each}

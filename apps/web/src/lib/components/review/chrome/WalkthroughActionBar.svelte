@@ -2,7 +2,7 @@
 import ArrowDown from "phosphor-svelte/lib/ArrowDown";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Star from "phosphor-svelte/lib/Star";
-import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
+import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
@@ -21,26 +21,74 @@ import {
   resume as resumeWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
 import {
-  getHasNewContentBelow as getWalkthroughHasNewContentBelow,
-  scrollToBottom as scrollWalkthroughToBottom,
-  scrollToRatings as scrollWalkthroughToRatings,
-  scrollToTop as scrollWalkthroughToTop,
-} from "$lib/stores/walkthroughNav.svelte";
-import {
   WALKTHROUGH_PERSPECTIVE_OPTIONS,
   WALKTHROUGH_PERSPECTIVES,
 } from "$lib/utils/walkthrough-perspective";
 
 interface Props {
   prId: string;
+  /** The page's walkthrough scroll container; null until it mounts. */
+  scrollRoot: HTMLElement | null;
 }
 
-let { prId }: Props = $props();
+let { prId, scrollRoot }: Props = $props();
+
+let userScrolledUp = $state(false);
+let scrollHeightWhenLeft = $state(0);
+let currentScrollHeight = $state(0);
+
+$effect(() => {
+  const el = scrollRoot;
+  userScrolledUp = false;
+  scrollHeightWhenLeft = 0;
+  currentScrollHeight = 0;
+  if (!el) return;
+  const onScroll = (): void => {
+    currentScrollHeight = el.scrollHeight;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    if (atBottom) {
+      userScrolledUp = false;
+      scrollHeightWhenLeft = 0;
+    } else if (!userScrolledUp && el.scrollTop > 0) {
+      scrollHeightWhenLeft = el.scrollHeight;
+      userScrolledUp = true;
+    }
+  };
+  el.addEventListener("scroll", onScroll);
+  return () => el.removeEventListener("scroll", onScroll);
+});
+
+const walkthroughHasNewContentBelow = $derived(
+  userScrolledUp && currentScrollHeight > scrollHeightWhenLeft,
+);
+
+function scrollToTop(): void {
+  scrollRoot?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function scrollToBottom(): void {
+  if (!scrollRoot) return;
+  userScrolledUp = false;
+  scrollHeightWhenLeft = 0;
+  currentScrollHeight = 0;
+  scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: "smooth" });
+}
+
+// Same 16px breathing room above the anchor as GuidedWalkthrough's own
+// rating button, so both land at the same offset.
+function scrollToRatings(): void {
+  if (!scrollRoot) return;
+  const el = document.getElementById("walkthrough-rating");
+  if (!el) return;
+  const containerRect = scrollRoot.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
+  scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
+}
 
 const walkthroughUiState = $derived(getWalkthroughUiState());
 const walkthroughPendingAction = $derived(getWalkthroughPendingAction(prId));
 const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
-const walkthroughHasNewContentBelow = $derived(getWalkthroughHasNewContentBelow());
 const chatStreaming = $derived(isChatStreaming(prId));
 const selectedMode = $derived(getSelectedMode(prId));
 const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
@@ -125,7 +173,7 @@ function handleRegenerate(): void {
     <div class="actions-row" role="toolbar" aria-label="Walkthrough actions">
       <GlassPill
         icon
-        onclick={scrollWalkthroughToTop}
+        onclick={scrollToTop}
         aria-label="Scroll to top of walkthrough"
       >
         <ArrowUp size={16} />
@@ -154,7 +202,7 @@ function handleRegenerate(): void {
           out:gsapFade={{ duration: tokens.snap }}
         >
           <GlassPill
-            onclick={scrollWalkthroughToBottom}
+            onclick={scrollToBottom}
             aria-label="Scroll to newest walkthrough content"
           >
             <ArrowDown size={16} />
@@ -170,7 +218,7 @@ function handleRegenerate(): void {
           out:gsapFade={{ duration: tokens.snap }}
         >
           <GlassPill
-            onclick={scrollWalkthroughToRatings}
+            onclick={scrollToRatings}
             aria-label="Scroll to rating panel"
           >
             <Star size={16} weight="fill" />

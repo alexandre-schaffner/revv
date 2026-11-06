@@ -1,15 +1,9 @@
 <script lang="ts">
-import Desktop from "phosphor-svelte/lib/Desktop";
-import Moon from "phosphor-svelte/lib/Moon";
-import Sun from "phosphor-svelte/lib/Sun";
 import type { Snippet } from "svelte";
 import type { Action } from "svelte/action";
+import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
+import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
-import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
 import RevvBrand from "./RevvBrand.svelte";
 
 /**
@@ -51,23 +45,7 @@ let {
 let pageNumber = $derived(String(stepIndex + 1).padStart(2, "0"));
 let pageTotal = $derived(String(totalSteps).padStart(2, "0"));
 
-const theme = $derived(getThemePreference());
-const cycle: Record<ThemePreference, ThemePreference> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-const labels: Record<ThemePreference, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
-
 let isScrollable = $state(false);
-
-function cycleTheme() {
-  setThemePreference(cycle[theme]);
-}
 
 // Show the scrollbar thumb only when the step overflows. A ResizeObserver
 // catches viewport changes; a MutationObserver catches content growing
@@ -123,14 +101,13 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 				<span class="page-sep">/</span>
 				<span class="page-total">{pageTotal}</span>
 			</span>
-			<button class="theme-btn" onclick={cycleTheme} aria-label={labels[theme]} title={labels[theme]}>
-				{#if theme === 'light'}
-					<Sun size={13} />
-				{:else if theme === 'dark'}
-					<Moon size={13} />
-				{:else}
-					<Desktop size={13} />
-				{/if}
+			<button
+				class="theme-btn"
+				onclick={cycleThemePreference}
+				aria-label={themePreferenceLabel()}
+				title={themePreferenceLabel()}
+			>
+				<ThemeIcon size={13} />
 			</button>
 		</div>
 	</header>

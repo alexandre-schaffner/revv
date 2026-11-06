@@ -95,7 +95,7 @@ const openGroups = $derived(groupByAuthor(openEntries));
         {#snippet authorGroupBlock(group: AuthorGroup, accent: "merged" | "open")}
           <div class="author-group" class:author-group--open={accent === "open"}>
             <div class="author-header">
-              <Avatar handle={group.handle} avatarContent={group.avatar} size={22} />
+              <Avatar name={group.handle} src={group.avatar} size={22} />
               <span class="author-handle">{group.handle}</span>
               <span class="author-count">
                 {group.entries.length === 1 ? "1 PR" : `${group.entries.length} PRs`}

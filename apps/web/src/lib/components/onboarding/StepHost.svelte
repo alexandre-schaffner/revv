@@ -1,10 +1,12 @@
 <script lang="ts">
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import { endSession } from "$lib/session/lifecycle.svelte";
 import { cancelSignIn, getIsAuthenticated, setForceOnboardingFlow } from "$lib/stores/auth.svelte";
 import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
+import { normalizeGithubHost } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
@@ -30,35 +32,18 @@ let customClientId = $state<string>(isStoredCustom ? getGithubClientId() : "");
 let showInstructions = $state(isStoredCustom);
 let isSaving = $state(false);
 
-/** Strip protocol, whitespace, and trailing slashes so the user can paste a URL. */
-function normalizeHost(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "")
-    .trim();
-}
-
-const resolvedHost = $derived(selected === CUSTOM ? normalizeHost(customHost) : selected);
+const resolvedHost = $derived(selected === CUSTOM ? normalizeGithubHost(customHost) : selected);
 const resolvedClientId = $derived(selected === CUSTOM ? customClientId.trim() : "");
-const clientIdIsPlaceholder = $derived(
-  (() => {
-    const normalized = resolvedClientId.toLowerCase();
-    return (
-      normalized === "github_client_id" ||
-      normalized === "client_id" ||
-      normalized === "your_client_id" ||
-      normalized === "your-github-client-id" ||
-      normalized.includes("xxxxxxxx")
-    );
-  })(),
+const clientIdInvalid = $derived(
+  resolvedClientId.length > 0 && !isLikelyGitHubClientId(resolvedClientId),
 );
+
 // Example URL for the "create a GitHub App" instructions — uses the host the
 // user typed once it's present, otherwise a placeholder.
 const appCreateUrl = $derived(`https://${resolvedHost || "your-ghe-host.com"}/settings/apps/new`);
 const canContinue = $derived(
   selected !== CUSTOM ||
-    (resolvedHost.length > 0 && resolvedClientId.length > 0 && !clientIdIsPlaceholder),
+    (resolvedHost.length > 0 && resolvedClientId.length > 0 && !clientIdInvalid),
 );
 
 async function handleContinue() {
@@ -157,8 +142,8 @@ async function handleContinue() {
 					Revv has no app registered on your instance — you create one and paste its
 					public client ID here. It's safe to store (it isn't a secret).
 				</p>
-				{#if clientIdIsPlaceholder}
-					<p class="field-error">Paste the real client ID from your GitHub App or OAuth App.</p>
+				{#if clientIdInvalid}
+					<p class="field-error">{GITHUB_CLIENT_ID_HINT}</p>
 				{/if}
 			</div>
 

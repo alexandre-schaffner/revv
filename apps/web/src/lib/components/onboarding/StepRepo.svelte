@@ -6,18 +6,11 @@ import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { untrack } from "svelte";
-import { toast } from "svelte-sonner";
-import { api } from "$lib/api/client";
 import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import {
-  addRepo,
-  fetchAvailableRepos,
-  getAvailableRepos,
-  getAvailableReposFetchFailed,
-  getAvailableReposLoading,
-  getRepositories,
-} from "$lib/stores/prs.svelte";
+import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
+import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { addRepo, getAvailableRepos, getAvailableReposLoading } from "$lib/stores/prs.svelte";
 
 interface Props {
   onContinue: () => void;
@@ -28,25 +21,20 @@ interface Props {
 
 let { onContinue, onBack, onSkip, isGhe = false }: Props = $props();
 
+const catalog = useAvailableRepos();
+const clone = new LocalClone();
+
+const SHOW_SKIP_WAITING_AFTER_MS = 8000;
+const FORCE_ADVANCE_AFTER_MS = 60000;
+
 let mode = $state<"browse" | "link">("link");
 let search = $state("");
-let isAdding = $state(false);
 let addingRepoName = $state<string | null>(null);
 let addingMode = $state<"clone" | "link">("clone");
-let waitingForClone = $state(false);
 let highlightedIndex = $state(0);
-let cloneTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
-let skipWaitingTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
 let showSkipWaiting = $state(false);
-let autoRetries = $state(0);
-let clonePath = $state("");
-let inspectedPath = $state<string | null>(null);
-let inspecting = $state(false);
-let remotes = $state<{ name: string; url: string }[]>([]);
-let isGitRepo = $state<boolean | null>(null);
-let fullName = $state<string | null>(null);
-const MAX_AUTO_RETRIES = 3;
-const AUTO_RETRY_DELAY_MS = 2000;
+
+const isAdding = $derived(addingRepoName !== null);
 
 function focusOnMount(node: HTMLInputElement) {
   // Wrapped in rAF so the focus call runs after the step animation
@@ -55,133 +43,51 @@ function focusOnMount(node: HTMLInputElement) {
   requestAnimationFrame(() => node.focus());
 }
 
-$effect(() => {
-  if (
-    getAvailableRepos().length === 0 &&
-    !getAvailableReposLoading() &&
-    !getAvailableReposFetchFailed()
-  ) {
-    fetchAvailableRepos();
-  }
-});
-
-// Auto-retry: after a fresh sign-in the GitHub token may not be fully
-// propagated yet, or the server may briefly 401 during the race between
-// setToken() and loadUser(). Retry a few times with a delay before
-// falling back to the manual "Retry" button.
-$effect(() => {
-  if (!getAvailableReposFetchFailed()) return;
-  if (autoRetries >= MAX_AUTO_RETRIES) return;
-  const timer = setTimeout(() => {
-    autoRetries++;
-    fetchAvailableRepos(true);
-  }, AUTO_RETRY_DELAY_MS);
-  return () => clearTimeout(timer);
-});
-
-// Pre-fill search with the most common org so the list is scoped
+// Pre-fill the search with an org that owns a clear majority of the user's
+// repos, so the list starts scoped without confusing users with many
+// personal repos.
 $effect(() => {
   const repos = getAvailableRepos();
   if (repos.length === 0 || untrack(() => search) !== "") return;
-  // Find the most common owner
-  const counts = new Map<string, number>();
-  for (const r of repos) {
-    counts.set(r.owner, (counts.get(r.owner) ?? 0) + 1);
-  }
-  let topOwner = "";
-  let topCount = 0;
-  for (const [owner, count] of counts) {
-    if (count > topCount) {
-      topOwner = owner;
-      topCount = count;
-    }
-  }
-  // Only pre-fill if the top org owns a clear majority (>50% of repos)
-  // to avoid confusing pre-selection when the user has many personal repos
-  if (topOwner && topCount > repos.length / 2) {
-    search = topOwner;
-  }
+  const owner = majorityOwner(repos);
+  if (owner) search = owner;
 });
 
-// Watch clone status and advance (or unblock) once the repo is ready or errored.
+// Advance once the repo being added is cloned (or failed). The clone can be
+// slow, so after a while the user may skip waiting, and past a hard limit
+// the step advances on its own.
+const addingStatus = $derived(
+  addingRepoName === null ? undefined : getTrackedRepo(addingRepoName)?.cloneStatus,
+);
+
 $effect(() => {
-  if (!waitingForClone || !addingRepoName) return;
-  const repos = getRepositories();
-  const added = repos.find((r) => r.fullName === addingRepoName);
-  if (!added) return;
-  const status = added.cloneStatus;
-  if (status === "ready" || status === "error") {
-    advanceFromClone();
-  }
+  if (addingStatus === "ready" || addingStatus === "error") untrack(advanceFromClone);
+});
+
+$effect(() => {
+  if (addingRepoName === null) return;
+  const skipTimer = setTimeout(() => (showSkipWaiting = true), SHOW_SKIP_WAITING_AFTER_MS);
+  const advanceTimer = setTimeout(advanceFromClone, FORCE_ADVANCE_AFTER_MS);
   return () => {
-    if (cloneTimeoutId !== null) clearTimeout(cloneTimeoutId);
-    if (skipWaitingTimeoutId !== null) clearTimeout(skipWaitingTimeoutId);
+    clearTimeout(skipTimer);
+    clearTimeout(advanceTimer);
   };
 });
 
-function advanceFromClone() {
-  clearCloneTimers();
-  waitingForClone = false;
-  isAdding = false;
+function stopAdding(): void {
   addingRepoName = null;
   showSkipWaiting = false;
+}
+
+function advanceFromClone(): void {
+  stopAdding();
   onContinue();
 }
 
-function clearCloneTimers() {
-  if (cloneTimeoutId !== null) {
-    clearTimeout(cloneTimeoutId);
-    cloneTimeoutId = null;
-  }
-  if (skipWaitingTimeoutId !== null) {
-    clearTimeout(skipWaitingTimeoutId);
-    skipWaitingTimeoutId = null;
-  }
-}
-
-function resetAddingAfterFailure() {
-  waitingForClone = false;
-  isAdding = false;
-  addingRepoName = null;
-  showSkipWaiting = false;
-  clearCloneTimers();
-}
-
-function startCloneTimeouts() {
-  skipWaitingTimeoutId = setTimeout(() => {
-    showSkipWaiting = true;
-  }, 8000);
-  cloneTimeoutId = setTimeout(() => {
-    advanceFromClone();
-  }, 60000);
-}
-
-let tracked = $derived(new Set(getRepositories().map((r) => r.fullName)));
-let alreadyTracked = $derived(fullName !== null && tracked.has(fullName));
-let canLink = $derived(
-  clonePath.trim() !== "" &&
-    inspectedPath === clonePath.trim() &&
-    fullName !== null &&
-    isGitRepo === true &&
-    !alreadyTracked &&
-    !isAdding &&
-    !inspecting,
-);
+let canLink = $derived(clone.linkable && !isAdding);
 let actionVerb = $derived(addingMode === "link" ? "Linking" : "Cloning");
 
-let filtered = $derived.by(() => {
-  const term = search.trim().toLowerCase();
-  const repos = getAvailableRepos();
-  if (!term) return repos.slice(0, 20);
-  return repos
-    .filter(
-      (r) =>
-        r.fullName.toLowerCase().includes(term) ||
-        r.owner.toLowerCase().includes(term) ||
-        r.name.toLowerCase().includes(term),
-    )
-    .slice(0, 20);
-});
+let filtered = $derived(filterRepos(getAvailableRepos(), search).slice(0, 20));
 
 $effect(() => {
   // Reset highlight when filter changes
@@ -189,115 +95,48 @@ $effect(() => {
   highlightedIndex = 0;
 });
 
-async function select(repo: Repository) {
+async function startAdding(
+  name: string,
+  addMode: "clone" | "link",
+  run: () => Promise<void>,
+): Promise<void> {
+  addingMode = addMode;
+  addingRepoName = name;
+  try {
+    await run();
+  } catch (e) {
+    toastAddRepoError(
+      e,
+      addMode === "link" ? "Failed to link repository" : "Failed to add repository",
+    );
+    stopAdding();
+  }
+}
+
+function select(repo: Repository): void {
   if (isAdding) return;
-  if (tracked.has(repo.fullName)) {
+  if (getTrackedRepo(repo.fullName)) {
     onSkip?.();
     return;
   }
-  isAdding = true;
-  addingMode = "clone";
-  addingRepoName = repo.fullName;
-  waitingForClone = true;
-  startCloneTimeouts();
-  try {
-    await addRepo(repo.fullName);
-    // Don't advance here — the clone-status $effect handles it
-  } catch (e) {
-    // If addRepo itself fails, stop waiting
-    toastAddRepoError(e, "Failed to add repository");
-    resetAddingAfterFailure();
-  }
+  void startAdding(repo.fullName, "clone", () => addRepo(repo.fullName));
 }
 
-async function submitManual(slug: string) {
+function submitManual(slug: string): void {
   if (isAdding) return;
-  isAdding = true;
-  addingMode = "clone";
-  addingRepoName = slug;
-  waitingForClone = true;
-  startCloneTimeouts();
-  try {
-    await addRepo(slug);
-  } catch (e) {
-    toastAddRepoError(e, "Failed to add repository");
-    resetAddingAfterFailure();
-  }
+  void startAdding(slug, "clone", () => addRepo(slug));
 }
 
-async function inspectPath(path: string): Promise<void> {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    resetInspection();
-    return;
-  }
-  inspecting = true;
-  try {
-    const { data, error } = await api.api.repos["inspect-local"].post({ path: trimmed });
-    if (error) {
-      const value = error.value as { error?: string; message?: string } | undefined;
-      throw new Error(value?.error ?? value?.message ?? "Failed to inspect local repository");
-    }
-    if (!data || "error" in data) {
-      throw new Error("Failed to inspect local repository");
-    }
-    isGitRepo = data.isGitRepo;
-    remotes = [...data.remotes];
-    fullName = data.proposedFullName;
-    inspectedPath = trimmed;
-    if (!data.isGitRepo) {
-      toast.error("Choose a folder that contains a git repository");
-    }
-  } catch (e) {
-    resetInspection();
-    toast.error(e instanceof Error ? e.message : "Failed to inspect local repository");
-  } finally {
-    inspecting = false;
-  }
-}
-
-function resetInspection(): void {
-  inspectedPath = null;
-  fullName = null;
-  remotes = [];
-  isGitRepo = null;
-}
-
-function handlePathInput(e: Event): void {
-  if (!(e.currentTarget instanceof HTMLInputElement)) return;
-  if (inspectedPath !== null && e.currentTarget.value.trim() !== inspectedPath) {
-    resetInspection();
-  }
-}
-
-async function browseLocalClone(): Promise<void> {
-  if (inspecting || isAdding) return;
-  try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true });
-    if (typeof selected !== "string") return;
-    clonePath = selected;
-    await inspectPath(selected);
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
-  }
-}
-
-async function submitLink(): Promise<void> {
+function submitLink(): void {
+  const fullName = clone.fullName;
   if (!canLink || fullName === null) return;
-  const path = clonePath.trim();
-  isAdding = true;
-  addingMode = "link";
-  addingRepoName = fullName;
-  waitingForClone = true;
-  startCloneTimeouts();
-  try {
-    await addRepo({ fullName, mode: "link", clonePath: path });
-    // Don't advance here — the clone-status $effect handles linked repos too.
-  } catch (e) {
-    toastAddRepoError(e, "Failed to link repository");
-    resetAddingAfterFailure();
-  }
+  const clonePath = clone.path.trim();
+  void startAdding(fullName, "link", () => addRepo({ fullName, mode: "link", clonePath }));
+}
+
+function browseLocalClone(): void {
+  if (isAdding) return;
+  void clone.browse();
 }
 
 function handleKey(e: KeyboardEvent) {
@@ -310,10 +149,11 @@ function handleKey(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     const repo = filtered[highlightedIndex];
+    const slug = search.trim();
     if (repo) {
-      void select(repo);
-    } else if (search.includes("/") && !isGhe) {
-      void submitManual(search.trim());
+      select(repo);
+    } else if (isRepoSlug(slug) && !isGhe) {
+      submitManual(slug);
     }
   }
 }
@@ -321,7 +161,7 @@ function handleKey(e: KeyboardEvent) {
 function handlePathKey(e: KeyboardEvent) {
   if (e.key === "Enter") {
     e.preventDefault();
-    void inspectPath(clonePath);
+    void clone.inspect();
   }
 }
 </script>
@@ -351,39 +191,38 @@ function handlePathKey(e: KeyboardEvent) {
 						type="text"
 						placeholder="/Users/you/code/project"
 						aria-label="Local clone path"
-						bind:value={clonePath}
-						oninput={handlePathInput}
-						onblur={() => void inspectPath(clonePath)}
+						bind:value={clone.path}
+						onblur={() => void clone.inspect()}
 						onkeydown={handlePathKey}
 						use:focusOnMount
 						autocomplete="off"
 						spellcheck="false"
 					/>
-					{#if inspecting}
+					{#if clone.inspecting}
 						<Dotmatrix variant="square-13" size="small" />
 					{/if}
-					<button class="browse-button" onclick={() => void browseLocalClone()} disabled={inspecting}>
+					<button class="browse-button" onclick={browseLocalClone} disabled={clone.inspecting}>
 						<FolderOpen size={13} />
 						<span>Browse</span>
 					</button>
 				</div>
 
-				{#if isGitRepo === false}
+				{#if clone.isGitRepo === false}
 					<p class="path-hint path-hint--danger">The selected folder is not a git repository.</p>
-				{:else if alreadyTracked}
+				{:else if clone.alreadyTracked}
 					<p class="path-hint path-hint--danger">This repository is already tracked.</p>
-				{:else if isGitRepo === true && fullName !== null}
+				{:else if clone.isGitRepo === true && clone.fullName !== null}
 					<p class="path-hint path-hint--ok">
 						<CheckCircle size={12} />
-						<span>Recognized as <code>{fullName}</code>.</span>
+						<span>Recognized as <code>{clone.fullName}</code>.</span>
 					</p>
-				{:else if isGitRepo === true}
+				{:else if clone.isGitRepo === true}
 					<p class="path-hint path-hint--danger">
 						This clone's <code>origin</code> remote doesn't point at a repository on this GitHub host.
 					</p>
-				{:else if remotes.length > 0}
+				{:else if clone.remotes.length > 0}
 					<div class="remote-list">
-						{#each remotes.slice(0, 3) as remote (`${remote.name}-${remote.url}`)}
+						{#each clone.remotes.slice(0, 3) as remote (`${remote.name}-${remote.url}`)}
 							<div class="remote-row">
 								<span>{remote.name}</span>
 								<code>{remote.url}</code>
@@ -400,7 +239,7 @@ function handlePathKey(e: KeyboardEvent) {
 					     quiet inline alternative beside it rather than competing
 					     as a full-width card. -->
 					<div class="link-actions">
-						<button class="link-submit" onclick={() => void submitLink()}>
+						<button class="link-submit" onclick={submitLink}>
 							<LinkSimple size={14} />
 							<span>Link this repository</span>
 						</button>
@@ -462,19 +301,19 @@ function handlePathKey(e: KeyboardEvent) {
 				</div>
 
 				<div class="list" role="listbox">
-					{#if (getAvailableReposLoading() || (getAvailableReposFetchFailed() && autoRetries < MAX_AUTO_RETRIES)) && filtered.length === 0}
+					{#if catalog.loading && filtered.length === 0}
 						<p class="empty">Loading repositories…</p>
-					{:else if getAvailableReposFetchFailed() && filtered.length === 0}
+					{:else if catalog.failed && filtered.length === 0}
 						<p class="empty error-state">
 							Could not load repositories — your GitHub session may have expired.
-							<button class="retry-link" onclick={() => { autoRetries = 0; fetchAvailableRepos(true); }}>Retry</button>
+							<button class="retry-link" onclick={catalog.retry}>Retry</button>
 						</p>
 					{:else if filtered.length === 0}
 						<p class="empty">No repositories match "{search}"</p>
 					{:else}
 						{#each filtered as repo, i (repo.fullName)}
 							{@const isHighlighted = i === highlightedIndex}
-							{@const isTracked = tracked.has(repo.fullName)}
+							{@const isTracked = getTrackedRepo(repo.fullName) !== undefined}
 							{@const isThisAdding = addingRepoName === repo.fullName}
 							<button
 								class="row"

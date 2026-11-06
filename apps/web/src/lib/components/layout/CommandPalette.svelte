@@ -1,15 +1,17 @@
 <script lang="ts">
 import type { PullRequest, Repository } from "@revv/shared";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import * as Command from "$lib/components/ui/command/index.js";
+import { shortcutLabel } from "$lib/stores/command-keys";
 import {
-  fuzzyScore,
   getFilteredCommands,
   resetQuery,
   setQuery as setCommandQuery,
 } from "$lib/stores/commands.svelte";
-import { getArchivedPrs, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
+import { getArchivedPrs, getPullRequests, getRepositories } from "$lib/stores/prs.svelte";
 import { type PaletteMode, setPaletteMode } from "$lib/stores/shortcuts.svelte";
-import { setSidebarView } from "$lib/stores/sidebar.svelte";
+import { openPr } from "$lib/stores/sidebar-nav.svelte";
+import { fuzzyScore } from "$lib/utils/fuzzy";
 
 interface Props {
   open: boolean;
@@ -81,19 +83,12 @@ const hasResults = $derived(
 
 function handlePrSelect(pr: PullRequest) {
   onOpenChange(false);
-  // Mirror PrItem.handleClick: pair PR selection with sidebar swap to keep
-  // header + body in lockstep regardless of entry point.
-  selectPr(pr.id);
-  setSidebarView("files");
+  openPr(pr.id);
 }
 
-function handleCommandSelect(action: () => void) {
+function handleCommandSelect(run: () => void) {
   onOpenChange(false);
-  action();
-}
-
-function hideBrokenImg(e: Event): void {
-  (e.currentTarget as HTMLImageElement).style.display = "none";
+  run();
 }
 </script>
 
@@ -111,16 +106,9 @@ function hideBrokenImg(e: Event): void {
     class={kind === "archived" ? "palette-pr-item palette-pr-item--archived" : "palette-pr-item"}
   >
     <div class="pr-row-top">
-      {#if result.pr.authorAvatarContent}
-        <img
-          src={result.pr.authorAvatarContent}
-          alt=""
-          class="pr-avatar"
-          loading="lazy"
-          referrerpolicy="no-referrer"
-          onerror={hideBrokenImg}
-        />
-      {/if}
+      <Avatar src={result.pr.authorAvatarContent} size={16} radius="4px">
+        {#snippet fallback()}{/snippet}
+      </Avatar>
       <span class="pr-title">{result.pr.title}</span>
       {#if kind === "archived"}
         <span class="pr-status-badge">{result.pr.status}</span>
@@ -171,12 +159,12 @@ function hideBrokenImg(e: Event): void {
       {#each commands as cmd (cmd.id)}
         <Command.Item
           value={cmd.id}
-          onSelect={() => handleCommandSelect(cmd.action)}
+          onSelect={() => handleCommandSelect(cmd.run)}
           class="palette-cmd-item"
         >
           <span class="cmd-label">{cmd.label}</span>
-          {#if cmd.shortcut}
-            <kbd class="cmd-shortcut">{cmd.shortcut}</kbd>
+          {#if cmd.keys}
+            <kbd class="cmd-shortcut">{shortcutLabel(cmd.keys)}</kbd>
           {/if}
         </Command.Item>
       {/each}
@@ -292,12 +280,6 @@ function hideBrokenImg(e: Event): void {
     gap: 8px;
     width: 100%;
     min-width: 0;
-  }
-  :global(.palette-shell .palette-pr-item .pr-avatar) {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    flex-shrink: 0;
   }
   :global(.palette-shell .palette-pr-item .pr-title) {
     font-size: 13px;

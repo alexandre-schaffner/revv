@@ -1,9 +1,19 @@
+<script module lang="ts">
+import ReviewTabs from "$lib/components/review/chrome/ReviewTabs.svelte";
+
+// Module-level so the tabs stay mounted when the page re-mounts for another
+// PR (see `useShellChrome`).
+export { reviewTabs };
+</script>
+
 <script lang="ts">
 import type { ReviewMode } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
 import ReviewLayout from "$lib/components/review/ReviewLayout.svelte";
 import { readStackPlace } from "$lib/components/stack/margin/place";
 import StackPlaceLine from "$lib/components/stack/margin/StackPlaceLine.svelte";
@@ -13,6 +23,7 @@ import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { getToken } from "$lib/session/token.svelte";
+import { useCommands } from "$lib/stores/commands.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
 import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
@@ -28,11 +39,13 @@ import {
   getReviewFiles,
   getReviewMode,
   loadSession,
+  REVIEW_TABS,
   setActiveFilePath,
   setFilesError,
   setIsLoadingFiles,
   setLoadedHeadSha,
   setPrScrollPosition,
+  setActiveTab,
   setReviewFiles,
   switchPrViewState,
 } from "$lib/stores/review.svelte";
@@ -48,7 +61,6 @@ import {
   fetchWalkthroughSizing,
   getWalkthroughSizing,
 } from "$lib/stores/walkthrough-sizing.svelte";
-import { setScrollRoot } from "$lib/stores/walkthroughNav.svelte";
 
 const pr = $derived(getSelectedPr());
 
@@ -218,13 +230,21 @@ $effect(() => {
   scrollRootEl.scrollTop = saved;
 });
 
-// Register the scroll container with the walkthrough-nav store so the
-// floating Top / Rating buttons in AppShell can scroll it without
-// having to reach across components for the DOM ref.
-$effect(() => {
-  setScrollRoot(scrollRootEl ?? null);
-  return () => setScrollRoot(null);
-});
+// ⌘1/2/3 → the review tabs, in the order the tab bar shows them.
+useCommands(
+  REVIEW_TABS.map((tab, index) => ({
+    id: `review:tab-${tab}`,
+    label: `Show ${tab} tab`,
+    keys: { key: String(index + 1) },
+    hidden: true,
+    run: () => setActiveTab(tab),
+  })),
+);
+
+useShellChrome(() => ({
+  tabs: pr ? reviewTabs : undefined,
+  actions: pr && activeTab === "walkthrough" ? walkthroughActions : undefined,
+}));
 
 // Record the visit against the current head SHA so the sidebar dot
 // clears now and only reappears if a new commit lands on this PR.
@@ -399,6 +419,16 @@ onDestroy(() => {
   deactivateWalkthrough();
 });
 </script>
+
+{#snippet reviewTabs()}
+	<ReviewTabs />
+{/snippet}
+
+{#snippet walkthroughActions()}
+	{#if pr}
+		<WalkthroughActionBar prId={pr.id} scrollRoot={scrollRootEl ?? null} />
+	{/if}
+{/snippet}
 
 {#if isLoading}
 <div class="loading">

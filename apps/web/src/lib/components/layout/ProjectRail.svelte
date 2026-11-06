@@ -5,6 +5,7 @@ import Plus from "phosphor-svelte/lib/Plus";
 import User from "phosphor-svelte/lib/User";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
@@ -108,18 +109,13 @@ function handleAddRepo(): void {
 								>
 									{#if collapsed}
 										<span class="folder-pill-header">
-											{#if group.avatarUrl}
-												<img
-													src={group.avatarUrl}
-													alt=""
-													class="folder-pill-avatar"
-													referrerpolicy="no-referrer"
-												/>
-										{:else}
-											<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
-												<User size={14} />
-											</span>
-										{/if}
+											<Avatar src={group.avatarUrl} size={28} radius="8px">
+												{#snippet fallback()}
+													<span class="folder-pill-avatar folder-pill-avatar--fallback" aria-hidden="true">
+														<User size={14} />
+													</span>
+												{/snippet}
+											</Avatar>
 											{#if isMulti}
 												<span class="folder-pill-count" aria-hidden="true">
 													{group.repos.length}
@@ -127,18 +123,13 @@ function handleAddRepo(): void {
 											{/if}
 										</span>
 									{:else}
-										{#if group.avatarUrl}
-											<img
-												src={group.avatarUrl}
-												alt=""
-												class="folder-pill-avatar"
-												referrerpolicy="no-referrer"
-											/>
-										{:else}
-											<span class="folder-pill-fallback" aria-hidden="true">
-												<User size={14} />
-											</span>
-										{/if}
+										<Avatar src={group.avatarUrl} size={28} radius="8px">
+											{#snippet fallback()}
+												<span class="folder-pill-fallback" aria-hidden="true">
+													<User size={14} />
+												</span>
+											{/snippet}
+										</Avatar>
 									{/if}
 								</Collapsible.Trigger>
 							{/snippet}
@@ -323,8 +314,6 @@ function handleAddRepo(): void {
 		width: 28px;
 		height: 28px;
 		border-radius: 8px;
-		object-fit: cover;
-		display: block;
 	}
 
 	.folder-pill-fallback {

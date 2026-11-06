@@ -17,13 +17,20 @@ import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Command from "$lib/components/ui/command/index.js";
 import {
+  filterRepos,
+  groupByOwner,
+  indexByFullName,
+  isRepoSlug,
+  repoKey,
+} from "$lib/repos/add-repo";
+import { pickDirectory, useAvailableRepos } from "$lib/repos/add-repo.svelte";
+import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
+import {
   addRepo,
-  deleteRepo,
   fetchAvailableRepos,
   getAvailablePrCount,
   getAvailablePrCountsLoaded,
   getAvailableRepos,
-  getAvailableReposFetchFailed,
   getAvailableReposLoading,
   getDefaultCloneBaseDir,
   getPullRequests,
@@ -56,18 +63,15 @@ let {
   onCloneSuccess?: (basePath: string) => void;
 } = $props();
 
-const MANUAL_REPO_REGEX = /^[\w.-]+\/[\w.-]+$/;
-const MAX_AUTO_RETRIES = 3;
-const AUTO_RETRY_DELAY_MS = 2000;
 const MANUAL_IMPORT_VALUE = "__manual_import__";
+
+const catalog = useAvailableRepos();
+const removal = new RepoRemoval();
 
 let search = $state("");
 let addingRepos = $state(new Set<string>());
-let removingRepos = $state(new Set<string>());
 let isManualLoading = $state(false);
 let browsing = $state(false);
-let repoPendingDelete = $state<Repository | null>(null);
-let autoRetries = $state(0);
 let searchEl = $state<HTMLInputElement | null>(null);
 
 // Focus the search on mount (rAF so it lands after the dialog's open motion),
@@ -76,10 +80,12 @@ $effect(() => {
   if (autoFocus && searchEl) requestAnimationFrame(() => searchEl?.focus());
 });
 
-// Reactive map of tracked repos so clone-status changes ripple through.
-let trackedByFullName = $derived(
-  new Map<string, Repository>(getRepositories().map((r) => [r.fullName, r])),
-);
+// Rebuilt on every store change so clone-status updates ripple through.
+let trackedByKey = $derived(indexByFullName(getRepositories()));
+
+function trackedRepo(fullName: string): Repository | undefined {
+  return trackedByKey.get(repoKey(fullName));
+}
 
 // Open-PR count per tracked repo, surfaced as a row badge.
 let openPrCountByRepoId = $derived.by(() => {
@@ -92,80 +98,32 @@ let openPrCountByRepoId = $derived.by(() => {
 
 let trimmedSearch = $derived(search.trim());
 
-let filteredAvailable = $derived(
-  trimmedSearch === ""
-    ? getAvailableRepos()
-    : getAvailableRepos().filter((repo) => {
-        const q = trimmedSearch.toLowerCase();
-        return (
-          repo.fullName.toLowerCase().includes(q) ||
-          repo.owner.toLowerCase().includes(q) ||
-          repo.name.toLowerCase().includes(q)
-        );
-      }),
-);
+let filteredAvailable = $derived(filterRepos(getAvailableRepos(), trimmedSearch));
 
-let groupedByOwner = $derived.by(() => {
-  const groups = new Map<string, typeof filteredAvailable>();
-  for (const repo of filteredAvailable) {
-    const existing = groups.get(repo.owner);
-    if (existing) existing.push(repo);
-    else groups.set(repo.owner, [repo]);
-  }
-  return groups;
-});
+let groupedByOwner = $derived(groupByOwner(filteredAvailable));
 
 // The manual-import row appears when the query parses as owner/name AND
 // there is no exact match in the browsable list. This unifies the old
 // Manual tab into the single search input.
 let showManualImport = $derived.by(() => {
-  if (!MANUAL_REPO_REGEX.test(trimmedSearch)) return false;
-  const lowered = trimmedSearch.toLowerCase();
-  return !filteredAvailable.some((r) => r.fullName.toLowerCase() === lowered);
+  if (!isRepoSlug(trimmedSearch)) return false;
+  const key = repoKey(trimmedSearch);
+  return !filteredAvailable.some((r) => repoKey(r.fullName) === key);
 });
 
-let isManualAlreadyTracked = $derived(showManualImport && trackedByFullName.has(trimmedSearch));
+let isManualAlreadyTracked = $derived(showManualImport && trackedRepo(trimmedSearch) !== undefined);
 
 // One source of truth for which list state to render.
 let listState = $derived.by<"loading" | "error" | "empty" | "no-match" | "groups">(() => {
   const hasRepos = getAvailableRepos().length > 0;
   if (hasRepos) return filteredAvailable.length > 0 ? "groups" : "no-match";
-  if (getAvailableReposLoading()) return "loading";
-  if (getAvailableReposFetchFailed()) {
-    return autoRetries < MAX_AUTO_RETRIES ? "loading" : "error";
-  }
+  if (catalog.loading) return "loading";
+  if (catalog.failed) return "error";
   return "empty";
 });
 
-$effect(() => {
-  if (
-    getAvailableRepos().length === 0 &&
-    !getAvailableReposLoading() &&
-    !getAvailableReposFetchFailed()
-  ) {
-    fetchAvailableRepos();
-  }
-});
-
-// Auto-retry: a freshly-issued GitHub token can briefly 401 during the race
-// between sign-in and propagation. Retry a few times before falling back to
-// the manual Retry button.
-$effect(() => {
-  if (!getAvailableReposFetchFailed() || autoRetries >= MAX_AUTO_RETRIES) return;
-  const timer = setTimeout(() => {
-    autoRetries++;
-    fetchAvailableRepos(true);
-  }, AUTO_RETRY_DELAY_MS);
-  return () => clearTimeout(timer);
-});
-
-function retryFetch(): void {
-  autoRetries = 0;
-  fetchAvailableRepos(true);
-}
-
 async function handleAdd(repoFullName: string) {
-  if (addingRepos.has(repoFullName) || trackedByFullName.has(repoFullName)) return;
+  if (addingRepos.has(repoFullName) || trackedRepo(repoFullName)) return;
   addingRepos = new Set([...addingRepos, repoFullName]);
   try {
     await addRepo(addBody(repoFullName));
@@ -179,28 +137,13 @@ async function handleAdd(repoFullName: string) {
   }
 }
 
-async function handleRemove(repoId: string) {
-  if (removingRepos.has(repoId)) return;
-  removingRepos = new Set([...removingRepos, repoId]);
-  try {
-    await deleteRepo(repoId);
-    repoPendingDelete = null;
-  } catch {
-    // toast handled by store
-  } finally {
-    const next = new Set(removingRepos);
-    next.delete(repoId);
-    removingRepos = next;
-  }
-}
-
 async function handleManualImport() {
   const slug = trimmedSearch;
-  if (!MANUAL_REPO_REGEX.test(slug)) {
+  if (!isRepoSlug(slug)) {
     toast.error("Enter a valid repository in owner/name format");
     return;
   }
-  if (trackedByFullName.has(slug)) {
+  if (trackedRepo(slug)) {
     toast.error("Repository is already tracked");
     return;
   }
@@ -223,7 +166,7 @@ let trimmedCloneBasePath = $derived(cloneBasePath.trim());
 // the submitted `basePath` read through this single value, never a literal.
 let effectiveBase = $derived(trimmedCloneBasePath || getDefaultCloneBaseDir() || "");
 let resolvedClonePath = $derived.by(() => {
-  if (!showLocation || !effectiveBase || !MANUAL_REPO_REGEX.test(trimmedSearch)) return null;
+  if (!showLocation || !effectiveBase || !isRepoSlug(trimmedSearch)) return null;
   const [owner, name] = trimmedSearch.split("/");
   if (!owner || !name) return null;
   return `${effectiveBase.replace(/\/$/, "")}/${owner}/${name}`;
@@ -245,15 +188,9 @@ function rememberCloneBase(): void {
 async function browseForCloneBase(): Promise<void> {
   if (browsing) return;
   browsing = true;
-  try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true });
-    if (typeof selected === "string") onCloneBasePathChange?.(selected);
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to open folder picker");
-  } finally {
-    browsing = false;
-  }
+  const selected = await pickDirectory();
+  browsing = false;
+  if (selected !== null) onCloneBasePathChange?.(selected);
 }
 
 function prCountFor(
@@ -342,7 +279,7 @@ function prCountFor(
 			<Command.Empty forceMount>
 				<div class="state-block">
 					<span>Couldn't load your repositories. Your GitHub session may have expired.</span>
-					<Button variant="outline" size="sm" onclick={retryFetch}>
+					<Button variant="outline" size="sm" onclick={catalog.retry}>
 						<ArrowsClockwise size={13} />
 						<span>Retry</span>
 					</Button>
@@ -352,7 +289,7 @@ function prCountFor(
 			<Command.Empty forceMount>
 				<div class="state-block">
 					<span>No repositories available yet.</span>
-					<Button variant="outline" size="sm" onclick={retryFetch}>
+					<Button variant="outline" size="sm" onclick={catalog.retry}>
 						<ArrowsClockwise size={13} />
 						<span>Refresh</span>
 					</Button>
@@ -415,11 +352,11 @@ function prCountFor(
 						<span class="org-heading-name">{owner}</span>
 					{/snippet}
 					{#each repos as repo (repo.fullName)}
-						{@const trackedRepo = trackedByFullName.get(repo.fullName)}
-						{@const isTracked = trackedRepo !== undefined}
+						{@const tracked = trackedRepo(repo.fullName)}
+						{@const isTracked = tracked !== undefined}
 						{@const isAdding = addingRepos.has(repo.fullName)}
-						{@const isRemoving = trackedRepo ? removingRepos.has(trackedRepo.id) : false}
-						{@const prCount = prCountFor(repo, trackedRepo)}
+						{@const isRemoving = tracked ? removal.isRemoving(tracked.id) : false}
+						{@const prCount = prCountFor(repo, tracked)}
 						<Command.Item
 							value={repo.fullName}
 							keywords={[repo.name, repo.owner]}
@@ -440,15 +377,15 @@ function prCountFor(
 							<div class="repo-meta">
 								{#if isAdding}
 									<Spinner size={13} class="motion-essential-spin text-accent" />
-								{:else if isTracked && trackedRepo.cloneStatus !== 'ready'}
+								{:else if isTracked && tracked.cloneStatus !== 'ready'}
 									<CloneStatusIndicator
-										status={trackedRepo.cloneStatus}
-										error={trackedRepo.cloneError}
-										onRetry={() => retryClone(trackedRepo.id)}
+										status={tracked.cloneStatus}
+										error={tracked.cloneError}
+										onRetry={() => retryClone(tracked.id)}
 										size={13}
 										showLabel
 									/>
-								{:else if isTracked && !trackedRepo.managed}
+								{:else if isTracked && !tracked.managed}
 									<Badge variant="secondary" class="meta-badge meta-badge--linked" title="Linked clone">
 										<LinkSimple size={10} />
 										Linked
@@ -468,7 +405,7 @@ function prCountFor(
 										class="remove-btn"
 										onclick={(e) => {
 											e.stopPropagation();
-											repoPendingDelete = trackedRepo;
+											removal.request(tracked);
 										}}
 										disabled={isRemoving}
 										aria-label="Remove {repo.fullName}"
@@ -497,17 +434,11 @@ function prCountFor(
 </Command.Root>
 
 <RepoDeleteConfirm
-	repo={repoPendingDelete}
-	open={repoPendingDelete !== null}
-	deleting={repoPendingDelete ? removingRepos.has(repoPendingDelete.id) : false}
-	onOpenChange={(nextOpen) => {
-		if (!nextOpen && (!repoPendingDelete || !removingRepos.has(repoPendingDelete.id))) {
-			repoPendingDelete = null;
-		}
-	}}
-	onConfirm={() => {
-		if (repoPendingDelete) void handleRemove(repoPendingDelete.id);
-	}}
+	repo={removal.pending}
+	open={removal.pending !== null}
+	deleting={removal.deleting}
+	onOpenChange={removal.onOpenChange}
+	onConfirm={() => void removal.confirm()}
 />
 
 <style>

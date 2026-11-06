@@ -1,32 +1,22 @@
 <script lang="ts">
 import type { ThreadMessage } from "@revv/shared";
-import Robot from "phosphor-svelte/lib/Robot";
-import User from "phosphor-svelte/lib/User";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 
 interface Props {
   msg: ThreadMessage;
 }
 
 let { msg }: Props = $props();
-
-let failed = $state(false);
 </script>
 
 <div class="avatar" title={msg.authorName}>
-	{#if msg.authorRole === 'ai_agent'}
-		<Robot size={14} aria-hidden="true" />
-	{:else if msg.authorAvatarContent && !failed}
-		<img
-			src={msg.authorAvatarContent}
-			alt={msg.authorName}
-			class="avatar-img"
-			loading="lazy"
-			referrerpolicy="no-referrer"
-			onerror={() => { failed = true; }}
-		/>
-	{:else}
-		<User size={14} aria-hidden="true" />
-	{/if}
+	<Avatar
+		src={msg.authorRole === 'ai_agent' ? null : msg.authorAvatarContent}
+		name={msg.authorName}
+		size={22}
+		fallback={msg.authorRole === 'ai_agent' ? 'robot' : 'user'}
+		glyphSize={14}
+	/>
 </div>
 
 <style>
@@ -41,12 +31,5 @@ let failed = $state(false);
 		overflow: hidden;
 		flex-shrink: 0;
 		color: var(--color-text-muted);
-	}
-
-	.avatar-img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		display: block;
 	}
 </style>

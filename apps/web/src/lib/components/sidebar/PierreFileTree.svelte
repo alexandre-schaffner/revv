@@ -1,5 +1,11 @@
 <script lang="ts">
-import { FileTree, type GitStatusEntry } from "@pierre/trees";
+import {
+  FileTree,
+  type FileTreeDirectoryHandle,
+  type FileTreeItemHandle,
+  type FileTreeVisibleRow,
+  type GitStatusEntry,
+} from "@pierre/trees";
 import { onDestroy, untrack } from "svelte";
 
 interface Props {
@@ -82,45 +88,6 @@ function withPhantomPaths(real: readonly string[]): string[] {
 
 function isPhantomPath(path: string): boolean {
   return path.startsWith(PHANTOM_PATH_PREFIX);
-}
-
-// The library renders flow rows inside `[data-file-tree-virtualized-sticky]`
-// in index order, with optional parked rows appended afterwards. To find the
-// next row that would receive focus after `from`, walk forward siblings and
-// skip anything that isn't a non-parked tree row.
-function nextFlowRow(from: HTMLElement): HTMLElement | null {
-  let sib = from.nextElementSibling;
-  while (sib != null) {
-    if (
-      sib instanceof HTMLElement &&
-      sib.matches('button[data-type="item"]') &&
-      sib.dataset.itemParked !== "true"
-    ) {
-      return sib;
-    }
-    sib = sib.nextElementSibling;
-  }
-  return null;
-}
-
-// Last real (non-phantom) flow row currently rendered in the shadow root.
-// Used to bounce End / Cmd-ArrowDown back from phantom territory. Walks
-// rows in reverse so we can stop at the first real one — phantoms always
-// sort last via the `~~~` prefix, so this is a constant-time scan over the
-// 3 phantom rows.
-function findLastRealRowEl(sr: ShadowRoot): HTMLElement | null {
-  const rows = sr.querySelectorAll<HTMLElement>('button[data-type="item"]');
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const row = rows[i];
-    if (
-      row != null &&
-      row.dataset.itemParked !== "true" &&
-      !isPhantomPath(row.dataset.itemPath ?? "")
-    ) {
-      return row;
-    }
-  }
-  return null;
 }
 
 // Mutable ref so the `renderRowDecoration` closure always reads the
@@ -449,42 +416,23 @@ $effect(() => {
       };
       host.addEventListener("click", clickHandler);
 
-      // Gate keyboard nav so the arrow / PageDown / End keys can't walk
-      // focus into the hidden phantom rows. The library's `onKeyDown`
-      // handler lives on the virtualized-root <div> inside the shadow
-      // root, so a capture-phase listener on `host` (light DOM) fires
-      // first — calling `stopImmediatePropagation` cancels the row
-      // handler entirely. Sidebar.handleKeydown's vim translation emits
-      // standard `ArrowDown` / `End` keys, so this gate catches both
-      // raw arrow input and vim shortcuts.
+      // Keep arrow / PageDown / End from walking focus into the phantom rows.
+      // The library handles keys on its tree root inside the shadow root, so a
+      // capture-phase listener on `host` runs first and can cancel it.
       if (keyHandler) host.removeEventListener("keydown", keyHandler, true);
       keyHandler = (event: KeyboardEvent) => {
         const key = event.key;
         const isEnd = key === "End" || (key === "ArrowDown" && (event.metaKey || event.ctrlKey));
         const isStep = key === "ArrowDown" || key === "PageDown";
-        if (!isEnd && !isStep) return;
-        const sr = tree?.getFileTreeContainer()?.shadowRoot;
-        if (!sr) return;
-        // End / Cmd-ArrowDown always targets the last row in the tree —
-        // which is always a phantom — so redirect to the last real row
-        // instead of letting the library handle it.
         if (isEnd) {
-          const target = findLastRealRowEl(sr);
-          if (target == null) return;
+          const last = lastRealPath();
+          if (last === null) return;
           event.preventDefault();
           event.stopImmediatePropagation();
-          const path = target.dataset.itemPath;
-          if (path) tree?.focusPath(path);
-          target.focus();
+          tree?.focusPath(last);
           return;
         }
-        // ArrowDown / PageDown only need gating at the boundary between
-        // the last real row and the first phantom. Anywhere else the
-        // library's nav is correct.
-        const focused = sr.querySelector<HTMLElement>('button[data-type="item"][tabindex="0"]');
-        if (focused == null) return;
-        const next = nextFlowRow(focused);
-        if (next != null && isPhantomPath(next.dataset.itemPath ?? "")) {
+        if (isStep && nextIsPhantom()) {
           event.preventDefault();
           event.stopImmediatePropagation();
         }
@@ -532,118 +480,170 @@ $effect(() => {
 // `select()` between those, we re-emit `onSelectionChange` and Preact
 // schedules a render between the two state changes which can swallow
 // the toggle).
-//
-// Deselect the previously-selected paths *before* selecting the new
-// one. `item.select()` is the multi-select primitive: it appends to
-// the current selection. If we just call `item.select(path)` while a
-// previous path is still selected, `onSelectionChange` fires with
-// `[oldPath, newPath]`, and the SidebarFilesView consumer reads
-// `selected[0]` (the *old* path) and re-applies it via
-// `setActiveFilePath`, undoing the jumpToDiffLine that triggered this
-// effect (e.g. clicking opportunity.service.ts badge from walkthrough
-// would land back on the previously-viewed campaign.repository.ts).
 $effect(() => {
   const path = activePath;
   if (!tree) return;
   untrack(() => {
-    if (path == null) return;
-    const current = tree?.getSelectedPaths() ?? [];
-    if (current.length === 1 && current[0] === path) return;
-    for (const p of current) {
-      if (p !== path) tree?.getItem(p)?.deselect();
-    }
-    tree?.getItem(path)?.select();
+    if (path != null) selectOnly(path);
   });
 });
 
-// Focus the host on mount / on demand so the library's built-in arrow-key
-// nav kicks in. Sidebar.handleKeydown translates vim-style j/k/l/h into
-// arrow events that the focused row inside `host` then handles. Without
-// this, the tree never receives focus and keyboard nav dead-ends.
+/**
+ * Make `path` the only selected row. `item.select()` *appends* to the
+ * selection, and `onSelectionChange` consumers read `selected[0]` — so a stale
+ * earlier selection would win. Returns false when it already was the only one.
+ */
+function selectOnly(path: string): boolean {
+  const current = tree?.getSelectedPaths() ?? [];
+  if (current.length === 1 && current[0] === path) return false;
+  for (const p of current) {
+    if (p !== path) tree?.getItem(p)?.deselect();
+  }
+  tree?.getItem(path)?.select();
+  return true;
+}
+
+// ── Keyboard API (Sidebar's vim keys) ──────────────────────────────────
+
+function visibleRows(): readonly FileTreeVisibleRow[] {
+  const count = tree?.getVisibleCount() ?? 0;
+  return count > 0 && tree ? tree.getVisibleRows(0, count - 1) : [];
+}
+
+function firstRealPath(kind?: "file"): string | null {
+  const row = visibleRows().find(
+    (r) => !isPhantomPath(r.path) && (kind === undefined || r.kind === kind),
+  );
+  return row?.path ?? null;
+}
+
+function lastRealPath(): string | null {
+  const rows = visibleRows();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row && !isPhantomPath(row.path)) return row.path;
+  }
+  return null;
+}
+
+function nextIsPhantom(): boolean {
+  if (!tree) return false;
+  const next = tree.getVisibleRows(tree.getFocusedIndex() + 1, tree.getFocusedIndex() + 1)[0];
+  return next !== undefined && isPhantomPath(next.path);
+}
+
+function isDirectory(item: FileTreeItemHandle): item is FileTreeDirectoryHandle {
+  return item.isDirectory();
+}
+
+function hasDomFocus(): boolean {
+  return tree?.getFileTreeContainer()?.shadowRoot?.activeElement != null;
+}
+
+/**
+ * Put DOM focus on `path`'s row. The library moves DOM focus along with its
+ * focus cursor on its next (async, Preact) render — but only while focus is
+ * already inside the tree, and only when the cursor actually moves. So: a row
+ * that is rendered gets focused directly (its focus handler moves the cursor);
+ * otherwise focus the tree's root and move the cursor, and the library brings
+ * the row into view and focuses it when it renders.
+ */
+function focusRow(path: string): void {
+  const shadowRoot = tree?.getFileTreeContainer()?.shadowRoot;
+  if (!tree || !shadowRoot) return;
+  const row = shadowRoot.querySelector<HTMLElement>(
+    `button[data-type="item"][data-item-path="${CSS.escape(path)}"]:not([data-file-tree-sticky-row="true"])`,
+  );
+  if (row) {
+    row.focus();
+    return;
+  }
+  shadowRoot.querySelector<HTMLElement>('[role="tree"]')?.focus({ preventScroll: true });
+  tree.focusPath(path);
+}
+
+function claimFocus(): void {
+  if (hasDomFocus()) return;
+  const path = tree?.getFocusedPath() ?? firstRealPath();
+  if (path) focusRow(path);
+}
+
+/** Focus the active file's row, or the first row; the host when empty. */
+function focusActive(): void {
+  const path = activePath ?? firstRealPath();
+  if (tree && path) focusRow(path);
+  else host?.focus();
+}
+
+// Focus the tree when the files view opens (`shouldFocus`) and each time the
+// sidebar panel regains control after a diff mode (`panelActive` goes false →
+// true; `shouldFocus` stays true throughout diff navigation so it can't).
 $effect(() => {
-  if (!shouldFocus) return;
-  if (!host) return;
-  untrack(() => {
-    // Defer to next frame so the layout is stable. The library mounts
-    // row buttons asynchronously after `render()`.
-    requestAnimationFrame(() => {
-      if (activePath != null && tree != null) {
-        // Restore the focus cursor to the active file so that
-        // navigation (j/k/h/l) resumes from where the user left
-        // off instead of jumping to the top of the list.
-        //
-        // selectOnlyPath (called on file open) does NOT set the
-        // controller's focusedPath — selection and focus are
-        // separate in @pierre/trees.  focusPath() syncs them and
-        // also scrolls the row into the virtual viewport.
-        //
-        // The Preact re-render that applies the new tabIndex="0"
-        // to the focused button is asynchronous, so we wait one
-        // more frame before calling element.focus() to ensure
-        // we land on the right button.
-        tree.focusPath(activePath);
-        requestAnimationFrame(() => {
-          // `bind:this` nulls `host` when the component is destroyed, and this
-          // callback is two frames removed from the effect that scheduled it —
-          // easily long enough for a PR switch to unmount us in between.
-          if (!host) return;
-          const sr = tree?.getFileTreeContainer()?.shadowRoot;
-          // After re-render, the focused row has tabIndex=0.
-          const row =
-            sr?.querySelector<HTMLElement>('[data-type="item"][tabindex="0"]') ??
-            sr?.querySelector<HTMLElement>('[data-type="item"]');
-          if (row) row.focus();
-          else host.focus();
-        });
-      } else {
-        // No active file yet — focus the first visible row so
-        // arrow-key navigation has a starting point.
-        if (!host) return;
-        const container = tree?.getFileTreeContainer();
-        const firstRow = container?.shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
-        if (firstRow) {
-          firstRow.focus();
-        } else {
-          host.focus();
-        }
-      }
-    });
-  });
+  if (!shouldFocus || !host) return;
+  untrack(focusActive);
 });
 
-// Re-focus the active row each time the sidebar panel regains control
-// after a diff mode (Escape / Space / h from diff). `shouldFocus` handles
-// the view-switch path (PR list → files) but stays true throughout diff
-// navigation, so it can never fire again on return. `panelActive` goes
-// false → true on every panel-return, filling that gap.
 $effect(() => {
-  if (!panelActive) return;
-  if (!host) return;
-  let frameId: number;
-  untrack(() => {
-    frameId = requestAnimationFrame(() => {
-      if (activePath != null && tree != null) {
-        tree.focusPath(activePath);
-        frameId = requestAnimationFrame(() => {
-          if (!host) return;
-          const sr = tree?.getFileTreeContainer()?.shadowRoot;
-          const row =
-            sr?.querySelector<HTMLElement>('[data-type="item"][tabindex="0"]') ??
-            sr?.querySelector<HTMLElement>('[data-type="item"]');
-          if (row) row.focus();
-          else host.focus();
-        });
-      } else {
-        if (!host) return;
-        const container = tree?.getFileTreeContainer();
-        const firstRow = container?.shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
-        if (firstRow) firstRow.focus();
-        else host.focus();
-      }
-    });
-  });
-  return () => cancelAnimationFrame(frameId);
+  if (!panelActive || !host) return;
+  untrack(focusActive);
 });
+
+export function moveFocus(direction: 1 | -1): void {
+  if (!tree) return;
+  claimFocus();
+  if (direction === 1) {
+    if (!nextIsPhantom()) tree.focusNextItem();
+  } else {
+    tree.focusPreviousItem();
+  }
+}
+
+/** Directory: expand it, or step into it when already open. File: open it. */
+export function openFocused(): void {
+  if (!tree) return;
+  claimFocus();
+  const item = tree.getFocusedItem();
+  if (!item) return;
+  if (isDirectory(item)) {
+    if (item.isExpanded()) moveFocus(1);
+    else item.expand();
+    return;
+  }
+  const path = item.getPath();
+  if (isPhantomPath(path)) return;
+  // A re-open of the selected file fires no selection change.
+  if (!selectOnly(path)) onSelect(path);
+}
+
+/**
+ * Collapse an open directory, else move to the parent row. False when there
+ * is nowhere to go: no row has focus, or it's a closed root-level row.
+ */
+export function collapseOrParent(): boolean {
+  if (!tree || !hasDomFocus()) return false;
+  const item = tree.getFocusedItem();
+  if (item && isDirectory(item) && item.isExpanded()) {
+    item.collapse();
+    return true;
+  }
+  const index = tree.getFocusedIndex();
+  const row = tree.getVisibleRows(index, index)[0];
+  if (!row || row.ancestorPaths.length === 0) return false;
+  tree.focusParentItem();
+  return true;
+}
+
+/**
+ * Apply `query` now and focus the first matching *file* — search keeps
+ * matching files' ancestor directories visible, and landing on one of those
+ * would point at an unrelated folder. Focus only; opening is a second Enter.
+ */
+export function focusFirstMatch(query: string): void {
+  if (!tree) return;
+  tree.setSearch(query.length > 0 ? query : null);
+  const path = firstRealPath("file");
+  if (path) focusRow(path);
+}
 
 onDestroy(() => {
   // `cleanUp` performs full teardown: detaches DOM, drops listeners,

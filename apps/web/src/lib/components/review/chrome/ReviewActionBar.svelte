@@ -31,26 +31,35 @@ import {
   markPrReadyForReview,
   mergePr,
 } from "$lib/stores/prs.svelte";
-import {
-  getReviewBarApproveBlockerSummary,
-  getReviewBarCanComment,
-  getReviewBarOnApprove,
-  getReviewBarOnComment,
-  getReviewBarOnGenerateChanges,
-  getReviewBarOnSubmitReview,
-  getReviewBarSelectedCount,
-  getReviewBarSubmitting,
-} from "$lib/stores/reviewBar.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
 import { type MergeGate, mergeGate } from "$lib/utils/merge-blocker";
 import MergeConfirmDialog from "./MergeConfirmDialog.svelte";
 
+interface Props {
+  submitting: "approve" | "request_changes" | "comment" | null;
+  selectedCount: number;
+  /** Anything to submit: selected walkthrough issues or pending line comments. */
+  canComment: boolean;
+  approveBlockerSummary: string;
+  onGenerateChanges: () => void;
+  onSubmitReview: () => void;
+  onComment: () => void;
+  onApprove: () => void;
+}
+
+let {
+  submitting: rcSubmitting,
+  selectedCount: rcSelectedCount,
+  canComment: rcCanComment,
+  approveBlockerSummary: rcApproveBlockerSummary,
+  onGenerateChanges,
+  onSubmitReview,
+  onComment,
+  onApprove,
+}: Props = $props();
+
 const pr = $derived(getSelectedPr());
-const rcSubmitting = $derived(getReviewBarSubmitting());
-const rcSelectedCount = $derived(getReviewBarSelectedCount());
-const rcCanComment = $derived(getReviewBarCanComment());
-const rcApproveBlockerSummary = $derived(getReviewBarApproveBlockerSummary());
 const chatStreaming = $derived(pr ? isChatStreaming(pr.id) : false);
 
 let rcGenerating = $state(false);
@@ -306,7 +315,7 @@ async function runMerge(method: MergeMethod): Promise<void> {
     <GlassPill
       variant="muted"
       disabled={rcSubmitting !== null || rcSelectedCount === 0 || rcGenerating}
-      onclick={() => { rcGenerating = true; getReviewBarOnGenerateChanges()(); }}
+      onclick={() => { rcGenerating = true; onGenerateChanges(); }}
       title={rcSelectedCount === 0
         ? "Select at least one issue to ask the agent to address"
         : rcGenerating
@@ -331,7 +340,7 @@ async function runMerge(method: MergeMethod): Promise<void> {
       <GlassPill
         variant="muted"
         disabled={rcSubmitting !== null || !rcCanComment}
-        onclick={() => getReviewBarOnComment()()}
+        onclick={onComment}
         title={!rcCanComment
           ? "Add comments or select walkthrough issues first"
           : "Post your line comments and selected issues to GitHub as a review"}
@@ -383,7 +392,7 @@ async function runMerge(method: MergeMethod): Promise<void> {
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcCanComment}
-        onclick={() => getReviewBarOnSubmitReview()()}
+        onclick={onSubmitReview}
         title={!rcCanComment
           ? "Add comments or select walkthrough issues first"
           : "Submit your review — posts your comments, and requests changes if any issues are selected"}
@@ -401,7 +410,7 @@ async function runMerge(method: MergeMethod): Promise<void> {
         <GlassPill
           variant="success"
           disabled={rcSubmitting !== null}
-          onclick={() => getReviewBarOnApprove()()}
+          onclick={onApprove}
           title={rcApproveBlockerSummary
             ? `Approve this pull request (${rcApproveBlockerSummary} still open)`
             : "Approve this pull request on GitHub"}

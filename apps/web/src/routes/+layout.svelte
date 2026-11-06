@@ -69,7 +69,7 @@ $effect(() => {
 });
 
 // Keep the sidebar view in lockstep with the URL in both directions.
-// PrItem.handleClick and CommandPalette already pair selectPr() with
+// Sidebar and palette clicks go through `openPr`, which pairs selectPr() with
 // setSidebarView('files') so the click-driven path is in sync. This
 // effect covers every URL-driven path that doesn't go through those
 // handlers — deep link, browser back/forward, refresh, SSE-driven nav,

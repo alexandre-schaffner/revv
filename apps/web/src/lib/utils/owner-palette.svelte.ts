@@ -8,10 +8,10 @@ import {
 } from "$lib/utils/avatarPalette";
 
 /**
- * The palette a repo's homepage is printed in: the same one its owner's
- * avatar resolves, read off the avatar once it has loaded and a hue hashed
- * from the repo's name until then. The session cache means the second
- * extraction for an avatar is free. Call during component init.
+ * A repo's owner palette (its homepage and gradient avatar are printed in
+ * it): read off the owner's avatar once it has loaded, a hue hashed from the
+ * repo's name until then. The session cache makes a second extraction for
+ * the same avatar free. Call during component init.
  */
 export function ownerPalette(repo: () => Pick<Repository, "fullName" | "avatarUrl">): {
   readonly current: OwnerPalette;

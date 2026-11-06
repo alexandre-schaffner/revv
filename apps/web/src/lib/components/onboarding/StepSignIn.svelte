@@ -3,6 +3,7 @@ import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
+import { copyFeedback } from "$lib/components/auth/copy-feedback.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   cancelSignIn,
@@ -12,6 +13,7 @@ import {
   getIsLoading,
   signIn,
 } from "$lib/stores/auth.svelte";
+import { githubHostLabel } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
 
 interface Props {
@@ -22,29 +24,18 @@ interface Props {
 let { onBack, githubHost = "github.com" }: Props = $props();
 
 const isGhe = $derived(githubHost !== "github.com");
-const hostLabel = $derived(isGhe ? githubHost : "GitHub");
+const hostLabel = $derived(githubHostLabel(githubHost));
 
 const error = $derived(getError());
 const deviceFlow = $derived(getDeviceFlow());
 const isLoading = $derived(getIsLoading());
 
-let copied = $state(false);
+const clipboard = copyFeedback(2000);
 
 onMount(() => {
   cancelSignIn();
   clearError();
 });
-
-async function copyCode() {
-  if (!deviceFlow) return;
-  try {
-    await navigator.clipboard.writeText(deviceFlow.userCode);
-    copied = true;
-    setTimeout(() => (copied = false), 2000);
-  } catch {
-    // Clipboard API may be unavailable in some contexts
-  }
-}
 </script>
 
 <div class="signin">
@@ -67,8 +58,8 @@ async function copyCode() {
 						<span class="char" style="animation-delay: {i * 40}ms">{char}</span>
 					{/each}
 				</div>
-				<button class="copy-btn" onclick={copyCode} aria-label="Copy code">
-					{#if copied}
+				<button class="copy-btn" onclick={() => void clipboard.copy(deviceFlow.userCode)} aria-label="Copy code">
+					{#if clipboard.copied}
 						<Check size={13} />
 						<span>Copied</span>
 					{:else}

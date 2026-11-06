@@ -1,10 +1,5 @@
 <script lang="ts">
-import {
-  fallbackOwnerPalette,
-  type OwnerPalette,
-  ownerPaletteFromAvatar,
-  peekOwnerPalette,
-} from "$lib/utils/avatarPalette";
+import { ownerPalette } from "$lib/utils/owner-palette.svelte";
 import { repoGradientDataUrl } from "$lib/utils/repoGradient";
 
 interface Props {
@@ -25,26 +20,9 @@ let {
   label,
 }: Props = $props();
 
-let resolvedOwnerPalette = $state<OwnerPalette | undefined>(undefined);
-let hueRequestKey = "";
+const palette = ownerPalette(() => ({ fullName, avatarUrl: ownerAvatarUrl }));
 
-const fallbackPalette = $derived(fallbackOwnerPalette(fullName));
-const ownerPalette = $derived(resolvedOwnerPalette ?? fallbackPalette);
-
-$effect(() => {
-  const cachedPalette = ownerAvatarUrl ? peekOwnerPalette(ownerAvatarUrl) : undefined;
-  resolvedOwnerPalette = cachedPalette;
-
-  if (!ownerAvatarUrl || cachedPalette !== undefined) return;
-
-  const requestKey = `${ownerAvatarUrl}:${fullName}`;
-  hueRequestKey = requestKey;
-  void ownerPaletteFromAvatar(ownerAvatarUrl, fallbackPalette).then((palette) => {
-    if (hueRequestKey === requestKey) resolvedOwnerPalette = palette;
-  });
-});
-
-const grad = $derived(repoGradientDataUrl(fullName, ownerPalette));
+const grad = $derived(repoGradientDataUrl(fullName, palette.current));
 const letter = $derived((fullName.split("/")[1] ?? fullName).slice(0, 1).toUpperCase());
 </script>
 

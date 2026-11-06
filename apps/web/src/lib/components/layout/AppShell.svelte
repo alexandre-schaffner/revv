@@ -7,13 +7,6 @@ import { RAIL_WIDTH } from "$lib/constants";
 import { gsap, gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { takeNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { getSelectedPr } from "$lib/stores/prs.svelte";
-import {
-  getActiveTab,
-  getIsPullingCommit,
-  getLoadedHeadSha,
-  pullLatestCommit,
-  setActiveTab,
-} from "$lib/stores/review.svelte";
 import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
 import { closePalette, getPaletteMode, getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
@@ -34,16 +27,13 @@ import {
   toggleRightPanel,
   toggleSidebar,
 } from "$lib/stores/sidebar.svelte";
-import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
-import FloatingTabs from "./FloatingTabs.svelte";
 import ProjectRail from "./ProjectRail.svelte";
-import ReviewActionBar from "./ReviewActionBar.svelte";
 import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
+import { provideShellChrome } from "./shell-chrome.svelte";
 import TopBar from "./TopBar.svelte";
-import WalkthroughActionBar from "./WalkthroughActionBar.svelte";
 
 let { children } = $props();
 
@@ -58,36 +48,7 @@ const rightPanelWidth = $derived(getRightPanelWidth());
 const chatStacked = $derived(getChatStacked());
 const chatOverlay = $derived(rightPanelOpen && chatStacked);
 const pr = $derived(getSelectedPr());
-const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
-const activeTab = $derived(getActiveTab());
-const isReviewRoute = $derived(page.url.pathname.startsWith("/review/"));
-const showFloatingActions = $derived(!!pr && isReviewRoute && activeTab === "walkthrough");
-const showReviewBar = $derived(!!pr && isReviewRoute && activeTab === "conversation");
-
-// New-commit-available signal: the PR's current headSha differs from the
-// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
-// first successful fetch, suppressing the signal on fresh visits.
-//
-// Scoped to the diff and the Pull button only — says nothing about whether
-// the walkthrough is outdated. Conflating the two marked freshly-generated
-// walkthroughs stale once new commits landed but the diff hadn't refetched.
-// Walkthrough staleness comes from the server (`/current`'s `stale`,
-// `lifecycle:superseded`, review-rounds `hasNewCommits`).
-//
-// Closed and merged PRs are excluded: their head is final, so there is
-// nothing to pull. Without this a merged PR whose archived row carries a
-// newer SHA than the loaded diff shows a Pull button that can never be
-// satisfied — the walkthrough stamps "Merged" instead.
-const hasNewCommit = $derived.by(() => {
-  if (!pr?.headSha || pr.status !== "open") return false;
-  const loaded = getLoadedHeadSha(pr.id);
-  return loaded !== null && loaded !== pr.headSha;
-});
-const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
-
-function onPullCommit(): void {
-  if (pr) void pullLatestCommit(pr.id);
-}
+const chrome = provideShellChrome();
 
 const PAGE_TRAVEL_PX = 14;
 
@@ -100,7 +61,6 @@ function pageEnter(node: Element) {
   });
 }
 
-// Drag state — not reactive $state, just local mutable refs
 let isDragging = $state(false);
 let dragStartX = 0;
 let dragStartWidth = 0;
@@ -245,6 +205,7 @@ function onRightHandleDblClick(): void {
 
 	<header class="topbar-area" data-tauri-drag-region>
 		<TopBar
+			subtitle={chrome.current.subtitle ?? null}
 			{rightPanelOpen}
 			onTogglePanel={toggleRightPanel}
 			{sidebarCollapsed}
@@ -255,16 +216,9 @@ function onRightHandleDblClick(): void {
 	<!-- `inert` while the chat is stacked over it: the main pane is covered, so
 		 it shouldn't answer clicks, focus, or Tab. -->
 	<main class="main-area" bind:this={mainEl} inert={chatOverlay}>
-		{#if pr && isReviewRoute}
+		{#if chrome.current.tabs}
 			<div class="tabs-float">
-				<FloatingTabs
-					{activeTab}
-					onTabChange={setActiveTab}
-					{walkthroughStatus}
-					{hasNewCommit}
-					{isPulling}
-					{onPullCommit}
-				/>
+				{@render chrome.current.tabs()}
 			</div>
 		{/if}
 		<div class="main-content">
@@ -282,13 +236,7 @@ function onRightHandleDblClick(): void {
 			{/key}
 		</div>
 
-		{#if showFloatingActions && pr}
-			<WalkthroughActionBar prId={pr.id} />
-		{/if}
-
-		{#if showReviewBar}
-			<ReviewActionBar />
-		{/if}
+		{@render chrome.current.actions?.()}
 	</main>
 
 	<aside class="userbar-area">
