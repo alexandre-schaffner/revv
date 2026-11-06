@@ -1,24 +1,18 @@
-# Git worktrees
 .worktrees/
 
-# Dependencies
 node_modules/
 
-# Build output
 build/
 dist/
 apps/web/.svelte-kit/
 apps/desktop/target/
 
-# TypeScript
 *.tsbuildinfo
 
-# Environment & secrets
 .env
 .env.local
 .env.*.local
 
-# Database
 *.db
 *.db-journal
 *.db-wal
@@ -27,29 +21,24 @@ apps/desktop/target/
 *.db.*.pid
 github-ledger.*.jsonl*
 
-# Turbo
 .turbo/
 
-# Logs
 *.log
 
-# OS
 .DS_Store
 
-# Tooling
+# Agent tooling; scripts/prepare-effect.sh clones .repos/effect
 .context/
 .openlogs/
 .repos/effect
 
-# Collector telemetry DB
 apps/collector/*.duckdb
 apps/collector/*.duckdb.wal
 apps/collector/*.collector.pid
 
-# Python CI helpers
 __pycache__/
 *.pyc
 
-# Nix / direnv
+# direnv, and the Nix build output symlink
 .direnv/
 result

@@ -1,33 +1,15 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────
-# revv — Management CLI for a Revv source install
-#
-# Installed by install.sh to ~/.local/bin/revv.
-# Drives the source tree at ~/Library/Application Support/Revv/src
-# and the desktop app that owns its API server.
-#
-# Commands:
-#   revv update      Pull latest channel; install release bundle or rebuild fallback
-#   revv channel     Print or change the release channel (stable | nightly)
-#   revv uninstall   Remove ALL Revv artifacts (app, data, config, services, CLI)
-#   revv start       Start Revv in the tray with its API server
-#   revv stop        Quit Revv and stop its API server
-#   revv restart     Stop + start
-#   revv status      Show versions, install paths, server state
-#   revv logs        Tail the server logs
-#   revv open        Open Revv.app
-#   revv doctor      Run a set of health checks
-#   revv path        Print paths used by this install
-#   revv help        Show this message
-# ──────────────────────────────────────────────────────────────
+# revv — management CLI for a Revv source install. install.sh copies it to
+# ~/.local/bin/revv; it drives the source tree at
+# ~/Library/Application Support/Revv/src and the desktop app that owns the
+# API server.
 set -euo pipefail
 
 CONFIG_FILE="$HOME/Library/Application Support/Revv/config"
 INSTALL_DIR="${REVV_INSTALL_DIR:-$HOME/Library/Application Support/Revv/src}"
-# Glob `Revv*.app` so we find the actual bundle regardless of productName
-# ("Revv.app" vs "Revv (Alpha).app", etc.). CONFIG_FILE's APP_PATH — written
-# by install.sh with the exact path it just copied — is prepended below and
-# takes precedence for normal installs.
+# Glob `Revv*.app`: the bundle name follows productName ("Revv.app",
+# "Revv (Alpha).app", …). The APP_PATH install.sh writes to CONFIG_FILE takes
+# precedence.
 APP_CANDIDATES=()
 for __dir in "/Applications" "$HOME/Applications"; do
   for __app in "$__dir"/Revv*.app; do
@@ -42,7 +24,6 @@ CLI_PATH="$HOME/.local/bin/revv"
 API_URL="http://localhost:45678"
 REVV_GITHUB_REPO="alexandre-schaffner/revv"
 
-# Override defaults with values persisted by the installer.
 if [[ -f "$CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$CONFIG_FILE"
@@ -50,11 +31,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
   [[ -n "${APP_PATH:-}" && -d "$APP_PATH" ]] && APP_CANDIDATES=("$APP_PATH" "${APP_CANDIDATES[@]}")
 fi
 
-# ── Load shared helpers ───────────────────────────────────────
-# Prefer the copy shipped alongside this CLI (~/.local/share/revv/common.sh).
-# Fall back to the one in the source tree for in-checkout invocations. If
-# neither is available, define just enough inline helpers to keep the CLI
-# working (useful if the user copied just the `revv` binary to a new machine).
+# If no common.sh is found (e.g. the user copied just the `revv` file to
+# another machine), the inline helpers below keep the CLI working.
 __revv_lib_paths=(
   "$HOME/.local/share/revv/common.sh"
   "$INSTALL_DIR/scripts/lib/common.sh"
@@ -71,7 +49,7 @@ for __lib in "${__revv_lib_paths[@]}"; do
 done
 
 if [[ "$__revv_lib_loaded" -eq 0 ]]; then
-  # Inline fallbacks. Keep these in sync with scripts/lib/common.sh.
+  # Keep in sync with scripts/lib/common.sh.
   if [[ -t 1 ]]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
     BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
@@ -126,11 +104,11 @@ if [[ "$__revv_lib_loaded" -eq 0 ]]; then
   }
 fi
 
-# Canonical paths (auth key, support dir, etc.)
 REVV_SUPPORT_DIR="${REVV_SUPPORT_DIR:-$HOME/Library/Application Support/Revv}"
 REVV_AUTH_KEY="${REVV_AUTH_KEY:-$REVV_SUPPORT_DIR/auth.key}"
 SERVER_CONFIG="$REVV_SUPPORT_DIR/desktop-server.json"
-# Match the desktop server configuration, retaining the legacy plist during migration.
+# Same DB the desktop server is configured with; installs from before the
+# app owned the server still carry it in the LaunchAgent plist.
 resolve_db_path() {
   if [[ -n "${REVV_DB_PATH:-}" ]]; then printf '%s' "$REVV_DB_PATH"; return; fi
   if [[ -f "$SERVER_CONFIG" ]]; then
@@ -161,10 +139,9 @@ Run the installer first:
 }
 
 load_bun_path() {
-  # NOTE: use `if` rather than `&&` chains so a false condition on the last
-  # line doesn't make the function return non-zero — that would trip `set -e`
-  # at the call site and exit the script silently (e.g. when Rust is installed
-  # via Homebrew instead of rustup, so ~/.cargo/env doesn't exist).
+  # `if`, not `&&`: a false last condition would make the function return
+  # non-zero and `set -e` would silently exit the caller (e.g. Homebrew Rust
+  # has no ~/.cargo/env).
   if [[ -d "$HOME/.bun/bin" ]]; then
     export PATH="$HOME/.bun/bin:$PATH"
   fi
@@ -175,7 +152,6 @@ load_bun_path() {
 }
 
 server_running() {
-  # Port check — more reliable than launchctl state
   nc -z 127.0.0.1 45678 >/dev/null 2>&1
 }
 
@@ -191,27 +167,17 @@ wait_for_server() {
   return 1
 }
 
-# ── Channel helpers ─────────────────────────────────────────────────────
-# SQLite is the source of truth for `update_channel`. The server writes
-# through to it inside `SettingsService.updateSettings`, so a read of the
-# column always reflects the latest committed state. Reads skip the API
-# entirely; writes go through the API so the in-memory `SubscriptionRef`
-# cache that drives the web app stays consistent.
+# SQLite is the source of truth for `update_channel`, so reads skip the API.
 read_channel() {
-  # NEVER abort the caller: `read_channel` runs at the very top of `cmd_update`,
-  # before the fresh source (and this CLI) is installed. A hard failure here
-  # would strand an install that can't read its own channel — including any
-  # future DB-path regression — with no way to `revv update` out of it. So on
-  # any unreadable-DB condition we warn (to stderr, so the captured stdout stays
-  # clean) and default to 'stable', letting the update proceed and self-heal.
-  # A nightly user hitting this can re-run with 'revv update --channel nightly'.
+  # Never abort: this runs before `revv update` installs a fresh CLI, so a
+  # hard failure would leave no way to update out of a broken install. Warn on
+  # stderr (stdout is captured) and default to 'stable'.
   if ! command -v sqlite3 >/dev/null 2>&1; then
     warn "sqlite3 not found — defaulting to the 'stable' channel for this update (install it, e.g. 'brew install sqlite', for channel-aware updates)." >&2
     printf "stable"; return 0
   fi
-  # Prefer the canonical app-data DB, but fall back to the legacy cwd/INSTALL_DIR
-  # location: on an install whose new server hasn't booted yet, the one-time
-  # relocation in db/index.ts hasn't run, so the DB may still sit at the old path.
+  # Until the new server boots once and relocates it, an older install's DB
+  # may still sit in the source tree.
   local db="$REVV_DB_PATH"
   [[ -f "$db" ]] || db="$INSTALL_DIR/revv.db"
   if [[ ! -f "$db" ]]; then
@@ -224,10 +190,8 @@ read_channel() {
   case "$v" in nightly) printf "nightly" ;; *) printf "stable" ;; esac
 }
 
-# Send a channel change through the running server. Going through the API
-# (instead of writing the column directly) keeps the in-memory
-# `SettingsService` cache consistent so the web app sees the new value
-# without a server restart.
+# Writes go through the running server so its in-memory settings cache (and
+# the web app) see the change without a restart.
 write_channel() {
   local target="$1"
   server_running || fail "Revv server is not running.
@@ -238,10 +202,8 @@ Start it with 'revv start', then re-run 'revv channel $target'."
     fail "Failed to update channel via $API_URL/api/update-channel."
 }
 
-# Resolve the git ref that `cmd_update` should fast-forward to. `stable`
-# pins to the latest `v*` tag reachable from origin/main (release-please's
-# semver tag); `nightly` rides origin/main HEAD. The caller is responsible
-# for having already fetched, so this never touches the network.
+# `stable` is the latest release-please `v*` tag on origin/main; `nightly` is
+# origin/main. Never fetches: the caller must have fetched already.
 resolve_target_ref() {
   case "$1" in
     nightly) printf "origin/main" ;;
@@ -254,8 +216,6 @@ resolve_target_ref() {
     *) fail "Invalid channel: $1" ;;
   esac
 }
-
-# ── Commands ─────────────────────────────────────────────────
 
 cmd_help() {
   cat <<EOF
@@ -411,8 +371,6 @@ cmd_open() {
 }
 
 cmd_update() {
-  # Single-flag parser: `--channel <stable|nightly>` overrides the
-  # persisted channel for this invocation only (no setting write).
   local channel_override=""
   case "${1:-}" in
     --channel)    channel_override="${2:-}"; shift 2 || true ;;
@@ -439,7 +397,6 @@ cmd_update() {
     info "Channel: ${channel}"
   fi
 
-  # ── Fetch ─────────────────────────────────────────────────
   spin_start "Fetching latest from origin…"
   git -C "$INSTALL_DIR" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   git -C "$INSTALL_DIR" fetch --all --prune --tags >/dev/null 2>&1 || true
@@ -473,7 +430,6 @@ cmd_update() {
     printf "\n"
   fi
 
-  # ── Dependencies ──────────────────────────────────────────
   step "Dependencies"
   (cd "$INSTALL_DIR" && bun install)
 
@@ -485,7 +441,6 @@ cmd_update() {
     source "$INSTALL_DIR/scripts/lib/common.sh"
   fi
 
-  # ── Desktop app ───────────────────────────────────────────
   local bundle_app app_name dest_app dest_dir old_app used_prebuilt=0
   old_app="$(find_app)" || old_app=""
 
@@ -526,7 +481,6 @@ cmd_update() {
     step "Build"
     (cd "$INSTALL_DIR" && make dist)
 
-    # Find the newly built .app.
     bundle_app="$(find "$INSTALL_DIR/apps/desktop/target/release/bundle/macos" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -1)"
     if [[ -z "$bundle_app" ]]; then
       bundle_app="$(find "$INSTALL_DIR/apps/desktop/target" -maxdepth 6 -type d -name '*.app' -path '*/bundle/macos/*' 2>/dev/null | head -1)"
@@ -534,7 +488,6 @@ cmd_update() {
     [[ -d "$bundle_app" ]] || fail "Build finished but no .app bundle was produced."
     app_name="$(basename "$bundle_app")"
 
-    # Determine install destination.
     if [[ -n "$old_app" ]]; then
       dest_dir="$(dirname "$old_app")"
     else
@@ -559,7 +512,6 @@ cmd_update() {
     spin_stop 1
   fi
 
-  # ── App-owned server ─────────────────────────────────────
   configure_server
   open -g "$dest_app" --args --hidden
   spin_start "Waiting for API server…"
@@ -570,7 +522,6 @@ cmd_update() {
     warn "API server did not respond; check revv logs."
   fi
 
-  # Refresh the CLI itself + helper lib in case they changed upstream.
   if [[ -f "$INSTALL_DIR/scripts/revv" ]]; then
     cp "$INSTALL_DIR/scripts/revv" "$CLI_PATH"
     chmod +x "$CLI_PATH"
@@ -624,7 +575,6 @@ EOF
 cmd_uninstall() {
   step "Uninstall Revv"
 
-  # ── Collect all artifact paths ──────────────────────────────
   local revv_data_dir="$HOME/.revv"
   local tauri_id="com.revv.desktop"
   local tauri_autostart_plist="$HOME/Library/LaunchAgents/${tauri_id}.plist"
@@ -635,10 +585,6 @@ cmd_uninstall() {
   local tauri_http_caches="$HOME/Library/Caches/${tauri_id}.WebView"
   local tauri_preferences="$HOME/Library/Preferences/${tauri_id}.plist"
 
-  # The production database lives in the app-data dir ($REVV_SUPPORT_DIR/revv.db,
-  # resolved into $REVV_DB_PATH above). Step 7 removes $REVV_SUPPORT_DIR wholesale,
-  # but list/remove it explicitly too so a REVV_DB_PATH override outside the
-  # support dir is still cleaned up.
   local prod_db="$REVV_DB_PATH"
   local prod_db_wal="$REVV_DB_PATH-wal"
   local prod_db_shm="$REVV_DB_PATH-shm"
@@ -682,7 +628,6 @@ EOF
 
   confirm "Proceed with uninstall?" || { info "Aborted."; return 0; }
 
-  # ── 1. Stop services ────────────────────────────────────────
   info "Stopping services…"
   launchctl unload -w "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
   launchctl unload -w "$tauri_autostart_plist" 2>/dev/null || true
@@ -690,10 +635,8 @@ EOF
   quit_app
   sleep 1
 
-  # ── 2. Unregister revv:// URL scheme ────────────────────────
-  # Removing the .app deletes the Info.plist that declares the scheme, but the
-  # OS Launch Services database caches it. Explicitly unregister so macOS
-  # forgets the revv:// handler immediately.
+  # Launch Services caches the revv:// handler past the .app's deletion;
+  # unregister it explicitly.
   local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   if [[ -x "$lsregister" ]]; then
     for p in "${APP_CANDIDATES[@]}"; do
@@ -702,7 +645,6 @@ EOF
     info "Unregistered revv:// URL scheme from Launch Services"
   fi
 
-  # ── 3. Remove the .app bundle(s) ────────────────────────────
   for p in "${APP_CANDIDATES[@]}"; do
     if [[ -d "$p" ]]; then
       rm -rf "$p"
@@ -710,19 +652,15 @@ EOF
     fi
   done
 
-  # ── 4. Remove LaunchAgents ──────────────────────────────────
   rm -f "$LAUNCH_AGENT_PLIST"
   rm -f "$tauri_autostart_plist"
 
-  # ── 5. Remove database files ────────────────────────────────
-  # Production DB lives in the app-data dir ($prod_db, resolved from
-  # $REVV_DB_PATH); step 7 removes $REVV_SUPPORT_DIR wholesale, but clean it up
-  # explicitly here too so a REVV_DB_PATH override outside that tree is handled.
+  # Explicit, for a REVV_DB_PATH override outside $REVV_SUPPORT_DIR.
   for f in "$prod_db" "$prod_db_wal" "$prod_db_shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done
-  # Also sweep the legacy cwd/INSTALL_DIR and repo-root locations (pre-b985e5c
-  # installs, or a dev server run from either directory).
+  # Older installs kept the DB in the source tree, and a server run from
+  # either directory writes it to cwd.
   for f in "$INSTALL_DIR/revv.db" "$INSTALL_DIR/revv.db-wal" "$INSTALL_DIR/revv.db-shm"; do
     [[ -f "$f" ]] && rm -f "$f"
   done
@@ -730,45 +668,37 @@ EOF
     [[ -f "$f" ]] && rm -f "$f"
   done
 
-  # ── 6. Remove ~/.revv/ (repos, worktrees, settings) ────────
   if [[ -d "$revv_data_dir" ]]; then
     rm -rf "$revv_data_dir"
     info "Removed $revv_data_dir (git clones, settings)"
   fi
 
-  # ── 7. Remove ~/Library/Application Support/Revv/ ──────────
-  # Contains: auth.key, config, github.conf, src/ (source install)
   if [[ -d "$REVV_SUPPORT_DIR" ]]; then
     rm -rf "$REVV_SUPPORT_DIR"
     info "Removed $REVV_SUPPORT_DIR"
   fi
-  # Also remove source dir if it was overridden to a different location
   if [[ -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REVV_SUPPORT_DIR"* ]]; then
     rm -rf "$INSTALL_DIR"
     info "Removed $INSTALL_DIR"
   fi
 
-  # ── 8. Remove logs ──────────────────────────────────────────
   [[ -d "$LOG_DIR" ]] && rm -rf "$LOG_DIR"
 
-  # ── 9. Remove Tauri / WebView data ─────────────────────────
   for d in "$tauri_webkit_dir" "$tauri_app_support" "$tauri_saved_state" "$tauri_caches" "$tauri_http_caches"; do
     [[ -d "$d" ]] && rm -rf "$d" && info "Removed $d"
   done
   [[ -f "$tauri_preferences" ]] && rm -f "$tauri_preferences"
 
-  # ── 10. Clean shell RC PATH entry ───────────────────────────
   local shell_rc=""
   case "${SHELL##*/}" in
     zsh)  shell_rc="$HOME/.zshrc" ;;
     bash) shell_rc="$HOME/.bashrc" ;;
   esac
   if [[ -n "$shell_rc" && -f "$shell_rc" ]]; then
-    # Remove the "# Added by Revv installer" comment and the PATH line that follows it.
-    # Also remove any standalone .local/bin PATH line that references the revv install.
+    # install.sh writes a "# Added by Revv installer" marker line followed by
+    # the PATH export; drop both.
     local tmp_rc
     tmp_rc="$(mktemp)"
-    # Use a state machine: skip the comment line AND the next line if it's the PATH export.
     awk '
       /^# Added by Revv installer/ { skip=1; next }
       skip && /export PATH=.*\.local\/bin/ { skip=0; next }
@@ -782,11 +712,10 @@ EOF
     fi
   fi
 
-  # ── 11. Remove CLI + shared helper ──────────────────────────
   rm -f "$HOME/.local/share/revv/common.sh"
   rmdir "$HOME/.local/share/revv" 2>/dev/null || true
 
-  # Remove self — do this last so the script can finish executing.
+  # Removes this script; keep it last.
   [[ -f "$CLI_PATH" ]] && rm -f "$CLI_PATH"
 
   printf "\n"
@@ -808,11 +737,10 @@ cmd_doctor() {
   if command -v cargo >/dev/null 2>&1; then success "cargo $(cargo --version | awk '{print $2}')"; else warn "cargo not on PATH"; bump; fi
   if server_running; then success "API server responding on $API_URL"; else warn "API server not responding — try 'revv restart'"; bump; fi
 
-  # Auth key check — replaces the old .env check. The server auto-generates
-  # this on first start, so its presence + 0600 mode is what we verify.
+  # The server generates the auth key (mode 0600) on first start.
   if [[ -f "$REVV_AUTH_KEY" ]]; then
     local mode
-    # `stat -f` on macOS/BSD, `stat -c` on GNU. Try both.
+    # `stat -f` on macOS/BSD, `stat -c` on GNU.
     mode="$(stat -f '%Lp' "$REVV_AUTH_KEY" 2>/dev/null || stat -c '%a' "$REVV_AUTH_KEY" 2>/dev/null || echo '?')"
     if [[ "$mode" == "600" ]]; then
       success "Auth key present (mode 600)"
@@ -834,7 +762,6 @@ cmd_doctor() {
   fi
 }
 
-# ── Dispatch ─────────────────────────────────────────────────
 case "${1:-help}" in
   update)     shift; cmd_update "$@" ;;
   channel)    shift; cmd_channel "$@" ;;

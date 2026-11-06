@@ -249,7 +249,6 @@ if (!isDeepStrictEqual(endpoints, expectedEndpoints)) {
   );
 }
 
-/** The localhost origins in a CSP's connect-src, in order. */
 const localConnectOrigins = (csp: unknown): string[] =>
   (typeof csp === "string"
     ? csp

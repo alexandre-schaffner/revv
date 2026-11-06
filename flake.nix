@@ -20,9 +20,9 @@
 
       # The GitHub release Revv.app comes from. The bundle carries the desktop
       # shell, the web frontend and the compiled server, so this one pin is the
-      # whole install. CI moves it after every stable release
-      # (.github/workflows/nix-release-pin.yml); `nix run .#update-release`
-      # does the same by hand.
+      # whole install. After every stable release, the Release workflow
+      # (.github/workflows/release.yml) opens a PR moving it;
+      # `nix run .#update-release` does the same by hand.
       release = lib.importJSON ./nix/release.json;
 
       # The port the desktop app, the updater endpoint and the frontend's CSP

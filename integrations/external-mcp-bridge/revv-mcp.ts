@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
 
-// ── Revv stdio MCP bridge ───────────────────────────────────────────────────
-//
-// One dependency-free proxy shared by every external coding agent Revv
-// supports (Claude Code, Codex, OpenCode, Cursor). Revv copies this file into
-// the per-agent install directory and injects the credential through the
-// environment; the agent speaks stdio JSON-RPC to it, and it forwards each
-// frame to Revv's loopback MCP route together with the checkout identity.
+// Revv's stdio MCP bridge: one dependency-free proxy shared by every external
+// coding agent Revv supports (Claude Code, Codex, OpenCode, Cursor). Revv
+// copies this file into the per-agent install directory and injects the
+// credential through the environment; the agent speaks stdio JSON-RPC to it,
+// and it forwards each frame to Revv's loopback MCP route together with the
+// checkout identity.
 //
 // The bridge holds no review state: SQLite inside Revv stays authoritative.
 

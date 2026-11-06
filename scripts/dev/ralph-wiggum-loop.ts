@@ -1,9 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Ralph Wiggum Loop — Audit Fix Automation
- *
- * Reads an audit PRD, confirms each finding in the actual source code,
- * applies the minimal safe fix, and verifies with typecheck / lint.
+ * Reads an audit PRD, confirms each finding in the source, applies the
+ * scripted fix, and rolls it back unless typecheck and lint pass.
  *
  * Usage:
  *   bun run scripts/dev/ralph-wiggum-loop.ts docs/audits/prd-security-hardening.md
@@ -12,10 +10,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { $ } from "bun";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
 
 interface UserStory {
   id: string;
@@ -32,10 +26,6 @@ interface FixResult {
   diff?: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PRD Parser
-// ─────────────────────────────────────────────────────────────────────────────
-
 function parsePrd(markdown: string): UserStory[] {
   const stories: UserStory[] = [];
   const storyRegex = /### (US-\d+):\s*(.+?)\n[\s\S]*?(?=### US-\d+|## |$)/g;
@@ -44,7 +34,6 @@ function parsePrd(markdown: string): UserStory[] {
     const [, id, title] = match;
     const block = match[0];
 
-    // Extract file references from acceptance criteria
     const fileRefs: string[] = [];
     const fileRegex = /`([^`]+\.(?:ts|svelte|tsx|json|rs))`/g;
     for (const fileMatch of block.matchAll(fileRegex)) {
@@ -52,7 +41,6 @@ function parsePrd(markdown: string): UserStory[] {
       if (!fileRefs.includes(path)) fileRefs.push(path);
     }
 
-    // Extract check items
     const checks: string[] = [];
     const checkRegex = /- \[ \]\s*(.+)/g;
     for (const checkMatch of block.matchAll(checkRegex)) {
@@ -64,10 +52,6 @@ function parsePrd(markdown: string): UserStory[] {
 
   return stories;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// File helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function readSrcFile(relPath: string): Promise<string | null> {
   try {
@@ -97,12 +81,8 @@ function computeDiff(original: string, modified: string): string {
     }
     i++;
   }
-  return diff.slice(0, 30).join("\n"); // cap diff size
+  return diff.slice(0, 30).join("\n");
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Confirmers — check if the bug still exists
-// ─────────────────────────────────────────────────────────────────────────────
 
 const CONFIRMERS: Record<string, (content: string) => boolean> = {
   // US-001: CORS regex
@@ -130,12 +110,7 @@ const CONFIRMERS: Record<string, (content: string) => boolean> = {
     src.includes("const message = e instanceof Error ? e.message"),
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Fixers — apply the minimal safe change
-// ─────────────────────────────────────────────────────────────────────────────
-
 const FIXERS: Record<string, (src: string) => string | null> = {
-  // US-001: Replace regex CORS with explicit allowlist
   "US-001": (src) => {
     if (!src.includes("origin: /localhost/")) return null;
     return src.replace(
@@ -144,18 +119,14 @@ const FIXERS: Record<string, (src: string) => string | null> = {
     );
   },
 
-  // US-005: Close WS on unresolved account instead of allowing it
   "US-005": (src) => {
     if (!src.includes('accountId = "unresolved"')) return null;
-    // Find the exact catch block that sets accountId = "unresolved"
     const catchStart = src.indexOf('accountId = "unresolved"');
     if (catchStart === -1) return null;
 
-    // Walk backward to find "catch {"
     const catchBlockStart = src.lastIndexOf("catch {", catchStart);
     if (catchBlockStart === -1) return null;
 
-    // Walk forward to find the closing "}"
     let braceDepth = 0;
     let catchBlockEnd = catchBlockStart;
     for (let i = catchBlockStart; i < src.length; i++) {
@@ -179,7 +150,6 @@ const FIXERS: Record<string, (src: string) => string | null> = {
     return before + replacement + after;
   },
 
-  // US-006: Sanitize unknown error responses
   "US-006": (src) => {
     if (!src.includes("return { error: message }")) return null;
     return src.replace(
@@ -193,10 +163,6 @@ const FIXERS: Record<string, (src: string) => string | null> = {
   },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Verification
-// ─────────────────────────────────────────────────────────────────────────────
-
 function getPackageDir(filePath: string): string {
   if (filePath.startsWith("apps/server/")) return "apps/server";
   if (filePath.startsWith("apps/web/")) return "apps/web";
@@ -209,11 +175,9 @@ async function verifyTypecheckOnFile(filePath: string): Promise<boolean> {
   const packageDir = getPackageDir(filePath);
   console.log(`  → running typecheck (scoped to ${packageDir})…`);
 
-  // Run tsc --noEmit in the package directory
   const proc = await $`cd ${packageDir} && bunx tsc --noEmit`.quiet().nothrow();
   const output = proc.stdout.toString() + proc.stderr.toString();
 
-  // Check if any error references our modified file
   const hasErrorInFile = output.includes(filePath);
   if (hasErrorInFile) {
     console.log(`  ⚠️  Type error in ${filePath}:`);
@@ -222,7 +186,6 @@ async function verifyTypecheckOnFile(filePath: string): Promise<boolean> {
     return false;
   }
 
-  // If tsc exited non-zero but not due to our file, that's a pre-existing issue — warn but don't fail
   if (proc.exitCode !== 0) {
     console.log(
       `  ⚠️  Typecheck exited non-zero, but no errors in ${filePath} (pre-existing issues in other files).`,
@@ -236,10 +199,6 @@ async function verifyLintOnFiles(files: string[]): Promise<boolean> {
   const proc = await $`biome check ${files} --no-errors-on-unmatched`.quiet().nothrow();
   return proc.exitCode === 0;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main loop
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
   const prdPath = process.argv[2];
@@ -266,7 +225,6 @@ async function main() {
   for (const story of stories) {
     console.log(`── ${story.id}: ${story.title} ──`);
 
-    // Determine which file to patch (heuristic: first file ref, or skip if no fixer)
     const targetFile = story.fileRefs[0];
     if (!targetFile) {
       console.log("  ⚠️  No file reference found — skipping.\n");
@@ -290,7 +248,6 @@ async function main() {
       continue;
     }
 
-    // Confirm finding
     const confirmed = confirmer(original);
     if (!confirmed) {
       console.log(`  ✅ Finding already resolved (not present in ${targetFile}).\n`);
@@ -299,7 +256,6 @@ async function main() {
     }
     console.log(`  🔍 Confirmed: bug present in ${targetFile}`);
 
-    // Apply fix
     const modified = fixer(original);
     if (!modified || modified === original) {
       console.log(`  ⚠️  Fixer produced no change — manual fix required.\n`);
@@ -319,7 +275,6 @@ async function main() {
     modifiedFiles.add(targetFile);
     console.log(`  💾 Wrote fix to ${targetFile}`);
 
-    // Verify — only lint the files we modified; typecheck scoped to package
     const typeOk = await verifyTypecheckOnFile(targetFile);
     const lintOk = await verifyLintOnFiles([targetFile]);
 
@@ -327,7 +282,6 @@ async function main() {
       console.log(`  ✅ Typecheck + lint pass.\n`);
       results.push({ storyId: story.id, confirmed: true, fixed: true, diff });
     } else {
-      // Rollback on verification failure
       await writeSrcFile(targetFile, original);
       console.log(`  ❌ Verification failed — rolled back ${targetFile}.\n`);
       results.push({
@@ -340,7 +294,6 @@ async function main() {
     }
   }
 
-  // ── Summary ──
   console.log("\n═══════════════════════════════════════════════════════════════════");
   console.log("                         SUMMARY                                   ");
   console.log("═══════════════════════════════════════════════════════════════════\n");
