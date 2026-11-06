@@ -13,12 +13,8 @@ import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
 import { gsapFade, tokens } from "$lib/motion";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { getPrScrollPosition, setPrScrollPosition } from "$lib/stores/pr-view-state.svelte";
-import {
-  getRepositories,
-  getSelectedPr,
-  getSelectedPrId,
-  getSelectedRepo,
-} from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
+import { getSelectedPr, getSelectedPrId, getSelectedRepo } from "$lib/stores/route.svelte";
 import { getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {
   getAddRepoDialogOpen,

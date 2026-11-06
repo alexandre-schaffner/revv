@@ -1,11 +1,8 @@
 <script lang="ts">
 import { gsapFadeY, tokens } from "$lib/motion";
-import {
-  getOpenPrCountByRepo,
-  getOpenPrsByRepoOrdered,
-  getSelectedPrId,
-  hasActivePrListFilter,
-} from "$lib/stores/prs.svelte";
+import { getOpenPrsByRepoOrdered, hasActivePrListFilter } from "$lib/stores/pr-filters.svelte";
+import { getOpenPrCountByRepo } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import PrItem from "./PrItem.svelte";
 
 interface Props {

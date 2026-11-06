@@ -28,7 +28,7 @@ import GitPullRequest from "phosphor-svelte/lib/GitPullRequest";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { REASON_LABEL, type TaggedReason, type TaggedRow } from "$lib/prs/tagged-prs";
 import type { VisitState } from "$lib/stores/pr-visits.svelte";
-import { selectPr } from "$lib/stores/prs.svelte";
+import { selectPr } from "$lib/stores/route.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 

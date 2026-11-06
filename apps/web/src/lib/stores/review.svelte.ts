@@ -20,7 +20,8 @@ import { plain } from "$lib/api/wire";
 import { getUser } from "$lib/stores/auth.svelte";
 import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { setActiveFilePath, setActiveTab } from "$lib/stores/pr-view-state.svelte";
-import { getReviewModeForPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { createResource } from "./resource";
 

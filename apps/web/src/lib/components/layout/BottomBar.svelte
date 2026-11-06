@@ -11,7 +11,7 @@ import {
   ContextOutputUsage,
   ContextTrigger,
 } from "$lib/components/ai/context";
-import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import {
   getLastSyncAt,

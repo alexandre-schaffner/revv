@@ -10,7 +10,8 @@ import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
 import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
-import { addRepo, getAvailableRepos, getAvailableReposLoading } from "$lib/stores/prs.svelte";
+import { getAvailableRepos, getAvailableReposLoading } from "$lib/repos/catalog.svelte";
+import { addRepo } from "$lib/stores/repos.svelte";
 
 interface Props {
   onContinue: () => void;

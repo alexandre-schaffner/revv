@@ -8,7 +8,8 @@
 import type { WalkthroughSizing } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/session/token.svelte";
-import { getPrById, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { createResource } from "./resource";
 

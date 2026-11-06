@@ -127,7 +127,7 @@ import {
   warmChatSessionContext,
 } from "$lib/stores/chat.svelte";
 import { getLoadedHeadSha, getReviewFiles } from "$lib/stores/diff-files.svelte";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import {
   FALLBACK_PROMPTS,
   fetchSuggestions,

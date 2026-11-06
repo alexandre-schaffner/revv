@@ -25,7 +25,7 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import RepoDeleteConfirm from "$lib/components/sidebar/RepoDeleteConfirm.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
-import { getRepositories } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import { openAddRepoDialog } from "$lib/stores/sidebar.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";

@@ -361,10 +361,9 @@ trivially with existing dispatchers and don't reinvent the API surface.
 in-file comment at `:129–142` documents the idiom and the Svelte 5 reactivity rationale —
 required reading before adding a new keyed store.
 
-**Anti-pattern.** `apps/web/src/lib/stores/review.svelte.ts:417` keeps `prViewStates = new Map<string, PrViewState>()`
-as a non-reactive plain Map plus a separate `let activeTab = $state(...)` mirror that has to
-be hand-synced via `getOrCreate(prId).activeTab = tab` in every setter. Two sources of truth
-for the same state.
+**Anti-pattern.** A non-reactive plain `Map<prId, ViewState>` plus a separate
+`let activeTab = $state(...)` mirror hand-synced in every setter: two sources of truth for the
+same state. (`pr-view-state.svelte.ts` keeps one reactive entry per PR instead.)
 
 **Backlog.** [`S-001`](./conventions-backlog.md#s-001), [`S-002`](./conventions-backlog.md#s-002).
 
@@ -469,24 +468,21 @@ List-snapshot rollback (`pullRequests = openSnapshot`) would clobber those updat
 re-introduce entities the server has since removed. Restoring only the fields you changed
 on the entity you touched is resilient to whatever else arrives over the wire.
 
-**Canonical example.** `apps/web/src/lib/stores/prs.svelte.ts:338-362` — `pinPr` and
+**Canonical example.** `apps/web/src/lib/stores/prs.svelte.ts` — `pinPr` and
 `unpinPr` capture the single field they mutate (`pinnedPrIds` membership), apply,
 and restore on throw. The four owner-only PR mutations (`convertPrToDraft`,
 `markPrReadyForReview`, `closePr`, `mergePr`) in the same file follow the same shape
 with more fields involved: draft flip uses a single-field local helper; close/merge reuse
 the existing `onPrArchived` for the forward open→archived move and `restorePrFromArchive`
 for the reverse rollback. Both helpers touch exactly one PR per call so concurrent
-`prs:updated` broadcasts that reshuffle the rest of the list survive intact.
+`prs:updated` broadcasts that reshuffle the rest of the list survive intact. A removal
+that spans entities captures what it removed: `repos.svelte.ts` `deleteRepo` takes back
+the repo row plus the restore function `prs.removeRepoPrsLocally` returns for that repo's
+PRs and pins. The review store's thread mutations restore only the thread or message they
+touched.
 
-**Anti-pattern.** `apps/web/src/lib/stores/prs.svelte.ts:455-487` — `deleteRepo` snapshots
-`repositories`, `pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` whole
-via `snapshotRepoState()`, restores them whole on error via `restoreRepoState()`. The
-shape works for the rare single-entity-delete case it lives in, but it does not generalize:
-any concurrent SSE broadcast between snapshot and rollback is silently dropped. The fix is
-entity-scoped removal — capture the removed repo, the removed PR ids, and the removed
-pinned ids — and inverse them on rollback rather than restoring the whole world.
-
-**Backlog.** [`S-005`](./conventions-backlog.md#s-005).
+**Anti-pattern.** Snapshotting whole lists (`const prev = threads`) and reassigning them on
+error: any concurrent SSE broadcast between snapshot and rollback is silently dropped.
 
 <a id="stores-resource"></a>
 ### 4.7 Per-key fetches go through `createResource`

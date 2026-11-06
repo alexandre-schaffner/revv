@@ -2,7 +2,7 @@
 import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
 import X from "phosphor-svelte/lib/X";
 import type { Snippet } from "svelte";
-import { setSearchQuery } from "$lib/stores/prs.svelte";
+import { setSearchQuery } from "$lib/stores/pr-filters.svelte";
 import {
   focusFirst,
   isFocusedVisible,

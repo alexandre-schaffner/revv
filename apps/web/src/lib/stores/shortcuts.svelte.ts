@@ -2,7 +2,7 @@ import { goto } from "$app/navigation";
 import type { Command } from "./command-keys";
 import { dispatchCommandKey, registerCommands } from "./commands.svelte";
 import { copySelectedPrLink } from "./pr-link.svelte";
-import { getSelectedPrId } from "./prs.svelte";
+import { getSelectedPrId } from "./route.svelte";
 import { openSettings, toggleSettings } from "./settingsModal.svelte";
 import {
   openAddRepoDialog,

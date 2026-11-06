@@ -8,12 +8,8 @@ import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shar
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
 import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
-import {
-  getIsLoading,
-  getRepositories,
-  getSelectedPr,
-  getSelectedPrId,
-} from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
+import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
 
 interface Props {
@@ -35,16 +31,13 @@ const repository = $derived(
 const selectedPrId = $derived(getSelectedPrId());
 const linkCopied = $derived(getPrLinkCopied());
 
-// Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
-// PR-list sync (`getPrListSyncing`) so the spinner reflects any in-flight
-// PR-list sync regardless of transport. Mirrors what Sidebar used to do.
-const isSyncing = $derived(getIsLoading() || getPrListSyncing());
+const isSyncing = $derived(getPrListSyncing());
 
 function handleSyncPrs(): void {
   if (selectedPrId) {
     requestFullSync(selectedPrId);
   } else {
-    requestSync();
+    void requestSync();
   }
 }
 </script>

@@ -30,7 +30,8 @@ import { authHeaders } from "$lib/session/token.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
-import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
+import { getPrById } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import {
   clearPendingWalkthroughBlockJump,
   getPendingWalkthroughBlockJump,

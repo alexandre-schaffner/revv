@@ -9,7 +9,8 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
+import { getSelectedRepoId } from "$lib/stores/route.svelte";
 import {
   isOwnerCollapsed,
   setAddRepoDialogOpen,

@@ -11,7 +11,7 @@ import {
   type ReviewTab,
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 

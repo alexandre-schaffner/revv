@@ -1,5 +1,5 @@
 import { toast } from "svelte-sonner";
-import { AddRepoError } from "$lib/stores/prs.svelte";
+import { AddRepoError } from "$lib/stores/repos.svelte";
 
 /**
  * Surface a failed add. A diagnosed rejection keeps its explanation on screen

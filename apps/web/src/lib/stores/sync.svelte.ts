@@ -93,12 +93,15 @@ export function onWindowForeground(streamOpen: boolean): void {
   if (streamOpen) freshenPrList();
 }
 
-export function requestSync(): void {
+/** Sync every tracked repo's PRs from GitHub now; `prs:sync-complete` clears the spinner. */
+export async function requestSync(): Promise<void> {
   prListSyncing = true;
-  void api.api.prs.sync.post().catch(() => {
+  try {
+    await api.api.prs.sync.post();
+  } catch {
     prListSyncing = false;
     toast.error("Failed to sync pull requests");
-  });
+  }
 }
 
 export function requestThreadSync(prId: string): void {

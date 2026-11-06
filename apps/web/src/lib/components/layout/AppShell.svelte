@@ -6,7 +6,7 @@ import StackMergeSheet from "$lib/components/stack/StackMergeSheet.svelte";
 import { RAIL_WIDTH } from "$lib/constants";
 import { gsap, gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { takeNavigationIntent } from "$lib/stores/navigation-intent.svelte";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { closeSettings, getSettingsOpen } from "$lib/stores/settingsModal.svelte";
 import { closePalette, getPaletteMode, getPaletteOpen } from "$lib/stores/shortcuts.svelte";
 import {

@@ -8,8 +8,8 @@ import {
   getArchivedByRepo,
   getArchivedLoadingMore,
   getArchivedNextCursor,
-  getSelectedPrId,
 } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { isArchiveOpen, toggleArchiveOpen } from "$lib/stores/sidebar.svelte";
 import PrItem from "./PrItem.svelte";
 

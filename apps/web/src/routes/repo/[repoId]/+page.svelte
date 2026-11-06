@@ -1,7 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
-import { getSelectedRepo } from "$lib/stores/prs.svelte";
+import { getSelectedRepo } from "$lib/stores/route.svelte";
 
 const repo = $derived(getSelectedRepo());
 const repoIdFromUrl = $derived(page.params.repoId ?? "");

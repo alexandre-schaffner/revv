@@ -6,8 +6,8 @@ import {
   getAvailableRepos,
   getAvailableReposFetchFailed,
   getAvailableReposLoading,
-  getRepositories,
-} from "$lib/stores/prs.svelte";
+} from "$lib/repos/catalog.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import { repoKey } from "./add-repo";
 
 const MAX_AUTO_RETRIES = 3;

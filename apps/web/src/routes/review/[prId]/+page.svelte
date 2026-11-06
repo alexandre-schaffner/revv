@@ -40,12 +40,8 @@ import {
   setActiveTab,
   setPrScrollPosition,
 } from "$lib/stores/pr-view-state.svelte";
-import {
-  getReviewModeForPr,
-  getSelectedPr,
-  isReviewModeResolved,
-  setSelectedPrId,
-} from "$lib/stores/prs.svelte";
+import { getReviewModeForPr, isReviewModeResolved } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
@@ -261,10 +257,7 @@ $effect(() => {
     return;
   }
 
-  untrack(() => {
-    setSelectedPrId(prId);
-    openReview(prId, mode);
-  });
+  untrack(() => openReview(prId, mode));
 });
 
 onDestroy(() => {

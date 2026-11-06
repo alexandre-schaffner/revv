@@ -9,7 +9,7 @@ import {
   setActiveFilePath,
   setActiveTab,
 } from "$lib/stores/pr-view-state.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 import PierreFileTree from "./PierreFileTree.svelte";
 import SidebarFilesSearch from "./SidebarFilesSearch.svelte";

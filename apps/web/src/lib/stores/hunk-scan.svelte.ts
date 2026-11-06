@@ -19,7 +19,7 @@ import type {
 } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   type EventsSinceAsked,
   mergeHydratedHunkScan,

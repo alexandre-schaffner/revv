@@ -6,7 +6,7 @@ import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
 import StackLayerList from "$lib/components/stack/StackLayerList.svelte";
 import { Button } from "$lib/components/ui/button";
 import { openStackLayer } from "$lib/stacks/open-layer";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 
 // The stack this PR belongs to, top of the stack first and the base branch

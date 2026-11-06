@@ -10,7 +10,7 @@ import RepoGradientAvatar from "$lib/components/shared/RepoGradientAvatar.svelte
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
 import { getTrackedRepo, LocalClone } from "$lib/repos/add-repo.svelte";
-import { addRepo, retryClone } from "$lib/stores/prs.svelte";
+import { addRepo, retryClone } from "$lib/stores/repos.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";
 

@@ -24,19 +24,17 @@ import {
   repoKey,
 } from "$lib/repos/add-repo";
 import { pickDirectory, useAvailableRepos } from "$lib/repos/add-repo.svelte";
-import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
 import {
-  addRepo,
   fetchAvailableRepos,
   getAvailablePrCount,
   getAvailablePrCountsLoaded,
   getAvailableRepos,
   getAvailableReposLoading,
   getDefaultCloneBaseDir,
-  getPullRequests,
-  getRepositories,
-  retryClone,
-} from "$lib/stores/prs.svelte";
+} from "$lib/repos/catalog.svelte";
+import { RepoRemoval } from "$lib/repos/repo-removal.svelte";
+import { getPullRequests } from "$lib/stores/prs.svelte";
+import { addRepo, getRepositories, retryClone } from "$lib/stores/repos.svelte";
 import RepoDeleteConfirm from "./RepoDeleteConfirm.svelte";
 import RepoDialogHeader from "./RepoDialogHeader.svelte";
 import RepoField from "./RepoField.svelte";

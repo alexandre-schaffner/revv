@@ -8,7 +8,8 @@ import {
   resetQuery,
   setQuery as setCommandQuery,
 } from "$lib/stores/commands.svelte";
-import { getArchivedPrs, getPullRequests, getRepositories } from "$lib/stores/prs.svelte";
+import { getArchivedPrs, getPullRequests } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import { type PaletteMode, setPaletteMode } from "$lib/stores/shortcuts.svelte";
 import { openPr } from "$lib/stores/sidebar-nav.svelte";
 import { fuzzyScore } from "$lib/utils/fuzzy";
