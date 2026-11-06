@@ -1,8 +1,8 @@
 import { STACK_CITATION_PATTERN, type StackLayer } from "@revv/shared";
 import { mount, unmount } from "svelte";
-import type { Action } from "svelte/action";
-import LayerChip from "$lib/components/stack/margin/LayerChip.svelte";
-import type { StackPlace } from "$lib/components/stack/margin/stack-margin";
+import { decorationAction } from "$lib/markdown/decorate";
+import LayerChip from "./LayerChip.svelte";
+import type { StackPlace } from "./stack-margin";
 
 const CITE_CLASS = "stack-cite";
 const NUMBER_ATTR = "data-stack-number";
@@ -40,10 +40,7 @@ const SKIP = `a, code, pre, button, .${CITE_CLASS}`;
  * The bound value is the PR's place in its stack, or null when it isn't
  * stacked (which also turns any chips back into text).
  */
-export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> = (node, value) => {
-  let destroyed = false;
-  let scheduled = false;
-  let place: StackPlace | null = value ?? null;
+export const stackCitations = decorationAction<StackPlace | null>((node) => {
   const chips = new Map<HTMLElement, Chip>();
 
   const unmountChip = (host: HTMLElement): void => {
@@ -84,7 +81,7 @@ export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> 
     for (const [host, layer] of minted) chips.set(host, mountChip(host, layer, at));
   };
 
-  const decorate = (): void => {
+  const decorate = (place: StackPlace | null): void => {
     // `{@html}` re-renders drop hosts without telling us; their chips go too.
     for (const host of [...chips.keys()]) {
       if (!node.contains(host)) unmountChip(host);
@@ -116,31 +113,10 @@ export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> 
     for (const t of texts) decorateTextNode(t, byNumber, at);
   };
 
-  const schedule = (): void => {
-    if (destroyed || scheduled) return;
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      if (destroyed) return;
-      observer.disconnect();
-      decorate();
-      if (!destroyed) observer.observe(node, { childList: true, subtree: true });
-    });
-  };
-
-  const observer = new MutationObserver(schedule);
-  observer.observe(node, { childList: true, subtree: true });
-  schedule();
-
   return {
-    update(next) {
-      place = next ?? null;
-      schedule();
-    },
+    apply: decorate,
     destroy() {
-      destroyed = true;
-      observer.disconnect();
       for (const host of [...chips.keys()]) unmountChip(host);
     },
   };
-};
+});

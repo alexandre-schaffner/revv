@@ -6,12 +6,12 @@ import Copy from "phosphor-svelte/lib/Copy";
 import Info from "phosphor-svelte/lib/Info";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
 import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
-import MarkdownBody from "./MarkdownBody.svelte";
 
 interface Props {
   request: RequestState<CheckDetails>;
@@ -114,7 +114,7 @@ function copyLog(details: CheckDetails): void {
 		{/if}
 
 		{#if !details.log && details.summary}
-			<MarkdownBody source={details.summary} />
+			<Markdown source={details.summary} trust="external" density="dense" class="wrap-anywhere" />
 		{/if}
 
 		{#if details.annotations.length === 0 && !details.log && !details.summary && !(details.logUnavailable && UNAVAILABLE[details.logUnavailable])}

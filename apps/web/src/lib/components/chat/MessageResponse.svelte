@@ -2,10 +2,11 @@
 // Markdown body of a chat message. In agent messages, inline-code paths that
 // match a changed file open it in the diff tab; in user messages, `@path`
 // mentions render as file pills.
-import { fileReferences } from "$lib/actions/file-references.svelte";
-import { mentionReferences } from "$lib/actions/mention-references.svelte";
+import { fromAction } from "svelte/attachments";
+import { fileReferences } from "$lib/chat/file-references";
+import { mentionReferences } from "$lib/chat/mention-references";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { getReviewFiles } from "$lib/stores/diff-files.svelte";
-import { renderMarkdownBlocks } from "$lib/utils/markdown.js";
 import { cn } from "$lib/utils.js";
 
 interface Props {
@@ -15,22 +16,16 @@ interface Props {
 }
 
 let { from, content, class: className }: Props = $props();
-
-/** Close an unclosed code fence so a streaming block renders as code. */
-function closeOpenFence(md: string): string {
-  const fences = md.match(/^```/gm);
-  return fences && fences.length % 2 !== 0 ? `${md}\n\`\`\`` : md;
-}
-
-const blocks = $derived(renderMarkdownBlocks(closeOpenFence(content)));
 </script>
 
-<div
+<Markdown
 	data-slot="message-response"
-	use:fileReferences={from === "assistant" ? getReviewFiles() : null}
-	use:mentionReferences={from === "user" ? getReviewFiles() : null}
+	source={content}
+	trust={from === "assistant" ? "agent" : "external"}
+	{@attach fromAction(fileReferences, () => (from === "assistant" ? getReviewFiles() : null))}
+	{@attach fromAction(mentionReferences, () => (from === "user" ? getReviewFiles() : null))}
 	class={cn(
-		"prose prose-sm max-w-none min-w-0 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
+		"max-w-none min-w-0 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_.shiki]:max-w-full [&_.shiki]:overflow-x-auto",
 		// A user bubble sits in an `items-end` column, so it is never narrower
 		// than its min-content; `wrap-anywhere` lowers that so a long path wraps
 		// instead of pushing the bubble past the pane. `max-w-full!` because
@@ -39,9 +34,7 @@ const blocks = $derived(renderMarkdownBlocks(closeOpenFence(content)));
 		from === "user" && "max-w-full! rounded-2xl bg-secondary px-4 py-2.5 wrap-anywhere",
 		className,
 	)}
->
-	{#each blocks as block}{@html block}{/each}
-</div>
+/>
 
 <style>
 	/* `.file-ref` (assistant inline-code paths) and `.mention-ref` (user `@`

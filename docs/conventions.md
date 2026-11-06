@@ -683,22 +683,39 @@ phosphor's own path data.
 
 **Backlog.** [`M-030`](./conventions-backlog.md#m-030).
 
-### 5.4 Rendered markdown goes through `.prose`
+### 5.4 Rendered markdown goes through `<Markdown>`
 
-Every `{@html …}` sink that renders markdown (`renderMarkdown(...)`, `messageHtml(...)`,
-`rendered*Html`, …) is wrapped in an element carrying `prose prose-sm`. Markdown styling is
-owned by one place — the themed `@tailwindcss/typography` layer in
-`apps/web/src/lib/styles/prose.css` (imported by `app.css`), whose `--tw-prose-*` slots map to
-`--color-*` tokens so both themes work with no `prose-invert`. Components **must not** re-declare
-element-level markdown CSS (`:global(p|code|strong|ul|ol|li|pre|blockquote|a)`) in their own
-`<style>`; express per-panel deviations as `--tw-prose-*` / container overrides instead. Dense
-side panels add `prose-dense` (13px/1.55) alongside `prose prose-sm`. The accent chat bubble adds
-`prose-on-accent`. A surface that deliberately is *not* prose (e.g. an inline-only sanitized
-display string) simply omits `.prose` — keep it outside a `.prose` ancestor.
+Every surface that renders markdown uses `lib/components/markdown/Markdown.svelte`:
+`<Markdown source trust density? fade? class? />`. Nothing else calls the renderer or
+`{@html}`s markdown. The component owns what each sink used to have to remember:
 
-**Backlog.** None — the consolidation removed all per-component markdown CSS. (This rule was
-previously enforced by `scripts/check-prose.ts`; that gate was retired once the migration was
-complete, so the rule is now convention-only.)
+- **Trust.** `trust="agent"` is text Revv's own agents wrote (walkthrough, ratings, chat
+  replies, plans, thoughts): its HTML keeps `class`/`style` and `prlens` fences become
+  diagrams. `trust="external"` is anyone else's (GitHub bodies, comments, reviews and
+  synced thread messages, CI summaries, the user's own chat text): `style` keeps only
+  colors, `class` only the renderer's own names, and `prlens` fences stay code. Pick by
+  who wrote the text, not by where it shows.
+- **Prose.** The root carries `prose prose-sm`, plus `prose-dense` (13px/1.55) for
+  `density="dense"` side panels and threads. Markdown styling is owned by the themed
+  `@tailwindcss/typography` layer in `apps/web/src/lib/styles/prose.css`, whose
+  `--tw-prose-*` slots map to `--color-*` tokens so both themes work with no `prose-invert`.
+  Components **must not** re-declare element-level markdown CSS
+  (`:global(p|code|strong|ul|ol|li|pre|blockquote|a)`); express per-panel deviations as
+  `--tw-prose-*` / container overrides on a `class` you pass, styled from a scoped
+  ancestor (`.card :global(.card-body) { … }`).
+- **Code highlighting.** The first fenced block with a language loads Shiki; every
+  `<Markdown>` re-renders when it is ready.
+- **Links** open in the browser, never in the app's webview.
+- **Decorations** (`lib/markdown/decorate.ts`): post-processing over rendered markdown
+  (diagrams, chat file references and mentions, stack citation chips) is a
+  `decorationAction`, which re-applies after every content or value change. Apply one
+  to a `<Markdown>` with `{@attach fromAction(action, () => value)}` or to an ancestor
+  with `use:`.
+
+A surface that deliberately is *not* markdown (e.g. an inline-only sanitized display
+string like the recap lede) stays outside a `.prose` ancestor.
+
+**Backlog.** None.
 
 ---
 

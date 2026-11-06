@@ -9,6 +9,7 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapSlide } from "$lib/motion";
@@ -27,7 +28,6 @@ import { getPrById } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { plural } from "$lib/utils/plural";
-import MarkdownBody from "./MarkdownBody.svelte";
 import MergeBoxCard from "./MergeBoxCard.svelte";
 
 // "This branch has conflicts with main", where GitHub's merge box would say
@@ -265,7 +265,7 @@ function onResolveClick(): void {
 								</ol>
 							{/if}
 							{#if run.agentText.length > 0}
-								<MarkdownBody source={run.agentText} />
+								<Markdown source={run.agentText} trust="external" density="dense" class="wrap-anywhere" />
 							{/if}
 						</div>
 					{/if}

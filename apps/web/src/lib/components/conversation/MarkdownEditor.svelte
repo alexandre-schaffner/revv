@@ -2,9 +2,9 @@
 import Eye from "phosphor-svelte/lib/Eye";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import { onMount } from "svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import SegmentedControl from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
-import MarkdownBody from "./MarkdownBody.svelte";
 
 // The one markdown editing surface on the Conversation tab: the composer,
 // a comment being edited, the PR description being edited. Write / Preview
@@ -111,7 +111,7 @@ onMount(() => {
 	{:else}
 		<div class="editor-preview">
 			{#if body.trim()}
-				<MarkdownBody source={body} />
+				<Markdown source={body} trust="external" density="dense" class="wrap-anywhere" />
 			{:else}
 				<p class="editor-empty">Nothing to preview.</p>
 			{/if}

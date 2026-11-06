@@ -89,7 +89,7 @@
 /* ──────────────────────────────────────────────────────────
    Prose tables — global styling for GFM tables rendered by
    marked. The `.prose-table` wrapper is added by the postprocess
-   hook in src/lib/utils/markdown.ts and provides horizontal
+   hook in src/lib/markdown/render.ts and provides horizontal
    scroll for tables wider than their container.
 
    Lives globally (not in per-component prose styles) because all

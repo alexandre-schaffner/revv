@@ -8,7 +8,6 @@ import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";
-import { createStreamingBlockRenderer } from "$lib/utils/markdown";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import RecapBody from "./RecapBody.svelte";
 import RecapHeroBig from "./RecapHeroBig.svelte";
@@ -35,7 +34,6 @@ let {
 }: Props = $props();
 
 let thoughtsOpen = $state(false);
-const renderThoughtBlocks = createStreamingBlockRenderer();
 
 const effectivePeriod = $derived<RecapPeriod>(period ?? recap?.period ?? "daily");
 
@@ -65,7 +63,6 @@ const phaseLabel = $derived(
 );
 const thoughtText = $derived(stream?.thoughts ?? "");
 const hasThoughtText = $derived(thoughtText.trim().length > 0);
-const thoughtBlocks = $derived.by(() => renderThoughtBlocks(thoughtText));
 
 const COMPLETED_AT_FMT = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -127,7 +124,7 @@ function formatCompletedAt(iso: string): string {
             {#if hasThoughtText}
               <ThoughtsReveal
                 bind:open={thoughtsOpen}
-                blocks={thoughtBlocks}
+                thoughts={thoughtText}
                 triggerClass="phase-trigger"
                 ariaLabel="{phaseLabel}. Toggle streamed thoughts"
               >
@@ -194,7 +191,7 @@ function formatCompletedAt(iso: string): string {
         {#if hasThoughtText}
           <ThoughtsReveal
             bind:open={thoughtsOpen}
-            blocks={thoughtBlocks}
+            thoughts={thoughtText}
             triggerClass="thoughts-trigger"
             ariaLabel="Toggle streamed thoughts"
           />

@@ -1,11 +1,9 @@
-import type { Action } from "svelte/action";
-
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
-import { getResolvedTheme, type ResolvedTheme } from "$lib/stores/theme.svelte";
-import { renderPrLens } from "$lib/utils/prlens.svelte";
-import { applyColourAttributes } from "$lib/utils/prlens-theme";
-
-const SELECTOR = ".prlens-diagram[data-prlens-src]";
+import type { ResolvedTheme } from "$lib/stores/theme.svelte";
+import { decorationAction } from "./decorate";
+import { renderPrLens } from "./prlens";
+import { DIAGRAM_SELECTOR, diagramSource } from "./prlens-fence";
+import { applyColourAttributes } from "./prlens-theme";
 
 /** The element a diagram is allowed to grow across. Nearest ancestor wins. */
 const BREAKOUT_HOST = "[data-prlens-breakout]";
@@ -105,16 +103,6 @@ function applyBreakout(container: HTMLElement, naturalWidth: number): void {
   if (shift > 0) container.style.marginLeft = `${-Math.round(shift)}px`;
 }
 
-function decodeSource(encoded: string): string | null {
-  try {
-    const binary = atob(encoded);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
 /** Re-indent the body so a rejected diagram is still readable as the fallback. */
 function formatSource(source: string): string {
   try {
@@ -168,12 +156,9 @@ function reveal(container: HTMLElement): void {
   );
 }
 
-export const prlensDiagrams: Action<HTMLElement, ResolvedTheme | undefined> = (node, theme) => {
-  let currentTheme: ResolvedTheme = theme ?? getResolvedTheme();
+/** Draws the `prlens` diagram placeholders under the node in the given theme. */
+export const prlensDiagrams = decorationAction<ResolvedTheme>((node) => {
   let destroyed = false;
-  let scheduled = false;
-  let rendering = false;
-  let rerunAfterRender = false;
 
   // Natural widths of the diagrams rendered under this node, so a host resize
   // can re-measure their breakout without re-rendering the SVG.
@@ -208,96 +193,55 @@ export const prlensDiagrams: Action<HTMLElement, ResolvedTheme | undefined> = (n
     observedHosts.add(host);
   };
 
-  const schedule = (): void => {
-    if (destroyed) return;
-    if (rendering) {
-      rerunAfterRender = true;
-      return;
-    }
-    if (scheduled) return;
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      void renderAll();
-    });
-  };
-
-  const renderAll = async (): Promise<void> => {
-    rendering = true;
-    const themeForRun = currentTheme;
-    // Read once per run rather than per diagram, so one batch is internally
-    // consistent. A change between runs changes `markerForRun`, which is what
-    // makes already-rendered diagrams eligible again.
-    const animateForRun = !prefersReducedMotion();
+  const apply = async (theme: ResolvedTheme): Promise<void> => {
+    const animate = !prefersReducedMotion();
     // Theme *and* motion change the emitted markup, so the "already rendered"
-    // marker has to carry both — keying it on theme alone left a diagram
-    // animating after the user turned reduced motion on.
-    const markerForRun = `${themeForRun}:${animateForRun ? "motion" : "still"}`;
-    try {
-      const containers = Array.from(node.querySelectorAll<HTMLElement>(SELECTOR));
-      const pending = containers.filter(
-        (container) => container.dataset.prlensRender !== markerForRun,
-      );
-      if (pending.length === 0) return;
+    // marker carries both.
+    const marker = `${theme}:${animate ? "motion" : "still"}`;
+    const pending = Array.from(node.querySelectorAll<HTMLElement>(DIAGRAM_SELECTOR)).filter(
+      (container) => container.dataset.prlensRender !== marker,
+    );
 
-      for (const container of pending) {
-        // A detached container drops out of the batch; only teardown aborts it.
-        // `return`ing on either abandoned every later diagram in `pending`.
-        if (destroyed) return;
-        if (!node.contains(container)) continue;
-        const encoded = container.dataset.prlensSrc;
-        if (!encoded) continue;
+    for (const container of pending) {
+      // A detached container drops out of the batch; only teardown aborts it.
+      if (destroyed) return;
+      if (!node.contains(container)) continue;
 
-        const source = decodeSource(encoded);
-        if (source === null) {
-          showFallback(container, "", "Diagram source could not be decoded.");
-          container.dataset.prlensRender = markerForRun;
-          continue;
-        }
-
-        container.innerHTML = '<span class="prlens-loading">Rendering diagram...</span>';
-
-        const result = await renderPrLens(source, themeForRun, animateForRun);
-        if (destroyed) return;
-        if (!node.contains(container)) continue;
-
-        if ("svg" in result) {
-          container.innerHTML = result.svg;
-          applyColourAttributes(container, result.colours);
-          naturalWidths.set(container, result.width);
-          observeHost(container);
-          applyBreakout(container, result.width);
-          reveal(container);
-        } else {
-          naturalWidths.delete(container);
-          showFallback(container, source, result.error);
-        }
-        container.dataset.prlensRender = markerForRun;
+      const source = diagramSource(container);
+      if (source === null) {
+        showFallback(container, "", "Diagram source could not be decoded.");
+        container.dataset.prlensRender = marker;
+        continue;
       }
-    } finally {
-      rendering = false;
-      if (rerunAfterRender) {
-        rerunAfterRender = false;
-        schedule();
+
+      container.innerHTML = '<span class="prlens-loading">Rendering diagram...</span>';
+
+      const result = await renderPrLens(source, theme, animate);
+      if (destroyed) return;
+      if (!node.contains(container)) continue;
+
+      if ("svg" in result) {
+        container.innerHTML = result.svg;
+        applyColourAttributes(container, result.colours);
+        naturalWidths.set(container, result.width);
+        observeHost(container);
+        applyBreakout(container, result.width);
+        reveal(container);
+      } else {
+        naturalWidths.delete(container);
+        showFallback(container, source, result.error);
       }
+      container.dataset.prlensRender = marker;
     }
   };
-
-  const observer = new MutationObserver(schedule);
-  observer.observe(node, { childList: true, subtree: true });
-  schedule();
 
   return {
-    update(nextTheme) {
-      currentTheme = nextTheme ?? getResolvedTheme();
-      schedule();
-    },
+    apply,
     destroy() {
       destroyed = true;
-      observer.disconnect();
       resizeObserver.disconnect();
       observedHosts.clear();
       naturalWidths.clear();
     },
   };
-};
+});

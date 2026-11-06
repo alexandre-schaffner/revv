@@ -4,6 +4,7 @@ import { loginsMatch } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import ChatCircleDots from "phosphor-svelte/lib/ChatCircleDots";
 import { SvelteSet } from "svelte/reactivity";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
 import { groupTimeline } from "$lib/conversation/timeline";
@@ -12,7 +13,6 @@ import { deleteComment, editComment, getAbilities } from "$lib/stores/conversati
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { openExternal } from "$lib/utils/open-external";
 import CommentCard from "./CommentCard.svelte";
-import MarkdownBody from "./MarkdownBody.svelte";
 import TimelineCommits from "./TimelineCommits.svelte";
 import TimelineEventLine from "./TimelineEventLine.svelte";
 import TimelineRow from "./TimelineRow.svelte";
@@ -89,7 +89,7 @@ const unfolded = new SvelteSet<string>();
 					{#if review.body.trim() || review.inlineCommentCount > 0}
 						<div class="review-body">
 							{#if review.body.trim()}
-								<MarkdownBody source={review.body} />
+								<Markdown source={review.body} trust="external" density="dense" class="wrap-anywhere" />
 							{/if}
 							{#if review.inlineCommentCount > 0}
 								<button type="button" class="review-inline" onclick={() => setActiveTab('diff')}>

@@ -11,10 +11,9 @@
 import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import Trash from "phosphor-svelte/lib/Trash";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { isHighlighterReady } from "$lib/utils/code-highlight.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { renderMarkdown } from "$lib/utils/markdown";
 import MessageAvatar from "../MessageAvatar.svelte";
 
 interface Props {
@@ -29,28 +28,13 @@ interface Props {
 let { threads, getThreadMessages, onJump, onDiscard }: Props = $props();
 const currentUserLogin = $derived(getCurrentUserLogin());
 
-// Flatten to a render-ready shape so the template doesn't recompute on
-// every iteration. Re-derive when the shiki highlighter becomes ready
-// so fenced code blocks pick up syntax highlighting on second pass.
-const highlighterReady = $derived(isHighlighterReady());
-const renderedThreads = $derived.by(() => {
-  void highlighterReady;
-  return threads.map((thread) => {
-    const messages = getThreadMessages(thread.id);
-    return {
-      thread,
-      messages,
-      rendered: messages.map((msg) => ({
-        id: msg.id,
-        html: msg.body.trim().length > 0 ? renderMarkdown(msg.body) : "",
-      })),
-    };
-  });
-});
+const threadEntries = $derived(
+  threads.map((thread) => ({ thread, messages: getThreadMessages(thread.id) })),
+);
 </script>
 
 <div class="expanded-body">
-    {#each renderedThreads as entry (entry.thread.id)}
+    {#each threadEntries as entry (entry.thread.id)}
         <div class="thread-block">
             <div class="thread-head">
                 <span class="thread-line" aria-label="Line {entry.thread.startLine}">
@@ -93,13 +77,13 @@ const renderedThreads = $derived.by(() => {
                                     {formatRelativeTime(msg.createdAt)}
                                 </time>
                             </div>
-                            <div class="turn-body prose prose-sm prose-dense">
-                                {#if entry.rendered[i]?.html}
-                                    {@html entry.rendered[i].html}
-                                {:else}
+                            {#if msg.body.trim()}
+                                <Markdown class="turn-body" source={msg.body} trust="external" density="dense" />
+                            {:else}
+                                <div class="turn-body prose prose-sm prose-dense">
                                     <p class="turn-empty">(empty message)</p>
-                                {/if}
-                            </div>
+                                </div>
+                            {/if}
                         </li>
                     {/each}
                 </ol>
@@ -255,7 +239,7 @@ const renderedThreads = $derived.by(() => {
 
     /* Density + body tone come from `prose prose-sm prose-dense`; this only
        owns the reading measure and offset. */
-    .turn-body {
+    .turn :global(.turn-body) {
         max-width: 65ch;
         margin-top: 6px;
     }
@@ -266,8 +250,6 @@ const renderedThreads = $derived.by(() => {
         font-style: italic;
     }
 
-    /* Markdown styling comes from the app-wide themed @tailwindcss/typography
-       prose layer (see app.css); `.turn-body` only owns the reading measure. */
 
     .empty-thread {
         margin: 0;

@@ -4,9 +4,9 @@ import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import X from "phosphor-svelte/lib/X";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import type { PlanStatus } from "$lib/chat/timeline.svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Collapsible, CollapsibleContent } from "$lib/components/ui/collapsible/index.js";
-import { renderMarkdown } from "$lib/utils/markdown";
 import { cn } from "$lib/utils.js";
 
 interface Props {
@@ -49,8 +49,8 @@ let open = $state(true);
 			</span>
 		{/if}
 	</div>
-	<CollapsibleContent data-slot="plan-content" class="px-4 pb-3 prose prose-sm max-w-none">
-		{@html markdown ? renderMarkdown(markdown) : ""}
+	<CollapsibleContent data-slot="plan-content" class="px-4 pb-3">
+		<Markdown source={markdown} trust="agent" />
 	</CollapsibleContent>
 	{#if status === "pending"}
 		<div data-slot="plan-footer" class="flex items-center justify-end gap-2 px-4 py-2">
