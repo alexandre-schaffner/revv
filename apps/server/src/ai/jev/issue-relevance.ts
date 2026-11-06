@@ -105,7 +105,7 @@ export function judgeIssue(
   candidate: IssueCandidate,
 ): Effect.Effect<IssueJudgment | null, never, JevService | CacheService | DbService> {
   return Effect.gen(function* () {
-    const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, candidate));
+    const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, issueId, candidate));
     if (input === null) return null;
 
     const raw = yield* cachedJev<RawIssueJudgment>(

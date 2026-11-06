@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import type { Db } from "../../db";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
@@ -35,10 +35,14 @@ function hunkFor(
   return { hunk: patch, offDiff: !fit.ok };
 }
 
-/** Gather the stable DB context a single judgment depends on. */
+/**
+ * Gather the stable DB context a single judgment depends on. The candidate is
+ * already written when it is judged, so it is left out of `existingIssues`.
+ */
 export function collectIssueGateInput(
   db: Db,
   walkthroughId: string,
+  issueId: string,
   candidate: IssueCandidate,
 ): IssueGateInput | null {
   const row = db
@@ -57,7 +61,9 @@ export function collectIssueGateInput(
       filePath: walkthroughIssues.filePath,
     })
     .from(walkthroughIssues)
-    .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
+    .where(
+      and(eq(walkthroughIssues.walkthroughId, walkthroughId), ne(walkthroughIssues.id, issueId)),
+    )
     .orderBy(asc(walkthroughIssues.order))
     .all()
     .map((issue) => ({
