@@ -4,7 +4,6 @@ import GithubLogo from "phosphor-svelte/lib/GithubLogo";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import {
-  cancelSignIn,
   getDeviceFlow,
   getError,
   getIsLoading,
@@ -13,6 +12,7 @@ import {
   signIn,
 } from "$lib/stores/auth.svelte";
 import { setGithubConfigStrict } from "$lib/stores/settings.svelte";
+import DeviceCodePanel from "./DeviceCodePanel.svelte";
 
 const reauth = $derived(getReauthRequired());
 const deviceFlow = $derived(getDeviceFlow());
@@ -20,7 +20,6 @@ const error = $derived(getError());
 const signInErrorCode = $derived(getSignInErrorCode());
 const isLoading = $derived(getIsLoading());
 
-let copied = $state(false);
 let clientId = $state("");
 let clientIdError = $state<string | null>(null);
 let isSavingClientId = $state(false);
@@ -34,13 +33,6 @@ const needsClientId = $derived(
         clientIdError),
   ),
 );
-
-async function copyCode(): Promise<void> {
-  if (!deviceFlow) return;
-  await navigator.clipboard.writeText(deviceFlow.userCode);
-  copied = true;
-  setTimeout(() => (copied = false), 2000);
-}
 
 function startReauth(): void {
   // Re-auth against the same GitHub host the expired account belongs to so
@@ -107,38 +99,12 @@ async function saveClientIdAndRetry(): Promise<void> {
 			</div>
 
 			{#if deviceFlow}
-				<div class="flex flex-col items-center gap-4">
-					<p class="text-sm text-text-secondary">Enter this code on GitHub:</p>
-					<div
-						class="flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-6 py-3"
-					>
-						<span class="font-mono text-2xl font-bold tracking-widest text-text-primary">
-							{deviceFlow.userCode}
-						</span>
-						<button
-							onclick={copyCode}
-							class="ml-1 cursor-pointer rounded p-1 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-							aria-label="Copy code"
-						>
-							{copied ? "Copied" : "Copy"}
-						</button>
-					</div>
-					<a
-						href={deviceFlow.verificationUri}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="text-xs text-accent hover:underline"
-					>
-						{deviceFlow.verificationUri}
-					</a>
-					<p class="text-xs text-text-muted">Waiting for authorization…</p>
-					<button
-						class="cursor-pointer text-xs text-text-muted underline hover:text-text-secondary"
-						onclick={cancelSignIn}
-					>
-						Cancel
-					</button>
-				</div>
+				<DeviceCodePanel
+					userCode={deviceFlow.userCode}
+					verificationUri={deviceFlow.verificationUri}
+					surface="tertiary"
+					copyLabel="text"
+				/>
 			{:else}
 				{#if error && !clientIdError}
 					<p class="text-sm text-danger">{error}</p>
