@@ -378,12 +378,9 @@ async function runMerge(method: MergeMethod): Promise<void> {
         </GlassPill>
       {/if}
     {:else}
-      <!-- Not the PR owner → a reviewer. Review mode is derived from identity
-           (see getReviewModeForPr), so "not owner" is exactly "reviewer". One
-           "Submit review" posts everything in a single GitHub review: the line
-           comments always go up, and it requests changes when walkthrough
-           issues are selected (otherwise it's a plain comment review). Approve
-           stays a distinct action. -->
+      <!-- One "Submit review" posts everything as a single GitHub review: the
+           line comments always, and it requests changes when walkthrough
+           issues are selected. Approve stays a separate action. -->
       <GlassPill
         variant="accent"
         disabled={rcSubmitting !== null || !rcCanComment}
@@ -435,16 +432,11 @@ async function runMerge(method: MergeMethod): Promise<void> {
 {/if}
 
 <style>
-  /* The bar wrapper now uses the shared `.actions-float` / `.actions-row`
-     primitives from `app.css`. Only locally-scoped pieces (the merge split-
-     button shape, the async-eligibility fade wrapper) remain here. */
   .pill-wrap {
     display: inline-flex;
     align-items: center;
   }
 
-  /* Merge split-button: single pill shell with transparent inner buttons so the
-     wrapper's `.glass-pill` border and radius create the shape. */
   .merge-pill {
     padding: 0;
     overflow: hidden;

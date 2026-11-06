@@ -399,7 +399,6 @@ function handleResume(): void {
 		padding: 28px 0;
 	}
 
-	/* Same attribution line as the recap detail footer. */
 	.walkthrough-footer {
 		margin-top: 1.5rem;
 		padding-top: 0.5rem;
@@ -467,7 +466,6 @@ function handleResume(): void {
 		padding-top: 14px;
 	}
 
-	/* The error state's trace of what the agent attempted before it stopped. */
 	.exploration-feed {
 		width: 100%;
 		display: flex;
@@ -538,7 +536,6 @@ function handleResume(): void {
 		display: contents;
 	}
 
-	/* Holds the skeleton row's height, like a block's severity dot. */
 	.block-step-dot {
 		justify-self: end;
 		align-self: flex-start;
@@ -548,7 +545,6 @@ function handleResume(): void {
 		margin-right: 16px;
 	}
 
-	/* The sentiment card above the scorecard, as one content-column item. */
 	.sentiment-stack {
 		display: flex;
 		flex-direction: column;

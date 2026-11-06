@@ -9,7 +9,6 @@ interface Props {
   verificationUri: string;
   /** Background of the code box, chosen to contrast with the surface it sits on. */
   surface: "elevated" | "tertiary";
-  /** `text` shows "Copy" / "Copied"; `icon` shows the copy / check glyphs. */
   copyLabel: "text" | "icon";
 }
 

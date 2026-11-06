@@ -129,10 +129,6 @@ useShellChrome(() => ({
 		width: 100%;
 	}
 
-	/* Center the loader vertically + horizontally in the available viewport
-	   while the recap (or the recap list) is loading. Approximate viewport
-	   height by subtracting the app shell chrome so the loader sits in the
-	   visual middle of the page area, not the middle of the document. */
 	.loader-fullscreen {
 		display: grid;
 		place-items: center;
@@ -140,8 +136,6 @@ useShellChrome(() => ({
 		width: 100%;
 	}
 
-	/* Editorial empty state. Mono eyebrow → display heading → lede.
-	   Sized to feel like a magazine landing, not a settings card. */
 	.period-hero {
 		display: flex;
 		flex-direction: column;
@@ -187,10 +181,8 @@ useShellChrome(() => ({
 		text-wrap: pretty;
 	}
 
-	/* The page's primary action, with the archive trigger beside it — on an
-	   empty repo there is no date header to hang the archive off, so it rides
-	   here instead. No helper line under them: both ledes already say the
-	   agent is quick. */
+	/* On an empty repo there is no date header to hang the archive off, so it
+	   rides beside the primary action. */
 	.period-cta {
 		display: flex;
 		align-items: center;

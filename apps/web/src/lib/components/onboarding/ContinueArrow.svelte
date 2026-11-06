@@ -1,12 +1,8 @@
 <script lang="ts">
 /*
- * ContinueArrow — the long, hairline arrow on onboarding's forward buttons.
- *
- * Deliberately not `phosphor-svelte/lib/ArrowRight`: phosphor draws on a
- * square 1:1 grid, and onboarding wants a wide 18×10 arrow with a 1px stroke
- * so it reads as a quiet lead-out rather than a UI control. This is the
- * "inline SVG only when no phosphor equivalent fits" carve-out from CLAUDE.md
- * — and it lives here once instead of being copy-pasted into every step.
+ * Not phosphor's ArrowRight: phosphor draws on a square 1:1 grid, and
+ * onboarding wants a wide 18×10 arrow with a 1px stroke that reads as a quiet
+ * lead-out (CLAUDE.md's inline-SVG carve-out).
  */
 interface Props {
   class?: string;

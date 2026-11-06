@@ -1,16 +1,7 @@
-// ── Composer contenteditable model (pure DOM) ────────────────────────────────
-//
-// The chat composer is a `contenteditable` surface, NOT a `<textarea>`: a
-// `@path` mention is a real, non-editable "pill" node while everything else is
-// plain text. The backend contract is still a flat string, so the DOM is
-// serialized back — each pill to its `@path[:line]` token — on every edit.
-//
-// Everything here is a pure function over `Node`/`Range`/`Selection` and the
-// known-mention set; nothing reads Svelte reactivity. It lives outside the
-// component so the gnarly parts (WebKit's two-backspace pill behavior, the
-// whitespace-node walking, the serialize/render round-trip) are unit-testable
-// under jsdom without mounting a component. The component keeps only the
-// reactive glue (`trigger`, `menuOpen`, effects, event wiring).
+// The composer is a `contenteditable`, not a `<textarea>`: a `@path` mention is
+// a real, non-editable pill node, everything else plain text. The backend
+// contract is a flat string, so the DOM is serialized back (each pill to its
+// `@path[:line]` token) on every edit.
 
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 
@@ -90,7 +81,6 @@ function serializeChildren(children: NodeListOf<ChildNode>, out: string[]): void
   }
 }
 
-/** Serialize a node tree back to the flat `@path`-bearing message string. */
 export function serialize(root: Node | null | undefined): string {
   if (!root) return "";
   const out: string[] = [];
@@ -113,15 +103,12 @@ function appendPillifiedInlineText(
     const path = m[1] ?? "";
     if (!mentionPathSet.has(path)) continue;
     if (m.index > last) appendInlineText(parent, value.slice(last, m.index));
-    // `m[0]` is the whole `@path[:line]` token, so the pill preserves the line
-    // suffix through a re-render instead of silently dropping it.
     parent.appendChild(makePill(m[0], path));
     last = m.index + m[0].length;
   }
   if (last < value.length) appendInlineText(parent, value.slice(last));
 }
 
-/** Rebuild the editor DOM from a flat string, pillifying known mentions. */
 export function render(
   editorEl: HTMLElement,
   value: string,
@@ -143,7 +130,6 @@ export function render(
   editorEl.replaceChildren(frag);
 }
 
-/** Every text node in the editor that is NOT inside a pill (pill text is a label). */
 function plainTextNodes(root: HTMLElement): Text[] {
   const out: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -156,16 +142,13 @@ function plainTextNodes(root: HTMLElement): Text[] {
 
 /**
  * Pillify hand-typed mentions *in place*, touching only the text nodes that
- * actually contain one. Returns whether anything changed.
+ * hold one. Returns whether anything changed.
  *
- * Deliberately not `render()`: that rebuilds the whole editor even when the
- * result is identical, which drops the nodes WebKit's saved selection points
- * at. Blur fires on every app switch and on every click elsewhere in the UI, so
- * rebuilding there resets the caret to offset 0 — the next focus that doesn't
- * come from a click (returning to the app, Cmd+L) lands at the start of the
- * message and the following keystrokes are typed in front of it. Surgical
- * replacement leaves every other node — including the one holding the caret —
- * untouched.
+ * Not `render()`: rebuilding the editor drops the nodes WebKit's saved
+ * selection points at. Blur fires on every app switch and every click
+ * elsewhere, so a rebuild there resets the caret to offset 0, and the next
+ * focus that doesn't come from a click (returning to the app, Cmd+L) types in
+ * front of the message.
  *
  * A mention split across two adjacent text nodes stays plain text; the pill is
  * cosmetic and the serialized value is identical either way.
@@ -193,10 +176,8 @@ export function insertLineBreak(editorEl: HTMLElement): boolean {
   return document.execCommand("insertParagraph");
 }
 
-// ── Caret-relative helpers ────────────────────────────────────────────────────
-// `savedRange` is the last collapsed caret inside the editor, threaded in by the
-// component so a mouse selection of an autocomplete row (which would otherwise
-// blur the editor and drop the live selection) can still target the right spot.
+// `savedRange` is the last collapsed caret inside the editor: a mouse pick of an
+// autocomplete row blurs the editor and drops the live selection.
 
 export function editorCaret(editorEl: HTMLElement, savedRange: Range | null): Range | null {
   const sel = window.getSelection();
@@ -216,9 +197,8 @@ export function caretTextBefore(editorEl: HTMLElement, savedRange: Range | null)
   return serialize(pre.cloneContents());
 }
 
-// The active token is freshly-typed plain text ending at the caret, so it lives
-// in one text node; delete `marker + query` chars and return the emptied range
-// for the caller to drop in a pill (mentions) or text (slash commands).
+// The active token is freshly typed plain text ending at the caret, so it lives
+// in one text node. Returns the emptied range for the caller to fill.
 export function replaceTokenRange(
   editorEl: HTMLElement,
   savedRange: Range | null,
@@ -246,8 +226,6 @@ export function placeCaretAfter(node: Node): void {
   sel.removeAllRanges();
   sel.addRange(r);
 }
-
-// ── Pill deletion ─────────────────────────────────────────────────────────────
 
 export function isPill(node: Node | null): node is HTMLElement {
   return node?.nodeType === Node.ELEMENT_NODE && isPillElement(node as HTMLElement);
@@ -278,50 +256,43 @@ function isWhitespaceText(node: Node | null): boolean {
   return node?.nodeType === Node.TEXT_NODE && (node.nodeValue ?? "").trim().length === 0;
 }
 
-/** The plan a single Backspace should apply near a pill. */
 export interface PillDeleteTarget {
   pill: HTMLElement;
   /** Whitespace/empty text nodes to delete whole. */
   removeNodes: Node[];
   /** Caret's own text node whose leading whitespace prefix should be trimmed. */
   trimNode: Text | null;
-  /** Length of that whitespace prefix. */
   trimLen: number;
   /** Where the caret should collapse afterward (kept node). */
   caretNode: Node | null;
 }
 
-// What a single Backspace should remove: the pill just before the caret, plus
-// any auto-inserted whitespace sitting between it and the caret (so the
-// `[pill][" "]` a mention insertion leaves behind — where the caret lands at
-// element level right after the space — dies in one press instead of two).
-// Returns null when there's ordinary text to delete first: then the browser
-// handles it.
+// What a single Backspace should remove: the pill before the caret plus any
+// whitespace between them, so the `[pill][" "]` a mention insertion leaves
+// (caret at element level after the space) dies in one press, not two. Null
+// when there's ordinary text to delete first: the browser handles that.
 export function backwardPillTarget(range: Range): PillDeleteTarget | null {
   const { startContainer: c, startOffset: o } = range;
 
-  // The node just left of the caret, and the text prefix to strip if the caret
-  // sits inside a (whitespace-only) text node.
   let scan: Node | null;
   let trimNode: Text | null = null;
   let trimLen = 0;
   let caretNode: Node | null;
   if (c.nodeType === Node.TEXT_NODE) {
     const before = (c.nodeValue ?? "").slice(0, o);
-    if (before.trim().length > 0) return null; // real text → normal delete
+    if (before.trim().length > 0) return null;
     trimNode = c as Text;
     trimLen = before.length;
-    caretNode = c; // keep this node; caret collapses to its start
+    caretNode = c;
     scan = c.previousSibling;
   } else {
-    caretNode = c.childNodes[o] ?? null; // node the caret sits before (kept)
+    caretNode = c.childNodes[o] ?? null;
     scan = c.childNodes[o - 1] ?? null;
   }
 
-  // Walk left across whitespace/empty text nodes to reach the pill.
   const removeNodes: Node[] = [];
   while (scan && scan.nodeType === Node.TEXT_NODE) {
-    if (!isWhitespaceText(scan)) return null; // real text → normal delete
+    if (!isWhitespaceText(scan)) return null;
     removeNodes.push(scan);
     scan = scan.previousSibling;
   }
@@ -329,8 +300,6 @@ export function backwardPillTarget(range: Range): PillDeleteTarget | null {
   return { pill: scan, removeNodes, trimNode, trimLen, caretNode };
 }
 
-// Collapse the caret before `anchor` if it's still attached, else to the end of
-// the editor. Shared by both delete directions so the fallback lives once.
 function collapseCaretBefore(sel: Selection, anchor: Node | null, editorEl: HTMLElement): void {
   const r = document.createRange();
   if (anchor?.parentNode) r.setStartBefore(anchor);
@@ -343,14 +312,12 @@ function collapseCaretBefore(sel: Selection, anchor: Node | null, editorEl: HTML
   sel.addRange(r);
 }
 
-/** Remove a pill via forward Delete; caret collapses where it stood. */
 export function deletePillForward(editorEl: HTMLElement, sel: Selection, pill: HTMLElement): void {
   const anchor = pill.nextSibling;
   pill.remove();
   collapseCaretBefore(sel, anchor, editorEl);
 }
 
-/** Apply a backward (Backspace) pill-deletion plan; caret collapses where it stood. */
 export function deletePillBackward(
   editorEl: HTMLElement,
   sel: Selection,

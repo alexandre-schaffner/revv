@@ -11,19 +11,13 @@ interface Props {
 
 let { onSubmit }: Props = $props();
 
-// Mirror SearchFilter.svelte's input UX: 300ms debounce so we don't thrash
-// the tree's setSearch on every keystroke.
 let inputEl: HTMLInputElement;
 let inputValue = $state(getFileSearchQuery());
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Sync inputValue from the store when the store changes externally.
-// The store is cleared on swipe-back (`setSidebarView('prs')`), PR
-// switches, and scope toggles. The pane stays mounted across those, so
-// without this sync the input would visually retain stale text and the
-// pending debounce would re-apply the stale query 300ms later.
-// `untrack` on the inputValue read keeps local typing from re-triggering
-// this effect — only real store changes do.
+// The store is cleared on swipe-back, PR switches and scope toggles while this
+// pane stays mounted; without this the input would keep the stale text and the
+// pending debounce would re-apply it.
 $effect(() => {
   const storeValue = getFileSearchQuery();
   untrack(() => {

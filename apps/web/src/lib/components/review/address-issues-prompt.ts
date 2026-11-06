@@ -1,9 +1,3 @@
-// ── Frontend prompt builders ───────────────────────────────────────────────
-//
-// User-facing chat prompts that we ship as the first message of a session.
-// Lives in the web bundle (not @revv/shared) because it's UI-driven and
-// references issue shapes that are already in the web app.
-
 import type { WalkthroughIssue } from "@revv/shared";
 import addressIssuesTemplate from "./address-issues.md?raw";
 
@@ -28,9 +22,8 @@ function locationOf(issue: WalkthroughIssue): string {
 }
 
 /**
- * Build the auto-prompt sent when the user clicks "Generate changes" in the
- * Conversation tab's Your review section. Bundles each selected walkthrough issue and asks the
- * agent to address them as separate commits using its Edit/Write/Bash tools.
+ * The first chat message when the user clicks "Generate changes" in Your
+ * review: each selected issue, to be addressed as separate commits.
  */
 export function buildAddressIssuesPrompt(issues: ReadonlyArray<WalkthroughIssue>): string {
   if (issues.length === 0) {

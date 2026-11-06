@@ -9,7 +9,6 @@ export interface ToolCallCardProps {
   payload?: unknown;
   /** Captured tool output (stdout / result text), once available. */
   output?: string | undefined;
-  /** Whether the tool call ended in error. */
   isError?: boolean | undefined;
   class?: string;
 }
@@ -73,8 +72,6 @@ const ICONS: Record<ActivityKind, Component> = {
   "tool.other": Wrench,
 };
 
-// Per-kind accent so the feed reads at a glance: reads/searches in the brand
-// accent, mutations warm (edit) / green (write, bash), the rest muted.
 const ICON_COLORS: Record<ActivityKind, string> = {
   "tool.read": "var(--color-accent)",
   "tool.write": "var(--color-success)",
@@ -93,16 +90,10 @@ const iconColor = $derived(ICON_COLORS[activityKind] ?? "var(--color-text-muted)
 const label = $derived(activityLabel({ activityKind, toolName, output }));
 const detail = $derived(activityDetailText({ activityKind, payload, summary }));
 const filePath = $derived(activityFilePath({ activityKind, payload }));
-// For a windowed Read, the line range it actually read — narrows the file peek
-// from the whole file down to those lines.
 const readWindow = $derived(activityReadWindow({ activityKind, payload }));
 const command = $derived(activityCommand({ activityKind, payload }));
 const peekable = $derived(activityHasPeek({ activityKind, payload, output }));
-// Per-extension file-type glyph (matches the sidebar tree) shown inside the
-// pill for file tools.
 const fileGlyph = $derived(filePath ? fileIcon(filePath) : null);
-// Structured edit diff (old/new) captured in the output, when present — drives
-// the diff peek and the +/- LOC counts beside the pill.
 const diffOut = $derived(decodeToolDiffOutput(output));
 const diffStats = $derived(diffOut ? diffLineStats(diffOut) : null);
 

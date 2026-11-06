@@ -52,7 +52,6 @@ import StatusDot from "../primitives/StatusDot.svelte";
 const cache = $derived(getSettings().cache);
 const enabled = $derived(cache.enabled);
 
-// ── Connection test ───────────────────────────────────────────────────────
 let cacheTestState = $state<{ healthy: boolean; detail: string } | null>(null);
 let cacheTestRunning = $state(false);
 
@@ -72,7 +71,6 @@ async function testCacheConnection(): Promise<void> {
   }
 }
 
-// ── ADC (Application Default Credentials) status ──────────────────────────
 type AdcStatus = Extract<
   EdenData<typeof api.api.settings.cache["adc-status"]["get"]>,
   { gcloudFound: boolean }
@@ -90,8 +88,8 @@ async function fetchAdcStatus(): Promise<void> {
   }
 }
 
-// Only probe credentials while the cache is on. It used to be fetched on open
-// regardless, and with the cache off the "Checking…" spinner never resolved.
+// Only probe credentials while the cache is on: with it off, the "Checking…"
+// spinner would never resolve.
 $effect(() => {
   if (enabled) void fetchAdcStatus();
 });
@@ -115,7 +113,6 @@ $effect(() => stopAdcPolling);
 async function startAdcLogin(): Promise<void> {
   const { data } = await api.api.settings.cache["adc-login"].post().catch(() => ({ data: null }));
   if (!data?.started) return;
-  // Poll until ADC becomes available, for at most a minute.
   stopAdcPolling();
   adcPolling = true;
   adcPollTimers = {
@@ -127,7 +124,6 @@ async function startAdcLogin(): Promise<void> {
   };
 }
 
-// ── Signing ───────────────────────────────────────────────────────────────
 const signingModeOptions: SegmentedOption<CacheSigningMode>[] = [
   { value: "strict", label: "Strict" },
   { value: "permissive", label: "Permissive" },

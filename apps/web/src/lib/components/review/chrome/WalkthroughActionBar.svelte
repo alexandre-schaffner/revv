@@ -88,7 +88,6 @@ const selectedMode = $derived(getSelectedMode(prId));
 const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
 const reviewNewCommitsLabel = "Review new commits";
 
-/** Map walkthrough-specific state to the normalised GenActionState. */
 const genActionState = $derived.by((): GenActionState | null => {
   switch (walkthroughUiState.kind) {
     case "absent":
@@ -121,10 +120,8 @@ const genActionState = $derived.by((): GenActionState | null => {
 // the identity-derived session either way.
 const perspective = $derived({ value: selectedMode, options: WALKTHROUGH_PERSPECTIVE_OPTIONS });
 
-/** When chat is streaming, treat it as an in-flight action so the
- *  destructive buttons are disabled with a contextual tooltip. Also covers
- *  the diff refresh in `handleRegenerate`'s stale branch, which runs before
- *  `regenerate` takes the pending slot. */
+/** A streaming chat or a commit pull counts as an in-flight action, so the
+ *  destructive buttons disable with a contextual tooltip. */
 const pullingCommit = $derived(getIsPullingCommit(prId));
 const combinedPendingAction = $derived(
   chatStreaming ? "chat" : pullingCommit ? "regenerate" : walkthroughPendingAction,
@@ -221,8 +218,6 @@ function handleRegenerate(): void {
 {/if}
 
 <style>
-  /* Transition-only wrapper. `inline-flex` keeps it a flex item of
-     `.actions-row` so the gap rule continues to work. */
   .pill-wrap {
     display: inline-flex;
     align-items: center;

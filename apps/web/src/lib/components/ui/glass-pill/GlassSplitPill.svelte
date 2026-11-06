@@ -20,7 +20,6 @@ interface Props {
   onclick?: (() => void) | undefined;
   /** Accessible name for the caret segment. */
   menuLabel?: string;
-  /** Main-segment content (icon + label). */
   children: Snippet;
   /** Menu rows. Receives `close` so a row can dismiss the menu. */
   menu?: Snippet<[close: () => void]> | undefined;

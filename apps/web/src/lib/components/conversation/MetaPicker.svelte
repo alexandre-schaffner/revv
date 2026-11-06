@@ -40,9 +40,7 @@ import LabelChip from "./LabelChip.svelte";
 // request per close, not one per click.
 
 interface Props {
-  /** Accessible name of the trigger, e.g. "Edit reviewers". */
   label: string;
-  /** Popover heading, e.g. "Request reviews". */
   title: string;
   placeholder: string;
   /** What's selected right now, by option key. */

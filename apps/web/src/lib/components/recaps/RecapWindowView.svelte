@@ -21,13 +21,9 @@ import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/recaps
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
 
 /**
- * A recap window that holds nothing yet.
- *
- * Every cell in the archive calendar is a link, which means the empty ones
- * need somewhere to land. This is that page: it names the window, says there
- * is no recap for it, and offers to write one. As soon as a recap exists for
- * the window — because this page generated it, or because the scheduler did —
- * it hands off to that recap's permalink.
+ * A recap window that holds nothing yet: where an empty calendar cell lands.
+ * As soon as a recap exists for the window (generated here or by the
+ * scheduler) it hands off to that recap's permalink.
  */
 interface Props {
   repoId: string;
@@ -48,7 +44,6 @@ $effect(() => {
 const recaps = $derived(getRecapsForRepo(repoId));
 const slotKey = $derived(slotKeyFor(period, dayKey));
 
-/** The recap occupying this window, if one has appeared. */
 const existing = $derived(
   recaps.find((r) => r.status !== "superseded" && recapSlotKey(r) === slotKey) ?? null,
 );
@@ -70,9 +65,7 @@ const unit = $derived(period === "daily" ? "day" : "week");
 
 /**
  * The window is still accumulating, so a recap generated now covers part of
- * it. That is the one thing worth saying under the date here — on a closed
- * window there is nothing, and the bare "UTC" that used to sit there was a
- * dangling word (on a real recap the same line reads "UTC · synced 10h ago").
+ * it; a closed window shows nothing under the date.
  */
 const windowStillOpen = $derived(isCurrentPeriod(period, dayKey, new Date()));
 useShellChrome(() => ({ actions: recapActions }));

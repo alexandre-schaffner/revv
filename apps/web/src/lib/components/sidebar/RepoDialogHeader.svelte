@@ -1,10 +1,6 @@
 <script lang="ts">
-// Shared title row for the add-repo / link-repo dialog steps. One header
-// treatment (title + optional right-aligned meta) instead of each step
-// re-rolling the identical markup and CSS.
 interface Props {
   title: string;
-  /** Optional right-aligned meta label (e.g. a step name or tracked count). */
   meta?: string | undefined;
 }
 

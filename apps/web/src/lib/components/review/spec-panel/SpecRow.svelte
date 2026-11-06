@@ -1,11 +1,8 @@
 <script lang="ts">
 /*
- * One collapsible row of a spec panel. The trigger is a grid:
- *
- *   gutter · icon (2ch) · label + preview (1fr) · trailing (auto) · chevron (16px)
- *
- * Callers paint it through custom properties on a wrapper (`--c-gutter-color`,
- * `--c-gutter-flash`, `--c-row-bg`, …) and fill the columns with snippets.
+ * Callers paint the row through custom properties on a wrapper
+ * (`--c-gutter-color`, `--c-gutter-flash`, `--c-row-bg`, …) and fill its
+ * columns with snippets.
  */
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import type { Snippet } from "svelte";
@@ -134,8 +131,6 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         display: block;
     }
 
-    /* ── Row trigger (clickable header) ─────────────────────────── */
-
     :global(.spec-row-trigger) {
         display: grid;
         grid-template-columns:
@@ -183,8 +178,6 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         opacity: 0.55;
     }
 
-    /* ── Left gutter ────────────────────────────────────────────── */
-
     .spec-row-gutter {
         position: absolute;
         left: 0;
@@ -208,8 +201,6 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         box-shadow: 0 0 6px
             color-mix(in srgb, var(--c-gutter-color, var(--color-text-primary)) 50%, transparent);
     }
-
-    /* ── Column slots ──────────────────────────────────────────── */
 
     .spec-row-icon {
         display: inline-flex;
@@ -252,8 +243,6 @@ function focusTriggerOnPointerDown(e: PointerEvent): void {
         white-space: nowrap;
         min-width: 0;
     }
-
-    /* ── Chevron ────────────────────────────────────────────────── */
 
     .spec-row-chevron {
         display: inline-flex;

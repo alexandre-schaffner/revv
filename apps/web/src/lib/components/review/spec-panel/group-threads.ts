@@ -6,13 +6,8 @@ export interface ThreadFileGroup {
 }
 
 /**
- * Bucket threads by filePath. Groups are ordered alphabetically by filePath
- * (locale-aware). Within each group, threads are ordered by startLine
- * ascending so the visual order matches the on-file reading order. Empty
- * inputs return an empty array.
- *
- * Mirrors the bucket-then-iterate precedent in `walkthrough-issues.ts`
- * (`groupIssuesBySeverity`). Pure function — no store reads, no side effects.
+ * Groups ordered by filePath (locale-aware), threads within one by startLine,
+ * so the order matches the file's reading order.
  */
 export function groupThreadsByFile(threads: readonly CommentThread[]): ThreadFileGroup[] {
   const buckets = new Map<string, CommentThread[]>();

@@ -2,7 +2,6 @@
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 
 interface Props {
-  /** Accessible label. */
   label?: string;
 }
 

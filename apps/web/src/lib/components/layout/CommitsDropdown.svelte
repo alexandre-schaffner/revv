@@ -35,12 +35,9 @@ let commits = $state<readonly Commit[] | null>(null);
 let loading = $state(false);
 let fetchError = $state(false);
 
-// ── Walkthrough reports ─────────────────────────────────────────────────
-//
-// The commit list doubles as the walkthrough history: a commit that a
-// walkthrough reviewed up to (`round.toSha`) is selectable and loads that
-// report into the walkthrough tab. Only on the PR's own review page — that
-// is where GuidedWalkthrough is mounted to render the pick.
+// The commit list doubles as the walkthrough history: a commit a walkthrough
+// reviewed up to (`round.toSha`) loads that report into the walkthrough tab.
+// Only on the PR's own review page, where GuidedWalkthrough renders the pick.
 
 const onReviewPage = $derived(page.params.prId === pr.id);
 const displayedWalkthroughId = $derived(onReviewPage ? getDisplayedWalkthroughId(pr.id) : null);
@@ -214,7 +211,6 @@ $effect(() => {
 					{@const primary = reports[0]}
 					{@const active = primary !== undefined && primary.walkthroughId === displayedWalkthroughId}
 					{#snippet commitRow()}
-						<!-- dot indicator: green for the head commit, blank otherwise -->
 						<div class="flex h-4 w-4 shrink-0 items-center justify-center">
 							{#if isLatest}
 								<div class="h-1.5 w-1.5 rounded-full bg-success"></div>
@@ -222,13 +218,10 @@ $effect(() => {
 								<div class="h-1.5 w-1.5"></div>
 							{/if}
 						</div>
-						<!-- short sha -->
 						<span class="shrink-0 font-mono text-xs text-text-muted">{commit.sha.slice(0, 7)}</span>
-						<!-- message -->
 						<span class="flex-1 truncate {active ? 'text-text-primary' : 'text-text-secondary'}">
 							{commit.message.split('\n')[0]?.slice(0, 48) ?? ''}
 						</span>
-						<!-- right label -->
 						<span class="shrink-0 text-xs tabular-nums text-text-muted">
 							{#if isLatest}
 								<span class="italic">latest</span>
@@ -256,7 +249,6 @@ $effect(() => {
 						>
 							{@render commitRow()}
 						</DropdownMenu.Item>
-						<!-- Earlier runs that reviewed up to this same commit -->
 						{#each reports.slice(1) as round (round.id)}
 							{@render reportRow(round, null)}
 						{/each}

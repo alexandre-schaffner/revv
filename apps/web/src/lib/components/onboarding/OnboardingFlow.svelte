@@ -16,7 +16,6 @@ import StepWelcome from "./StepWelcome.svelte";
 type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
 
 interface Props {
-  /** Called once the user has fully completed onboarding. */
   onFinish: () => void;
 }
 
@@ -47,13 +46,9 @@ onMount(async () => {
       await fetchSettings();
     }
 
-    // Validate the stored token against the server before using it to
-    // determine the resume step. A stale token (e.g. after a DB reset)
-    // would cause getIsAuthenticated() to return true even though the
-    // session is gone, skipping signin and then failing with 401 on
-    // the repo step. loadUser() clears the token only when the server
-    // confirms the session is invalid, so getIsAuthenticated() will
-    // return false below if the token is no longer valid.
+    // A stale token (e.g. after a DB reset) would read as authenticated, skip
+    // signin and then 401 on the repo step. loadUser() clears the token only
+    // when the server confirms the session is invalid.
     await loadUser();
 
     // Refresh repo list before evaluating the resume point so stale
@@ -73,8 +68,6 @@ onMount(async () => {
       } else if (authed && !host) {
         initialStep = "host";
       } else {
-        // Not authenticated → always start from welcome.
-        // This handles fresh installs, DB resets, and sign-outs cleanly.
         initialStep = "welcome";
       }
     }
@@ -91,8 +84,6 @@ onMount(async () => {
 let current = $state<StepId>("welcome");
 let stepIndex = $derived(ORDER.indexOf(current));
 
-// Auto-advance: when authentication flips while on the signin step,
-// move forward to repo.
 $effect(() => {
   if (current === "signin" && getIsAuthenticated()) {
     advance();

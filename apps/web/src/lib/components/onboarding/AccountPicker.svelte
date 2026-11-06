@@ -11,7 +11,6 @@ import { switchSession } from "$lib/session/lifecycle.svelte";
 import { getError, getIsSwitching, getLocalAccounts } from "$lib/stores/auth.svelte";
 
 interface Props {
-  /** Called when user chooses "Sign in with a different account" */
   onNewAccount: () => void;
 }
 

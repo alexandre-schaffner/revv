@@ -1,11 +1,7 @@
 <script lang="ts">
 /*
- * Every unresolved thread on one file, as one row:
- *
- *   [chat icon]  src/auth.ts :12   [avatar] first message…   3 threads  ›
- *
- * The file badge jumps to the first thread; each thread in the open body
- * has its own jump.
+ * Every unresolved thread on one file, as one row. The file badge jumps to the
+ * first thread; each thread in the open body has its own jump.
  */
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import Chat from "phosphor-svelte/lib/Chat";
@@ -154,23 +150,18 @@ const ariaLabel = $derived(
 
 <style>
     .comment-row {
-        /* Single neutral-accent gutter — no severity variants for comments. */
         --c-gutter-color: var(--color-accent);
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--color-accent);
     }
 
-    /* Confine the accent gutter to the clickable trigger row — without a
-       local positioning context the gutter (absolute, top/bottom:0) stretches
-       against .spec-row and bleeds through the expanded body. Scoped to the
-       comments panel so issue/rating rows keep their full-height gutter. */
+    /* A local positioning context keeps the absolute gutter on the trigger
+       row; otherwise it stretches against .spec-row through the expanded
+       body. Issue and rating rows keep their full-height gutter. */
     .comment-row :global(.spec-row-trigger) {
         position: relative;
     }
 
-    /* Open-trigger tint — neutral wash that marks the row as active without
-       slabbing it gray. Kept gentle so the trigger and the drawer below it
-       read as one "active region" rather than two stacked gray bars. */
     .comment-row[data-open="true"] :global(.spec-row-trigger:not(:disabled):not([aria-disabled="true"])) {
         background: color-mix(
             in srgb,
@@ -179,8 +170,6 @@ const ariaLabel = $derived(
         );
     }
 
-    /* ── Icon ──────────────────────────────────────────────── */
-
     .comment-icon {
         display: inline-flex;
         align-items: center;
@@ -188,14 +177,12 @@ const ariaLabel = $derived(
         color: var(--color-accent);
     }
 
-    /* ── File-badge slot: stops clicks so the badge doesn't also toggle the row. */
+    /* Stops clicks so the badge doesn't also toggle the row. */
 
     .file-badge-slot {
         display: inline-flex;
         align-items: center;
     }
-
-    /* ── Line-number chip — mono, muted, like a gutter annotation ── */
 
     .line-chip {
         font-family: var(--font-mono);
@@ -206,8 +193,6 @@ const ariaLabel = $derived(
         white-space: nowrap;
         flex-shrink: 0;
     }
-
-    /* ── Preview (sans for readability) ────────────────────── */
 
     .preview-wrap {
         display: inline-flex;
@@ -241,8 +226,6 @@ const ariaLabel = $derived(
         font-size: 12px;
         color: var(--color-text-muted);
     }
-
-    /* ── Count pill — mono tabular, git-log-style ──── */
 
     .count-pill {
         display: inline-flex;

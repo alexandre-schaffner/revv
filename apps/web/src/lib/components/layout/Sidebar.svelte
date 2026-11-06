@@ -39,21 +39,13 @@ const view = $derived(getSidebarView());
 // effect resolves (cold load of /review/{prId} with empty repos cache).
 const selectedPr = $derived(getSelectedPr());
 const filesViewRepo = $derived(selectedPr ? getRepoById(selectedPr.repositoryId) : null);
-// Active project for the PR-list view header / lists. URL-driven by the
-// +layout effect — single source of truth, so the column tracks the rail
-// and deep-links resolve correctly.
+// URL-driven by the +layout effect, so the column tracks the rail and
+// deep links resolve.
 const displayRepo = $derived(getSelectedRepo());
 const hasRepos = $derived(getRepositories().length > 0);
 
-// ── Per-PR scroll persistence (left pane) ────────────────────────────────
-//
-// The PR-list pane scrolls inside `.pr-list`; we anchor scroll position to
-// the *currently-selected* PR. Switching to a new PR saves the outgoing
-// PR's scrollTop and restores the incoming PR's. Continuous-write via
-// onscroll keeps the value fresh across route changes / unmounts.
-//
-// The files-mode pane (PierreFileTree) manages its own scroll via the
-// shadow-DOM tree library, so we don't try to drive it from here.
+// The PR list's scroll position is saved per selected PR, continuously, so it
+// survives route changes. The file tree manages its own scroll.
 let prListEl = $state<HTMLElement | null>(null);
 let suppressNextPrListScroll = false;
 
@@ -67,7 +59,6 @@ function handlePrListScroll(): void {
 }
 
 $effect(() => {
-  // Restore the selected PR's saved scrollTop whenever it changes.
   const prId = selectedPrId;
   if (!prListEl) return;
   if (!prId) return;
@@ -119,7 +110,6 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // 'v' enters diff scroll mode (viewport scrolling with j/k/d/u/G/gg)
   if (e.key === "v") {
     e.preventDefault();
     enterScrollMode();
@@ -134,15 +124,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 <svelte:window onkeydown={handleKeydown} />
 
-<!--
-	The project column. AppShell's grid sets the actual width — when collapsed,
-	the column is 0 wide and hidden behind a CSS contraction. The rail sits to
-	the left and is always visible.
--->
 <div class="sidebar" bind:this={sidebarEl}>
-	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
-	     mode. Drops to nothing when collapsed since the column is 0 wide.
-	     Branches crossfade in sync with the pane slide below. -->
 	<div
 		class="sidebar-header"
 		class:sidebar-header--hidden={collapsed}
@@ -182,14 +164,8 @@ function handleKeydown(e: KeyboardEvent) {
 		{/if}
 	</div>
 
-	<!--
-		Two-view drawer holding the PR list and the repo file-tree. Each pane is
-		absolutely positioned so the body can host both side-by-side without
-		fighting flex sizing. Swipe is driven by the parent's `--files` class:
-		PRs translate(0) → translate(-100%) and Files translate(100%) →
-		translate(0). Both panes stay mounted so PR-list state (scroll position,
-		focus, search) persists across swipes.
-	-->
+	<!-- Both panes stay mounted so PR-list state (scroll, focus, search)
+	     persists across swipes. -->
 	<div
 		class="sidebar-body"
 		class:sidebar-body--hidden={collapsed}
@@ -239,10 +215,6 @@ function handleKeydown(e: KeyboardEvent) {
 		</div>
 	</div>
 
-	<!-- Bottom-edge fade: dissolves the PR list / file tree into the
-	     userbar's bg-secondary so the bottom chrome strip reads as one
-	     continuous band, with no hard clip between scrolling content and
-	     the user menu below. -->
 	<div class="sidebar-fade" aria-hidden="true"></div>
 </div>
 
@@ -254,12 +226,8 @@ function handleKeydown(e: KeyboardEvent) {
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		/* Stable internal width — the grid track animates 0 ↔ sidebarWidth
-		   during collapse/expand, but this element stays at full width so
-		   its contents don't reflow per frame. `.sidebar-area`'s
-		   overflow:hidden clips the overflow when the track is narrower.
-		   During a live drag `--sidebar-width` updates per pointer event,
-		   so the contents follow the cursor naturally. */
+		/* Full width even while the grid track is narrower (`.sidebar-area`
+		   clips it), so the contents don't reflow per frame. */
 		width: var(--sidebar-width, 100%);
 		background: var(--color-bg-secondary);
 		overflow: hidden;
@@ -276,13 +244,8 @@ function handleKeydown(e: KeyboardEvent) {
 		z-index: 5;
 	}
 
-	/* position:relative anchors the two stacked .header-branch children so
-	   they crossfade in place during the view-toggle. No opacity/transform
-	   transition on the collapse toggle — the sidebar stays at full
-	   --sidebar-width and the parent's overflow:hidden does the reveal;
-	   layering a fade on top reads as two competing motions. Visibility is
-	   deferred off so the content lingers through the full collapse, then
-	   drops out for tab focus once the panel is actually closed. */
+	/* No fade on collapse: the parent's overflow does the reveal, and a fade
+	   on top reads as two competing motions. */
 	.sidebar-header {
 		position: relative;
 		min-height: 48px;
@@ -316,8 +279,6 @@ function handleKeydown(e: KeyboardEvent) {
 		transition: visibility 0s linear var(--duration-smooth);
 	}
 
-	/* Files-view breadcrumb back-button. Stretches the full content row
-	   so clicking anywhere on the row swipes back. */
 	.files-header {
 		display: flex;
 		align-items: center;
@@ -362,11 +323,6 @@ function handleKeydown(e: KeyboardEvent) {
 		color: var(--color-text-primary);
 	}
 
-	/* Body wrapper — provides the positioning context for the two stacked
-	   panes. Each pane is absolutely positioned and animates its own
-	   translateX so we never have to fight flex sizing across a 200%-wide
-	   track. The body's overflow:hidden clips the off-screen pane.
-	   Collapse-toggle handling matches .sidebar-header above. */
 	.sidebar-body {
 		flex: 1;
 		min-height: 0;
@@ -412,10 +368,7 @@ function handleKeydown(e: KeyboardEvent) {
 		transform: translateX(0);
 	}
 
-	/* Block stray pointer events on whichever pane is off-screen. Combined
-	   with aria-hidden this is the equivalent of `inert` without the
-	   attribute-handling quirks that previously interacted badly with
-	   the layout. */
+	/* With aria-hidden, this stands in for `inert` on the off-screen pane. */
 	.sidebar-body:not(.sidebar-body--files) .view-pane--files,
 	.sidebar-body--files .view-pane--prs {
 		pointer-events: none;
@@ -430,7 +383,6 @@ function handleKeydown(e: KeyboardEvent) {
 		padding: var(--spacing-island-half) 0 48px;
 	}
 
-	/* Empty state */
 	.empty-state {
 		display: flex;
 		flex-direction: column;

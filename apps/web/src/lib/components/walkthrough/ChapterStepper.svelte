@@ -122,13 +122,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 </div>
 
 <style>
-	/* ── Chapters stepper ────────────────────────────────────────────────
-	   One cell per chapter, side by side. Active cell: 2px accent top rule, italic
-	   serif eyebrow, big serif title, body row of {dot-matrix spinner +
-	   "reading" verb + live mono file path}. Past/queued cells: same title
-	   with a static blurb under it — no "done" affordance, just absence of
-	   the active treatment. */
-
 	.chapter-stepper {
 		display: grid;
 		grid-template-columns: repeat(var(--chapter-count, 4), minmax(0, 1fr));
@@ -136,10 +129,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 	}
 
 	.chapter-cell {
-		/* Reset button defaults — the cell is rendered as a <button> so it can
-		   participate in tab order and fire onclick when clickable. Inheriting
-		   the surrounding type styles keeps the visual output identical to the
-		   prior <div>-based markup. */
 		appearance: none;
 		background: transparent;
 		border: none;
@@ -189,11 +178,8 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		opacity: 0.35;
 	}
 
-	/* ── Navigation mode (post-streaming) ─────────────────────────────────
-	   Once generation finishes, the stepper persists as a chapter index for
-	   quick jumps to any section. Chapters whose content was written get a
-	   highlighted top rule + clickable hover/focus treatment; chapters that
-	   never wrote (e.g., generation aborted before Phase D) stay muted. */
+	/* Once generation finishes the stepper stays as a chapter index; chapters
+	   that never wrote (generation aborted early) stay muted. */
 
 	.chapter-cell--available {
 		border-top-color: var(--color-accent);
@@ -207,9 +193,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		cursor: pointer;
 	}
 
-	/* Done cells (already-completed phases during streaming) drop to 0.5
-	   opacity by default to read as "past." Bump opacity on hover so the
-	   click affordance is unambiguous when the user reaches for one. */
 	.chapter-cell--clickable.chapter-cell--done:hover :is(.chapter-eyebrow, .chapter-title-row) {
 		opacity: 1;
 	}
@@ -259,7 +242,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 
 	}
 
-	/* inactive path only */
 	.chapter-title-row {
 		display: flex;
 		align-items: center;
@@ -287,7 +269,6 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		min-height: 32px;
 	}
 
-	/* A chapter's own content under its body (the first pass's ribbon). */
 	.chapter-extra {
 		margin-top: 6px;
 	}
@@ -324,10 +305,9 @@ const TOOL_CALL_ROW_H = 14; // px — 10px font × 1.4 line-height
 		display: flex;
 		gap: 6px;
 		min-width: 0;
-		/* `top` is deliberate over `transform: translateY`: Svelte's `fly` enter
-		   transition (used inline) writes inline `transform`, and a base-class
-		   transform would compose unpredictably with it. The animated property
-		   is bounded to ±14px so the layout cost is trivial. */
+		/* `top`, not a transform: the gsapFadeY enter transition writes an
+		   inline `transform`, and a base-class transform would compose with
+		   it. */
 		transition: top var(--duration-smooth) var(--ease-standard);
 	}
 

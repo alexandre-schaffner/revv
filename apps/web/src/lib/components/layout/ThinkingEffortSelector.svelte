@@ -24,7 +24,6 @@ import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/walkthrough/si
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
-// Thinking-effort options follow the selected chat agent's capabilities.
 let currentId = $derived(getSettings().aiAgent);
 let options = $derived(getThinkingEffortOptions(currentId));
 let visible = $derived(options.length > 0);
@@ -61,11 +60,9 @@ let triggerTitle = $derived(
     : undefined,
 );
 
-// If the selected effort isn't valid for the current agent (e.g. a Claude-only
-// tier after switching to codex, or any tier after switching to an agent with
-// no thinking-effort knob), the launch path clamps it (see the server agent adapters). The
-// persisted preference is intentionally left untouched here — switching back
-// to the original agent should restore the original tier, not a clamped one.
+// An effort the current agent doesn't support is clamped at launch (the server
+// agent adapters). The stored preference stays, so switching back to the
+// original agent restores its tier.
 
 function select(value: ThinkingEffortSetting) {
   updateSettings({ aiThinkingEffort: value });

@@ -11,11 +11,9 @@ export interface GroupableActivity {
   readonly turnId?: string;
   /** Raw tool input (file_path, command, …) — drives the clickable peek. */
   readonly payload?: unknown;
-  /** Provider tool-call id. */
   readonly callId?: string;
   /** Captured tool output (stdout / result text), once available. */
   readonly output?: string;
-  /** Whether the tool call ended in error. */
   readonly isError?: boolean;
 }
 
@@ -103,8 +101,6 @@ function countLabel(count: number, one: string, other: string): string | null {
   return count > 0 ? plural(count, one, other) : null;
 }
 
-// ── Tool-call detail extraction (for the verbose, clickable card) ────────────
-
 /** Tool kinds whose payload names a single file the peek can render. */
 const FILE_TOOL_KINDS = new Set<ActivityKind>(["tool.read", "tool.write", "tool.edit"]);
 
@@ -137,9 +133,8 @@ function payloadPath(payload: unknown): string {
 }
 
 /**
- * The single file path a Read/Write/Edit touched, if any — repo-relative when
- * the server relativized it. Used to fetch a content peek via
- * `GET /api/prs/:id/repo-file`. Null for non-file tools or when absent.
+ * The single file a Read/Write/Edit touched; repo-relative when the server
+ * relativized it.
  */
 export function activityFilePath(
   item: Pick<GroupableActivity, "activityKind" | "payload">,
@@ -149,11 +144,9 @@ export function activityFilePath(
 }
 
 /**
- * The line window a Read tool requested via `offset`/`limit`, if any. Lets the
- * file peek render only the lines the agent actually read instead of the whole
- * file. `offset` is the 1-based first line (defaults to 1 when only a limit is
- * given); `limit` is the requested line count, or null for "to end of file".
- * Returns null for non-reads or a full-file read (no offset and no limit).
+ * The line window a Read requested, so the peek shows only what the agent
+ * read. `offset` is 1-based (1 when only a limit is given); a null `limit`
+ * runs to the end of the file. Null for non-reads and full-file reads.
  */
 export function activityReadWindow(
   item: Pick<GroupableActivity, "activityKind" | "payload">,
@@ -168,7 +161,6 @@ export function activityReadWindow(
   };
 }
 
-/** The shell command a Bash tool ran, if any. Drives the terminal peek. */
 export function activityCommand(
   item: Pick<GroupableActivity, "activityKind" | "payload">,
 ): string | null {
@@ -177,10 +169,9 @@ export function activityCommand(
 }
 
 /**
- * The dimmed, secondary text shown next to the bold tool name in a card header
- * — the file name, command, or search pattern that makes the call legible at a
- * glance ("Read · PromptInputTextarea.svelte", "Bash · git status"). Empty when
- * the payload carries no useful detail.
+ * The dimmed text beside the tool name in a card header ("Read ·
+ * PromptInputTextarea.svelte", "Bash · git status"); empty when the payload
+ * carries no useful detail.
  */
 export function activityDetailText(
   item: Pick<GroupableActivity, "activityKind" | "payload" | "summary">,
@@ -207,14 +198,10 @@ export function activityDetailText(
 }
 
 /**
- * Whether a tool call has something worth peeking at — i.e. an expanded body
- * that shows more than its header already does. That means a genuine view: a
- * file to render, a command + its terminal output, or captured output text.
- *
- * MCP/other tools are the one case where the only "view" is the raw JSON input
- * (`<ToolInput>`), so they stay peekable when they carry a payload. Plain
- * builtin tools (a Grep, an LS) with no captured output render as a cheap
- * static row instead of an expandable card whose body would just echo input.
+ * Whether the expanded body would show more than the header: a file, a
+ * command and its output, or captured output. MCP/other tools stay peekable
+ * with a payload, since their raw JSON input is their only view; a builtin
+ * (Grep, LS) with no output renders as a static row.
  */
 export function activityHasPeek(item: {
   readonly activityKind: ActivityKind;

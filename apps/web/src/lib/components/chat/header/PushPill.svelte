@@ -106,10 +106,7 @@ async function push(): Promise<void> {
 <NewBranchDialog bind:this={newBranchDialog} {prId} {commitCount} {sourceBranch} onPushed={pulse} />
 
 <style>
-	/* Two halves joined by a hairline: the wide half pushes to the PR branch,
-	   the chevron opens the other targets. A neutral chip; the accent shows
-	   only in the icon and the count. Hover lives on the wrapper so both
-	   halves light up as one surface. */
+	/* Hover lives on the wrapper so both halves light up as one surface. */
 	.push-pill {
 		display: inline-flex;
 		align-items: stretch;
@@ -138,7 +135,6 @@ async function push(): Promise<void> {
 		cursor: pointer;
 	}
 
-	/* Press feedback on the half actually clicked. */
 	.push-pill-main:active:not(:disabled),
 	.push-pill-chevron:active:not(:disabled) {
 		background: rgba(0, 0, 0, 0.08);

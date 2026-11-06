@@ -90,7 +90,6 @@ const thoughtBlocks = $derived(children ? [] : splitAgentMarkdown(thoughts));
   margin: 0.375rem 0 0;
 }
 
-/* Thoughts read quieter than ordinary body prose. */
 .thought-stream :global(.thought-markdown-block) {
   --tw-prose-body: var(--color-text-muted);
 }

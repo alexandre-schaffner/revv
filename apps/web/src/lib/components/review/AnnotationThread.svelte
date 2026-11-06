@@ -62,13 +62,9 @@ function canModifyMessage(message: ThreadMessage): boolean {
   return canUserModifyComment(message, currentUserLogin);
 }
 
-// ── Pending (unsynced) reply detection ────────────────────────────────────
-// A reply is "pending" once submitted but before the sync loop has pushed it
-// to GitHub (externalId still null). While the thread itself is pending
-// (`isPending`), every message is trivially unsynced and the thread-level
-// Discard handles removal, so we only care about non-first messages on a
-// synced thread. The most recent such message is the one a Discard click
-// should reach for (LIFO — undo the last thing the user did).
+// A reply is pending until the sync loop pushes it to GitHub (externalId still
+// null). On a pending thread the thread-level Discard covers every message;
+// on a synced one, Discard takes back the latest pending reply.
 const pendingReply = $derived.by((): ThreadMessage | null => {
   if (isPending) return null;
   for (let i = messages.length - 1; i > 0; i--) {
@@ -77,8 +73,6 @@ const pendingReply = $derived.by((): ThreadMessage | null => {
   }
   return null;
 });
-
-// ── Inline edit state ─────────────────────────────────────────────────────
 
 let editingMessageId = $state<string | null>(null);
 let editBody = $state("");

@@ -32,11 +32,8 @@ const unresolvedThreads = $derived(threads.filter((t) => !isThreadResolved(t.sta
 const blocks = $derived(getBlocks(prId));
 
 let selectedIssueIds = $state<Set<string>>(new Set());
-// Derived from the walkthrough store — each issue carries its own
-// `submittedAt` once persisted on the server. Deriving here (instead of
-// caching a module-level Map) means the "already posted" treatment
-// survives reloads, PR-switches, and app restarts: on next mount the
-// cached walkthrough fetch hydrates `issues` with the timestamp intact.
+// Each issue carries its server-side `submittedAt`, so the "already posted"
+// treatment survives reloads, PR switches and restarts.
 const submittedIssueIds = $derived(
   new Set(issues.filter((i) => i.submittedAt != null).map((i) => i.id)),
 );
@@ -57,10 +54,8 @@ let submitting = $state<ReviewAction | null>(null);
 let approveDialogOpen = $state(false);
 
 /**
- * Approve click handler. When the walkthrough flagged any issues OR there are
- * unresolved comment threads, we surface a confirmation dialog so the reviewer
- * has to explicitly acknowledge they're approving despite outstanding concerns.
- * With a clean slate we submit directly.
+ * Outstanding issues or unresolved threads make the reviewer confirm that
+ * they're approving despite them; a clean slate submits directly.
  */
 function handleApproveClick(): void {
   if (submitting) return;
@@ -78,7 +73,6 @@ const selectedCount = $derived(selectedIssues.length);
 const pendingCommentCount = $derived(
   unresolvedThreads.filter((t) => getThreadMessages(t.id).some(isPublishableDraftComment)).length,
 );
-// A plain COMMENT review can go up with selected issues OR pending comments.
 const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 
 const approveBlockerSummary = $derived(
@@ -96,10 +90,9 @@ async function submit(action: ReviewAction): Promise<void> {
 }
 
 /**
- * Hand the selected walkthrough issues to the right-pane chat agent and
- * ask it to address them as commits on the chat worktree's working
- * branch. The user can then inspect the proposed-changes strip in the
- * chat panel and choose which commits to keep.
+ * The chat agent addresses the selected issues as commits on its worktree's
+ * working branch; the user then picks which to keep from the chat panel's
+ * proposed-changes strip.
  */
 function generateChanges(): void {
   const selected = selectedIssues;

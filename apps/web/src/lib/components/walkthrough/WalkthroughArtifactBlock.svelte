@@ -26,12 +26,10 @@ let frameReady = $state(false);
 let status = $state<"loading" | "ready" | "error">("loading");
 let errorMessage = $state<string | null>(null);
 let iframeHeight = $state(240);
-// The HTML currently rendered inside the live host document, and a key that
-// forces a fresh iframe when it must be re-rendered. The host injects content
-// via `document.write`, which tears down the host's own message listener — so
-// a second `mount` postMessage is silently dropped. To re-render (a chat-edit
-// changing `block.html`) we recreate the iframe via `{#key reloadKey}` so a
-// fresh host document, with a live listener, receives the new HTML.
+// The host injects content via `document.write`, which tears down its own
+// message listener, so a second `mount` postMessage is silently dropped.
+// Re-rendering (a chat edit changing `block.html`) recreates the iframe via
+// `{#key reloadKey}` so a fresh host document receives the new HTML.
 let mountedHtml = $state<string | null>(null);
 let reloadKey = $state(0);
 let shellEl: HTMLDivElement | null = null;
@@ -65,30 +63,23 @@ function collectThemeTokens(): ArtifactTokens {
   if (!browser) return {};
   const styles = getComputedStyle(document.documentElement);
   const names = [
-    // Surfaces
     "--color-bg-primary",
     "--color-bg-secondary",
     "--color-bg-tertiary",
     "--color-bg-elevated",
-    // Lines
     "--color-border",
     "--color-border-subtle",
-    // Text
     "--color-text-primary",
     "--color-text-secondary",
     "--color-text-muted",
-    // Accent (the one accent — no AI violet)
     "--color-accent",
     "--color-accent-hover",
     "--color-accent-muted",
-    // Status
     "--color-success",
     "--color-warning",
     "--color-danger",
-    // Type
     "--font-sans",
     "--font-mono",
-    // Geometry (static, injected so artifacts match app metrics)
     "--radius-card",
     "--radius-island",
     "--spacing-island-half",
@@ -140,18 +131,12 @@ function reveal(): void {
 }
 
 /**
- * Inject the current HTML into the host. Idempotent: re-running with the
- * same HTML is a no-op, so it's safe to call from both the iframe `load`
- * event and the host's `ready` message — whichever wins mounts, the other
- * is skipped.
- *
- * Driving the mount off `load` (not solely the one-shot `ready` postMessage)
- * removes two races: the host can post `ready` before Svelte's `bind:this`
- * has assigned `iframeEl` (so `onHostMessage` drops it as `event.source`
- * mismatches), and a synchronously-served host document (Tauri's custom
- * `artifact://` scheme) can fire before the listener is even attached. By
- * `load`, the host's inline script — including its `mount` listener — has
- * always run, so the post is guaranteed to land.
+ * Idempotent, so both the iframe `load` event and the host's `ready` message
+ * can call it. `ready` alone races twice: the host can post it before
+ * `bind:this` assigns `iframeEl` (so `onHostMessage` drops it as a source
+ * mismatch), and a synchronously served host document (Tauri's `artifact://`
+ * scheme) can fire before the listener is attached. By `load` the host's
+ * inline script, `mount` listener included, has always run.
  */
 function mountIntoFrame(): void {
   if (!iframeEl?.contentWindow) return;
@@ -176,8 +161,6 @@ function onHostMessage(event: MessageEvent): void {
   if (!isHostMessage(event.data)) return;
 
   if (event.data.kind === "ready") {
-    // Backup path: the iframe `load` handler is the primary mount trigger,
-    // but if `ready` arrives first (and `iframeEl` is bound), mount now.
     mountIntoFrame();
     return;
   }
@@ -210,12 +193,11 @@ function onHostMessage(event: MessageEvent): void {
 
 $effect(() => {
   const html = block.html;
-  // Initial mount is driven by the iframe `load` handler; this effect only
-  // handles a later change to `block.html` (e.g. a chat-edit). Because the host
-  // can't receive a second `mount`, recreate the iframe so a fresh host
-  // re-mounts.
-  if (mountedHtml === null) return; // not mounted yet — `load`/`ready` will mount it
-  if (html === mountedHtml) return; // unchanged
+  // Initial mount comes from `load`/`ready`; this handles a later change to
+  // `block.html`, which needs a fresh iframe since the host can't take a
+  // second `mount`.
+  if (mountedHtml === null) return;
+  if (html === mountedHtml) return;
   untrack(() => {
     if (mountWatchdog) {
       clearTimeout(mountWatchdog);

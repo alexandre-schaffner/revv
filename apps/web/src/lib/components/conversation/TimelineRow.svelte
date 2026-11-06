@@ -10,7 +10,6 @@ interface Props {
   glyph?: Snippet;
   /** A state change GitHub draws filled and coloured. */
   tone?: "merged" | "closed" | "open" | null;
-  /** Trailing controls at the end of the line. */
   actions?: Snippet;
   /** Under the line, in the text column. */
   body?: Snippet;

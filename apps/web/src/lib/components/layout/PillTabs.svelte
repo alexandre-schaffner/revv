@@ -36,16 +36,11 @@ let hoveredIndex = $state<number | null>(null);
 let hasMeasured = $state(false);
 
 $effect(() => {
-  // Keep segment refs array length in sync with tabs prop.
   if (segmentEls.length !== tabs.length) {
     segmentEls = tabs.map((_, i) => segmentEls[i] ?? null);
   }
 });
 
-// Indicator position is driven imperatively via GSAP rather than via reactive
-// inline styles + a CSS `transition:`. The first measure jumps (gsap.set),
-// subsequent measures tween — keeps GSAP as the single source of truth for
-// timing across rapid tab switches (overwrite:auto cancels in-flight tweens).
 $effect(() => {
   const activeIndex = tabs.findIndex((t) => t.id === activeTab);
   const index = hoveredIndex ?? activeIndex;
@@ -92,16 +87,10 @@ function isDividerHidden(index: number): boolean {
   return index === highlighted || index + 1 === highlighted;
 }
 
-// ── Trailing-slot clamp ──
-// The trailing slot is out of flow (see `.status-slot` below), so the pill
-// stays centred in its container no matter what the slot holds. The cost is
-// that the slot's content hangs past the wrapper's right edge, and the
-// container — a floating bar inside an `overflow: hidden` pane — clips it once
-// the pane gets narrow. That is what used to slice the walkthrough status dot
-// in half with the sidebar and the context panel both open.
-//
-// So: nudge the whole wrapper left by exactly the amount that would otherwise
-// overflow. Zero shift whenever there is room, which is the common case.
+// The trailing slot is out of flow so the pill stays centered, but its content
+// then hangs past the wrapper's edge, and the container (a floating bar in an
+// `overflow: hidden` pane) clips it when the pane is narrow. Nudge the wrapper
+// left by exactly the overflow; zero whenever there is room.
 const TRAILING_GAP = 8;
 const EDGE_GAP = 8;
 let shift = 0;
@@ -150,7 +139,6 @@ $effect(() => {
     });
   };
 
-  // First run is initial layout, so it lands without motion.
   measure(hasClamped);
   hasClamped = true;
 
@@ -160,11 +148,9 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
-// Cmd-hold shortcut hint reveal. Animates the ⌘N labels next to each tab
-// label when the user holds Cmd. Reveal/hide are simultaneous across all
-// segments and symmetric in easing: a modifier-key hint should feel like
-// instant feedback, not a ripple. Width is animated to a fixed 22px (not
-// `auto`) so GSAP doesn't have to force a layout measurement before tweening.
+// The ⌘N hints reveal on all segments at once, with symmetric easing: a
+// modifier-key hint should feel instant, not ripple. Width tweens to a fixed
+// 22px, not `auto`, so GSAP needn't force a layout measurement.
 $effect(() => {
   if (!pillEl) return;
   const hints = pillEl.querySelectorAll<HTMLElement>(".seg-shortcut");
@@ -228,14 +214,11 @@ $effect(() => {
 		align-items: center;
 	}
 
-	/* Anchor for the trailing content, hanging off the pill's right edge.
-	   Out of flow so its contents never push the centred pill sideways;
-	   zero-width, so consumers position their own children against it with
-	   `position: absolute; left: 0`. `height` matches the tallest expected
-	   child (an 18 px pill button) so the centre line those children align
-	   to stays fixed regardless of which one is showing. The clamp effect
-	   above keeps this anchor inside the container. Keep `left` in sync with
-	   TRAILING_GAP. */
+	/* Out of flow so its contents never push the centered pill sideways;
+	   zero-width, so consumers position children against it with
+	   `position: absolute; left: 0`. `height` matches the tallest child (an
+	   18px pill button) so their center line stays fixed. Keep `left` in
+	   sync with TRAILING_GAP. */
 	.status-slot {
 		position: absolute;
 		left: calc(100% + 8px);
@@ -281,9 +264,7 @@ $effect(() => {
 		user-select: none;
 		white-space: nowrap;
 		-webkit-font-smoothing: antialiased;
-		/* Color crossfade between inactive / hovered / active states is a paint
-		   property, not a motion concern. It stays as CSS — GSAP would just be
-		   tweening color values, costing more than the benefit. */
+		/* Color is a paint property, so it stays a CSS transition. */
 		transition: color var(--duration-snap) var(--ease-soft);
 	}
 
@@ -295,10 +276,8 @@ $effect(() => {
 		color: var(--color-text-primary);
 	}
 
-	/* The indicator's position, width, and opacity are driven by GSAP from the
-	   measurement $effect above — not by CSS. autoAlpha starts at 0 until the
-	   first measure runs, which keeps the indicator invisible during the
-	   pre-measure flash. */
+	/* GSAP drives position, width and opacity; autoAlpha starts at 0, so the
+	   indicator stays invisible until the first measure. */
 	.pill-indicator {
 		position: absolute;
 		top: 3px;
@@ -330,10 +309,8 @@ $effect(() => {
 		opacity: 0;
 	}
 
-	/* Reveal opacity, width, and margin are driven by GSAP from the cmdHeld
-	   $effect above. CSS only sets the rest state and the inherited type props.
-	   No `visibility: hidden` — that adds a frame of opacity → visibility
-	   sequencing that makes the modifier-key reveal feel laggy. */
+	/* No `visibility: hidden`: its opacity → visibility sequencing adds a
+	   frame of lag to the modifier-key reveal. */
 	.seg-shortcut {
 		display: inline-block;
 		font-size: 11px;

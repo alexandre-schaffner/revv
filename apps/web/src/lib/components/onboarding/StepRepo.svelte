@@ -396,8 +396,6 @@ function handlePathKey(e: KeyboardEvent) {
 		transform: translateX(-3px);
 	}
 
-	/* Return to the primary path (link an existing clone) from the
-	   secondary GitHub-browse view. Mirrors the step-level back link. */
 	.back-mode {
 		display: inline-flex;
 		align-items: center;
@@ -682,9 +680,6 @@ function handlePathKey(e: KeyboardEvent) {
 		gap: 18px;
 	}
 
-	/* Quiet textual alternative that sits beside the primary Link CTA once a
-	   clone is recognized. Echoes the alt-path's serif voice and arrow nudge,
-	   but at text weight so the primary action clearly leads. */
 	.alt-link {
 		display: inline-flex;
 		align-items: center;
@@ -717,8 +712,6 @@ function handlePathKey(e: KeyboardEvent) {
 		color: var(--ob-text-italic);
 	}
 
-	/* The second path: linking a clone already on disk. A real, visible
-	   choice — bordered, icon-led, serif — not a dimmed dismiss link. */
 	.alt-path {
 		display: flex;
 		align-items: center;
@@ -806,7 +799,6 @@ function handlePathKey(e: KeyboardEvent) {
 		transition: color var(--duration-snap) var(--ease-out-expo);
 	}
 
-	/* Quiet dismiss sits below the alt-path, right-aligned. */
 	.repo-actions .skip {
 		align-self: flex-end;
 	}
@@ -815,8 +807,7 @@ function handlePathKey(e: KeyboardEvent) {
 		color: var(--ob-text-label);
 	}
 
-	/* Matches the onboarding primary CTA (StepWelcome / StepHost): 2px
-	   outline rectangle, serif italic — never the pill it used to be. */
+	/* Matches the onboarding primary CTA (StepWelcome / StepHost). */
 	.link-submit {
 		display: inline-flex;
 		align-items: center;

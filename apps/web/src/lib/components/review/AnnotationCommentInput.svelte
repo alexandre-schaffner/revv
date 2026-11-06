@@ -49,8 +49,6 @@ function handleSubmit() {
 
 onMount(() => {
   textareaEl?.focus();
-  // Move caret to the end and right-size the box when an initial body is
-  // pre-filled (used for editing an existing comment).
   if (textareaEl && body.length > 0) {
     textareaEl.setSelectionRange(body.length, body.length);
     autoResize();

@@ -35,9 +35,6 @@ const blank: SidePane = {
 let baseSide = $state<SidePane>({ ...blank });
 let headSide = $state<SidePane>({ ...blank });
 
-// Track every object URL we mint so onDestroy can revoke them. Without
-// this each PR diff visit would leak a blob URL per image until the tab
-// closes.
 const createdUrls: string[] = [];
 
 const showBase = $derived(!file.isNew);
@@ -95,10 +92,8 @@ function releaseUrls(): void {
   createdUrls.length = 0;
 }
 
-// `file.path` is the load key. When the user switches files, this $effect
-// re-runs. Revoke any previously-minted object URLs first so we don't leak
-// a blob per switch; the captured `path` then guards against a stale
-// fetch landing after a second switch.
+// Revoke the previous file's object URLs first; the captured `path` guards
+// against a stale fetch landing after another switch.
 $effect(() => {
   const path = file.path;
   const old = oldPath;

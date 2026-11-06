@@ -28,8 +28,6 @@ const selectedPrId = $derived(getSelectedPrId());
 const nextCursor = $derived(getArchivedNextCursor());
 const loadingMore = $derived(getArchivedLoadingMore());
 
-// Hide the toggle entirely when there's nothing to show — keeps the
-// column clean for fresh repos and reduces visual noise.
 const visible = $derived(archivedPrs.length > 0 || nextCursor !== null);
 </script>
 

@@ -41,25 +41,18 @@ function handleSyncPrs(): void {
 </script>
 
 <div class="topbar">
-	<!-- Dedicated drag layer — sits behind interactive elements via z-index -->
 	<div class="drag-layer" data-tauri-drag-region></div>
 
-	<!-- Sidebar collapse toggle. In Tauri, absolutely positioned in the
-		 traffic-light overlay row immediately to the right of the macOS
-		 buttons. In browser mode, lives flush-left in the topbar's flex row. -->
 	<button
 		class="left-toggle-btn"
 		onclick={onToggleSidebar}
 		aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 		title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 	>
-		<!-- One glyph; `fill` is the "panel is showing" state. Previously this
-			 was an {#if} whose two branches imported the same icon under
-			 different names, so the button never changed appearance. -->
+		<!-- One glyph; `fill` is the "panel is showing" state. -->
 		<SidebarSimple size={14} weight={sidebarCollapsed ? 'regular' : 'fill'} />
 	</button>
 
-	<!-- Left: app name / inline PR title when scrolled -->
 	<div class="title-block">
 		{#if pr}
 			<div class="title-row">
@@ -104,7 +97,6 @@ function handleSyncPrs(): void {
 		{/if}
 	</div>
 
-	<!-- Right: sync PRs + theme toggle + panel toggle -->
 	<div class="panel-toggle-wrap">
 		<button
 			class="theme-btn"
@@ -242,7 +234,6 @@ function handleSyncPrs(): void {
 		justify-content: flex-end;
 	}
 
-	/* In Tauri, position elements in the traffic-light zone */
 	:global(html.tauri) .topbar {
 		position: static;
 	}
@@ -263,9 +254,7 @@ function handleSyncPrs(): void {
 		height: 22px;
 	}
 
-	/* Sidebar collapse toggle. In browser mode, lives in the static flex row
-	   at the left edge. In Tauri, anchored to the overlay row immediately
-	   right of the macOS traffic lights (which occupy ~0–72px). */
+	/* In Tauri, anchored right of the macOS traffic lights (~0–72px). */
 	.left-toggle-btn {
 		display: flex;
 		align-items: center;

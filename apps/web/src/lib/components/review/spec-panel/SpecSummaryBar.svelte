@@ -1,8 +1,4 @@
 <script lang="ts">
-/*
- * The header line of a spec panel: icon, title, count pills, then the
- * toolbar (expand all, filters, one optional action).
- */
 import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVertical";
 import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
 import Funnel from "phosphor-svelte/lib/Funnel";

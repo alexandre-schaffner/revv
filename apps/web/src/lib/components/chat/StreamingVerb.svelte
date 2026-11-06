@@ -1,14 +1,7 @@
 <script lang="ts">
-// ── Streaming verb ─────────────────────────────────────────────────────
-// Rotates through a short list of present-progressive verbs while the
-// assistant bubble is waiting for its first content token. Visually
-// matches the walkthrough's tool-call labels (`GuidedWalkthrough.svelte`
-// :687-697): same 14px row height, accent-colored "tool" text, fly-up
-// in / fly-up out transition driven by a `{#key}` re-mount.
-//
-// Unlike the walkthrough — which animates *real* tool activity as it
-// arrives — this list is purely placeholder rotation: we don't know
-// what the agent is doing yet, so the verbs are generic.
+// Placeholder verbs rotated while the assistant bubble waits for its first
+// token: we don't know what the agent is doing yet. Rows match the
+// walkthrough's tool-call labels (14px, accent text, fly-up).
 
 import { gsapFadeY, tokens } from "$lib/motion";
 
@@ -38,8 +31,6 @@ const VERBS = [
 const STEP_MS = 3000;
 const ROW_H = 14;
 
-// Shuffle on mount so each session sees the verbs in a different order
-// (no repeats within a cycle, full variety eventually).
 function shuffled<T>(arr: readonly T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i -= 1) {

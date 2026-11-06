@@ -1,12 +1,7 @@
 <script lang="ts">
 /*
- * One issue, read like a lint diagnostic:
- *
- *   [✓]  E  Unhandled async error in login   description…   ›
- *
- * checkbox (or a check once posted or resolved) · severity letter · title ·
- * one-line description. File and step links live in the expanded body so
- * the row has no nested click targets.
+ * File and step links live in the expanded body so the row has no nested
+ * click targets.
  */
 import {
   ISSUE_SEVERITY_LABEL,
@@ -73,7 +68,6 @@ function handleCheckedChange(): void {
 }
 
 function stopPropagation(e: MouseEvent): void {
-  // Ticking the box must not also toggle the row.
   e.stopPropagation();
 }
 </script>
@@ -165,7 +159,6 @@ function stopPropagation(e: MouseEvent): void {
         --c-row-bg: color-mix(in srgb, var(--color-success) 7%, var(--color-bg-elevated));
     }
 
-    /* In the next submit batch. */
     .issue-row--selected:not(.issue-row--submitted) {
         background: color-mix(in srgb, var(--c-gutter-color) 6%, transparent);
     }
@@ -178,16 +171,12 @@ function stopPropagation(e: MouseEvent): void {
         );
     }
 
-    /* ── Checkbox / staged-check ──────────────────────────────── */
-
     .staged-check {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         color: var(--color-success);
     }
-
-    /* ── Severity code letter (E / W / I) ────────────────────── */
 
     .severity-code {
         display: inline-flex;

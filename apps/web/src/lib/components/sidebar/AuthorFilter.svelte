@@ -74,8 +74,6 @@ const showTeamsSection = $derived(
   owner !== null && (teamsFetchState !== "idle" || teamRows.length > 0),
 );
 
-// Fetch the org's teams when the repo filter mounts. The request is
-// idempotent, so the popover usually opens with the team state already known.
 $effect(() => {
   if (owner) void fetchTeamsForOrg(owner);
 });
@@ -187,8 +185,6 @@ function retryTeams(): void {
 {/if}
 
 <style>
-	/* Compact icon button living inline to the right of the search input —
-	   matches the input's 28px height and pill shape. */
 	:global(.filter-trigger) {
 		display: inline-flex;
 		align-items: center;
@@ -211,7 +207,6 @@ function retryTeams(): void {
 		background: var(--color-bg-tertiary);
 	}
 
-	/* Active = at least one creator selected. */
 	:global(.filter-trigger--active) {
 		border-color: var(--color-accent);
 		color: var(--color-accent);

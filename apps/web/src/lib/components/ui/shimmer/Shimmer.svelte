@@ -2,7 +2,6 @@
 import type { HTMLAttributes } from "svelte/elements";
 
 export type ShimmerProps = HTMLAttributes<HTMLElement> & {
-  /** Whether the shimmer animation is active. Defaults to true. */
   active?: boolean;
   /** Stagger offset for multiple shimmers running out-of-phase. */
   offset?: number;

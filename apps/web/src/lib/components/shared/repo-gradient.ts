@@ -9,7 +9,6 @@ const BLEND_MODES = [
   "lighten",
 ] as const;
 
-/** Convert a hue (0–360), saturation (0–100), and lightness (0–100) to an hsl string. */
 function hsl(h: number, s: number, l: number): string {
   return `hsl(${Math.round(h % 360)}, ${Math.round(s)}%, ${Math.round(l)}%)`;
 }
@@ -19,10 +18,6 @@ interface DerivedColors {
   text: [string, string];
 }
 
-/**
- * Derive two harmonious background colors and two light text-tint colors
- * from an owner hue and a repo seed.
- */
 function deriveColors(ownerPalette: OwnerPalette, repoSeed: number): DerivedColors {
   const r = repoSeed;
 
@@ -36,7 +31,6 @@ function deriveColors(ownerPalette: OwnerPalette, repoSeed: number): DerivedColo
 
   const ownerHue = ownerPalette.hue;
 
-  // 10 different harmonic relationships
   const relationships = [
     (h: number) => h + 30, // analogous warm
     (h: number) => h - 30, // analogous cool
@@ -61,13 +55,11 @@ function deriveColors(ownerPalette: OwnerPalette, repoSeed: number): DerivedColo
   }
   const hue2 = relFn(ownerHue);
 
-  // Saturation jitter: both stops share a base, with a small differential
   const sBase = 50 + ((r >> 4) % 25); // 50–74%
   const sDiff = ((r >> 8) % 11) - 5; // -5..+5
   const sat1 = sBase + sDiff;
   const sat2 = sBase - sDiff;
 
-  // Lightness jitter: one stop is darker, one lighter
   const lBase = 45 + ((r >> 12) % 20); // 45–64%
   const lDiff = 8 + ((r >> 16) % 7); // 8–14
   const light1 = lBase - lDiff;
@@ -85,16 +77,12 @@ export interface RepoGradient {
 }
 
 /**
- * Generate a deterministic ffflux-style fluid SVG gradient data URL
- * for a given repository, plus a CSS text gradient that echoes the palette.
- *
- * The `ownerHue` (extracted from the owner's GitHub avatar, or a
- * fallback hash) drives the color palette.  The `repoFullName` seed
- * controls geometric variation (angle, turbulence, blur, blend mode)
- * and the harmonic relationship between the two gradient stops.
- *
- * The same inputs always produce the same gradient so avatars are
- * stable across renders and sessions.
+ * A deterministic ffflux-style fluid SVG gradient data URL for a repository,
+ * plus a CSS text gradient that echoes the palette. `ownerHue` (from the
+ * owner's GitHub avatar, or a fallback hash) drives the palette; the
+ * `repoFullName` seed drives the geometry and the stops' harmonic
+ * relationship. Same inputs, same gradient, so avatars are stable across
+ * renders and sessions.
  */
 export function repoGradientDataUrl(
   repoFullName: string,

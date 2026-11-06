@@ -159,7 +159,6 @@ onMount(() => {
 		margin: 0;
 	}
 
-	/* ── Entry state ────────────────────────────────────────────── */
 	.entry {
 		display: flex;
 		flex-direction: column;
@@ -223,7 +222,6 @@ onMount(() => {
 		cursor: not-allowed;
 	}
 
-	/* ── Device-flow state ──────────────────────────────────────── */
 	.device-flow {
 		display: flex;
 		flex-direction: column;

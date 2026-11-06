@@ -153,14 +153,10 @@ function regenerateFromScratch(next?: T): void {
 {/snippet}
 
 <!--
-  Keyed wrapper: when `uiState.kind` flips (e.g. empty → streaming), Svelte
-  mounts the new branch *while* the old branch is still animating out. We
-  need two pieces to keep that swap glitch-free:
-    1. `.gen-slot` is a 1×1 grid; both branches occupy `1/1` and stack on
-       top of each other instead of sitting side-by-side in `.actions-row`.
-    2. The `in:` is delayed by the `out:` duration so the new pill fades
-       in only after the old one has fully faded out — no crossfade at
-       the same position.
+  When `uiState.kind` flips, Svelte mounts the new branch while the old one is
+  still animating out. `.gen-slot` stacks both in one grid cell, and `in:`
+  waits out the `out:` duration, so the pills never sit side by side or
+  crossfade in place.
 -->
 <span class="gen-slot">
   {#key uiState.kind}
@@ -238,10 +234,6 @@ function regenerateFromScratch(next?: T): void {
 </span>
 
 <style>
-  /* 1×1 grid: both keyed branches land in row/column 1, so the old
-     fading-out branch and the freshly-mounted next branch stack on top
-     of each other rather than briefly sitting side-by-side as siblings
-     in `.actions-row` (which is what caused the Stop+Regenerate flash). */
   .gen-slot {
     display: inline-grid;
     grid-template-columns: auto;
@@ -253,9 +245,6 @@ function regenerateFromScratch(next?: T): void {
     grid-column: 1;
     grid-row: 1;
   }
-  /* `inline-flex` so the wrapper participates in the parent's flex gap;
-     `gap` here matches `.actions-row` so multi-pill branches (resumable,
-     error) keep their inner rhythm. */
   .gen-branch {
     display: inline-flex;
     align-items: center;

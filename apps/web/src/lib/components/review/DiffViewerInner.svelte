@@ -107,7 +107,6 @@ let wrapperEl: HTMLDivElement | null = null;
 // Raw: a deep proxy over Pierre's instance would be both costly and wrong.
 let instance = $state.raw<FileDiff<ThreadMeta> | VirtualizedFileDiff<ThreadMeta> | null>(null);
 let error = $state<string | null>(null);
-/** The options the instance was built with, for `setOptions` merging. */
 let initialOptions: FileDiffOptions<ThreadMeta, undefined> | null = null;
 let virtualizer = $state.raw<ReturnType<typeof createPierreVirtualizer> | null>(null);
 let parsedFileDiff = $state.raw<FileDiffMetadata | null>(null);
@@ -137,9 +136,8 @@ function getShadowRoot(): ShadowRoot | null {
 
 /**
  * True when a live annotation has no matching `<slot>` in the just-hydrated
- * shadow DOM — i.e. Pierre's `hydrate` adopted prerendered slots that don't
- * cover the current annotation set. See the hydrate call site in onMount for
- * why the prerendered and live sets diverge and what the corrective render does.
+ * shadow DOM: Pierre's `hydrate` adopted prerendered slots that don't cover
+ * the current annotation set (see the hydrate call site in onMount).
  */
 function hasUnhydratedAnnotation(annos: DiffLineAnnotation<ThreadMeta>[]): boolean {
   if (annos.length === 0) return false;
@@ -249,16 +247,10 @@ function cursorRange(from: number, to: number): DiffLineRange | null {
   return diffRowRange(parsedFileDiff, fromIndex, toIndex);
 }
 
-// ─ Annotation reconcile ──────────────────────────────────────────────────
-// Re-render when the thread data changes. The reference-equality guard skips
-// the eager first run, since onMount has already rendered via render()/hydrate().
-//
-// LOAD-BEARING: the hydrate path in onMount may deliberately leave
-// `appliedAnnotations` null (when prerendered slots don't cover every live
-// annotation) precisely so this guard sees a mismatch and fires one corrective
-// render on first run. Don't "simplify" the guard to assume appliedAnnotations
-// is always set after mount — that silently reintroduces the vanished-comment
-// bug fixed in #114.
+// The reference-equality guard skips the eager first run, since onMount has
+// already rendered. Load-bearing: the hydrate path in onMount may leave
+// `appliedAnnotations` null on purpose so this fires one corrective render;
+// don't assume it is always set after mount, or comments vanish in unified view.
 $effect(() => {
   if (!instance) return;
   const currentAnnotations = threads.annotations;
@@ -290,11 +282,8 @@ $effect(() => {
   mounts.pruneDetached();
 });
 
-// ── First-pass gutter bars ────────────────────────────────────────────────
-// On their own stylesheet, so a cursor move never re-parses them and a scan
-// event never touches the cursor CSS. A string derived: scan events that leave
-// this file's flags alone compare equal and don't re-apply it. Read for the
-// head this diff was loaded at.
+// Their own stylesheet, so a cursor move never re-parses them and a scan event
+// never touches the cursor CSS.
 const firstPassCss = $derived(
   firstPassGutterCss(parsedFileDiff, getHunkScanForFile(prId, getLoadedHeadSha(prId), file.path)),
 );
@@ -316,7 +305,6 @@ function applyUnsafeCss(css: string): void {
   instance.injectUnsafeCSS?.();
 }
 
-// ── Line cursor highlight (diff-line mode) ────────────────────────────────
 $effect(() => {
   if (!instance || !initialOptions) return;
   const panel = getActivePanel();
@@ -332,7 +320,6 @@ $effect(() => {
   }
 });
 
-// ── Scroll active line into view ──────────────────────────────────────────
 $effect(() => {
   if (!isInLineCursorMode()) return;
   const row = cursorRowIndex(getCursorLineIndex());
@@ -343,7 +330,6 @@ $effect(() => {
   });
 });
 
-// ── Walkthrough → diff jump ───────────────────────────────────────────────
 $effect(() => {
   const jump = getPendingDiffJump();
   if (!jump || jump.filePath !== file.path || !instance || !parsedFileDiff) return;
@@ -358,7 +344,6 @@ $effect(() => {
   }, 50);
 });
 
-// ── Visual line selection (diff-visual mode) ──────────────────────────────
 $effect(() => {
   if (!instance) return;
 
@@ -380,7 +365,6 @@ $effect(() => {
   }
 });
 
-// ── Keyboard `c`: a comment over the cursor's rows ────────────────────────
 $effect(() => {
   const trigger = commentTrigger;
   if (!trigger || !parsedFileDiff) return;
@@ -390,8 +374,6 @@ $effect(() => {
     if (range) threads.openInput(range);
   });
 });
-
-// ── Instance lifecycle ────────────────────────────────────────────────────
 
 onMount(() => {
   if (!wrapperEl) return;
@@ -467,16 +449,12 @@ onMount(() => {
     }
     parsedFileDiff = parsed;
 
-    // SSR-hydrate only when the server has prerendered HTML for unified
-    // mode (the server doesn't know the user's mode preference; split
-    // always falls through to render()). Hydrate skips the worker
-    // tokenize round-trip — the diff body paints synchronously and
-    // interaction managers attach to the existing DOM.
-    //
-    // Pierre's `hydrate` doesn't invoke `renderHeaderPrefix` /
+    // SSR-hydrate only when the server prerendered unified mode (it doesn't
+    // know the user's mode preference) for `overflow: scroll` (so not wrap).
+    // Hydrate skips the worker tokenize round-trip and paints synchronously.
+    // Pierre's `hydrate` doesn't call `renderHeaderPrefix` /
     // `renderHeaderMetadata` (only `render` does), so the header slots are
-    // filled by hand after hydrate.
-    // The prerendered HTML is laid out for `overflow: scroll`, so wrap skips it too.
+    // filled by hand.
     if (file.prerenderedHtml !== undefined && mode === "unified" && !wrap) {
       instance = new FileDiff<ThreadMeta>(options, workerManager);
       const hostEl = createDiffsHost();
@@ -489,18 +467,13 @@ onMount(() => {
       });
       populateDiffHeaderSlots(hostEl, parsed, options);
 
-      // The server prerenders the unified diff's annotation slots from a
-      // point-in-time thread snapshot (`/api/prs/:id/files`); the client's
-      // live thread set (loaded via `/reviews/active`, and reloaded on SSE
-      // without refetching files) can diverge — e.g. AI comments that land
-      // after the snapshot. `hydrate` adopts the prerendered slots as-is and
-      // never rebuilds the body, so those extra comments project into a
-      // non-existent slot and silently vanish in unified view (split is fine —
-      // it always uses the full `render()` path). When that gap exists, leave
-      // appliedAnnotations null so the reconcile $effect fires exactly once and
-      // rebuilds the missing slots via one corrective render(); otherwise mark
-      // them applied so the $effect is a no-op and the SSR no-tokenize fast
-      // paint is preserved.
+      // The server prerenders annotation slots from a point-in-time thread
+      // snapshot (`/api/prs/:id/files`); the live thread set (reloaded on SSE
+      // without refetching files) can hold more, e.g. AI comments that landed
+      // later. `hydrate` adopts the prerendered slots as-is, so those comments
+      // would project into no slot and silently vanish. Leaving
+      // appliedAnnotations null makes the reconcile $effect fire one corrective
+      // render(); otherwise the no-tokenize fast paint is kept.
       appliedAnnotations = hasUnhydratedAnnotation(annotations) ? null : annotations;
     } else {
       virtualizer = createPierreVirtualizer(scrollRoot, wrapperEl);
@@ -571,7 +544,7 @@ onDestroy(() => {
 		white-space: pre-wrap;
 	}
 
-	/* ── View-mode pill toggle (lives in light DOM inside diffs-container) ── */
+	/* The view-mode pill lives in light DOM inside diffs-container. */
 	:global([data-view-pill]) {
 		position: relative;
 		display: inline-flex;

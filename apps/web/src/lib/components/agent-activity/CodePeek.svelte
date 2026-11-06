@@ -7,12 +7,10 @@ import { pierreFile } from "$lib/pierre/mount";
 interface Props {
   /** File path — drives the language and is not displayed. */
   path: string;
-  /** File contents / code to render. */
   content: string;
   /**
-   * Render only a window of `content` (the gutter keeps absolute line numbers)
-   * instead of the whole file. `startLine` is 1-based. Used by the Read peek so
-   * a `Read(offset, limit)` shows just the lines it read.
+   * Render only the window from this 1-based line (the gutter keeps absolute
+   * line numbers), for a `Read(offset, limit)`.
    */
   startLine?: number | undefined;
   lineCount?: number | undefined;

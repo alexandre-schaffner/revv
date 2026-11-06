@@ -85,14 +85,6 @@ $effect(() => {
   activeIndex = 0;
 });
 
-// ── Mentions in the editor are atomic pills ──────────────────────────────
-// The editor is a contenteditable surface, NOT a textarea: a `@path` mention
-// is a real, non-editable pill node, while everything else is plain text.
-// `value` stays a flat string (the backend's contract) by serializing the
-// DOM — each pill back to its `@path` token — on every edit. The DOM algebra
-// (serialize/render/caret/pill-deletion) lives in `composer-editor-model.ts`;
-// this component keeps only the reactive glue.
-
 // Keep the editor DOM in step with programmatic value changes (the submit
 // clear, mainly). Skip when the DOM already serializes to `value` — i.e.
 // during normal typing — so we never stomp the caret mid-edit.
@@ -106,10 +98,6 @@ function pushValue() {
   value = serialize(editorEl);
 }
 
-// ── Caret-relative trigger detection ─────────────────────────────────────
-// The last collapsed caret inside the editor. Saved on every interaction so
-// selecting an autocomplete row with the mouse — which would otherwise blur
-// the editor and drop the live selection — can still target the right spot.
 let savedRange: Range | null = null;
 
 function sameTrigger(a: MentionTrigger | null, b: MentionTrigger | null): boolean {
@@ -134,7 +122,6 @@ function refreshTrigger() {
   if (!sameTrigger(trigger, next)) trigger = next;
 }
 
-// ── Token replacement (autocomplete selection) ───────────────────────────
 function applyMention(path: string) {
   if (trigger?.kind !== "mention" || !editorEl) return;
   const r = replaceTokenRange(editorEl, savedRange, trigger.query.length + 1);
@@ -179,11 +166,8 @@ function shortPath(path: string): string {
   return `${path.slice(0, 24)}...${path.slice(-28)}`;
 }
 
-// Atomic pill deletion. WebKit otherwise needs two Backspaces on a
-// `contenteditable=false` node (the first only steps the caret over it), so
-// when a pill sits next to the caret we remove it ourselves in one press. The
-// model computes the target/plan; we execute it, then re-sync value + trigger
-// once at the end (shared by both directions).
+// WebKit needs two Backspaces on a `contenteditable=false` node (the first only
+// steps the caret over it), so a pill next to the caret is removed here in one.
 function deleteAdjacentPill(e: KeyboardEvent): boolean {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !editorEl) return false;
@@ -256,16 +240,9 @@ function handleInput() {
   refreshTrigger();
 }
 
-// Pillify any complete, known mention typed by hand (rather than picked from
-// the menu) once the user leaves the field. Serialization is unchanged, so
-// `value` stays put.
-//
-// This must not rebuild the editor (`render`): blur is not "a safe moment,
-// there's no caret to disturb" — it also fires on every app switch and on
-// every click elsewhere in the UI, and replacing the nodes invalidates the
-// caret the browser would otherwise restore. `pillifyInPlace` rewrites only
-// the text nodes that actually hold a mention, so an ordinary blur leaves the
-// DOM — and the caret — exactly as it was.
+// Pillify complete, known mentions typed by hand once the user leaves the
+// field. Never `render` here: blur also fires on every app switch and every
+// click elsewhere, and rebuilding loses the caret the browser would restore.
 function handleBlur() {
   if (editorEl && value.trim().length > 0) pillifyInPlace(editorEl, mentionPathSet);
 }
@@ -370,8 +347,6 @@ function handlePaste(e: ClipboardEvent) {
 		user-select: none;
 		color: var(--color-muted-foreground);
 	}
-	/* Atomic mention chip: a real, non-editable pill. Accent-tinted so it reads
-	   as a token on the dark composer; the file glyph keeps its own color. */
 	.pi-editor :global(.composer-pill) {
 		display: inline-flex;
 		align-items: center;

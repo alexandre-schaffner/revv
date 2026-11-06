@@ -1,15 +1,9 @@
 <script lang="ts">
 /*
- * The list's toolbar strip.
- *
- * Anatomy is GitHub's `⑂ 60 Open  ✓ 2,638 Closed … Sort ▾` bar: filters on the
- * left as bare text-with-count, sort on the right as a menu. Its hairline is
- * the list's top edge, which is what makes the filters read as belonging to
- * the rows they narrow.
- *
- * Deliberately not chips. Chips with a glyph, a bold count and a label are a
- * stats row wearing a control's clothes, and they duplicate the count already
- * in the section heading. Weight alone carries the active state here.
+ * GitHub's `Open / Closed … Sort ▾` bar: filters on the left as bare
+ * text-with-count, sort on the right as a menu. Its hairline is the list's top
+ * edge, so the filters read as belonging to the rows they narrow. Not chips:
+ * those duplicate the heading's count; weight alone carries the active state.
  */
 
 import * as Select from "$lib/components/ui/select";

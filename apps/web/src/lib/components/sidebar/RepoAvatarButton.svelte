@@ -144,8 +144,6 @@ const cloneStatusLabel = $derived.by(() => {
 		border: 1.5px solid var(--color-bg-secondary);
 	}
 
-	/* Cloning is live work: the accent dot breathes a halo so it reads as
-	   active, distinct from the static amber "queued" dot. */
 	.status-dot--cloning {
 		background: var(--color-accent, #2563eb);
 	}

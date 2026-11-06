@@ -55,11 +55,9 @@ const filtered = $derived(hasActivePrListFilter());
 		padding: 6px 4px;
 	}
 
-	/* Skip layout and paint for off-screen PR rows. With hundreds of PRs
-	   open this is what makes the sidebar-toggle width animation cheap:
-	   the browser only relayouts the ~20 rows currently in the viewport
-	   instead of all of them on every frame. `contain-intrinsic-size`
-	   reserves a placeholder height so scrollbar geometry stays stable. */
+	/* Off-screen rows skip layout and paint, so the sidebar-toggle width
+	   animation only relayouts the visible ones. `contain-intrinsic-size`
+	   keeps the scrollbar geometry stable. */
 	.pr-list-row {
 		content-visibility: auto;
 		contain-intrinsic-size: auto 48px;

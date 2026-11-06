@@ -19,7 +19,6 @@ interface Props {
   trailing?: Snippet;
   /** The list's `<li>` rows. */
   children: Snippet;
-  /** Rendered under the list. */
   footer?: Snippet;
 }
 

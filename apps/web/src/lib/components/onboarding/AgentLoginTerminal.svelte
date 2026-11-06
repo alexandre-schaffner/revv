@@ -10,15 +10,13 @@ import { SseHttpError, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { cssTokens, openXterm, xtermTheme } from "$lib/utils/xterm";
-// xterm ships its own canvas/DOM — acceptable for a literal terminal. The
-// stylesheet is required for layout; the JS is dynamically imported in onMount
-// so it never runs during SSR / prerender.
+// The stylesheet is needed for layout; the JS is imported in onMount so it
+// never runs during SSR / prerender.
 import "@xterm/xterm/css/xterm.css";
 
 interface Props {
   /** Agent whose login command runs in the spawned PTY. */
   agent: AcpAgentId;
-  /** Human label for the lede / buttons. */
   agentLabel: string;
   /** Fired once the CLI reports a successful, freshly-verified login. */
   onDone: () => void;
@@ -88,7 +86,6 @@ function applyEvent(event: LoginEvent): void {
     authUrl = event.url;
     return;
   }
-  // done
   if (event.success) {
     onDone();
   } else {
@@ -141,7 +138,6 @@ function terminalTheme(el: HTMLElement) {
 }
 
 onMount(async () => {
-  // 1. Start (or join) the login job.
   try {
     const { data, error } = await api.api.onboarding.login.post({ agent });
     if (error) {
@@ -156,7 +152,6 @@ onMount(async () => {
     return;
   }
 
-  // 2. Mount the terminal.
   ({ term, fit } = await openXterm(container, {
     convertEol: false,
     cursorBlink: !prefersReducedMotion(),
@@ -167,19 +162,15 @@ onMount(async () => {
   term.onData((d) => void sendInput(d));
   window.addEventListener("resize", onResize);
 
-  // 3. Stream the PTY output.
   const ctrl = new AbortController();
   abort = ctrl;
   void streamLoginEvents(jobId, ctrl.signal);
 });
 
-// The tokens above are resolved to literal colors at construction and xterm
-// never re-reads them, so a theme switch mid-login left the PTY output painted
-// in the old palette on the new paper — and the onboarding shell carries its
-// own theme toggle, so that switch is one click away from this very screen.
-// Re-read and reapply on every resolved-theme change. `term` is deliberately
-// not reactive: the first run lands before the async import resolves and is a
-// no-op, which is correct — construction already applied the current theme.
+// xterm resolves the tokens above to literal colors at construction and never
+// re-reads them, and the onboarding shell carries its own theme toggle, so
+// reapply on every resolved-theme change. `term` isn't reactive: the first run
+// lands before the async import resolves, when construction applies the theme.
 $effect(() => {
   const resolved = getResolvedTheme();
   if (!term) return;

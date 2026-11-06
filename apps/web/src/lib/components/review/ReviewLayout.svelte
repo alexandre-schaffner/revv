@@ -30,16 +30,12 @@ import FileIssues from "./FileIssues.svelte";
 import ImageDiffViewer from "./ImageDiffViewer.svelte";
 import type { CommentRowsTrigger } from "./pierre-diff-adapter";
 
-// ── Props ─────────────────────────────────────────────────────────────────
-
 interface Props {
   prId: string;
   files: ReviewFile[];
 }
 
 let { prId, files }: Props = $props();
-
-// ── Layout state ──────────────────────────────────────────────────────────
 
 const activeFilePath = $derived(getActiveFilePath());
 const activeFile = $derived(files.find((f) => f.path === activeFilePath) ?? null);
@@ -53,8 +49,6 @@ const activeFileIsImage = $derived(
     (isImagePath(activeFile.path) ||
       (activeFile.oldPath !== undefined && isImagePath(activeFile.oldPath))),
 );
-// Filename for the title bar — falls back to the raw path when neither
-// `activeFile` (PR-changed) nor a tree-selection has populated something.
 const activeFileName = $derived.by((): string => {
   if (activeFile) return activeFile.path.split("/").pop() ?? activeFile.path;
   if (activeFilePath) return activeFilePath.split("/").pop() ?? activeFilePath;
@@ -63,8 +57,6 @@ const activeFileName = $derived.by((): string => {
 
 let fileTitleSectionEl = $state<HTMLElement | null>(null);
 
-// ── Comment trigger ──────────────────────────────────────────────────────
-
 /** Rows are the cursor's; the diff viewer resolves them to file lines. */
 let pendingCommentTrigger = $state<CommentRowsTrigger | null>(null);
 
@@ -72,7 +64,6 @@ function openComment(fromRow: number, toRow: number) {
   pendingCommentTrigger = { fromRow, toRow, seq: Date.now() };
 }
 
-// ── Topbar subtitle (show full path when file title scrolls out) ─────────
 let fileTitleVisible = $state(true);
 
 $effect(() => {
@@ -91,12 +82,9 @@ $effect(() => {
 
 useShellChrome(() => ({ subtitle: fileTitleVisible ? null : activeFilePath || null }));
 
-// ── Keyboard navigation ──────────────────────────────────────────────────
-
 /** Scroll amount per j/k press (in pixels). */
 const SCROLL_STEP = 80;
 
-/** Encapsulates the pendingG / gTimer state for the gg two-key chord. */
 class PendingGState {
   flag = false;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -144,18 +132,12 @@ function navigateFile(direction: 1 | -1) {
   }
 }
 
-// ── Command-map keyboard dispatch ────────────────────────────────────────
-//
-// Two-level map: panel → key → handler. The pendingG state machine for the
-// `gg` chord is encapsulated in PendingGState above.
-
 function handleGlobalKeydown(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (isTextEditingKeyTarget(e)) return;
 
   const panel = getActivePanel();
 
-  // ── Global bindings (all panels) ──────────────────────────────────────
   if (e.key === " ") {
     e.preventDefault();
     if (isInDiffMode()) {
@@ -172,11 +154,9 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // ── Panel-specific bindings ───────────────────────────────────────────
   const handled = dispatchKey(panel, e.key, e);
   if (handled) return;
 
-  // ── Fallback: sidebar bindings (n/p file navigation) ──────────────────
   if (e.key === "n") {
     e.preventDefault();
     navigateFile(1);
@@ -344,7 +324,6 @@ function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
   const keyMap = PANEL_KEY_MAP[panel];
   if (!keyMap) return false;
 
-  // Handle the gg two-key chord for diff-line and diff-scroll panels
   if (panel === "diff-line" || panel === "diff-scroll") {
     if (key === "g" && !e.shiftKey) {
       e.preventDefault();
@@ -361,7 +340,6 @@ function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
       pendingG.arm();
       return true;
     }
-    // Any other key cancels pendingG
     if (pendingG.flag) pendingG.reset();
   }
 
@@ -370,14 +348,12 @@ function dispatchKey(panel: string, key: string, e: KeyboardEvent): boolean {
   return false;
 }
 
-// ── Mode indicator derived state ─────────────────────────────────────────
 const panel = $derived(getActivePanel());
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
 <div class="relative flex h-full flex-col overflow-hidden bg-bg-primary">
-	<!-- @pierre/diffs renderer -->
 	<div
 		class="diff-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none"
 		class:mode-scroll={panel === 'diff-scroll'}

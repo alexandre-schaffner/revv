@@ -1,37 +1,7 @@
 <script lang="ts">
-// ── Dotmatrix spinner component ──────────────────────────────────────────
-// Single-dispatch dot-matrix renderer. Every variant — legacy or
-// square-N — flows through `DOTMATRIX_VARIANTS` in `./variants.ts`:
-//
-//   kind: 'css'      → CSS keyframes own the animation. The resolver
-//                      returns optional per-dot CSS vars + an optional
-//                      extra class for variants that fan out to multiple
-//                      keyframes (e.g. square-4 outer vs middle ring).
-//                      Keyframes live in `dotmatrix-loader.css`.
-//
-//   kind: 'stepped'  → JS frame-stepping via setTimeout. The resolver
-//                      computes opacity per dot per step; component
-//                      writes it inline.
-//
-//   kind: 'phase'    → JS continuous phase 0..1 via rAF. Same shape as
-//                      `stepped` but with a 0..1 phase argument.
-//
-// Layout & styling: ALL CSS — grid, dot dimensions, size variants,
-// inactive state, keyframes, variant rules — lives in
-// `./dotmatrix-loader.css` (imported globally via `app.css`). This
-// component has no local `<style>` so its classes are unhashed and the
-// global stylesheet matches by class name alone.
-//
-// Reduced motion: JS variants read `prefersReducedMotion()` (reactive), skip
-// the ticker and render `idleOpacity(...)`. CSS variants are caught by the global
-// `prefers-reduced-motion: reduce` rule in `app.css`. The matrix is
-// decorative variation on top of the always-present `.stream-cursor`
-// (motion-essential), so we don't bypass the global reset.
-//
-// Props:
-//   variant — any `DotmatrixVariant` (24 total: 4 legacy + 20 square-N)
-//   size    — 'default' (5px dots, 29px) | 'small' (3px dots, 19px)
-//   active  — false suspends the JS sequencers
+// Every variant dispatches through `DOTMATRIX_VARIANTS` (./variants.ts). No
+// local `<style>`: all CSS lives in `dotmatrix-loader.css`, imported globally
+// via `app.css`, so the classes stay unhashed and match by name alone.
 
 import { prefersReducedMotion } from "$lib/motion";
 import {
@@ -49,7 +19,6 @@ interface Props {
 
 let { variant, size = "default", active = true }: Props = $props();
 
-// ── 5×5 grid layout — precomputed once ─────────────────────────────────
 const MATRIX_5X5 = (() =>
   Array.from({ length: 25 }, (_, i) => ({
     row: Math.floor(i / 5),
@@ -58,7 +27,6 @@ const MATRIX_5X5 = (() =>
 
 const reducedMotion = $derived(prefersReducedMotion());
 
-// ── JS sequencer state (used by 'stepped' and 'phase' variants) ────────
 const config: VariantConfig = $derived(DOTMATRIX_VARIANTS[variant]);
 let stepIdx = $state(0);
 let phase = $state(0);
@@ -97,8 +65,6 @@ $effect(() => {
     return () => cancelAnimationFrame(rafId);
   }
 });
-
-// ── Per-dot resolvers ──────────────────────────────────────────────────
 
 function dotInlineStyle(idx: number, row: number, col: number): string {
   if (config.kind === "css") {
