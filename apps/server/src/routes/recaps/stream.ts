@@ -1,14 +1,5 @@
-// ── Recap SSE stream ────────────────────────────────────────────────────────
-//
-// GET /api/recaps/:id/stream — SSE endpoint for live recap generation.
-//
-// Thin subscriber around {@link ProjectRecapJobs}. Mirrors the walkthrough
-// SSE handler pattern but radically simpler:
-//   • No SSR pre-render.
-//   • No clone polling.
-//   • Reconnect emits the current `lede` + each `entry` / theme_summary
-//     snapshot from the DB, then attaches to live events if the job is
-//     still running.
+// A reconnect replays the current `lede`, each entry and theme summary from
+// the DB, then attaches to live events while the job is still running.
 
 import type { ProjectRecap, ProjectRecapStatus, RecapStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
@@ -34,14 +25,12 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
 
   void (async () => {
     try {
-      // Phase 1: Read recap row.
       const row = await AppRuntime.runPromise(
         Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
       );
 
       const status = row.status as ProjectRecapStatus;
 
-      // Terminal: complete.
       if (status === "complete") {
         emitSnapshot(channel, row);
         channel.send({ type: "done", data: { recapId: row.id } });
@@ -55,7 +44,6 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         return;
       }
 
-      // Terminal: error.
       if (status === "error") {
         channel.send({
           type: "error",
@@ -68,7 +56,6 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         return;
       }
 
-      // Terminal: superseded.
       if (status === "superseded") {
         channel.send({
           type: "error",
@@ -96,7 +83,6 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
 
       if (!sub.found) {
         // No live run: it finished, or its resume was refused.
-        // Re-read the row to get final state.
         const finalRow = await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
         );
@@ -120,10 +106,9 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
 
       channel.onClose(sub.unsubscribe);
 
-      // Flush buffered events (delivered through the subscriber callback
-      // in arrival order) BEFORE reading the snapshot. Then re-read the
-      // row so any writes committed between phase 1 and now are reflected
-      // in the replay snapshot.
+      // Flush buffered events (delivered through the subscriber callback in
+      // arrival order) BEFORE reading the snapshot. Then re-read the row so any
+      // writes committed since the first read are reflected in the replay snapshot.
       sub.flush();
 
       const snapshot = await AppRuntime.runPromise(

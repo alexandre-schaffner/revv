@@ -155,8 +155,6 @@ export function readMigrations(migrationsFolder: string): Migration[] {
   }));
 }
 
-// ── Probes ───────────────────────────────────────────────────────────────────
-
 function tableExists(sqlite: Database, table: string): boolean {
   return (
     sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !==
@@ -223,8 +221,6 @@ function addable(column: ColumnDef): boolean {
   if (/\b(PRIMARY KEY|UNIQUE)\b/i.test(def)) return false;
   return !/\bNOT NULL\b/i.test(def) || /\bDEFAULT\b/i.test(def);
 }
-
-// ── Reconcile ────────────────────────────────────────────────────────────────
 
 /** Whether a later migration has undone, or is about to undo, `artifact`. */
 type Undone = (artifact: Artifact) => boolean;

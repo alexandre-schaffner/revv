@@ -38,13 +38,6 @@ import { WalkthroughService } from "../services/Walkthrough";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
 
-// ── PR diff SSR options ─────────────────────────────────────────────────────
-//
-// Must match the structural options in DiffViewerInner.svelte:326-345 so the
-// hydrated DOM lines up with what the client would have rendered. Callbacks
-// and DOM-producing options stay client-side; only the layout-affecting
-// fields are mirrored here.
-
 const PR_DIFF_SSR_OPTIONS: SsrDiffOptions = PR_DIFF_RENDER_OPTIONS;
 
 /**
@@ -65,7 +58,6 @@ function resolveScopedSha(at: string | undefined, headSha: string | null): strin
   return isHead ? null : at;
 }
 
-/** Build the full git patch the SSR call expects from a cached PR file row. */
 function buildPrFilePatch(file: CachedDiffFile): string {
   const header = buildGitPatchHeader({
     path: file.path,
@@ -76,11 +68,6 @@ function buildPrFilePatch(file: CachedDiffFile): string {
   return file.patch !== null ? `${header}\n${file.patch}` : header;
 }
 
-/**
- * SSR a single PR file, returning the prerendered HTML or undefined if the
- * file has no patch (binary), exceeds the SSR guardrails, or rendering
- * failed. The client always has a working render-path fallback.
- */
 function annotationsForFile(
   filePath: string,
   threads: CommentThread[],
@@ -94,6 +81,10 @@ function annotationsForFile(
     }));
 }
 
+/**
+ * The prerendered HTML, or undefined when the file has no patch (binary),
+ * exceeds the SSR guardrails, or rendering failed: the client renders it then.
+ */
 async function prerenderPrFile(
   file: CachedDiffFile,
   threads: CommentThread[],
@@ -115,8 +106,6 @@ function selectPrerenderPath(files: CachedDiffFile[], activePath?: string): stri
   }
   return files[0]?.path ?? null;
 }
-
-// ── Routes ───────────────────────────────────────────────────────────────────
 
 export const prRoutes = new Elysia({ prefix: "/api/prs" })
   .use(withAccount)
@@ -301,8 +290,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     {
       query: t.Object({
         active: t.Optional(t.String()),
-        // Malformed SHAs are rejected with a 400 before the handler runs, so
-        // the compare path can only ever be reached with a plausible ref.
         at: t.Optional(t.String({ pattern: "^[0-9a-fA-F]{7,40}$" })),
       }),
       detail: {
@@ -383,12 +370,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const bytes = yield* github.files.rawBytes(client, repo.fullName, ctx.query.path, sha);
 
           const contentType = guessImageContentType(ctx.query.path);
-          // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,
-          // narrower than the lib.dom BlobPart signature
-          // (`ArrayBufferView<ArrayBuffer>`). The cast is safe — we
-          // allocate the underlying ArrayBuffer ourselves via
-          // `new Uint8Array(arrayBuffer)`. Wrapping in a Blob avoids
-          // the BodyInit mismatch the raw Uint8Array hits.
+          // Bun types `bytes` as `Uint8Array<ArrayBufferLike>`, narrower than the
+          // lib.dom BlobPart signature; we allocated its ArrayBuffer ourselves.
           const blob = new Blob([bytes as BlobPart], { type: contentType });
           return new Response(blob, {
             status: 200,
@@ -484,12 +467,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     ),
   )
 
-  // ── Owner-only PR mutations (draft toggle, close) ─────────────────────
-  //
-  // All three endpoints follow the same shape: resolve PR + repo + token,
-  // run the GitHub mutation, record its outcome on the local row, and
-  // broadcast `prs:updated` so other clients see the new state without
-  // waiting for the next poll cycle.
   .post("/:id/convert-to-draft", (ctx) =>
     runRoute(
       Effect.gen(function* () {
@@ -596,28 +573,18 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     ),
   );
 
-// ── Suggestions cache + resolver ─────────────────────────────────────────────
-//
-// In-memory cache for the right-panel suggestions endpoint. Keyed on
-// `${prId}:${headSha}:${agent}:${model}` so any of those changing produces a
-// fresh model call. TTL is soft — entries are cleaned up lazily on read.
-//
-// Compliant with CLAUDE.md invariant #1 (SQLite is authoritative): the cache
-// is reconstructible. Any miss re-derives by loading the PR + walkthrough
-// from DB and calling the model. The cache only exists to avoid re-spending
-// tokens when the user opens the same PR repeatedly within one server
-// session.
-//
-// Not invalidated server-side on settings change — the client invalidates
-// its store, and the next request lands on a different `model` key, so the
-// stale entry simply expires unused.
+// Keyed on `${prId}:${headSha}:${agent}:${model}`, so any of those changing
+// means a fresh model call; entries expire lazily on read. A reconstructible
+// cache (invariant 1): it only saves re-spending tokens when the user reopens
+// a PR within one server session. A settings change needs no invalidation:
+// the next request lands on a different `model` key.
 
 interface SuggestionsCacheEntry {
   readonly suggestions: string[];
   readonly expiresAt: number;
 }
 
-const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SUGGESTIONS_CACHE_TTL_MS = 60 * 60 * 1000;
 const SUGGESTIONS_CACHE_MAX_ENTRIES = 256;
 const suggestionsCache = new Map<string, SuggestionsCacheEntry>();
 
@@ -636,8 +603,7 @@ function readSuggestionsCache(key: string): string[] | null {
 }
 
 function writeSuggestionsCache(key: string, suggestions: string[]): void {
-  // Bounded eviction: drop the oldest insertion when we hit the cap. Map
-  // preserves insertion order so deleting via `keys().next()` is O(1).
+  // Map iterates in insertion order, so the first key is the oldest.
   if (suggestionsCache.size >= SUGGESTIONS_CACHE_MAX_ENTRIES) {
     const oldest = suggestionsCache.keys().next().value;
     if (oldest !== undefined) suggestionsCache.delete(oldest);
@@ -660,7 +626,6 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const pr = yield* prService.getPr(prId, accountId);
     const headSha = pr.headSha ?? "no-head";
 
-    // Cache check before any DB / model work.
     const key = suggestionsCacheKey(prId, headSha, launch.agent, launch.model);
     const cached = readSuggestionsCache(key);
     if (cached !== null) return cached;

@@ -1,11 +1,5 @@
-// ── Server-side observability ───────────────────────────────────────────────
-//
-// In-memory span ring buffer backed by an OpenTelemetry SpanExporter.
-// Provides both a custom ring-buffer exporter (always active) and an
-// optional ConsoleSpanExporter gated on REVV_DEBUG=1.
-//
 // One globally registered OTel provider serves both Effect's Tracer and
-// `trace.getTracer` (see `provider` below), so the exporter receives every
+// `trace.getTracer` (see `provider` below), so the exporters receive every
 // span `Effect.withSpan` creates plus the manual spans from non-Effect code.
 
 import * as OtelTracer from "@effect/opentelemetry/OtelTracer";
@@ -25,23 +19,17 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { Effect, Layer } from "effect";
 import { serverEnv } from "../config";
 
-// ── Ring-buffer types ───────────────────────────────────────────────────────
-
 export interface CompletedSpan {
-  /** Monotonic id, useful as a key in dev panels. */
   readonly id: number;
-  /** Span operation name, e.g. "WalkthroughJobs.resumePending". */
   readonly name: string;
   /** OTel trace id (hex string). */
   readonly traceId: string;
   /** OTel span id (hex string). */
   readonly spanId: string;
-  /** Parent span id, or null if root. */
   readonly parentSpanId: string | null;
   readonly startMs: number;
   readonly durationMs: number;
   readonly attrs: Readonly<Record<string, unknown>>;
-  /** Captured Error if the span ended with error status. */
   readonly error: { name: string; message: string } | null;
 }
 
@@ -54,8 +42,6 @@ export interface SpanSummary {
   readonly max: number;
   readonly errorCount: number;
 }
-
-// ── Ring buffer implementation ──────────────────────────────────────────────
 
 const manualTracer = trace.getTracer("revv-server");
 
@@ -125,7 +111,6 @@ export function readSpans(filter?: {
   });
 }
 
-/** Group spans by name and compute per-name summary stats. */
 export function summarizeSpans(): Record<string, SpanSummary> {
   const buckets = new Map<string, number[]>();
   const errors = new Map<string, number>();
@@ -162,13 +147,10 @@ export function clearSpans(): void {
   nextSpanId = 1;
 }
 
-// ── OTel → ring buffer converter ────────────────────────────────────────────
-
 function extractError(span: ReadableSpan): { name: string; message: string } | null {
   // OTel SpanStatusCode: 0 = UNSET, 1 = OK, 2 = ERROR
   if (span.status.code === 2) {
     const msg = span.status.message ?? "span error";
-    // Try to find an exception event for richer info
     const ev = span.events.find((e) => e.name === "exception");
     if (ev) {
       const type = ev.attributes?.["exception.type"] ?? "Error";
@@ -196,8 +178,6 @@ function readableSpanToCompleted(span: ReadableSpan): CompletedSpan {
   };
 }
 
-// ── Custom SpanExporter ─────────────────────────────────────────────────────
-
 class RevSpanExporter implements SpanExporter {
   export(spans: readonly ReadableSpan[], resultCallback: (result: { code: number }) => void): void {
     for (const span of spans) {
@@ -214,8 +194,6 @@ class RevSpanExporter implements SpanExporter {
     return Promise.resolve();
   }
 }
-
-// ── Effect TracingLive layer ────────────────────────────────────────────────
 
 const SERVICE_NAME = "revv-server";
 

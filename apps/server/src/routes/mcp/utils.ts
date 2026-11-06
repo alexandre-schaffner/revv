@@ -1,9 +1,3 @@
-// ── MCP route shared utilities ───────────────────────────────────────────────
-//
-// Types and helpers shared by all HTTP MCP transports (walkthrough, chat-context,
-// etc.). Each transport is a thin JSON-RPC router; this module keeps the
-// protocol boilerplate in one place.
-
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
@@ -12,8 +6,6 @@ import { debug, logError } from "../../logger";
 import { withGraftedSpan } from "../../observability/span-graft";
 import { AppRuntime, type AppServices } from "../../runtime";
 import { DbService } from "../../services/Db";
-
-// ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -35,8 +27,6 @@ export interface JsonRpcError {
 }
 
 export type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function jsonRpcSuccess(id: number | string | null, result: unknown): JsonRpcSuccess {
   return { jsonrpc: "2.0", id, result };
@@ -62,8 +52,6 @@ export function extractBearer(req: Request): string | null {
   return match?.[1] ? match[1].trim() : null;
 }
 
-// ── Shared HTTP binder ──────────────────────────────────────────────────────
-
 export type ContextResolution<Ctx, Meta> =
   | { ok: true; ctx: Ctx; meta: Meta }
   | { ok: false; status: number; message: string };
@@ -74,7 +62,6 @@ export type ConnectionResolution<Meta> =
 
 export interface HttpToolCall<Ctx, Meta> {
   readonly toolName: string;
-  /** The validated arguments. */
   readonly input: unknown;
   readonly ctx: Ctx;
   readonly meta: Meta;
@@ -331,13 +318,10 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       debug(options.logScope, served);
     }
 
-    // All inbound messages were notifications/responses (no `id`), so there is
-    // nothing to reply with — e.g. the `notifications/initialized` handshake
-    // step. Per the MCP Streamable HTTP spec, return 202 Accepted with an empty
-    // body. Returning a bodyless 200 + `Content-Type: application/json` (the old
-    // behavior) makes strict clients try to JSON-parse an empty body and fail
-    // with "EOF while parsing a value at line 1 column 0" — this killed Codex's
-    // `rmcp` transport worker right after the initialized notification.
+    // Only notifications/responses (no `id`), e.g. the `notifications/initialized`
+    // handshake step. The MCP Streamable HTTP spec wants 202 Accepted with an
+    // empty body: strict clients (Codex's `rmcp`) JSON-parse a bodyless 200 and
+    // fail with "EOF while parsing".
     if (responses.length === 0) {
       return new Response(null, { status: 202 });
     }
@@ -349,8 +333,6 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
     });
   });
 }
-
-// ── Token-authenticated routes ───────────────────────────────────────────────
 
 export interface BindTokenRouteOptions<Ctx, Meta, Payload, Result extends McpToolResult>
   extends Omit<BindHttpOptions<Ctx, Meta, Result>, "resolveContext" | "resolveConnection"> {

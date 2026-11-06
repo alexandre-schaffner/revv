@@ -1,9 +1,3 @@
-// ── Project recap routes ────────────────────────────────────────────────────
-//
-// HTTP surface for the daily / weekly recap pipeline. Read endpoints serve
-// the UI's list + detail views; mutation endpoints ask `ProjectRecapJobs` for
-// a recap (reused, or rerun in place).
-
 import { canonicalWindow } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -22,7 +16,6 @@ function parsePeriod(value: string | undefined): "daily" | "weekly" | undefined 
 const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
   .use(withAuth)
   .onBeforeHandle(ownedBy({ id: "repository" }))
-  // ─── GET /api/repos/:id/recaps ─────────────────────────────────────────
   .get(
     "/:id/recaps",
     async (ctx) => {
@@ -68,7 +61,6 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
       }),
     },
   )
-  // ─── POST /api/repos/:id/recaps/generate ───────────────────────────────
   // Body: { period: "daily" | "weekly", periodStart?, periodEnd? }. Without
   // boundaries it asks for the open window so far (today / this week up to
   // now); `?regenerate=true` reruns the window's recap rather than reusing it.
@@ -115,11 +107,9 @@ const repoRecapRoutes = new Elysia({ prefix: "/api/repos" })
 const recapByIdRoutes = new Elysia({ prefix: "/api/recaps" })
   .use(withAuth)
   .onBeforeHandle(ownedBy({ id: "recap" }))
-  // ─── GET /api/recaps/:id ───────────────────────────────────────────────
   .get("/:id", (ctx) =>
     runRoute(Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id))),
   )
-  // ─── POST /api/recaps/:id/regenerate ───────────────────────────────────
   // Rerun the recap over its window as it stands now: up to now while the
   // window is open, the whole period once it has closed.
   .post("/:id/regenerate", (ctx) =>
@@ -138,10 +128,8 @@ const recapByIdRoutes = new Elysia({ prefix: "/api/recaps" })
       }),
     ),
   )
-  // ─── POST /api/recaps/:id/stop ─────────────────────────────────────────
-  // Stop an in-flight recap generation: the row ends `stopped` and the
-  // change is broadcast so other clients update. No-op once the job has
-  // finished.
+  // The row ends `stopped` and the change is broadcast so other clients
+  // update. No-op once the job has finished.
   .post("/:id/stop", (ctx) =>
     runRoute(
       Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.cancel(ctx.params.id)).pipe(
@@ -149,9 +137,6 @@ const recapByIdRoutes = new Elysia({ prefix: "/api/recaps" })
       ),
     ),
   )
-  // ─── GET /api/recaps/:id/stream ────────────────────────────────────────
-  // SSE endpoint for live recap generation. Returns markdown chunks as
-  // the AI composes them, plus phase shimmer events.
   .get("/:id/stream", recapStreamHandler);
 
 export const recapRoutes = new Elysia().use(repoRecapRoutes).use(recapByIdRoutes);

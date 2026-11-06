@@ -54,7 +54,6 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     },
   )
 
-  // Push this thread to GitHub as a review comment.
   .post("/:id/push", (ctx) =>
     runRoute(
       Effect.gen(function* () {

@@ -37,7 +37,6 @@ export const recapThemeSummaries = sqliteTable(
       t.recapId,
       t.theme,
     ),
-    /** Join-back-to-recap index for the read path. */
     recapIdx: index("recap_theme_summaries_recap_idx").on(t.recapId),
   }),
 );

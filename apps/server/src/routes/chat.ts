@@ -1,13 +1,3 @@
-// ── Chat route ─────────────────────────────────────────────────────────────
-//
-// The right-pane chat's HTTP surface:
-//
-//   POST   /api/chat               - run a turn, streamed as SSE
-//   GET    /api/chat/:prId/messages - the PR's chat session's timeline
-//   DELETE /api/chat/:prId         - clear the conversation and the agent's commits
-//
-// The turn itself is `ChatTurnService`; the agent's workspace is `PrWorkspace`.
-
 import {
   attachmentByteSize,
   attachmentsTotalTooLargeMessage,
@@ -31,30 +21,22 @@ import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 import { pipeToSse, runStream } from "./sse";
 
-// Valid base64 alphabet, optional `=` padding, length a multiple of 4. Used to
-// confirm an attachment the client labelled `image` actually carries base64
-// bytes (and not, say, raw text mislabelled as an image).
+// Confirms an attachment labelled `image` carries base64 bytes, not
+// mislabelled raw text.
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
-// Defense-in-depth bound on a single attachment's raw `data` string, enforced
-// at the schema layer. This just rejects an absurd single field early; the
-// authoritative, per-kind decoded-byte caps live in `validateAttachments`.
-// Sized for the worst case — base64 image data, which inflates the byte cap by
-// ~4/3, plus slack. For `text` attachments (`data` is raw UTF-8, ~1 byte/char)
-// this cap therefore over-permits by ~33%; that is intentional — text relies
-// entirely on the decoded-byte check in `validateAttachments`, this bound only
-// exists to stop a pathologically huge single field. (Bun's global body limit
-// remains the real parse-time memory guard.)
+// Rejects an absurd single `data` field at the schema layer. The real caps are
+// the per-kind decoded-byte checks in `validateAttachments`; this one is sized
+// for base64 image data (~4/3 of the byte cap) plus slack, so it over-permits
+// raw-UTF-8 `text` by ~33% on purpose. Bun's global body limit is the
+// parse-time memory guard.
 const MAX_ATTACHMENT_DATA_CHARS = Math.ceil((MAX_CHAT_ATTACHMENT_BYTES * 4) / 3) + 1024;
 
 /**
- * Sanity-check the client-asserted `kind` at the trust boundary so downstream
- * consumers (size accounting in `attachmentByteSize`, the ACP render branch in
- * `buildPromptBlocks`) can rely on `kind` matching the payload shape — an
- * `image` carries non-empty base64 with an image MIME type; `text` does not
- * claim an image type. This is a cheap structural guard, not a semantic one:
- * valid base64 is not necessarily a decodable image (that's the agent's
- * problem). Returns a structured error string on mismatch.
+ * Check the client-asserted `kind` at the trust boundary, so size accounting
+ * (`attachmentByteSize`) and the ACP render branch (`buildPromptBlocks`) can
+ * rely on it matching the payload. Structural only: valid base64 is not
+ * necessarily a decodable image.
  */
 function validateAttachmentKind(attachment: ChatAttachment): string | null {
   if (attachment.kind === "image") {
@@ -70,7 +52,6 @@ function validateAttachmentKind(attachment: ChatAttachment): string | null {
     }
     return null;
   }
-  // Text attachments carry raw UTF-8; reject anything claiming an image type.
   if (attachment.mimeType.startsWith("image/")) {
     return `${attachment.name} has an image type but was sent as text.`;
   }

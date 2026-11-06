@@ -10,16 +10,9 @@ import { appDataDir } from "./paths";
 import { appDatabase } from "./services/Db";
 
 /**
- * Locate (or create) the better-auth signing secret.
- *
- * Priority:
- *   1. `BETTER_AUTH_SECRET` env var (escape hatch for dev / CI / containers).
- *   2. Persisted key file under the OS-appropriate per-user support dir.
- *      Generated with `crypto.randomBytes(32).toString('hex')` on first run,
- *      stored mode `0600` inside a directory created mode `0700`.
- *
- * The key never leaves the machine and is not exposed to the frontend — it
- * signs session cookies and JWTs only.
+ * `BETTER_AUTH_SECRET` when set, else a key generated on first run and kept
+ * under the app-data dir (file `0600`, directory `0700`). It never leaves the
+ * machine and never reaches the frontend: it signs session cookies and JWTs only.
  */
 function loadOrCreateAuthSecret(): string {
   if (serverEnv.betterAuthSecret) return serverEnv.betterAuthSecret;
@@ -38,7 +31,6 @@ function loadOrCreateAuthSecret(): string {
   return secret;
 }
 
-/** OS-appropriate path for the persisted better-auth key. */
 function authKeyPath(): string {
   return join(appDataDir(), "auth.key");
 }
@@ -49,10 +41,8 @@ export const auth = betterAuth({
   database: drizzleAdapter(appDatabase(), {
     provider: "sqlite",
   }),
-  // No `socialProviders` — Revv authenticates exclusively via GitHub's
-  // device-code flow (see `routes/device-auth.ts`). The browser-redirect
-  // social provider was never wired up on the frontend and required
-  // `client_secret`, which we no longer collect.
+  // No `socialProviders`: Revv signs in only through GitHub's device-code flow
+  // (`routes/device-auth.ts`), which needs no `client_secret`.
   plugins: [bearer()],
   trustedOrigins: [...AUTH_TRUSTED_ORIGINS],
   account: {

@@ -62,23 +62,13 @@ export class InvalidGitHubClientIdError extends Error {
 }
 
 /**
- * Client_id for a host.
- *
- * - **Pro on github.com** → the bundled GitHub App id.
- * - **github.com (OSS)** → the bundled public OAuth App id.
- * - **A user-added GHE host** → `customClientId`, the GitHub App/OAuth App id
- *   the user registered on their own instance (passed from settings). There is
- *   no bundled registration on a customer's host.
- * - **A GHE host configured via env** → the `GITHUB_CLIENT_ID` override (for a
- *   fixed self-hosted deployment).
- *
- * github.com ALWAYS resolves to Revv's bundled registration, and the public
- * paths are checked BEFORE `customClientId` — a `customClientId` is bound to a
- * GHE host and must never be applied to github.com. Otherwise a stale GHE id
+ * github.com always resolves to Revv's bundled registration, checked BEFORE
+ * `customClientId`: a `customClientId` is the id a user registered on their
+ * own GHE instance and must never be applied to github.com. A stale GHE id
  * left in settings after switching back to a github.com account (the switch
- * updates only the host) would be POSTed to github.com's device-code endpoint,
- * which 404s. `savedClientIdForHost` (in `@revv/shared`) applies the same
- * rule to the saved ID.
+ * updates only the host) would otherwise be POSTed to github.com's
+ * device-code endpoint, which 404s. `savedClientIdForHost` (in `@revv/shared`)
+ * applies the same rule to the saved ID.
  *
  * Throws a clear error when github.com lacks `GITHUB_CLIENT_ID_PUBLIC`, or when
  * a GHE host has no client ID at all, so the user gets a diagnosable message

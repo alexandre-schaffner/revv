@@ -1,4 +1,3 @@
-// ── Boot ─────────────────────────────────────────────────────────────────────
 // Every service's start-up work, in one sequence whose ordering is the code
 // below. Built with the runtime, so it runs once the server's runtime is
 // forced (after `listen`), in the runtime's scope: shutdown interrupts what is
@@ -20,7 +19,6 @@ import { StackMergeService } from "./services/stacks/StackMerge";
 import { StackReviewService } from "./services/stacks/StackReview";
 import { WalkthroughJobs } from "./services/WalkthroughJobs";
 
-/** One boot step; a failure is logged and never stops the others. */
 const step = <R>(
   scope: string,
   effect: Effect.Effect<unknown, unknown, R>,

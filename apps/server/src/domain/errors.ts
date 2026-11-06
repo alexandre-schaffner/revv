@@ -5,7 +5,6 @@ export class ProfilingError extends Data.TaggedError("ProfilingError")<{
   readonly cause: unknown;
 }> {}
 
-// GitHub API errors
 export class GitHubRateLimitError extends Data.TaggedError("GitHubRateLimitError")<{
   readonly resetAt: Date;
   readonly retryAfter?: number;
@@ -78,7 +77,6 @@ export function isGitHubUnreachable(e: unknown): e is GitHubNetworkError | GitHu
   return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
 }
 
-// General errors
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
   readonly resource: string;
   readonly id: string;
@@ -100,8 +98,6 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
     | "INTERNAL";
   readonly cause?: unknown;
 }> {}
-
-// AI errors
 
 /** `auth`: the agent isn't signed in, or Revv can't read its login. */
 export type AgentFailureKind = "auth" | "other";
@@ -157,7 +153,6 @@ export class SyncError extends Data.TaggedError("SyncError")<{
   readonly cause?: unknown;
 }> {}
 
-// Clone errors
 export class CloneError extends Data.TaggedError("CloneError")<{
   readonly message: string;
   readonly cause?: unknown;
@@ -206,13 +201,10 @@ export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")
 /** What holds a PR's agent workspace (see `PrWorkspace`). */
 export type WorkspaceHolder = "chat-turn" | "push" | "branch-edit";
 
-/** Someone else holds the PR's agent workspace. */
 export class WorkspaceBusyError extends Data.TaggedError("WorkspaceBusyError")<{
   readonly prId: string;
   readonly heldBy: WorkspaceHolder;
 }> {}
-
-// Pushing the chat agent's commits
 
 export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
   readonly message: string;
@@ -298,29 +290,18 @@ export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
   readonly commits: readonly ProposedCommit[];
 }> {}
 
-// ── Project Recap errors ───────────────────────────────────────────────────
-
-/**
- * Raised when a recap row can't be found by id. Used by the manual
- * regenerate / detail endpoints to return 404 cleanly.
- */
 export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
   readonly recapId: string;
 }> {}
 
-// Database errors
 export class DbError extends Data.TaggedError("DbError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-// ── Remote walkthrough cache errors ────────────────────────────────────────
-//
-// `BlobStore*` errors describe failures at the storage-backend layer
-// (GCS/S3/etc.). `Cache*` errors describe failures at the snapshot-level
-// service that sits on top. The orchestrator treats every cache error as
-// "miss + fall back to running the agent" — no error escapes to the user
-// modulo settings-page health checks.
+// The orchestrator treats every cache error as "miss, fall back to running
+// the agent": none reaches the user except through the settings page's
+// health checks.
 
 /**
  * The configured blob store is unreachable, misconfigured, or rejected
@@ -373,8 +354,6 @@ export class ImportError extends Data.TaggedError("ImportError")<{
   readonly cause?: unknown;
 }> {}
 
-// ── SSH cache-signing errors ────────────────────────────────────────────────
-
 /** `ssh-keygen` binary is absent from PATH or the configured path. */
 export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
   readonly message: string;
@@ -382,8 +361,8 @@ export class SshKeygenMissing extends Data.TaggedError("SshKeygenMissing")<{
 
 /**
  * The local machine cannot sign right now — key not found, auto-detect
- * failed, or ssh-keygen returned an unexpected error. Push fails loudly
- * (fire-and-forget contract unchanged); the walkthrough still completes.
+ * failed, or ssh-keygen returned an unexpected error. The push fails loudly;
+ * the walkthrough still completes.
  */
 export class SshSigningUnavailable extends Data.TaggedError("SshSigningUnavailable")<{
   readonly message: string;
@@ -402,8 +381,6 @@ export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
   readonly cause?: unknown;
 }> {}
 
-// ── HTTP meaning ────────────────────────────────────────────────────────────
-//
 // Every error above answers an HTTP request the same way wherever it
 // surfaces: a REST route, a stream refused before it starts, or the external
 // agent's MCP route. Adding an error class means adding its row here.

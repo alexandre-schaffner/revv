@@ -1,5 +1,3 @@
-// ── Server-sent events ──────────────────────────────────────────────────────
-//
 // Every streaming response goes through here: the global `/api/events`
 // stream, chat turns, push and base-conflict resolution, recaps, and the
 // agent install/login streams. The wire format (`data: <json>` frames, a

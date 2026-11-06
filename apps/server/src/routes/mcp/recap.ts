@@ -1,9 +1,3 @@
-// ── /mcp/recap ──────────────────────────────────────────────────────────────
-//
-// HTTP transport for the project-recap MCP tool surface: the bearer token
-// resolves to the run's tool context; JSON-RPC dispatch is shared by the MCP
-// tool gateway binder.
-
 import { Effect } from "effect";
 import { buildRecapActivity } from "../../ai/providers/recap-activity";
 import type { RecapToolContext } from "../../ai/providers/recap-tools";

@@ -1,17 +1,13 @@
-// ── Global SSE stream ───────────────────────────────────────────────────────
-//
 // `GET /api/events` — one long-lived SSE connection per client tab carrying
 // account-scoped server pushes.
 //
-// Auth: `?token=<bearer>` query param. Cannot use
-// the `Authorization` header because the browser's `EventSource` API does
-// not allow custom headers.
+// Auth: `?token=<bearer>`, because the browser's `EventSource` API does not
+// allow custom headers.
 //
-// Reconnect: native `EventSource` auto-reconnects with `Last-Event-ID`. The
-// server does NOT replay missed events on reconnect — the client reconciles
-// via REST snapshots (`/api/walkthroughs/active`, `/current`) which return
-// `seqAt` cursors. `Last-Event-ID` is therefore informational only. See
-// the SSE-rewrite plan §4.2 for rationale.
+// Reconnect: native `EventSource` auto-reconnects with `Last-Event-ID`, but
+// the server does NOT replay missed events — the client reconciles via REST
+// snapshots (`/api/walkthroughs/active`, `/current`), which return `seqAt`
+// cursors (invariant 8).
 
 import type { ServerEventMessage } from "@revv/shared";
 import { Effect, Exit } from "effect";
@@ -23,7 +19,6 @@ import { requestAccount, sessionFromHeaders } from "./middleware";
 import { openSse } from "./sse";
 
 export const eventsRoute = new Elysia().get("/api/events", async ({ query, request }) => {
-  // ── Auth ────────────────────────────────────────────────────────────────
   const token = typeof query.token === "string" ? query.token : undefined;
   if (!token) {
     return new Response("Unauthorized", { status: 401 });

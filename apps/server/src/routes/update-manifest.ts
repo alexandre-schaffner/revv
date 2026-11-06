@@ -85,9 +85,7 @@ type NightlyResolution = { kind: "ok"; url: string } | { kind: "none" } | { kind
 
 // The releases API is unauthenticated here (60 req/hr per source IP) and gets
 // hit on every updater check. A short in-memory cache keeps a handful of
-// manual "check for updates" clicks from burning through that budget. Errors
-// are never cached — a transient rate-limit/outage shouldn't stick around
-// for the full TTL once GitHub recovers.
+// manual "check for updates" clicks from burning through that budget.
 const NIGHTLY_CACHE_TTL_MS = 5 * 60 * 1000;
 let nightlyCache: { resolution: NightlyResolution; expiresAt: number } | null = null;
 
@@ -113,14 +111,9 @@ async function resolveNightlyManifestUrlUncached(): Promise<NightlyResolution> {
 }
 
 /**
- * Resolves the newest published nightly's `latest.json` URL, cached for
- * {@link NIGHTLY_CACHE_TTL_MS}.
- *
- * Still distinguishes "no nightly exists yet" (`"none"`, a legitimate state)
- * from "couldn't ask GitHub" (`"error"`, e.g. the API is down or
- * rate-limited) even though both now produce the same 502 response to the
- * plugin: only `"none"` is cache-worthy — caching a transient error would
- * make a rate-limit blip look like "no nightly" for the full TTL.
+ * `"none"` (no nightly published yet) and `"error"` (couldn't ask GitHub)
+ * both answer 502, but only `"none"` is cached: a cached error would make a
+ * rate-limit blip look like "no nightly" for the full TTL.
  */
 async function resolveNightlyManifestUrl(): Promise<NightlyResolution> {
   if (nightlyCache && nightlyCache.expiresAt > Date.now()) return nightlyCache.resolution;

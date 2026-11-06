@@ -56,7 +56,6 @@ function foreignKeysOf(sqlite: Database, table: string): ForeignKeyInfo[] {
   return sqlite.query(`PRAGMA foreign_key_list(\`${table}\`)`).all() as ForeignKeyInfo[];
 }
 
-/** A migrations folder holding only the first `count` journal entries. */
 function migrationPrefix(count: number): string {
   const folder = join(scratch, `prefix-${count}`);
   mkdirSync(join(folder, "meta"), { recursive: true });

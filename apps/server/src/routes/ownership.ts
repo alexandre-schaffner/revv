@@ -1,5 +1,3 @@
-// ── Ownership guard ─────────────────────────────────────────────────────────
-//
 // Several local users can share one Revv install, each with their own GitHub
 // accounts. A router registers `ownedBy` once, right after its auth plugin,
 // and every route it then declares answers 404, before its handler runs, for

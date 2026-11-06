@@ -20,11 +20,9 @@ export const commentThreads = sqliteTable("comment_threads", {
   // A status set in Revv that GitHub hasn't taken yet: a pull keeps it and
   // pushes it again rather than reverting it to GitHub's.
   statusPushPending: integer("status_push_pending", { mode: "boolean" }).notNull().default(false),
-  // Optional back-reference to a walkthrough_issues row when this thread was
-  // authored by the AI agent via the `add_issue_comment` MCP tool. Null for
-  // every human-authored thread. Lets us trace AI comments to their source
-  // issue and (via the cascading walkthrough_issues → walkthroughs FK chain)
-  // drop AI comments cleanly when the underlying walkthrough is superseded.
+  // The walkthrough issue this thread comments on, when the agent wrote it
+  // (`add_issue_comment`); null for human threads. Cascades, so deleting the
+  // issue (a Jev retraction, `delete_issue`) deletes its threads.
   walkthroughIssueId: text("walkthrough_issue_id").references(() => walkthroughIssues.id, {
     onDelete: "cascade",
   }),

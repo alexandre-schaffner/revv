@@ -1,9 +1,3 @@
-// ── /mcp/walkthrough ────────────────────────────────────────────────────────
-//
-// HTTP transport for the walkthrough MCP tool surface: the bearer token
-// resolves to the run, whose context WalkthroughJobs built at launch; JSON-RPC
-// dispatch is shared by the MCP tool gateway binder.
-
 import { Effect } from "effect";
 import { TOOL_SPECS, WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";

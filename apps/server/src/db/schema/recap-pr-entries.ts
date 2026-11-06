@@ -16,9 +16,7 @@ import { projectRecaps } from "./project-recaps";
  * `theme` is an open-vocabulary lowercase label (e.g. `auth`, `payments`,
  * `frontend`) — the agent picks one per PR. The UI deterministically maps
  * theme name → swatch color via a hash, and orders chapters by entry count
- * desc (ties broken alphabetically). There is no fixed taxonomy; that
- * decision intentionally departs from the original draft, which hardcoded
- * five Revv-specific themes that don't generalize across repos.
+ * desc (ties broken alphabetically).
  */
 export const recapPrEntries = sqliteTable(
   "recap_pr_entries",
@@ -27,14 +25,9 @@ export const recapPrEntries = sqliteTable(
     recapId: text("recap_id")
       .notNull()
       .references(() => projectRecaps.id, { onDelete: "cascade" }),
-    /**
-     * PR identity. Soft reference — not a FK to `pull_requests` so the recap
-     * survives PR pruning. See file header.
-     */
     prId: text("pr_id").notNull(),
     /** Render order within the recap; preserved from the agent's call sequence. */
     position: integer("position").notNull(),
-    /** Short lowercase theme label, agent-chosen (open vocabulary). */
     theme: text("theme").notNull(),
     /** Past-tense verb: `shipped`, `fixed`, `refactored`, `removed`, etc. */
     verb: text("verb").notNull(),
@@ -55,7 +48,6 @@ export const recapPrEntries = sqliteTable(
     description: text("description").notNull(),
     /** Additions for this PR (mirrors `pull_requests.additions` at recap time). */
     linesAdded: integer("lines_added").notNull().default(0),
-    /** Deletions for this PR. */
     linesRemoved: integer("lines_removed").notNull().default(0),
     /**
      * Whether the PR was archived (merged/closed) at recap time or still
@@ -72,7 +64,6 @@ export const recapPrEntries = sqliteTable(
   (t) => ({
     /** Idempotency key — the agent upserts on this on every `add_pr_entry`. */
     recapPrUniqueIdx: uniqueIndex("recap_pr_entries_recap_pr_unique_idx").on(t.recapId, t.prId),
-    /** Render-order index for the join-and-order-by-position read path. */
     recapPositionIdx: index("recap_pr_entries_recap_position_idx").on(t.recapId, t.position),
   }),
 );

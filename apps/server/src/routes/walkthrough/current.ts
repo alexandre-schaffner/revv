@@ -24,15 +24,11 @@ import { walkthroughPerspective } from "../../services/walkthrough/perspective";
  *
  * `mode` is optional; without it the server picks `walkthroughPerspective`.
  *
- * The head SHA is read from the locally-synced PR row (`pr.headSha`), NOT a
- * live GitHub call. This endpoint serves locally-cached content and must not
- * depend on GitHub being reachable — a live `prs.meta()` call here meant any
- * rate-limit (429), expired token (401), or network blip threw before the DB
- * was even consulted, stranding a perfectly good complete walkthrough behind
- * the "Generate" empty state on reload. `pr.headSha` is also the exact SHA the
- * diff view loads against, so the walkthrough stays consistent with the diff;
- * new-commit detection / superseding is the PollScheduler's job, not this
- * read path's. (Doctrine: SQLite is authoritative.)
+ * The head SHA is the locally-synced `pr.headSha`, never a live GitHub call:
+ * this read must not depend on GitHub being reachable, or a rate limit,
+ * expired token or network blip strands a complete walkthrough behind the
+ * "Generate" empty state on reload. It is also the SHA the diff view loads
+ * against. Noticing new commits is the PollScheduler's job.
  */
 export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode) {
   return Effect.gen(function* () {
@@ -48,7 +44,6 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
     // a later `prs:updated` + component-mount re-hydration recovers.
     if (!headSha) return { status: "not_found" as const, mode };
 
-    // 1. Complete walkthrough — best case, no SSE needed.
     const complete = yield* walkthroughService.getCached(pr.id, headSha, mode);
     if (complete) {
       const seqAt = yield* walkthroughService.getSeqAt(complete.id);
@@ -59,7 +54,6 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
       };
     }
 
-    // 2. In-progress or errored walkthrough — hydrate partial state.
     const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
     if (partial) {
       const seqAt = yield* walkthroughService.getSeqAt(partial.id);
@@ -70,8 +64,8 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
       };
     }
 
-    // 3. No local row — probe the team cache. On a hit the cache importer
-    //    creates a complete row, so we re-query and return it as complete.
+    // No local row: probe the team cache. On a hit the cache importer creates a
+    // complete row, so re-query and return it as complete.
     const hydrated = yield* jobs.tryHydrateFromRemoteCache(pr.id, headSha, repo.fullName, mode);
     if (hydrated) {
       const fromCache = yield* walkthroughService.getCached(pr.id, headSha, mode);
@@ -85,10 +79,10 @@ export function currentWalkthrough(prId: string, requestedMode?: WalkthroughMode
       }
     }
 
-    // 4. New commits have invalidated the latest generated row, but the
-    //    user has not started the incremental walkthrough yet. Keep the
-    //    last reviewed artifact visible and mark it stale so the action bar
-    //    offers "Review new commits" instead of making the page feel empty.
+    // New commits have invalidated the latest generated row, but the user has
+    // not started the incremental walkthrough yet. Keep the last reviewed
+    // artifact visible and mark it stale so the action bar offers "Review new
+    // commits" instead of making the page feel empty.
     const latest = yield* walkthroughService.getLatestDisplayable(pr.id, mode);
     if (latest && latest.prHeadSha !== headSha) {
       const seqAt = yield* walkthroughService.getSeqAt(latest.id);

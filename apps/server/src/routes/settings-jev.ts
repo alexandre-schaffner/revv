@@ -1,8 +1,3 @@
-// ── TypeSafe System One key management ─────────────────────────────────────
-//
-// Composed into `settingsRoutes` via `.use()`. Every route here is
-// individually `withAuth`-guarded, unlike the unauthenticated parent — why the key never enters its DTO.
-
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { clearJevApiKey, setJevApiKey } from "../ai/jev/api-key";
@@ -10,7 +5,6 @@ import type { JevUnavailableReason } from "../domain/errors";
 import { JevService } from "../services/Jev";
 import { runRoute, withAuth } from "./middleware";
 
-/** Human-readable cause for the Settings "Test connection" result. */
 const TEST_FAILURE_MESSAGE: Record<JevUnavailableReason, string> = {
   unconfigured: "No API key saved.",
   disabled: "TypeSafe is turned off.",

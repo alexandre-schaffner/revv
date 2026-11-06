@@ -1,5 +1,3 @@
-// ── Walkthrough HTTP surface ────────────────────────────────────────────────
-//
 // Trigger, hydrate and lifecycle endpoints for a PR's walkthrough. Generation
 // events stream over the global SSE bus (`/api/events`), not from here. The
 // agent's own surface is `/mcp/walkthrough` (routes/mcp/walkthrough.ts).
