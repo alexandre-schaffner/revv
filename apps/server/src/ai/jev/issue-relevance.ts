@@ -1,8 +1,5 @@
-// ── Issue relevance orchestration ────────────────────────────────────────────
-//
-// `flag_issue` commits immediately. This module schedules the optional
-// relevance/severity judgment behind the agent; policy, DB reads, and writes
-// live in separate modules so each can be tested without the others.
+// `flag_issue` commits immediately; the relevance/severity judgment runs
+// behind the agent and is optional.
 
 import { isDiscardedScore, isLowSignalScore } from "@revv/shared";
 import { noul, type ScoreQuestion } from "@typesafe-ai/sdk";

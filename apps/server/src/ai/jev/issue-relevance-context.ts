@@ -35,10 +35,7 @@ function hunkFor(
   return { hunk: patch, offDiff: !fit.ok };
 }
 
-/**
- * Gather the stable DB context a single judgment depends on. The candidate is
- * already written when it is judged, so it is left out of `existingIssues`.
- */
+/** The candidate is already written when it is judged, so it is left out of `existingIssues`. */
 export function collectIssueGateInput(
   db: Db,
   walkthroughId: string,

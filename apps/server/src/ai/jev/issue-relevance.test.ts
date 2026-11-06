@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { isDiscardedScore, isLowSignalScore, LOW_SIGNAL_THRESHOLD } from "@revv/shared";
 import { compositeScore, severityForLevel } from "./issue-relevance-policy";
 
-/** A concern that failed every judgment — the clearest discard case. */
 const worthless = {
   grounded: 0.05,
   in_scope: 0.05,
@@ -12,7 +11,6 @@ const worthless = {
   declaredSeverity: "info",
 };
 
-/** A concern that passed every judgment. */
 const solid = {
   grounded: 0.95,
   in_scope: 0.95,

@@ -24,15 +24,11 @@ import {
   verdictSchema,
 } from "../walkthrough-content-schema";
 
-// ─── Walkthrough tool contract ──────────────────────────────────────────────
-//
 // The content pipeline is strictly A → B → C → D (CLAUDE.md, "Agent Subsystem
 // Invariants"). Each write tool belongs to one phase and refuses an
 // out-of-order call with an error the agent can recover from; `phases.ts`
 // holds the windows. Handlers write in one transaction and emit after the
 // commit (invariant 8).
-
-// ── Handler execution context ─────────────────────────────────────────────────
 
 export interface WalkthroughToolContext {
   readonly db: Db;
@@ -59,7 +55,6 @@ export interface WalkthroughToolJudgments {
    * complete_walkthrough so the gate never checks a set about to change.
    */
   readonly awaitIssueJudgments: () => Promise<void>;
-  /** Whether a judgment already retracted this issue id. */
   readonly issueRetracted: (issueId: string) => boolean;
   /**
    * Holds an artifact to the craft bar. Awaited, unlike the issue judgment,
@@ -87,40 +82,13 @@ export type WalkthroughToolSpec = GatewayToolSpec<WalkthroughToolContext, Walkth
   readonly activity: string;
 };
 
-// ── Tool input schemas (zod) ─────────────────────────────────────────────────
-
 const getWalkthroughStateSchema = z.object({});
 
-/**
- * Read-only: returns recent project recaps for the repo this walkthrough
- * belongs to. The agent calls this once during Phase A to ground its
- * overview in recent project context (what shipped, themes, risk
- * patterns) without re-deriving them from the diff alone. See
- * `apps/server/src/services/ProjectRecap.ts` for the recap model.
- *
- * Empty inputs by design — the repoId is resolved from the walkthrough
- * row inside the handler.
- */
 const getRepoContextSchema = z.object({
-  /**
-   * Optional period filter. Default is "any period" — the handler returns
-   * the most recent recaps across daily and weekly so the agent sees both
-   * fresh signal (yesterday) and broader context (last week).
-   */
   period: z.enum(["daily", "weekly"]).nullable().optional(),
-  /** Optional cap; defaults to 3. Hard maximum 10 to keep prompts bounded. */
   limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 
-/**
- * Read-only: returns the PR commit list captured at job start. The agent
- * calls this once before opening the required journey chapter at
- * `semantic_step_index: 0`, then narrates the narrative from the response.
- *
- * Empty inputs by design — the walkthroughId is in the tool context.
- * Commits are stored verbatim on the walkthrough row (`pr_commits` JSON
- * column), so this never hits GitHub.
- */
 const getCommitHistorySchema = z.object({});
 
 const getStackContextSchema = z.object({});
@@ -138,26 +106,6 @@ const setOverviewSchema = z.object({
     ),
 });
 
-/**
- * Phase B chapter declaration — opens a chapter AND writes its first atomic
- * block in one transaction. This is the ONLY way to create a chapter. The
- * `initial_block` argument is REQUIRED: it lands at `step_index=0` of the
- * chapter, so a chapter cannot exist without content.
- *
- * Rationale: a previous version of this tool only opened the chapter and
- * relied on a follow-up `add_diff_step` call to fill it. Models routinely
- * stopped between the two calls (open chapter → satisfied → end_turn),
- * leaving empty chapters that the completion gate would reject and the run
- * would never recover from. Bundling the first block into the open call
- * eliminates the failure mode by construction.
- *
- * Subsequent atomic blocks in the same chapter (the 2nd–Nth) still go through
- * `add_diff_step` with `step_index >= 1`.
- *
- * One atomic idempotent upsert per call (doctrine invariant #3): retry with
- * the same `semantic_step_index` replays as a no-op against the unique key
- * for both the chapter row and the step_index=0 block.
- */
 const semanticStepInitialBlockSchema = z
   .object({
     markdown: z
@@ -217,14 +165,8 @@ const addSemanticStepSchema = z.object({
 });
 
 /**
- * Phase B step input — exactly one atomic block per tool call. The tool
- * schema rejects arrays and batch submissions deliberately (doctrine
- * invariant #4): each step is a separate atomic MCP call so resume is
- * idempotent and crash loss is bounded to at most one in-flight step.
- *
- * Every block belongs to a parent semantic step (declared earlier via
- * `add_semantic_step`). The persistence key is
- * `(walkthroughId, phase, semantic_step_index, step_index)`.
+ * One block per call: batching is forbidden at the tool surface (invariant 4),
+ * so a crash loses at most one in-flight step.
  */
 const addDiffStepSchema = z.object({
   semantic_step_index: z.coerce
@@ -241,7 +183,6 @@ const addDiffStepSchema = z.object({
     .describe(
       "Monotonic zero-based index for this atomic block *within* its parent chapter. Restart at 0 in each new chapter. Required. Upsert key: a retry with the same (semantic_step_index, step_index) replaces (not duplicates) the prior row.",
     ),
-  /** One of four mutually-exclusive block shapes. Agent picks which to send. */
   markdown: z
     .object({
       content: z
@@ -332,9 +273,8 @@ const addIssueCommentSchema = z.object({
 });
 
 /**
- * Phase B onward: the agent's verdict on one first-pass lead, keyed on
- * `(walkthrough_id, lead_id)`. A later call replaces the verdict, so a
- * replay is a no-op and a changed mind is one more call.
+ * Keyed on `(walkthrough_id, lead_id)`: a later call replaces the verdict, so
+ * a replay is a no-op and a changed mind is one more call.
  */
 const resolveLeadSchema = z.object({
   lead_id: z.string().describe("The lead's id from the prompt's First-pass leads, e.g. `L3`."),
@@ -400,8 +340,6 @@ const rateAxisSchema = z.object({
 });
 
 const completeWalkthroughSchema = z.object({});
-
-// ── Type exports (so handlers can be written with static input types) ────────
 
 export type GetWalkthroughStateInput = z.infer<typeof getWalkthroughStateSchema>;
 export type GetCommitHistoryInput = z.infer<typeof getCommitHistorySchema>;

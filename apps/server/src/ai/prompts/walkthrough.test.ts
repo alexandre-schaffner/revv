@@ -62,7 +62,6 @@ describe("buildWalkthroughPrompt first-pass leads", () => {
     expect(prompt).toContain(
       "#### src/bar.ts (modified, +3 -1)\nFirst-pass leads:\n- `L2` line 7 — vulnerability (0.50)\n```diff",
     );
-    // The rules come before the files they annotate, and before the first actions.
     expect(prompt.indexOf("### First-pass leads")).toBeLessThan(prompt.indexOf("#### src/foo.ts"));
     expect(prompt.indexOf("### First-pass leads")).toBeLessThan(prompt.indexOf("## First actions"));
     expect(prompt).toContain("It flagged 3 hunks");

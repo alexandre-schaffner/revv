@@ -1,10 +1,5 @@
-// ─── recap-tools/handlers ────────────────────────────────────────────────────
-//
-// The recap MCP tools, served at `/mcp/recap`.
-//
-// All writes hit `projectRecaps` directly via Drizzle so we don't need an
-// Effect runtime inside the agent's call path. Each handler is one atomic
-// transaction; replays are idempotent.
+// Plain Drizzle, not Effect: the agent's call path has no Effect runtime.
+// Each handler is one atomic transaction; replays are idempotent.
 
 import { randomUUID } from "node:crypto";
 import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
@@ -34,29 +29,19 @@ import type {
   SetThemeSummaryInput,
 } from "./spec";
 
-/** Lowercase the theme, trim, collapse internal whitespace. Single source of
- *  truth so `add_pr_entry` and `set_theme_summary` join on the same key. */
+/** `add_pr_entry` and `set_theme_summary` join on this key. */
 function normalizeTheme(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-/** Default page size for `list_open_prs`. Small enough that 20 PRs split into
- *  ≤4 pages, each well under the MCP response budget. */
+/** 20 open PRs split into ≤4 pages, each well under the MCP response budget. */
 const OPEN_PRS_DEFAULT_PAGE_SIZE = 5;
-/** Hard cap on a single `list_open_prs` page — matches the schema. */
+/** Must match `listOpenPrsSchema`'s `.max(20)`. */
 const OPEN_PRS_MAX_PAGE_SIZE = 20;
 
-// ── Read tools ───────────────────────────────────────────────────────────────
-
 export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async (ctx) => {
-  // The orchestrator already loaded the source bundle when the job
-  // started; we just hand it to the agent. This shape is the structured
-  // counterpart to "here are all the PRs you need to recap." Agents read
-  // this first, every run, including resumes.
-  // Surface entries written in a prior partial run so the agent can pick up
-  // where it left off rather than start over. Idempotent upserts on
-  // (recap_id, pr_id) mean re-adding existing entries is safe, but skipping
-  // already-covered PRs keeps the run cheaper.
+  // A resume sees what a prior partial run wrote, so it skips covered PRs
+  // instead of redoing them.
   const priorEntries = ctx.db
     .select({
       prId: recapPrEntries.prId,
@@ -120,9 +105,8 @@ export const getRecapStateHandler: RecapToolHandler<GetRecapStateInput> = async 
 };
 
 export const listOpenPrsHandler: RecapToolHandler<ListOpenPrsInput> = async (ctx, input) => {
-  // Slice the in-memory bundle — the orchestrator already capped the list at
-  // 20 most-recently-updated rows when it built the bundle, so we never page
-  // beyond what was loaded at job start.
+  // The bundle already holds at most the 20 most recently updated open PRs
+  // (`listOpenPrsAsOfWindow`); paging never goes past it.
   const all = ctx.sourceBundle.openPrs;
   const total = all.length;
   const offset = Math.max(0, input.offset ?? 0);
@@ -215,12 +199,9 @@ export const getRepoContextHandler: RecapToolHandler<GetRepoContextInput> = asyn
   );
 };
 
-// ── Atomic content writes ────────────────────────────────────────────────────
-
 /**
- * `<strong>` / `<em>` are the only HTML tags allowed in the lede; the UI
- * applies the same allowlist at render time. The handler scrubs everything
- * else here so a non-conforming model emission never reaches storage.
+ * `<strong>` / `<em>` are the only tags allowed in the lede, the same
+ * allowlist the UI applies at render; anything else never reaches storage.
  */
 function sanitizeLede(raw: string): string {
   return raw
@@ -230,7 +211,6 @@ function sanitizeLede(raw: string): string {
     .trim();
 }
 
-// Fail the call if the recap is no longer `generating` (stopped, superseded, completed).
 function requireGenerating(ctx: RecapToolContext, action: string): RecapToolResult | null {
   const row = ctx.db
     .select({ status: projectRecaps.status })
@@ -272,12 +252,8 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   const guard = requireGenerating(ctx, "add_pr_entry");
   if (guard) return guard;
 
-  // Validate prId is in the source bundle. Archived PRs are recorded as
-  // `pr_state='merged'`, open PRs as `pr_state='open'` — server-derived from
-  // which list the id came from. The agent never passes prState directly;
-  // this mirrors the "orchestrator owns lifecycle, agents own content"
-  // invariant. The UI groups open entries as "In progress" inside the
-  // theme chapter, alongside the merged entries.
+  // `pr_state` comes from which bundle list holds the id, never from the
+  // agent: the orchestrator owns lifecycle, agents own content.
   const archivedIds = new Set(ctx.sourceBundle.prs.map((p) => p.id));
   const openIds = new Set(ctx.sourceBundle.openPrs.map((p) => p.id));
   if (!archivedIds.has(input.pr_id) && !openIds.has(input.pr_id)) {
@@ -300,9 +276,6 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
     .where(eq(pullRequests.id, input.pr_id))
     .get();
 
-  // Upsert on (recap_id, pr_id), returning the canonical row in one round-trip.
-  // The original `id` is preserved on conflict; the generated one is only used
-  // when this is a fresh insert.
   const persisted = ctx.db.transaction(() => {
     const [row] = ctx.db
       .insert(recapPrEntries)
@@ -448,8 +421,6 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
   return ok(`Theme summary stored for "${theme}".`);
 };
 
-// ── Validation gate ──────────────────────────────────────────────────────────
-
 /**
  * Why recap `recapId` can't complete yet, or null when its journal passes.
  * `complete_recap` and the orchestrator both decide on this check.
@@ -484,14 +455,9 @@ export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async 
 
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
 
-  // Notify the orchestrator that the validation gate passed. The actual
-  // status transition is performed by the orchestrator, not here — agent
-  // never writes status (CLAUDE.md invariant #11).
   ctx.onCompleted();
   return ok("Recap complete. The orchestrator will transition status. You may stop.");
 };
-
-// ── Lazy diff tool ───────────────────────────────────────────────────────────
 
 export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, input) => {
   const allPrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];

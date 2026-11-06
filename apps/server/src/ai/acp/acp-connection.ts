@@ -1,5 +1,3 @@
-// ── ACP connection pool ──────────────────────────────────────────────────────
-//
 // One ACP (Agent Client Protocol) agent subprocess per working directory,
 // reused across chat turns so resume works and we don't pay subprocess
 // cold-start on every message. Talks JSON-RPC over the subprocess stdio via the
@@ -75,7 +73,6 @@ export function acpErrorMessage(message: string, data: unknown): string {
   return `${message}: ${clipped}`;
 }
 
-/** Rethrow an agent's JSON-RPC error with its `data` in the message. */
 async function withErrorDetail<T>(request: Promise<T>): Promise<T> {
   try {
     return await request;
@@ -111,9 +108,9 @@ export function agentStartupFailureMessage(
  * outside `[A-Za-z0-9_-]`: it emits an internal `mcp__<name>__startup` tool call
  * that never connects, our HTTP route is never hit, and the turn runs with none
  * of our tools — the agent just reports them "unavailable". The chat server is
- * named after the prId (`<repoId>:<prNumber>`), so that colon cost every Codex
- * chat turn the walkthrough-edit tools. Normalize here, at the one point every
- * ACP caller funnels through, so no adapter can be handed an unsafe name.
+ * named after the prId (`<repoId>:<prNumber>`), whose colon trips this.
+ * Normalize here, at the one point every ACP caller funnels through, so no
+ * adapter can be handed an unsafe name.
  * Nothing reads the name back, so rewriting it is invisible to callers.
  */
 export function sanitizeMcpServerName(name: string): string {
@@ -129,10 +126,8 @@ function sanitizeMcpServers(servers: McpServer[]): McpServer[] {
 
 export type AcpSessionUpdate = SessionUpdate;
 
-/** Listener invoked for every `session/update` notification on a session. */
 export type AcpUpdateListener = (update: AcpSessionUpdate) => void;
 
-/** What a just-opened or loaded session reports back. */
 export interface AcpSessionState {
   readonly modes: SessionModeState | null;
   /**
@@ -163,7 +158,6 @@ export interface AcpConnectionHandle {
    * fresh `session/new` (preserving the system-prompt / walkthrough prepend).
    */
   readonly listAvailableCommands: (timeoutMs?: number) => Promise<readonly AvailableCommand[]>;
-  /** Open a fresh session, handing the agent the supplied MCP servers. */
   readonly newSession: (mcpServers: McpServer[]) => Promise<AcpNewSessionResult>;
   /**
    * Resume an existing session by id. Returns its mode state (for plan mode).
@@ -178,7 +172,6 @@ export interface AcpConnectionHandle {
    * this one stops as soon as no turn holds it.
    */
   readonly retire: () => void;
-  /** Register (or clear, with null) the update listener for a session. */
   readonly setListener: (sessionId: string, listener: AcpUpdateListener | null) => void;
   /** Flag a session as plan-mode so the permission handler refuses mode switches. */
   readonly setPlanMode: (sessionId: string, planMode: boolean) => void;
@@ -204,7 +197,6 @@ interface ConnectionEntry {
   // session after the first turn, and survives churn through session ids.
   lastCommands: AvailableCommand[] | null;
   readonly planModeSessions: Set<string>;
-  // Per-session model/mode routing (see `createSessionSelections`).
   readonly selections: SessionSelections;
   loadSessionSupported: boolean;
   httpMcpSupported: boolean;
@@ -260,9 +252,8 @@ function buildClient(entry: () => ConnectionEntry): Client {
           ? { outcome: { outcome: "selected", optionId: reject.optionId } }
           : { outcome: { outcome: "cancelled" } };
       }
-      // Auto-allow everything else — reproduces the existing chat semantics
-      // (Claude `bypassPermissions` / codex `approval: never`): no permission
-      // prompts mid-stream.
+      // Auto-allow everything else: no permission prompts mid-stream (the
+      // equivalent of Claude `bypassPermissions` / Codex `approval: never`).
       const allow =
         options.find((o) => o.kind === "allow_once") ??
         options.find((o) => o.kind.startsWith("allow"));
@@ -355,8 +346,6 @@ async function spawnConnection(
     }
   })();
 
-  // On subprocess exit, evict the entry and reject any in-flight listeners so
-  // the next turn spawns fresh.
   void proc.exited.then((code) => {
     entry.alive = false;
     live.delete(entry);
@@ -394,9 +383,8 @@ async function handshake(
     initialize = await connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
-        // Advertise NO client fs/terminal: the agent edits + commits natively in
-        // its cwd (the spike confirmed claude-agent-acp does this), which keeps
-        // proposed-commit detection identical to the existing drivers.
+        // Advertise NO client fs/terminal: the agent edits and commits natively
+        // in its cwd, which proposed-commit detection relies on.
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
@@ -435,11 +423,6 @@ async function handshake(
   return entry;
 }
 
-/**
- * Drop every per-session map so a long-lived connection that churns through
- * many sessions can't leak entries (the listener clear also releases any
- * in-flight notification handlers).
- */
 function clearSessionState(entry: ConnectionEntry): void {
   entry.listeners.clear();
   entry.availableCommands.clear();
@@ -485,7 +468,6 @@ function stopEntry(entry: ConnectionEntry): void {
   }
 }
 
-/** The two ACP selection calls {@link createSessionSelections} routes between. */
 export type SessionSelectionConnection = Pick<
   ClientSideConnection,
   "setSessionConfigOption" | "setSessionMode"
@@ -589,7 +571,6 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
     embeddedContext: entry.embeddedContext,
     getAvailableCommands: (sessionId) => entry.availableCommands.get(sessionId) ?? [],
     listAvailableCommands: async (timeoutMs = 8_000) => {
-      // Already harvested (e.g. a prior turn or warm-up) — answer instantly.
       if (entry.lastCommands) return entry.lastCommands;
 
       // Open a throwaway session (no MCP servers needed — commands are the
@@ -612,7 +593,6 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
       const immediate = entry.availableCommands.get(sessionId);
       if (immediate && immediate.length > 0) return immediate;
 
-      // Otherwise wait (bounded) for the `available_commands_update` notification.
       await new Promise<void>((resolve) => {
         let settled = false;
         const finish = (): void => {
@@ -733,7 +713,6 @@ export async function peekAcpConnection(
   try {
     entry = await pooled.ready;
   } catch {
-    // The pooled spawn rejected — treat as no warm connection.
     return null;
   }
   if (!entry.alive) return null;

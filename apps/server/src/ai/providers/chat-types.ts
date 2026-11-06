@@ -1,20 +1,5 @@
-// ── chat-types ──────────────────────────────────────────────────────────────
-//
-// SSE wire shape for the right-pane chat stream. Owns:
-//   - `RawChatStreamFrame` — the internal driver-emitted union that the
-//     route's persistence wrapper translates into the wire `ChatStreamFrame`.
-//
-// The wire `ChatStreamFrame` (shared between server and client) lives in
-// `@revv/shared/chat` and is re-exported below for callers that already
-// import from `./chat-types`.
-//
-// The structured tool-use shape (`Activity`, `ActivityKind`) and the
-// classifier / tool-name normalizer live in `@revv/shared/activity` so
-// walkthrough and chat both consume one source of truth.
-
 import type { Activity, ChatTask } from "@revv/shared";
 
-// Re-export the canonical wire frame from shared.
 export type { ChatStreamFrame } from "@revv/shared";
 
 /**

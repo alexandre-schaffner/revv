@@ -1,7 +1,3 @@
-// ── chat-edit-read-handler ───────────────────────────────────────────────────
-//
-// get_walkthrough_for_edit: the targeting keys every edit tool takes.
-
 import { chapterNumbersByIndex, RATING_AXES } from "@revv/shared";
 import {
   decodeBlock,

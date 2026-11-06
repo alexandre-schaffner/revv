@@ -8,7 +8,6 @@ import {
   routeSizing,
 } from "./routing";
 
-/** A confident, unambiguous answer — the baseline every case varies from. */
 function input(over: Partial<RouteSizingInput> = {}): RouteSizingInput {
   return {
     agent: "claude-code",

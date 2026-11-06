@@ -45,8 +45,8 @@ describe("acpErrorMessage", () => {
 
 describe("agentStartupFailureMessage", () => {
   // npx run inside a Bun monorepo that npm can't parse dies before the
-  // adapter starts. That used to surface as "ACP connection closed" plus
-  // Keychain advice, which sent every user to the wrong fix.
+  // adapter starts; Keychain advice for that failure sends the user to the
+  // wrong fix.
   const npmFailure = [
     "npm error code EUNSUPPORTEDPROTOCOL",
     'npm error Unsupported URL Type "catalog:": catalog:v4',

@@ -1,4 +1,3 @@
-// ── Prose-voice advisory ─────────────────────────────────────────────────────
 // `PROSE_VOICE_CONTRACT` and the banned-opener list are the most-repeated,
 // least-enforced instructions in the walkthrough prompt; voice is a judgment,
 // not something a word budget can check.
@@ -87,7 +86,6 @@ export function judgeProse(
   });
 }
 
-// ── Per-run advisory mailbox ─────────────────────────────────────────────────
 // A judgment landing between two tool calls has nowhere to go, so it waits here
 // and rides out on the next `add_diff_step` result. One per walkthrough run,
 // dropped with it: losing an advisory costs a sentence of feedback, so it has

@@ -1,5 +1,3 @@
-// ── Agent failures: classification and sign-in / Keychain guidance ───────────
-//
 // Every agent turn failure leaves the runner as an `AgentTurnError` whose
 // `kind` says whether it is an auth problem, so callers (and the web) branch
 // on the kind instead of re-reading the message.
@@ -19,17 +17,6 @@
 // Settings' "Test agent" button (`agent-check.ts`) runs a real one-line turn
 // rather than probing the Keychain or `claude auth status`: neither proves the
 // agent subprocess itself can authenticate, and only a real turn does.
-//
-// An auth-shaped failure has TWO real causes that look identical from the raw
-// ACP error alone (401 / "connection closed"): the agent simply isn't logged
-// in yet, or (rarer) it IS logged in but the background service is Keychain-ACL
-// -blocked from reading it. `detectAgentAuth` — now context-aware for
-// claude-code, resolved against the same `CLAUDE_CONFIG_DIR` the failing spawn
-// used (see `claude-config.ts`) — tells us which bucket we're in. Not-logged-in
-// leads (the common case); the keychain remediation is either the SOLE message
-// (agent is logged in, so ACL is the credible diagnosis) or a secondary
-// "already signed in?" hint (agent reports not logged in, so ACL is only a
-// fallback guess — the status check itself could be what's ACL-blocked).
 
 import { RequestError } from "@agentclientprotocol/sdk";
 import { type AcpAgentId, getAcpAgent, getAgentKeychainAuth } from "@revv/shared";
@@ -49,7 +36,6 @@ export function looksLikeAuthFailure(message: string): boolean {
   return /401|unauthor|authenticat|invalid api key|oauth|connection closed/i.test(message);
 }
 
-/** Plain "go sign in" message, generic across every registry agent. */
 function notLoggedInMessage(agent: AcpAgentId): string {
   const label = getAcpAgent(agent).label;
   return (
@@ -63,17 +49,16 @@ function notLoggedInMessage(agent: AcpAgentId): string {
  * error doesn't look auth-related (so unrelated failures aren't drowned in
  * advice).
  *
- * `isLoggedIn` is checked first to pick the right lead: if the agent isn't
- * authenticated in the active context, that's the credible diagnosis (login
- * is the fix, not a Keychain ACL) — the keychain remediation, when the agent
- * is keychain-backed, is appended only as an "already signed in?" fallback,
- * since the two causes aren't reliably distinguishable from here. If the
- * agent DOES report authenticated, a lingering auth-shaped failure is the
- * keychain remediation's actual target case, so it's shown alone.
+ * An auth-shaped failure (401 / "connection closed") has two causes the raw
+ * error can't tell apart: the agent isn't logged in (common), or it is but the
+ * background service is Keychain-ACL-blocked from reading the login. When the
+ * agent reports not logged in, sign-in leads and the keychain remediation is
+ * only an "already signed in?" fallback, since the status check itself could
+ * be what's ACL-blocked. When it reports logged in, the ACL is the credible
+ * diagnosis and its remediation is shown alone.
  *
- * @param isLoggedIn Test seam for the auth check — defaults to
- * `detectAgentAuth` (context-aware for claude-code, see `claude-config.ts`).
- * Production leaves it at the default.
+ * @param isLoggedIn Test seam; production leaves it at `detectAgentAuth`,
+ * which probes in the same `CLAUDE_CONFIG_DIR` the failing spawn used.
  */
 export function agentFailureGuidance(
   agent: AcpAgentId,
@@ -92,7 +77,6 @@ export function agentFailureGuidance(
   return keychainAuth?.remediation ?? null;
 }
 
-/** Append {@link agentFailureGuidance} to an agent error, after a blank line. */
 export function withAgentKeychainHint(
   agent: AcpAgentId,
   rawMessage: string,
@@ -125,7 +109,6 @@ export class AgentTurnError extends Error {
   }
 }
 
-/** Classify a raw failure from an agent and attach the guidance for it. */
 export function toAgentTurnError(agent: AcpAgentId, err: unknown): AgentTurnError {
   if (err instanceof AgentTurnError) return err;
   const raw = err instanceof Error ? err.message : String(err);

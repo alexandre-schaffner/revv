@@ -1,12 +1,9 @@
-// ── Agent check ──────────────────────────────────────────────────────────────
-//
 // Settings' "Test agent" button. It runs one real, tiny turn through the same
 // ACP transport walkthroughs use, from the server, with the configured review
-// model. A green result from anything weaker misled users: the previous check
-// ran the user's own `claude auth status`, a different binary in a different
-// directory from the agent subprocess, and reported "can read your login"
-// while every walkthrough failed. Only a real turn proves the agent can start,
-// authenticate, reach the model, and answer.
+// model. Anything weaker (e.g. the user's own `claude auth status`, a different
+// binary in a different directory) can report green while every walkthrough
+// fails: only a real turn proves the agent can start, authenticate, reach the
+// model, and answer.
 
 import type { AgentCheckResult } from "@revv/shared";
 import { AgentTurnError, agentFailureGuidance } from "../acp/agent-failure";

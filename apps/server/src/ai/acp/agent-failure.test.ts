@@ -32,9 +32,8 @@ describe("looksLikeAuthFailure", () => {
 });
 
 describe("withAgentKeychainHint", () => {
-  // `isLoggedIn` is the test seam (3rd arg) — every case below pins it
-  // explicitly so the assertions never depend on this machine's real Claude
-  // Code / Codex / Cursor login state.
+  // Every case pins the `isLoggedIn` seam (3rd arg) so the assertions never
+  // depend on this machine's real Claude Code / Codex / Cursor login state.
 
   it("leads with the keychain remediation ALONE when the agent reports logged in", () => {
     const out = withAgentKeychainHint("claude-code", "ACP connection closed", () => true);
@@ -48,7 +47,6 @@ describe("withAgentKeychainHint", () => {
     expect(out).toContain("ACP connection closed");
     expect(out).toContain("Claude Code agent isn't logged in for this session");
     expect(out).toContain("sign in to Claude Code");
-    // The keychain remediation still appears, but only behind the fallback framing.
     expect(out).toContain("Already signed in?");
     expect(out).toContain(getAgentKeychainAuth("claude-code")?.remediation ?? " ");
   });
@@ -74,9 +72,8 @@ describe("withAgentKeychainHint", () => {
   });
 
   it("falls back to the real detectAgentAuth-based probe when no test seam is supplied (smoke test)", () => {
-    // Only asserts it runs to completion and returns a string on this machine
-    // — the actual auth state is environment-dependent, so this doesn't
-    // assert which branch fired.
+    // The real auth state is environment-dependent, so this can't assert
+    // which branch fired.
     const out = withAgentKeychainHint("claude-code", "ACP connection closed");
     expect(typeof out).toBe("string");
     expect(out).toContain("ACP connection closed");

@@ -1,4 +1,3 @@
-// ── In-flight background judgments ───────────────────────────────────────────
 // Phase B's Jev hooks are fire-and-forget: `flag_issue` writes the row and returns,
 // and the relevance judgment lands later, possibly retracting it. This closes two
 // holes that opens:
@@ -15,11 +14,11 @@
 import { debug } from "../../logger";
 
 export interface JudgmentTracker {
-  /** Registers background work and swallows its failure; tracked, not awaited, so the caller returns immediately. A crashed judgment must never take down the tool call that scheduled it. */
+  /** Not awaited, and swallows failure: a crashed judgment must never take down the tool call that scheduled it. */
   readonly track: (work: Promise<unknown>) => void;
   /** Drains every judgment, including ones scheduled mid-drain. Bounded: past the round cap the gate proceeds, degrading to "judged late" rather than wedging. */
   readonly drain: (maxRounds?: number) => Promise<void>;
-  /** How many judgments are still outstanding. Diagnostics only. */
+  /** Diagnostics only. */
   readonly pending: () => number;
   readonly markRetracted: (issueId: string) => void;
   readonly wasRetracted: (issueId: string) => boolean;

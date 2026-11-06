@@ -1,10 +1,3 @@
-// ─── Recap prompts ───────────────────────────────────────────────────────────
-//
-// System + user prompts for the structured daily/weekly project recap
-// pipeline. The agent reads source PRs and prior recaps via MCP tools, then
-// writes a short lede and per-PR entries via tool calls. All content flows
-// through tool arguments — there is no visible-text capture buffer.
-
 import type { ProjectRecap } from "@revv/shared";
 import type { RecapSourceBundle } from "../../db/schema/project-recaps";
 

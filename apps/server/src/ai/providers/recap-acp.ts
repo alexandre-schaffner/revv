@@ -16,8 +16,6 @@ import { createRecapDispatchState, dispatchRecapStreamEvent } from "./recap-even
 import type { RecapToolContext } from "./recap-tools";
 import { RECAP_MCP_SERVER } from "./recap-tools";
 
-// ── Public types ─────────────────────────────────────────────────────────────
-
 export interface RunRecapAgentAcpParams {
   readonly ctx: RecapToolContext;
   /** Bearer token the orchestrator issued for `ctx` on `/mcp/recap`. */
@@ -32,9 +30,6 @@ export interface RunRecapAgentAcpParams {
   readonly isValidated: () => boolean;
 }
 
-// ── Driver ───────────────────────────────────────────────────────────────────
-
-/** One recap agent turn; resolves once the model finishes or the abort signal fires. */
 export async function runRecapAgentViaAcp(
   params: RunRecapAgentAcpParams,
 ): Promise<McpAgentAcpResult> {
@@ -43,9 +38,6 @@ export async function runRecapAgentViaAcp(
     params.ctx.priorRecaps,
   )}`;
 
-  // Visible assistant text is discarded; reasoning becomes `thought` events +
-  // a throttled phase heartbeat. MCP-tool content reaches the UI via the route
-  // handlers' `ctx.emit`, not this stream.
   const dispatchState = createRecapDispatchState();
   const fanOut = (event: RecapStreamEvent): void => {
     if (params.isValidated()) return;

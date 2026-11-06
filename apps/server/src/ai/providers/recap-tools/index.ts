@@ -1,9 +1,5 @@
-// ─── recap-tools ─────────────────────────────────────────────────────────────
-//
-// Public surface for the project-recap MCP tool set. Re-exports the schemas
-// and the handler types, and bundles the specs for the HTTP MCP route at
-// `/mcp/recap` (the single transport every ACP agent reaches — see
-// `recap-acp.ts`). The shared handlers in `handlers.ts` run transport-agnostic.
+// Specs for the `/mcp/recap` HTTP MCP route, the single transport every ACP
+// agent reaches (see `recap-acp.ts`).
 
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
 import {
@@ -99,5 +95,4 @@ export const RECAP_TOOL_BUNDLE: ToolSpecBundle<RecapToolContext, RecapToolResult
   specs: RECAP_TOOL_SPECS,
 };
 
-/** Canonical MCP-server name; mirrors the walkthrough's `revv-walkthrough`. */
 export const RECAP_MCP_SERVER = "revv-recap";

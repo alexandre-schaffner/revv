@@ -11,7 +11,6 @@ export interface LaunchSelection {
   readonly thinkingEffort?: ThinkingEffort | undefined;
 }
 
-/** How a selection reaches the agent: launch env, a per-session model, or both. */
 export interface LaunchRouting {
   readonly env: Record<string, string>;
   /**
@@ -56,7 +55,6 @@ export interface AgentAdapter {
   readonly authStatus: () => AgentAuthStatus;
   /** The ACP auth method to request from those the agent advertises. */
   readonly authMethod: (methods: readonly { readonly id: string }[]) => string | undefined;
-  /** The model picker's catalog. */
   readonly listModels: () => Promise<AgentModelOption[]>;
 }
 

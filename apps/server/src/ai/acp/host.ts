@@ -1,5 +1,3 @@
-// ── Host probing for agent binaries ──────────────────────────────────────────
-//
 // A server launched by launchd or a GUI inherits a sanitized PATH that omits
 // where CLIs actually live (nvm, Homebrew on Apple Silicon, npm global
 // prefixes, app-managed bin dirs). Every agent probe and spawn therefore runs
@@ -30,7 +28,6 @@ export function addInstalledBinDirs(dirs: readonly string[]): void {
   cachedPath = null;
 }
 
-/** Drop the cached PATH so the next probe re-reads the shell and filesystem. */
 export function invalidateUserPath(): void {
   cachedPath = null;
 }
@@ -90,7 +87,6 @@ export function isCommandOnPath(command: string): boolean {
   return resolveCommandPath(command) !== null;
 }
 
-/** Whether `command` is an executable file, absolute or found on `path`. */
 export function executableExists(command: string, path: string): boolean {
   const candidates = isAbsolute(command)
     ? [command]
@@ -109,7 +105,6 @@ export function executableExists(command: string, path: string): boolean {
   });
 }
 
-/** The inherited environment with undefined entries dropped and PATH widened. */
 export function hostEnv(
   inherited: Readonly<Record<string, string | undefined>> = process.env,
   path: string = resolveUserPath(),
@@ -122,7 +117,6 @@ export function hostEnv(
   return env;
 }
 
-/** Run a status command; true when it exits 0 within 5 s. */
 export function commandSucceeds(
   command: string,
   args: readonly string[],

@@ -100,14 +100,9 @@ export async function runWalkthroughTurn(
   let currentPhase: Extract<WalkthroughLifecyclePhase, "connecting" | "exploring"> = "connecting";
   let lastPhaseMessage = "Starting up...";
   let lastReasoningPush = 0;
-  // Exploration tool-call ids we surfaced as pills, so their later `tool-result`
-  // can be forwarded as an `exploration-result` (and others dropped).
   const surfacedExplorationCallIds = new Set<string>();
-  // Open spans for the agent's own tool calls, keyed on ACP call id. The agent
-  // reads and greps inside our worktree for as long as it likes; without these
-  // that time is indistinguishable from model inference in the timeline. Closed
-  // on the matching `tool-result`, and swept in the `finally` below so a turn
-  // that dies mid-tool-call doesn't leak an unended span.
+  // Without these, the agent's reads and greps in the worktree are
+  // indistinguishable from model inference in the timeline.
   const openToolSpans = new Map<string, ReturnType<typeof graftedSpan>>();
   const enterExploring = (message: string): void => {
     if (currentPhase === "exploring") return;
@@ -115,9 +110,6 @@ export async function runWalkthroughTurn(
     lastPhaseMessage = message;
     push({ type: "phase", data: { phase: currentPhase, message } });
   };
-  // Agent's own ACP `session/update` stream: reasoning, built-in exploration
-  // pills, context-occupancy. MCP content tool calls are ignored here (the
-  // route surfaces them).
   const handleAgentEvent = (ev: NormalizedAgentEvent): void => {
     if (ev.kind === "reasoning-delta" || ev.kind === "text-delta") {
       recordWalkthroughToken(params.walkthroughId, ev.data);
@@ -136,7 +128,6 @@ export async function runWalkthroughTurn(
 
     if (ev.kind === "reasoning-delta") {
       if (ev.data.length > 0) push({ type: "thought", data: { text: ev.data } });
-      // Throttled phase heartbeat while reasoning runs without a tool call.
       const now = Date.now();
       if (now - lastReasoningPush >= 30_000) {
         lastReasoningPush = now;
@@ -150,7 +141,6 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "text-delta") {
-      // Visible assistant text signals an active session; nudge into exploring.
       enterExploring("Reading files and understanding changes...");
       return;
     }
@@ -186,8 +176,6 @@ export async function runWalkthroughTurn(
         if (ev.isError) toolSpan.fail(new Error("agent tool reported an error"));
         toolSpan.end();
       }
-      // Only forward results for exploration pills we actually surfaced — the
-      // feed keys peeks by callId and ignores unmatched ones anyway.
       if (surfacedExplorationCallIds.has(ev.callId)) {
         push({
           type: "exploration-result",
@@ -198,7 +186,7 @@ export async function runWalkthroughTurn(
     }
 
     if (ev.kind === "tool-call-update") {
-      // Late-arriving input — back-fill the surfaced pill's filename/command.
+      // ACP can deliver a tool call's input after the call itself.
       if (surfacedExplorationCallIds.has(ev.callId)) {
         push({
           type: "exploration-input",
@@ -224,7 +212,6 @@ export async function runWalkthroughTurn(
       label: "walkthrough-acp",
       launch: params.launch,
       cwd: params.worktreePath,
-      // Required: all content flows through it.
       mcp: {
         route: "/mcp/walkthrough",
         name: `${WALKTHROUGH_MCP_SERVER}-${params.walkthroughId}`,

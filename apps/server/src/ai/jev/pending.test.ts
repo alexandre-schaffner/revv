@@ -18,8 +18,6 @@ describe("judgment tracker", () => {
     expect(tracker.pending()).toBe(0);
   });
 
-  // A judgment can be scheduled mid-drain; one `Promise.all` over a single
-  // snapshot would miss it.
   it("drains work scheduled during the drain", async () => {
     const tracker = makeJudgmentTracker("w");
     let second = false;

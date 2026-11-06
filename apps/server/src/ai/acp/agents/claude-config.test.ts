@@ -21,8 +21,6 @@ describe("resolveClaudeConfigDir", () => {
   });
 });
 
-// ── ensureClaudeConfigDir ────────────────────────────────────────────────────
-
 describe("ensureClaudeConfigDir", () => {
   it("creates the dir (mode 0700) and seeds an onboarding-only .claude.json", async () => {
     const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
@@ -72,11 +70,9 @@ describe("ensureClaudeConfigDir", () => {
     expect(() => ensureClaudeConfigDir(dir)).not.toThrow();
   });
 
-  // The regression this guards: with only `.credentials.json` linked, an agent
-  // spawned into the isolated dir saw none of the user's skills, so Revv's `/`
-  // menu offered a strictly smaller set than the same user's `claude` in a
-  // terminal. The session registry must stay unlinked all the same — that's
-  // what isolation is for.
+  // Revv's `/` menu must offer the same skills as the user's `claude` in a
+  // terminal, while the session registry stays unlinked — that's what
+  // isolation is for.
   it("links the user's auth + toolbox and nothing from the session registry", async () => {
     const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
     const globalDir = join(base, "global");
@@ -116,15 +112,14 @@ describe("ensureClaudeConfigDir", () => {
     try {
       mkdirSync(join(globalDir, "skills"), { recursive: true });
       mkdirSync(join(globalDir, "commands"), { recursive: true });
-      // A real dir already inside the isolated config — e.g. one the CLI wrote
-      // itself before this linking existed. Left as-is, not clobbered.
+      // A real dir the CLI already wrote into the isolated config is left
+      // as-is, not clobbered.
       mkdirSync(join(dir, "commands"), { recursive: true });
 
       ensureClaudeConfigDir(dir, globalDir);
 
       expect(lstatSync(join(dir, "skills")).isSymbolicLink()).toBe(true);
       expect(lstatSync(join(dir, "commands")).isSymbolicLink()).toBe(false);
-      // `agents`/`plugins`/`CLAUDE.md` don't exist upstream — no dangling links.
       for (const entry of ["agents", "plugins", "CLAUDE.md"]) {
         expect(existsSync(join(dir, entry))).toBe(false);
       }
@@ -133,9 +128,8 @@ describe("ensureClaudeConfigDir", () => {
     }
   });
 
-  // The regression this guards: `plugins/` was linked but no plugin was
-  // enabled, because Claude Code reads `enabledPlugins` from `settings.json`
-  // and the isolated dir had none. Every plugin skill was missing from Revv.
+  // Claude Code reads `enabledPlugins` from `settings.json`; without it a
+  // linked `plugins/` enables nothing.
   it("copies enabledPlugins into the isolated settings.json and keeps its other keys", async () => {
     const base = mkdtempSync(join(tmpdir(), "revv-claude-config-"));
     const globalDir = join(base, "global");

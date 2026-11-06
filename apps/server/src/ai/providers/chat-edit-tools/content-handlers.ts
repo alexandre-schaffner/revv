@@ -1,7 +1,3 @@
-// ── chat-edit-content-handlers ───────────────────────────────────────────────
-//
-// Overview, sentiment, chapters and blocks.
-
 import type { RiskLevel, WalkthroughStreamEvent } from "@revv/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../../../db";
@@ -59,8 +55,6 @@ function blockAt(db: Db, walkthroughId: string, semanticStepIndex: number, stepI
     .get();
 }
 
-// ── Tool: update_overview ───────────────────────────────────────────────────
-
 export const updateOverviewHandler: ChatEditToolHandler<UpdateOverviewInput> = async (
   ctx,
   input,
@@ -90,8 +84,6 @@ export const updateOverviewHandler: ChatEditToolHandler<UpdateOverviewInput> = a
     };
   });
 };
-
-// ── Tool: add_semantic_step ─────────────────────────────────────────────────
 
 export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEditInput> = async (
   ctx,
@@ -146,8 +138,6 @@ export const addSemanticStepEditHandler: ChatEditToolHandler<AddSemanticStepEdit
   });
 };
 
-// ── Tool: update_semantic_step ──────────────────────────────────────────────
-
 export const updateSemanticStepHandler: ChatEditToolHandler<UpdateSemanticStepInput> = async (
   ctx,
   input,
@@ -184,8 +174,6 @@ export const updateSemanticStepHandler: ChatEditToolHandler<UpdateSemanticStepIn
     };
   });
 };
-
-// ── Tool: delete_semantic_step ──────────────────────────────────────────────
 
 export const deleteSemanticStepHandler: ChatEditToolHandler<DeleteSemanticStepInput> = async (
   ctx,
@@ -232,8 +220,6 @@ export const deleteSemanticStepHandler: ChatEditToolHandler<DeleteSemanticStepIn
       events,
     };
   });
-
-// ── Tool: add_block ─────────────────────────────────────────────────────────
 
 export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, input) => {
   if (blockVariantCount(input.content) !== 1) {
@@ -287,8 +273,6 @@ export const addBlockHandler: ChatEditToolHandler<AddBlockInput> = async (ctx, i
   });
 };
 
-// ── Tool: update_block ──────────────────────────────────────────────────────
-
 export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (ctx, input) => {
   if (blockVariantCount(input.content) !== 1) {
     return fail(
@@ -322,8 +306,6 @@ export const updateBlockHandler: ChatEditToolHandler<UpdateBlockInput> = async (
   });
 };
 
-// ── Tool: delete_block ──────────────────────────────────────────────────────
-
 export const deleteBlockHandler: ChatEditToolHandler<DeleteBlockInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = blockAt(ctx.db, wt.id, input.semantic_step_index, input.step_index);
@@ -350,8 +332,6 @@ export const deleteBlockHandler: ChatEditToolHandler<DeleteBlockInput> = async (
       ],
     };
   });
-
-// ── Tool: update_sentiment ──────────────────────────────────────────────────
 
 export const updateSentimentHandler: ChatEditToolHandler<UpdateSentimentInput> = async (
   ctx,

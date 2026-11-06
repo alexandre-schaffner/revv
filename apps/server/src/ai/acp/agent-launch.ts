@@ -1,8 +1,6 @@
-// ── Which agent, model and effort run for a purpose ──────────────────────────
-//
-// The one resolution. Its result keys the ACP connection pool and, for chat,
-// the chat session row, so two call sites can never disagree about which warm
-// agent or which conversation is "the chat".
+// Which agent, model and effort run for a purpose. Its result keys the ACP
+// connection pool and, for chat, the chat session row, so two call sites can
+// never disagree about which warm agent or which conversation is "the chat".
 
 import {
   ACP_AGENTS,
@@ -118,7 +116,6 @@ export function agentLaunchFor(
     : generationLaunch(settings, agent, purpose, override);
 }
 
-/** {@link agentLaunchFor} on the current settings and the configured agent for `purpose`. */
 export function resolveAgentLaunch(
   purpose: "suggestions",
 ): Effect.Effect<AgentLaunch | null, never, SettingsService>;

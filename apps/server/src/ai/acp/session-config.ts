@@ -1,5 +1,3 @@
-// ── ACP session config options ───────────────────────────────────────────────
-//
 // ACP has two ways for an agent to publish per-session selections: the older
 // `modes` field (`session/set_mode`) and the generic `configOptions` list
 // (`session/set_config_option`). opencode (1.18+ and 2) moved everything onto
@@ -32,7 +30,6 @@ export interface ResolvedSessionModes {
   readonly modeConfigId?: string;
 }
 
-/** First `select` config option in a category, if the agent advertises one. */
 function findSelectConfigOption(
   options: readonly SessionConfigOption[] | null | undefined,
   category: string,
@@ -43,7 +40,6 @@ function findSelectConfigOption(
   );
 }
 
-/** A select option's choices, flattening grouped option lists. */
 function selectChoices(option: SelectConfigOption): SessionConfigSelectOption[] {
   return option.options.flatMap((entry) => ("group" in entry ? entry.options : [entry]));
 }

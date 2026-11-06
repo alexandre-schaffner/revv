@@ -1,9 +1,3 @@
-// ─── walkthrough-tools ───────────────────────────────────────────────────────
-//
-// The phase-bound MCP tool surface of the walkthrough pipeline, served by
-// `routes/mcp/walkthrough.ts`. Phase A/C/D handlers and the completion gate
-// live here; Phase B in `phase-b-handlers.ts`.
-
 import type { RatingCitation, RiskLevel, WalkthroughRating } from "@revv/shared";
 import { RATING_AXES } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
@@ -60,8 +54,6 @@ import {
 
 export type { WalkthroughToolContext, WalkthroughToolResult } from "./spec";
 
-// ── Handler: set_overview (Phase A) ──────────────────────────────────────────
-//
 // Writes the summary, and the risk tier only when the orchestrator has not
 // assigned one (invariant 2's carve-out).
 
@@ -109,8 +101,6 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
     "Overview set. Phase A complete — open the first chapter with add_semantic_step (title + optional summary), then walk through it via add_diff_step calls.",
   );
 };
-
-// ── Handler: set_sentiment (Phase C) ─────────────────────────────────────────
 
 export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = async (
   ctx,
@@ -166,8 +156,6 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
   );
 };
 
-// ── Handler: rate_axis (Phase D) ─────────────────────────────────────────────
-//
 // The agent sends all nine calls in one turn, so they land in any order. The
 // body is one synchronous transaction, so the rated-axis count sees every
 // earlier call's commit and exactly one call advances the phase.
@@ -279,8 +267,6 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
   );
 };
 
-// ── Handler: complete_walkthrough (validation gate) ──────────────────────────
-//
 // Validates only, on the same journal check the orchestrator completes a run
 // by (services/walkthrough/completion.ts); the status transition is the
 // orchestrator's (invariant 11).
@@ -299,8 +285,6 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
     "Walkthrough complete. You may stop. The orchestrator marks it complete when your turn ends.",
   );
 };
-
-// ── Canonical TOOL_SPECS list ────────────────────────────────────────────────
 
 export const TOOL_SPECS: ReadonlyArray<WalkthroughToolSpec> = [
   {
