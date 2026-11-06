@@ -8,6 +8,7 @@ export * from "./enter";
 export { gsap, initGsap } from "./gsap";
 export * from "./presets";
 export { prefersReducedMotion } from "./reduced-motion";
+export { gsapRotate } from "./rotate";
 export * from "./stack";
 export { tokens } from "./tokens";
 export * from "./transitions";

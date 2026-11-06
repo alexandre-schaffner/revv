@@ -2,7 +2,7 @@
 import type { PrLabel } from "@revv/shared";
 
 /** What a row draws before its title. */
-export type PickerLeading =
+type PickerLeading =
   | { readonly kind: "user"; readonly avatarContent: string | null }
   | { readonly kind: "team" }
   | { readonly kind: "label"; readonly label: PrLabel };
@@ -31,8 +31,8 @@ import FilterSectionHeader from "$lib/components/shared/filter-popover/FilterSec
 import FilterStateRow from "$lib/components/shared/filter-popover/FilterStateRow.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Popover from "$lib/components/ui/popover";
-import { labelHue } from "$lib/utils/label-colors";
-import { pickerChanges } from "$lib/utils/picker-changes";
+import { pickerChanges } from "$lib/conversation/picker-changes";
+import LabelChip from "./LabelChip.svelte";
 
 // The sidebar's editor for a set (reviewers, assignees, labels), drawn with
 // the same filter-popover parts as the sidebar's creator filter. A gear opens
@@ -214,12 +214,7 @@ function toggleSection(name: string): void {
 						>
 							{#snippet leading()}
 								{#if option.leading.kind === 'label'}
-									{@const hue = labelHue(option.leading.label.color)}
-									<span
-										class="swatch"
-										style="--label-h: {hue.h}; --label-c: {hue.c}"
-										aria-hidden="true"
-									></span>
+									<LabelChip label={option.leading.label} swatch />
 								{:else}
 									<FilterOptionAvatar
 										kind={option.leading.kind}
@@ -240,13 +235,5 @@ function toggleSection(name: string): void {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-	}
-
-	/* A label's hue on LabelChip's ramp, as a dot in the avatar slot. */
-	.swatch {
-		width: 10px;
-		height: 10px;
-		border-radius: 999px;
-		background: oklch(62% min(var(--label-c), 0.13) var(--label-h));
 	}
 </style>

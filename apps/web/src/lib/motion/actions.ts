@@ -157,6 +157,8 @@ interface BitsAnimParams {
   outPreset?: BitsPreset;
   /** Read `data-side` and pass it to the preset. */
   directionAware?: boolean;
+  /** Show the state the element mounts in without animating to it. */
+  settleOnMount?: boolean;
 }
 
 const PRESENCE_PROP = "--gsap-presence-frame";
@@ -187,7 +189,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     placeholder = null;
   };
 
-  const play = (state: string | null) => {
+  const play = (state: string | null, instant = false) => {
     if (!current) return;
     stop();
     const side = readSide();
@@ -200,7 +202,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     const preset = isOpen ? current.inPreset : current.outPreset;
     active = (preset as PresetFn<unknown>)(node, opts);
 
-    if (prefersReducedMotion()) {
+    if (instant || prefersReducedMotion()) {
       active.progress(1).pause();
       return;
     }
@@ -211,7 +213,7 @@ export const bitsAnim: Action<HTMLElement, BitsAnimParams> = (node, params) => {
     }
   };
 
-  play(node.getAttribute("data-state"));
+  play(node.getAttribute("data-state"), current?.settleOnMount === true);
 
   const observer = new MutationObserver(() => {
     play(node.getAttribute("data-state"));

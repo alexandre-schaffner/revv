@@ -8,10 +8,11 @@
 //   first, then a fresh fetch replaces it. A conversation never replaces a
 //   newer one (`fetchedAt`), and a load that raced a write is dropped.
 // - Writes are optimistic. The local copy changes at once (a patch from
-//   `conversation-patches.ts`), the server applies the write on GitHub and
+//   `lib/conversation/patches.ts`), the server applies the write on GitHub and
 //   answers the re-read conversation, which replaces the optimistic copy; a
 //   failure undoes the rows the patch touched, nothing else.
-// - The tab polls pending CI while it's on screen (see `watchChecks`).
+// - While the tab is on screen (`watchConversation`), pending CI is polled and
+//   a return to the window re-reads the conversation.
 
 import type {
   ActorOption,
@@ -42,8 +43,9 @@ import {
   removeLabelsPatch,
   removeReviewersPatch,
   requestReviewersPatch,
-} from "$lib/utils/conversation-patches";
+} from "$lib/conversation/patches";
 import { RequestState } from "./_types";
+import { type Answer, createResource } from "./resource";
 
 /**
  * Affordances GitHub refused with a 403 this session. A GitHub App install
@@ -79,8 +81,11 @@ const FRESH_FOR_MS = 30_000;
 
 let entries = $state(new Map<string, ConversationEntry>());
 
-/** In-flight loads per PR; plain Map, nothing renders it. */
-const inflight = new Map<string, Promise<void>>();
+/** Schedules reads; what they read lands in `entries`, where writes patch it. */
+const reads = createResource<void, true>({
+  fetch: (prId) => fetchConversation(prId),
+  freshForMs: FRESH_FOR_MS,
+});
 
 /**
  * Bumped when a write starts and when it lands. A load that began under an
@@ -91,6 +96,7 @@ const writeGeneration = new Map<string, number>();
 function setEntry(prId: string, entry: ConversationEntry): void {
   entries.set(prId, entry);
   entries = new Map(entries);
+  if (prId === watched) syncChecksPoll();
 }
 
 function updateEntry(prId: string, updater: (entry: ConversationEntry) => ConversationEntry): void {
@@ -99,6 +105,26 @@ function updateEntry(prId: string, updater: (entry: ConversationEntry) => Conver
 
 export function getConversation(prId: string): ConversationEntry {
   return entries.get(prId) ?? EMPTY;
+}
+
+export interface ConversationAbilities {
+  /** Edit the description, reviewers, assignees and labels. */
+  readonly canEdit: boolean;
+  /** Post, edit and delete comments. */
+  readonly canComment: boolean;
+  /** Re-run Actions jobs. */
+  readonly canRerun: boolean;
+}
+
+/** What the viewer may change, by GitHub's say and by what it refused this session. */
+export function getAbilities(prId: string): ConversationAbilities {
+  const entry = getConversation(prId);
+  const conversation = entry.request.status === "ok" ? entry.request.data : null;
+  return {
+    canEdit: !!conversation?.viewerCanUpdate && !entry.denied.has("edit"),
+    canComment: !entry.denied.has("edit"),
+    canRerun: !!conversation?.viewerCanPush && !entry.denied.has("rerun"),
+  };
 }
 
 /** The loaded conversation, or null while it isn't. */
@@ -147,24 +173,14 @@ function describeFailure(error: { status: number; value?: unknown }): string {
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /**
- * Load the conversation. With data younger than {@link FRESH_FOR_MS} it does
- * nothing unless `force`; concurrent calls share one fetch.
+ * Load the conversation. A fresh read of GitHub younger than
+ * {@link FRESH_FOR_MS} is enough unless `force`; concurrent calls share one fetch.
  */
-export function loadConversation(prId: string, opts: { force?: boolean } = {}): Promise<void> {
-  const current = dataOf(prId);
-  if (
-    !opts.force &&
-    current &&
-    !getConversation(prId).stale &&
-    Date.now() - Date.parse(current.fetchedAt) < FRESH_FOR_MS
-  ) {
-    return Promise.resolve();
-  }
-  const running = inflight.get(prId);
-  if (running) return running;
-  const run = fetchConversation(prId).finally(() => inflight.delete(prId));
-  inflight.set(prId, run);
-  return run;
+export async function loadConversation(
+  prId: string,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  await (opts.force ? reads.refresh(prId) : reads.load(prId));
 }
 
 /** The server's cached snapshot, which costs GitHub nothing. */
@@ -179,7 +195,8 @@ async function loadSnapshot(prId: string): Promise<void> {
   }
 }
 
-async function fetchConversation(prId: string): Promise<void> {
+/** Ok once GitHub's own answer is on screen; an error keeps the next load asking. */
+async function fetchConversation(prId: string): Promise<Answer<true>> {
   const generation = writeGeneration.get(prId) ?? 0;
   if (dataOf(prId) === null) {
     updateEntry(prId, (entry) => ({ ...entry, request: RequestState.loading() }));
@@ -187,26 +204,32 @@ async function fetchConversation(prId: string): Promise<void> {
     await loadSnapshot(prId);
   }
 
-  const failed = (message: string) =>
+  const failed = (message: string): Answer<true> => {
     updateEntry(prId, (entry) => ({
       ...entry,
       // Keep showing what we have; only an empty tab shows the error.
       request: entry.request.status === "ok" ? entry.request : RequestState.error(message),
       stale: entry.request.status === "ok",
     }));
+    return { status: "error", error: message };
+  };
 
   try {
     const { data, error } = await api.api.prs({ id: prId }).conversation.get();
     if (error || !data || !("conversation" in data)) {
-      failed(error ? describeFailure(error) : "Unexpected response");
-      return;
+      return failed(error ? describeFailure(error) : "Unexpected response");
     }
     // A write began meanwhile; this answer may predate it.
-    if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) return;
+    if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) {
+      return { status: "ok", data: true };
+    }
     const response = plain(data) as PrConversationResponse;
     accept(prId, hydrateConversationAvatars(response.conversation), response.stale);
+    return response.stale
+      ? { status: "error", error: "GitHub couldn't be reached" }
+      : { status: "ok", data: true };
   } catch (e) {
-    failed(thrownMessage(e));
+    return failed(thrownMessage(e));
   }
 }
 
@@ -285,7 +308,7 @@ export async function loadLabelOptions(prId: string): Promise<PrLabel[]> {
   return data;
 }
 
-// ── CI polling ──────────────────────────────────────────────────────────────
+// ── On screen: CI polling and foreground reads ──────────────────────────────
 
 const POLL_FIRST_MS = 20_000;
 /** GitHub registers a re-run within seconds; the first look comes sooner. */
@@ -294,18 +317,48 @@ const POLL_MAX_MS = 60_000;
 /** Polls with nothing pending before a re-run is taken to have been a no-op. */
 const RERUN_GRACE_POLLS = 3;
 
+/** The PR whose conversation is on screen. */
+let watched: string | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollPrId: string | null = null;
 
 /**
+ * The conversation tab is on screen for `prId`: load it, and keep its CI
+ * current while something is pending (or a re-run hasn't shown up yet).
+ * Returns the stop function for the tab's `$effect` teardown.
+ */
+export function watchConversation(prId: string): () => void {
+  watched = prId;
+  void loadConversation(prId);
+  syncChecksPoll();
+  return () => {
+    if (watched !== prId) return;
+    watched = null;
+    stopChecksPoll();
+  };
+}
+
+/** Back in the window: what's on screen may have moved on GitHub meanwhile. */
+export function onWindowForeground(): void {
+  if (watched) void loadConversation(watched);
+}
+
+/** Start polling the watched PR's CI when it has something pending. */
+function syncChecksPoll(): void {
+  const prId = watched;
+  if (prId === null || pollPrId === prId) return;
+  const entry = getConversation(prId);
+  if (!ciHasPending(dataOf(prId)?.ci) && !entry.awaitingRerun) return;
+  pollChecks(prId);
+}
+
+/**
  * Poll the PR's CI, backing off from 20s to 60s, pausing while the window is
  * hidden, and stopping once nothing is pending (or a re-run's grace polls
- * ran out). A failed poll backs off and tries again. One PR at a time:
- * watching another stops the first. The tab owns when to watch; this
- * returns the stop function for its `$effect` teardown.
+ * ran out). A failed poll backs off and tries again.
  */
-export function watchChecks(prId: string): () => void {
-  stopWatchingChecks();
+function pollChecks(prId: string): void {
+  stopChecksPoll();
   pollPrId = prId;
   let delay = getConversation(prId).awaitingRerun ? POLL_AFTER_RERUN_MS : POLL_FIRST_MS;
   let graceLeft = RERUN_GRACE_POLLS;
@@ -313,6 +366,10 @@ export function watchChecks(prId: string): () => void {
   const schedule = () => {
     pollTimer = setTimeout(() => void tick(), delay);
     delay = Math.min(delay * 1.5, POLL_MAX_MS);
+  };
+  const settle = () => {
+    pollTimer = null;
+    pollPrId = null;
   };
   const tick = async () => {
     pollTimer = null;
@@ -338,16 +395,16 @@ export function watchChecks(prId: string): () => void {
       schedule();
       return;
     }
+    settle();
     if (awaiting) updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: false }));
     // Settled: the timeline's per-commit CI glyphs are now out of date too.
     if (answer.rollup?.state !== before) void loadConversation(prId, { force: true });
   };
 
   schedule();
-  return stopWatchingChecks;
 }
 
-function stopWatchingChecks(): void {
+function stopChecksPoll(): void {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = null;
   pollPrId = null;
@@ -531,8 +588,9 @@ export function onPrConversationUpdated(data: { prId: string; fetchedAt: string 
 }
 
 export function reset(): void {
-  stopWatchingChecks();
-  inflight.clear();
+  watched = null;
+  stopChecksPoll();
+  reads.reset();
   writeGeneration.clear();
   entries = new Map();
 }

@@ -10,8 +10,8 @@ default sort.
 |---|---|---|
 | Server (Effect) | 0 | — |
 | Web stores | 1 | low |
-| UI / motion | 14 | all fixed |
-| **Total** | **1** | |
+| UI / motion | 1 | low |
+| **Total** | **2** | |
 
 ---
 
@@ -42,6 +42,20 @@ rollback that itself is rare." Not actively biting in production. Tracked becaus
 implicitly endorses the shape.
 
 **Sizing:** ~30 lines. One PR. Worth pairing with any other touch to the repo-delete flow.
+
+<a id="m-030"></a>
+### M-030 — `weight="bold"` on an 18px dialog-title glyph
+
+**Rule violated:** [§5.3 — Iconography](./conventions.md#motion-icon-only) (`bold` is for
+glyphs at 15px or less, or an outline mark in a set of `fill` marks).
+
+**Where:** `apps/web/src/lib/components/stack/StackMergeSheet.svelte` — the `GitMerge size={18}`
+in the sheet's title.
+
+**Fix shape.** `regular`, or a size the rule covers. A visible change; check it against the
+other dialog titles first.
+
+**Severity:** Low.
 
 ---
 
@@ -84,3 +98,5 @@ implicitly endorses the shape.
 - M-026 — app.css: `ease-out` → `var(--ease-out-expo)`; `1.5s ease-in-out` → `var(--duration-pulse) var(--ease-soft)`; `300ms cubic-bezier(...)` → `var(--duration-ceremonial-quick) var(--ease-soft)`
 - M-027 — dotmatrix-loader: `cubic-bezier(0.42, 0, 0.58, 1)` → `var(--ease-soft)`; `ease-in-out` (×3) → `var(--ease-soft)`; `180ms cubic-bezier(...)` → `var(--duration-quick) var(--ease-soft)`
 - M-028 — Added `--duration-pulse: 1400ms` to app.css `@theme` block
+- M-029 — Hand-rolled component `@keyframes` gone: walkthrough blocks, issue cards, stepper and spec-panel rows enter through `enterOnce` (w-walkthrough); the tool-activity group entrance is `in:gsapFadeY`, the push-pill pulse a GSAP tween, and RightPanel's duplicate `motion-essential-spin` was dropped (w-chat); ReviewTabs' status dot already pulsed through GSAP. The component keyframes left (`cell-pulse`, `footer-bounce`, `clone-pulse`, `grain-drift`) are on the surviving list in `motion/README.md`
+- M-031 — Onboarding (`OnboardingShell`, `OnboardingFlow`, every `Step*`) entrances moved from component `@keyframes` to `gsapEnter`; `ProjectRail`'s folder unfold to `bitsAnim` + `collapsibleOpen/Close`; `Dotmatrix` and recaps' `scrollToTheme` read `prefersReducedMotion()` instead of their own `matchMedia`; `RepoAvatarButton`'s `clone-pulse` uses `--duration-pulse` and is on the surviving list

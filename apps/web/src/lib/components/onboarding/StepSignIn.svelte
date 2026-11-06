@@ -3,8 +3,8 @@ import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
-import { copyFeedback } from "$lib/components/auth/copy-feedback.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { gsapEnter } from "$lib/motion";
 import {
   cancelSignIn,
   clearError,
@@ -13,6 +13,7 @@ import {
   getIsLoading,
   signIn,
 } from "$lib/stores/auth.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import { githubHostLabel } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
 
@@ -55,7 +56,7 @@ onMount(() => {
 			<div class="code-wrap">
 				<div class="code">
 					{#each deviceFlow.userCode as char, i (i)}
-						<span class="char" style="animation-delay: {i * 40}ms">{char}</span>
+						<span class="char" use:gsapEnter={{ y: 8, blur: 3, delay: i * 0.04 }}>{char}</span>
 					{/each}
 				</div>
 				<button class="copy-btn" onclick={() => void clipboard.copy(deviceFlow.userCode)} aria-label="Copy code">
@@ -251,20 +252,6 @@ onMount(() => {
 		letter-spacing: 0.04em;
 		color: var(--ob-text-heading);
 		display: inline-block;
-		animation: char-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	@keyframes char-in {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-			filter: blur(3px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
 	}
 
 	.copy-btn {
@@ -334,11 +321,5 @@ onMount(() => {
 
 	.cancel:hover {
 		color: var(--ob-text-italic);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.char {
-			animation: none;
-		}
 	}
 </style>

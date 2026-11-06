@@ -1,7 +1,8 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import { completeOnboarding, getIsOnboarded } from "$lib/stores/auth.svelte";
+import { gsapEnter, tokens } from "$lib/motion";
+import { completeOnboarding, endOnboardingReplay, getIsOnboarded } from "$lib/stores/auth.svelte";
 
 interface Props {
   onFinish: () => void;
@@ -14,9 +15,7 @@ onMount(() => {
   const maxAttempts = 5;
 
   async function tryComplete() {
-    if (typeof sessionStorage !== "undefined") {
-      sessionStorage.removeItem("revv-onboarding-replay");
-    }
+    endOnboardingReplay();
     try {
       await completeOnboarding();
     } catch {
@@ -47,7 +46,7 @@ onMount(() => {
 });
 </script>
 
-<div class="done">
+<div class="done" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 	<div class="ornament">
 		<Dotmatrix variant="square-14" />
 	</div>
@@ -57,7 +56,7 @@ onMount(() => {
 		The first one is preparing now.
 	</p>
 
-	<div class="footer-row">
+	<div class="footer-row" use:gsapEnter={{ duration: tokens.ceremonialSlow, delay: 0.6 }}>
 		<span class="dash"></span>
 		<span class="label">Fin</span>
 		<span class="dash"></span>
@@ -70,7 +69,6 @@ onMount(() => {
 		flex-direction: column;
 		gap: 32px;
 		max-width: 520px;
-		animation: scene-in var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.ornament {
@@ -93,7 +91,6 @@ onMount(() => {
 		align-items: center;
 		gap: 14px;
 		padding-top: 16px;
-		animation: fin-in var(--duration-ceremonial-slow) var(--ease-out-expo) 600ms backwards;
 	}
 
 	.dash {
@@ -108,32 +105,5 @@ onMount(() => {
 		font-size: 14px;
 		color: var(--ob-text-label);
 		letter-spacing: 0.08em;
-	}
-
-	@keyframes scene-in {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@keyframes fin-in {
-		from {
-			opacity: 0;
-		}
-		to {
-			opacity: 1;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.done,
-		.footer-row {
-			animation: none;
-		}
 	}
 </style>

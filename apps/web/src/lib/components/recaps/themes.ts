@@ -1,4 +1,5 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
+import { prefersReducedMotion } from "$lib/motion";
 import { formatRecapTitle, openSpan, recapSpan } from "./period-window";
 
 function relativeFromNow(iso: string): string {
@@ -82,9 +83,7 @@ export function scrollToTheme(theme: string): void {
   if (typeof document === "undefined") return;
   const el = document.getElementById(themeSlug(theme));
   if (!el) return;
-  const reduced =
-    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
 }
 
 export interface RecapHeader {

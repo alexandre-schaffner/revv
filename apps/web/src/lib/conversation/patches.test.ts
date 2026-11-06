@@ -7,7 +7,7 @@ import {
   postCommentPatch,
   removeReviewersPatch,
   requestReviewersPatch,
-} from "./conversation-patches";
+} from "./patches";
 
 const actor = (login: string): ConversationActor => ({
   login,

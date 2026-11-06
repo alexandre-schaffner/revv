@@ -1,7 +1,8 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
-import { getIsAuthenticated, loadUser } from "$lib/stores/auth.svelte";
+import { gsapEnter, tokens } from "$lib/motion";
+import { getIsAuthenticated, isOnboardingReplay, loadUser } from "$lib/stores/auth.svelte";
 import { fetchRepos } from "$lib/stores/prs.svelte";
 import { fetchSettings, getGithubHost, isSettingsLoaded } from "$lib/stores/settings.svelte";
 import OnboardingShell from "./OnboardingShell.svelte";
@@ -31,15 +32,7 @@ const signinMeta = $derived<StepMeta>({
 
 const ORDER: StepId[] = ["welcome", "host", "signin", "repo", "agent", "done"];
 
-// Replay-mode flag set by `resetOnboarding()` in the auth store. When
-// present, we ignore the usual resume logic and force a start from
-// welcome so the user can experience the flow again even though their
-// host/auth/repos are already set. The flag is cleared once the user
-// reaches done (or unmounts) so a follow-up signout-and-back-in
-// doesn't accidentally bounce them back to welcome.
-const REPLAY_KEY = "revv-onboarding-replay";
-const isReplay =
-  typeof sessionStorage !== "undefined" && sessionStorage.getItem(REPLAY_KEY) === "1";
+const isReplay = isOnboardingReplay();
 
 // Resume point: derived from observable state so a mid-flow reload or
 // kill -9 lands the user on the right step without local persistence.
@@ -185,7 +178,7 @@ const meta: Record<StepId, StepMeta> = {
 		spinnerVariant={m.spinnerVariant}
 	>
 		{#key current}
-			<div class="step-frame">
+			<div use:gsapEnter={{ y: 10, duration: tokens.ceremonialSlow, delay: 0.28 }}>
 				{#if current === 'welcome'}
 					<StepWelcome onContinue={advance} />
 				{:else if current === 'host'}
@@ -203,26 +196,3 @@ const meta: Record<StepId, StepMeta> = {
 		{/key}
 	</OnboardingShell>
 {/if}
-
-<style>
-	.step-frame {
-		animation: step-in var(--duration-ceremonial-slow) var(--ease-out-expo) 280ms backwards;
-	}
-
-	@keyframes step-in {
-		from {
-			opacity: 0;
-			transform: translateY(10px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.step-frame {
-			animation: none;
-		}
-	}
-</style>

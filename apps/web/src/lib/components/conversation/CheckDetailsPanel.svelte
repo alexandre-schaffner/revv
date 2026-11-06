@@ -10,6 +10,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
 import { getReviewFiles } from "$lib/stores/review.svelte";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import MarkdownBody from "./MarkdownBody.svelte";
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
 
 let { request, onretry }: Props = $props();
 
-let copied = $state(false);
+const logCopy = copyFeedback(1400);
 
 const UNAVAILABLE: Record<NonNullable<CheckDetails["logUnavailable"]>, string | null> = {
   not_actions: null,
@@ -37,11 +38,8 @@ const LEVEL_LABEL: Record<CheckAnnotation["level"], string> = {
 /** Paths the PR touches; an annotation elsewhere has no diff line to jump to. */
 const prPaths = $derived(new Set(getReviewFiles().map((f) => f.path)));
 
-async function copyLog(details: CheckDetails): Promise<void> {
-  if (!details.log) return;
-  await navigator.clipboard.writeText(details.log.lines.map((l) => l.text).join("\n"));
-  copied = true;
-  setTimeout(() => (copied = false), 1400);
+function copyLog(details: CheckDetails): void {
+  if (details.log) void logCopy.copy(details.log.lines.map((l) => l.text).join("\n"));
 }
 </script>
 
@@ -101,8 +99,8 @@ async function copyLog(details: CheckDetails): Promise<void> {
 				<div class="log-head">
 					<span class="log-step">{details.log.stepName ?? 'Job log'}</span>
 					{#if details.log.truncated}<span class="log-note">last {details.log.lines.length} lines</span>{/if}
-					<Button variant="ghost" size="xs" onclick={() => void copyLog(details)}>
-						{#if copied}<Check />Copied{:else}<Copy />Copy log{/if}
+					<Button variant="ghost" size="xs" onclick={() => copyLog(details)}>
+						{#if logCopy.copied}<Check />Copied{:else}<Copy />Copy log{/if}
 					</Button>
 				</div>
 				<pre class="log-body"><code

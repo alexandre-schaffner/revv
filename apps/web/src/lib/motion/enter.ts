@@ -10,6 +10,11 @@
  * not yet played plays again, so a state change can carry its own entrance
  * (`key: \`${axis}:${state}\``). Nodes laid out in the same frame under one
  * `cascade.group` stagger in DOM order.
+ *
+ *   <div use:gsapEnter={{ y: 6, delay: 0.24 }}>
+ *
+ * `gsapEnter` is the plain version: it plays on mount with ad-hoc offsets, no
+ * key, no layout wait. Both tween through `enterFrom`.
  */
 import type { Action } from "svelte/action";
 
@@ -107,6 +112,32 @@ function cascadeSlot(cascade: EnterCascade, cursors: Map<string, CascadeCursor>)
   return slot;
 }
 
+/** Inline props a `from` tween leaves behind, to clear when it ends. */
+function propsSetBy(from: gsap.TweenVars): string {
+  const props: string[] = [];
+  if (from.opacity !== undefined) props.push("opacity");
+  if (from.x !== undefined || from.y !== undefined || from.scale !== undefined) {
+    props.push("transform");
+  }
+  if (from.filter !== undefined) props.push("filter");
+  return props.join(",");
+}
+
+/**
+ * Tween `node` from `from` to its own style, then clear what the tween set.
+ * A leftover inline transform/filter keeps the node on its own compositing
+ * layer (a long walkthrough then runs WKWebView out of layer budget and tiles
+ * flicker), and a transform makes it a containing block for its
+ * `position: fixed` descendants.
+ */
+function enterFrom(
+  node: Element,
+  from: gsap.TweenVars,
+  timing: { duration: number; ease: string; delay: number },
+): gsap.core.Tween {
+  return gsap.from(node, { ...from, ...timing, clearProps: propsSetBy(from) });
+}
+
 function play(node: Element, params: EnterParams, cursors: Map<string, CascadeCursor>): void {
   if (params.key !== undefined && !firstEntrance(params.key)) return;
   if (prefersReducedMotion()) return;
@@ -116,16 +147,7 @@ function play(node: Element, params: EnterParams, cursors: Map<string, CascadeCu
     const { step, cap } = params.cascade;
     delay += Math.min(cascadeSlot(params.cascade, cursors), cap) * step;
   }
-  gsap.from(node, {
-    ...look.from,
-    duration: look.duration,
-    ease: look.ease,
-    delay,
-    // Leftover inline transform/filter keeps every entered node on its own
-    // compositing layer; a long walkthrough then runs WKWebView out of layer
-    // budget and tiles flicker.
-    clearProps: "opacity,transform,filter",
-  });
+  enterFrom(node, look.from, { duration: look.duration, ease: look.ease, delay });
 }
 
 function onLayout(entries: ResizeObserverEntry[]): void {
@@ -159,6 +181,43 @@ export const enterOnce: Action<HTMLElement, EnterParams | undefined> = (node, pa
     destroy() {
       if (waiting.delete(node)) observer?.unobserve(node);
       gsap.killTweensOf(node);
+    },
+  };
+};
+
+export interface MountEnterParams {
+  /** Rise from this many px below (negative: drop from above). */
+  readonly y?: number;
+  /** Start from this scale. */
+  readonly scale?: number;
+  /** Start blurred by this many px. */
+  readonly blur?: number;
+  /** Fade in from transparent. Default true. */
+  readonly fade?: boolean;
+  /** Seconds. Default `tokens.ceremonialMedium`. */
+  readonly duration?: number;
+  /** Seconds; the element stays at its start state until then. */
+  readonly delay?: number;
+}
+
+/**
+ * A one-shot entrance, played when the element mounts: from the given offset,
+ * scale, blur and transparency to the element's own style, on
+ * `--ease-out-expo`. Later parameter changes don't replay it. Under reduced
+ * motion the element simply appears.
+ */
+export const gsapEnter: Action<HTMLElement, MountEnterParams | undefined> = (node, params = {}) => {
+  if (prefersReducedMotion()) return;
+  const { y, scale, blur, fade = true, duration = tokens.ceremonialMedium, delay = 0 } = params;
+  const from: gsap.TweenVars = {};
+  if (fade) from.opacity = 0;
+  if (y !== undefined) from.y = y;
+  if (scale !== undefined) from.scale = scale;
+  if (blur !== undefined) from.filter = `blur(${blur}px)`;
+  const tween = enterFrom(node, from, { duration, ease: tokens.easeOutExpo, delay });
+  return {
+    destroy() {
+      tween.kill();
     },
   };
 };

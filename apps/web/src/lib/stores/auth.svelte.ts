@@ -519,19 +519,32 @@ export async function completeOnboarding(): Promise<void> {
 }
 
 /**
- * Reset the user's onboarded flag so the OnboardingGate re-shows the flow.
- * Auth and tracked repos are kept — this is a "replay" affordance for the
- * settings page, not a destructive reset.
- *
- * Pairs with `sessionStorage['revv-onboarding-replay']`, which the
- * OnboardingFlow reads to bypass its usual "resume on the right step"
- * logic and always start from the welcome step.
+ * A replay started from settings: the flow starts from welcome instead of
+ * resuming on the step the account's state points at. Lives until the flow
+ * reaches its last step.
+ */
+const ONBOARDING_REPLAY_KEY = "revv-onboarding-replay";
+
+export function isOnboardingReplay(): boolean {
+  return (
+    typeof sessionStorage !== "undefined" && sessionStorage.getItem(ONBOARDING_REPLAY_KEY) === "1"
+  );
+}
+
+export function endOnboardingReplay(): void {
+  if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(ONBOARDING_REPLAY_KEY);
+}
+
+/**
+ * Reset the user's onboarded flag so the OnboardingGate re-shows the flow,
+ * as a replay. Auth and tracked repos are kept — this is a "replay"
+ * affordance for the settings page, not a destructive reset.
  */
 export async function resetOnboarding(): Promise<void> {
   const token = getToken();
   if (!token || !user) return;
   if (typeof sessionStorage !== "undefined") {
-    sessionStorage.setItem("revv-onboarding-replay", "1");
+    sessionStorage.setItem(ONBOARDING_REPLAY_KEY, "1");
   }
   user = { ...user, onboardedAt: null };
   try {

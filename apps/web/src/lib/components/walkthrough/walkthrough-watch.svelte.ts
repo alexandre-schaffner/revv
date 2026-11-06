@@ -6,7 +6,7 @@
 import type { WalkthroughReviewRound } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
-import { getRepositories } from "$lib/stores/prs.svelte";
+import { getRepoById } from "$lib/stores/prs.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import {
   getLastWalkthroughEventAt,
@@ -68,9 +68,7 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
   const isStreaming = $derived(entry?.isStreaming ?? false);
   const streamError = $derived(entry?.streamError ?? null);
   const cloneRepoId = $derived(entry?.cloneInProgress ? entry.cloneRepoId : null);
-  const cloneRepo = $derived(
-    cloneRepoId ? (getRepositories().find((r) => r.id === cloneRepoId) ?? null) : null,
-  );
+  const cloneRepo = $derived(cloneRepoId ? getRepoById(cloneRepoId) : null);
 
   $effect(() => {
     const id = prId;

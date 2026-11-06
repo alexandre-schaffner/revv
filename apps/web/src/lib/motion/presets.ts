@@ -89,6 +89,19 @@ export const tooltipPopOut: PresetFn = (el) =>
     ease: tokens.easeSoft,
   });
 
+/** A bits-ui Collapsible.Content unfolding to its natural height. */
+export const collapsibleOpen: PresetFn = (el) =>
+  gsap
+    .timeline()
+    .fromTo(
+      el,
+      { height: 0 },
+      { height: "auto", duration: tokens.quick, ease: tokens.easeOutExpo, clearProps: "height" },
+    );
+
+export const collapsibleClose: PresetFn = (el) =>
+  gsap.timeline().to(el, { height: 0, duration: tokens.quick, ease: tokens.easeOutExpo });
+
 /**
  * Background-tint pulse on a settings row that search just landed on. Tweens
  * `--setting-flash` (0 → 1 → 0); the row's CSS turns it into an accent tint, so

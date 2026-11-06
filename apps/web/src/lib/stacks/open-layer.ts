@@ -1,7 +1,7 @@
 import { buildPullRequestDeepLink, type PrStackEntry } from "@revv/shared";
 import { setNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
-import { getPrById, getPullRequests, getRepositories, selectPr } from "$lib/stores/prs.svelte";
+import { getPrById, getPullRequests, getRepoById, selectPr } from "$lib/stores/prs.svelte";
 import { getLayer } from "$lib/stores/stacks.svelte";
 
 type Layer = Pick<PrStackEntry, "number"> & {
@@ -27,7 +27,7 @@ export function openStackLayer(fromPrId: string, layer: Layer): void {
     void selectPr(tracked.id);
     return;
   }
-  const repository = getRepositories().find((r) => r.id === from.repositoryId);
+  const repository = getRepoById(from.repositoryId);
   if (!repository) return;
   void openPrDeepLink(
     buildPullRequestDeepLink({

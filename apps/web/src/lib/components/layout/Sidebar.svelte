@@ -13,6 +13,7 @@ import SidebarFilesView from "$lib/components/sidebar/SidebarFilesView.svelte";
 import { gsapFade, tokens } from "$lib/motion";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import {
+  getRepoById,
   getRepositories,
   getSelectedPr,
   getSelectedPrId,
@@ -42,9 +43,7 @@ const view = $derived(getSidebarView());
 // PR so the header stays correct even before the new selectedRepoId
 // effect resolves (cold load of /review/{prId} with empty repos cache).
 const selectedPr = $derived(getSelectedPr());
-const filesViewRepo = $derived(
-  selectedPr ? (getRepositories().find((r) => r.id === selectedPr.repositoryId) ?? null) : null,
-);
+const filesViewRepo = $derived(selectedPr ? getRepoById(selectedPr.repositoryId) : null);
 // Active project for the PR-list view header / lists. URL-driven by the
 // +layout effect — single source of truth, so the column tracks the rail
 // and deep-links resolve correctly.

@@ -9,6 +9,7 @@ import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import { onDestroy, onMount } from "svelte";
 import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
 import Dotmatrix from "$lib/components/ui/dotmatrix/Dotmatrix.svelte";
+import { gsapEnter } from "$lib/motion";
 import {
   agentChange,
   fetchAgentStatus,
@@ -25,6 +26,7 @@ import {
 } from "$lib/utils/agent-install";
 import AgentLoginTerminal from "./AgentLoginTerminal.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
+import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 
 interface Props {
   onContinue: () => void;
@@ -234,7 +236,7 @@ function handleSkip(): void {
 				<label
 					class="option"
 					data-selected={selected === agent.id}
-					style="--option-index: {i}"
+					use:gsapEnter={{ ...OPTION_IN, delay: i * 0.08 }}
 				>
 					<input
 						type="radio"
@@ -243,7 +245,9 @@ function handleSkip(): void {
 						bind:group={selected}
 						disabled={install.kind === 'running' || signingIn !== null}
 					/>
-					<span class="option-mark" aria-hidden="true"></span>
+					<span class="option-mark" aria-hidden="true">
+						{#if selected === agent.id}<span class="option-dot" use:gsapEnter={MARK_POP}></span>{/if}
+					</span>
 					<span class="option-icon" aria-hidden="true">
 						<AgentIcon size={20} />
 					</span>
@@ -292,14 +296,14 @@ function handleSkip(): void {
 				{/each}
 				<div class="log-line log-error">{install.error}</div>
 			</div>
-			<div class="install-actions">
+			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
 				<button class="primary" onclick={() => handleInstall(selected)}>
 					<span>Retry</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else if cta.kind === 'ready'}
-			<div class="actions">
+			<div class="actions" use:gsapEnter={ACTIONS_IN}>
 				<button class="primary" onclick={handleContinue} disabled={isSaving}>
 					<span>Continue</span>
 					<ContinueArrow />
@@ -314,21 +318,21 @@ function handleSkip(): void {
 				</p>
 				<code class="win-hint-cmd">{selectedLoginCommand}</code>
 			</div>
-			<div class="install-actions">
+			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
 				<button class="primary" onclick={handleContinue} disabled={isSaving}>
 					<span>Continue</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else if cta.kind === 'needs-login'}
-			<div class="install-actions">
+			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
 				<button class="primary" onclick={() => handleSignIn(selected)}>
 					<span>Sign in to {selectedLabel}</span>
 				</button>
 				<button class="secondary" onclick={handleSkip}>Skip for now</button>
 			</div>
 		{:else}
-			<div class="install-actions">
+			<div class="install-actions" use:gsapEnter={ACTIONS_IN}>
 				<button class="primary" onclick={() => handleInstall(selected)}>
 					<span>Install {selectedLabel}</span>
 				</button>
@@ -415,19 +419,6 @@ function handleSkip(): void {
 		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: option-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-		animation-delay: calc(var(--option-index, 0) * 80ms);
-	}
-
-	@keyframes option-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.option:hover {
@@ -454,22 +445,11 @@ function handleSkip(): void {
 		border-color: var(--ob-text-italic);
 	}
 
-	.option[data-selected='true'] .option-mark::after {
-		content: '';
+	.option-dot {
 		position: absolute;
 		inset: 3px;
 		border-radius: 50%;
 		background: var(--ob-text-italic);
-		animation: mark-pop var(--duration-slow) var(--ease-out-expo);
-	}
-
-	@keyframes mark-pop {
-		from {
-			transform: scale(0);
-		}
-		to {
-			transform: scale(1);
-		}
 	}
 
 	.option-icon {
@@ -541,18 +521,6 @@ function handleSkip(): void {
 		justify-content: flex-end;
 		align-items: center;
 		gap: 18px;
-		animation: actions-in var(--duration-ceremonial-medium) var(--ease-out-expo) 240ms backwards;
-	}
-
-	@keyframes actions-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.primary {
@@ -685,14 +653,5 @@ function handleSkip(): void {
 		font-size: 12.5px;
 		color: var(--ob-text-heading);
 		user-select: all;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.option,
-		.option[data-selected='true'] .option-mark::after,
-		.actions,
-		.install-actions {
-			animation: none !important;
-		}
 	}
 </style>

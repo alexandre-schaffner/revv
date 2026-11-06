@@ -16,7 +16,7 @@
 //   kind: 'phase'    — JS continuous phase 0..1 via rAF. Used for variants
 //                      driven by trigonometry (helix strands, sound bars).
 //
-// Reduced motion: `Dotmatrix.svelte` checks `prefers-reduced-motion: reduce`
+// Reduced motion: `Dotmatrix.svelte` reads `prefersReducedMotion()`
 // and renders `idleOpacity(...)` instead of running the JS loop. CSS variants
 // are caught by the global motion reset in `app.css`.
 //

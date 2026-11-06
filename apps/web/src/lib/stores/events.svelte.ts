@@ -14,7 +14,7 @@ import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { getToken } from "$lib/session/token.svelte";
 import * as auth from "./auth.svelte";
-import { onPrConversationUpdated } from "./conversation.svelte";
+import * as conversation from "./conversation.svelte";
 import { setError } from "./errors.svelte";
 import * as hunkScan from "./hunk-scan.svelte";
 import * as prs from "./prs.svelte";
@@ -41,6 +41,7 @@ const ON_RECONNECT: ReadonlyArray<() => void> = [
 /** The window came back to the foreground while a stream exists. */
 const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
   sync.onWindowForeground,
+  conversation.onWindowForeground,
   review.onWindowForeground,
   prs.onWindowForeground,
 ];
@@ -96,7 +97,7 @@ function dispatch(msg: ServerEventMessage): void {
       prs.onPrArchived(msg.data);
       break;
     case "pr:conversation-updated":
-      onPrConversationUpdated(msg.data);
+      conversation.onPrConversationUpdated(msg.data);
       break;
     case "prs:sync-started":
       sync.onPrsSyncStarted();

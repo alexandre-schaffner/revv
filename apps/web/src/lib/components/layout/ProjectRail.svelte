@@ -9,6 +9,8 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import RepoAvatarButton from "$lib/components/sidebar/RepoAvatarButton.svelte";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+import { bitsAnim, collapsibleClose, collapsibleOpen } from "$lib/motion";
+import { groupByOwner } from "$lib/repos/add-repo";
 import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
 import {
   isOwnerCollapsed,
@@ -31,26 +33,18 @@ async function handleHome(): Promise<void> {
   await goto("/");
 }
 
-// Group repos by owner (case-insensitive). First-seen owner / first-seen
-// repo order preserves whatever the server returned so grouping doesn't
-// reshuffle the rail on every render. `avatarUrl` is the GitHub owner
-// avatar lifted from the first non-null repo in the group.
-const ownerGroups = $derived.by((): OwnerGroup[] => {
-  const groups = new Map<string, OwnerGroup>();
-  for (const repo of repos) {
-    const key = repo.owner.toLowerCase();
-    const existing = groups.get(key);
-    if (existing) {
-      existing.repos.push(repo);
-      if (existing.avatarUrl === null && repo.avatarUrl !== null) {
-        existing.avatarUrl = repo.avatarUrl;
-      }
-    } else {
-      groups.set(key, { owner: repo.owner, avatarUrl: repo.avatarUrl, repos: [repo] });
-    }
-  }
-  return [...groups.values()];
-});
+// Server order is kept, so grouping doesn't reshuffle the rail on every
+// render. `avatarUrl` is the owner's avatar from the group's first repo that
+// has one.
+const ownerGroups = $derived(
+  [...groupByOwner(repos)].map(
+    ([owner, grouped]): OwnerGroup => ({
+      owner,
+      avatarUrl: grouped.find((repo) => repo.avatarUrl !== null)?.avatarUrl ?? null,
+      repos: grouped,
+    }),
+  ),
+);
 
 function handleAddRepo(): void {
   setAddRepoDialogOpen(true);
@@ -139,15 +133,24 @@ function handleAddRepo(): void {
 						</Tooltip.Content>
 					</Tooltip.Root>
 
-					<Collapsible.Content class="folder-pill-content">
-						<div class="folder-pill-content-inner">
-							{#each group.repos as repo (repo.id)}
-								<RepoAvatarButton
-									repository={repo}
-									isActive={repo.id === activeRepoId}
-								/>
-							{/each}
-						</div>
+					<Collapsible.Content>
+						{#snippet child({ props })}
+							<div
+								{...props}
+								class="folder-pill-content"
+								use:bitsAnim={{
+									inPreset: collapsibleOpen,
+									outPreset: collapsibleClose,
+									settleOnMount: true,
+								}}
+							>
+								<div class="folder-pill-content-inner">
+									{#each group.repos as repo (repo.id)}
+										<RepoAvatarButton repository={repo} isActive={repo.id === activeRepoId} />
+									{/each}
+								</div>
+							</div>
+						{/snippet}
 					</Collapsible.Content>
 				</div>
 			</Collapsible.Root>
@@ -378,40 +381,9 @@ function handleAddRepo(): void {
 			0 1px 2px rgba(15, 118, 110, 0.18);
 	}
 
-	/* Collapsible.Content animation. bits-ui injects the natural content
-	   height into `--bits-collapsible-content-height` once mounted, which
-	   lets the keyframes interpolate between 0 and the real height for
-	   both directions. `overflow: hidden` clips the children during the
-	   animation. Reduced-motion is handled globally in app.css. */
-	:global(.folder-pill-content) {
+	.folder-pill-content {
 		overflow: hidden;
 		width: 100%;
-	}
-
-	:global(.folder-pill-content[data-state='open']) {
-		animation: folder-pill-content-down var(--duration-quick) var(--ease-out-expo);
-	}
-
-	:global(.folder-pill-content[data-state='closed']) {
-		animation: folder-pill-content-up var(--duration-quick) var(--ease-out-expo);
-	}
-
-	@keyframes folder-pill-content-down {
-		from {
-			height: 0;
-		}
-		to {
-			height: var(--bits-collapsible-content-height);
-		}
-	}
-
-	@keyframes folder-pill-content-up {
-		from {
-			height: var(--bits-collapsible-content-height);
-		}
-		to {
-			height: 0;
-		}
 	}
 
 	/* Vertical padding sits on the inner content (not the pill) so the

@@ -8,6 +8,7 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { monthGridRange } from "$lib/components/recaps/period-window";
 import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
+import { createResource } from "./resource";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -29,27 +30,27 @@ import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
  * Tombstone tracking isn't worth it for a local desktop app.
  */
 let recapsByRepo = $state<Map<string, ProjectRecapSummary[]>>(new Map());
-let loadingByRepo = $state<Map<string, boolean>>(new Map());
 
-/**
- * Which `(repo, month)` grids have been fetched, and which are in flight.
- * Deliberately plain `Set`s, not `$state`: they're read inside an async
- * function, and a reactive read there would subscribe whatever effect
- * happened to kick off the fetch to every subsequent month load.
- * {@link monthLoading} is the reactive mirror, and it exists only to drive the
- * calendar's grid skeleton.
- */
-const monthsLoaded = new Set<string>();
-const monthsInFlight = new Set<string>();
-let monthLoading = $state<Map<string, boolean>>(new Map());
+/** Full recap (markdown + provenance + stats), keyed by `recapId`. */
+let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
+
+// The three reads below only schedule fetches; what they read merges into the
+// maps above, which SSE reducers patch too.
+
+/** A repo's newest page of summaries. */
+const repoReads = createResource<void, true>({ fetch: (repoId) => readRepoRecaps(repoId) });
+
+/** A calendar month's grid, by `repoId:monthKey`; a loaded month stays loaded. */
+const monthReads = createResource<{ readonly repoId: string; readonly monthKey: string }, true>({
+  fetch: (_key, { repoId, monthKey }) => readMonthRecaps(repoId, monthKey),
+  freshForMs: Number.POSITIVE_INFINITY,
+});
+
+const detailReads = createResource<void, true>({ fetch: (recapId) => readRecap(recapId) });
 
 function monthCacheKey(repoId: string, monthKey: string): string {
   return `${repoId}:${monthKey}`;
 }
-
-/** Full recap (markdown + provenance + stats), keyed by `recapId`. */
-let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
-let loadingDetailById = $state<Map<string, boolean>>(new Map());
 
 // In-flight destructive actions keyed by recapId. Drives the `disabled`
 // state on the floating Stop / Resume / Retry / Regenerate buttons so a
@@ -89,12 +90,12 @@ export function getRecapsForRepo(repoId: string): ProjectRecapSummary[] {
 }
 
 export function getRecapLoading(repoId: string): boolean {
-  return loadingByRepo.get(repoId) ?? false;
+  return repoReads.entry(repoId).loading;
 }
 
 /** True while the calendar grid for this month is being fetched. */
 export function getMonthRecapsLoading(repoId: string, monthKey: string): boolean {
-  return monthLoading.get(monthCacheKey(repoId, monthKey)) ?? false;
+  return monthReads.entry(monthCacheKey(repoId, monthKey)).loading;
 }
 
 export function getRecapDetail(recapId: string): ProjectRecap | null {
@@ -102,7 +103,7 @@ export function getRecapDetail(recapId: string): ProjectRecap | null {
 }
 
 export function getRecapDetailLoading(recapId: string): boolean {
-  return loadingDetailById.get(recapId) ?? false;
+  return detailReads.entry(recapId).loading;
 }
 
 // ── Map-write helpers (per §4 conventions — reassign after Map.set) ─────────
@@ -124,13 +125,6 @@ function updateEntry<K, V>(
   return next;
 }
 
-function deleteEntry<K, V>(map: Map<K, V>, key: K): Map<K, V> {
-  if (!map.has(key)) return map;
-  const next = new Map(map);
-  next.delete(key);
-  return next;
-}
-
 // ── List fetches ─────────────────────────────────────────────────────────────
 
 /**
@@ -147,8 +141,10 @@ function mergeSummaries(
 }
 
 export async function fetchRecapsForRepo(repoId: string): Promise<void> {
-  if (loadingByRepo.get(repoId)) return;
-  loadingByRepo = setEntry(loadingByRepo, repoId, true);
+  await repoReads.load(repoId);
+}
+
+async function readRepoRecaps(repoId: string) {
   try {
     const { data } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
     if (data) {
@@ -163,10 +159,11 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
         mergeSummaries(cur ?? [], page.recaps),
       );
     }
+    return { status: "ok", data: true } as const;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to load recaps");
-  } finally {
-    loadingByRepo = setEntry(loadingByRepo, repoId, false);
+    const message = e instanceof Error ? e.message : "Failed to load recaps";
+    toast.error(message);
+    return { status: "error", error: message } as const;
   }
 }
 
@@ -183,54 +180,54 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
  *
  * Unlike {@link fetchRecapsForRepo} this never raises a toast: it runs as a
  * background prefetch of adjacent months, and a failed warm-up must not throw
- * an error at a user who didn't ask for anything. The month is left unmarked
- * so a later navigation retries it.
+ * an error at a user who didn't ask for anything. A failed month is asked
+ * again by a later navigation.
  */
 export async function fetchRecapsForMonth(repoId: string, monthKey: string): Promise<void> {
-  const key = monthCacheKey(repoId, monthKey);
-  if (monthsLoaded.has(key) || monthsInFlight.has(key)) return;
-  monthsInFlight.add(key);
-  monthLoading = setEntry(monthLoading, key, true);
+  await monthReads.load(monthCacheKey(repoId, monthKey), { repoId, monthKey });
+}
+
+async function readMonthRecaps(repoId: string, monthKey: string) {
   try {
     const { from, to } = monthGridRange(monthKey);
     const { data } = await api.api
       .repos({ id: repoId })
       .recaps.get({ query: { from, to, limit: "100" } });
-    if (data) {
-      const page = data as {
-        recaps: ProjectRecapSummary[];
-        nextCursor: string | null;
-      };
-      recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
-        mergeSummaries(cur ?? [], page.recaps),
-      );
-      monthsLoaded.add(key);
-    }
+    if (!data) return { status: "error", error: "No recaps returned" } as const;
+    const page = data as {
+      recaps: ProjectRecapSummary[];
+      nextCursor: string | null;
+    };
+    recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
+      mergeSummaries(cur ?? [], page.recaps),
+    );
+    return { status: "ok", data: true } as const;
   } catch (e) {
     console.warn(`[recaps] failed to load ${monthKey} for repo ${repoId}`, e);
-  } finally {
-    monthsInFlight.delete(key);
-    monthLoading = deleteEntry(monthLoading, key);
+    return { status: "error", error: String(e) } as const;
   }
 }
 
 /**
- * Fetch the recap row. `force` reads it even while another load is in
- * flight: that one may have left before the state the caller is
- * reconciling against was committed.
+ * Fetch the recap row. `force` reads it again after a load in flight: that
+ * one may have left before the state the caller is reconciling against was
+ * committed.
  */
 export async function loadRecap(recapId: string, options?: { force?: boolean }): Promise<void> {
-  if (loadingDetailById.get(recapId) && !options?.force) return;
-  loadingDetailById = setEntry(loadingDetailById, recapId, true);
+  await (options?.force ? detailReads.refresh(recapId) : detailReads.load(recapId));
+}
+
+async function readRecap(recapId: string) {
   try {
     const { data } = await api.api.recaps({ id: recapId }).get();
     if (data) {
       recapDetailById = setEntry(recapDetailById, recapId, data as ProjectRecap);
     }
+    return { status: "ok", data: true } as const;
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : "Failed to load recap");
-  } finally {
-    loadingDetailById = setEntry(loadingDetailById, recapId, false);
+    const message = e instanceof Error ? e.message : "Failed to load recap";
+    toast.error(message);
+    return { status: "error", error: message } as const;
   }
 }
 
@@ -420,11 +417,9 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
 
 export function reset(): void {
   recapsByRepo = new Map();
-  loadingByRepo = new Map();
-  monthsLoaded.clear();
-  monthsInFlight.clear();
-  monthLoading = new Map();
   recapDetailById = new Map();
-  loadingDetailById = new Map();
+  repoReads.reset();
+  monthReads.reset();
+  detailReads.reset();
   pendingActions.map = new Map();
 }

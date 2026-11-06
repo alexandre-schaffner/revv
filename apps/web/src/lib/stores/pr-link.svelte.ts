@@ -1,6 +1,6 @@
 import { buildPullRequestDeepLink } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import { getRepositories, getSelectedPr } from "./prs.svelte";
+import { getRepoById, getSelectedPr } from "./prs.svelte";
 
 /**
  * Copying the selected PR's `revv://` deep link is reachable from two places —
@@ -25,7 +25,7 @@ export function getPrLinkCopied(): boolean {
 export async function copySelectedPrLink(): Promise<void> {
   const pr = getSelectedPr();
   if (!pr) return;
-  const repository = getRepositories().find((candidate) => candidate.id === pr.repositoryId);
+  const repository = getRepoById(pr.repositoryId);
   if (!repository) return;
 
   try {

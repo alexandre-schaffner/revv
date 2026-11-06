@@ -22,8 +22,8 @@
 // component has no local `<style>` so its classes are unhashed and the
 // global stylesheet matches by class name alone.
 //
-// Reduced motion: JS variants skip the ticker and render
-// `idleOpacity(...)`. CSS variants are caught by the global
+// Reduced motion: JS variants read `prefersReducedMotion()` (reactive), skip
+// the ticker and render `idleOpacity(...)`. CSS variants are caught by the global
 // `prefers-reduced-motion: reduce` rule in `app.css`. The matrix is
 // decorative variation on top of the always-present `.stream-cursor`
 // (motion-essential), so we don't bypass the global reset.
@@ -33,6 +33,7 @@
 //   size    — 'default' (5px dots, 29px) | 'small' (3px dots, 19px)
 //   active  — false suspends the JS sequencers
 
+import { prefersReducedMotion } from "$lib/motion";
 import {
   DOTMATRIX_VARIANTS,
   type DotmatrixVariant,
@@ -55,18 +56,7 @@ const MATRIX_5X5 = (() =>
     col: i % 5,
   })))();
 
-// ── Reduced motion detection ───────────────────────────────────────────
-let reducedMotion = $state(false);
-$effect(() => {
-  if (typeof window === "undefined") return;
-  const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-  reducedMotion = mq.matches;
-  const update = () => {
-    reducedMotion = mq.matches;
-  };
-  mq.addEventListener("change", update);
-  return () => mq.removeEventListener("change", update);
-});
+const reducedMotion = $derived(prefersReducedMotion());
 
 // ── JS sequencer state (used by 'stepped' and 'phase' variants) ────────
 const config: VariantConfig = $derived(DOTMATRIX_VARIANTS[variant]);

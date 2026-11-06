@@ -3,16 +3,20 @@ import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
+import { gsapEnter, tokens } from "$lib/motion";
 import { endSession } from "$lib/session/lifecycle.svelte";
 import { cancelSignIn, getIsAuthenticated, setForceOnboardingFlow } from "$lib/stores/auth.svelte";
 import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
 import { normalizeGithubHost } from "$lib/utils/github-host";
 import ContinueArrow from "./ContinueArrow.svelte";
+import { ACTIONS_IN, MARK_POP, OPTION_IN } from "./motion";
 
 interface Props {
   onContinue: () => void;
   onBack?: () => void;
 }
+
+const DROP_IN = { y: -4, duration: tokens.smooth } as const;
 
 let { onContinue, onBack }: Props = $props();
 
@@ -87,9 +91,11 @@ async function handleContinue() {
 	<fieldset class="options">
 		<legend class="visually-hidden">GitHub host</legend>
 
-		<label class="option" data-selected={selected === PUBLIC}>
+		<label class="option" data-selected={selected === PUBLIC} use:gsapEnter={{ ...OPTION_IN, delay: 0.08 }}>
 			<input type="radio" name="host" value={PUBLIC} bind:group={selected} />
-			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-mark" aria-hidden="true">
+				{#if selected === PUBLIC}<span class="option-dot" use:gsapEnter={MARK_POP}></span>{/if}
+			</span>
 			<span class="option-body">
 				<span class="option-row">
 					<span class="option-name">GitHub</span>
@@ -98,9 +104,11 @@ async function handleContinue() {
 			</span>
 		</label>
 
-		<label class="option" data-selected={selected === CUSTOM}>
+		<label class="option" data-selected={selected === CUSTOM} use:gsapEnter={{ ...OPTION_IN, delay: 0.16 }}>
 			<input type="radio" name="host" value={CUSTOM} bind:group={selected} />
-			<span class="option-mark" aria-hidden="true"></span>
+			<span class="option-mark" aria-hidden="true">
+				{#if selected === CUSTOM}<span class="option-dot" use:gsapEnter={MARK_POP}></span>{/if}
+			</span>
 			<span class="option-body">
 				<span class="option-row">
 					<span class="option-name">GitHub Enterprise</span>
@@ -111,7 +119,7 @@ async function handleContinue() {
 	</fieldset>
 
 	{#if selected === CUSTOM}
-		<div class="custom">
+		<div class="custom" use:gsapEnter={DROP_IN}>
 			<div class="field">
 				<label class="field-label" for="ghe-host">Enterprise host</label>
 				<input
@@ -169,7 +177,7 @@ async function handleContinue() {
 				</button>
 
 				{#if showInstructions}
-					<ol class="guide-steps">
+					<ol class="guide-steps" use:gsapEnter={DROP_IN}>
 						<li>
 							<span class="step-copy">
 								<span class="step-title">Open the new app page</span>
@@ -245,7 +253,7 @@ async function handleContinue() {
 		</div>
 	{/if}
 
-	<div class="actions">
+	<div class="actions" use:gsapEnter={ACTIONS_IN}>
 		<button class="primary" onclick={handleContinue} disabled={isSaving || !canContinue}>
 			<span>Continue</span>
 			<ContinueArrow />
@@ -330,26 +338,6 @@ async function handleContinue() {
 		border-bottom: 1px solid var(--ob-border);
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: option-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	.option:nth-child(2) {
-		animation-delay: 80ms;
-	}
-
-	.option:nth-child(3) {
-		animation-delay: 160ms;
-	}
-
-	@keyframes option-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.option:hover {
@@ -376,22 +364,11 @@ async function handleContinue() {
 		border-color: var(--ob-text-italic);
 	}
 
-	.option[data-selected='true'] .option-mark::after {
-		content: '';
+	.option-dot {
 		position: absolute;
 		inset: 3px;
 		border-radius: 50%;
 		background: var(--ob-text-italic);
-		animation: mark-pop var(--duration-slow) var(--ease-out-expo);
-	}
-
-	@keyframes mark-pop {
-		from {
-			transform: scale(0);
-		}
-		to {
-			transform: scale(1);
-		}
 	}
 
 	.option-body {
@@ -427,18 +404,6 @@ async function handleContinue() {
 	.actions {
 		display: flex;
 		justify-content: flex-end;
-		animation: actions-in var(--duration-ceremonial-medium) var(--ease-out-expo) 240ms backwards;
-	}
-
-	@keyframes actions-in {
-		from {
-			opacity: 0;
-			transform: translateY(6px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.primary {
@@ -487,18 +452,6 @@ async function handleContinue() {
 		flex-direction: column;
 		gap: 22px;
 		margin-top: -8px;
-		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
-	}
-
-	@keyframes custom-in {
-		from {
-			opacity: 0;
-			transform: translateY(-4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.field {
@@ -646,7 +599,6 @@ async function handleContinue() {
 		font-size: 13px;
 		line-height: 1.5;
 		color: var(--ob-text-body);
-		animation: custom-in var(--duration-smooth) var(--ease-out-expo) backwards;
 		list-style: none;
 	}
 
@@ -771,19 +723,6 @@ async function handleContinue() {
 	@media (max-width: 640px) {
 		.permission-grid {
 			grid-template-columns: 1fr;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.custom,
-		.guide-steps {
-			animation: none !important;
-		}
-
-		.option,
-		.option[data-selected='true'] .option-mark::after,
-		.actions {
-			animation: none !important;
 		}
 	}
 </style>
