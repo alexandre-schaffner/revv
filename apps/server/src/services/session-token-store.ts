@@ -1,19 +1,16 @@
 // ── Session-token store ────────────────────────────────────────────────────
 //
-// Ephemeral bearer-token registry used by the opencode HTTP-MCP routes to
-// authenticate per-job tool calls. Each active job issues one (or more)
-// opaque tokens bound to a payload; the route resolves token → payload per
-// JSON-RPC call. Tokens expire after the runner's time budget plus slack.
+// The bearer tokens every HTTP MCP route authenticates an agent run with:
+// chat turns, walkthrough, recap and stack-brief jobs. A run issues an opaque
+// token bound to a payload; the route resolves token → payload per JSON-RPC
+// call. Tokens expire after the run's ceiling plus slack, so one whose `clear`
+// was missed still dies.
 //
 // Per CLAUDE.md invariant #1 this is coordination-cache only: a server
 // restart wipes the map; the orchestrator's resume path re-issues tokens.
 //
-// Two callers, one shared substrate:
-//   • Recap passes no `liveCheck` — a token resolves to its stored payload
-//     for as long as it hasn't expired, regardless of fiber liveness.
-//   • Walkthrough injects a `liveCheck` so a token stops resolving the moment
-//     its job leaves the in-memory registry (the job died), even before TTL.
-// This is the one real behavioral difference between the two; keep it.
+// Walkthrough injects a `liveCheck`, so a token stops resolving the moment its
+// job leaves the in-memory registry (the job died), even before TTL.
 
 import { Effect, Ref } from "effect";
 

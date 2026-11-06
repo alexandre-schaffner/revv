@@ -4,10 +4,14 @@
 // etc.). Each transport is a thin JSON-RPC router; this module keeps the
 // protocol boilerplate in one place.
 
+import { Effect } from "effect";
 import { Elysia } from "elysia";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "../../ai/providers/mcp-tool-gateway";
+import type { Db } from "../../db";
 import { debug, logError } from "../../logger";
 import { withGraftedSpan } from "../../observability/span-graft";
+import { AppRuntime, type AppServices } from "../../runtime";
+import { DbService } from "../../services/Db";
 
 // ── JSON-RPC 2.0 types ───────────────────────────────────────────────────────
 
@@ -58,28 +62,6 @@ export function extractBearer(req: Request): string | null {
   return match?.[1] ? match[1].trim() : null;
 }
 
-/**
- * Convert a zod object schema to an MCP-ish JSON Schema object. Uses the
- * standard `.toJSONSchema()` method when available, falling back to a
- * permissive schema so the tool is still callable (the zod schema still
- * validates on handler entry).
- */
-export function toJsonSchema(schema: unknown): Record<string, unknown> {
-  try {
-    if (
-      schema != null &&
-      typeof schema === "object" &&
-      "toJSONSchema" in schema &&
-      typeof (schema as { toJSONSchema: unknown }).toJSONSchema === "function"
-    ) {
-      return (schema as { toJSONSchema: () => Record<string, unknown> }).toJSONSchema();
-    }
-  } catch {
-    /* fall through — zod schema still validates on handler entry */
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
 // ── Shared HTTP binder ──────────────────────────────────────────────────────
 
 export type ContextResolution<Ctx, Meta> =
@@ -92,6 +74,8 @@ export type ConnectionResolution<Meta> =
 
 export interface HttpToolCall<Ctx, Meta> {
   readonly toolName: string;
+  /** The validated arguments. */
+  readonly input: unknown;
   readonly ctx: Ctx;
   readonly meta: Meta;
 }
@@ -158,7 +142,9 @@ function handleToolsList<Ctx, Result extends McpToolResult>(
   const tools = specs.map((spec) => ({
     name: spec.name,
     description: spec.description,
-    inputSchema: toJsonSchema(spec.inputSchema),
+    // zod throws on what JSON Schema can't express (a `.transform()`); a
+    // permissive fallback would silently strip the tool's contract.
+    inputSchema: spec.inputSchema.toJSONSchema(),
   }));
   return jsonRpcSuccess(id, { tools });
 }
@@ -198,7 +184,12 @@ async function handleToolsCall<Ctx, Meta, Result extends McpToolResult>(
   }
 
   try {
-    options.beforeToolCall?.({ toolName: name, ctx: resolved.ctx, meta: resolved.meta });
+    options.beforeToolCall?.({
+      toolName: name,
+      input: parsed.data,
+      ctx: resolved.ctx,
+      meta: resolved.meta,
+    });
     const anchorKey = options.traceAnchorKey?.(resolved.meta) ?? null;
     const result = await withGraftedSpan(
       anchorKey,
@@ -356,5 +347,44 @@ export function bindHttp<Ctx, Meta, Result extends McpToolResult>(
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
+  });
+}
+
+// ── Token-authenticated routes ───────────────────────────────────────────────
+
+export interface BindTokenRouteOptions<Ctx, Meta, Payload, Result extends McpToolResult>
+  extends Omit<BindHttpOptions<Ctx, Meta, Result>, "resolveContext" | "resolveConnection"> {
+  /** The bearer's payload from its issuer's token store; `null` when unknown, expired or revoked. */
+  readonly resolveToken: (token: string) => Effect.Effect<Payload | null, never, AppServices>;
+  /** The 403 message for a token that doesn't resolve. */
+  readonly rejected: string;
+  readonly toContext: (payload: Payload, db: Db) => { readonly ctx: Ctx; readonly meta: Meta };
+}
+
+/**
+ * An MCP route whose caller is an agent Revv started, holding a per-run bearer
+ * token: 401 without one, 403 when it doesn't resolve, otherwise the tool
+ * context built from its payload.
+ */
+export function bindTokenMcpRoute<Ctx, Meta, Payload, Result extends McpToolResult>(
+  options: BindTokenRouteOptions<Ctx, Meta, Payload, Result>,
+) {
+  const { resolveToken, rejected, toContext, ...rest } = options;
+  return bindHttp<Ctx, Meta, Result>({
+    ...rest,
+    resolveContext: async (req) => {
+      const token = extractBearer(req);
+      if (!token) return { ok: false, status: 401, message: "Missing bearer token" };
+      const resolved = await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const payload = yield* resolveToken(token);
+          if (payload === null) return null;
+          const { db } = yield* DbService;
+          return { payload, db };
+        }),
+      );
+      if (!resolved) return { ok: false, status: 403, message: rejected };
+      return { ok: true, ...toContext(resolved.payload, resolved.db) };
+    },
   });
 }

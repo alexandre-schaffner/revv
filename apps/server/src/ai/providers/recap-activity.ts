@@ -1,28 +1,13 @@
 import type { Activity, ActivityKind } from "@revv/shared";
 
+/** A recap tool call (by its MCP name) or a built-in agent tool, as a feed activity. */
 export function buildRecapActivity(toolName: string, input: unknown): Activity {
-  const recapToolName = normalizeRecapToolName(toolName);
   return {
-    activityKind: recapActivityKind(recapToolName),
-    toolName: recapToolName,
-    summary: recapActivitySummary(recapToolName, input),
+    activityKind: recapActivityKind(toolName),
+    toolName,
+    summary: recapActivitySummary(toolName, input),
     ...(input !== undefined ? { payload: input } : {}),
   };
-}
-
-export function normalizeRecapToolName(toolName: string): string {
-  const known = [
-    "get_recap_state",
-    "get_pr_diff",
-    "list_open_prs",
-    "get_repo_context",
-    "set_lede",
-    "add_pr_entry",
-    "set_theme_summary",
-    "complete_recap",
-    "Bash",
-  ];
-  return known.find((name) => toolName === name || toolName.endsWith(`_${name}`)) ?? toolName;
 }
 
 function recapActivityKind(toolName: string): ActivityKind {

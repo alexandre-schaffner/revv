@@ -1,39 +1,17 @@
 import { Effect } from "effect";
 import type { StackBriefToolContext } from "../../ai/providers/stack-brief-tools";
 import { STACK_BRIEF_TOOL_BUNDLE } from "../../ai/providers/stack-brief-tools";
-import { AppRuntime } from "../../runtime";
 import { StackBriefJobs } from "../../services/stacks/StackBriefJobs";
-import { bindHttp, type ContextResolution, extractBearer } from "./utils";
+import { bindTokenMcpRoute } from "./utils";
 
-interface StackBriefRouteMeta {
-  readonly briefId: string;
-}
-
-async function resolveContext(
-  req: Request,
-): Promise<ContextResolution<StackBriefToolContext, StackBriefRouteMeta>> {
-  const token = extractBearer(req);
-  if (!token) {
-    return { ok: false, status: 401, message: "Missing bearer token" };
-  }
-  const ctx = await AppRuntime.runPromise(
-    Effect.flatMap(StackBriefJobs, (jobs) => jobs.resolveSessionToken(token)),
-  );
-  if (!ctx) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Session token not recognized, expired, or job no longer running",
-    };
-  }
-  return { ok: true, ctx, meta: { briefId: ctx.briefId } };
-}
-
-export const mcpStackBriefRoute = bindHttp({
+export const mcpStackBriefRoute = bindTokenMcpRoute({
   path: "/stack-brief",
   logScope: "mcp-stack-brief-route",
   bundle: STACK_BRIEF_TOOL_BUNDLE,
-  resolveContext,
+  resolveToken: (token) =>
+    Effect.flatMap(StackBriefJobs, (jobs) => jobs.resolveSessionToken(token)),
+  rejected: "Session token not recognized, expired, or job no longer running",
+  toContext: (ctx: StackBriefToolContext) => ({ ctx, meta: { briefId: ctx.briefId } }),
   logInbound: true,
   beforeToolCall: ({ toolName, ctx }) => ctx.onToolCall(toolName),
   servedMessage: (requests, _ctx, meta) =>
