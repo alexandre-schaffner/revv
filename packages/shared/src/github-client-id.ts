@@ -9,3 +9,19 @@ export const GITHUB_CLIENT_ID_HINT =
 export function isLikelyGitHubClientId(value: string): boolean {
   return /^(Iv|Ov)[A-Za-z0-9]{8,}$/.test(value.trim());
 }
+
+/**
+ * The client ID saved in settings for `host`, or null. A saved ID belongs to
+ * the GitHub Enterprise host it was entered with and is never sent to any
+ * other host: github.com always signs in through Revv's bundled registration.
+ */
+export function savedClientIdForHost(
+  host: string,
+  saved: { readonly githubHost: string; readonly githubClientId: string },
+): string | null {
+  const target = host.trim().toLowerCase();
+  if (target === "github.com") return null;
+  if (saved.githubHost.trim().toLowerCase() !== target) return null;
+  const clientId = saved.githubClientId.trim();
+  return clientId === "" ? null : clientId;
+}

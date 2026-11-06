@@ -36,7 +36,6 @@ import { recapRoutes } from "./routes/recaps";
 import { repoRoutes } from "./routes/repos";
 import { reviewRoutes } from "./routes/reviews";
 import { settingsRoutes } from "./routes/settings";
-import { signOutRoute } from "./routes/sign-out";
 import { stackReviewRoutes } from "./routes/stack-review";
 import { repoStackRoutes, stackMergeRunRoutes, stackRoutes } from "./routes/stacks";
 import { threadRoutes } from "./routes/threads";
@@ -46,7 +45,7 @@ import { walkthroughsRoute } from "./routes/walkthroughs";
 import { AppRuntime } from "./runtime";
 import { appDatabase } from "./services/Db";
 import { DbMaintenance } from "./services/DbMaintenance";
-import { Identity } from "./services/Identity";
+import { GitHubAccounts } from "./services/github/accounts";
 import { PollScheduler } from "./services/PollScheduler";
 import { ensureHighlighter } from "./services/PrerenderCache";
 import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
@@ -153,7 +152,6 @@ const app = new Elysia()
   .use(threadRoutes)
   .use(updateManifestRoute)
   .use(settingsRoutes)
-  .use(signOutRoute)
   .use(deviceAuthRoutes)
   .use(onboardingRoutes)
   .use(userRoutes)
@@ -252,7 +250,7 @@ watchDesktopParent(serverEnv.desktopPid, () => void gracefulShutdown("desktop ex
 // so the first poll cycle reads tokens from their new home. One-time and
 // idempotent — a no-op once every row has been migrated.
 await AppRuntime.runPromise(
-  Effect.flatMap(Identity, (identity) => identity.migrateLegacyTokenSecrets),
+  Effect.flatMap(GitHubAccounts, (accounts) => accounts.migrateLegacyTokens),
 )
   .then((n) => {
     if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);

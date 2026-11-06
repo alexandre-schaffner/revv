@@ -39,19 +39,27 @@ import {
 } from "./walkthrough-cache-format";
 import { exportWalkthroughSnapshot, validateSnapshot } from "./walkthrough-snapshot";
 
-function resolveRepoFullName(db: Db, prId: string): string | null {
+function resolveRepo(
+  db: Db,
+  prId: string,
+): { readonly id: string; readonly fullName: string; readonly accountId: string } | null {
   const pr = db
     .select({ repositoryId: pullRequests.repositoryId })
     .from(pullRequests)
     .where(eq(pullRequests.id, prId))
     .get();
   if (!pr) return null;
-  const repo = db
-    .select({ fullName: repositories.fullName })
-    .from(repositories)
-    .where(eq(repositories.id, pr.repositoryId))
-    .get();
-  return repo?.fullName ?? null;
+  return (
+    db
+      .select({
+        id: repositories.id,
+        fullName: repositories.fullName,
+        accountId: repositories.accountId,
+      })
+      .from(repositories)
+      .where(eq(repositories.id, pr.repositoryId))
+      .get() ?? null
+  );
 }
 
 export class RemoteWalkthroughCache extends Context.Service<
@@ -302,8 +310,8 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             return;
           }
 
-          const repoFullName = resolveRepoFullName(db, wtRow.pullRequestId);
-          if (!repoFullName) {
+          const repo = resolveRepo(db, wtRow.pullRequestId);
+          if (!repo) {
             return yield* Effect.fail(
               new CacheUnavailable({
                 message: `repoFullName unresolvable for walkthrough ${walkthroughId}`,
@@ -311,9 +319,11 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             );
           }
 
+          const repoFullName = repo.fullName;
+
           // ── Eligibility gate ────────────────────────────────────────────
           const canPush = yield* eligibility
-            .canPush(repoFullName)
+            .canPush(repo.id)
             .pipe(Effect.catch(() => Effect.succeed(false)));
           if (!canPush) {
             debug(
@@ -353,7 +363,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           if (signingMode !== "off") {
             const sigMsg = cacheSigningMessage(repoFullName, snapshot.prHeadSha, contentSha256);
-            const signResult = yield* signer.sign(sigMsg).pipe(
+            const signResult = yield* signer.sign(sigMsg, repo.accountId).pipe(
               Effect.mapError(
                 (e) =>
                   new CacheSerialization({

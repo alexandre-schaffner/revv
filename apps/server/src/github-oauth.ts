@@ -1,20 +1,16 @@
-import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId } from "@revv/shared";
+import { GITHUB_CLIENT_ID_HINT, isLikelyGitHubClientId, savedClientIdForHost } from "@revv/shared";
 import { serverEnv } from "./config";
+import { isPublicGitHub } from "./domain/github-host";
 
 /**
  * Per-host GitHub OAuth wiring shared by the device-code sign-in flow
- * (`routes/device-auth.ts`) and the token-refresh path (`TokenProvider`).
+ * (`routes/device-auth.ts`) and the token-refresh grant (`GitHubAccounts`).
  *
  * Revv targets github.com with a bundled public OAuth App (or, in Pro, a
  * bundled GitHub App), and any GitHub Enterprise host with a client ID the
  * user supplies during onboarding — no GHE host is baked in. The device-code
  * flow — including its `refresh_token` grant — never needs a `client_secret`.
  */
-
-/** `true` for public github.com, `false` for any GitHub Enterprise host. */
-export function isPublicGitHub(host: string): boolean {
-  return host === "github.com";
-}
 
 /**
  * `true` when this host authenticates via the **bundled** Revv GitHub App
@@ -81,8 +77,8 @@ export class InvalidGitHubClientIdError extends Error {
  * GHE host and must never be applied to github.com. Otherwise a stale GHE id
  * left in settings after switching back to a github.com account (the switch
  * updates only the host) would be POSTed to github.com's device-code endpoint,
- * which 404s. See the `settings.githubHost==='github.com'` clamp in
- * `SettingsService.updateSettings` and the guard in `resolveGithubUrls`.
+ * which 404s. `savedClientIdForHost` (in `@revv/shared`) applies the same
+ * rule to the saved ID.
  *
  * Throws a clear error when github.com lacks `GITHUB_CLIENT_ID_PUBLIC`, or when
  * a GHE host has no client ID at all, so the user gets a diagnosable message
@@ -118,7 +114,15 @@ export function clientIdForHost(host: string, customClientId?: string | null): s
   );
 }
 
-/** OAuth token endpoint (used for both device-code exchange and refresh). */
-export function tokenUrlForHost(host: string): string {
-  return `https://${host}/login/oauth/access_token`;
+/**
+ * The client_id to sign in to (or refresh a token on) `host`: an explicit
+ * `override` (a deep link's or onboarding's transient input), else the one
+ * saved for that host, else the bundled/env one.
+ */
+export function resolveClientId(
+  host: string,
+  saved: { readonly githubHost: string; readonly githubClientId: string },
+  override?: string,
+): string {
+  return clientIdForHost(host, override?.trim() || savedClientIdForHost(host, saved));
 }

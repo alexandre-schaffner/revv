@@ -8,19 +8,19 @@
 // use ("require approvals from code owners") — revoking a teammate's repo
 // access also revokes their cache authority on next verification.
 //
-// Results are TTL-cached in memory to avoid hammering the GitHub API on every
-// cache hit. The cache is invalidated whenever settings change (e.g. host set
-// changes) via the SettingsService.settingsChanges() stream.
+// Permissions are asked as the account that tracks the repository, on the
+// repository's own host. Results are TTL-cached in memory to avoid hammering
+// the GitHub API on every cache hit.
 
-import { eq } from "drizzle-orm";
-import { Context, Effect, Layer, Stream } from "effect";
-import { account, user } from "../db/schema";
-import { hostFromProviderId } from "../domain/provider-id";
+import { and, eq } from "drizzle-orm";
+import { Context, Effect, Layer } from "effect";
+import { repositories } from "../db/schema";
+import { dbTry } from "../effects/db-try";
 import { debug } from "../logger";
 import { DbService } from "./Db";
-import { GitHubGateway } from "./GitHub";
-import { SettingsService } from "./Settings";
-import { TokenProvider } from "./TokenProvider";
+import { GitHubAccounts } from "./github/accounts";
+import { GitHubGateway } from "./github/gateway";
+import type { GitHubClient } from "./github/transport";
 
 type PermLevel = "admin" | "maintain" | "write" | "triage" | "read" | "none";
 
@@ -42,21 +42,22 @@ export class CacheEligibility extends Context.Service<
   CacheEligibility,
   {
     /**
-     * Returns `true` iff the local user currently has at least `write`
-     * permission on `repoFullName`. Never raises — any failure → `false`.
+     * Returns `true` iff the account tracking the repository currently has
+     * at least `write` permission on it. Never raises — any failure → `false`.
      *
      * Used on push to gate whether this machine is allowed to publish to
      * the shared cache. A read-only contributor still receives cache hits;
      * they simply don't push.
      */
-    readonly canPush: (repoFullName: string) => Effect.Effect<boolean>;
+    readonly canPush: (repoId: string) => Effect.Effect<boolean>;
     /**
      * Returns `true` iff `signerLogin` on `signerHost` currently has at
      * least `write` permission on `repoFullName`. Never raises — failure → `false`.
      *
-     * Used on fetch after signature verification succeeds. If `signerHost`
-     * doesn't match any of the local user's authenticated hosts, returns
-     * `false` immediately without hitting the GitHub API.
+     * Used on fetch after signature verification succeeds. Asked as the
+     * account that tracks `repoFullName` on `signerHost`; with none (the
+     * signer is on another host, or this machine doesn't track the repo
+     * there), returns `false` without calling GitHub.
      */
     readonly isSignerEligible: (
       repoFullName: string,
@@ -71,16 +72,11 @@ export class CacheEligibility extends Context.Service<
 export const CacheEligibilityLive = Layer.effect(
   CacheEligibility,
   Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const githubSvc = yield* GitHubGateway;
+    const github = yield* GitHubGateway;
+    const accounts = yield* GitHubAccounts;
     const { db } = yield* DbService;
-    const tokenProvider = yield* TokenProvider;
 
     const permCache = new Map<string, CacheEntry>();
-
-    function permCacheKey(host: string, owner: string, repo: string, login: string): string {
-      return `${host}:${owner}/${repo}:${login}`;
-    }
 
     function getCached(key: string): PermLevel | null {
       const entry = permCache.get(key);
@@ -91,135 +87,59 @@ export const CacheEligibilityLive = Layer.effect(
       return null;
     }
 
-    function getLocalAccountForHost(
-      targetHost: string,
-    ): { accountId: string; login: string } | null {
-      const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
-      if (!firstUser) return null;
-
-      const rows = db
-        .select({
-          id: account.id,
-          providerId: account.providerId,
-          githubLogin: account.githubLogin,
-        })
-        .from(account)
-        .where(eq(account.userId, firstUser.id))
-        .all();
-
-      for (const row of rows) {
-        if (!row.githubLogin) continue;
-        const host = hostFromProviderId(row.providerId);
-        if (host === targetHost) {
-          return { accountId: row.id, login: row.githubLogin };
-        }
-      }
-      return null;
-    }
-
-    function getAllLocalHosts(): Set<string> {
-      const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
-      if (!firstUser) return new Set();
-      const rows = db
-        .select({ providerId: account.providerId })
-        .from(account)
-        .where(eq(account.userId, firstUser.id))
-        .all();
-      return new Set(rows.map((r) => hostFromProviderId(r.providerId)));
-    }
-
-    const fetchPermission = (
-      token: string,
-      host: string,
-      owner: string,
-      repo: string,
-      login: string,
-    ): Effect.Effect<PermLevel> =>
-      githubSvc.repos
-        .collaboratorPermission(token, host, owner, repo, login)
-        .pipe(Effect.catch(() => Effect.succeed("none" as PermLevel)));
-
-    // Invalidate on settings changes (host set may change).
-    yield* Effect.forkScoped(
-      settingsSvc
-        .settingsChanges()
-        .pipe(Stream.runForEach(() => Effect.sync(() => permCache.clear()))),
-    );
-
     const resolvePermission = (
-      host: string,
-      owner: string,
-      repo: string,
+      client: GitHubClient,
+      fullName: string,
       login: string,
-      token: string,
     ): Effect.Effect<PermLevel> => {
-      const key = permCacheKey(host, owner, repo, login);
+      const key = `${client.host}:${fullName}:${login}`;
       const cached = getCached(key);
       if (cached !== null) return Effect.succeed(cached);
-
-      return fetchPermission(token, host, owner, repo, login).pipe(
+      return github.repos.collaboratorPermission(client, fullName, login).pipe(
+        Effect.catch(() => Effect.succeed("none" as PermLevel)),
         Effect.tap((perm) =>
           Effect.sync(() => {
             permCache.set(key, { permission: perm, fetchedAt: Date.now() });
-            debug("cache-eligibility", `${login}@${host} has ${perm} on ${owner}/${repo}`);
+            debug("cache-eligibility", `${login}@${client.host} has ${perm} on ${fullName}`);
           }),
         ),
       );
     };
 
     return CacheEligibility.of({
-      canPush: (repoFullName) =>
+      canPush: (repoId) =>
         Effect.gen(function* () {
-          const parts = repoFullName.split("/");
-          if (parts.length !== 2) return false;
-          const [owner, repo] = parts as [string, string];
-
-          // Use settings host as the authority for "which account do I use?"
-          const host = yield* settingsSvc.githubHost();
-
-          const localAcct = yield* Effect.try({
-            try: () => getLocalAccountForHost(host),
-            catch: () => null,
-          }).pipe(Effect.catch(() => Effect.succeed(null)));
-
-          if (!localAcct) return false;
-          const token = yield* tokenProvider
-            .getTokenByAccountId(localAcct.accountId)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          if (!token) return false;
-
-          const perm = yield* resolvePermission(host, owner, repo, localAcct.login, token);
-          return isEligible(perm);
+          const repo = yield* dbTry("read repository", () =>
+            db
+              .select({ fullName: repositories.fullName, accountId: repositories.accountId })
+              .from(repositories)
+              .where(eq(repositories.id, repoId))
+              .get(),
+          );
+          if (!repo) return false;
+          const { githubLogin } = yield* accounts.profile(repo.accountId);
+          if (!githubLogin) return false;
+          const client = yield* accounts.clientFor(repo.accountId);
+          return isEligible(yield* resolvePermission(client, repo.fullName, githubLogin));
         }).pipe(Effect.catch(() => Effect.succeed(false))),
 
       isSignerEligible: (repoFullName, signerHost, signerLogin) =>
         Effect.gen(function* () {
-          const parts = repoFullName.split("/");
-          if (parts.length !== 2) return false;
-          const [owner, repo] = parts as [string, string];
-
-          // The local user must have an account on signerHost to query permissions.
-          const localHosts = yield* Effect.try({
-            try: () => getAllLocalHosts(),
-            catch: () => new Set<string>(),
-          }).pipe(Effect.catch(() => Effect.succeed(new Set<string>())));
-
-          if (!localHosts.has(signerHost)) return false;
-
-          // Use the local user's token for this host to query the signer's permission.
-          const localAcct = yield* Effect.try({
-            try: () => getLocalAccountForHost(signerHost),
-            catch: () => null,
-          }).pipe(Effect.catch(() => Effect.succeed(null)));
-
-          if (!localAcct) return false;
-          const token = yield* tokenProvider
-            .getTokenByAccountId(localAcct.accountId)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          if (!token) return false;
-
-          const perm = yield* resolvePermission(signerHost, owner, repo, signerLogin, token);
-          return isEligible(perm);
+          const repo = yield* dbTry("read repository", () =>
+            db
+              .select({ accountId: repositories.accountId })
+              .from(repositories)
+              .where(
+                and(
+                  eq(repositories.fullName, repoFullName),
+                  eq(repositories.githubHost, signerHost),
+                ),
+              )
+              .get(),
+          );
+          if (!repo) return false;
+          const client = yield* accounts.clientFor(repo.accountId);
+          return isEligible(yield* resolvePermission(client, repoFullName, signerLogin));
         }).pipe(Effect.catch(() => Effect.succeed(false))),
     });
   }),
