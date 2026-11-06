@@ -1,7 +1,7 @@
 import { type MergeMethod, type StackMergePlan, type StackMergeRun, stackKey } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
-import { plain, thrownMessage } from "$lib/api/wire";
+import { type ApiError, apiErrorMessage } from "$lib/api/errors";
+import { thrownMessage } from "$lib/api/wire";
 import { RequestState } from "./_types";
 import { onStackUpdated, refreshStack } from "./stacks.svelte";
 
@@ -48,17 +48,12 @@ export async function loadStackMergePlan(prId: string, quiet = false): Promise<v
   try {
     const { data, error } = await api.api.prs({ id: prId }).stack["merge-plan"].get();
     if (openFor !== prId) return;
-    if (error || !data || !("layers" in data)) {
-      plan = RequestState.error(
-        error
-          ? apiErrorMessage(error, "Couldn't read the stack from GitHub")
-          : "Unexpected response",
-      );
+    if (error) {
+      plan = RequestState.error(apiErrorMessage(error, "Couldn't read the stack from GitHub"));
       return;
     }
-    const next = plain(data);
-    if (next.latestRun) setRun(next.latestRun);
-    plan = RequestState.ok(next);
+    if (data.latestRun) setRun(data.latestRun);
+    plan = RequestState.ok(data);
   } catch (e) {
     if (openFor === prId) plan = RequestState.error(thrownMessage(e));
   }
@@ -69,19 +64,14 @@ export type StackMergeAnswer =
   | { readonly ok: false; readonly error: string };
 
 async function runCall(
-  call: () => Promise<{
-    data: StackMergeRun | { error: string } | null | undefined;
-    error: { status: number; value?: unknown } | null;
-  }>,
+  call: () => Promise<{ data: StackMergeRun; error: null } | { data: null; error: ApiError }>,
   fallback: string,
 ): Promise<StackMergeAnswer> {
   try {
     const { data, error } = await call();
     if (error) return { ok: false, error: apiErrorMessage(error, fallback) };
-    if (!data || !("status" in data)) return { ok: false, error: fallback };
-    const run = plain(data);
-    setRun(run);
-    return { ok: true, run };
+    setRun(data);
+    return { ok: true, run: data };
   } catch (e) {
     return { ok: false, error: thrownMessage(e) };
   }

@@ -1,10 +1,10 @@
 // The repositories the account tracks: the list, its clone status, and
 // adding, removing and re-cloning one.
 
-import type { CloneStatus, Repository } from "@revv/shared";
+import type { ApiErrorCode, CloneStatus, Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { apiErrorMessage } from "$lib/api/errors";
+import { apiErrorBody, apiErrorMessage } from "$lib/api/errors";
 import { requestSync } from "$lib/stores/sync.svelte";
 import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
 import { fetchPrs, removeRepoPrsLocally } from "./prs.svelte";
@@ -101,6 +101,7 @@ export type AddRepoInput = string | AddRepoBody;
 export class AddRepoError extends Error {
   constructor(
     message: string,
+    readonly code: ApiErrorCode | null,
     readonly detail: string | null,
     readonly action: { readonly label: string; readonly url: string } | null,
   ) {
@@ -109,20 +110,23 @@ export class AddRepoError extends Error {
   }
 }
 
+function accessAction(value: unknown): AddRepoError["action"] {
+  if (typeof value !== "object" || value === null) return null;
+  const { label, url } = value as Record<string, unknown>;
+  return typeof label === "string" && typeof url === "string" ? { label, url } : null;
+}
+
 export async function addRepo(input: AddRepoInput): Promise<void> {
   const body = typeof input === "string" ? { fullName: input } : input;
   const { error } = await api.api.repos.post(body);
   if (error) {
-    const value = error.value as
-      | {
-          error?: string;
-          message?: string;
-          detail?: string;
-          action?: { label: string; url: string };
-        }
-      | undefined;
-    const msg = value?.error ?? value?.message ?? `Failed to add repository (HTTP ${error.status})`;
-    throw new AddRepoError(msg, value?.detail ?? null, value?.action ?? null);
+    const refusal = apiErrorBody(error);
+    throw new AddRepoError(
+      apiErrorMessage(error, "Failed to add repository"),
+      refusal?.code ?? null,
+      typeof refusal?.detail === "string" ? refusal.detail : null,
+      accessAction(refusal?.action),
+    );
   }
   await fetchRepos();
   // The new repo's PRs arrive over `prs:updated` once the sync has run.

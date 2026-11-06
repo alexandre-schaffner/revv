@@ -5,7 +5,11 @@
 
 import { isMaintainerLogin, type UserUpdatedEnvelope } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { apiErrorMessage, bodyMessage } from "$lib/api/errors";
+import type { EdenData } from "$lib/api/wire";
 import { authClient } from "$lib/auth-client";
+import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
 import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
 import { surfaceWindow } from "$lib/utils/surface-window";
 
@@ -46,19 +50,19 @@ let deviceFlow = $state<{
   host?: string;
   clientId?: string;
 } | null>(null);
-export type LocalAccount = {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-  accounts: Array<{
-    host: string;
-    githubLogin: string | null;
-    avatarUrl: string | null;
-  }>;
-};
+/** A local user and its GitHub account on each host. */
+export type LocalAccount = EdenData<(typeof api.api.auth)["local-accounts"]["get"]>[number];
 
-let localAccounts = $state<LocalAccount[]>([]);
+let localAccounts = $state<readonly LocalAccount[]>([]);
+/** Whether a signed-out window has finished checking the sessions it holds. */
+let localAccountsLoaded = $state(false);
+let localAccountsRead = 0;
+/**
+ * The signed-out window skips the account picker: the user asked to sign in
+ * with another account, changed host mid-onboarding, or removed the account
+ * the window was on. Lasts until the next sign-in.
+ */
+let accountPickerDismissed = $state(false);
 let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let loadUserRetryAttempts = $state(0);
 let authRestoreError = $state<string | null>(null);
@@ -86,8 +90,24 @@ export function onAuthReauthCleared(): void {
   reauthRequired = null;
 }
 
-export function getLocalAccounts(): LocalAccount[] {
+/**
+ * The accounts this window can switch to: every local user with a live
+ * session when signed in, else the ones whose session this machine holds.
+ */
+export function getLocalAccounts(): readonly LocalAccount[] {
   return localAccounts;
+}
+
+export function getLocalAccountsLoaded(): boolean {
+  return localAccountsLoaded;
+}
+
+export function getAccountPickerDismissed(): boolean {
+  return accountPickerDismissed;
+}
+
+export function dismissAccountPicker(): void {
+  accountPickerDismissed = true;
 }
 
 const isAuthenticated = $derived((getToken() ?? "").length > 0);
@@ -143,14 +163,16 @@ export function getDeviceFlow(): typeof deviceFlow {
 }
 
 /**
- * Forget the signed-in identity and its token. Called by the session
- * lifecycle; stores holding account data are reset there, not here.
+ * Forget the signed-in identity and its token, then list the held sessions a
+ * signed-out window offers. Called by the session lifecycle; stores holding
+ * account data are reset there, not here.
  */
 export function clearIdentity(): void {
   resetLoadUserRetryState();
   clearToken();
   user = null;
   localAccounts = [];
+  localAccountsLoaded = false;
   identityAttempted = false;
   // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
   // signed-out session must clear it (and any stale sign-in error) — otherwise
@@ -158,6 +180,7 @@ export function clearIdentity(): void {
   reauthRequired = null;
   error = null;
   signInErrorCode = null;
+  void fetchLocalAccounts();
 }
 
 function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
@@ -166,17 +189,13 @@ function parseSignInErrorCode(value: unknown): SignInErrorCode | null {
     : null;
 }
 
-async function signInHttpError(res: Response): Promise<Error> {
-  const body = await res.text().catch(() => "");
-  let detail = body.trim();
-  try {
-    const parsed = JSON.parse(body) as { error?: string; code?: unknown };
-    if (parsed?.error) detail = parsed.error;
-    signInErrorCode = parseSignInErrorCode(parsed?.code);
-  } catch {
-    // Plain-text body — use it as-is.
-  }
-  return new Error(`Sign-in request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+function signInRefusal(refusal: { status: number; value: unknown }): Error {
+  const { value } = refusal;
+  signInErrorCode = parseSignInErrorCode(
+    typeof value === "object" && value !== null && "code" in value ? value.code : null,
+  );
+  const detail = typeof value === "string" ? value.trim() : (bodyMessage(value) ?? "");
+  return new Error(`Sign-in request failed (${refusal.status})${detail ? `: ${detail}` : ""}`);
 }
 
 function signInErrorMessage(e: unknown): string {
@@ -244,23 +263,10 @@ export async function signIn(host?: string, clientId?: string): Promise<boolean>
   signInErrorCode = null;
   isLoading = true;
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/device/init`, {
-      method: "POST",
-      ...(host
-        ? {
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ host, ...(clientId ? { client_id: clientId } : {}) }),
-          }
-        : {}),
-    });
-    if (!res.ok) throw await signInHttpError(res);
-    const data = (await res.json()) as {
-      device_code: string;
-      user_code: string;
-      verification_uri: string;
-      expires_in: number;
-      interval: number;
-    };
+    const { data, error: refusal } = await api.api.auth.device.init.post(
+      host ? { host, ...(clientId ? { client_id: clientId } : {}) } : undefined,
+    );
+    if (refusal) throw signInRefusal(refusal);
     deviceFlow = {
       userCode: data.user_code,
       verificationUri: data.verification_uri,
@@ -301,36 +307,27 @@ async function poll(): Promise<void> {
   }
 
   try {
-    const body: Record<string, string> = { device_code: deviceFlow.deviceCode };
     const token = getToken();
-    if (token) body.session_token = token;
-    if (deviceFlow.host) body.host = deviceFlow.host;
-    if (deviceFlow.clientId) body.client_id = deviceFlow.clientId;
-    const res = await fetch(`${API_BASE_URL}/api/auth/device/poll`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await res.json()) as {
-      status?: string;
-      token?: string;
-      error?: string;
-      interval?: number;
+    const body = {
+      device_code: deviceFlow.deviceCode,
+      ...(token ? { session_token: token } : {}),
+      ...(deviceFlow.host ? { host: deviceFlow.host } : {}),
+      ...(deviceFlow.clientId ? { client_id: deviceFlow.clientId } : {}),
     };
-
-    if (data.status === "pending") {
+    const { data, error: refusal } = await api.api.auth.device.poll.post(body);
+    if (data?.status === "pending") {
       schedulePoll(deviceFlow.interval);
       return;
     }
 
-    if (data.status === "slow_down") {
+    if (data?.status === "slow_down") {
       const newInterval = data.interval ?? deviceFlow.interval + 5;
       deviceFlow = { ...deviceFlow, interval: newInterval };
       schedulePoll(newInterval);
       return;
     }
 
-    if (data.status === "linked") {
+    if (data?.status === "linked") {
       deviceFlow = null;
       // Re-auth of the active account lands here (session_token was sent).
       // Clear the gate immediately; the server also broadcasts
@@ -340,7 +337,7 @@ async function poll(): Promise<void> {
       return;
     }
 
-    if (data.status === "success" && data.token) {
+    if (data?.status === "success") {
       resetLoadUserRetryState();
       setToken(data.token);
       deviceFlow = null;
@@ -353,13 +350,14 @@ async function poll(): Promise<void> {
     // Surface the server-provided reason when it's anything other than the two
     // well-known device-flow outcomes (no email on account, GitHub API 4xx, DB
     // error, ...).
+    const reason = refusal ? bodyMessage(refusal.value) : undefined;
     error =
-      data.error === "expired"
+      reason === "expired"
         ? "Sign-in timed out. Please try again."
-        : data.error === "access_denied"
+        : reason === "access_denied"
           ? "Sign-in was cancelled."
-          : data.error
-            ? `Sign-in failed: ${data.error}`
+          : reason
+            ? `Sign-in failed: ${reason}`
             : "Sign-in failed. Please try again.";
     signInErrorCode = null;
     cancelSignIn();
@@ -398,17 +396,8 @@ export async function loadUser(): Promise<void> {
       // The server refreshes `user.image` on each poll cycle, so the identity
       // read carries a fresh avatar even after GitHub's signed URL expired.
       try {
-        const res = await fetch(`${API_BASE_URL}/api/user/identity`, {
-          headers: { Authorization: `Bearer ${getToken() ?? tokenSnapshot}` },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as {
-            login: string | null;
-            avatarContent?: string | null;
-            onboardedAt?: string | null;
-            reauthRequired?: boolean;
-            host?: string | null;
-          };
+        const { data } = await api.api.user.identity.get();
+        if (data) {
           if (user) {
             const next: User = {
               ...user,
@@ -429,8 +418,11 @@ export async function loadUser(): Promise<void> {
       } finally {
         identityAttempted = true;
       }
+      accountPickerDismissed = false;
+      holdCurrentSession();
       void fetchLocalAccounts();
     } else if (shouldClearTokenAfterSessionMiss(session.error)) {
+      releaseSession({ token: tokenSnapshot });
       clearIdentity();
     } else {
       const message =
@@ -452,6 +444,19 @@ export async function loadUser(): Promise<void> {
   }
 }
 
+/** Keep the signed-in session, so a signed-out window can offer it again. */
+function holdCurrentSession(): void {
+  const token = getToken();
+  if (!user || !token) return;
+  holdSession({
+    userId: user.id,
+    token,
+    name: user.name,
+    email: user.email,
+    image: user.image ?? null,
+  });
+}
+
 export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
   if (!user) return;
   const next: User = {
@@ -465,6 +470,7 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
     next.image = data.image;
   }
   user = next;
+  holdCurrentSession();
 }
 
 /**
@@ -477,19 +483,12 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
  * actually failed.
  */
 export async function completeOnboarding(): Promise<void> {
-  const token = getToken();
-  if (!token || !user) return;
+  if (!getToken() || !user) return;
   const localStamp = new Date().toISOString();
   user = { ...user, onboardedAt: localStamp };
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/complete`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { onboardedAt: string };
-      if (user) user = { ...user, onboardedAt: data.onboardedAt };
-    }
+    const { data } = await api.api.onboarding.complete.post();
+    if (data && user) user = { ...user, onboardedAt: data.onboardedAt };
   } catch {
     // best-effort — optimistic local stamp keeps the UI moving
   }
@@ -518,36 +517,61 @@ export function endOnboardingReplay(): void {
  * affordance for the settings page, not a destructive reset.
  */
 export async function resetOnboarding(): Promise<void> {
-  const token = getToken();
-  if (!token || !user) return;
+  if (!getToken() || !user) return;
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.setItem(ONBOARDING_REPLAY_KEY, "1");
   }
   user = { ...user, onboardedAt: null };
   try {
-    await fetch(`${API_BASE_URL}/api/onboarding/reset`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    await api.api.onboarding.reset.post();
   } catch {
     // best-effort — local mirror already flipped; the gate is showing.
   }
 }
 
-/** The machine's signed-in users, for the account switcher. Needs a session. */
+/**
+ * Read the accounts this window can switch to. Signed in, the server lists
+ * them; signed out, each held session is asked for its own accounts with its
+ * own token, and one the server no longer honours is forgotten.
+ */
 export async function fetchLocalAccounts(): Promise<void> {
-  if (!getToken()) {
-    localAccounts = [];
-    return;
-  }
+  const read = ++localAccountsRead;
+  const next = getToken() ? await signedInLocalAccounts() : await heldLocalAccounts();
+  if (read !== localAccountsRead || next === null) return;
+  localAccounts = next;
+  localAccountsLoaded = true;
+}
+
+async function signedInLocalAccounts(): Promise<readonly LocalAccount[] | null> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/local-accounts`, { headers: bearer() });
-    if (res.ok) {
-      localAccounts = (await res.json()) as LocalAccount[];
-    }
+    const { data } = await api.api.auth["local-accounts"].get();
+    return data ?? null;
   } catch {
-    // best-effort
+    return null;
   }
+}
+
+async function heldLocalAccounts(): Promise<readonly LocalAccount[]> {
+  const rows = await Promise.all(
+    getHeldSessions().map(async (held): Promise<LocalAccount | null> => {
+      try {
+        const { data, error: refusal } = await api.api.auth.accounts.get({
+          headers: { Authorization: `Bearer ${held.token}` },
+        });
+        if (refusal?.status === 401) releaseSession({ token: held.token });
+        if (!data) return null;
+        const accounts = data
+          .filter((a) => a.connected)
+          .map(({ host, githubLogin, avatarUrl }) => ({ host, githubLogin, avatarUrl }));
+        return accounts.length > 0
+          ? { id: held.userId, name: held.name, email: held.email, image: held.image, accounts }
+          : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return rows.filter((row) => row !== null);
 }
 
 /**
@@ -573,30 +597,15 @@ export async function runAccountSwitch(run: () => Promise<void>): Promise<boolea
 
 /** Ask the server for a session token for another local user. */
 export async function requestAccountSwitch(userId: string): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/auth/switch`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...bearer() },
-    body: JSON.stringify({ userId }),
-  });
-  if (!res.ok) throw new Error("Switch failed");
-  const data = (await res.json()) as { token: string };
+  const { data, error: refusal } = await api.api.auth.switch.post({ userId });
+  if (refusal) throw new Error(apiErrorMessage(refusal, "Switch failed"));
   return data.token;
 }
 
 /** Delete the signed-in user on the server. Throws when the server refuses. */
 export async function deleteAccount(): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/user/account`, {
-    method: "DELETE",
-    headers: bearer(),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to remove account: ${res.status}`);
-  }
-}
-
-function bearer(): Record<string, string> {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const { error: refusal } = await api.api.user.account.delete();
+  if (refusal) throw new Error(apiErrorMessage(refusal, "Failed to remove account"));
 }
 
 export function getUser(): User | null {

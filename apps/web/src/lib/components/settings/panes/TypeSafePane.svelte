@@ -23,7 +23,6 @@ import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input";
 import { Switch } from "$lib/components/ui/switch";
-import { authHeaders } from "$lib/session/token.svelte";
 import { fetchSettings, getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
@@ -36,7 +35,7 @@ const hasApiKey = $derived(getSettings().jev.hasApiKey);
 let apiKeyDraft = $state("");
 let apiKeySaving = $state(false);
 
-type TestResult = Extract<EdenData<typeof api.api.settings.jev.test.post>, { ok: boolean }>;
+type TestResult = EdenData<typeof api.api.settings.jev.test.post>;
 let testState = $state<TestResult | null>(null);
 let testRunning = $state(false);
 
@@ -81,10 +80,7 @@ async function testConnection(): Promise<void> {
   testRunning = true;
   try {
     const { data, error } = await api.api.settings.jev.test.post();
-    testState =
-      data && "ok" in data
-        ? data
-        : { ok: false, error: error ? apiErrorMessage(error, "Test failed") : "No answer" };
+    testState = error ? { ok: false, error: apiErrorMessage(error, "Test failed") } : data;
   } catch (e) {
     testState = { ok: false, error: thrownMessage(e) };
   } finally {

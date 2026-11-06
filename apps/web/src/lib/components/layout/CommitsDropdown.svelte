@@ -10,6 +10,7 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
+import type { EdenData } from "$lib/api/wire";
 import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { refreshPrHead } from "$lib/stores/sync.svelte";
 import {
@@ -23,20 +24,14 @@ import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
 
 let { pr }: { pr: PullRequest } = $props();
 
-type Commit = {
-  sha: string;
-  message: string;
-  authorLogin: string | null;
-  authorAvatarUrl: string | null;
-  date: string | null;
-};
+type Commit = EdenData<ReturnType<typeof api.api.prs>["commits"]["get"]>[number];
 
 let open = $state(false);
 // Cache key is `prId@headSha`, not just `prId`: a head-SHA move makes the
 // cached list wrong (it is missing the new commits and its "latest" marker
 // points at a commit that is no longer the head), so the next open must refetch.
 let cachedKey = $state<string | null>(null);
-let commits = $state<Commit[] | null>(null);
+let commits = $state<readonly Commit[] | null>(null);
 let loading = $state(false);
 let fetchError = $state(false);
 
@@ -118,8 +113,11 @@ async function fetchData(prId: string, headSha: string | null) {
   loading = true;
   fetchError = false;
   try {
-    const res = await api.api.prs({ id: prId }).commits.get();
-    const fetched = (res.data ?? []) as Commit[];
+    const { data: fetched, error } = await api.api.prs({ id: prId }).commits.get();
+    if (error) {
+      fetchError = true;
+      return;
+    }
     commits = fetched;
     cachedKey = key;
     // This endpoint reads GitHub live and returns the PR's commits head-first,

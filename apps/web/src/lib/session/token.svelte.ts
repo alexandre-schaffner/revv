@@ -2,26 +2,23 @@
 // nothing from stores, so any transport can read it without pulling the
 // session's owners into its import graph.
 
-const STORAGE_KEY = "rev_session_token";
+import { persisted, STORAGE_KEYS, textCodec } from "$lib/stores/persisted.svelte";
 
-let token = $state<string | null>(
-  typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null,
-);
+const active = persisted(STORAGE_KEYS.sessionToken, textCodec, null);
 
 export function getToken(): string | null {
-  return token;
+  return active.current;
 }
 
 export function setToken(next: string): void {
-  token = next;
-  if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, next);
+  active.current = next;
 }
 
 export function clearToken(): void {
-  token = null;
-  if (typeof localStorage !== "undefined") localStorage.removeItem(STORAGE_KEY);
+  active.current = null;
 }
 
 export function authHeaders(): Record<string, string> {
+  const token = active.current;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }

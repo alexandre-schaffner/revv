@@ -7,7 +7,6 @@ export { reviewTabs };
 </script>
 
 <script lang="ts">
-import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
@@ -20,58 +19,23 @@ import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
-import { useWalkthroughWatch } from "$lib/components/walkthrough/walkthrough-watch.svelte";
-import { closeReview, openReview } from "$lib/review/open-review";
-import { getToken } from "$lib/session/token.svelte";
+import { useOpenReview } from "$lib/review/open-review.svelte";
 import { useCommands } from "$lib/stores/commands.svelte";
-import { loadConversation } from "$lib/stores/conversation.svelte";
-import {
-  getFilesError,
-  getIsLoadingFiles,
-  getLoadedHeadSha,
-  getReviewFiles,
-} from "$lib/stores/diff-files.svelte";
-import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
-import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
-import {
-  getActiveTab,
-  REVIEW_TABS,
-  setActiveTab,
-} from "$lib/stores/pr-view-state.svelte";
-import { getSelectedPr } from "$lib/stores/route.svelte";
-import { getSettings } from "$lib/stores/settings.svelte";
-import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
-import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
-import { requestThreadSync } from "$lib/stores/sync.svelte";
+import { getFilesError, getIsLoadingFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getActiveTab, REVIEW_TABS, setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/stores/walkthrough.svelte";
-import {
-  fetchWalkthroughSizing,
-  getWalkthroughSizing,
-} from "$lib/stores/walkthrough-sizing.svelte";
+import { getWalkthroughSizing } from "$lib/stores/walkthrough-sizing.svelte";
+
+useOpenReview(() => page.params.prId ?? null);
 
 const pr = $derived(getSelectedPr());
-
-const routePrId = $derived(page.params.prId ?? null);
-const signedIn = $derived(getToken() !== null);
-$effect(() => {
-  const id = routePrId;
-  if (id && signedIn) untrack(() => void loadConversation(id));
-});
-const threadSyncPrId = $derived(pr && pr.id === page.params.prId ? pr.id : null);
-$effect(() => {
-  const id = threadSyncPrId;
-  if (id) untrack(() => requestThreadSync(id));
-});
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
 const routePrIdOrEmpty = $derived(page.params.prId ?? "");
-useWalkthroughWatch(
-  () => routePrIdOrEmpty,
-  () => activeTab === "walkthrough",
-);
 // The tier a generated walkthrough carries. Null until one exists.
 const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
 
@@ -79,60 +43,8 @@ const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
 // PR shows attention needed without a review. Same cached answer either way,
 // so the badge value doesn't change when generation starts.
 const sizing = $derived(getWalkthroughSizing(pr?.id ?? null, pr?.headSha ?? null));
-$effect(() => {
-  const prId = pr?.id;
-  const headSha = pr?.headSha;
-  if (!prId || !headSha || generatedRiskLevel !== null) return;
-  if (sizing !== null) return;
-  void fetchWalkthroughSizing(prId, headSha);
-});
-
-// The first pass, for the head the diff on screen was loaded against. Asked
-// once that diff has loaded, which is also when the server's diff cache is
-// warm; it runs on its own, so the Diff tab has it before any walkthrough.
-// Untracked: the store's rows change on every `hunk-scan:hunk`, and reading
-// them here would re-ask the server for each one.
-const loadedHeadSha = $derived(getLoadedHeadSha(page.params.prId ?? ""));
-const jevEnabled = $derived(getSettings().jev.enabled);
-$effect(() => {
-  const prId = page.params.prId;
-  const headSha = loadedHeadSha;
-  if (!prId || !headSha || !jevEnabled) return;
-  untrack(() => void ensureHunkScan(prId, headSha));
-});
-
-const stackPrId = $derived(pr?.stack ? pr.id : null);
-const stackNumber = $derived(pr?.stack?.number ?? null);
-$effect(() => {
-  const prId = stackPrId;
-  const number = stackNumber;
-  if (!prId || number === null) return;
-  let live = true;
-  let cancelIdle: (() => void) | null = null;
-  void untrack(() => ensureStack(prId, number)).then(() => {
-    if (live) cancelIdle = whenIdle(() => warmNeighbours(prId));
-  });
-  return () => {
-    live = false;
-    cancelIdle?.();
-  };
-});
 
 const stackPlace = $derived(activeTab === "walkthrough" && pr ? readStackPlace(pr.id) : null);
-const stackRepositoryId = $derived(pr?.stack ? pr.repositoryId : null);
-$effect(() => {
-  const repositoryId = stackRepositoryId;
-  if (repositoryId) untrack(() => ensureStackHeadlines(repositoryId));
-});
-
-function whenIdle(run: () => void): () => void {
-  if (typeof window.requestIdleCallback === "function") {
-    const handle = window.requestIdleCallback(run, { timeout: 2000 });
-    return () => window.cancelIdleCallback(handle);
-  }
-  const handle = setTimeout(run, 400);
-  return () => clearTimeout(handle);
-}
 
 const walkthroughRiskLevel = $derived(
   generatedRiskLevel ?? (sizing?.status === "ready" ? sizing.riskLevel : null),
@@ -167,26 +79,6 @@ useShellChrome(() => ({
   tabs: pr ? reviewTabs : undefined,
   actions: pr && activeTab === "walkthrough" ? walkthroughActions : undefined,
 }));
-
-// Record the visit against the current head SHA so the sidebar dot
-// clears now and only reappears if a new commit lands on this PR.
-// Waits until the PR row is loaded for the route id — initial deep-link
-// loads call setSelectedPrId() before fetchPrs() has populated the store.
-$effect(() => {
-  const current = pr;
-  const routeId = page.params.prId;
-  if (!current || !routeId || current.id !== routeId) return;
-  markPrVisited(current.id, current.headSha ?? null);
-});
-
-$effect(() => {
-  const prId = routePrId;
-  if (prId && signedIn) untrack(() => openReview(prId));
-});
-
-onDestroy(() => {
-  closeReview();
-});
 </script>
 
 {#snippet reviewTabs()}

@@ -9,19 +9,19 @@
 // from SQLite on mount instead of starting empty after a desktop reload.
 
 import type {
-  AcpAgentId,
   Activity,
+  ApiErrorCode,
   ChatAttachment,
-  ChatAttachmentMetadata,
   ChatSessionContext,
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
   StreamErrorBody,
 } from "@revv/shared";
-import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { apiErrorCode, apiErrorMessage } from "$lib/api/errors";
 import { SseFrameError, SseHttpError, SseIdleError, streamSse } from "$lib/api/sse-stream";
-import { authHeaders } from "$lib/session/token.svelte";
+import type { EdenData } from "$lib/api/wire";
 
 // Re-export activity types used by stores and components.
 export type { Activity, ChatTask, InteractionMode };
@@ -156,73 +156,39 @@ function agentStreamError(err: unknown): StreamErrorBody | null {
   };
 }
 
+function chat(prId: string) {
+  return api.api.chat({ prId });
+}
+
 /** Clear the agent-side session and worktree+branch for this PR's chat. */
 export async function clearChat(prId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!res.ok && res.status !== 204) {
-    throw new Error(`Failed to clear chat: ${res.status}`);
-  }
+  const { error } = await chat(prId).delete();
+  if (error) throw new Error(apiErrorMessage(error, "Failed to clear chat"));
 }
 
 // ── Plan / interaction-mode endpoints ─────────────────────────────────────
 
 export async function setInteractionMode(prId: string, mode: InteractionMode): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/interaction-mode`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ mode }),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to set interaction mode: ${res.status}`);
-  }
+  const { error } = await chat(prId)["interaction-mode"].patch({ mode });
+  if (error) throw new Error(apiErrorMessage(error, "Failed to set interaction mode"));
 }
 
 export async function approvePlan(prId: string, planId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/plan/${planId}/approve`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(
-      (body.message as string | undefined) ??
-        (body.error as string | undefined) ??
-        `Approve failed: ${res.status}`,
-    );
-  }
+  const { error } = await chat(prId).plan({ planId }).approve.post();
+  if (error) throw new Error(apiErrorMessage(error, "Approve failed"));
 }
 
 export async function rejectPlan(prId: string, planId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/plan/${planId}/reject`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(
-      (body.message as string | undefined) ??
-        (body.error as string | undefined) ??
-        `Reject failed: ${res.status}`,
-    );
-  }
+  const { error } = await chat(prId).plan({ planId }).reject.post();
+  if (error) throw new Error(apiErrorMessage(error, "Reject failed"));
 }
 
-export interface AvailableAgents {
-  agent: AcpAgentId;
-  planAvailable: boolean;
-}
+export type AvailableAgents = EdenData<typeof api.api.chat.agents.available.get>;
 
 export async function fetchAvailableAgents(): Promise<AvailableAgents> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/agents/available`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to load available agents: ${res.status}`);
-  }
-  return (await res.json()) as AvailableAgents;
+  const { data, error } = await api.api.chat.agents.available.get();
+  if (error) throw new Error(apiErrorMessage(error, "Failed to load available agents"));
+  return data;
 }
 
 export async function fetchSessionContext(
@@ -232,126 +198,34 @@ export async function fetchSessionContext(
   // `warm=1` opts into the server's eager path (acquire worktree + harvest slash
   // commands) so the `/`-command menu works on a brand-new chat. The plain fetch
   // stays side-effect-free.
-  const query = opts.warm ? "?warm=1" : "";
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/session-context${query}`, {
-    headers: authHeaders(),
+  const { data, error } = await chat(prId)["session-context"].get({
+    query: opts.warm ? { warm: "1" } : {},
   });
-  if (!res.ok) {
-    throw new Error(`Failed to load chat session context: ${res.status}`);
-  }
-  return (await res.json()) as ChatSessionContext;
+  if (error) throw new Error(apiErrorMessage(error, "Failed to load chat session context"));
+  return data;
 }
 
 // ── History reload ────────────────────────────────────────────────────────
 
-export interface PersistedChatMessage {
-  entryKind: "message";
-  id: string;
-  chatSessionId: string;
-  role: "user" | "assistant";
-  content: string;
-  attachments: ReadonlyArray<ChatAttachmentMetadata>;
-  isStreaming: boolean;
-  sequence: number;
-  turnId: string;
-  error: string | null;
-  createdAt: string;
-  finalizedAt: string | null;
-}
-
-export interface PersistedChatActivity {
-  entryKind: "activity";
-  id: string;
-  chatSessionId: string;
-  turnId: string;
-  activityKind: string;
-  toolName: string | null;
-  summary: string;
-  payloadJson: string | null;
-  callId: string | null;
-  output: string | null;
-  isError: boolean | null;
-  sequence: number;
-  createdAt: string;
-}
-
-export interface PersistedChatTaskList {
-  entryKind: "task-list";
-  turnId: string;
-  sequence: number;
-  tasks: ReadonlyArray<ChatTask>;
-}
-
-export interface PersistedChatPlan {
-  entryKind: "plan";
-  id: string;
-  chatSessionId: string;
-  turnId: string;
-  planMarkdown: string;
-  status: "pending" | "approved" | "rejected" | "superseded";
-  sequence: number;
-  createdAt: string;
-  decidedAt: string | null;
-}
-
-export type PersistedChatEntry =
-  | PersistedChatMessage
-  | PersistedChatActivity
-  | PersistedChatTaskList
-  | PersistedChatPlan;
-
-export interface ChatTimeline {
-  chatSessionId: string | null;
-  entries: PersistedChatEntry[];
-  interactionMode: InteractionMode;
-}
+export type ChatTimeline = EdenData<ReturnType<typeof chat>["messages"]["get"]>;
+export type PersistedChatEntry = ChatTimeline["entries"][number];
 
 /** Fetch the persisted timeline for a PR's current head-SHA chat session. */
 export async function fetchChatMessages(prId: string): Promise<ChatTimeline> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/messages`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch chat messages: ${res.status}`);
-  }
-  return (await res.json()) as ChatTimeline;
+  const { data, error } = await chat(prId).messages.get();
+  if (error) throw new Error(apiErrorMessage(error, "Failed to fetch chat messages"));
+  return data;
 }
 
 // ── Proposed changes ──────────────────────────────────────────────────────
 
-export interface ProposedCommit {
-  sha: string;
-  shortSha: string;
-  subject: string;
-  committedAt: string;
-  files: string[];
-}
-
-export interface ProposedChanges {
-  branchName: string | null;
-  /** Baseline the listed commits are measured from — NOT the PR head. */
-  baseSha: string | null;
-  commits: ProposedCommit[];
-}
+export type ProposedChanges = EdenData<ReturnType<typeof chat>["proposed-changes"]["get"]>;
 
 /** Fetch the list of commits the agent has made on top of the PR's head SHA. */
 export async function fetchProposedChanges(prId: string): Promise<ProposedChanges> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch proposed changes: ${res.status}`);
-  }
-  return (await res.json()) as ProposedChanges;
-}
-
-export interface ProposedDiffFile {
-  path: string;
-  oldPath: string | null;
-  oldContent: string | null;
-  newContent: string | null;
-  status: string;
-  binary: boolean;
+  const { data, error } = await chat(prId)["proposed-changes"].get();
+  if (error) throw new Error(apiErrorMessage(error, "Failed to fetch proposed changes"));
+  return data;
 }
 
 /**
@@ -360,49 +234,41 @@ export interface ProposedDiffFile {
  * non-partial `FileDiffMetadata` — the prerequisite for the line-info
  * separator's expand-up / expand-down controls to be enabled.
  */
-export async function fetchProposedDiffFiles(
-  prId: string,
-  sha: string,
-): Promise<ProposedDiffFile[]> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/${sha}/files`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch files for ${sha}: ${res.status}`);
-  }
-  const data = (await res.json()) as {
-    files?: ProposedDiffFile[];
-    error?: string;
-  };
-  if (data.error) throw new Error(data.error);
-  return data.files ?? [];
+export async function fetchProposedDiffFiles(prId: string, sha: string) {
+  const { data, error } = await chat(prId)["proposed-changes"]({ sha }).files.get();
+  if (error) throw new Error(apiErrorMessage(error, `Failed to fetch files for ${sha}`));
+  if (data.error !== undefined) throw new Error(data.error);
+  return data.files;
 }
+
+export type ProposedDiffFile = Awaited<ReturnType<typeof fetchProposedDiffFiles>>[number];
 
 // ── Merge & push ──────────────────────────────────────────────────────────
 
-export type MergePushResult =
-  | {
-      status: "pushed";
-      newSha: string;
-      pushedCommits: number;
-      branch: string;
-    }
-  | { status: "conflict"; files: string[]; branch: string }
-  | { status: "remote-changed"; branch: string }
-  | { status: "ref-exists"; branch: string };
+export type MergePushResult = EdenData<
+  ReturnType<typeof chat>["proposed-changes"]["merge-and-push"]["post"]
+>;
 
+/** A refused push: the error table's code, or `GENERIC_ERROR` when the body carries none. */
 export interface MergePushError {
-  code:
-    | "CONCURRENT_PUSH"
-    | "CHAT_STREAMING"
-    | "DIRTY_WORKTREE"
-    | "NO_CHANGES"
-    | "NO_CHAT_SESSION"
-    | "PUSH_REJECTED"
-    | "INVALID_BRANCH_NAME"
-    | "REF_EXISTS"
-    | "GENERIC_ERROR";
+  code: ApiErrorCode | "GENERIC_ERROR";
   message: string;
+}
+
+const MERGE_PUSH_OUTCOMES: ReadonlySet<unknown> = new Set<MergePushResult["status"]>([
+  "pushed",
+  "conflict",
+  "remote-changed",
+  "ref-exists",
+]);
+
+function isMergePushResult(value: unknown): value is MergePushResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    MERGE_PUSH_OUTCOMES.has(value.status)
+  );
 }
 
 export interface PushProposedOptions {
@@ -427,60 +293,18 @@ export async function pushProposedChanges(
   prId: string,
   options?: PushProposedOptions,
 ): Promise<MergePushResult> {
-  const headers: Record<string, string> = { ...authHeaders() };
-  let bodyJson: string | undefined;
-  if (options && (options.newBranchName !== undefined || options.force !== undefined)) {
-    headers["Content-Type"] = "application/json";
-    bodyJson = JSON.stringify({
-      ...(options.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
-      ...(options.force !== undefined ? { force: options.force } : {}),
-    });
-  }
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/merge-and-push`, {
-    method: "POST",
-    headers,
-    ...(bodyJson !== undefined ? { body: bodyJson } : {}),
+  const { data, error } = await chat(prId)["proposed-changes"]["merge-and-push"].post({
+    ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
+    ...(options?.force !== undefined ? { force: options.force } : {}),
   });
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-
-  // 200 / 409: body is the structured result.
-  if (res.ok || res.status === 409) {
-    const status = body.status;
-    if (status === "pushed") {
-      return {
-        status: "pushed",
-        newSha: String(body.newSha),
-        pushedCommits: Number(body.pushedCommits ?? 0),
-        branch: String(body.branch),
-      };
-    }
-    if (status === "conflict") {
-      return {
-        status: "conflict",
-        files: Array.isArray(body.files) ? (body.files as string[]) : [],
-        branch: String(body.branch),
-      };
-    }
-    if (status === "remote-changed") {
-      return {
-        status: "remote-changed",
-        branch: String(body.branch),
-      };
-    }
-    if (status === "ref-exists") {
-      return {
-        status: "ref-exists",
-        branch: String(body.branch),
-      };
-    }
-  }
-
-  // Otherwise it's a structured error.
-  const code = (body.code as MergePushError["code"]) ?? "GENERIC_ERROR";
-  const message =
-    (body.message as string) ?? (body.error as string) ?? `Push failed (${res.status})`;
-  const err: MergePushError = { code, message };
-  throw err;
+  if (data) return data;
+  // A conflict, a moved remote and an existing ref answer 409 with the result.
+  if (error?.status === 409 && isMergePushResult(error.value)) return error.value;
+  const refusal: MergePushError = {
+    code: (error && apiErrorCode(error)) ?? "GENERIC_ERROR",
+    message: error ? apiErrorMessage(error, "Push failed") : "Push failed",
+  };
+  throw refusal;
 }
 
 // ── Resolve & push (SSE) ──────────────────────────────────────────────────
@@ -525,21 +349,8 @@ export interface ResolvePushCallbacks {
 
 /** Discard a single proposed commit via interactive rebase. */
 export async function discardProposedCommit(prId: string, sha: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/${sha}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-      string,
-      unknown
-    >;
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
+  const { error } = await chat(prId)["proposed-changes"]({ sha }).delete();
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
 }
 
 /** Rebase all agent commits onto a new head SHA. */
@@ -548,62 +359,23 @@ export async function rebaseProposedCommits(
   oldHeadSha: string,
   newHeadSha: string,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/rebase-onto`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ oldHeadSha, newHeadSha }),
+  const { error } = await chat(prId)["proposed-changes"]["rebase-onto"].post({
+    oldHeadSha,
+    newHeadSha,
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-      string,
-      unknown
-    >;
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
 }
 
 /** After all blocked commits are handled, advance the worktree to the new PR head. */
 export async function advanceWorktree(prId: string, newHeadSha: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/advance`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ newHeadSha }),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-      string,
-      unknown
-    >;
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
+  const { error } = await chat(prId)["proposed-changes"].advance.post({ newHeadSha });
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
 }
 
 /** Cherry-pick a single proposed commit onto the PR source branch and push. */
 export async function cherryPickProposedCommit(prId: string, sha: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/cherry-pick`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ sha }),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-      string,
-      unknown
-    >;
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
+  const { error } = await chat(prId)["proposed-changes"]["cherry-pick"].post({ sha });
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
 }
 
 /** Cherry-pick N proposed commits onto the PR source branch and push once. */
@@ -611,26 +383,11 @@ export async function batchCherryPickProposedCommits(
   prId: string,
   shas: readonly string[],
 ): Promise<{ pushedCommits: number; branch: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/batch-cherry-pick`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ shas }),
+  const { data, error } = await chat(prId)["proposed-changes"]["batch-cherry-pick"].post({
+    shas,
   });
-  const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-    string,
-    unknown
-  >;
-  if (!res.ok) {
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
-  return {
-    pushedCommits: typeof body.pushedCommits === "number" ? body.pushedCommits : shas.length,
-    branch: typeof body.branch === "string" ? body.branch : "",
-  };
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  return { pushedCommits: data.pushedCommits ?? shas.length, branch: data.branch ?? "" };
 }
 
 /** Discard N proposed commits from the worktree atomically. */
@@ -638,25 +395,9 @@ export async function batchDiscardProposedCommits(
   prId: string,
   shas: readonly string[],
 ): Promise<{ discardedCount: number }> {
-  const res = await fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/batch-discard`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ shas }),
-  });
-  const body = (await res.json().catch(() => ({ error: "Unknown error" }))) as Record<
-    string,
-    unknown
-  >;
-  if (!res.ok) {
-    throw new Error(
-      (body.error as string | undefined) ??
-        (body.message as string | undefined) ??
-        `Failed: ${res.status}`,
-    );
-  }
-  return {
-    discardedCount: typeof body.discardedCount === "number" ? body.discardedCount : shas.length,
-  };
+  const { data, error } = await chat(prId)["proposed-changes"]["batch-discard"].post({ shas });
+  if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  return { discardedCount: data.discardedCount ?? shas.length };
 }
 
 /**

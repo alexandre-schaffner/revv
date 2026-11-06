@@ -23,8 +23,8 @@ import type {
 } from "@revv/shared";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
-import { API_BASE_URL } from "$lib/api/base-url";
-import { authHeaders } from "$lib/session/token.svelte";
+import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
@@ -38,7 +38,6 @@ import {
   mergeSnapshot,
   startingEntry,
   type WalkthroughEntry,
-  type WalkthroughSnapshot,
   type WalkthroughUiState,
   walkthroughUiState,
   ZERO_TOKEN_USAGE,
@@ -221,12 +220,9 @@ export function getLastWalkthroughEventAt(prId: string): number | null {
 
 const reviewRounds = createResource<string, WalkthroughReviewRoundsResponse>({
   fetch: async (_key, prId) => {
-    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds`, {
-      headers: authHeaders(),
-      credentials: "include",
-    });
-    if (!res.ok) return { status: "error", error: `HTTP ${res.status}` };
-    return { status: "ok", data: (await res.json()) as WalkthroughReviewRoundsResponse };
+    const { data, error } = await api.api.reviews({ id: prId }).walkthrough.rounds.get();
+    if (error) return { status: "error", error: apiErrorMessage(error, "Review rounds failed") };
+    return { status: "ok", data };
   },
 });
 
@@ -299,24 +295,20 @@ async function readSnapshot(prId: string, options?: HydrateOptions): Promise<boo
   }
 
   try {
-    const endpoint =
-      reportId === null
-        ? `${API_BASE_URL}/api/reviews/${prId}/walkthrough/current`
-        : `${API_BASE_URL}/api/reviews/${prId}/walkthrough/report/${reportId}`;
-    const res = await fetch(endpoint, { headers: authHeaders(), credentials: "include" });
-    if (!res.ok) {
-      wtTrace("lifecycle", `hydrateFromCache prId=${prId} httpStatus=${res.status} → false`);
+    const walkthrough = api.api.reviews({ id: prId }).walkthrough;
+    const { data: body, error } = await (reportId === null
+      ? walkthrough.current.get({ query: {} })
+      : walkthrough.report({ walkthroughId: reportId }).get());
+    if (error) {
+      wtTrace("lifecycle", `hydrateFromCache prId=${prId} httpStatus=${error.status} → false`);
       return false;
     }
-    const body = (await res.json()) as
-      | { status: "not_found"; mode?: WalkthroughMode }
-      | WalkthroughSnapshot;
 
     if (body.status === "not_found") {
       wtTrace("lifecycle", `hydrateFromCache prId=${prId} status=not_found → false`);
       // The server names the perspective Generate defaults to; only an entry
       // that isn't following a walkthrough takes it.
-      const defaultMode = body.mode;
+      const defaultMode = "mode" in body ? body.mode : undefined;
       if (defaultMode !== undefined) {
         updateEntry(prId, (e) => {
           if (e.walkthroughId === null) e.mode = defaultMode;
@@ -486,20 +478,8 @@ export function onWalkthroughLive({
  */
 async function hydrateActiveWalkthroughs(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/walkthroughs/active`, {
-      headers: authHeaders(),
-      credentials: "include",
-    });
-    if (!res.ok) return;
-    const body = (await res.json()) as {
-      walkthroughs: Array<{
-        prId: string;
-        walkthroughId: string;
-        mode?: WalkthroughMode;
-        seqAt: number;
-      }>;
-    };
-    for (const row of body.walkthroughs) {
+    const { data } = await api.api.walkthroughs.active.get();
+    for (const row of data?.walkthroughs ?? []) {
       const selectedReportId = selectedReportIds.get(row.prId) ?? null;
       if (selectedReportId !== null && selectedReportId !== row.walkthroughId) continue;
       if (!entries.has(row.prId)) {

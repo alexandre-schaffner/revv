@@ -18,6 +18,7 @@ import type {
   HunkScanStatus,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
@@ -99,9 +100,9 @@ const asks = createResource<{ prId: string }, EnsureOutcome>({
   gaveUpError: "The PR's diff never reached the cache.",
   fetch: async (key, { prId }): Promise<Answer<EnsureOutcome>> => {
     const since = markEvents(key);
-    const { data: result, error, status } = await api.api.reviews({ id: prId })["hunk-scan"].post();
-    if (error || !result || "error" in result) {
-      return { status: "error", error: `First pass request failed (${status})` };
+    const { data: result, error } = await api.api.reviews({ id: prId })["hunk-scan"].post();
+    if (error) {
+      return { status: "error", error: apiErrorMessage(error, "First pass request failed") };
     }
     if (result.status === "pending") return { status: "pending" };
     if (result.status === "off") return { status: "ok", data: "off" };

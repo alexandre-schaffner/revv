@@ -131,7 +131,6 @@ export class LocalClone {
     try {
       const { data, error } = await api.api.repos["inspect-local"].post({ path });
       if (error) throw new Error(apiErrorMessage(error, "Failed to inspect local repository"));
-      if (!data || "error" in data) throw new Error("Failed to inspect local repository");
       this.#inspection = {
         path,
         isGitRepo: data.isGitRepo,

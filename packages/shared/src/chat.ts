@@ -15,6 +15,16 @@
  */
 export type InteractionMode = "default" | "plan";
 
+/** How many prompts the chat's empty state offers for a PR. */
+export const CHAT_SUGGESTION_COUNT = 3;
+
+/** The empty state's prompts before a PR's own arrive, and whenever generating them fails. */
+export const CHAT_SUGGESTION_FALLBACKS: readonly string[] = [
+  "What's the riskiest change here?",
+  "Summarize the security implications",
+  "Suggest a test plan",
+];
+
 /**
  * One row from the agent's running todo list. Snapshot semantics: providers
  * emit the full list each update; the server upserts in place keyed on

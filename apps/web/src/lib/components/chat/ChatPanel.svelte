@@ -37,7 +37,7 @@ const showQueueDock = $derived(
     (getQueuedMessages(prId).length > 0 || getActiveTasks(prId).length > 0 || commitCount > 0),
 );
 
-let conflict = $state<{ files: string[]; branch: string } | null>(null);
+let conflict = $state<{ files: readonly string[]; branch: string } | null>(null);
 let composer: ChatComposer | undefined = $state();
 
 provideActivityPr(() => prId);

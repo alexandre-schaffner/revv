@@ -7,7 +7,7 @@ let byRepo = $state(new Map<string, ReadonlyMap<number, StackHeadline>>());
 async function fetchHeadlines(repositoryId: string): Promise<void> {
   try {
     const { data, error } = await api.api.repos({ id: repositoryId })["stack-headlines"].get();
-    if (error || !data || !("headlines" in data)) return;
+    if (error) return;
     const map = new Map<number, StackHeadline>();
     for (const [number, headline] of Object.entries(data.headlines)) {
       map.set(Number(number), headline);

@@ -20,7 +20,7 @@ interface Props {
   sourceBranch: string | undefined;
   /** Another chat operation holds the worktree. */
   blocked: boolean;
-  onConflict: (conflict: { files: string[]; branch: string }) => void;
+  onConflict: (conflict: { files: readonly string[]; branch: string }) => void;
 }
 
 let { prId, commitCount, sourceBranch, blocked, onConflict }: Props = $props();

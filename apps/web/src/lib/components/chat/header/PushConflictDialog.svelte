@@ -6,7 +6,7 @@ import Warning from "phosphor-svelte/lib/Warning";
 import ConfirmDialog from "$lib/components/ui/confirm-dialog/ConfirmDialog.svelte";
 
 interface Props {
-  conflict: { files: string[]; branch: string } | null;
+  conflict: { files: readonly string[]; branch: string } | null;
   onClose: () => void;
   onResolve: () => void;
 }
@@ -14,7 +14,7 @@ interface Props {
 let { conflict, onClose, onResolve }: Props = $props();
 
 // Kept while the dialog animates out after `conflict` clears.
-let shown = $state<{ files: string[]; branch: string }>({ files: [], branch: "" });
+let shown = $state<{ files: readonly string[]; branch: string }>({ files: [], branch: "" });
 $effect(() => {
   if (conflict) shown = conflict;
 });

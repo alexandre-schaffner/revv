@@ -6,8 +6,8 @@
 // on `(prId, headSha, diffFingerprint)`, shared with the generation path.
 
 import type { WalkthroughSizing } from "@revv/shared";
-import { API_BASE_URL } from "$lib/api/base-url";
-import { authHeaders } from "$lib/session/token.svelte";
+import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { getPrById } from "$lib/stores/prs.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
@@ -33,12 +33,8 @@ const sizings = createResource<{ prId: string }, WalkthroughSizing>({
   freshForMs: Number.POSITIVE_INFINITY,
   waitForSignalMs: DIFF_FILL_WAIT_MS,
   fetch: async (_key, { prId }) => {
-    const res = await fetch(
-      `${API_BASE_URL}/api/reviews/${encodeURIComponent(prId)}/walkthrough/sizing`,
-      { headers: authHeaders(), credentials: "include" },
-    );
-    if (!res.ok) return { status: "error", error: `HTTP ${res.status}` };
-    const data = (await res.json()) as WalkthroughSizing;
+    const { data, error } = await api.api.reviews({ id: prId }).walkthrough.sizing.get();
+    if (error) return { status: "error", error: apiErrorMessage(error, "Sizing failed") };
     return data.status === "pending" ? { status: "pending", data } : { status: "ok", data };
   },
 });

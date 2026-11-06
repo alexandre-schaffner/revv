@@ -80,15 +80,14 @@ const app = new Elysia()
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
-  .onRequest(({ request, server, set }) => {
+  .onRequest(({ request, server, status }) => {
     // Defense-in-depth: reject non-loopback peers so a future bind-widening
     // can't silently re-expose the API. Skipped when bound to a non-loopback
     // host; fails open when the peer IP is undeterminable.
     if (isLoopbackAddress(serverEnv.host)) {
       const peer = server?.requestIP(request)?.address;
       if (peer && !isLoopbackAddress(peer)) {
-        set.status = 403;
-        return "Forbidden: this server only accepts loopback connections";
+        return status(403, "Forbidden: this server only accepts loopback connections");
       }
     }
   })

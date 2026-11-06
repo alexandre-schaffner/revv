@@ -2,7 +2,7 @@ import type { BaseConflictFrame, BaseConflictsCheck } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { SseHttpError, streamSse } from "$lib/api/sse-stream";
-import { plain, thrownMessage } from "$lib/api/wire";
+import { thrownMessage } from "$lib/api/wire";
 
 export async function fetchBaseConflicts(
   prId: string,
@@ -14,8 +14,7 @@ export async function fetchBaseConflicts(
       ["base-conflicts"].get({ query: force ? { force: "1" } : {} });
     if (error)
       return { ok: false, message: apiErrorMessage(error, "Couldn't check for conflicts") };
-    if (!data || !("status" in data)) return { ok: false, message: "Unexpected response" };
-    return { ok: true, check: plain(data) as BaseConflictsCheck };
+    return { ok: true, check: data };
   } catch (e) {
     return { ok: false, message: thrownMessage(e) };
   }

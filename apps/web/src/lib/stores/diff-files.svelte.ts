@@ -16,7 +16,7 @@ let files = $state<ReviewFile[]>([]);
 /** The load the review page waits on. A refresh of the view on screen doesn't show here. */
 let load = $state<RequestState<void>>(RequestState.idle());
 /** The PR `files` belong to, and when they arrived. */
-let loaded: { prId: string; at: number } | null = null;
+let loaded = $state<{ prId: string; at: number } | null>(null);
 /** Only the latest load may write; anything older lost the race. */
 let requestSeq = 0;
 
@@ -26,6 +26,11 @@ let loadedHeadShas = $state(new Map<string, string>());
 
 export function getReviewFiles(): ReviewFile[] {
   return files;
+}
+
+/** The paths `prId` changes, once its files are the ones loaded; empty until then. */
+export function getChangedPaths(prId: string): readonly string[] {
+  return loaded?.prId === prId ? files.map((f) => f.path) : [];
 }
 
 export function getIsLoadingFiles(): boolean {

@@ -232,6 +232,7 @@ async function rerunAll(): Promise<void> {
 			{@const id = check.checkRunId}
 			<div id={detailsId} transition:gsapSlide>
 				<CheckDetailsPanel
+					{prId}
 					request={details.get(id) ?? RequestState.idle()}
 					onretry={() => expand(id)}
 				/>

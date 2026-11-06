@@ -16,7 +16,7 @@ interface Props {
   hasItems: boolean;
   stacked: boolean;
   onClose: () => void;
-  onConflict: (conflict: { files: string[]; branch: string }) => void;
+  onConflict: (conflict: { files: readonly string[]; branch: string }) => void;
 }
 
 let { prId, pr, commitCount, hasItems, stacked, onClose, onConflict }: Props = $props();

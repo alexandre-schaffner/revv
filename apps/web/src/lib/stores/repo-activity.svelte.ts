@@ -1,5 +1,6 @@
 import type { RepoActivity, RepoPrFlow } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { RequestState } from "$lib/stores/_types";
 import { createResource } from "./resource";
 
@@ -28,8 +29,11 @@ const activity = createResource<void, Omit<RepoActivityData, "commitsPending">>(
       .catch(() => null);
     if (!res) return { status: "error", error: "Couldn't reach the Revv server" };
     const { data, error } = res;
-    if (error || !data || !("commits" in data)) {
-      return { status: "error", error: "Couldn't load activity from GitHub" };
+    if (error) {
+      return {
+        status: "error",
+        error: apiErrorMessage(error, "Couldn't load activity from GitHub"),
+      };
     }
     const commits = data.commits.status === "ready" ? data.commits : null;
     return commits
