@@ -1,6 +1,5 @@
 /**
- * Event frames emitted over SSE while the server runs the opencode install
- * script (`curl … | bash` on macOS/Linux, `irm … | iex` on Windows). The
+ * SSE frames while the server runs an agent's official install script. The
  * stream closes after `done`; on failure the message lives in `error`.
  */
 export type InstallEvent =
@@ -8,13 +7,11 @@ export type InstallEvent =
   | { type: "done"; success: boolean; error?: string };
 
 /**
- * Event frames emitted over SSE while the server drives an agent's interactive
- * CLI login inside a spawned pseudo-terminal (e.g. `codex login`,
- * `cursor-agent login`). `data` carries a raw terminal chunk to render into an
- * xterm instance; `auth-url` is the first `https?://…` the CLI printed (so the
- * UI can open it in the browser); the stream closes after `done`, whose
- * `success` reflects a fresh auth re-check. On failure the message lives in
- * `error`. Mirrors {@link InstallEvent}'s lifecycle.
+ * SSE frames while the server drives an agent's interactive CLI login in a
+ * pseudo-terminal (e.g. `codex login`). `data` is a raw terminal chunk;
+ * `auth-url` is the first `https?://…` the CLI printed. The stream closes
+ * after `done`, whose `success` reflects a fresh auth re-check; on failure the
+ * message lives in `error`.
  */
 export type LoginEvent =
   | { type: "data"; chunk: string }

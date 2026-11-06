@@ -1,5 +1,3 @@
-// ── Unified-diff hunks ──────────────────────────────────────────────────────
-//
 // A hunk's position among its patch's hunks is its `hunkIndex`: the server's
 // first-pass rows, the web's scan ribbon and `@pierre/diffs` all address hunks
 // by it, so every side splits patches here.
@@ -30,7 +28,6 @@ export function parseHunkHeader(line: string): HunkHeader | null {
   };
 }
 
-/** One `@@` hunk of a patch. */
 export interface PatchHunk extends HunkHeader {
   /** Position among the patch's hunks — the same `hunkIndex` `@pierre/diffs` assigns. */
   readonly index: number;
@@ -41,7 +38,7 @@ export interface PatchHunk extends HunkHeader {
   readonly addedLines: readonly string[];
 }
 
-/** Split a unified patch into its hunks. Preamble before the first header is dropped. */
+/** Preamble before the first header is dropped. */
 export function splitHunks(patch: string): PatchHunk[] {
   const hunks: PatchHunk[] = [];
   let current: { header: string; ranges: HunkHeader; lines: string[]; added: string[] } | null =
@@ -59,7 +56,6 @@ export function splitHunks(patch: string): PatchHunk[] {
   };
 
   const lines = patch.split("\n");
-  // A patch ending in a newline would otherwise leave an empty context line on its last hunk.
   if (lines.at(-1) === "") lines.pop();
 
   for (const line of lines) {

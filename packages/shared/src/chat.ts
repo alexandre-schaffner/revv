@@ -1,17 +1,9 @@
-// ── Chat types ───────────────────────────────────────────────────────────────
-//
-// Shared types for the right-pane chat's structured surfaces: task lists (ACP
-// `plan` updates) and plans (the buffered plan-mode turn).
-//
-// These shapes are the wire-level contract between the Elysia server and the
-// SvelteKit frontend, and the persistence shape in `chat_tasks` and
-// `chat_plans` mirrors them 1:1.
+// The persistence shape in `chat_tasks` and `chat_plans` mirrors these wire
+// types 1:1.
 
 /**
- * Session-level interaction toggle. Borrows the t3code naming so semantics
- * are easy to look up. `plan` flips the underlying driver into plan-mode for
- * every turn in the session until either the user toggles back to `default`
- * or a plan-approval flow auto-flips.
+ * Session-level: `plan` keeps every turn in plan mode until the user toggles
+ * back to `default` or approves a plan.
  */
 export type InteractionMode = "default" | "plan";
 
@@ -26,9 +18,8 @@ export const CHAT_SUGGESTION_FALLBACKS: readonly string[] = [
 ];
 
 /**
- * One row from the agent's running todo list. Snapshot semantics: providers
- * emit the full list each update; the server upserts in place keyed on
- * `taskId` so the client can re-render diff-free.
+ * One row of the agent's todo list (ACP `plan` update). Agents send the full
+ * list on every update; the server upserts in place keyed on `taskId`.
  */
 export interface ChatTask {
   readonly id: string;
@@ -42,9 +33,7 @@ export interface ChatAttachment {
   readonly kind: "image" | "text";
   readonly name: string;
   readonly mimeType: string;
-  /**
-   * Images are base64-encoded bytes. Text attachments carry UTF-8 text.
-   */
+  /** Images are base64-encoded bytes; text attachments carry UTF-8 text. */
   readonly data: string;
 }
 
@@ -55,16 +44,7 @@ export interface ChatAttachmentMetadata {
   readonly size: number;
 }
 
-// ── Attachment limits + helpers ────────────────────────────────────────────
-//
-// Canonical home for the attachment size math, formatting, and limit messages.
-// Both the server (validation + 413s) and the web client (pre-send gate +
-// toasts + size labels) import these so the two sides can never drift on the
-// caps, the byte accounting, or the user-facing copy.
-
-/** Per-attachment hard cap. */
 export const MAX_CHAT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-/** Combined cap across every attachment in a single message. */
 export const MAX_CHAT_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024;
 /**
  * Hard cap on the number of attachments in a single message. Bounds the array
@@ -73,14 +53,9 @@ export const MAX_CHAT_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024;
  */
 export const MAX_CHAT_ATTACHMENTS_COUNT = 20;
 
-// Reused across every `attachmentByteSize` call (hot on both the optimistic
-// composer path and server-side validation) instead of allocating per call.
 const TEXT_ENCODER = new TextEncoder();
 
-/**
- * Decoded byte size of an attachment's payload. Images carry base64 (the
- * decoded byte count is ≈ 3/4 of the string length); text carries raw UTF-8.
- */
+/** Decoded payload size; for base64 images that is ≈ 3/4 of the string length. */
 export function attachmentByteSize(attachment: ChatAttachment): number {
   if (attachment.kind === "image") {
     return Math.ceil((attachment.data.length * 3) / 4);
@@ -88,21 +63,18 @@ export function attachmentByteSize(attachment: ChatAttachment): number {
   return TEXT_ENCODER.encode(attachment.data).byteLength;
 }
 
-/** Human-readable size label (B / KB / MB). */
 export function formatAttachmentSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Per-attachment over-limit message. */
 export function attachmentTooLargeMessage(name: string): string {
   return `${name} is too large. Attachments are limited to ${
     MAX_CHAT_ATTACHMENT_BYTES / (1024 * 1024)
   } MB each.`;
 }
 
-/** Total-over-limit message. */
 export function attachmentsTotalTooLargeMessage(): string {
   return `Attachments are too large. The total attachment limit is ${
     MAX_CHAT_ATTACHMENTS_TOTAL_BYTES / (1024 * 1024)
@@ -121,20 +93,12 @@ export interface ChatSessionContext {
   readonly repoFiles: ReadonlyArray<string>;
 }
 
-// ── SSE wire frame ────────────────────────────────────────────────────────
-
 import type { Activity } from "./activity";
 import type { AgentProgressFrame } from "./base-conflicts";
 
 /**
- * The SSE frame discriminated union streamed from the server to the web
- * client during a chat turn. The activity variant carries the full
- * `Activity` shape inline so a frame stays a single flat JSON object on the
- * wire (the SSE parser doesn't have to walk a nested `data:` field).
- *
- * This is the *wire-level* contract between server and client — both import
- * from here. The server-internal `RawChatStreamFrame` (driver-emitted, pre-
- * persistence) lives in `apps/server/src/ai/providers/chat-types.ts`.
+ * Streamed during a chat turn. Each frame is one flat JSON object on the
+ * wire: the activity variant spreads `Activity` inline.
  */
 export type ChatStreamFrame =
   | { readonly kind: "text"; readonly data: string }
@@ -143,10 +107,8 @@ export type ChatStreamFrame =
   | {
       /**
        * Terminal output of a previously-streamed `activity`, correlated by
-       * `callId`. Arrives after the activity frame (once the tool finishes)
-       * so the web store patches the matching activity in place to power the
-       * clickable output peek. Best-effort: may never arrive if the agent
-       * doesn't report a terminal tool-call status.
+       * `callId`. Best-effort: never arrives if the agent doesn't report a
+       * terminal tool-call status.
        */
       readonly kind: "activity-result";
       readonly callId: string;
@@ -155,11 +117,9 @@ export type ChatStreamFrame =
     }
   | {
       /**
-       * Late-arriving tool input for a previously-streamed `activity`,
-       * correlated by `callId`. Some agents send the initial tool-call with an
-       * empty `rawInput` and only populate it (the touched file, the command)
-       * on a follow-up update — this frame patches the activity's payload in
-       * place so its filename/command and file peek resolve.
+       * Late tool input for a previously-streamed `activity`, correlated by
+       * `callId`: some agents send the tool call with an empty `rawInput` and
+       * only fill it in on a follow-up update.
        */
       readonly kind: "activity-input";
       readonly callId: string;
@@ -177,8 +137,6 @@ export type ChatStreamFrame =
       readonly markdown: string;
       readonly status: "pending";
     };
-
-// ── Proposed changes ────────────────────────────────────────────────────────
 
 /** A commit the chat agent made on its working branch that isn't on the PR yet. */
 export interface ProposedCommit {

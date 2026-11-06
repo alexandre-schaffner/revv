@@ -1,22 +1,13 @@
-// ── ACP agent registry (shared) ──────────────────────────────────────────────
-//
-// Single source of truth for the ACP (Agent Client Protocol) agents Revv can
-// drive for chat and walkthrough generation. Lives in @revv/shared so BOTH the
-// server (to launch the subprocess + propagate model/effort/context) and the web
-// (to render the provider list + the model/effort/context selectors) consume the
-// same list.
-//
-// Adding a new ACP-compatible agent = ONE entry below plus its server adapter
-// (`apps/server/src/ai/acp/agents/<id>.ts`, the behaviour: how model and effort
-// reach it, its auth probe, its environment). Both tables are keyed by
-// `AcpAgentId`, so a missing adapter is a compile error.
+// Adding an ACP agent = one `ACP_AGENTS` entry plus its server adapter
+// (`apps/server/src/ai/acp/agents/<id>.ts`: how model and effort reach it, its
+// auth probe, its environment). Both tables are keyed by `AcpAgentId`, so a
+// missing adapter is a compile error.
 
 /**
  * Revv's thinking-effort tiers. `extra-high` is Revv's key for the providers'
- * `xhigh` level (see the server agent adapters for the per-agent mapping). `ultrathink` is
- * retained only so persisted `user_settings.ai_thinking_effort` rows written
- * before the tier was retired still parse — no agent offers it, and both the
- * selector and `applyAgentDefaults` coerce it away on next render.
+ * `xhigh` level. `ultrathink` is retained only so persisted
+ * `user_settings.ai_thinking_effort` rows written before the tier was retired
+ * still parse; no agent offers it.
  */
 export type ThinkingEffort =
   | "ultra"
@@ -30,7 +21,6 @@ export type ThinkingEffort =
 /** Brand-icon key — the web maps this to an icon component (generic fallback). */
 export type AcpAgentIconKey = "anthropic" | "openai" | "opencode" | "cursor" | "generic";
 
-/** A selectable model for an agent: display `label` + the id passed to the agent. */
 export interface AcpAgentModel {
   readonly label: string;
   readonly value: string;
@@ -60,10 +50,10 @@ export interface AcpAgentCapabilities {
   /** Thinking-effort tiers offered; empty = no thinking-effort control. */
   readonly thinkingEfforts: readonly ThinkingEffort[];
   /**
-   * Whether the agent supports a read-only plan turn — i.e. it advertises a
-   * plan/ask/architect mode (`findPlanModeId` in `ai/acp/session-config.ts`) the transport can
-   * select. Drives the composer's Plan-mode toggle; when `false`, requesting
-   * plan mode would 422, so the toggle stays disabled.
+   * Whether the agent supports a read-only plan turn: it advertises a
+   * plan/ask/architect mode (`findPlanModeId` in `ai/acp/session-config.ts`).
+   * Drives the composer's Plan-mode toggle; a plan turn on an agent without
+   * one fails.
    */
   readonly planMode: boolean;
 }
@@ -101,17 +91,12 @@ export interface AcpAgentCli {
 export interface AcpAgentDescriptor {
   /** Stable id — persisted as the chat-agent setting and the connection-pool key. */
   readonly id: string;
-  /** Human-readable label for the provider list. */
   readonly label: string;
-  /** One-line description for the agent picker / onboarding. */
   readonly description: string;
-  /** Icon key the web maps to a component. */
   readonly icon: AcpAgentIconKey;
   /** argv[0] — `npx`/`bunx` to run an adapter on demand, or a binary on PATH. */
   readonly command: string;
-  /** Fixed launch args. */
   readonly args: readonly string[];
-  /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
   readonly cli: AcpAgentCli;
   /**
@@ -120,11 +105,6 @@ export interface AcpAgentDescriptor {
    * when the agent's own starting mode already does that.
    */
   readonly sessionMode?: string;
-  /**
-   * macOS keychain login details, when the agent stores its credential there and
-   * the background server can be ACL-blocked from reading it. Absent for
-   * file-based agents (codex/opencode/cursor), which the server reaches directly.
-   */
   readonly keychainAuth?: AcpAgentKeychainAuth;
 }
 
@@ -139,7 +119,6 @@ export const THINKING_EFFORT_ORDER = [
   "low",
 ] as const satisfies readonly ThinkingEffort[];
 
-// ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
 export const ACP_AGENTS = [
   {
     id: "claude-code",
@@ -201,7 +180,6 @@ export const ACP_AGENTS = [
       bin: "opencode",
       install: ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"],
       installBinDirs: [".opencode/bin", ".local/bin"],
-      // A local engine: nothing to sign in to.
       loginArgs: null,
     },
     capabilities: {
@@ -236,8 +214,7 @@ export const ACP_AGENTS = [
       // This maintained adapter embeds a current Codex App Server, so the
       // selector can expose the current GPT-6 family. GPT-6.1 Sol is Codex's
       // recommended default; GPT-6 Sol has left the docs but stays listed for
-      // existing installations. Do not
-      // replace it with the deprecated `@zed-industries/codex-acp`: that
+      // existing installations. Do not replace it with the deprecated `@zed-industries/codex-acp`: that
       // adapter embeds an older Codex core which rejects current models.
       models: [
         // https://learn.chatgpt.com/docs/models (2026-10-13).
@@ -314,12 +291,10 @@ export function isAcpAgentId(value: string): value is AcpAgentId {
 
 export function getAcpAgent(id: AcpAgentId): AcpAgentDescriptor {
   const found = ACP_AGENTS.find((a) => a.id === id);
-  // `id: AcpAgentId` is constrained to registry keys, so this is always defined.
   if (!found) throw new Error(`Unknown ACP agent id: ${id}`);
   return found;
 }
 
-/** The model / context-window / thinking-effort surface Revv exposes for an agent. */
 export function getAgentCapabilities(id: AcpAgentId): AcpAgentCapabilities {
   return getAcpAgent(id).capabilities;
 }
@@ -335,7 +310,6 @@ export function getModelThinkingEfforts(id: AcpAgentId, model?: string): readonl
   );
 }
 
-/** Revv's persisted-model default for an ACP agent. */
 export function getAcpAgentDefaultModel(id: AcpAgentId): string {
   return getAcpAgent(id).capabilities.defaultModel;
 }
@@ -345,8 +319,6 @@ export function getAcpAgentDefaultModel(id: AcpAgentId): string {
  * PR and pick". Only consulted when the TypeSafe auto-model toggle is on.
  *
  * Namespaced because plain `"auto"` is already taken by `cursor`'s own model.
- * One constant for both fields since the two are independent opt-ins but a
- * shared value is one fewer thing to get wrong.
  *
  * Absent from every agent's `capabilities.models` / `.thinkingEfforts`.
  * {@link resolveGenerationModel} and {@link resolveThinkingEffort} are the
@@ -358,7 +330,6 @@ export const AUTO_SENTINEL = "revv:auto";
 
 export type AutoSentinel = typeof AUTO_SENTINEL;
 
-/** Type predicate, not a plain `boolean`, so a false branch narrows {@link ThinkingEffortSetting} to {@link ThinkingEffort} without a cast. */
 export function isAutoSentinel(value: string | null | undefined): value is AutoSentinel {
   return value === AUTO_SENTINEL;
 }
@@ -399,26 +370,21 @@ export function clampThinkingEffort(
   const allowed = getModelThinkingEfforts(id, model);
   if (allowed.length === 0) return undefined;
   if (allowed.includes(effort)) return effort;
-  // THINKING_EFFORT_ORDER is strongest-first, so the first allowed tier at or
-  // below the request is the nearest step down.
   const from = THINKING_EFFORT_ORDER.indexOf(effort);
   return THINKING_EFFORT_ORDER.slice(from).find((t) => allowed.includes(t)) ?? allowed[0];
 }
 
-/** Keychain-login details for an agent, or `undefined` when it isn't keychain-backed. */
 export function getAgentKeychainAuth(id: AcpAgentId): AcpAgentKeychainAuth | undefined {
   return getAcpAgent(id).keychainAuth;
 }
 
 /**
- * Per-agent onboarding setup status. A single detection call resolves both
- * facts the agent step needs so the UI never races two endpoints:
+ * Per-agent onboarding setup status, resolved in one detection call so the UI
+ * never races two endpoints:
  *   - `installed` — the agent's CLI is present on PATH (or pinned via the
- *     LaunchAgent `REVV_*_BIN` env vars), or — for the SDK/auth-store agents —
- *     otherwise usable.
+ *     LaunchAgent `REVV_*_BIN` env vars).
  *   - `authed` — usable credentials are configured. opencode needs no login,
  *     so it always reports `true`.
- *   - `verified` — the provider's own status command confirmed the session.
  * `loginCommand` is the agent's official interactive login command (joined
  * argv), surfaced so the UI can show a manual hint where the embedded PTY login
  * isn't available; `null` for agents that need no login (opencode).
@@ -446,12 +412,9 @@ export interface AgentStatus {
 }
 
 /**
- * Full onboarding detection snapshot: per-agent {@link AgentStatus} keyed by
- * registry id (so the picker renders straight from `ACP_AGENTS` and a new agent
- * surfaces automatically), plus whether this host can drive an agent's CLI
- * login inside an embedded pseudo-terminal. Revv is macOS-only, so
- * `embeddedLoginSupported` is always `true`; the per-agent `loginCommand` hint
- * remains as a manual fallback. The server is the single authority on this.
+ * `embeddedLoginSupported`: whether this host can drive an agent's CLI login
+ * inside an embedded pseudo-terminal. Revv is macOS-only, so it is always
+ * `true`; the per-agent `loginCommand` hint remains as a manual fallback.
  */
 export interface AgentStatusReport {
   embeddedLoginSupported: boolean;

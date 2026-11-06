@@ -1,5 +1,3 @@
-// ── Block types ─────────────────────────────────────────────────────────────
-
 import type { ThinkingEffort } from "./acp-agents";
 import type { Activity, ActivityResult } from "./activity";
 import type { ExternalAgentProvider } from "./external-integrations";
@@ -10,8 +8,7 @@ import type { ReviewMode } from "./review";
  * How much attention a PR needs, and what "Auto" would pick for it, answered
  * before any walkthrough exists.
  *
- * Wire contract of `GET /api/reviews/:id/walkthrough/sizing`, shared so the
- * handler's return and the store's `res.json()` can't drift out of sync.
+ * Wire contract of `GET /api/reviews/:id/walkthrough/sizing`.
  */
 export type WalkthroughSizing =
   /** No auto half in play and the risk hook is off. */
@@ -37,18 +34,13 @@ export type WalkthroughBlockPhase = "overview" | "diff_analysis" | "sentiment";
 
 export interface BlockPhaseFields {
   /**
-   * The pipeline phase this block belongs to. Currently only `'diff_analysis'`
-   * is populated at write time — Phase A (overview) lives on
-   * `Walkthrough.summary` / `riskLevel`, and Phase C (sentiment) lives on
-   * `Walkthrough.sentiment`. The discriminator is carried on every block for
-   * forward compatibility with future phases that may produce blocks.
+   * Only `'diff_analysis'` is written: Phase A lives on `Walkthrough.summary`
+   * and Phase C on `Walkthrough.sentiment`.
    */
   phase?: WalkthroughBlockPhase;
   /**
    * Monotonic, zero-based index of the parent semantic step. Required when
-   * `phase === 'diff_analysis'`. Lets the renderer group atomic blocks under
-   * their chapter and lets resume reconstructions know which section each
-   * block belongs to.
+   * `phase === 'diff_analysis'`.
    */
   semanticStepIndex?: number;
   /**
@@ -109,8 +101,6 @@ export interface ArtifactBlock extends BlockPhaseFields {
 
 export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactBlock;
 
-// ── Semantic step (Phase B chapter) ─────────────────────────────────────────
-
 /**
  * A "chapter" of the walkthrough body — a meaningful unit of explanation
  * focused on one concept, pattern, or concern that may span multiple files
@@ -120,7 +110,6 @@ export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactB
 export interface WalkthroughSemanticStep {
   /** Monotonic, zero-based ordering within the walkthrough. */
   semanticStepIndex: number;
-  /** Chapter title — the heading shown in the UI. */
   title: string;
   /** Optional 1–2 sentence prelude rendered beneath the chapter title. */
   summary: string | null;
@@ -145,11 +134,9 @@ export function chapterNumbersByIndex(
   return new Map(visible.map((index, position) => [index, position + 1]));
 }
 
-// ── Issue (structured concern flagged by the AI agent) ───────────────────────
-
 /**
- * Consequence tier of a flagged concern. Decided by the agent, or by the
- * relevance pass when `jev.issueSeverity` is on — both name this closed set.
+ * Consequence tier of a flagged concern. Sent by the agent, then relabelled
+ * by the Jev relevance pass when Jev is on.
  */
 export type IssueSeverity = "info" | "warning" | "critical";
 
@@ -169,7 +156,6 @@ export function severityRank(severity: IssueSeverity): number {
 
 export type IssueResolutionStatus = "open" | "addressed" | "wont_fix";
 
-/** A resolution status that closes the issue. */
 export function isResolvedIssueStatus(
   status: string | null | undefined,
 ): status is Exclude<IssueResolutionStatus, "open"> {
@@ -202,9 +188,7 @@ export interface WalkthroughIssue {
   endLine?: number;
   /**
    * ISO 8601 timestamp recorded when the reviewer submitted this issue to
-   * GitHub via the Request Changes flow. Absent = not yet sent. Drives the
-   * "already posted" (grayed out) treatment in IssuesPanel and survives
-   * across sessions because it's persisted on the walkthrough_issues row.
+   * GitHub via the Request Changes flow. Absent = not yet sent.
    */
   submittedAt?: string;
   /**
@@ -227,8 +211,6 @@ export interface WalkthroughIssue {
   resolvedBy?: ExternalAgentProvider;
 }
 
-// ── Risk & token tracking ───────────────────────────────────────────────────
-
 export type RiskLevel = "low" | "medium" | "high";
 
 export type WalkthroughMode = ReviewMode;
@@ -250,14 +232,13 @@ export interface WalkthroughTokenUsage {
    */
   contextTokens: number;
   /**
-   * Provider-reported context window for the active model. Only some providers
-   * report this (e.g. the Claude Agent SDK); the sole optional field, omitted
-   * when unavailable so consumers fall back to a configured window.
+   * Agent-reported context window for the active model (ACP `usage_update`
+   * `size`). Omitted when the agent doesn't report it, so consumers fall back
+   * to a configured window.
    */
   contextWindowTokens?: number;
 }
 
-/** Throughput and occupancy both at zero — the identity for accumulation. */
 export const ZERO_TOKEN_USAGE: WalkthroughTokenUsage = Object.freeze({
   inputTokens: 0,
   outputTokens: 0,
@@ -292,12 +273,9 @@ export function normalizeTokenUsage(value: unknown): WalkthroughTokenUsage {
   };
 }
 
-// ── Per-axis scorecard ──────────────────────────────────────────────────────
-
 /**
- * Canonical order for rendering the scorecard grid. The frontend renders cards
- * in this order regardless of arrival order so the 3×3 layout is stable and
- * reviewers' eyes always land on the same axis in the same spot.
+ * Canonical order for the 3×3 scorecard grid, regardless of arrival order, so
+ * each axis always lands in the same spot.
  */
 export const RATING_AXES = [
   "correctness",
@@ -313,10 +291,6 @@ export const RATING_AXES = [
 
 export type RatingAxis = (typeof RATING_AXES)[number];
 
-/**
- * Display label for each axis. Used in the scorecard UI; the prompt also
- * references these labels so the model and the UI stay in sync.
- */
 export const RATING_AXIS_LABELS: Record<RatingAxis, string> = {
   correctness: "Correctness",
   scope: "Scope",
@@ -359,12 +333,10 @@ export interface WalkthroughRating {
 
 /**
  * Composite score below which an issue is treated as low signal. Kept low:
- * a false positive here hides a real bug behind a disclosure. Shared so the
- * server's DTO and client-side reasoning can't drift.
+ * a false positive here hides a real bug behind a disclosure.
  */
 export const LOW_SIGNAL_THRESHOLD = 0.4;
 
-/** True when a scored issue falls below {@link LOW_SIGNAL_THRESHOLD}. */
 export function isLowSignalScore(score: number | null | undefined): boolean {
   return typeof score === "number" && score < LOW_SIGNAL_THRESHOLD;
 }
@@ -381,19 +353,16 @@ export function isLowSignalScore(score: number | null | undefined): boolean {
  */
 export const ISSUE_DISCARD_THRESHOLD = 0.2;
 
-/** True when a scored concern falls below {@link ISSUE_DISCARD_THRESHOLD}. */
 export function isDiscardedScore(score: number | null | undefined): boolean {
   return typeof score === "number" && score < ISSUE_DISCARD_THRESHOLD;
 }
-
-// ── Pipeline phase (A→B→C→D) ────────────────────────────────────────────────
 
 /**
  * Pointer into the strict 4-phase content pipeline (see "Agent Subsystem
  * Invariants" in the repo root CLAUDE.md).
  *
  *   'none' — nothing persisted yet
- *   'A'    — Phase A (overview + risk) complete
+ *   'A'    — Phase A (overview) complete
  *   'B'    — Phase B (diff analysis, ≥1 step) complete
  *   'C'    — Phase C (overall sentiment) complete
  *   'D'    — Phase D (all 9 axes rated) complete
@@ -473,8 +442,6 @@ export interface WalkthroughReviewRoundsResponse {
   rounds: WalkthroughReviewRound[];
 }
 
-// ── Walkthrough (cached & replayed) ─────────────────────────────────────────
-
 export interface Walkthrough {
   id: string;
   reviewSessionId: string;
@@ -491,7 +458,6 @@ export interface Walkthrough {
   riskConfidence?: number | null;
   /**
    * Phase C output — "Overall Sentiment" markdown. Null until Phase C completes.
-   * Replaces the old convention of a specially-formatted markdown block.
    */
   sentiment: string | null;
   /**
@@ -509,7 +475,6 @@ export interface Walkthrough {
    * from the remote cache — then only where its issues sit says anything.
    */
   leads: WalkthroughLead[] | null;
-  /** Current phase pointer. See {@link WalkthroughPipelinePhase}. */
   lastCompletedPhase: WalkthroughPipelinePhase;
   /** Last terminal generation failure, if this row is in `status='error'`. */
   errorMessage?: string | null;
@@ -524,13 +489,13 @@ export interface Walkthrough {
   baseHeadSha?: string | null;
   /**
    * ISO 8601 timestamp of the most recent chat-driven edit, or null if the
-   * walkthrough has only ever been produced by the generation pipeline. See
-   * CLAUDE.md invariant #7 (chat-edit carve-out).
+   * walkthrough has only ever been produced by the generation pipeline
+   * (CLAUDE.md invariant #7, chat-edit carve-out).
    */
   lastEditedAt?: string | null;
   /**
-   * Actor that performed the most recent chat-driven edit. Typically
-   * `'chat:claude'` or `'chat:opencode'`. Null when never edited.
+   * Actor of the most recent edit: `'chat:acp'` or an external coding agent's
+   * provider id. Null when never edited.
    */
   lastEditedBy?: string | null;
   /**
@@ -557,8 +522,6 @@ export interface Walkthrough {
     maxTurns: number;
   } | null;
 }
-
-// ── MCP read-tool response ──────────────────────────────────────────────────
 
 /**
  * Returned by `get_walkthrough_state` — the MCP read tool that agents call
@@ -625,10 +588,8 @@ export interface WalkthroughState {
   }>;
   ratedAxes: RatingAxis[];
   /**
-   * Identities of every issue already flagged for this walkthrough. The agent
-   * uses these `id` values when calling `add_issue_comment` so resumes can
-   * attach line comments to issues from prior runs without re-flagging. Empty
-   * for fresh walkthroughs. The order matches insertion order.
+   * Every issue already flagged, in insertion order. A resumed agent passes
+   * these ids to `add_issue_comment` instead of re-flagging.
    */
   issues: Array<{
     id: string;
@@ -637,16 +598,12 @@ export interface WalkthroughState {
     startLine: number | null;
     endLine: number | null;
   }>;
-  /** Convenience — equal to `issues.length`. Retained for forward compatibility. */
   issueCount: number;
   /**
-   * Subset of `issues` filtered to entries that REQUIRE an inline review
-   * comment but don't yet have one — i.e. `filePath` + `startLine` are both set, AND no
-   * `comment_threads` row references the issue. The walkthrough cannot
-   * transition to `'complete'` until this list is empty (enforced by
-   * `complete_walkthrough` AND the orchestrator). On a resumed run, the
-   * agent should call `add_issue_comment` for every entry here before
-   * calling `complete_walkthrough`.
+   * Line-anchored issues (`filePath` + `startLine` set) that no
+   * `comment_threads` row references yet. The walkthrough cannot become
+   * `'complete'` until this is empty (checked by `complete_walkthrough` and
+   * the orchestrator).
    */
   issuesNeedingInlineComment: Array<{
     id: string;
@@ -668,12 +625,9 @@ export interface WalkthroughState {
   leadsNeedingVerdict: string[];
 }
 
-// ── SSE stream events ───────────────────────────────────────────────────────
-
 /**
- * UI-lifecycle phase (distinct from the content pipeline phase). Drives the
- * phase-progress indicator in the walkthrough header. The content pipeline
- * phase is carried on events where relevant (e.g. `phase:advanced`).
+ * UI-lifecycle phase, distinct from the content pipeline phase (which
+ * `phase:advanced` carries).
  */
 export type WalkthroughLifecyclePhase =
   | "connecting"
@@ -725,7 +679,6 @@ export type WalkthroughLiveEvent =
    */
   | { type: "exploration-input"; data: { callId: string; payload: unknown } }
   | { type: "phase"; data: { phase: WalkthroughLifecyclePhase; message: string } }
-  /** Streamed model reasoning text. */
   | { type: "thought"; data: { text: string } };
 
 /**

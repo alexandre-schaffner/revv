@@ -1,13 +1,9 @@
-// ── PR conversation ─────────────────────────────────────────────────────────
-//
-// What the Conversation tab shows: the GitHub "Conversation" page of a pull
-// request (description, reviewers, assignees, labels, timeline) plus the CI
-// rollup of its head commit. Fetched on demand from GitHub and cached as a
-// snapshot; GitHub stays the source of truth, so nothing here is journaled.
+// The GitHub "Conversation" page of a pull request plus its head's CI rollup.
+// Fetched on demand and cached as a snapshot; GitHub stays the source of
+// truth, so nothing here is journaled.
 
 import type { CodeownersFile } from "./codeowners";
 
-/** A GitHub account as the conversation renders it. */
 export interface ConversationActor {
   readonly login: string;
   readonly name: string | null;
@@ -37,7 +33,6 @@ export type ReviewerEntry =
   | {
       readonly kind: "user";
       readonly actor: ConversationActor;
-      /** A review is requested from them right now. */
       readonly requested: boolean;
       /** GitHub requested them because CODEOWNERS names them. */
       readonly asCodeOwner: boolean;
@@ -78,8 +73,6 @@ export interface PrMilestone {
   readonly state: "open" | "closed";
 }
 
-// ── Timeline ────────────────────────────────────────────────────────────────
-
 interface TimelineBase {
   /** GitHub node id; stable across fetches. */
   readonly id: string;
@@ -119,7 +112,6 @@ export interface TimelineCommit extends TimelineBase {
   readonly ci: CiRollupState | null;
 }
 
-/** One-line timeline entries: someone changed something about the PR. */
 export type TimelineEvent = TimelineBase & { readonly actor: ConversationActor } & (
     | { readonly kind: "labeled" | "unlabeled"; readonly label: PrLabel }
     | { readonly kind: "assigned" | "unassigned"; readonly assignee: string }
@@ -157,8 +149,6 @@ export type TimelineEvent = TimelineBase & { readonly actor: ConversationActor }
   );
 
 export type TimelineItem = TimelineComment | TimelineReview | TimelineCommit | TimelineEvent;
-
-// ── CI ──────────────────────────────────────────────────────────────────────
 
 /** GitHub's combined state for a commit's checks and statuses. */
 export type CiRollupState = "success" | "failure" | "pending" | "error" | "expected";
@@ -223,7 +213,6 @@ export function rollupBucket(state: CiRollupState | null | undefined): CiCheckBu
   }
 }
 
-/** Something is still running: the rollup, or any single check. */
 export function ciHasPending(rollup: CiRollup | null | undefined): boolean {
   if (!rollup) return false;
   return (
@@ -231,7 +220,6 @@ export function ciHasPending(rollup: CiRollup | null | undefined): boolean {
   );
 }
 
-/** Where CI stands overall: a failing check outweighs a pending one, which outweighs the rollup. */
 export function ciStanding(rollup: CiRollup | null | undefined): CiCheckBucket | null {
   if (!rollup) return null;
   const aggregate = rollupBucket(rollup.state);
@@ -275,8 +263,6 @@ export interface CheckDetails {
   readonly logUnavailable: "not_actions" | "permission" | "expired" | "running" | null;
 }
 
-// ── Stack ───────────────────────────────────────────────────────────────────
-
 /**
  * Where a stacked PR stands, as GitHub's stack list labels it: merged and
  * closed are final; an open PR is a draft, ready (mergeable once the PRs
@@ -293,8 +279,6 @@ export interface PrStackEntry {
   readonly headRef: string;
   readonly status: StackEntryStatus;
 }
-
-// ── The whole page ──────────────────────────────────────────────────────────
 
 export interface PrConversation {
   readonly prId: string;
@@ -338,7 +322,6 @@ export interface PrConversation {
   readonly fetchedAt: string;
 }
 
-/** Fill each actor's `avatarContent` from the conversation's `avatars` map. */
 export function hydrateConversationAvatars(conversation: PrConversation): PrConversation {
   const { avatars } = conversation;
   const actor = (a: ConversationActor): ConversationActor =>
@@ -399,7 +382,6 @@ export interface ConversationWriteResult {
   readonly conversation: PrConversation | null;
 }
 
-/** Picker rows for the sidebar's reviewer / assignee / label editors. */
 export interface ActorOption {
   readonly login: string;
   readonly name: string | null;

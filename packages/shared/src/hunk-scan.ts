@@ -1,12 +1,8 @@
-// ── First pass: per-hunk smell scan ─────────────────────────────────────────
-//
-// One scan per PR head SHA: the orchestrator asks Jev to judge every
-// substantive hunk against nine smells, starting when the review page opens
-// (or when a walkthrough job needs it first). The answers are probabilities
-// only — no prose, no line spans — so they reach the agent as leads to verify
-// and the UI as a separate layer of the review. Floors live here because both
-// sides apply them: the server to pick prompt leads, the web to decide what a
-// chip shows.
+// The first pass: Jev's smell probabilities for every substantive hunk of one
+// PR head. Probabilities only — no prose, no line spans — so they reach the
+// agent as leads to verify and the UI as a separate layer of the review.
+// Floors live here because both sides apply them: the server to pick prompt
+// leads, the web to decide what a chip shows.
 
 export const HUNK_SMELLS = [
   "vulnerability",
@@ -125,12 +121,10 @@ export interface HunkScanRow extends HunkRange {
   scannedAt: string | null;
 }
 
-/** A hunk's identity within one scan: its file and its position there. */
 export function hunkKey(row: { readonly filePath: string; readonly hunkIndex: number }): string {
   return `${row.filePath}\0${row.hunkIndex}`;
 }
 
-/** A hunk the scan means to ask about and hasn't heard back on yet. */
 export function isHunkRowPending(row: {
   readonly signals: unknown;
   readonly skipReason: unknown;
