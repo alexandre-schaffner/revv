@@ -20,8 +20,8 @@ import type {
   NormalizedQuestion,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { authHeaders } from "$lib/utils/session-token";
-import { parseSSEBuffer } from "$lib/utils/sse-parser";
+import { SseFrameError, SseHttpError, SseIdleError, streamSse } from "$lib/api/sse-stream";
+import { authHeaders } from "$lib/session/token.svelte";
 
 // Re-export activity types used by stores and components.
 export type { Activity, ChatTask, InteractionMode, NormalizedQuestion };
@@ -64,20 +64,6 @@ export interface ChatCallbacks {
 }
 
 /**
- * No-bytes inactivity timeout for the chat SSE — the transport is considered
- * dead and we fire `onError` so the Stop button can clear.
- *
- * The server sends `: keepalive` every 15s (see `chatStreamToSSE` in
- * apps/server/src/routes/middleware.ts), so this only trips when even
- * heartbeats have stopped flowing — i.e. the connection is genuinely dead,
- * not just the model thinking. Without this guard, a silent close (server
- * crash mid-turn, OS reclaiming the WKWebView socket) leaves `reader.read()`
- * blocked forever and `setStreaming(false)` is never called, so the Stop
- * button stays rendered after the agent is effectively gone.
- */
-const CHAT_INACTIVITY_TIMEOUT_MS = 90 * 1000;
-
-/**
  * Open a streaming chat turn. Returns an AbortController so the caller can
  * cancel mid-stream (e.g. when the user sends a new message before the
  * previous one finishes).
@@ -87,191 +73,136 @@ export function streamChatMessage(
   callbacks: ChatCallbacks,
 ): AbortController {
   const controller = new AbortController();
-
-  // Watchdog timer: resets on every byte from the server. Fires once if no
-  // data arrives for `CHAT_INACTIVITY_TIMEOUT_MS` — aborts the fetch so the
-  // `.catch` below converts it into a structured NETWORK_ERROR. The
-  // `inactivityTripped` flag lets the catch distinguish "we aborted" from a
-  // user-driven AbortController.abort() (both surface as AbortError, but the
-  // user case should stay silent — abortChatTurn already finalized the UI).
-  let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-  let inactivityTripped = false;
-  const armInactivity = (): void => {
-    if (inactivityTimer) clearTimeout(inactivityTimer);
-    inactivityTimer = setTimeout(() => {
-      inactivityTripped = true;
-      controller.abort();
-    }, CHAT_INACTIVITY_TIMEOUT_MS);
-  };
-  const disarmInactivity = (): void => {
-    if (inactivityTimer) {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = undefined;
-    }
-  };
-
-  armInactivity();
-
-  fetch(`${API_BASE_URL}/api/chat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-    },
-    body: JSON.stringify({
-      prId: params.prId,
-      message: params.message,
-      ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
-      ...(params.interactionMode !== undefined ? { interactionMode: params.interactionMode } : {}),
-      ...(params.approvedPlanId !== undefined ? { approvedPlanId: params.approvedPlanId } : {}),
+  void settleAgentStream(
+    streamSse<ChatStreamFrame>({
+      path: "/api/chat",
+      method: "POST",
+      body: {
+        prId: params.prId,
+        message: params.message,
+        ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
+        ...(params.interactionMode !== undefined
+          ? { interactionMode: params.interactionMode }
+          : {}),
+        ...(params.approvedPlanId !== undefined ? { approvedPlanId: params.approvedPlanId } : {}),
+      },
+      signal: controller.signal,
+      onEvent: (frame) => dispatchChatFrame(frame, callbacks),
     }),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        disarmInactivity();
-        const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
-        callbacks.onError(body as { code: string; message: string });
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        disarmInactivity();
-        callbacks.onError({ code: "NO_BODY", message: "No response body" });
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let gotError = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        // Any bytes from the server — including `: keepalive` heartbeats
-        // stripped by the SSE parser as comments — prove the transport
-        // is alive. Reset the watchdog so it only trips on a genuinely
-        // dead connection.
-        if (value && value.byteLength > 0) {
-          armInactivity();
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const result = parseSSEBuffer<ChatStreamFrame>(buffer);
-        buffer = result.remaining;
-
-        if (result.error) {
-          callbacks.onError(result.error);
-          gotError = true;
-          continue;
-        }
-
-        for (const frame of result.events) {
-          if (frame.kind === "text") {
-            callbacks.onText(frame.data);
-          } else if (frame.kind === "reasoning") {
-            // Reasoning frames are intentionally dropped — the
-            // chat panel never surfaces model reasoning.
-          } else if (frame.kind === "activity") {
-            callbacks.onActivity({
-              activityKind: frame.activityKind,
-              toolName: frame.toolName,
-              summary: frame.summary,
-              payload: frame.payload,
-              ...(frame.callId !== undefined ? { callId: frame.callId } : {}),
-              ...(frame.subagentInvocationId !== undefined
-                ? { subagentInvocationId: frame.subagentInvocationId }
-                : {}),
-            });
-          } else if (frame.kind === "activity-result") {
-            callbacks.onActivityResult({
-              callId: frame.callId,
-              output: frame.output,
-              isError: frame.isError,
-            });
-          } else if (frame.kind === "activity-input") {
-            callbacks.onActivityInput({ callId: frame.callId, payload: frame.payload });
-          } else if (frame.kind === "task-list") {
-            callbacks.onTaskList({
-              turnId: frame.turnId,
-              tasks: frame.tasks,
-            });
-          } else if (frame.kind === "plan-presented") {
-            callbacks.onPlanPresented({
-              planId: frame.planId,
-              turnId: frame.turnId,
-              markdown: frame.markdown,
-            });
-          } else if (frame.kind === "subagent-start") {
-            callbacks.onSubagentStart({
-              invocationId: frame.invocationId,
-              parentTurnId: frame.parentTurnId,
-              subagentType: frame.subagentType,
-              description: frame.description,
-            });
-          } else if (frame.kind === "subagent-end") {
-            callbacks.onSubagentEnd({
-              invocationId: frame.invocationId,
-              result: frame.result,
-              ok: frame.ok,
-            });
-          } else if (frame.kind === "user-question") {
-            callbacks.onQuestionPosted({
-              questionId: frame.questionId,
-              turnId: frame.turnId,
-              questions: frame.questions,
-              previewFormat: frame.previewFormat,
-            });
-          } else if (frame.kind === "user-question-resolved") {
-            callbacks.onQuestionResolved({
-              questionId: frame.questionId,
-              status: frame.status,
-              ...(frame.answers !== undefined ? { answers: frame.answers } : {}),
-            });
-          }
-        }
-
-        if (result.done) {
-          disarmInactivity();
-          callbacks.onDone();
-          return;
-        }
-      }
-
-      disarmInactivity();
-      if (!gotError) {
-        callbacks.onDone();
-      }
-    })
-    .catch((err: Error) => {
-      disarmInactivity();
-      // Inactivity watchdog tripped — surface as a structured error so
-      // the chat store clears `isStreaming` and the Stop button hides.
-      if (inactivityTripped) {
-        callbacks.onError({
-          code: "NETWORK_ERROR",
-          message:
-            "Lost connection to the local server. The agent may have stopped — check the server logs and try again.",
-        });
-        return;
-      }
-      if (err.name !== "AbortError") {
-        // WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
-        // Both mean the local server closed the connection unexpectedly.
-        const isConnectionDrop = err.message === "Load failed" || err.message === "Failed to fetch";
-        callbacks.onError({
-          code: "NETWORK_ERROR",
-          message: isConnectionDrop
-            ? "Lost connection to the local server. The agent may have stopped — check the server logs and try again."
-            : err.message,
-        });
-      }
-    });
-
+    callbacks,
+  );
   return controller;
+}
+
+function dispatchChatFrame(frame: ChatStreamFrame, callbacks: ChatCallbacks): void {
+  if (frame.kind === "text") {
+    callbacks.onText(frame.data);
+  } else if (frame.kind === "reasoning") {
+    // Reasoning frames are intentionally dropped — the
+    // chat panel never surfaces model reasoning.
+  } else if (frame.kind === "activity") {
+    callbacks.onActivity({
+      activityKind: frame.activityKind,
+      toolName: frame.toolName,
+      summary: frame.summary,
+      payload: frame.payload,
+      ...(frame.callId !== undefined ? { callId: frame.callId } : {}),
+      ...(frame.subagentInvocationId !== undefined
+        ? { subagentInvocationId: frame.subagentInvocationId }
+        : {}),
+    });
+  } else if (frame.kind === "activity-result") {
+    callbacks.onActivityResult({
+      callId: frame.callId,
+      output: frame.output,
+      isError: frame.isError,
+    });
+  } else if (frame.kind === "activity-input") {
+    callbacks.onActivityInput({ callId: frame.callId, payload: frame.payload });
+  } else if (frame.kind === "task-list") {
+    callbacks.onTaskList({
+      turnId: frame.turnId,
+      tasks: frame.tasks,
+    });
+  } else if (frame.kind === "plan-presented") {
+    callbacks.onPlanPresented({
+      planId: frame.planId,
+      turnId: frame.turnId,
+      markdown: frame.markdown,
+    });
+  } else if (frame.kind === "subagent-start") {
+    callbacks.onSubagentStart({
+      invocationId: frame.invocationId,
+      parentTurnId: frame.parentTurnId,
+      subagentType: frame.subagentType,
+      description: frame.description,
+    });
+  } else if (frame.kind === "subagent-end") {
+    callbacks.onSubagentEnd({
+      invocationId: frame.invocationId,
+      result: frame.result,
+      ok: frame.ok,
+    });
+  } else if (frame.kind === "user-question") {
+    callbacks.onQuestionPosted({
+      questionId: frame.questionId,
+      turnId: frame.turnId,
+      questions: frame.questions,
+      previewFormat: frame.previewFormat,
+    });
+  } else if (frame.kind === "user-question-resolved") {
+    callbacks.onQuestionResolved({
+      questionId: frame.questionId,
+      status: frame.status,
+      ...(frame.answers !== undefined ? { answers: frame.answers } : {}),
+    });
+  }
+}
+
+const LOST_CONNECTION_MESSAGE =
+  "Lost connection to the local server. The agent may have stopped — check the server logs and try again.";
+
+/**
+ * Report an agent stream's end through the chat-style callbacks: `onDone`
+ * when it closed cleanly, `onError` otherwise, nothing when the caller
+ * aborted it (the caller already finalized its UI).
+ */
+async function settleAgentStream(
+  stream: Promise<void>,
+  callbacks: {
+    onDone: () => void;
+    onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
+  },
+): Promise<void> {
+  try {
+    await stream;
+  } catch (err) {
+    const error = agentStreamError(err);
+    if (error) callbacks.onError(error);
+    return;
+  }
+  callbacks.onDone();
+}
+
+function agentStreamError(
+  err: unknown,
+): { code: string; message: string; [k: string]: unknown } | null {
+  if (err instanceof SseHttpError) {
+    return typeof err.body === "object" && err.body !== null
+      ? (err.body as { code: string; message: string })
+      : { code: "UNKNOWN", message: err.statusText };
+  }
+  if (err instanceof SseFrameError) return { code: err.code, message: err.message };
+  if (err instanceof SseIdleError)
+    return { code: "NETWORK_ERROR", message: LOST_CONNECTION_MESSAGE };
+  if (!(err instanceof Error)) return { code: "NETWORK_ERROR", message: String(err) };
+  if (err.name === "AbortError") return null;
+  // WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
+  const isConnectionDrop = err.message === "Load failed" || err.message === "Failed to fetch";
+  return {
+    code: "NETWORK_ERROR",
+    message: isConnectionDrop ? LOST_CONNECTION_MESSAGE : err.message,
+  };
 }
 
 /** Clear the agent-side session and worktree+branch for this PR's chat. */
@@ -871,92 +802,39 @@ export function resolveConflictsAndPush(
   callbacks: ResolvePushCallbacks,
 ): AbortController {
   const controller = new AbortController();
-
-  fetch(`${API_BASE_URL}/api/chat/${prId}/proposed-changes/resolve-and-push`, {
-    method: "POST",
-    headers: authHeaders(),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
-        callbacks.onError(body as { code: string; message: string });
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        callbacks.onError({ code: "NO_BODY", message: "No response body" });
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let gotError = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const result = parseSSEBuffer<ResolvePushFrame>(buffer);
-        buffer = result.remaining;
-
-        if (result.error) {
-          callbacks.onError(result.error);
-          gotError = true;
-          continue;
+  void settleAgentStream(
+    streamSse<ResolvePushFrame>({
+      path: `/api/chat/${prId}/proposed-changes/resolve-and-push`,
+      method: "POST",
+      signal: controller.signal,
+      // The resolve-and-push stream sends no heartbeat, so a quiet agent step is normal.
+      idleTimeoutMs: null,
+      onEvent: (frame) => {
+        switch (frame.kind) {
+          case "status":
+            callbacks.onStatus?.(frame.message);
+            break;
+          case "conflict-files":
+            callbacks.onConflictFiles?.(frame.files);
+            break;
+          case "agent-text":
+            callbacks.onAgentText?.(frame.data);
+            break;
+          case "agent-activity":
+            callbacks.onAgentActivity?.({
+              activityKind: frame.activityKind,
+              toolName: frame.toolName,
+              summary: frame.summary,
+              ...(frame.payload !== undefined ? { payload: frame.payload } : {}),
+            });
+            break;
+          case "result":
+            callbacks.onResult(frame);
+            break;
         }
-
-        for (const frame of result.events) {
-          switch (frame.kind) {
-            case "status":
-              callbacks.onStatus?.(frame.message);
-              break;
-            case "conflict-files":
-              callbacks.onConflictFiles?.(frame.files);
-              break;
-            case "agent-text":
-              callbacks.onAgentText?.(frame.data);
-              break;
-            case "agent-activity":
-              callbacks.onAgentActivity?.({
-                activityKind: frame.activityKind,
-                toolName: frame.toolName,
-                summary: frame.summary,
-                ...(frame.payload !== undefined ? { payload: frame.payload } : {}),
-              });
-              break;
-            case "result":
-              callbacks.onResult(frame);
-              break;
-          }
-        }
-
-        if (result.done) {
-          callbacks.onDone();
-          return;
-        }
-      }
-
-      if (!gotError) {
-        callbacks.onDone();
-      }
-    })
-    .catch((err: Error) => {
-      if (err.name !== "AbortError") {
-        // WebKit surfaces connection drops as "Load failed"; Chromium as "Failed to fetch".
-        // Both mean the local server closed the connection unexpectedly.
-        const isConnectionDrop = err.message === "Load failed" || err.message === "Failed to fetch";
-        callbacks.onError({
-          code: "NETWORK_ERROR",
-          message: isConnectionDrop
-            ? "Lost connection to the local server. The agent may have stopped — check the server logs and try again."
-            : err.message,
-        });
-      }
-    });
-
+      },
+    }),
+    callbacks,
+  );
   return controller;
 }

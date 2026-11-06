@@ -1,6 +1,5 @@
 import type { Activity, RecapPrEntry, RecapStreamEvent, RecapThemeSummary } from "@revv/shared";
-import { API_BASE_URL } from "$lib/api/base-url";
-import { runRecapSse } from "$lib/services/recap-sse";
+import { streamSse } from "$lib/api/sse-stream";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
 
@@ -204,10 +203,10 @@ export async function streamRecap(recapId: string): Promise<void> {
   controllers.set(recapId, abortCtrl);
 
   try {
-    await runRecapSse({
-      url: `${API_BASE_URL}/api/recaps/${recapId}/stream`,
+    await streamSse<RecapStreamEvent>({
+      path: `/api/recaps/${recapId}/stream`,
       signal: abortCtrl.signal,
-      onEvents: (events) => applyEvents(recapId, events),
+      onEvent: (event) => applyEvents(recapId, [event]),
     });
   } catch (e) {
     const current = entries.get(recapId);
@@ -239,4 +238,10 @@ export function abortRecapStream(recapId: string): void {
 export function resetRecapStream(recapId: string): void {
   abortRecapStream(recapId);
   deleteEntry(recapId);
+}
+
+export function reset(): void {
+  for (const ctrl of controllers.values()) ctrl.abort();
+  controllers.clear();
+  entries = new Map();
 }
