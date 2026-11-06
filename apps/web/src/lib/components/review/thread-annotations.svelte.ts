@@ -78,7 +78,6 @@ export class ThreadAnnotations {
     return input?.filePath === this.#filePath() ? input : null;
   }
 
-  /** Whether trigger `seq` is new; claims it when it is. */
   claimTrigger(seq: number): boolean {
     if (seq <= this.#handledTriggerSeq) return false;
     this.#handledTriggerSeq = seq;

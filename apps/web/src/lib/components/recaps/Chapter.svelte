@@ -129,8 +129,6 @@ const openGroups = $derived(groupByAuthor(openEntries));
 <style>
 .chapter {
   padding: 1.5rem 0;
-  /* Offset for the sticky-ish hero so smooth-scroll lands the heading
-     comfortably below the fold instead of jammed at viewport top. */
   scroll-margin-top: 1.5rem;
 }
 
@@ -241,10 +239,6 @@ const openGroups = $derived(groupByAuthor(openEntries));
   flex-direction: column;
 }
 
-/* Subtle visual demotion on active-work rows so the "what landed" group
-   reads as the primary content. Lower opacity is enough — preserving the
-   verb tense + subhead context — without dimming so far that the entries
-   feel inaccessible. */
 .author-group--open {
   opacity: 0.78;
 }
@@ -276,8 +270,6 @@ const openGroups = $derived(groupByAuthor(openEntries));
   padding-left: calc(22px + 0.55rem);
 }
 
-/* Thin in-chapter divider. Functions like the chapter-header's bottom
-   border at a smaller scale — same color recipe, smaller label. */
 .subgroup-divider {
   display: flex;
   align-items: center;

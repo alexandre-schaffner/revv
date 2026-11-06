@@ -1,23 +1,11 @@
 <script lang="ts">
 /*
- * RepoTaggedPrs — the repo homepage's queue of PRs that involve the viewer.
+ * A list with a toolbar, not a data grid: the shape of GitHub's `/pulls`, the
+ * one PR list every reviewer can already read. A queue of a handful of rows
+ * triaged by eye doesn't need per-column sort headers.
  *
- * A list with a toolbar, not a data grid. The queue is a handful of rows the
- * reader triages by eye; a `<thead>` with per-column sort buttons is apparatus
- * that a spreadsheet needs and a queue does not, and it forced a column named
- * "Why" over a gutter of glyphs that needed their own legend.
- *
- * So the shape is GitHub's `/pulls` list, which is the one PR list every
- * reviewer can already read: a toolbar carries the filters and the sort, and
- * each row below it is `state icon → title → #num · who · when`. See
- * TaggedPrRow for where the row deliberately improves on GitHub rather than
- * copying it.
- *
- * No entrance motion. This is a surface the user lands on many times a day;
- * a staggered reveal on every render (and on every SSE tick that re-keys a
- * row) is a tax, not polish. Motion here is state only: a folded stack
- * fanning under the pointer, the toolbar's press, and a stack opening or
- * closing.
+ * No entrance motion. The user lands here many times a day, and a staggered
+ * reveal on every render (and every SSE tick that re-keys a row) is a tax.
  */
 
 import Tray from "phosphor-svelte/lib/Tray";
@@ -50,15 +38,9 @@ interface Props {
 
 let { repoId, defaultBranch }: Props = $props();
 
-// ── State ───────────────────────────────────────────────────────────────────
-// All component-local: nothing else in the app needs the sort or the filter.
-
 /**
- * The reason to narrow to, or `null` for "All".
- *
- * Single-select, not a `Set`: `reasonFor` makes the three reasons mutually
- * exclusive by construction, so a multi-select over them only ever expressed
- * "all" in a more expensive way.
+ * The reason to narrow to, or `null` for "All". Single-select, not a `Set`:
+ * `reasonFor` makes the reasons mutually exclusive.
  */
 let activeReason = $state<TaggedReason | null>(null);
 let sortId = $state<TaggedSortId>("relevance");
@@ -218,8 +200,6 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		list-style: none;
 	}
 
-	/* ── Loading ────────────────────────────────────────────────────────── */
-
 	/* Deliberately motionless: a static bar preserves the layout, reads as
 	   "loading" on its own, and needs no reduced-motion carve-out. */
 	.skel-row {
@@ -249,8 +229,6 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 		width: 34%;
 		height: 7px;
 	}
-
-	/* ── Empty states ───────────────────────────────────────────────────── */
 
 	.filtered-blank {
 		margin: 0;

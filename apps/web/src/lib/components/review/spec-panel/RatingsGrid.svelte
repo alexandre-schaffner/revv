@@ -140,7 +140,6 @@ $effect(() => {
   }
 });
 
-// ── Keyboard navigation (2-D) ───────────────────────────────
 const cellRefs: Record<RatingAxis, HTMLElement | null> = {
   correctness: null,
   scope: null,
@@ -170,7 +169,6 @@ function onGridKeydown(e: KeyboardEvent): void {
   let nextIdx: number | null = null;
 
   if (e.key === "ArrowRight") {
-    // Stay in the row rather than wrapping into the next one.
     const maxColThisRow = Math.min(GRID_COLS - 1, RATING_AXES.length - 1 - row * GRID_COLS);
     if (col < maxColThisRow) nextIdx = idx + 1;
   } else if (e.key === "ArrowLeft") {
@@ -313,39 +311,25 @@ function onGridKeydown(e: KeyboardEvent): void {
         border: 0;
     }
 
-    /* ── Grid ────────────────────────────────────────────────────── */
-
     .rating-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        /* 1px gap with cells holding their own borders-via-background
-           produces a hairline grid — the "grid of lines" feel from the
-           reference design. */
         gap: 1px;
         background: var(--grid-line);
     }
 
     .rating-grid :global(.cell) {
-        /* Fill the grid slot. The 1px `gap` + hairline background reveals
-           between cells provides the separator lines without needing per-cell
-           borders (which would double up at adjacencies). */
+        /* The 1px gap over the hairline background draws the separators;
+           per-cell borders would double up at adjacencies. */
         width: 100%;
         height: 100%;
     }
 
-    /* "Only failing": dim pass cells instead of removing them so the grid
-       shape stays intact. Pointer-events stay on — users can still open the
-       pass popover to read "why it passed" — but the opacity drop pushes the
-       eye toward failing cells. */
+    /* Pass cells stay clickable, to read why they passed. */
     .rating-grid--only-failing :global(.cell--pass) {
         opacity: 0.3;
     }
 
-    /* ── Narrow-width container queries ──────────────────────────── */
-
-    /* Below 680px we collapse to 2 columns — still grid-shaped but cell
-       content has room to breathe. Below 440px (uncommon but defensive) we
-       stack to a single column. */
     @container ratings-grid (max-width: 680px) {
         .rating-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));

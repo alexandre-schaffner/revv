@@ -133,8 +133,6 @@ const confidenceLabels: Record<Confidence, string> = {
         max-width: 65ch;
     }
 
-    /* ── Expected / Received (Jest-style) ────────────────────────── */
-
     .expected-received {
         display: flex;
         flex-direction: column;
@@ -179,8 +177,6 @@ const confidenceLabels: Record<Confidence, string> = {
         letter-spacing: 0.02em;
     }
 
-    /* ── Score title: the axis name heading the popover ──────────── */
-
     .score-title {
         margin: 0;
         font-family: var(--font-mono);
@@ -205,20 +201,14 @@ const confidenceLabels: Record<Confidence, string> = {
         top: -1px;
     }
 
-    /* ── Details (rendered markdown) ─────────────────────────────── */
-
     .rating-details-host :global(.rating-details) {
         font-family: var(--font-sans);
         --tw-prose-body: var(--color-text-primary);
         max-height: 480px;
         overflow-y: auto;
         max-width: 65ch;
-        /* No fade mask: it clipped the last line of short content, the
-           common case. */
     }
 
-    /* `### headings` in rating details render as small uppercase section
-       labels rather than prose headings. */
     .rating-details-host :global(.rating-details h3) {
         font-size: 12px;
         font-weight: 700;

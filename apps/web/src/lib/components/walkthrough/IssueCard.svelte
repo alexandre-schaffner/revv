@@ -61,9 +61,6 @@ const resolved = $derived(resolutionLabel !== null);
 
 {#snippet cardContent()}
 	<div class="issue-card-body">
-		<!-- Three grid slots: marks / title / step tag. The badges share one
-		     `.issue-card-marks` cell so the row stays three columns whichever
-		     badges show; see the grid rules in the stylesheet. -->
 		<div class="issue-card-top" class:issue-card-top--tagged={!!stepTag}>
 			<span class="issue-card-marks">
 				<span class="issue-badge issue-badge--{issue.severity}">
@@ -88,7 +85,6 @@ const resolved = $derived(resolutionLabel !== null);
 {/snippet}
 
 <style>
-	/* ── Base card ──────────────────────────────────────────────────── */
 	.issue-card {
 		padding: 10px 14px;
 		border-radius: 8px;
@@ -104,19 +100,15 @@ const resolved = $derived(resolutionLabel !== null);
 		width: 100%;
 		box-sizing: border-box;
 		cursor: default;
-		/* The card is its own query container: its width is set by whichever
-		   list embeds it (the walkthrough content column caps at 820px, the
-		   per-file list is the diff pane minus 64px), and neither tracks
-		   `.review-content` — the nearest ancestor container — closely enough
-		   to drive the header layout. `width: 100%` above is what keeps
-		   inline-size containment from collapsing the card to zero intrinsic
-		   width. No positioned-fixed descendants live in here, so the
+		/* Its own query container: its width comes from whichever list embeds
+		   it, which `.review-content` (the nearest container) doesn't track.
+		   `width: 100%` above keeps inline-size containment from collapsing it
+		   to zero. No position:fixed descendants live here, so the
 		   containing-block side effect is inert. */
 		container-type: inline-size;
 		container-name: issue-card;
 	}
 
-	/* Severity left-border + hover shadow color */
 .issue-card--info {
     --severity-color: var(--color-accent);
     background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary));
@@ -130,7 +122,6 @@ const resolved = $derived(resolutionLabel !== null);
     background: color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary));
 }
 
-	/* ── Clickable (button) variant ─────────────────────────────────── */
 	button.issue-card {
 		cursor: pointer;
 		transition:
@@ -164,7 +155,6 @@ const resolved = $derived(resolutionLabel !== null);
 		background: color-mix(in srgb, var(--color-success) 5%, var(--color-bg-secondary));
 	}
 
-	/* ── Body ────────────────────────────────────────────────────────── */
 	.issue-card-body {
 		display: flex;
 		flex-direction: column;
@@ -173,16 +163,10 @@ const resolved = $derived(resolutionLabel !== null);
 		min-width: 0;
 	}
 
-	/* Header row. A wrapping flexbox is wrong here: the title is a single
-	   flex item with no room to shrink, so as soon as badge + title + tag
-	   exceed the card the *tag* is what wraps — landing on its own line,
-	   pushed right by `margin-left: auto`, floating between the title and
-	   the description with nothing to anchor it. That happens at every card
-	   width, including the 820px maximum, whenever a title runs long.
-
-	   Grid instead: the title owns a `minmax(0, 1fr)` track so it wraps
-	   inside its own column while the badges and the tag stay pinned to the
-	   first baseline. Nothing ever orphans. */
+	/* Grid, not a wrapping flexbox: with flex, a long title makes the *tag*
+	   wrap onto its own line, orphaned. The title's `minmax(0, 1fr)` track
+	   wraps inside its column while the badges and the tag stay pinned to the
+	   first baseline. */
 	.issue-card-top {
 		display: grid;
 		grid-template-columns: auto minmax(0, 1fr);
@@ -244,7 +228,6 @@ const resolved = $derived(resolutionLabel !== null);
 		overflow-wrap: anywhere;
 	}
 
-	/* ── Step tag ────────────────────────────────────────────────────── */
 	.issue-step-tag {
 		justify-self: end;
 		font-size: 10px;
@@ -274,7 +257,6 @@ const resolved = $derived(resolutionLabel !== null);
 		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
 	}
 
-	/* ── First-pass mark ─────────────────────────────────────────────── */
 	/* Corroboration, not a status: an icon in the card's own tone, quiet
 	   enough to skim past and specific enough on hover. */
 	.issue-card-first-pass {
@@ -283,7 +265,6 @@ const resolved = $derived(resolutionLabel !== null);
 		color: color-mix(in srgb, var(--severity-color, var(--color-text-muted)) 70%, var(--color-text-muted));
 	}
 
-	/* ── Severity badge ──────────────────────────────────────────────── */
 	.issue-badge {
 		font-size: 10px;
 		font-weight: 600;

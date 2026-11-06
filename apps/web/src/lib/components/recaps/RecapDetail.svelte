@@ -215,9 +215,7 @@ function formatCompletedAt(iso: string): string {
   gap: 1rem;
   width: 100%;
   margin: 0 auto;
-  /* 4.5rem at the foot clears the floating action bar. The archive section
-     that used to sit below this and carry that clearance is now a popover at
-     the top, so the recap's own last line is what has to stay legible. */
+  /* 4.5rem at the foot clears the floating action bar. */
   padding: 1.5rem 2rem 4.5rem;
   container-type: inline-size;
   container-name: recap;
@@ -240,8 +238,7 @@ function formatCompletedAt(iso: string): string {
 }
 
 /* The rail is a wide-pane affordance. Hidden by default because its content
-   is a duplicate of `.hero-big` — stacking it, as the old max-width:960px
-   block did, renders the header twice. */
+   duplicates `.hero-big`; stacking it would render the header twice. */
 :global(.recap-page .grid > .side) {
   grid-column: 1;
   grid-row: 1 / span 2;
@@ -360,11 +357,7 @@ function formatCompletedAt(iso: string): string {
   align-items: center;
   gap: 0.75rem;
   padding: 6rem 1rem 2rem;
-  /* Match the body column's reading width so the streamed thoughts read
-     as a column under the loader instead of spanning edge-to-edge. The
-     dotmatrix loader and phase caption stay centered via align-items;
-     the Collapsible + its content fill this width so the markdown
-     paragraph wraps at a comfortable measure. */
+  /* The streamed thoughts wrap at the body column's reading measure. */
   max-width: var(--recap-measure);
   width: 100%;
   margin: 0 auto;
@@ -432,8 +425,6 @@ function formatCompletedAt(iso: string): string {
   overflow: hidden;
 }
 
-/* No rule above it. This is the last line on the page now and it needs no
-   ceiling; mono + muted already sets it apart from the body. */
 .footer {
   padding-top: 0.25rem;
   font-size: 0.7rem;

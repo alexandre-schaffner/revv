@@ -2,7 +2,6 @@
 import type { HTMLAttributes } from "svelte/elements";
 
 export type ToolInputProps = HTMLAttributes<HTMLDivElement> & {
-  /** The input parameters passed to the tool (displayed as formatted JSON). */
   input?: unknown;
 };
 </script>

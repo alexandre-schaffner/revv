@@ -49,7 +49,6 @@ const pr = $derived(row.pr);
  */
 const updatedAt = $derived(String(pr.updatedAt));
 
-/** Absolute timestamp for the hover title; falls back to the raw value. */
 const updatedAtExact = $derived.by(() => {
   const ms = Date.parse(updatedAt);
   return Number.isNaN(ms) ? updatedAt : new Date(ms).toLocaleString();
@@ -249,11 +248,9 @@ function onNav(event: MouseEvent): void {
 	}
 
 	/*
-	 * Brand teal, not the warm "attention" orange — a review request is fresh
-	 * work, not a failure, and orange reads as an error. Teal matches the
-	 * system's other "this is live" marks (streaming cursor, active file row).
-	 * Specificity clears `.link--visited .state` since a read row dims its
-	 * glyph, but a pending review request still needs you.
+	 * Teal, like the system's other "this is live" marks. Out-specifies
+	 * `.link--visited .state`: a read row dims its glyph, but a pending review
+	 * request still needs you.
 	 */
 	.link .state--reason {
 		position: relative;
@@ -269,9 +266,7 @@ function onNav(event: MouseEvent): void {
 		flex: 1 1 auto;
 	}
 
-	/* A step below the section heading. The system's 0.9375rem "Title" step ties
-	   the heading exactly, which read as nine sibling headings rather than as a
-	   list under one; weight carries the emphasis instead. */
+	/* A step below the section heading; weight carries the emphasis. */
 	.title {
 		font-size: 0.875rem;
 		font-weight: 600;
@@ -330,14 +325,11 @@ function onNav(event: MouseEvent): void {
 		flex-shrink: 0;
 	}
 
-	/* ── Change size ────────────────────────────────────────────────────── */
-
 	/* Right-aligned so numbers terminate on the card's right inset. The min-width floor keeps small diffs from collapsing the column to a hairline. */
 	.size {
 		display: flex;
 		flex-direction: column;
 		align-items: flex-end;
-		/* Matches `.body`'s gap for shared rhythm between columns. */
 		gap: 0.1875rem;
 		flex-shrink: 0;
 		min-width: 5rem;
@@ -356,7 +348,6 @@ function onNav(event: MouseEvent): void {
 		white-space: nowrap;
 	}
 
-	/* Weight and ink split the digit (the datum) from the "files" label so the eye lands on the number. */
 	.size-count {
 		font-size: 0.8125rem;
 		font-weight: 600;
@@ -376,7 +367,6 @@ function onNav(event: MouseEvent): void {
 	 * below. Left-aligning or sizing to text would let either edge drift.
 	 */
 	.size-unit {
-		/* Sized to "files" itself; slack lands in the gap rather than as unused headroom. */
 		min-width: 1.375rem;
 		text-align: right;
 		font-size: 0.6875rem;
@@ -385,7 +375,6 @@ function onNav(event: MouseEvent): void {
 		color: var(--color-text-secondary);
 	}
 
-	/* Detail line: mono, one step down from the count, so it never reads louder than the file count. */
 	.size-lines {
 		display: flex;
 		align-items: baseline;
@@ -434,10 +423,8 @@ function onNav(event: MouseEvent): void {
 		opacity: 0.85;
 	}
 
-	/* `white-space: nowrap` is what makes the ellipsis work at all. Without it
-	   the branch name wraps instead, and once flex has shrunk this box toward
-	   zero it wraps to three lines and inflates the whole row from 55px to
-	   83px. */
+		/* `white-space: nowrap` is what makes the ellipsis work: otherwise the
+		   shrunk box wraps the name onto several lines and inflates the row. */
 	.branch-src {
 		min-width: 0;
 		overflow: hidden;

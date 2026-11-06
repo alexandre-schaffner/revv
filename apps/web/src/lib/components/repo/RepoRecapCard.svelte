@@ -38,7 +38,6 @@ const listLoading = $derived(getRecapLoading(repoId));
 const latest = $derived<ProjectRecapSummary | null>(pickLatestByWindow(recaps));
 const latestId = $derived(latest?.id ?? null);
 
-// Hydrate the full markdown for the latest recap.
 $effect(() => {
   const id = latestId;
   if (id) {
@@ -206,7 +205,6 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 		text-decoration: underline;
 	}
 
-	/* Paper-like container — subtle shadow, border, scrollable body. */
 	.recap-card-paper {
 		display: flex;
 		flex-direction: column;
@@ -215,9 +213,6 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border-subtle);
 		border-radius: var(--radius-card);
-		/* The system's Small tier. The hand-rolled `rgba(0, 0, 0, 0.04/0.06)`
-		   this replaces was near-invisible on the midnight canvas; the token
-		   carries its own dark-theme value. */
 		box-shadow: var(--color-shadow-sm);
 		max-height: 640px;
 		overflow-y: auto;
@@ -269,14 +264,8 @@ const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 		color: var(--color-text-muted);
 	}
 
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css). The recap lede reads as primary-weight body
-	   text rather than the muted prose default, and headings get a touch of
-	   negative tracking to match the card's display type. */
 	.recap-card-prose {
 		--tw-prose-body: var(--color-text-primary);
-		/* The page container is wider than a reading measure now that the queue
-		   table drives its width; keep the lede at a readable line length. */
 		max-width: 70ch;
 	}
 

@@ -5,20 +5,16 @@ import { gsapFadeY, tokens } from "$lib/motion";
 interface Props {
   items: readonly T[];
   activeIndex: number;
-  /** Stable per-row key. */
   key: (item: T) => string;
   onselect: (item: T) => void;
   /** Renders the row body; receives the item and whether it is the active row. */
   row: Snippet<[T, boolean]>;
-  /** Extra classes for the row `<button>` (e.g. layout / font per menu kind). */
   rowClass?: string;
-  /** Optional per-row `title` (tooltip). */
   rowTitle?: (item: T) => string | undefined;
 }
 
 let { items, activeIndex, key, onselect, row, rowClass = "", rowTitle }: Props = $props();
 
-// Keep the active row scrolled into view as the user arrows through it.
 let buttons: (HTMLButtonElement | undefined)[] = $state([]);
 $effect(() => {
   buttons[activeIndex]?.scrollIntoView({ block: "nearest" });

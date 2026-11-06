@@ -23,7 +23,6 @@ export function createRowKeys({ order, toggleAll, rowKeys = {} }: Options) {
   }
 
   return {
-    /** Ref callback for a row's trigger. */
     trigger(id: string): (el: HTMLElement | null) => void {
       return (el) => {
         if (el) triggers.set(id, el);

@@ -24,9 +24,6 @@ let { open, mode, onOpenChange }: Props = $props();
 
 let inputValue = $state("");
 
-// Reset query state whenever the palette is opened, or the mode flips while
-// open. The store-backed `mode` is the source of truth; we only sync local
-// input + command-store query off it.
 $effect(() => {
   if (!open) return;
   if (mode === "command") {
@@ -93,13 +90,6 @@ function handleCommandSelect(run: () => void) {
 }
 </script>
 
-<!--
-  Styling note. The shadcn primitives carry their own Tailwind defaults
-  (px-2/py-1.5 items, text-xs muted heading, rounded-sm hover). We keep the
-  primitives and override the visual rhythm via `:global()` rules below,
-  targeting the bits-ui `data-command-*` attributes so the selectors stay
-  stable against shadcn class drift.
--->
 {#snippet prRow(result: PrResult, kind: "open" | "archived")}
   <Command.Item
     value={`${kind}-${result.pr.id}`}
@@ -177,14 +167,10 @@ function handleCommandSelect(run: () => void) {
 </Command.Dialog>
 
 <style>
-  /* Palette overrides restore the previous visual rhythm on top of the
-     shadcn `Command.*` wrappers. Selectors mostly hit bits-ui's
-     `data-command-*` attributes (stable across shadcn class drift); the
-     input wrapper lives one level up in our own shadcn shell and uses
-     `data-slot` instead. `:global` is required because the dialog content
-     portals out of this component's scope. Flat selectors on purpose:
-     Svelte's CSS compiler doesn't reliably pass native nesting through a
-     `:global()` block. */
+  /* `:global` because the dialog content portals out of this component's
+     scope. Selectors hit bits-ui's `data-command-*` attributes, stable across
+     shadcn class drift. Flat on purpose: Svelte's CSS compiler doesn't
+     reliably pass native nesting through a `:global()` block. */
   :global(.palette-shell [data-slot="command-input-wrapper"]) {
     margin: 0;
     padding: 0 16px;
@@ -243,7 +229,6 @@ function handleCommandSelect(run: () => void) {
     color: var(--color-text-muted);
   }
 
-  /* Command rows: label left, kbd shortcut right. */
   :global(.palette-shell .palette-cmd-item) {
     align-items: center;
     justify-content: space-between;
@@ -268,8 +253,6 @@ function handleCommandSelect(run: () => void) {
     flex-shrink: 0;
   }
 
-  /* PR rows: avatar + title + meta on top, branch on bottom indented past
-     the avatar so it aligns under the title. */
   :global(.palette-shell .palette-pr-item) {
     flex-direction: column;
     align-items: stretch;

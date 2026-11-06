@@ -1,13 +1,4 @@
 <script lang="ts">
-/*
- * CommentExpandedBody — the content that appears when a file-level
- * comment row is expanded. Each thread renders as a lifted card; the
- * line-range marker + jump button live at the top of the card, then
- * every message stacks with the same avatar + name + relative-time
- * header used by the inline annotation thread. Replies indent with a
- * thin left guide.
- */
-
 import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import Trash from "phosphor-svelte/lib/Trash";
@@ -20,8 +11,7 @@ interface Props {
   threads: readonly CommentThread[];
   getThreadMessages: (threadId: string) => ThreadMessage[];
   onJump?: ((filePath: string, line: number) => void) | undefined;
-  /** Discard a pending (unsynced) thread. Only offered for threads that
-      haven't been pushed to GitHub yet (externalCommentId == null). */
+  /** Only offered for threads not yet pushed to GitHub (externalCommentId == null). */
   onDiscard?: ((threadId: string) => void) | undefined;
 }
 
@@ -101,8 +91,6 @@ const threadEntries = $derived(
         color: var(--color-text-secondary);
     }
 
-    /* ── Per-thread block ──────────────────────────────────── */
-
     .thread-block {
         display: flex;
         flex-direction: column;
@@ -163,8 +151,6 @@ const threadEntries = $derived(
         line-height: 1;
     }
 
-    /* Discard sits at the right edge of the thread head. Danger-tinted to
-       match the inline AnnotationThread "Discard" affordance. */
     .thread-discard {
         margin-left: auto;
         display: inline-flex;
@@ -199,8 +185,6 @@ const threadEntries = $derived(
     .thread-discard-label {
         line-height: 1;
     }
-
-    /* ── Turns ─────────────────────────────────────────────── */
 
     .turns {
         list-style: none;

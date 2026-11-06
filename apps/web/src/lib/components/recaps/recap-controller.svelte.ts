@@ -131,7 +131,6 @@ export class RecapController {
     return stored !== null && this.isStale && stored.status !== "generating";
   });
 
-  /** Ask for the recap of the current window. */
   async generate(period: RecapPeriod): Promise<{ recapId: string } | null> {
     if (this.#generating) return null;
     this.#generating = true;

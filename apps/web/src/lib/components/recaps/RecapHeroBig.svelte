@@ -160,7 +160,6 @@ const header = $derived(buildRecapHeader(recap, period));
   color: var(--color-text-muted);
 }
 
-/* Inline stats — one row with key + value pairs, compact mono. */
 .stats {
   margin: 0;
   display: flex;

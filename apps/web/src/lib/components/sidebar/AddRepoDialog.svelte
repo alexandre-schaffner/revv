@@ -49,9 +49,7 @@ function rememberCloneBase(path: string): void {
   <Dialog.Content
     class={[
       'flex flex-col !gap-0 !p-0 sm:!max-w-[480px] overflow-hidden',
-      // Only the clone view has a scrolling repo list, so it takes a stable
-      // height to keep the modal from resizing as the list loads in. The source
-      // chooser and the link form are short, so they hug their content.
+      // Only the clone view's list loads in, so only it takes a fixed height.
       view === 'clone' ? 'h-[min(580px,82vh)]' : 'max-h-[min(580px,82vh)]',
     ]}
     showCloseButton={false}
@@ -121,11 +119,8 @@ function rememberCloneBase(path: string): void {
 </Dialog.Root>
 
 <style>
-  /* Stack the view layers in a single grid cell so that during a view change
-     the outgoing (fading) layer and the incoming layer overlap instead of
-     stacking. The container's height is then the max of the layers (governed
-     by the incoming view), never the sum — so the modal never balloons tall
-     mid-transition and then shrinks back. */
+  /* Every view layer shares one grid cell, so mid-transition the outgoing and
+     incoming layers overlap and the modal's height is the max, never the sum. */
   .view-stack {
     display: grid;
   }

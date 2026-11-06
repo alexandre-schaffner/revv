@@ -126,7 +126,6 @@ const isDisabled = $derived(state !== "resolved");
 
 <style>
     .cell {
-        /* Verdict palette — overridden by `.cell--{verdict}` below. */
         --c-rating-bg: transparent;
         --c-rating-border: var(--color-border);
         --c-rating-icon: var(--color-text-muted);
@@ -135,13 +134,9 @@ const isDisabled = $derived(state !== "resolved");
 
         position: relative;
         display: flex;
-        /* Single cell body — the trigger fills it. A CSS grid row/column
-           slot provides the outer layout so the cell just needs to stretch. */
         min-height: 96px;
         background: var(--color-bg-secondary);
     }
-
-    /* ── Verdict color palettes ──────────────────────────────────── */
 
     .cell--pass {
         --c-rating-bg: var(--color-score-pass-bg);
@@ -166,8 +161,6 @@ const isDisabled = $derived(state !== "resolved");
         --c-rating-label: var(--color-score-blocker-label);
         --c-rating-axis: var(--color-score-blocker-axis);
     }
-
-    /* ── Cell trigger (clickable button) ─────────────────────────── */
 
     :global(.cell-trigger) {
         display: flex;
@@ -196,15 +189,12 @@ const isDisabled = $derived(state !== "resolved");
     }
 
     :global(.cell-trigger:hover:not(:disabled):not([aria-disabled="true"])) {
-        /* Faint verdict-tinted wash on hover. */
         background: color-mix(
             in srgb,
             var(--c-rating-bg) 55%,
             transparent
         );
     }
-
-    /* ── Label (uppercase mono axis name) ────────────────────────── */
 
     .cell-body {
         display: flex;
@@ -228,8 +218,6 @@ const isDisabled = $derived(state !== "resolved");
     .cell[data-state="running"] .cell-label {
         opacity: 0.6;
     }
-
-    /* ── Status row (icon + verdict text) ────────────────────────── */
 
     .cell-status {
         display: inline-flex;
@@ -286,17 +274,11 @@ const isDisabled = $derived(state !== "resolved");
         letter-spacing: 0.01em;
     }
 
-    /* ── Synthesis line (muted detail) ───────────────────────────── */
-
     .cell-synthesis {
         font-family: var(--font-mono);
         font-size: 11.5px;
         color: var(--color-text-muted);
         line-height: 1.35;
-        /* Clamp to a single line — citation summaries are structured and
-           short, and rationale fragments have already been truncated by
-           `synthesize`. A second line would make the grid cells uneven
-           heights and pull the eye around. */
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -305,16 +287,12 @@ const isDisabled = $derived(state !== "resolved");
         align-self: stretch;
     }
 
-    /* ── Lifecycle ───────────────────────────────────────────────── */
-
     .cell[data-state="queued"] :global(.cell-trigger) {
         opacity: 0.55;
     }
 
     .cell[data-state="running"] :global(.cell-trigger) {
         opacity: 0.85;
-        /* Subtle background pulse so the eye can pick the running cell out
-           of the grid without having to interpret the spinner. */
         animation: cell-pulse var(--duration-pulse) var(--ease-soft) infinite;
     }
 
@@ -332,10 +310,8 @@ const isDisabled = $derived(state !== "resolved");
         }
     }
 
-    /* ── Popover content overrides ───────────────────────────────── */
-    /* Bits-ui's default popover caps at w-72 (288px) which is too tight for
-       the expanded rating body (rationale + details + citations + chips).
-       Override via a global selector on the class we pass in. */
+    /* Bits-ui's default popover caps at w-72 (288px), too tight for the
+       expanded rating body. */
     :global(.rating-cell-popover) {
         width: min(420px, 90vw) !important;
         max-height: min(520px, 70vh);

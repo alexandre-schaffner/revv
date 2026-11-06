@@ -12,7 +12,6 @@ import {
 } from "$lib/stores/sidebar-nav.svelte";
 
 interface Props {
-  /** Inline to the right of the input — the creator filter button. */
   trailing?: Snippet;
 }
 

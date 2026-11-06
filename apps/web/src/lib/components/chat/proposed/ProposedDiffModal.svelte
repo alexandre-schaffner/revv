@@ -111,14 +111,12 @@ const gitStatus: GitStatusEntry[] = $derived(
   })),
 );
 
-// ── DOM refs ──────────────────────────────────────────────────────────────
 let treeHostEl: HTMLElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
 let diffWrapperEls = $state<(HTMLDivElement | null)[]>([]);
 let diffInstances = $state<(PierreFileDiff<CommentMeta> | null)[]>([]);
 let tree: FileTree | null = null;
 
-// Resize wrapper/instance arrays reactively when files count changes
 $effect(() => {
   const len = files.length;
   if (diffWrapperEls.length !== len) {
@@ -129,7 +127,6 @@ $effect(() => {
 
 const annotationMounts = new AnnotationMounts();
 
-// ── Reactive UI state ─────────────────────────────────────────────────────
 const mode = $derived(getDiffMode());
 let isTreeCollapsed = $state(false);
 
@@ -149,7 +146,6 @@ const commitActionBusy = $derived(isDiscarding || isCherryPicking);
 async function handleDiscardCommit() {
   if (commitActionBusy) return;
   await discardProposedCommitAction(prId, sha);
-  // Commit no longer exists — close the modal.
   requestClose();
 }
 
@@ -159,7 +155,6 @@ async function handleCherryPickCommit() {
   requestClose();
 }
 
-// ── Annotation metadata ───────────────────────────────────────────────────
 interface CommentMeta {
   kind: "input" | "chip";
   commentId?: string;
@@ -204,7 +199,6 @@ function annotationsFor(file: FileDiffMetadata): DiffLineAnnotation<CommentMeta>
   return out;
 }
 
-// ── FileDiff lifecycle ────────────────────────────────────────────────────
 function buildOptions(
   file: FileDiffMetadata,
   diffStyle: "unified" | "split",
@@ -296,10 +290,8 @@ function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: "unified" | "
   diffInstances[idx] = instance;
 }
 
-// Mount FileDiff lazily as each per-file wrapper element is captured.
-// Using an action (rather than `bind:this` into an array) sidesteps Svelte
-// 5's strict typing on indexed array binds and gives us a deterministic
-// `destroy` hook for cleanup if the modal closes mid-mount.
+// An action rather than `bind:this` into an array: Svelte 5 types indexed binds
+// strictly, and `destroy` cleans up if the modal closes mid-mount.
 function captureDiffEl(el: HTMLDivElement, index: number) {
   diffWrapperEls[index] = el;
   if (!diffInstances[index]) {
@@ -321,10 +313,8 @@ function captureDiffEl(el: HTMLDivElement, index: number) {
   };
 }
 
-// ── Reactive: re-render annotations when comments / pendingInputs change ──
 let didFirstAnnotationRender = false;
 $effect(() => {
-  // Subscribe to both signals.
   void comments;
   void pendingInputs.size;
   // Skip the very first run — instances are still being constructed via
@@ -345,7 +335,6 @@ $effect(() => {
   }
 });
 
-// ── Reactive: mode changes — destroy + recreate every FileDiff ────────────
 let lastMode = $state(untrack(() => mode));
 $effect(() => {
   const next = mode;
@@ -366,14 +355,12 @@ $effect(() => {
   }
 });
 
-// ── Comment handlers ──────────────────────────────────────────────────────
 function openInput(
   filePath: string,
   lineNumber: number,
   side: "deletions" | "additions",
   editingId?: string,
 ) {
-  // Only one input open at a time keeps the UX focused.
   pendingInputs.clear();
   pendingInputs.set(pendingKey(filePath, lineNumber, side), { editingId });
 }
@@ -388,12 +375,10 @@ function dismissPendingInput(
 
 function handleLineClick(filePath: string, lineNumber: number, side: "deletions" | "additions") {
   const key = pendingKey(filePath, lineNumber, side);
-  // Toggle: clicking the same line again dismisses
   if (pendingInputs.has(key)) {
     pendingInputs.delete(key);
     return;
   }
-  // If a chip already exists, open it for edit; otherwise start fresh.
   const existing = comments.find(
     (c) => c.filePath === filePath && c.lineNumber === lineNumber && c.side === side,
   );
@@ -433,16 +418,13 @@ function toggleTree() {
   isTreeCollapsed = !isTreeCollapsed;
 }
 
-// ── File tree ─────────────────────────────────────────────────────────────
 onMount(() => {
   if (!treeHostEl || files.length === 0) return;
   initTree();
 });
 
-// When fileContents arrives after mount (async load), initialize the tree.
 $effect(() => {
   if (!treeHostEl || files.length === 0 || tree) return;
-  // Read reactive dependencies before the untrack block
   const currentPaths = paths;
   const currentGitStatus = gitStatus;
   initTree(currentPaths, currentGitStatus);
@@ -715,7 +697,6 @@ onDestroy(() => {
 		color: var(--color-text-secondary);
 	}
 
-	/* ── View-mode pill ──────────────────────────────────────────────────── */
 	.view-pill {
 		display: inline-flex;
 		align-items: stretch;
@@ -761,7 +742,6 @@ onDestroy(() => {
 		background: var(--color-border-subtle);
 	}
 
-	/* ── Commit-level actions (discard / cherry-pick) ─────────────────── */
 	.commit-actions {
 		display: inline-flex;
 		align-items: stretch;
@@ -810,7 +790,6 @@ onDestroy(() => {
 		background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 	}
 
-	/* ── Body grid ───────────────────────────────────────────────────────── */
 	.card-body {
 		flex: 1;
 		display: grid;
@@ -896,7 +875,6 @@ onDestroy(() => {
 		font-size: 13px;
 	}
 
-	/* ── Footer ──────────────────────────────────────────────────────────── */
 	.card-footer {
 		display: flex;
 		align-items: center;

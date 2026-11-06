@@ -29,7 +29,6 @@ interface Props {
 
 let { open, onClose }: Props = $props();
 
-// ── Navigation ────────────────────────────────────────────────────────────
 let activePane = $state<SettingsSectionId>("general");
 let query = $state("");
 let paneEl = $state<HTMLElement | null>(null);
@@ -79,7 +78,6 @@ function focusNavItem(list: HTMLElement | null, e: KeyboardEvent, onEscapeTop?: 
   items[Math.min(next, items.length - 1)]?.focus();
 }
 
-// ── Search ────────────────────────────────────────────────────────────────
 let searchEl = $state<HTMLInputElement | null>(null);
 let resultsEl = $state<HTMLElement | null>(null);
 const hits = $derived(searchSettings<SettingsPaneEntry>(SETTINGS_PANES, query));
@@ -309,7 +307,6 @@ function handleKeydown(e: KeyboardEvent): void {
 			0 4px 12px rgba(0, 0, 0, 0.25);
 	}
 
-	/* ── Sidebar ── */
 	.sidebar {
 		display: flex;
 		width: 232px;
@@ -482,7 +479,6 @@ function handleKeydown(e: KeyboardEvent): void {
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* ── Search results ── */
 	.result {
 		display: flex;
 		flex-direction: column;
@@ -531,7 +527,6 @@ function handleKeydown(e: KeyboardEvent): void {
 		overflow-wrap: anywhere;
 	}
 
-	/* ── User footer ── */
 	.sidebar-user {
 		display: flex;
 		align-items: center;
@@ -561,7 +556,6 @@ function handleKeydown(e: KeyboardEvent): void {
 		white-space: nowrap;
 	}
 
-	/* ── Pane ── */
 	.pane {
 		position: relative;
 		min-width: 0;

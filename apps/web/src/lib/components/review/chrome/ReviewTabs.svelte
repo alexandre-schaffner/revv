@@ -19,20 +19,12 @@ const pr = $derived(getSelectedPr());
 const activeTab = $derived(getActiveTab());
 const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 
-// New-commit-available signal: the PR's current headSha differs from the
-// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
-// first successful fetch, suppressing the signal on fresh visits.
-//
-// Scoped to the diff and the Pull button only — says nothing about whether
-// the walkthrough is outdated. Conflating the two marked freshly-generated
-// walkthroughs stale once new commits landed but the diff hadn't refetched.
-// Walkthrough staleness comes from the server (`/current`'s `stale`,
-// `lifecycle:superseded`, review-rounds `hasNewCommits`).
-//
-// Closed and merged PRs are excluded: their head is final, so there is
-// nothing to pull. Without this a merged PR whose archived row carries a
-// newer SHA than the loaded diff shows a Pull button that can never be
-// satisfied — the walkthrough stamps "Merged" instead.
+// For the diff and the Pull button only: the PR's head differs from the SHA
+// the diff was loaded at (`getLoadedHeadSha` is null until the first fetch).
+// Walkthrough staleness is the server's call (`/current`'s `stale`,
+// `lifecycle:superseded`, review-rounds `hasNewCommits`). A closed or merged
+// PR's head is final, so there is nothing to pull; its walkthrough stamps
+// "Merged" instead.
 const hasNewCommit = $derived.by(() => {
   if (!pr?.headSha || pr.status !== "open") return false;
   const loaded = getLoadedHeadSha(pr.id);
@@ -44,12 +36,8 @@ function onPullCommit(): void {
   if (pr) void pullLatestCommit(pr.id);
 }
 
-// The dot and the pull button live in the same slot to the right of the
-// pill tabs. Only one is visible at a time — the pull affordance takes
-// precedence because it requires user action; walkthrough status is
-// passive info. Both elements stay in the DOM so opacity + scale
-// transitions run on mount/unmount of visibility, producing a clean
-// crossfade rather than a layout-shifting morph.
+// The pull button takes precedence over the dot, since it needs the user to
+// act. Both stay in the DOM and crossfade in the same slot.
 const dotVisible = $derived(!hasNewCommit && walkthroughStatus !== "idle");
 const buttonVisible = $derived(hasNewCommit);
 const buttonInteractive = $derived(hasNewCommit && !isPulling);
@@ -101,8 +89,6 @@ $effect(() => {
 
 const trailingReserve = $derived(buttonVisible ? pullBtnWidth : dotVisible ? STATUS_DOT_SIZE : 0);
 
-// Status-dot visibility (autoAlpha + scale crossfade). Replaces the CSS
-// transitions on `.status-dot { transition: opacity, transform, ... }`.
 $effect(() => {
   if (!dotEl) return;
   if (prefersReducedMotion()) {
@@ -118,10 +104,8 @@ $effect(() => {
   });
 });
 
-// Status-dot pulse loop while the walkthrough is generating. Replaces the
-// `@keyframes status-dot-pulse` driven by `.status-dot--generating.status-dot--visible`.
-// Marked essential so the pulse continues under prefers-reduced-motion:
-// it's the only liveness signal that work is happening.
+// Essential, so it keeps pulsing under reduced motion: it's the only sign that
+// work is happening.
 $effect(() => {
   if (!dotEl) return;
   const shouldPulse = dotVisible && walkthroughStatus === "generating";
@@ -142,7 +126,6 @@ $effect(() => {
   };
 });
 
-// Pull-button crossfade. Replaces the CSS transitions on `.pull-btn`.
 $effect(() => {
   if (!pullBtnEl) return;
   if (prefersReducedMotion()) {
@@ -197,23 +180,9 @@ $effect(() => {
 
 <style>
 	/*
-	 * Both children render into PillTabs' `.status-slot` — an absolutely
-	 * positioned, zero-width anchor hanging off the pill's right edge (it
-	 * stays out of flow so the pull button appearing never pushes the
-	 * centered tabs wrapper leftward). PillTabs also keeps the anchor
-	 * inside its container, so neither child gets clipped by the pane.
-	 *
-	 * The two children are `position: absolute` with `left: 0`, so they
-	 * occupy the same anchor and crossfade via opacity + scale. Only one
-	 * is visible at a time; the other sits invisible and non-interactive
-	 * underneath.
+	 * Both children render into PillTabs' zero-width `.status-slot` anchor
+	 * and overlap at `left: 0`, crossfading; only one is visible at a time.
 	 */
-
-	/* ── Walkthrough status dot (6 × 6, centered in the slot) ──
-	   Visibility, scale, and the generating-pulse loop are all driven by GSAP
-	   from the $effect blocks above. CSS only sets layout + background-color
-	   keyed to status. autoAlpha (used by GSAP) sets `visibility: hidden`
-	   automatically when opacity is 0, which provides pointer-events safety. */
 	.status-dot {
 		position: absolute;
 		left: 0;
@@ -244,14 +213,9 @@ $effect(() => {
 		background: var(--color-danger);
 	}
 
-	/* ── Pull button (amber pill, 18 px tall, auto width) ──
-	 * Invisible state: pointer-events: none AND cursor: default. The cursor
-	 * declaration is important — `pointer-events: none` alone prevents clicks
-	 * but some browsers still reflect the button's native cursor on hover,
-	 * which would wrongly flip the cursor to pointer over the dot's bounds
-	 * (the invisible button sits right on top of the visible dot). */
-	/* Crossfade in/out is driven by GSAP from the $effect above. Background
-	   color crossfade on hover stays as CSS (paint property). */
+	/* `cursor: default` as well as `pointer-events: none` while hidden: some
+	 * browsers still show a disabled-for-pointer button's native cursor, and
+	 * the hidden button sits right over the visible dot. */
 	.pull-btn {
 		position: absolute;
 		left: 0;

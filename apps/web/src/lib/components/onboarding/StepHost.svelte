@@ -42,8 +42,6 @@ const clientIdInvalid = $derived(
   resolvedClientId.length > 0 && !isLikelyGitHubClientId(resolvedClientId),
 );
 
-// Example URL for the "create a GitHub App" instructions — uses the host the
-// user typed once it's present, otherwise a placeholder.
 const appCreateUrl = $derived(`https://${resolvedHost || "your-ghe-host.com"}/settings/apps/new`);
 const canContinue = $derived(
   selected !== CUSTOM ||
@@ -445,7 +443,6 @@ async function handleContinue() {
 		cursor: not-allowed;
 	}
 
-	/* ── Custom GHE host ────────────────────────────────────────── */
 	.custom {
 		display: flex;
 		flex-direction: column;

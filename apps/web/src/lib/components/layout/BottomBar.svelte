@@ -44,7 +44,6 @@ function handleRetrySync() {
 </script>
 
 <div class="bottombar-row">
-	<!-- Left: model info -->
 	<div class="bottombar-left">
 		<div class="flex items-center gap-0.5">
 			<AgentSelector />
@@ -53,7 +52,6 @@ function handleRetrySync() {
 		</div>
 	</div>
 
-	<!-- Right: usage indicator + sync + branch/sha -->
 	<div class="bottombar-right">
 		{#if showUsage}
 			<ContextUsage {usedTokens} maxTokens={maxContext} {usage} />

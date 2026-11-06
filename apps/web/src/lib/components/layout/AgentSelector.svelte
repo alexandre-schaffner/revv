@@ -20,7 +20,6 @@ import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 
-// The selected agent (single `aiAgent`) so the trigger reflects what runs.
 let currentId = $derived(getSettings().aiAgent);
 let current = $derived(ACP_AGENTS.find((a) => a.id === currentId));
 let currentLabel = $derived(current?.label ?? "Agent");

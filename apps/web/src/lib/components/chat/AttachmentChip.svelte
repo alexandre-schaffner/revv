@@ -7,7 +7,7 @@ import X from "phosphor-svelte/lib/X";
 interface Props {
   kind: "image" | "text";
   name: string;
-  /** Size in bytes; rendered via the shared formatter. */
+  /** In bytes. */
   size: number;
   /** `muted` for the composer, `accent` for the user-message transcript bubble. */
   tone?: "muted" | "accent";

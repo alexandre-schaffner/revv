@@ -22,8 +22,6 @@ let linkedFullName = $state<string | null>(null);
 
 let canSubmit = $derived(clone.linkable && !adding);
 
-// The freshly linked repo, read from the store so its clone status (and any
-// SSE update to it) renders inline.
 let linkedRepo = $derived(linkedFullName ? (getTrackedRepo(linkedFullName) ?? null) : null);
 
 async function submit(): Promise<void> {
@@ -182,7 +180,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		flex-shrink: 0;
 	}
 
-	/* ── Hints ──────────────────────────────────────────── */
 	.hint {
 		display: flex;
 		align-items: center;
@@ -237,7 +234,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		color: var(--color-text-secondary);
 	}
 
-	/* ── Success view ───────────────────────────────────── */
 	.linked-card {
 		display: flex;
 		align-items: center;
@@ -294,7 +290,6 @@ function onPathKeydown(e: KeyboardEvent): void {
 		font-size: 10.5px;
 	}
 
-	/* ── Footer ─────────────────────────────────────────── */
 	.footer {
 		display: flex;
 		justify-content: flex-end;

@@ -25,7 +25,6 @@ import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);
 
-// The model surface follows `aiAgent`; capabilities are the registry's single source of truth.
 let currentId = $derived(getSettings().aiAgent);
 let caps = $derived(getAgentCapabilities(currentId));
 // opencode is the only agent whose catalog is fetched live; everything else

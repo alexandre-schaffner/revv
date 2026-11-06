@@ -128,7 +128,6 @@ $effect(() => {
 		overflow: hidden;
 	}
 
-	/* The queue dock and the input float over the conversation as one panel. */
 	.composer-float {
 		position: absolute;
 		left: 10px;

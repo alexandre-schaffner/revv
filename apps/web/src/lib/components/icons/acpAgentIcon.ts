@@ -1,7 +1,5 @@
-// Maps a shared ACP agent `icon` key to a Svelte icon component. Brand marks
-// where we have them; a generic glyph otherwise — so adding an agent to the
-// shared registry needs no icon work to render everywhere (a brand SVG can be
-// dropped in later by extending this map).
+// Brand marks where we have them, a generic glyph otherwise, so an agent added
+// to the shared registry renders everywhere without icon work.
 
 import type { AcpAgentIconKey } from "@revv/shared";
 import Robot from "phosphor-svelte/lib/Robot";

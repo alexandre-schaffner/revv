@@ -42,10 +42,8 @@ const isSwitching = $derived(getIsSwitching());
 
 const displayAvatar = $derived(user?.image ?? null);
 
-// When isSwitching drops to false, clear the per-row switching tracker
 const _switchingActive = $derived(isSwitching ? switchingId : null);
 
-// Flat list of (userId, host) entries — one row per connected host per user
 const switcherEntries = $derived(
   localAccounts.flatMap((la) =>
     la.accounts.map((acct) => ({
@@ -125,7 +123,6 @@ async function handleSignOut(): Promise<void> {
 		align="start"
 		side="top"
 	>
-		<!-- Account rows -->
 		{#each switcherEntries as entry (entryKey(entry))}
 			{@const active = isEntryActive(entry)}
 			{@const switching = _switchingActive === entryKey(entry)}
@@ -146,13 +143,11 @@ async function handleSignOut(): Promise<void> {
 					</Avatar>
 				</span>
 
-				<!-- Identity -->
 				<span class="acct-body">
 					<span class="acct-login">{entry.githubLogin ?? entry.userName}</span>
 					<span class="acct-host">{entry.githubLogin ?? entry.userEmail} · {githubHostLabel(entry.host)}</span>
 				</span>
 
-				<!-- Status indicator -->
 				<span class="acct-status-slot">
 					{#if switching}
 						<Spinner size={12} class="acct-spinner motion-essential-spin" />
@@ -165,13 +160,11 @@ async function handleSignOut(): Promise<void> {
 
 		<div class="menu-divider"></div>
 
-		<!-- Settings -->
 		<button class="menu-row" onclick={handleSettings}>
 			<Gear size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Settings</span>
 		</button>
 
-		<!-- Sign out -->
 		<button class="menu-row menu-row--danger" onclick={handleSignOut}>
 			<SignOut size={13} class="menu-row-icon" />
 			<span class="menu-row-label">Sign out</span>
@@ -180,12 +173,6 @@ async function handleSignOut(): Promise<void> {
 </PopoverRoot>
 
 <style>
-	/* ── Trigger ──
-	   Lives inside the userbar chrome strip (AppShell .userbar-area). The
-	   trigger fills the bar width; padding/gap come from island tokens so
-	   the chip-on-chrome rhythm matches .acct-row / .menu-row below. The
-	   collapsed variant centers the 28px avatar inside the rail's
-	   effective width (RAIL_WIDTH − userbar's chrome-gap padding-left). */
 	:global(.user-trigger) {
 		display: flex;
 		align-items: center;
@@ -209,20 +196,14 @@ async function handleSignOut(): Promise<void> {
 		background: var(--color-bg-elevated);
 	}
 
-	/* Collapsed: only the rail column is visible. Centering the avatar via
-	   padding-left rather than justify-content keeps the motion continuous
-	   when toggling — justify-content can't be transitioned, so swapping
-	   it caused the avatar to jump sideways at the start of the expand
-	   animation before easing back. padding-left is part of the trigger's
-	   transition list, so it animates with the rest of the geometry.
-	   Value = (RAIL_WIDTH − userbar padding-left − avatar size) / 2
-	         = (64 − 8 − 28) / 2 = 14px. */
+	/* Centered through padding-left, not justify-content: justify-content
+	   can't transition, so the avatar jumped sideways at the start of the
+	   expand. (64 rail − 8 userbar padding − 28 avatar) / 2 = 14px. */
 	:global(.user-trigger--collapsed) {
 		padding: 0 14px;
 		gap: 0;
 	}
 
-	/* ── Trigger avatar with spinner overlay ── */
 	.user-avatar-wrap {
 		position: relative;
 		flex-shrink: 0;
@@ -259,7 +240,6 @@ async function handleSignOut(): Promise<void> {
 			visibility 0s linear 0s;
 	}
 
-	/* Collapse direction — text fades + collapses out first, ahead of the column */
 	.user-text--gone {
 		opacity: 0;
 		visibility: hidden;
@@ -309,7 +289,6 @@ async function handleSignOut(): Promise<void> {
 			visibility 0s linear var(--duration-quick);
 	}
 
-	/* ── Account rows ── */
 	.acct-row {
 		display: flex;
 		align-items: center;
@@ -390,14 +369,12 @@ async function handleSignOut(): Promise<void> {
 		color: var(--color-text-muted);
 	}
 
-	/* ── Divider ── */
 	.menu-divider {
 		height: 1px;
 		margin: 4px 6px;
 		background: var(--color-border);
 	}
 
-	/* ── Menu rows (Add account, Settings, Sign out) ── */
 	:global(.menu-row) {
 		display: flex;
 		align-items: center;

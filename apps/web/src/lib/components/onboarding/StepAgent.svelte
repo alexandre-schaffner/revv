@@ -39,13 +39,6 @@ let { onContinue, onBack, onSkip }: Props = $props();
 
 const OPENCODE: AcpAgentId = "opencode";
 
-// ── State ──────────────────────────────────────────────────────────────────
-//
-// `mode` gates the loading screen vs. the picker. `status` is the server's
-// one-shot detection snapshot (per-agent installed + authed + login command,
-// plus whether this host can drive the embedded PTY login). `install` is a
-// tagged request-state union; `signingIn` is the agent whose embedded sign-in
-// terminal is mounted. The adaptive CTA is derived from all three (see `cta`).
 let mode = $state<"loading" | "picker">("loading");
 let status = $state<AgentStatusReport | null>(null);
 let install = $state<AgentInstallState>({ kind: "idle" });
@@ -57,14 +50,11 @@ let installAbort: AbortController | null = null;
 // if the settings haven't loaded or the saved agent isn't installed.
 let selected = $state<AcpAgentId>(getSettings().aiAgent);
 
-// ── Derived ──────────────────────────────────────────────────────────────
 const selectedInstalled = $derived(status?.agents[selected]?.installed ?? false);
 // When detection hasn't resolved (null) treat the selection as authed so a
 // probe failure never blocks Continue.
 const selectedAuthed = $derived(status ? (status.agents[selected]?.authed ?? false) : true);
 const selectedLabel = $derived(ACP_AGENTS.find((a) => a.id === selected)?.label ?? selected);
-// Manual login command for the no-embedded-PTY fallback — server-provided, so
-// there's a single source of truth for each agent's login command.
 const selectedLoginCommand = $derived(
   status?.agents[selected]?.loginCommand ?? `${selected} login`,
 );
@@ -74,8 +64,6 @@ const noneInstalled = $derived(
   status !== null && !ACP_AGENTS.some((a) => status?.agents[a.id]?.installed),
 );
 
-// The single adaptive CTA state — one tagged value instead of an order-dependent
-// boolean ladder, so each arm's precondition is explicit and self-contained.
 type CtaState =
   | { kind: "signing-in"; agent: AcpAgentId }
   | { kind: "installing" }
@@ -111,7 +99,6 @@ onMount(async () => {
     const saved = getSettings().aiAgent;
     selected = data.agents[saved]?.installed ? saved : (installed[0]?.id ?? selected);
   } else {
-    // Nothing installed — advertise opencode as the out-of-the-box option.
     selected = OPENCODE;
   }
   mode = "picker";
@@ -163,7 +150,6 @@ function applyInstallEvent(event: InstallEvent, agent: AcpAgentId): void {
     install = appendAgentInstallLog(install, agent, event.line);
     return;
   }
-  // done
   if (!event.success) {
     install = { kind: "failed", agent, log: currentLog(), error: event.error ?? "Install failed" };
     return;

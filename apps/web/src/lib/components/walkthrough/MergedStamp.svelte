@@ -2,11 +2,6 @@
 import { firstEntrance, gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
-/**
- * Rubber-stamp mark for a merged PR, pressed into the top-right of the
- * walkthrough. Purely decorative (`pointer-events: none`) — it carries its
- * meaning to assistive tech through `role="img"` + `aria-label`.
- */
 interface Props {
   prId: string;
   /** ISO merge timestamp; renders as the stamp's date band when present. */
@@ -16,11 +11,9 @@ interface Props {
 let { prId, mergedAt }: Props = $props();
 
 /**
- * Per-PR press variance. A real stamp never lands twice at the same angle,
- * and every merged PR showing an identical mark is the tell that it's a badge
- * with a filter on it. Both the tilt and the ink grain are seeded off the PR
- * id, so a given PR always stamps the same way (stable across reloads and
- * re-renders) while no two PRs match.
+ * A real stamp never lands twice at the same angle, so the tilt and ink grain
+ * are seeded off the PR id: a given PR always stamps the same way, and no two
+ * PRs match.
  */
 function hash32(value: string): number {
   let h = 2166136261;
@@ -68,9 +61,6 @@ $effect(() => {
     gsap.set(node, { autoAlpha: 1, scale: 1, rotation: tilt });
     return;
   }
-  // Press, then seat: the die comes down big and over-rotated, lands past
-  // its resting angle, and rocks back the last degree — the way a hand-held
-  // stamp actually settles. Both steps ease out; no bounce.
   const tl = gsap
     .timeline()
     .fromTo(
@@ -90,17 +80,11 @@ $effect(() => {
 </script>
 
 <!--
-  The ink distress. The die itself is crisp — straight rules, even corners —
-  and the imperfection is in the *ink*: a dry pad lays colour down unevenly,
-  leaving paper-coloured specks all through the stroke. That is a per-pixel
-  alpha knock-out, which CSS cannot express, so it comes from an SVG filter:
-  fine-grained turbulence, hard-thresholded into a speckle mask, composited
-  through the mark's own alpha.
-
-  Grain scale is deliberately fine (baseFrequency 0.85, a single octave):
-  the speckle should sit just above the pixel grid so it reads as ink
-  texture at a glance. A second octave layers in larger blotches that
-  survive at any zoom and make the stamp look damaged instead of pressed.
+  The die is crisp; the imperfection is in the ink, a dry pad leaving
+  paper-coloured specks through the stroke. That per-pixel alpha knock-out
+  is beyond CSS, so it is an SVG filter: fine turbulence, hard-thresholded
+  into a speckle mask, composited through the mark's own alpha. One octave
+  only: a second layers in blotches that read as damage, not texture.
 -->
 <svg width="0" height="0" aria-hidden="true" focusable="false" class="stamp-filter-host">
 	<filter id={filterId} color-interpolation-filters="sRGB">
@@ -121,15 +105,10 @@ $effect(() => {
 			        1 0 0 0 0"
 			result="grainAlpha"
 		/>
-		<!-- Near-binary ramp: the mask is either fully opaque or fully clear
-		     across ~1px, so the specks are clean holes. A gentler slope leaves
-		     half-transparent ink everywhere, which reads as a blurry, washed
-		     mark rather than a pressed one. Only the low tail of the noise
-		     (n < 0.26) punches through, keeping the ink mostly solid — the
-		     mark should read as dry ink, not as a chewed-up die. Push the
-		     threshold past ~0.3 and the erosion starts eating the rule and
-		     the glyphs: the border breaks into a dashed line and the word
-		     grows holes, which is noise rather than texture. -->
+		<!-- Near-binary ramp, so the specks are clean holes rather than a
+		     washed, half-transparent mark. Only the low tail (n < 0.26)
+		     punches through; past ~0.3 the erosion breaks the rule into
+		     dashes and puts holes in the word. -->
 		<feComponentTransfer in="grainAlpha" result="speckle">
 			<feFuncA type="linear" slope="10" intercept="-2.6" />
 		</feComponentTransfer>
@@ -166,15 +145,12 @@ $effect(() => {
 		flex-direction: column;
 		align-items: stretch;
 		padding: 7px 16px;
-		/* Single bold rule, like a real die — the texture does the work. */
 		border: 2.75px solid var(--color-merged);
 		border-radius: 5px;
-		/* No fill: the plate is bare paper, so the speckle only ever eats into
-		   the rule and the glyphs. A tinted fill puts noise across the whole
-		   rectangle, which just reads as haze. */
+		/* No fill: a tinted fill spreads the speckle over the whole
+		   rectangle as haze. */
 		background: transparent;
 		color: var(--color-merged);
-		/* Decorative: never eat a click meant for the content beneath it. */
 		pointer-events: none;
 		user-select: none;
 		/* Hidden until the entrance effect runs, so a reload never flashes the
@@ -195,9 +171,6 @@ $effect(() => {
 		padding-left: 0.22em;
 	}
 
-	/* Date band — the second half of real stamp anatomy, and what makes this
-	   ornament carry information instead of only decorating. Mono so the
-	   digits sit on an even rhythm under the word. */
 	.stamp-date {
 		margin-top: 5px;
 		padding-top: 4px;

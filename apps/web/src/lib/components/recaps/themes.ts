@@ -97,9 +97,7 @@ export interface RecapHeader {
   readonly palette: Map<string, string>;
 }
 
-/** Single source of truth for the header data displayed by the body-column
- *  hero and the sticky sidebar. Both components render the same struct so
- *  their date / stats / themes blocks can never drift out of sync. */
+/** Shared by the body-column hero and the sticky sidebar, so they never drift. */
 export function buildRecapHeader(recap: ProjectRecap | null, period: RecapPeriod): RecapHeader {
   const themes = recap ? orderThemes(recap.entries) : [];
   return {
@@ -124,12 +122,9 @@ function fnv1a(input: string): number {
 }
 
 /**
- * Build a theme→color palette for the whole recap so every theme is
- * guaranteed visually distinct from every other. Hues are evenly spaced
- * around the wheel (360°/N) starting from a per-recap rotation offset,
- * with lightness alternating between two levels to add a second axis of
- * separation when N is large. Deterministic on the input set: same themes
- * in → same colors out.
+ * Every theme visually distinct: hues evenly spaced around the wheel from a
+ * per-recap rotation, lightness alternating between two levels. Same themes
+ * in, same colors out.
  */
 export function buildThemePalette(themes: ReadonlyArray<string>): Map<string, string> {
   const unique = Array.from(new Set(themes.map((t) => t.toLowerCase()))).sort();
@@ -139,10 +134,8 @@ export function buildThemePalette(themes: ReadonlyArray<string>): Map<string, st
   const step = 360 / unique.length;
   unique.forEach((theme, i) => {
     const hue = (offset + i * step) % 360;
-    // Two lightness levels alternated so adjacent themes get a second axis
-    // of perceptual separation when N is large. Chroma fixed at 0.12 —
-    // OKLCH keeps lightness perceptually constant across the hue wheel
-    // (HSL doesn't, which is why yellows used to outshine blues).
+    // OKLCH keeps lightness perceptually constant across hues (HSL doesn't);
+    // chroma is fixed at 0.12.
     const l = i % 2 === 0 ? 56 : 48;
     palette.set(theme, `oklch(${l}% 0.12 ${hue.toFixed(1)})`);
   });

@@ -8,15 +8,9 @@ import { gsapEnter, tokens } from "$lib/motion";
 import RevvBrand from "./RevvBrand.svelte";
 
 /**
- * Cinematic frame for the onboarding flow. Calm, dark, type-led: a
- * book-chapter feel rather than a SaaS welcome modal. Owns the
- * letterboxed canvas, a small persistent brand glyph, a chapter label,
- * the serif title, and a tiny dotmatrix that ticks in the corner so
- * the page never feels static.
- *
- * Everything below the chapter label flows from `children`; the shell
- * itself never pushes a card or a shadow — visual hierarchy comes from
- * typography and breathing room, not container chrome.
+ * A book-chapter feel rather than a SaaS welcome modal. The shell never
+ * pushes a card or a shadow: hierarchy comes from typography and breathing
+ * room, not container chrome.
  */
 
 type StepId = "welcome" | "host" | "signin" | "repo" | "agent" | "done";
@@ -93,8 +87,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 	<div class="grain" aria-hidden="true"></div>
 	<div class="vignette" aria-hidden="true"></div>
 
-	<!-- Header: tiny brand glyph + step counter. Persistent across all
-	     steps — the eye anchors here rather than chasing a morphing logo. -->
 	<header class="header" data-tauri-drag-region use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<RevvBrand variant="onboarding" />
 		<div class="header-right">
@@ -115,8 +107,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		</div>
 	</header>
 
-	<!-- Main column. The title block + content occupies a narrow center
-	     column for that book-page measure. -->
 	<main class="stage" data-scrollable={isScrollable}>
 		<div class="stage-scroll" use:scrollStage={stepIndex}>
 			<div class="title-block">
@@ -140,7 +130,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		</div>
 	</main>
 
-	<!-- Footer: thin progress bar made of cells. -->
 	<footer class="footer" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<div class="cells">
 			{#each Array(totalSteps) as _, i (i)}
@@ -166,7 +155,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		grid-template-columns: 1fr;
 		font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
 
-		/* ── Light mode (default) ───────────────────────────────────── */
 		--ob-bg: #faf9f6;
 		--ob-text: #2a2825;
 		--ob-text-heading: #1a1816;
@@ -190,7 +178,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		--ob-grain-color: rgba(0, 0, 0, 0.4);
 	}
 
-	/* ── Dark mode ──────────────────────────────────────────────── */
 	:global(html.dark) .onboarding-shell {
 		--ob-bg: #0a0a0c;
 		--ob-text: #e6e4dc;
@@ -215,9 +202,8 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		--ob-grain-color: rgba(255, 255, 255, 0.8);
 	}
 
-	/* Film-grain — a barely-perceptible noise that lifts the canvas off
-	 perfect black so it reads as a "scene" rather than dead space. Its drift
-	 stays a CSS animation (see motion/README.md). */
+	/* Film grain lifts the canvas off perfect black. Its drift stays a CSS
+	 animation (see motion/README.md). */
 	.grain {
 		position: absolute;
 		inset: -50%;
@@ -244,7 +230,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		75% { transform: translate(-1%, -2%); }
 	}
 
-	/* Letterbox vignette — darkens the edges. Very subtle, not a spotlight. */
 	.vignette {
 		position: absolute;
 		inset: 0;
@@ -267,7 +252,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 			);
 	}
 
-	/* Header bar */
 	.header {
 		grid-row: 1;
 		display: flex;
@@ -321,7 +305,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		border-color: var(--ob-text-italic);
 	}
 
-	/* Stage — title + content column */
 	.stage {
 		grid-row: 2;
 		position: relative;
@@ -422,7 +405,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		margin-bottom: auto;
 	}
 
-	/* Footer — segmented progress bar */
 	.footer {
 		grid-row: 3;
 		padding: 24px 36px 32px;

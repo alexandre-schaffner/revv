@@ -94,7 +94,6 @@ const conflictStrategyHints: Record<BaseConflictStrategy, string> = {
 const aiAgent = $derived(getSettings().aiAgent);
 const agentLabel = $derived(ACP_AGENTS.find((a) => a.id === aiAgent)?.label ?? "agent");
 
-// ── Provider status ───────────────────────────────────────────────────────
 let statusLoading = $state(false);
 
 async function refreshStatus(options: { refresh?: boolean } = {}): Promise<void> {
@@ -116,7 +115,6 @@ $effect(() => {
   void fetchModels(aiAgent);
 });
 
-// ── Agent test ────────────────────────────────────────────────────────────
 let agentChecking = $state(false);
 let agentCheck = $state<AgentCheckResult | null>(null);
 
@@ -145,7 +143,6 @@ async function handleSelectAgent(agent: AcpAgentId): Promise<void> {
   void refreshStatus();
 }
 
-// ── Defaults ──────────────────────────────────────────────────────────────
 const AUTO_LABEL = "Auto (sized per pull request)";
 const AUTO_OPTION: ModelOption = { label: AUTO_LABEL, value: AUTO_SENTINEL };
 const AUTO_EFFORT: { label: string; value: ThinkingEffortSetting } = {
