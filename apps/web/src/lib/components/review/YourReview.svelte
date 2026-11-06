@@ -12,18 +12,17 @@ import {
   getReviewFiles,
   getThreadMessages,
   getThreads,
-  jumpToDiffLine,
-  jumpToWalkthroughBlock,
   loadSession,
 } from "$lib/stores/review.svelte";
+import { jumpToDiffLine, jumpToWalkthroughBlock } from "$lib/stores/review-nav.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
 import { getBlocks, getIssues, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
 import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
 import { partitionBySignal, shouldHideLowSignal } from "$lib/utils/walkthrough-issues";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
-import CommentsPanel from "./comments-panel/CommentsPanel.svelte";
-import IssuesPanel from "./issues-panel/IssuesPanel.svelte";
+import CommentsPanel from "./spec-panel/CommentsPanel.svelte";
+import IssuesPanel from "./spec-panel/IssuesPanel.svelte";
 
 interface Props {
   prId: string;
@@ -35,7 +34,7 @@ type Action = "approve" | "request_changes" | "comment";
 // Filtered once here rather than at each of the four consumers below, so a
 // low-signal issue the reader never saw can't be posted via select-all.
 const issueSignal = $derived(
-  partitionBySignal(getIssues(), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
+  partitionBySignal(getIssues(prId), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
 );
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
@@ -48,7 +47,7 @@ const threads = $derived(getThreads());
 const unresolvedThreads = $derived(
   threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
 );
-const blocks = $derived(getBlocks());
+const blocks = $derived(getBlocks(prId));
 
 // File paths currently part of the PR diff (new path + old path for renames).
 // A pending comment whose file isn't here is stale: its line no longer exists

@@ -12,20 +12,28 @@ interface Counts {
 
 interface Props {
   counts: Counts;
-  /** Total elapsed across all ratings (ms), or null while streaming / for
-   *  cached replays where a 0ms reading would be misleading. */
+  /** Null while streaming, and for a cached replay where it would read 0ms. */
   totalElapsedMs: number | null;
-  /** True iff all axes resolved as pass. Drives the "all checks passed"
-   *  celebration treatment. */
+  /** Every axis passed: the footer celebrates. */
   allPassed: boolean;
 }
 
 let { counts, totalElapsedMs, allPassed }: Props = $props();
+
+// The bounce is a scale up and back, which an entrance tween can't express,
+// so it stays a CSS animation. Dropping the class once it has run keeps a
+// re-shown tab from restarting it.
+let bounced = $state(false);
+$effect(() => {
+  if (!allPassed) bounced = false;
+});
 </script>
 
 <div
     class="summary-footer"
     class:summary-footer--passed={allPassed}
+    class:summary-footer--bounce={allPassed && !bounced}
+    onanimationend={() => (bounced = true)}
     aria-live="off"
 >
     <span class="footer-line">
@@ -73,7 +81,6 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
         letter-spacing: 0.01em;
     }
 
-    /* All-green celebration state — faint green wash + one-time bounce. */
     .summary-footer--passed {
         background: color-mix(
             in srgb,
@@ -81,6 +88,9 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
             transparent
         );
         color: var(--color-score-pass-label);
+    }
+
+    .summary-footer--bounce {
         animation: footer-bounce var(--duration-ceremonial-medium) var(--ease-out-expo) 1;
     }
 
@@ -104,12 +114,6 @@ let { counts, totalElapsedMs, allPassed }: Props = $props();
         }
         100% {
             transform: scale(1);
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .summary-footer--passed {
-            animation: none;
         }
     }
 </style>

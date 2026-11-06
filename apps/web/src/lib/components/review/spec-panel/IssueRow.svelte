@@ -1,56 +1,35 @@
 <script lang="ts">
 /*
- * IssueTestRow — one row in the Issues panel.
+ * One issue, read like a lint diagnostic:
  *
- * Reads left-to-right like a lint diagnostic:
+ *   [✓]  E  Unhandled async error in login   description…   ›
  *
- *   [✓]  E  Unhandled async error in login   description…                             ›
- *   │    │  │                                │
- *   │    │  │                                └ preview (single-line description)
- *   │    │  └ title (mono 13 / 600)
- *   │    └ severity code letter (E/W/I — like TS2345 / clippy::lint / etc)
- *   └ selection checkbox (or green Check glyph when submitted)
- *
- * Wraps SpecRow; consumes it via snippets for icon/label/preview. File
- * paths and step chips live in the expanded body's "references" section
- * so the clickable row stays clean — no nested click targets.
- * Selection checkbox must NOT bubble to the SpecRow trigger (otherwise
- * checking a box would also expand the row, which feels hostile).
+ * checkbox (or a check once posted or resolved) · severity letter · title ·
+ * one-line description. File and step links live in the expanded body so
+ * the row has no nested click targets.
  */
-
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import { Checkbox } from "$lib/components/ui/checkbox";
-import SpecRow, { type SpecRowState } from "../shared/SpecRow.svelte";
+import { enterOnce } from "$lib/motion";
+import { SEVERITY_LABELS } from "$lib/utils/walkthrough-issues";
 import IssueExpandedBody from "./IssueExpandedBody.svelte";
+import SpecRow from "./SpecRow.svelte";
 
 interface Props {
   issue: WalkthroughIssue;
-  /** Is the checkbox ticked? Drives submit-review selection. */
+  /** Ticked for the next submit. */
   selected: boolean;
-  /** Already posted to GitHub — row is dimmed, can't expand, checkbox
-   *  replaced by a green Check glyph. */
+  /** Already posted to GitHub. */
   submitted: boolean;
-  /** Controlled expanded state. */
   open: boolean;
-  /** Index within the current filtered list — used for cascade-entry
-   *  animation staggering. Capped at 6 in the parent so we don't
-   *  wait forever on long lists. */
-  index: number;
-  /** Fired when the user ticks/unticks the checkbox. */
+  /** Rows sharing a group cascade in together. */
+  cascadeGroup: string;
   onToggleSelect: () => void;
-  /** Fired when the user clicks the row body (expand/collapse). */
   onToggleOpen: () => void;
-  /** Jump to diff line when the FileBadge is clicked. */
   onFileClick?: ((filePath: string, line: number) => void) | undefined;
-  /** Called on mount with the trigger element — the parent uses this
-   *  to build a non-reactive map of refs for keyboard navigation.
-   *  Also called with `null` on unmount so the map stays clean. */
   onTriggerRef?: ((el: HTMLElement | null) => void) | undefined;
-  /** All walkthrough blocks — used to resolve blockIds to step numbers. */
   blocks: WalkthroughBlock[];
-  /** Jump to a walkthrough block by id. Chips are only rendered when
-   *  this callback is supplied AND the issue has blockIds. */
   onBlockJump?: ((blockId: string) => void) | undefined;
 }
 
@@ -59,7 +38,7 @@ let {
   selected,
   submitted,
   open,
-  index,
+  cascadeGroup,
   onToggleSelect,
   onToggleOpen,
   onFileClick,
@@ -68,27 +47,11 @@ let {
   onBlockJump,
 }: Props = $props();
 
-// Forward the trigger ref from SpecRow up to the panel parent. Using a
-// local $state so the $effect below runs whenever SpecRow assigns it.
-let triggerRef = $state<HTMLElement | null>(null);
-
-$effect(() => {
-  onTriggerRef?.(triggerRef);
-  return () => onTriggerRef?.(null);
-});
-
-// Two-char severity code, like a compiler error prefix. Kept tabular
-// so rows line up vertically regardless of which severities are present.
+/** Compiler-style prefix (like TS2345's leading letter), tabular so rows line up. */
 const severityCode: Record<WalkthroughIssue["severity"], string> = {
   critical: "E",
   warning: "W",
   info: "I",
-};
-
-const severityLabels: Record<WalkthroughIssue["severity"], string> = {
-  critical: "Critical",
-  warning: "Warning",
-  info: "Info",
 };
 
 const resolutionLabel = $derived(
@@ -101,26 +64,18 @@ const resolutionLabel = $derived(
 const resolved = $derived(resolutionLabel !== null);
 
 const ariaLabel = $derived(
-  `${severityLabels[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}${resolutionLabel ? ` (${resolutionLabel})` : ""}`,
+  `${SEVERITY_LABELS[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}${resolutionLabel ? ` (${resolutionLabel})` : ""}`,
 );
 
-// Cascade-entry delay. Cap at 6 so long lists resolve quickly.
-const delay = $derived(`${Math.min(index, 6) * 50}ms`);
-
-// SpecRow lifecycle: submitted rows render as "submitted" (dimmed, no
-// expand); everything else is "resolved" (the normal steady state).
-// Deliberately named `rowState` — avoid `state` which collides with
-// the Svelte $state rune name in svelte-check's flow analysis.
-const rowState: SpecRowState = $derived(submitted ? "submitted" : "resolved");
+const motionKey = $derived(`spec-row:issue:${issue.id}`);
 
 function handleCheckedChange(): void {
   if (submitted || resolved) return;
   onToggleSelect();
 }
 
-function handleCheckboxClick(e: MouseEvent): void {
-  // Stop the click bubbling up to the SpecRow trigger — otherwise
-  // toggling selection would also expand/collapse the row.
+function stopPropagation(e: MouseEvent): void {
+  // Ticking the box must not also toggle the row.
   e.stopPropagation();
 }
 </script>
@@ -130,17 +85,20 @@ function handleCheckboxClick(e: MouseEvent): void {
     class:issue-row--submitted={submitted}
     class:issue-row--resolved={resolved}
     class:issue-row--selected={selected}
-    style:--issue-delay={delay}
     data-open={open ? "true" : undefined}
+    use:enterOnce={{
+        key: motionKey,
+        look: "row",
+        cascade: { group: cascadeGroup, step: 0.05, cap: 6 },
+    }}
 >
     <SpecRow
         {open}
         onToggle={onToggleOpen}
-        state={rowState}
-        disabled={submitted}
+        {motionKey}
+        {submitted}
         {ariaLabel}
-        dataKind="issue"
-        bind:triggerRef
+        {onTriggerRef}
     >
         {#snippet icon()}
             {#if submitted || resolved}
@@ -149,11 +107,10 @@ function handleCheckboxClick(e: MouseEvent): void {
                 </span>
             {:else}
                 <Checkbox
-                    class="issue-checkbox"
                     checked={selected}
                     aria-label="Include in submit"
                     onCheckedChange={handleCheckedChange}
-                    onclick={handleCheckboxClick}
+                    onclick={stopPropagation}
                 />
             {/if}
         {/snippet}
@@ -161,7 +118,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         {#snippet label()}
             <span
                 class="severity-code severity-code--{issue.severity}"
-                title={severityLabels[issue.severity]}
+                title={SEVERITY_LABELS[issue.severity]}
             >
                 {severityCode[issue.severity]}
             </span>
@@ -183,17 +140,13 @@ function handleCheckboxClick(e: MouseEvent): void {
 
 <style>
     .issue-row {
-        /* SpecRow reads these custom props to paint its gutter and hover. */
         --c-gutter-color: var(--color-border);
         --c-row-bg: var(--color-bg-elevated);
         --c-gutter-flash: var(--c-gutter-color);
-        animation: issue-row-enter var(--duration-ceremonial-medium) var(--ease-out-expo) both;
-        animation-delay: var(--issue-delay, 0ms);
     }
 
-    /* Severity → palette mapping. Uses the existing `--color-score-*`
-       tokens so issue gutters match scorecard gutters 1:1 for concern /
-       blocker, plus the new `--color-score-info-*` family for info. */
+    /* Same `--color-score-*` palette as the scorecard, so an issue gutter
+       matches a concern / blocker cell. */
     .issue-row--critical {
         --c-gutter-color: var(--color-score-blocker-icon);
         --c-row-bg: var(--color-score-blocker-bg);
@@ -214,13 +167,11 @@ function handleCheckboxClick(e: MouseEvent): void {
         --c-row-bg: color-mix(in srgb, var(--color-success) 7%, var(--color-bg-elevated));
     }
 
-    /* Subtle background tint when a row is selected but not yet submitted —
-       signals "in the next submit batch" without shouting. */
+    /* In the next submit batch. */
     .issue-row--selected:not(.issue-row--submitted) {
         background: color-mix(in srgb, var(--c-gutter-color) 6%, transparent);
     }
 
-    /* Expanded-state background tint — mirrors RatingTestRow's open state. */
     .issue-row[data-open="true"] :global(.spec-row-trigger:not(:disabled):not([aria-disabled="true"])) {
         background: color-mix(
             in srgb,
@@ -272,8 +223,6 @@ function handleCheckboxClick(e: MouseEvent): void {
         border: 1px solid color-mix(in srgb, var(--color-score-info-border) 35%, transparent);
     }
 
-    /* ── Issue title — the headline, sans-serif for readability ─ */
-
     .issue-title {
         font-family: var(--font-sans);
         font-size: 13px;
@@ -306,24 +255,5 @@ function handleCheckboxClick(e: MouseEvent): void {
         color: var(--color-text-muted);
         white-space: nowrap;
         min-width: 0;
-    }
-
-    /* ── Entry animation ─────────────────────────────────────── */
-
-    @keyframes issue-row-enter {
-        from {
-            opacity: 0;
-            transform: translateY(4px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .issue-row {
-            animation: none;
-        }
     }
 </style>
