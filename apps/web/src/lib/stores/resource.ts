@@ -1,11 +1,8 @@
-// ── Keyed async resource ────────────────────────────────────────────────────
-//
 // The one way a store fetches something per key: concurrent asks de-dupe onto
 // one request, an answer can be served fresh for a while, a `pending` answer
 // (the server is still working) waits for the server's completion signal or is
 // asked again on a bounded schedule, a superseded or reset ask can't write
-// back, and every key's state is a `RequestState<T>`. The reactive map is a `SvelteMap`, so components reading
-// `entry()` / `data()` re-render on change.
+// back, and every key's state is a `RequestState<T>`.
 //
 // A store either keeps its data here (`data(key)`), or keeps its own state and
 // lets its fetcher write it, using the resource only to schedule asks.
@@ -71,11 +68,9 @@ export interface Resource<A, T> {
    * response). Always false without `waitForSignalMs`.
    */
   isWaiting(key: string): boolean;
-  /** Every key {@link isWaiting} is true for. */
   waitingKeys(): string[];
   /** Forget `key`; an ask in flight for it can't write back. */
   invalidate(key: string): void;
-  /** Forget every key. */
   reset(): void;
 }
 

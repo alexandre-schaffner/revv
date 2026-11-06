@@ -1,5 +1,3 @@
-// ── Global SSE event stream ─────────────────────────────────────────────────
-//
 // Owns the long-lived `EventSource` to `GET /api/events?token=…` and routes
 // each envelope, whole, to the stores that own its state. Stores filter on
 // envelope fields themselves and own their reconcile after a reconnect or a
@@ -292,7 +290,6 @@ function open(): void {
 }
 
 /**
- * Open the stream for the current session token, closing any open one.
  * `hostOverride` binds the stream to an account whose host the settings
  * store doesn't hold yet (an account switch); it sticks across reconnects.
  */

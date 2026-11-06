@@ -21,9 +21,7 @@ export interface Command {
   when?: () => boolean;
   /** Bound to its keys but left out of the palette. */
   hidden?: boolean;
-  /** The keys do nothing while a text field has focus. */
   notInTextFields?: boolean;
-  /** Holding the keys fires once. */
   ignoreRepeat?: boolean;
   run: () => void;
 }

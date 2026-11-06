@@ -19,11 +19,9 @@ import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { createResource } from "./resource";
 
-/** The PR whose threads are on screen, and the one most recently asked for. */
 let shownPrId: string | null = null;
 let wantedPrId: string | null = null;
 
-/** A review read stays fresh for a minute, so re-entering a PR doesn't re-read it. */
 const reviews = createResource<string, true>({
   freshForMs: 60_000,
   fetch: async (prId) => {
@@ -70,7 +68,6 @@ export async function loadSession(prId: string, force = false): Promise<void> {
   await (force ? reviews.refresh(prId, prId) : reviews.load(prId, prId));
 }
 
-// --- Comment threads ---
 let threads = $state<CommentThread[]>([]);
 let threadMessages = $state<Record<string, ThreadMessage[]>>({});
 // Monotonic counter bumped on every thread mutation. Consumed inside reactive
@@ -207,7 +204,6 @@ export function onThreadUpdated({
   threadsVersion++;
 }
 
-/** Another PR's threads are not on screen. */
 export function onThreadCreated({ prId, thread, message }: ThreadCreatedEnvelope["data"]): void {
   if (prId !== shownPrId) return;
   if (!threads.some((t) => t.id === thread.id)) {
@@ -220,7 +216,7 @@ export function onThreadCreated({ prId, thread, message }: ThreadCreatedEnvelope
   }
 }
 
-/** A new message; a changed one comes as `thread:message:edited`. Another PR's threads are not on screen. */
+/** A new message; a changed one comes as `thread:message:edited`. */
 export function onThreadMessage({ threadId, message }: ThreadMessageEnvelope["data"]): void {
   if (!threads.some((t) => t.id === threadId)) return;
   const existing = threadMessages[threadId] ?? [];
@@ -362,10 +358,6 @@ export async function editThreadMessage(
   return true;
 }
 
-/**
- * Apply the suggestion from a comment thread's first message.
- * Replaces content with the suggested code.
- */
 export async function applyCommentSuggestion(threadId: string, suggestion: string): Promise<void> {
   const messages = threadMessages[threadId];
   if (!messages || messages.length === 0) return;
@@ -375,7 +367,6 @@ export async function applyCommentSuggestion(threadId: string, suggestion: strin
   );
   threadMessages = { ...threadMessages, [threadId]: updated };
 
-  // Resolve the thread
   await resolveThread(threadId);
 }
 

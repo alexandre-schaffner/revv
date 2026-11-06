@@ -51,7 +51,6 @@ function questionVersion(q: MergeQuestion): string {
   return `${q.headSha}|${q.reviewDecision}|${q.ciState}`;
 }
 
-/** The PR's latest answer; null without a question. */
 export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility | null {
   return question ? answers.data(question.prId) : null;
 }

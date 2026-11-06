@@ -19,12 +19,10 @@ export interface ResolveRun {
 }
 
 interface CheckAnswer {
-  /** The PR head the check was asked for. */
   readonly headSha: string | null;
   readonly check: BaseConflictsCheck;
 }
 
-/** A check for one head; the PR head the UI shows is its version. */
 const checks = createResource<
   { readonly headSha: string | null; readonly force: boolean },
   CheckAnswer
@@ -79,10 +77,7 @@ export function getBaseConflicts(prId: string, headSha: string | null): BaseConf
 
 const versionOf = (headSha: string | null) => headSha ?? "";
 
-/**
- * Ask the server which files conflict with the base, unless an answer for
- * this head is in flight or under 30s old. The last answer stays up meanwhile.
- */
+/** Ask the server which files conflict with the base. The last answer stays up meanwhile. */
 export function checkBaseConflicts(
   prId: string,
   headSha: string | null,

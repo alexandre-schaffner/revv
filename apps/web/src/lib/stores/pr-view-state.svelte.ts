@@ -14,7 +14,6 @@ interface PrViewState {
   scroll: Partial<Record<ScrollPaneKey, number>>;
 }
 
-/** A PR opened for the first time lands here. */
 const FIRST_VISIT_TAB: ReviewTab = "conversation";
 
 function emptyState(): PrViewState {
@@ -82,7 +81,6 @@ export function setActiveFilePath(path: string | null): void {
   }
 }
 
-/** Make `prId` the PR on screen, restoring its tab and file (or the first-visit defaults). */
 export function switchPrViewState(prId: string): void {
   const tab = store.entries.get(prId)?.activeTab ?? lastTabFor(prId) ?? FIRST_VISIT_TAB;
   store.activePrId = prId;
@@ -90,11 +88,6 @@ export function switchPrViewState(prId: string): void {
   store.entries = new Map(store.entries);
   rememberLastTab(prId, tab);
 }
-
-// Scroll offsets are read once when a pane mounts (or on a tab/PR switch) and
-// written on every scroll, so they need no reactivity of their own. The review
-// panes persist through `review-nav`'s `scrollPane` action; the sidebar
-// through Sidebar.svelte.
 
 export function getPrScrollPosition(prId: string, key: ScrollPaneKey): number {
   return store.entries.get(prId)?.scroll[key] ?? 0;

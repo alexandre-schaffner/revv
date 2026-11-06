@@ -3,26 +3,15 @@ import { toast } from "svelte-sonner";
 import { getRepoById } from "./repos.svelte";
 import { getSelectedPr } from "./route.svelte";
 
-/**
- * Copying the selected PR's `revv://` deep link is reachable from two places —
- * the top-bar button and the ⇧⌘C shortcut — so the copy itself and the
- * transient "copied" acknowledgement live here rather than in the component.
- */
-
 const COPIED_RESET_MS = 1400;
 
 let copied = $state(false);
 let resetTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Whether a copy just succeeded; drives the top-bar check-mark swap. */
 export function getPrLinkCopied(): boolean {
   return copied;
 }
 
-/**
- * Copy the selected PR's deep link. No-op when no PR is selected or its
- * repository hasn't loaded yet — both shortcut and button are then inert.
- */
 export async function copySelectedPrLink(): Promise<void> {
   const pr = getSelectedPr();
   if (!pr) return;

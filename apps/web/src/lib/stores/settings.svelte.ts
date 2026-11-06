@@ -33,7 +33,6 @@ const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] =
   THINKING_EFFORT_ORDER.map((value) => ({ label: THINKING_EFFORT_LABELS[value], value }));
 
 let loaded = $state<UserSettings | null>(null);
-/** A failed read keeps the last list: the cached (possibly empty) list is the best fallback. */
 const models = createResource<AcpAgentId, ModelOption[]>({
   keepDataOnError: true,
   fetch: async (_key, agent) => {
@@ -43,7 +42,6 @@ const models = createResource<AcpAgentId, ModelOption[]>({
   },
 });
 
-/** The server's settings, or the shared defaults until they've loaded. */
 export function getSettings(): UserSettings {
   return loaded ?? DEFAULT_USER_SETTINGS;
 }
@@ -174,7 +172,6 @@ export function agentChange(agent: AcpAgentId): SettingsUpdate {
   );
 }
 
-/** Fetch the model list for an agent; concurrent calls for one agent share a request. */
 export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
   await models.load(agent, agent);
   return models.data(agent) ?? [];
@@ -187,11 +184,6 @@ export async function fetchModels(agent: AcpAgentId): Promise<ModelOption[]> {
 export async function fetchAllModels(): Promise<void> {
   await Promise.all(ACP_AGENT_IDS.map((id) => fetchModels(id)));
 }
-
-// ── Agent status ──────────────────────────────────────────────────────────────
-// Cached one-shot detection snapshot: per-agent installed + authed + login
-// command. Null until `fetchAgentStatus()` runs, since first render has nothing
-// useful to show.
 
 let agentStatus = $state<AgentStatusReport | null>(null);
 
@@ -214,9 +206,8 @@ export async function fetchAgentStatus(
   }
 }
 
-// ── Agent test ───────────────────────────────────────────────────────────────
-// One real turn through the review path, run by the server (see the server's
-// `agent-check.ts`). Explicit and user-triggered: it starts the agent and
+// One real turn through the review path, run by the server
+// (`ai/providers/agent-check.ts`). Explicit and user-triggered: it starts the agent and
 // spends a few tokens, so opening Settings must never run it.
 
 export async function runAgentCheck(agent: AcpAgentId): Promise<AgentCheckResult> {

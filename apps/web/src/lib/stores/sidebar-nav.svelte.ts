@@ -1,7 +1,6 @@
-// ── Vim-like PR-list navigation ─────────────────────────────
-//
-// The cursor walks the PR rows the list renders for the selected repo, in
-// order: open PRs, then closed ones while that section is open.
+// Vim-like PR-list navigation. The cursor walks the PR rows the list renders
+// for the selected repo, in order: open PRs, then closed ones while that
+// section is open.
 //
 // Bindings:
 //   j / ArrowDown    Move down
@@ -43,12 +42,10 @@ export function clearFocus(): void {
   pendingG = false;
 }
 
-/** Whether the cursor sits on a row that is on screen. */
 export function isFocusedVisible(): boolean {
   return focusedId !== null && rows.includes(focusedId);
 }
 
-/** Open a PR: navigate to it (unless it is already open) and show its file tree. */
 export function openPr(prId: string): void {
   if (getSelectedPrId() !== prId) void selectPr(prId);
   setSidebarView("files");

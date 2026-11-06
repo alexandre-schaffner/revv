@@ -362,7 +362,6 @@ async function poll(): Promise<void> {
     signInErrorCode = null;
     cancelSignIn();
   } catch {
-    // Network error — retry after current interval
     if (deviceFlow) schedulePoll(deviceFlow.interval);
   }
 }
@@ -474,13 +473,8 @@ export function onUserUpdated(data: UserUpdatedEnvelope["data"]): void {
 }
 
 /**
- * Mark the user as onboarded. Called by `StepDone` once the first repo has
- * been added; flips `onboardedAt` to the server-supplied timestamp so the
- * gate stops rendering the onboarding flow on next render.
- *
- * Failures are silent: the in-memory `user.onboardedAt` is set optimistically
- * so the UI advances; the next identity refresh will reconcile if the POST
- * actually failed.
+ * Optimistic and silent on failure: the UI advances at once, and the next
+ * identity read reconciles if the POST didn't land.
  */
 export async function completeOnboarding(): Promise<void> {
   if (!getToken() || !user) return;
@@ -602,7 +596,6 @@ export async function requestAccountSwitch(userId: string): Promise<string> {
   return data.token;
 }
 
-/** Delete the signed-in user on the server. Throws when the server refuses. */
 export async function deleteAccount(): Promise<void> {
   const { error: refusal } = await api.api.user.account.delete();
   if (refusal) throw new Error(apiErrorMessage(refusal, "Failed to remove account"));
@@ -612,7 +605,6 @@ export function getUser(): User | null {
   return user;
 }
 
-/** Current user's GitHub login, or null if not yet loaded or missing. */
 export function getCurrentUserLogin(): string | null {
   return user?.githubLogin ?? null;
 }
@@ -628,12 +620,10 @@ export function hasAttemptedIdentityLoad(): boolean {
 }
 
 /**
- * Whether the current user's GitHub login is on the maintainer allowlist.
  * Maintainers bypass the 48h stable-channel cooldown in the in-app updater.
- * Computed locally from `MAINTAINER_LOGINS` so client and server agree without
- * a round-trip — the `/api/user/identity` response also carries this flag,
- * but recomputing here keeps the answer correct even before the first fetch
- * completes (returns `false` until `githubLogin` is loaded).
+ * Computed locally from `MAINTAINER_LOGINS` rather than read from
+ * `/api/user/identity`, so client and server agree without a round-trip
+ * (false until `githubLogin` loads).
  */
 export function getIsMaintainer(): boolean {
   return isMaintainerLogin(user?.githubLogin ?? null);

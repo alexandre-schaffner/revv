@@ -47,30 +47,18 @@ let rightPanelWidth = $state(
   readStored(STORAGE_KEYS.rightPanelWidth, rightPanelWidthCodec, RIGHT_PANEL_WIDTH_DEFAULT),
 );
 
-// Live viewport width — the input to the side-by-side ⇄ stacked decision for
-// the chat panel. Kept here (not in a component) so the layout math reads
-// from one source. `ssr = false`, so
-// touching `window` at module scope is safe.
+// `ssr = false`, so touching `window` at module scope is safe.
 let viewportWidth = $state(window.innerWidth);
 
-// Collapsed owner-folders in the project rail. Owners are stored
-// lowercase. Default: every owner is expanded — owners only land here
-// after the user explicitly collapses their folder. Persisted so the
-// expand/collapse pattern survives reloads.
 let collapsedOwners = $state<Set<string>>(
   new Set(readStored(STORAGE_KEYS.railCollapsedOwners, collapsedOwnersCodec, [])),
 );
 
-// Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
-// selected PR's head SHA). Transient — not persisted across reloads. Resets to
-// 'prs' when the URL leaves a /review/[prId] route (see +layout.svelte).
+// 'files' is the full repo tree at the selected PR's head SHA. Not persisted;
+// +layout.svelte follows the route (files on /review/[prId], prs elsewhere).
 type SidebarView = "prs" | "files";
 let sidebarView = $state<SidebarView>("prs");
 
-// Files-mode search query. Drives `tree.setSearch(...)` on the Pierre file
-// tree via a prop on <PierreFileTree>. Transient — cleared whenever we leave
-// files view (see setSidebarView below) and on PR / scope switches inside
-// SidebarFilesView. Empty string means "no filter".
 let fileSearchQuery = $state<string>("");
 
 $effect.root(() => {
@@ -92,8 +80,6 @@ $effect.root(() => {
   });
 });
 
-// ── Sidebar ──────────────────────────────────────────────
-
 export {
   RIGHT_PANEL_WIDTH_DEFAULT,
   RIGHT_PANEL_WIDTH_MAX,
@@ -111,8 +97,6 @@ export function toggleSidebar(): void {
   sidebarCollapsed = !sidebarCollapsed;
 }
 
-// ── Sidebar width ────────────────────────────────────────
-
 export function getSidebarWidth(): number {
   return sidebarWidth;
 }
@@ -124,8 +108,6 @@ export function setSidebarWidth(w: number): void {
 export function resetSidebarWidth(): void {
   sidebarWidth = SIDEBAR_WIDTH_DEFAULT;
 }
-
-// ── Right panel ──────────────────────────────────────────
 
 export function getRightPanelOpen(): boolean {
   return rightPanelOpen;
@@ -139,9 +121,6 @@ export function toggleRightPanel(): void {
   rightPanelOpen = !rightPanelOpen;
 }
 
-// ── Right panel presentation (side-by-side ⇄ stacked) ────
-
-/** Width owed to the left chrome (rail + sidebar, if expanded). */
 function chromeWidth(): number {
   return RAIL_WIDTH + (sidebarCollapsed ? 0 : sidebarWidth);
 }
@@ -158,8 +137,6 @@ function chromeWidth(): number {
 export function getChatStacked(): boolean {
   return viewportWidth - chromeWidth() - RIGHT_PANEL_WIDTH_MIN < MAIN_MIN_WIDTH;
 }
-
-// ── Right panel width ───────────────────────────────────
 
 /** Widest the panel may actually render: whatever still leaves a usable main
     pane. Floored at the panel's own minimum, which only binds while stacked
@@ -186,8 +163,6 @@ export function resetRightPanelWidth(): void {
   rightPanelWidth = RIGHT_PANEL_WIDTH_DEFAULT;
 }
 
-// ── Add-repo dialog ─────────────────────────────────────
-
 export function getAddRepoDialogOpen(): boolean {
   return addRepoDialogOpen;
 }
@@ -200,25 +175,16 @@ export function openAddRepoDialog(): void {
   addRepoDialogOpen = true;
 }
 
-// ── Sidebar view (PR list ⇄ file tree) ──────────────────
-
 export function getSidebarView(): SidebarView {
   return sidebarView;
 }
 
 export function setSidebarView(v: SidebarView): void {
   sidebarView = v;
-  // Single chokepoint for clearing the files-mode search query when we
-  // leave files view. Both the user-driven swipe-back paths
-  // (Sidebar.handleKeydown's Esc/h, the breadcrumb back button) and the
-  // route-driven auto-reset in +layout.svelte funnel through this setter,
-  // so dropping the query here covers every exit.
   if (v === "prs") {
     fileSearchQuery = "";
   }
 }
-
-// ── Files-mode search ───────────────────────────────────
 
 export function getFileSearchQuery(): string {
   return fileSearchQuery;
@@ -227,8 +193,6 @@ export function getFileSearchQuery(): string {
 export function setFileSearchQuery(v: string): void {
   fileSearchQuery = v;
 }
-
-// ── Rail owner-folder collapse state ────────────────────
 
 export function isOwnerCollapsed(owner: string): boolean {
   return collapsedOwners.has(owner.toLowerCase());
@@ -241,8 +205,6 @@ export function toggleOwnerCollapsed(owner: string): void {
   else next.add(key);
   collapsedOwners = next;
 }
-
-// ── Closed-PR section, per repo ─────────────────────────
 
 let archiveOpen = $state(new Map<string, boolean>());
 
