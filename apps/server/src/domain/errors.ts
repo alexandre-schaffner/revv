@@ -120,13 +120,6 @@ export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class AiNotConfiguredError extends Data.TaggedError("AiNotConfiguredError")<{}> {}
 
-export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelectedError")<{
-  readonly selectedAgent: string;
-}> {}
-
-// biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
-export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
-
 /**
  * Why a TypeSafe System One (Jev) call produced no answer.
  *
@@ -156,11 +149,7 @@ export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
   readonly cause?: unknown;
 }> {}
 
-export type AiError =
-  | AiGenerationError
-  | AiNotConfiguredError
-  | OpencodeNotSelectedError
-  | OpencodeUnhealthyError;
+export type AiError = AiGenerationError | AiNotConfiguredError;
 
 export class ReviewError extends Data.TaggedError("ReviewError")<{
   readonly message: string;

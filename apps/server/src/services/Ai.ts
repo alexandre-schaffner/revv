@@ -146,9 +146,6 @@ export const AiServiceLive = Layer.effect(
   Effect.gen(function* () {
     const settingsService = yield* SettingsService;
     const { db } = yield* DbService;
-    // Every AI pipeline — chat, merge-conflict, walkthrough, recap, and
-    // suggestions — runs on the ACP transport now. There is no opencode daemon
-    // or provider SDK left to manage.
     const chatMcpTokens = yield* ChatMcpTokens;
 
     // Map ValidationError from getSettings() to AiGenerationError
