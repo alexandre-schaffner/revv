@@ -4,28 +4,26 @@
 // branches. Commits are written with the user's own identity, but neither
 // their hooks nor their signing setup run: nobody is there to answer them.
 
-import { existsSync, rmSync } from "node:fs";
 import {
-  abortDetachedRebase,
-  addDetachedWorktree,
-  classifyPushFailure,
+  abortRebase,
   commitExists,
   deleteRef,
-  fetchForRebase,
   isAncestor,
   mergeBase,
-  pushAtomicWithLeases,
-  rebaseDetached,
-  removeWorktree,
+  rebaseOnto,
   resolveRef,
   unmergedPaths,
-  workflowPermissionRejection,
-} from "../GitOps";
+} from "../git/ops";
+import { scratchRef } from "../git/pr-refs";
+import { type PushOutcome, pushLeased, pushOutcome } from "../git/push";
+import {
+  clearScratch,
+  fetchForScratch,
+  firstLine,
+  prepareScratch,
+  SCRATCH_OPERATION_TIMEOUT_MS,
+} from "../git/scratch";
 import type { RebaseStep } from "./rebase-plan";
-
-const REBASE_TIMEOUT_MS = 5 * 60_000;
-const FETCH_TIMEOUT_MS = 3 * 60_000;
-const DEEPEN_BY = 1_000;
 
 export interface ReplayInput {
   readonly clonePath: string;
@@ -49,43 +47,23 @@ export type ReplayOutcome =
     }
   | { readonly kind: "failed"; readonly message: string };
 
-export type PushOutcome =
-  | { readonly kind: "pushed" }
-  | { readonly kind: "moved" | "auth" | "rejected"; readonly message: string };
-
-const firstLine = (stderr: string) =>
-  stderr
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0 && !l.startsWith("hint:")) ?? "git failed";
-
-const baseRef = (stackNumber: number) => `refs/revv/stack-rebase/${stackNumber}/base`;
-
-async function clearScratch(input: ReplayInput): Promise<void> {
-  if (existsSync(input.scratchPath)) await abortDetachedRebase(input.scratchPath);
-  await removeWorktree(input.clonePath, input.scratchPath);
-  if (existsSync(input.scratchPath)) {
-    rmSync(input.scratchPath, { recursive: true, force: true });
-    await removeWorktree(input.clonePath, input.scratchPath);
-  }
-}
+const baseRef = (stackNumber: number) => scratchRef("stack-rebase", stackNumber, "base");
 
 export async function cleanupReplay(input: ReplayInput): Promise<void> {
-  await clearScratch(input);
+  await clearScratch(input.clonePath, input.scratchPath);
   await deleteRef(input.clonePath, baseRef(input.stackNumber));
 }
 
-async function fetchStack(input: ReplayInput, deepen: boolean): Promise<string | null> {
-  const r = await fetchForRebase(
+function fetchStack(input: ReplayInput, deepen: boolean): Promise<string | null> {
+  return fetchForScratch(
     input.clonePath,
     input.remoteUrl,
     [
       `+refs/heads/${input.baseRefName}:${baseRef(input.stackNumber)}`,
       ...input.steps.map((s) => s.tip),
     ],
-    deepen ? { deepen: DEEPEN_BY, timeoutMs: FETCH_TIMEOUT_MS } : { timeoutMs: FETCH_TIMEOUT_MS },
+    deepen,
   );
-  return r.ok ? null : firstLine(r.stderr);
 }
 
 async function upstreamOf(
@@ -108,11 +86,8 @@ export async function replayStack(input: ReplayInput): Promise<ReplayOutcome> {
   const baseTip = await resolveRef(clonePath, baseRef(input.stackNumber));
   if (!baseTip) return { kind: "failed", message: `Couldn't read ${input.baseRefName}'s tip` };
 
-  await clearScratch(input);
-  const added = await addDetachedWorktree(clonePath, scratchPath, baseTip, REBASE_TIMEOUT_MS);
-  if (!added.ok) {
-    return { kind: "failed", message: `Couldn't prepare a worktree: ${firstLine(added.stderr)}` };
-  }
+  const prepared = await prepareScratch(clonePath, scratchPath, baseTip);
+  if (prepared.kind === "failed") return prepared;
 
   const heads = new Map<number, string>();
   const tipOf = (number: number) => input.steps.find((s) => s.number === number)?.tip ?? null;
@@ -144,10 +119,16 @@ export async function replayStack(input: ReplayInput): Promise<ReplayOutcome> {
       continue;
     }
 
-    const rebased = await rebaseDetached(scratchPath, onto, upstream, step.tip, REBASE_TIMEOUT_MS);
+    const rebased = await rebaseOnto(
+      scratchPath,
+      onto,
+      upstream,
+      step.tip,
+      SCRATCH_OPERATION_TIMEOUT_MS,
+    );
     if (!rebased.ok) {
       const files = await unmergedPaths(scratchPath).catch(() => []);
-      await abortDetachedRebase(scratchPath);
+      await abortRebase(scratchPath);
       if (files.length > 0) return { kind: "conflict", number: step.number, ontoLabel, files };
       return {
         kind: "failed",
@@ -170,32 +151,11 @@ export async function pushStack(
   moved: ReadonlyArray<{ readonly headRef: string; readonly from: string; readonly to: string }>,
 ): Promise<PushOutcome> {
   if (moved.length === 0) return { kind: "pushed" };
-  const r = await pushAtomicWithLeases(
-    clonePath,
-    remoteUrl,
-    moved.map((m) => ({ branch: m.headRef, from: m.from, to: m.to })),
-    FETCH_TIMEOUT_MS,
+  return pushOutcome(
+    await pushLeased(
+      clonePath,
+      remoteUrl,
+      moved.map((m) => ({ branch: m.headRef, from: m.from, to: m.to })),
+    ),
   );
-  if (r.ok) return { kind: "pushed" };
-
-  const workflow = workflowPermissionRejection(r.stderr);
-  if (workflow) {
-    return {
-      kind: "rejected",
-      message:
-        `GitHub won't let Revv's credential push ${workflow.path ?? "files under .github/workflows/"} ` +
-        "— rebase this stack from your own checkout (gh stack rebase)",
-    };
-  }
-  switch (classifyPushFailure(r.stderr)) {
-    case "remote-moved":
-      return {
-        kind: "moved",
-        message: "A layer got new commits while Revv was rebasing — nothing was pushed, try again",
-      };
-    case "auth":
-      return { kind: "auth", message: "GitHub refused Revv's credential for this push" };
-    case "rejected":
-      return { kind: "rejected", message: `GitHub rejected the push: ${firstLine(r.stderr)}` };
-  }
 }

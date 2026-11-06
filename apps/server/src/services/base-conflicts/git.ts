@@ -7,38 +7,33 @@
 // never names a local branch, since the clone shares refs with the user's own
 // checkouts. Its only durable effect is the leased push at the end.
 
-import { existsSync, rmSync } from "node:fs";
 import type { BaseConflictStrategy } from "@revv/shared";
 import {
-  abortDetachedMerge,
-  abortDetachedRebase,
-  addDetachedWorktree,
   changedPaths,
-  classifyPushFailure,
   commitParents,
   deleteRef,
-  describePushRejection,
-  fetchForRebase,
   hasConflictMarkers,
   isAncestor,
   isMergeInProgress,
   isRebaseInProgress,
+  merge,
   mergeBase,
   mergeTreeWriteTree,
-  mergeUnattended,
-  pushAtomicWithLeases,
-  rebaseDetached,
-  removeWorktree,
+  rebaseOnto,
   resolveRef,
   revListCount,
   unmergedPaths,
   workingTreeIsClean,
-} from "../GitOps";
+} from "../git/ops";
+import { scratchRef } from "../git/pr-refs";
+import { type PushOutcome, pushLeased, pushOutcome } from "../git/push";
+import {
+  type Failed,
+  fetchForScratch,
+  firstLine,
+  SCRATCH_OPERATION_TIMEOUT_MS,
+} from "../git/scratch";
 import { parseMergeTree } from "./merge-tree";
-
-const FETCH_TIMEOUT_MS = 3 * 60_000;
-const OPERATION_TIMEOUT_MS = 5 * 60_000;
-const DEEPEN_BY = 1_000;
 
 export interface SyncRepo {
   readonly clonePath: string;
@@ -53,17 +48,9 @@ export interface Tips {
   readonly mergeBase: string;
 }
 
-export type Failed = { readonly kind: "failed"; readonly message: string };
-
-const firstLine = (stderr: string) =>
-  stderr
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0 && !l.startsWith("hint:")) ?? "git failed";
-
 const refsFor = (prNumber: number) => ({
-  base: `refs/revv/base-conflicts/${prNumber}/base`,
-  head: `refs/revv/base-conflicts/${prNumber}/head`,
+  base: scratchRef("base-conflicts", prNumber, "base"),
+  head: scratchRef("base-conflicts", prNumber, "head"),
 });
 
 /**
@@ -79,25 +66,18 @@ export async function fetchTips(
   const refs = refsFor(repo.prNumber);
   const refspecs = [`+refs/heads/${repo.baseBranch}:${refs.base}`, `+${headSource}:${refs.head}`];
   const fetch = (deepen: boolean) =>
-    fetchForRebase(
-      repo.clonePath,
-      repo.remoteUrl,
-      refspecs,
-      deepen ? { deepen: DEEPEN_BY, timeoutMs: FETCH_TIMEOUT_MS } : { timeoutMs: FETCH_TIMEOUT_MS },
-    );
+    fetchForScratch(repo.clonePath, repo.remoteUrl, refspecs, deepen);
 
-  const first = await fetch(false);
-  if (!first.ok) return { kind: "failed", message: `Couldn't fetch: ${firstLine(first.stderr)}` };
+  const fetchError = await fetch(false);
+  if (fetchError) return { kind: "failed", message: `Couldn't fetch: ${fetchError}` };
   const baseTip = await resolveRef(repo.clonePath, refs.base);
   const headTip = await resolveRef(repo.clonePath, refs.head);
   if (!baseTip || !headTip) return { kind: "failed", message: "Couldn't read the fetched tips" };
 
   let forkPoint = await mergeBase(repo.clonePath, baseTip, headTip);
   if (!forkPoint) {
-    const deeper = await fetch(true);
-    if (!deeper.ok) {
-      return { kind: "failed", message: `Couldn't fetch history: ${firstLine(deeper.stderr)}` };
-    }
+    const deeperError = await fetch(true);
+    if (deeperError) return { kind: "failed", message: `Couldn't fetch history: ${deeperError}` };
     forkPoint = await mergeBase(repo.clonePath, baseTip, headTip);
   }
   if (!forkPoint) {
@@ -142,31 +122,6 @@ export async function checkTips(clonePath: string, tips: Tips): Promise<TipsChec
   };
 }
 
-export async function clearScratch(clonePath: string, scratchPath: string): Promise<void> {
-  if (existsSync(scratchPath)) {
-    if (await isMergeInProgress(scratchPath)) await abortDetachedMerge(scratchPath);
-    if (await isRebaseInProgress(scratchPath)) await abortDetachedRebase(scratchPath);
-  }
-  await removeWorktree(clonePath, scratchPath);
-  if (existsSync(scratchPath)) {
-    rmSync(scratchPath, { recursive: true, force: true });
-    await removeWorktree(clonePath, scratchPath);
-  }
-}
-
-/** A fresh scratch worktree detached at `sha`, clearing whatever a dead run left. */
-export async function prepareScratch(
-  clonePath: string,
-  scratchPath: string,
-  sha: string,
-): Promise<{ readonly kind: "ok" } | Failed> {
-  await clearScratch(clonePath, scratchPath);
-  const added = await addDetachedWorktree(clonePath, scratchPath, sha, OPERATION_TIMEOUT_MS);
-  return added.ok
-    ? { kind: "ok" }
-    : { kind: "failed", message: `Couldn't prepare a worktree: ${firstLine(added.stderr)}` };
-}
-
 export interface OperationInput {
   readonly strategy: BaseConflictStrategy;
   readonly scratchPath: string;
@@ -187,18 +142,17 @@ export async function startOperation(
   const { scratchPath, tips } = input;
   const run =
     input.strategy === "merge"
-      ? await mergeUnattended(
-          scratchPath,
-          tips.baseTip,
-          `Merge branch '${input.baseBranch}' into ${input.sourceBranch}`,
-          OPERATION_TIMEOUT_MS,
-        )
-      : await rebaseDetached(
+      ? await merge(scratchPath, tips.baseTip, {
+          message: `Merge branch '${input.baseBranch}' into ${input.sourceBranch}`,
+          noFastForward: true,
+          timeoutMs: SCRATCH_OPERATION_TIMEOUT_MS,
+        })
+      : await rebaseOnto(
           scratchPath,
           tips.baseTip,
           tips.mergeBase,
           tips.headTip,
-          OPERATION_TIMEOUT_MS,
+          SCRATCH_OPERATION_TIMEOUT_MS,
         );
   if (run.ok) return { kind: "clean" };
   const files = await unmergedPaths(scratchPath).catch(() => []);
@@ -262,11 +216,6 @@ export async function verifyResolution(
   return { kind: "ok", head };
 }
 
-export type PushResult =
-  | { readonly kind: "pushed" }
-  | { readonly kind: "moved" }
-  | { readonly kind: "auth" | "rejected"; readonly message: string };
-
 /** Push `head` to the PR's source branch, leased on the head Revv started from. */
 export async function pushResult(
   scratchPath: string,
@@ -274,20 +223,8 @@ export async function pushResult(
   sourceBranch: string,
   from: string,
   head: string,
-): Promise<PushResult> {
-  const r = await pushAtomicWithLeases(
-    scratchPath,
-    remoteUrl,
-    [{ branch: sourceBranch, from, to: head }],
-    FETCH_TIMEOUT_MS,
+): Promise<PushOutcome> {
+  return pushOutcome(
+    await pushLeased(scratchPath, remoteUrl, [{ branch: sourceBranch, from, to: head }]),
   );
-  if (r.ok) return { kind: "pushed" };
-  switch (classifyPushFailure(r.stderr)) {
-    case "remote-moved":
-      return { kind: "moved" };
-    case "auth":
-      return { kind: "auth", message: "GitHub refused Revv's credential for this push" };
-    case "rejected":
-      return { kind: "rejected", message: describePushRejection(r.stderr) };
-  }
 }

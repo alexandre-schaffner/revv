@@ -1,11 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { parseNameStatusZ, parseNumstat } from "./git/parse";
 import {
   capPatch,
   countPatchLines,
   MAX_INCREMENTAL_PATCH_CHARS,
   normalizeGitStatus,
-  parseNameStatusZ,
-  parseNumstat,
   resolveCounts,
 } from "./incremental-diff";
 

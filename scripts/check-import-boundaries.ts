@@ -31,20 +31,18 @@ const identityForbiddenImports = new Set([
   "apps/server/src/services/TokenProvider",
 ]);
 
-// ── Local Git boundary ──────────────────────────────────────────────────────
-// `git-runner` is the raw git-subprocess primitive — an internal of the Local
-// Git module. Only the module's own files may spawn git directly; everything
-// else must go through `RepoCloneService` (clone + per-job worktrees) or
-// `GitOps` (git command primitives), which keep worktree acquisition scoped
-// and the subprocess registry/signal-handling in one place. `clone-policy` is
-// `RepoCloneService`'s own read-only inspection/policy helper, so it sits
-// inside the module boundary too.
-const gitRunnerModule = "apps/server/src/services/git-runner";
-const gitRunnerAllowedImporters = new Set([
-  "apps/server/src/services/RepoClone.ts",
-  "apps/server/src/services/clone-policy.ts",
-  "apps/server/src/services/GitOps.ts",
-]);
+// ── Git boundary ────────────────────────────────────────────────────────────
+// `services/git/` is the one place Revv spawns git: its runner applies the
+// policy every git command needs (no prompts, none of the user's hooks or
+// signing, a timeout, the process registry, token redaction). Nothing outside
+// it may import the runner or spawn git itself. Tests build fixtures with the
+// git CLI directly.
+const gitModuleDir = "apps/server/src/services/git/";
+const gitRunnerModule = "apps/server/src/services/git/runner";
+// `build-info.ts` reads the commit of Revv's own source checkout, never a clone.
+const gitSpawnAllowed = new Set(["apps/server/src/build-info.ts"]);
+const gitSpawnPattern =
+  /(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*\[?\s*["'`]git\b|Bun\.spawn(?:Sync)?\(\s*\[\s*["'`]git["'`]/;
 
 // ── Realtime boundary ───────────────────────────────────────────────────────
 // `Broadcaster` only moves bytes to connected clients. Features address a push
@@ -131,11 +129,18 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
       violations.push(`${rel} imports ${specifier}; run agent turns through ai/acp/run-turn`);
     }
 
-    if (target === gitRunnerModule && !gitRunnerAllowedImporters.has(rel)) {
-      violations.push(
-        `${rel} imports ${specifier}; spawn git through RepoCloneService or GitOps, not git-runner directly`,
-      );
+    if (target === gitRunnerModule && !rel.startsWith(gitModuleDir)) {
+      violations.push(`${rel} imports ${specifier}; run git through services/git/ops`);
     }
+  }
+
+  if (
+    !rel.startsWith(gitModuleDir) &&
+    !gitSpawnAllowed.has(rel) &&
+    !/\.test\.ts$/.test(rel) &&
+    gitSpawnPattern.test(source)
+  ) {
+    violations.push(`${rel} spawns git; run git through services/git/ops`);
   }
 }
 

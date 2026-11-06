@@ -558,12 +558,12 @@ export const WalkthroughJobsLive = Layer.effect(
               filePriorities: ctx.filePriorities,
             });
         const worktree = repoCloneService
-          .acquirePrWorktree({
+          .acquireReviewWorktree({
             repoId: ctx.repoId,
             prNumber: ctx.pr.externalId,
-            prHeadSha: ctx.prHeadSha,
+            headSha: ctx.prHeadSha,
             githubToken: ctx.token,
-            exactHead: true,
+            walkthroughId: job.walkthroughId,
           })
           .pipe(
             Effect.mapError((e) => {
@@ -576,7 +576,7 @@ export const WalkthroughJobsLive = Layer.effect(
               return new AiGenerationError({ cause: e, message });
             }),
           );
-        const [{ worktreePath }, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
+        const [worktreePath, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
           concurrency: 2,
         });
 
@@ -1550,11 +1550,8 @@ export const WalkthroughJobsLive = Layer.effect(
           const rows = yield* provideDb(walkthroughService.listGenerating());
           debug("walkthrough-jobs", "resumePending: found", rows.length, "generating rows");
 
-          // No worktree GC on resume: the unified per-PR worktree at
-          // `worktrees/pr-{prNumber}` is shared across walkthroughs and
-          // chat sessions, so it's never orphaned by a walkthrough fiber
-          // dying. The next `acquirePrWorktree` call simply refreshes
-          // the existing dir to the desired SHA in place.
+          // A resumed job clears the review worktree its killed run left
+          // (`acquireReviewWorktree`); one that never resumes is swept.
 
           for (const row of rows) {
             // An attempt that can't be counted isn't run: resuming it would

@@ -1,24 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   abortMerge,
-  checkoutDetachedAt,
-  classifyPushFailure,
+  checkoutDetached,
   isMergeInProgress,
   merge,
-  proposedCommitCount,
-  redactGitAuth,
-  resolveProposedBaseSha,
-  revParse,
+  removeWorktree,
+  resolveRef,
   unmergedPaths,
   unstagedOutsideMerge,
-  workflowPermissionRejection,
   workingTreeIsClean,
-} from "./GitOps";
+} from "./ops";
+import { classifyPushFailure, workflowPermissionRejection } from "./push";
+import { redactGitAuth } from "./remote";
 
 // ── checkoutDetachedAt ───────────────────────────────────────────────────────
 //
@@ -113,7 +119,7 @@ function makeFixture(prefix: string): Fixture {
   return { base, origin, clonePath, userWorktree, revvWorktree, sourceTip };
 }
 
-describe("checkoutDetachedAt", () => {
+describe("checkoutDetached", () => {
   const sourceBranch = SOURCE_BRANCH;
   const agentBranch = AGENT_BRANCH;
 
@@ -139,9 +145,9 @@ describe("checkoutDetachedAt", () => {
   });
 
   it("positions HEAD at the source-branch tip while another worktree holds it", async () => {
-    await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+    await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
 
-    expect(await revParse(revvWorktree, "HEAD", 5_000)).toBe(sourceTip);
+    expect(await resolveRef(revvWorktree, "HEAD")).toBe(sourceTip);
     // Detached: HEAD names no branch, and the user's worktree is untouched.
     expect(() => git(revvWorktree, ["symbolic-ref", "--short", "HEAD"])).toThrow();
     expect(git(userWorktree, ["rev-parse", "HEAD"])).toBe(sourceTip);
@@ -156,15 +162,13 @@ describe("checkoutDetachedAt", () => {
     git(revvWorktree, ["fetch", "-q", "origin", `+refs/heads/*:refs/remotes/origin/*`]);
     const newSourceTip = git(userWorktree, ["rev-parse", "HEAD"]);
 
-    await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-    const result = await merge(
-      revvWorktree,
-      agentBranch,
-      `Merge branch '${agentBranch}' into ${sourceBranch}`,
-    );
+    await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+    const result = await merge(revvWorktree, agentBranch, {
+      message: `Merge branch '${agentBranch}' into ${sourceBranch}`,
+    });
 
     expect(result.ok).toBe(true);
-    const mergedTip = await revParse(revvWorktree, "HEAD", 5_000);
+    const mergedTip = (await resolveRef(revvWorktree, "HEAD")) ?? "";
     expect(git(revvWorktree, ["log", "-1", "--format=%s"])).toBe(
       `Merge branch '${agentBranch}' into ${sourceBranch}`,
     );
@@ -217,8 +221,8 @@ describe("isMergeInProgress", () => {
     // old filesystem probe.
     expect(statSync(join(revvWorktree, ".git")).isFile()).toBe(true);
 
-    await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-    const result = await merge(revvWorktree, agentBranch, "merge");
+    await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+    const result = await merge(revvWorktree, agentBranch, { message: "merge" });
 
     expect(result.ok).toBe(false);
     expect(await isMergeInProgress(revvWorktree)).toBe(true);
@@ -226,8 +230,8 @@ describe("isMergeInProgress", () => {
   });
 
   it("is false again once the merge is aborted", async () => {
-    await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-    await merge(revvWorktree, agentBranch, "merge");
+    await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+    await merge(revvWorktree, agentBranch, { message: "merge" });
 
     expect(await abortMerge(revvWorktree)).toBe(true);
     expect(await isMergeInProgress(revvWorktree)).toBe(false);
@@ -240,8 +244,8 @@ describe("isMergeInProgress", () => {
   // someone's uncommitted edit destroys it with no way back.
   describe("unstagedOutsideMerge", () => {
     it("finds nothing in a pure conflict state, so the abort is safe", async () => {
-      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-      await merge(revvWorktree, agentBranch, "merge");
+      await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, { message: "merge" });
 
       // Premise: the tree IS dirty, so an emptiness check here would be
       // vacuous if it were only reading `workingTreeIsClean`.
@@ -251,8 +255,8 @@ describe("isMergeInProgress", () => {
     });
 
     it("finds an uncommitted edit the merge did not make, so the abort is refused", async () => {
-      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-      await merge(revvWorktree, agentBranch, "merge");
+      await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, { message: "merge" });
 
       // A file the merge never touched, edited in the working tree — exactly
       // what an interrupted chat turn leaves behind. `merge --abort` would
@@ -264,8 +268,8 @@ describe("isMergeInProgress", () => {
     });
 
     it("ignores untracked files, which `merge --abort` leaves alone", async () => {
-      await checkoutDetachedAt(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
-      await merge(revvWorktree, agentBranch, "merge");
+      await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
+      await merge(revvWorktree, agentBranch, { message: "merge" });
       writeFileSync(join(revvWorktree, "scratch.log"), "build output\n");
 
       expect(await unstagedOutsideMerge(revvWorktree)).toEqual([]);
@@ -411,80 +415,72 @@ describe("redactGitAuth", () => {
   });
 });
 
-// ── resolveProposedBaseSha ───────────────────────────────────────────────────
+// ── The runner's policy ──────────────────────────────────────────────────────
 //
-// Regression cover for "40 proposed commits" in a brand-new chat. The chat
-// session row's `prHeadSha` is frozen at the head the session started on, but
-// `acquirePrWorktree` resets the per-PR worktree to the *current* head whenever
-// the agent branch isn't a descendant of it. `staleHead..HEAD` then reports the
-// PR's whole rebased history as the agent's proposed commits.
+// Revv's clone is often the user's own repository. Their hooks (a husky
+// post-checkout, a pre-push test run) and their signing setup are theirs to
+// trigger; run unattended, a failing hook aborts the push and a signing prompt
+// hangs it until it times out.
 
-describe("resolveProposedBaseSha", () => {
-  const agentBranch = "revv/pr-1";
-
-  let base: string;
-  let worktree: string;
-  let oldHead: string;
-  let newHead: string;
+describe("every git command Revv runs", () => {
+  let fixture: Fixture;
+  let ran: string;
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), "revv-basesha-"));
-    worktree = join(base, "repo");
-    git(base, ["init", "-q", "-b", agentBranch, "repo"]);
-    commitFile(worktree, "README.md", "seed\n", "seed");
-    oldHead = commitFile(worktree, "a.ts", "export const a = 1;\n", "pr: first commit");
-    newHead = commitFile(worktree, "b.ts", "export const b = 1;\n", "pr: second commit");
+    fixture = makeFixture("revv-gitops-policy-");
+    commitFile(fixture.revvWorktree, "agent.ts", "agent\n", "agent: add");
+    commitFile(fixture.userWorktree, "user.ts", "user\n", "user: add");
+    git(fixture.userWorktree, ["push", "-q", "origin", SOURCE_BRANCH]);
+    git(fixture.revvWorktree, ["fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
+
+    const hooks = join(fixture.base, "hooks");
+    ran = join(fixture.base, "hook-ran");
+    mkdirSync(hooks);
+    for (const hook of ["post-checkout", "pre-merge-commit", "commit-msg", "post-merge"]) {
+      writeFileSync(join(hooks, hook), `#!/bin/sh\necho ${hook} >> "${ran}"\nexit 1\n`);
+      chmodSync(join(hooks, hook), 0o755);
+    }
+    git(fixture.clonePath, ["config", "core.hooksPath", hooks]);
+    git(fixture.clonePath, ["config", "commit.gpgsign", "true"]);
+    git(fixture.clonePath, ["config", "gpg.program", "/usr/bin/false"]);
   });
 
   afterEach(async () => {
-    await rm(base, { recursive: true, force: true });
+    await rm(fixture.base, { recursive: true, force: true });
   });
 
-  const resolve = (sessionPrHeadSha: string, prHeadSha: string | null) =>
-    resolveProposedBaseSha({ worktreePath: worktree, tip: "HEAD", sessionPrHeadSha, prHeadSha });
+  it("runs none of the user's hooks and never signs", async () => {
+    expect(
+      (await checkoutDetached(fixture.revvWorktree, `refs/remotes/origin/${SOURCE_BRANCH}`)).ok,
+    ).toBe(true);
+    const merged = await merge(fixture.revvWorktree, AGENT_BRANCH, { message: "merge" });
+    expect(merged.ok).toBe(true);
+    expect(git(fixture.revvWorktree, ["log", "-1", "--format=%P"]).split(" ")).toHaveLength(2);
+    expect(existsSync(ran)).toBe(false);
+  });
+});
 
-  it("prefers the PR's current head once the worktree has been reset onto it", async () => {
-    // The state the bug reproduced in: worktree HEAD *is* the new PR head, the
-    // session still names the old one. Anything but `newHead` here surfaces the
-    // PR's own commits as proposed commits.
-    expect(await resolve(oldHead, newHead)).toBe(newHead);
-    expect(await proposedCommitCount(worktree, `${newHead}..HEAD`)).toBe("0");
+describe("removeWorktree", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = makeFixture("revv-gitops-remove-");
   });
 
-  it("reports nothing proposed when the PR head has moved past the worktree", async () => {
-    // The live shape of the bug: the branch sits on a *former* PR head — the
-    // session's baseline was rebased away and the PR has since moved on, so
-    // neither candidate is an ancestor of the tip. Only the PR's current head
-    // gives the honest answer, which is that the agent proposed nothing.
-    const rebased = commitFile(worktree, "d.ts", "export const d = 1;\n", "pr: rebased tip");
-    git(worktree, ["reset", "-q", "--hard", newHead]);
-
-    expect(await resolve(oldHead, rebased)).toBe(rebased);
-    expect(await proposedCommitCount(worktree, `${rebased}..HEAD`)).toBe("0");
+  afterEach(async () => {
+    await rm(fixture.base, { recursive: true, force: true });
   });
 
-  it("keeps the session baseline while agent commits sit on the older head", async () => {
-    // The branch carries agent work built on `oldHead`, so it does not contain
-    // the PR's new head. Both candidates attribute exactly the agent's commit
-    // to the agent, and a tie leaves the historical baseline in place.
-    git(worktree, ["reset", "-q", "--hard", oldHead]);
-    commitFile(worktree, "a.ts", "export const a = 2;\n", "agent: tweak a");
+  // `git worktree prune` would also drop the user's worktrees whose drive
+  // isn't mounted: Revv only ever removes the worktree it names.
+  it("drops the named worktree, even with its folder gone, and nothing else", async () => {
+    rmSync(fixture.userWorktree, { recursive: true, force: true });
+    rmSync(fixture.revvWorktree, { recursive: true, force: true });
 
-    expect(await resolve(oldHead, newHead)).toBe(oldHead);
-    expect(await proposedCommitCount(worktree, `${oldHead}..HEAD`)).toBe("1");
-  });
+    expect(await removeWorktree(fixture.clonePath, fixture.revvWorktree)).toBe(true);
 
-  it("counts only the agent's commits when both heads are behind the tip", async () => {
-    commitFile(worktree, "c.ts", "export const c = 1;\n", "agent: add c");
-
-    expect(await resolve(oldHead, newHead)).toBe(newHead);
-    expect(await proposedCommitCount(worktree, `${newHead}..HEAD`)).toBe("1");
-  });
-
-  it("falls back to the session baseline when the PR head is unknown or unusable", async () => {
-    expect(await resolve(oldHead, null)).toBe(oldHead);
-    expect(await resolve(oldHead, "not-a-sha")).toBe(oldHead);
-    // A syntactically valid SHA that this repository has never seen.
-    expect(await resolve(oldHead, "0".repeat(40))).toBe(oldHead);
+    const listed = git(fixture.clonePath, ["worktree", "list", "--porcelain"]);
+    expect(listed).toContain(fixture.userWorktree);
+    expect(listed).not.toContain(fixture.revvWorktree);
   });
 });

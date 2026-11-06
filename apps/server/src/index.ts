@@ -195,7 +195,7 @@ enterOrigin("boot", "boot");
 // SIGINT  arrives on Ctrl-C.
 //
 // Registered before the first `await`: the server already answers requests,
-// and building the runtime installs other SIGTERM listeners (git-runner) that
+// and building the runtime installs other SIGTERM listeners (the git runner) that
 // suppress Bun's default exit, so a signal landing earlier would be swallowed.
 //
 // Both previously only logged, leaving the process alive — that's why stale
@@ -321,11 +321,11 @@ AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.resumePendin
   },
 );
 
-// Reap Revv-owned review worktrees + `revv/pr-N` branches for PRs that are
-// closed/merged (or no longer tracked), left behind by prior runs. Bounds
-// accumulation in the user's clone so VSCode isn't overwhelmed. Runs after
-// `resumePending` so any in-flight generation's worktree is protected by
-// `pruneWorktree`'s `generating` guard. Best-effort; never crashes boot.
+// Reap the agent worktrees and `revv/pr-N` branches of closed, merged or
+// untracked PRs, and the review worktrees of walkthroughs no longer
+// generating, so they don't pile up in the user's clone. Runs after
+// `resumePending`, so a resumed job's review worktree counts as generating.
+// Best-effort; never crashes boot.
 AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.sweepStaleWorktrees())).catch(
   (err) => {
     logError("repo-clone", "sweepStaleWorktrees failed on boot:", err);
