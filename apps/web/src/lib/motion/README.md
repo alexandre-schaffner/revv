@@ -16,9 +16,11 @@ timelines (right-panel slide + vignette crossfade).
 | --- | --- |
 | `gsap.ts` | GSAP + `CustomEase` registration; `overwrite:auto` default. |
 | `tokens.ts` | Flat const mirror of the `@theme` motion variables in `app.css`. |
-| `reduced-motion.ts` | `prefersReducedMotion()` — the single arbiter. |
-| `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, …). |
-| `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`). |
+| `reduced-motion.ts` | `prefersReducedMotion()` — the single arbiter; reactive inside effects. |
+| `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, `collapsibleOpen`, …). |
+| `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`; `settleOnMount` skips the first state's animation). |
+| `enter.ts` | `gsapEnter` — a one-shot entrance on mount (offset, scale, blur, fade, delay). Replaces hand-rolled entrance `@keyframes`. |
+| `rotate.ts` | `gsapRotate` — turns an element to an angle (disclosure carets, via `components/shared/DisclosureCaret.svelte`). |
 | `transitions.ts` | Svelte custom transitions (`gsapFade`, `gsapFadeY`, `gsapPop`, `gsapRise`, `gsapSlide`). |
 | `crossfade.ts` | `crossfadeDocument` — fade the whole page through a change (theme switches). `turnLook` — turn one element to a new look at the same pace, cutting instead while a page crossfade already fades it. |
 | `frames.ts` | `afterPaint` — internal to `crossfade.ts`: `turnLook` starts once the heavy frame that caused it has been drawn. |
@@ -63,7 +65,9 @@ control points because `CustomEase` parses any string starting with a digit.
 
 `prefersReducedMotion()` is the **single arbiter**. Every action, preset
 call site, and motion `$effect` reads through it. There is no `gsap.matchMedia`
-wrapper — the synchronous check is enough for every case we have.
+wrapper. It is a synchronous read everywhere, and backed by a Svelte
+`MediaQuery`, so an `$effect` or `$derived` that reads it re-runs when the OS
+setting flips (Dotmatrix's JS sequencers rely on that).
 
 The defensive `@media (prefers-reduced-motion: reduce)` block in `app.css`
 covers the CSS animations that intentionally stayed off GSAP — see the
@@ -94,5 +98,12 @@ Kept off GSAP by design — moving them would be a regression:
   with everything else. Glass surfaces are frozen to solid fills for the
   fade, found by their `data-glass` attribute: a new `backdrop-filter`
   surface must carry it.
+- **`clone-pulse`** — the halo on a cloning repo's status dot
+  (`sidebar/RepoAvatarButton.svelte`). A status indicator like the spinner,
+  on a `::after` GSAP can't reach; it has its own reduced-motion rule because
+  the global reset would leave the halo showing.
+- **`grain-drift`** — onboarding's film grain (`onboarding/OnboardingShell.svelte`),
+  a stepped 16 s ambient drift. An infinite GSAP tween would tick rAF every
+  frame for eight jumps per cycle.
 - **`transition: background-color` / `color`** on hover states — compositor
   paint crossfades on dozens of list items.

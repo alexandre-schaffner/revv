@@ -8,6 +8,7 @@ import LinkSimple from "phosphor-svelte/lib/LinkSimple";
 import { untrack } from "svelte";
 import { toastAddRepoError } from "$lib/components/shared/add-repo-toast";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { gsapEnter, tokens } from "$lib/motion";
 import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
 import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
 import { addRepo, getAvailableRepos, getAvailableReposLoading } from "$lib/stores/prs.svelte";
@@ -179,7 +180,7 @@ function handlePathKey(e: KeyboardEvent) {
 			<Dotmatrix variant="square-15" />
 			<p class="cloning-label">{actionVerb} {addingRepoName}… this may take a moment.</p>
 			{#if showSkipWaiting}
-				<button class="skip-waiting" onclick={advanceFromClone}>Skip waiting →</button>
+				<button class="skip-waiting" onclick={advanceFromClone} use:gsapEnter={{ duration: tokens.smooth }}>Skip waiting →</button>
 			{/if}
 		</div>
 	{:else}
@@ -322,7 +323,7 @@ function handlePathKey(e: KeyboardEvent) {
 								onclick={() => select(repo)}
 								onmouseenter={() => (highlightedIndex = i)}
 								disabled={isAdding}
-								style="animation-delay: {Math.min(i, 8) * 30}ms"
+								use:gsapEnter={{ y: 4, delay: Math.min(i, 8) * 0.03 }}
 							>
 								<span class="row-owner">{repo.owner}</span>
 								<span class="row-slash">/</span>
@@ -568,18 +569,6 @@ function handlePathKey(e: KeyboardEvent) {
 		text-align: left;
 		cursor: pointer;
 		transition: background-color var(--duration-snap) var(--ease-out-expo);
-		animation: row-in var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
-	@keyframes row-in {
-		from {
-			opacity: 0;
-			transform: translateY(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
 	}
 
 	.row[data-highlighted='true'] {
@@ -880,21 +869,9 @@ function handlePathKey(e: KeyboardEvent) {
 		color: var(--ob-text-dimmed);
 		cursor: pointer;
 		transition: color var(--duration-snap) var(--ease-out-expo);
-		animation: fade-in var(--duration-smooth) var(--ease-out-expo) both;
 	}
 
 	.skip-waiting:hover {
 		color: var(--ob-text-italic);
-	}
-
-	@keyframes fade-in {
-		from { opacity: 0; }
-		to { opacity: 1; }
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.row {
-			animation: none;
-		}
 	}
 </style>

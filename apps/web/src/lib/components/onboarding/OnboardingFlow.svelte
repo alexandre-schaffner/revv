@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import { gsapEnter, tokens } from "$lib/motion";
 import { getIsAuthenticated, loadUser } from "$lib/stores/auth.svelte";
 import { fetchRepos } from "$lib/stores/prs.svelte";
 import { fetchSettings, getGithubHost, isSettingsLoaded } from "$lib/stores/settings.svelte";
@@ -185,7 +186,7 @@ const meta: Record<StepId, StepMeta> = {
 		spinnerVariant={m.spinnerVariant}
 	>
 		{#key current}
-			<div class="step-frame">
+			<div use:gsapEnter={{ y: 10, duration: tokens.ceremonialSlow, delay: 0.28 }}>
 				{#if current === 'welcome'}
 					<StepWelcome onContinue={advance} />
 				{:else if current === 'host'}
@@ -203,26 +204,3 @@ const meta: Record<StepId, StepMeta> = {
 		{/key}
 	</OnboardingShell>
 {/if}
-
-<style>
-	.step-frame {
-		animation: step-in var(--duration-ceremonial-slow) var(--ease-out-expo) 280ms backwards;
-	}
-
-	@keyframes step-in {
-		from {
-			opacity: 0;
-			transform: translateY(10px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.step-frame {
-			animation: none;
-		}
-	}
-</style>

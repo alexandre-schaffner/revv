@@ -4,6 +4,7 @@ import type { Action } from "svelte/action";
 import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
 import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import { Dotmatrix, type DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import { gsapEnter, tokens } from "$lib/motion";
 import RevvBrand from "./RevvBrand.svelte";
 
 /**
@@ -41,6 +42,8 @@ let {
   spinnerVariant = "square-3",
   children,
 }: Props = $props();
+
+const TITLE_REVEAL = { y: 14, blur: 4, duration: tokens.ceremonialSlow } as const;
 
 let pageNumber = $derived(String(stepIndex + 1).padStart(2, "0"));
 let pageTotal = $derived(String(totalSteps).padStart(2, "0"));
@@ -92,7 +95,7 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 
 	<!-- Header: tiny brand glyph + step counter. Persistent across all
 	     steps — the eye anchors here rather than chasing a morphing logo. -->
-	<header class="header" data-tauri-drag-region>
+	<header class="header" data-tauri-drag-region use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<RevvBrand variant="onboarding" />
 		<div class="header-right">
 			<Dotmatrix variant={spinnerVariant} size="small" />
@@ -117,26 +120,28 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 	<main class="stage" data-scrollable={isScrollable}>
 		<div class="stage-scroll" use:scrollStage={stepIndex}>
 			<div class="title-block">
-				<div class="chapter-label" data-key={stepIndex}>
+				<div class="chapter-label" use:gsapEnter={{ y: 8 }}>
 					<span class="chapter-rule"></span>
 					<span class="chapter-text">{chapter}</span>
 				</div>
-				<h1 class="title" data-key={stepIndex}>
-					<span class="title-line">{title}</span>
+				<h1 class="title">
+					<span class="title-line" use:gsapEnter={TITLE_REVEAL}>{title}</span>
 					{#if titleItalic}
-						<span class="title-line title-italic">{titleItalic}</span>
+						<span class="title-line title-italic" use:gsapEnter={{ ...TITLE_REVEAL, delay: 0.12 }}>
+							{titleItalic}
+						</span>
 					{/if}
 				</h1>
 			</div>
 
-			<div class="content" data-key={stepIndex}>
+			<div class="content" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow, delay: 0.2 }}>
 				{@render children()}
 			</div>
 		</div>
 	</main>
 
 	<!-- Footer: thin progress bar made of cells. -->
-	<footer class="footer">
+	<footer class="footer" use:gsapEnter={{ y: 8, duration: tokens.ceremonialSlow }}>
 		<div class="cells">
 			{#each Array(totalSteps) as _, i (i)}
 				<div
@@ -211,8 +216,8 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 	}
 
 	/* Film-grain — a barely-perceptible noise that lifts the canvas off
-	 perfect black so it reads as a "scene" rather than dead space. Pure
-	 CSS, very cheap. */
+	 perfect black so it reads as a "scene" rather than dead space. Its drift
+	 stays a CSS animation (see motion/README.md). */
 	.grain {
 		position: absolute;
 		inset: -50%;
@@ -270,7 +275,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		align-items: center;
 		padding: 28px 36px;
 		z-index: 2;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.header-right {
@@ -385,10 +389,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		color: var(--ob-text-label);
 	}
 
-	.chapter-label[data-key] {
-		animation: fade-up var(--duration-ceremonial-medium) var(--ease-out-expo) backwards;
-	}
-
 	.chapter-rule {
 		display: block;
 		width: 36px;
@@ -409,14 +409,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		gap: 2px;
 	}
 
-	.title[data-key] .title-line {
-		animation: title-reveal var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
-	}
-
-	.title[data-key] .title-line:nth-child(2) {
-		animation-delay: 120ms;
-	}
-
 	.title-italic {
 		font-style: italic;
 		color: var(--ob-text-italic);
@@ -428,7 +420,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		flex-direction: column;
 		flex: 0 0 auto;
 		margin-bottom: auto;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) 200ms backwards;
 	}
 
 	/* Footer — segmented progress bar */
@@ -436,7 +427,6 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 		grid-row: 3;
 		padding: 24px 36px 32px;
 		z-index: 2;
-		animation: fade-up var(--duration-ceremonial-slow) var(--ease-out-expo) backwards;
 	}
 
 	.cells {
@@ -459,42 +449,5 @@ const scrollStage: Action<HTMLElement, number> = (node) => {
 
 	.cell[data-state='current'] {
 		background: var(--ob-cell-current);
-	}
-
-	@keyframes fade-up {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@keyframes title-reveal {
-		from {
-			opacity: 0;
-			transform: translateY(14px);
-			filter: blur(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.grain {
-			animation: none;
-		}
-		.header,
-		.chapter-label,
-		.title .title-line,
-		.content,
-		.footer {
-			animation: none !important;
-		}
 	}
 </style>

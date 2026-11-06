@@ -157,7 +157,7 @@ const cloneStatusLabel = $derived.by(() => {
 		inset: -1.5px;
 		border-radius: 50%;
 		background: var(--color-accent, #2563eb);
-		animation: clone-pulse 1.6s var(--ease-soft) infinite;
+		animation: clone-pulse var(--duration-pulse) var(--ease-soft) infinite;
 	}
 
 	.status-dot--pending {
