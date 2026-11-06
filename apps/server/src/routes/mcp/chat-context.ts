@@ -10,11 +10,11 @@ import { EDIT_TOOL_SPECS } from "../../ai/providers/chat-edit-tools";
 import { CHAT_TOOL_BUNDLE, type ChatToolContext } from "../../ai/providers/chat-mcp-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
 import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const EDIT_TOOL_NAMES = new Set(EDIT_TOOL_SPECS.map((s) => s.name));

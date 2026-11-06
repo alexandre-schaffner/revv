@@ -57,30 +57,6 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     },
   )
 
-  // POST /api/threads/:id/reopen — convenience endpoint that flips to open + syncs
-  .post("/:id/reopen", async (ctx) => {
-    try {
-      const updated = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const reviewService = yield* ReviewService;
-          const broadcaster = yield* Broadcaster;
-          const sync = yield* SyncService;
-
-          const thread = yield* reviewService.updateThreadStatus(ctx.params.id, "open");
-          yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
-            type: "thread:updated",
-            data: { threadId: ctx.params.id, status: thread.status },
-          });
-          yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catch(() => Effect.void));
-          return thread;
-        }),
-      );
-      return updated;
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
   // POST /api/threads/:id/push — push this thread to GitHub (create the review comment).
   // Used by the frontend immediately after creating a thread to get it round-tripping.
   .post("/:id/push", async (ctx) => {
@@ -206,17 +182,6 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         }),
       );
       return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  // GET /api/threads/:id/messages — list messages in a thread
-  .get("/:id/messages", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(ReviewService, (s) => s.getMessages(ctx.params.id)),
-      );
     } catch (e) {
       return handleAppError(e, ctx);
     }

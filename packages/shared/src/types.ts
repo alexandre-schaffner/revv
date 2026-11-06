@@ -331,8 +331,6 @@ export type AuthorRole = "reviewer" | "coder" | "ai_agent";
 
 export type MessageType = "comment" | "reply" | "suggestion" | "resolution";
 
-export type HunkDecisionType = "accepted" | "rejected";
-
 export interface ReviewSession {
   id: string;
   pullRequestId: string;
@@ -424,15 +422,6 @@ export interface ThreadMessage {
   createdAt: string;
   editedAt: string | null;
   externalId: string | null;
-}
-
-export interface HunkDecision {
-  id: string;
-  reviewSessionId: string;
-  filePath: string;
-  hunkIndex: number;
-  decision: HunkDecisionType;
-  decidedAt: string;
 }
 
 export type SyncChangeKind = "review_requested" | "pr_updated" | "pr_closed" | "pr_authored";

@@ -23,9 +23,9 @@ import type {
 import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { DbService } from "../../services/Db";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
+import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 interface WalkthroughRouteMeta {

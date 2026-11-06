@@ -1,6 +1,11 @@
 import { integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 import { reviewSessions } from "./review-sessions";
 
+/**
+ * Retired: nothing reads or writes this table. It stays in users' databases
+ * (no drop migration) and stays declared here because the migration snapshot
+ * still lists it, so `drizzle-kit generate` would otherwise emit a DROP TABLE.
+ */
 export const hunkDecisions = sqliteTable(
   "hunk_decisions",
   {

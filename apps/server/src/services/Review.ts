@@ -1,8 +1,6 @@
 import type {
   AuthorRole,
   CommentThread,
-  HunkDecision,
-  HunkDecisionType,
   MessageType,
   ReviewMode,
   ReviewSession,
@@ -13,7 +11,6 @@ import { canUserModifyComment } from "@revv/shared";
 import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
-import { hunkDecisions } from "../db/schema/hunk-decisions";
 import { remoteUsers } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
@@ -72,17 +69,6 @@ function rowToMessage(
   };
 }
 
-function rowToHunkDecision(row: typeof hunkDecisions.$inferSelect): HunkDecision {
-  return {
-    id: row.id,
-    reviewSessionId: row.reviewSessionId,
-    filePath: row.filePath,
-    hunkIndex: row.hunkIndex,
-    decision: row.decision as HunkDecision["decision"],
-    decidedAt: row.decidedAt,
-  };
-}
-
 // ── Create-params types ──────────────────────────────────────────────────────
 
 export interface CreateThreadParams {
@@ -131,10 +117,6 @@ export class ReviewService extends Context.Service<
       prId: string,
       mode?: ReviewMode,
     ) => Effect.Effect<ReviewSession | null, ReviewError, DbService>;
-    readonly completeSession: (
-      id: string,
-      status: "completed" | "abandoned",
-    ) => Effect.Effect<void, ReviewError, DbService>;
 
     // Threads
     readonly createThread: (
@@ -144,10 +126,6 @@ export class ReviewService extends Context.Service<
     readonly getThread: (threadId: string) => Effect.Effect<CommentThread, ReviewError, DbService>;
     readonly getThreadsForSession: (
       sessionId: string,
-    ) => Effect.Effect<CommentThread[], ReviewError, DbService>;
-    readonly getThreadsForFile: (
-      sessionId: string,
-      filePath: string,
     ) => Effect.Effect<CommentThread[], ReviewError, DbService>;
     readonly getThreadByExternalCommentId: (
       sessionId: string,
@@ -238,22 +216,6 @@ export class ReviewService extends Context.Service<
     readonly findMessageByExternalId: (
       externalId: string,
     ) => Effect.Effect<ThreadMessage | null, ReviewError, DbService>;
-
-    // Hunk decisions
-    readonly setHunkDecision: (
-      sessionId: string,
-      filePath: string,
-      hunkIndex: number,
-      decision: HunkDecisionType,
-    ) => Effect.Effect<void, ReviewError, DbService>;
-    readonly clearHunkDecision: (
-      sessionId: string,
-      filePath: string,
-      hunkIndex: number,
-    ) => Effect.Effect<void, ReviewError, DbService>;
-    readonly getHunkDecisions: (
-      sessionId: string,
-    ) => Effect.Effect<HunkDecision[], ReviewError, DbService>;
   }
 >()("ReviewService") {}
 
@@ -326,27 +288,6 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
           .get(),
       );
       return row ? rowToSession(row) : null;
-    }),
-
-  completeSession: (id, status) =>
-    Effect.gen(function* () {
-      const existing = yield* tryDb("find session", (db) =>
-        db.select().from(reviewSessions).where(eq(reviewSessions.id, id)).get(),
-      );
-
-      if (!existing) {
-        return yield* Effect.fail(
-          new ReviewError({ message: "Session not found", code: "NOT_FOUND" }),
-        );
-      }
-
-      yield* tryDb("update session", (db) =>
-        db
-          .update(reviewSessions)
-          .set({ status, completedAt: new Date().toISOString() })
-          .where(eq(reviewSessions.id, id))
-          .run(),
-      );
     }),
 
   // ── Threads ───────────────────────────────────────────────────────────────
@@ -552,23 +493,6 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       yield* tryDb("delete thread", (db) =>
         db.delete(commentThreads).where(eq(commentThreads.id, threadId)).run(),
       );
-    }),
-
-  getThreadsForFile: (sessionId, filePath) =>
-    Effect.gen(function* () {
-      const rows = yield* tryDb("list threads for file", (db) =>
-        db
-          .select()
-          .from(commentThreads)
-          .where(
-            and(
-              eq(commentThreads.reviewSessionId, sessionId),
-              eq(commentThreads.filePath, filePath),
-            ),
-          )
-          .all(),
-      );
-      return rows.map(rowToThread);
     }),
 
   updateThreadStatus: (threadId, status) =>
@@ -835,44 +759,5 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         db.select().from(threadMessages).where(eq(threadMessages.externalId, externalId)).get(),
       );
       return row ? rowToMessage(row) : null;
-    }),
-
-  // ── Hunk decisions ────────────────────────────────────────────────────────
-
-  setHunkDecision: (sessionId, filePath, hunkIndex, decision) => {
-    const id = crypto.randomUUID();
-    const decidedAt = new Date().toISOString();
-    return tryDb("set hunk decision", (db) =>
-      db
-        .insert(hunkDecisions)
-        .values({ id, reviewSessionId: sessionId, filePath, hunkIndex, decision, decidedAt })
-        .onConflictDoUpdate({
-          target: [hunkDecisions.reviewSessionId, hunkDecisions.filePath, hunkDecisions.hunkIndex],
-          set: { decision, decidedAt },
-        })
-        .run(),
-    ).pipe(Effect.asVoid);
-  },
-
-  clearHunkDecision: (sessionId, filePath, hunkIndex) =>
-    tryDb("clear hunk decision", (db) =>
-      db
-        .delete(hunkDecisions)
-        .where(
-          and(
-            eq(hunkDecisions.reviewSessionId, sessionId),
-            eq(hunkDecisions.filePath, filePath),
-            eq(hunkDecisions.hunkIndex, hunkIndex),
-          ),
-        )
-        .run(),
-    ).pipe(Effect.asVoid),
-
-  getHunkDecisions: (sessionId) =>
-    Effect.gen(function* () {
-      const rows = yield* tryDb("list hunk decisions", (db) =>
-        db.select().from(hunkDecisions).where(eq(hunkDecisions.reviewSessionId, sessionId)).all(),
-      );
-      return rows.map(rowToHunkDecision);
     }),
 });

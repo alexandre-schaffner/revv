@@ -1,10 +1,10 @@
 import type { ThreadEventMessage } from "@revv/shared";
 import { Effect } from "effect";
-import { logError } from "../logger";
-import { AppRuntime } from "../runtime";
-import { Broadcaster } from "./Broadcaster";
-import { PrContextService } from "./PrContext";
-import { RepositoryService } from "./Repository";
+import { logError } from "../../logger";
+import { AppRuntime } from "../../runtime";
+import { Broadcaster } from "../../services/Broadcaster";
+import { PrContextService } from "../../services/PrContext";
+import { RepositoryService } from "../../services/Repository";
 
 /**
  * Fire-and-forget SSE broadcast for thread events.

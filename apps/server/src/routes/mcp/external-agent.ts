@@ -12,7 +12,6 @@ import {
 import { externalIntegrationHttpStatus } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
-import { fireAndForgetThreadEventBroadcast } from "../../services/broadcast-thread-event";
 import { DbService } from "../../services/Db";
 import {
   type ExternalAuthorizedContext,
@@ -26,6 +25,7 @@ import {
   describeWalkthroughRequestError,
   requestWalkthroughAtHead,
 } from "../../services/walkthrough-request";
+import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const LOG_SCOPE = "mcp-external";

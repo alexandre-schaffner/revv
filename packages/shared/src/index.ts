@@ -256,8 +256,6 @@ export type {
   CloneStatus,
   CommentThread,
   DiffViewMode,
-  HunkDecision,
-  HunkDecisionType,
   InstallEvent,
   LoginEvent,
   MergeEligibility,

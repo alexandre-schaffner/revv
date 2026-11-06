@@ -24,20 +24,6 @@ export class RemoteUserService extends Context.Service<
     }) => Effect.Effect<void>;
 
     /**
-     * Get a remote user by login. Returns null if not found.
-     */
-    readonly getByLogin: (login: string) => Effect.Effect<{
-      id: string;
-      provider: string;
-      providerUserId: string;
-      login: string;
-      displayName: string | null;
-      avatarContent: string | null;
-      lastFetchedAt: Date | null;
-      lastAvatarUrl: string | null;
-    } | null>;
-
-    /**
      * Get avatar content (base64 data URL) for a login.
      * Returns null if user not found or no avatar cached.
      */
@@ -50,12 +36,6 @@ export class RemoteUserService extends Context.Service<
     readonly getAvatarContents: (
       logins: readonly string[],
     ) => Effect.Effect<ReadonlyMap<string, string>>;
-
-    /**
-     * Fetch an image from a URL and return as base64 data URL.
-     * Does not store in the database — caller should combine with upsert.
-     */
-    readonly fetchAsDataUrl: (url: string) => Effect.Effect<string>;
   }
 >()("RemoteUserService") {}
 
@@ -174,22 +154,6 @@ export const RemoteUserServiceLive = Layer.effect(
           );
         }).pipe(Effect.orElseSucceed(() => undefined)),
 
-      getByLogin: (login) =>
-        Effect.tryPromise(async () => {
-          const row = await db.select().from(remoteUsers).where(eq(remoteUsers.login, login)).get();
-          if (!row) return null;
-          return {
-            id: row.id,
-            provider: row.provider,
-            providerUserId: row.providerUserId,
-            login: row.login,
-            displayName: row.displayName ?? null,
-            avatarContent: row.avatarContent ?? null,
-            lastFetchedAt: row.lastFetchedAt,
-            lastAvatarUrl: row.lastAvatarUrl ?? null,
-          };
-        }).pipe(Effect.orElseSucceed(() => null)),
-
       getAvatarContent: (login) =>
         Effect.tryPromise(async () => {
           const row = await db
@@ -216,8 +180,6 @@ export const RemoteUserServiceLive = Layer.effect(
             ),
           );
         }).pipe(Effect.orElseSucceed(() => new Map<string, string>())),
-
-      fetchAsDataUrl: (url) => githubFetchDataUrl(url).pipe(Effect.orElseSucceed(() => "")),
     };
   }),
 );

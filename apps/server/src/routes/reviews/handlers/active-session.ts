@@ -5,7 +5,7 @@ import { ReviewService } from "../../../services/Review";
 
 /**
  * GET /api/reviews/active/:prId — get or create the active session,
- * fully hydrated with its threads, their messages, and hunk decisions.
+ * fully hydrated with its threads and their messages.
  *
  * Returns everything the review UI needs to render a PR from a cold start
  * in a single round-trip, avoiding the N+1 of separate fetches for the
@@ -28,9 +28,7 @@ export function activeSessionHandler(prId: string, mode: ReviewMode = "reviewer"
         messages[thread.id] = yield* reviewService.getMessages(thread.id);
       }
 
-      const hunkDecisions = yield* reviewService.getHunkDecisions(reviewSession.id);
-
-      return { session: reviewSession, threads, messages, hunkDecisions };
+      return { session: reviewSession, threads, messages };
     }),
   );
 }

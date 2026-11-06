@@ -136,15 +136,8 @@ function normalizeEdition(value: string): "oss" | "pro" {
   return value === "pro" ? "pro" : "oss";
 }
 
-/** `api.github.com` for github.com, `api.<host>` for GitHub Enterprise. */
-const githubApiBase =
-  resolved.githubHost === "github.com"
-    ? "https://api.github.com"
-    : `https://api.${resolved.githubHost}`;
-
 export const serverEnv = {
   ...resolved,
   channel: normalizeChannel(resolved.channel),
   edition: normalizeEdition(resolved.edition),
-  githubApiBase,
 } as const;

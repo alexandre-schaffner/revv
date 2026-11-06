@@ -8,7 +8,6 @@ import { Broadcaster } from "../services/Broadcaster";
 import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { ReviewService } from "../services/Review";
-import { SyncService } from "../services/Sync";
 import { WalkthroughService } from "../services/Walkthrough";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { handleAppError, withAccount } from "./middleware";
@@ -24,19 +23,9 @@ import {
 import { getCurrentWalkthroughHandler } from "./reviews/handlers/walkthrough-current";
 import { getWalkthroughSizingHandler } from "./reviews/handlers/walkthrough-sizing";
 
-/**
- * Review routes — thin Elysia router. Handler bodies live in
- * `routes/reviews/handlers/*` to keep each file single-purpose.
- *
- * Small CRUD endpoints (threads, hunks, session lifecycle) stay inline here
- * because they're trivial Effect one-liners and extracting them adds more
- * import noise than it removes. Anything non-trivial — notably the SSE
- * walkthrough stream (formerly 370 lines inline) — lives in a handler file.
- */
+/** Review routes. Non-trivial handler bodies live in `routes/reviews/handlers/*`. */
 export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
   .use(withAccount)
-
-  // ── Session lifecycle ──────────────────────────────────────────────────
   .get("/active/:prId", async (ctx) => {
     try {
       return await activeSessionHandler(ctx.params.prId, coerceReviewMode(ctx.query.mode));
@@ -45,58 +34,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
     }
   })
 
-  .post(
-    "/",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) =>
-            s.getOrCreateActiveSession(ctx.body.pullRequestId, coerceReviewMode(ctx.body.mode)),
-          ),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ pullRequestId: t.String(), mode: t.Optional(t.String()) }) },
-  )
-
-  .patch(
-    "/:id",
-    async (ctx) => {
-      try {
-        await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) => s.completeSession(ctx.params.id, ctx.body.status)),
-        );
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { body: t.Object({ status: t.Union([t.Literal("completed"), t.Literal("abandoned")]) }) },
-  )
-
   // ── Threads ────────────────────────────────────────────────────────────
-  .get(
-    "/:id/threads",
-    async (ctx) => {
-      try {
-        return await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const reviewService = yield* ReviewService;
-            if (ctx.query.filePath) {
-              return yield* reviewService.getThreadsForFile(ctx.params.id, ctx.query.filePath);
-            }
-            return yield* reviewService.getThreadsForSession(ctx.params.id);
-          }),
-        );
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    { query: t.Object({ filePath: t.Optional(t.String()) }) },
-  )
-
   .post(
     "/:id/threads",
     async (ctx) => {
@@ -105,10 +43,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
           Effect.gen(function* () {
             const reviewService = yield* ReviewService;
             const broadcaster = yield* Broadcaster;
-            // SyncService is kept as a dependency so future auto-push
-            // from thread creation can be wired up without changing
-            // this handler's shape.
-            yield* SyncService;
 
             const thread = yield* reviewService.createThread(ctx.params.id, {
               filePath: ctx.body.filePath,
@@ -176,62 +110,6 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
       }),
     },
   )
-
-  // ── Hunk decisions ─────────────────────────────────────────────────────
-  .get("/:id/hunks", async (ctx) => {
-    try {
-      return await AppRuntime.runPromise(
-        Effect.flatMap(ReviewService, (s) => s.getHunkDecisions(ctx.params.id)),
-      );
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
-
-  .put(
-    "/:id/hunks",
-    async (ctx) => {
-      try {
-        await AppRuntime.runPromise(
-          Effect.flatMap(ReviewService, (s) =>
-            s.setHunkDecision(
-              ctx.params.id,
-              ctx.body.filePath,
-              ctx.body.hunkIndex,
-              ctx.body.decision,
-            ),
-          ),
-        );
-        return { success: true };
-      } catch (e) {
-        return handleAppError(e, ctx);
-      }
-    },
-    {
-      body: t.Object({
-        filePath: t.String(),
-        hunkIndex: t.Number(),
-        decision: t.Union([t.Literal("accepted"), t.Literal("rejected")]),
-      }),
-    },
-  )
-
-  .delete("/:id/hunks/:filePath/:hunkIndex", async (ctx) => {
-    try {
-      await AppRuntime.runPromise(
-        Effect.flatMap(ReviewService, (s) =>
-          s.clearHunkDecision(
-            ctx.params.id,
-            decodeURIComponent(ctx.params.filePath),
-            Number(ctx.params.hunkIndex),
-          ),
-        ),
-      );
-      return { success: true };
-    } catch (e) {
-      return handleAppError(e, ctx);
-    }
-  })
 
   // ── Walkthrough ────────────────────────────────────────────────────────
   //

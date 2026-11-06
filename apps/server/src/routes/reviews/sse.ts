@@ -25,8 +25,6 @@ const encoder = new TextEncoder();
 export interface SseWriter {
   /** Send a typed SSE `data:` payload. Returns false if the client is gone. */
   send: (event: unknown) => boolean;
-  /** Shortcut for emitting a `{ type: 'phase', data: { phase, message } }` event. */
-  sendPhase: (phase: string, message: string) => boolean;
   /** Send a terminal `data: [DONE]` marker and close the stream. */
   sendDone: () => void;
   /** Close the controller. Safe to call multiple times. */
@@ -108,10 +106,6 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
 
   const writer: SseWriter = {
     send: (event) => tryEnqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
-    sendPhase: (phase, message) =>
-      tryEnqueue(
-        encoder.encode(`data: ${JSON.stringify({ type: "phase", data: { phase, message } })}\n\n`),
-      ),
     sendDone: () => {
       tryEnqueue(encoder.encode("data: [DONE]\n\n"));
       writer.close();
