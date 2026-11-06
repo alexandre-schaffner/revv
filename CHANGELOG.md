@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.34.0](https://github.com/alexandre-schaffner/revv/compare/v0.33.0...v0.34.0) (2026-11-06)
+
+
+### Features
+
+* install Revv through Nix (flake, Home Manager module, dev shell) ([#294](https://github.com/alexandre-schaffner/revv/issues/294)) ([d5f5e33](https://github.com/alexandre-schaffner/revv/commit/d5f5e33068fbf22c877ccde197701b3f0f6d42ab))
+
+
+### Bug Fixes
+
+* bump @opentelemetry/exporter-trace-otlp-http ([#301](https://github.com/alexandre-schaffner/revv/issues/301)) ([b2d8b23](https://github.com/alexandre-schaffner/revv/commit/b2d8b23e46c02afc56f9d226aebde4754bb9f4a0))
+* bump @opentelemetry/sdk-logs from 0.222.0 to 3.0.0 ([#299](https://github.com/alexandre-schaffner/revv/issues/299)) ([e0e0ecf](https://github.com/alexandre-schaffner/revv/commit/e0e0ecfdde3821e2a29e56da8da19bd8ecd4ecb0))
+* bump @opentelemetry/semantic-conventions from 1.43.0 to 1.44.0 ([#298](https://github.com/alexandre-schaffner/revv/issues/298)) ([80665f5](https://github.com/alexandre-schaffner/revv/commit/80665f586e51f1c511b89922eecc1fbad99d9fe6))
+* bump the patches group in /apps/desktop with 4 updates ([#296](https://github.com/alexandre-schaffner/revv/issues/296)) ([6570d22](https://github.com/alexandre-schaffner/revv/commit/6570d225b0e5605f5ace1c877a06478dd06e861d))
+* bump the patches group with 8 updates ([#297](https://github.com/alexandre-schaffner/revv/issues/297)) ([df160f4](https://github.com/alexandre-schaffner/revv/commit/df160f406c41e1783014938dfdfbcd9815c9bc39))
+* **server:** keep Claude sessions out of Auto mode and show ACP error details ([#304](https://github.com/alexandre-schaffner/revv/issues/304)) ([041dc28](https://github.com/alexandre-schaffner/revv/commit/041dc2845bca063d96b86175a0940a5c3f8d7a8b))
+
 ## [0.33.0](https://github.com/alexandre-schaffner/revv/compare/v0.32.3...v0.33.0) (2026-11-03)
 
 
