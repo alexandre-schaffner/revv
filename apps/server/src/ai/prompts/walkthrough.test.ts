@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
-import { buildWalkthroughPrompt } from "./walkthrough";
+import { JOURNEY_CHAPTER_KEYWORDS } from "../../services/walkthrough/content";
+import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "./walkthrough";
 
 const BASE = {
   pr: {
@@ -218,5 +219,20 @@ describe("buildWalkthroughPrompt stack block", () => {
     });
     expect(prompt).toContain("#### src/gone.ts (reverted, +0 -0)");
     expect(prompt).toContain("[Change reverted — this layer no longer touches this file]");
+  });
+});
+
+describe("buildWalkthroughSystemPrompt contract fragments", () => {
+  it("leaves no marker unsubstituted in either perspective", () => {
+    for (const mode of ["reviewer", "author"] as const) {
+      expect(buildWalkthroughSystemPrompt(mode)).not.toMatch(/\{\{[A-Z_]+\}\}/);
+    }
+  });
+
+  it("lists every journey keyword the completion gate accepts", () => {
+    const prompt = buildWalkthroughSystemPrompt("reviewer");
+    for (const word of Object.keys(JOURNEY_CHAPTER_KEYWORDS)) {
+      expect(prompt).toContain(`\`${word}\``);
+    }
   });
 });

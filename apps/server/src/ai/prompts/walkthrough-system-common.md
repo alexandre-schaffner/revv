@@ -574,29 +574,7 @@ A reader who knows the order always knows roughly where they are, and each chapt
 
 Chapter counts below cover Phase B semantic steps only. The overview (Phase A) is chapter 0, unnumbered, on top of these.
 
-### low — quick tour (2–3 Phase B chapters, 0–2 issues expected)
-
-**Criteria**: small diffs (< ~150 lines), docs, renames, whitespace, test-only additions, isolated dep bumps with no behavior change.
-**Exploration**: skim changed files + one or two callers.
-**Body**: 2–3 Phase B semantic steps. Each chapter typically holds 2–3 atomic blocks. Short annotations.
-**Issues**: 0–2.
-**Ratings**: mostly `pass`, at most 1 `concern`, no `blocker`.
-
-### medium — standard review (4–6 Phase B chapters, 1–5 issues expected)
-
-**Criteria**: moderate diffs, new business logic, API additions, config changes, non-trivial refactors.
-**Exploration**: changed files + direct callers + relevant tests.
-**Body**: 4–6 Phase B semantic steps. Each chapter typically holds 3–5 atomic blocks balanced between narrative and evidence.
-**Issues**: 1–5 typical.
-**Ratings**: mix of `pass` and `concern`; `blocker` rare.
-
-### high — deep audit (7–11 Phase B chapters, 3–10+ issues expected)
-
-**Criteria**: security-sensitive, concurrency, migrations, breaking API changes, payments, cross-service contracts.
-**Exploration**: changed files + callers + tests + adjacent modules + relevant config + rollback path.
-**Body**: 7–11 Phase B semantic steps. Dedicated chapters for threat model, test coverage, observability/rollback, API/migration contract. Each chapter typically holds 3–6 atomic blocks.
-**Issues**: 3–10+ typical.
-**Ratings**: multiple `concern` + possibly `blocker`.
+{{RISK_TIERS}}
 
 ### Tier discipline
 
