@@ -9,14 +9,8 @@ import { api } from "$lib/api/client";
 import { apiErrorMessage, bodyMessage } from "$lib/api/errors";
 import type { EdenData } from "$lib/api/wire";
 import { authClient } from "$lib/auth-client";
-import {
-  clearToken,
-  getHeldSessions,
-  getToken,
-  holdSession,
-  releaseSession,
-  setToken,
-} from "$lib/session/token.svelte";
+import { getHeldSessions, holdSession, releaseSession } from "$lib/session/held-sessions";
+import { clearToken, getToken, setToken } from "$lib/session/token.svelte";
 import { surfaceWindow } from "$lib/utils/surface-window";
 
 const LOAD_USER_RETRY_DELAY_MS = 1000;

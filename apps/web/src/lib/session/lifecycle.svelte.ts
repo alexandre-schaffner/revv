@@ -47,7 +47,8 @@ import { reset as resetStacks } from "$lib/stores/stacks.svelte";
 import { reset as resetSync } from "$lib/stores/sync.svelte";
 import { reset as resetWalkthrough } from "$lib/stores/walkthrough.svelte";
 import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
-import { getToken, heldToken, releaseSession, setToken } from "./token.svelte";
+import { heldToken, releaseSession } from "./held-sessions";
+import { getToken, setToken } from "./token.svelte";
 
 /** The user whose session is running; null between sessions. */
 let sessionUserId: string | null = null;
