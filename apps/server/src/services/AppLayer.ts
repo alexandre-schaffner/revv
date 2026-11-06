@@ -1,5 +1,4 @@
 import { Layer } from "effect";
-import { CacheStatsLive, InvalidationBusLive } from "../cache/index";
 import { AgentLoginServiceLive } from "./AgentLogin";
 import { AiServiceLive } from "./Ai";
 import { BroadcasterLive } from "./Broadcaster";
@@ -15,7 +14,6 @@ import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
 import { ExternalIntegrationsLive } from "./ExternalIntegrations";
-import { FileContentServiceLive } from "./FileContent";
 import { GitHubGatewayLive } from "./GitHub";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
 import { HunkScanServiceLive } from "./HunkScan";
@@ -99,7 +97,6 @@ const BaseLayers = Layer.mergeAll(
   WalkthroughServiceLive,
   ProjectRecapServiceLive,
   DiffCacheServiceLive,
-  FileContentServiceLive,
   CacheServiceLive,
   OnboardingServiceLive,
   AgentLoginServiceLive,
@@ -107,11 +104,6 @@ const BaseLayers = Layer.mergeAll(
   ChatMcpTokensLive,
   PrPushLockServiceLive,
   ExternalIntegrationsWithDeps,
-  // Unified cache layer (M1 Foundations) — InvalidationBus is live with zero
-  // publishers yet; CacheStats is ready for per-namespace registrations as
-  // existing services migrate to adapters in M2.
-  CacheStatsLive,
-  InvalidationBusLive,
 );
 
 // PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers

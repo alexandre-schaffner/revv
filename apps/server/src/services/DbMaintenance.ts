@@ -1,6 +1,6 @@
 import { and, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { Context, Duration, Effect, Layer, Schedule } from "effect";
-import { cacheEntries, githubEtagCache, kvCache, pullRequests } from "../db/schema/index";
+import { githubEtagCache, kvCache, pullRequests } from "../db/schema/index";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { logError } from "../logger";
 import { DbService } from "./Db";
@@ -10,7 +10,7 @@ const PR_RETENTION_DAYS = 7;
 /**
  * Retention for `github_etag_cache`.
  *
- * Unlike `cache_entries` / `kv_cache`, rows here carry no `expires_at` — an
+ * Unlike `kv_cache`, rows here carry no `expires_at` — an
  * ETag stays valid indefinitely — so without a sweep the table only grows. Two
  * things grow it fast: `listReviewComments` folds its advancing `since`
  * watermark into the cache key, so every watermark move for every PR leaves a
@@ -47,18 +47,6 @@ export const DbMaintenanceLive = Layer.effect(
         Date.now() - PR_RETENTION_DAYS * 24 * 60 * 60 * 1000,
       ).toISOString();
 
-      // 1. Sweep expired cache_entries rows
-      const expiredCacheEntries = db
-        .select({ n: sql<number>`COUNT(*)` })
-        .from(cacheEntries)
-        .where(lt(cacheEntries.expiresAt, nowIso))
-        .get();
-      const cacheEntriesSwept = expiredCacheEntries?.n ?? 0;
-      if (cacheEntriesSwept > 0) {
-        db.delete(cacheEntries).where(lt(cacheEntries.expiresAt, nowIso)).run();
-      }
-
-      // 2. Sweep expired kv_cache rows
       const expiredKv = db
         .select({ n: sql<number>`COUNT(*)` })
         .from(kvCache)
@@ -69,9 +57,8 @@ export const DbMaintenanceLive = Layer.effect(
         db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run();
       }
 
-      // 3. Sweep archived PRs older than the retention window. Cascades clean
-      // walkthroughs, review sessions, chat sessions, diff files, and pinned
-      // rows via the schema's onDelete: "cascade" declarations.
+      // Cascades clean walkthroughs, review sessions, chat sessions, diff
+      // files, and pinned rows via the schema's onDelete: "cascade" declarations.
       const expiredPrsPredicate = and(
         inArray(pullRequests.status, ["closed", "merged"]),
         isNotNull(pullRequests.closedAt),
@@ -87,7 +74,6 @@ export const DbMaintenanceLive = Layer.effect(
         db.delete(pullRequests).where(expiredPrsPredicate).run();
       }
 
-      // 4. Sweep GitHub conditional-request cache rows not touched in a week.
       // `fetched_at` is refreshed on every 200 AND left alone on a 304, so it
       // is a last-write time, not a last-use time — which is the conservative
       // direction: a key still being replayed via 304s can be reaped, costing
@@ -106,14 +92,13 @@ export const DbMaintenanceLive = Layer.effect(
         db.delete(githubEtagCache).where(lt(githubEtagCache.fetchedAt, etagCutoffIso)).run();
       }
 
-      // 5. Checkpoint WAL to reclaim disk space from the WAL file
       db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
 
-      const total = cacheEntriesSwept + kvSwept + prsSwept + etagsSwept;
+      const total = kvSwept + prsSwept + etagsSwept;
       if (total > 0) {
         logError(
           "DbMaintenance",
-          `sweep complete — cache_entries: ${cacheEntriesSwept} rows, kv_cache: ${kvSwept} rows, pull_requests: ${prsSwept} rows, github_etag_cache: ${etagsSwept} rows, WAL checkpointed`,
+          `sweep complete — kv_cache: ${kvSwept} rows, pull_requests: ${prsSwept} rows, github_etag_cache: ${etagsSwept} rows, WAL checkpointed`,
         );
       }
     }).pipe(

@@ -5,7 +5,6 @@ import { selectCalls } from "../observability/github-ledger/select";
 import { clearSpans, readSpans, summarizeSpans } from "../observability/tracer";
 import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
-import { FileContentService } from "../services/FileContent";
 import { GitHubEtagCache } from "../services/GitHubEtagCache";
 import { WalkthroughJobs } from "../services/WalkthroughJobs";
 import { jsonResponse, withAuth } from "./middleware";
@@ -23,17 +22,7 @@ export const debugRoutes = new Elysia({ prefix: "/api/_debug" })
         Effect.gen(function* () {
           const cache = yield* CacheService;
           const etagCache = yield* GitHubEtagCache;
-          const fileContent = yield* FileContentService;
-
-          const kvStats = yield* cache.stats();
-          const etagStats = etagCache.stats();
-          const fileStats = fileContent.stats();
-
-          return {
-            kv: kvStats,
-            github: etagStats,
-            fileContent: fileStats,
-          };
+          return { kv: yield* cache.stats(), github: etagCache.stats() };
         }),
       );
 
