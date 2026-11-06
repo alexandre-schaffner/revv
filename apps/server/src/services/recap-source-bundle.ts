@@ -1,9 +1,3 @@
-// ── Recap source bundle assembly ──────────────────────────────────────────────
-//
-// Pure functions for building and annotating the RecapSourceBundle passed to
-// the recap agent. No Effect services, no closures — extracted from
-// ProjectRecapJobs so that file stays focused on orchestration.
-
 import type { RecapPeriod, RecapSummaryStats } from "@revv/shared";
 import type { RecapSourcePrDiff, RecapSourcePrDiffFile } from "../ai/providers/recap-tools";
 import type {

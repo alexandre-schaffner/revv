@@ -152,8 +152,8 @@ describe("ReviewService", () => {
     ]);
   });
 
-  // A comment edited on GitHub used to arrive as `thread:message`, which the
-  // web drops as a message it already has.
+  // The web drops a `thread:message` for a message it already has, so an edit
+  // must arrive as `thread:message:edited`.
   it("announces an edit made on GitHub as an edit", async () => {
     const { events, run } = harness();
     const { message } = await run((r) =>
@@ -202,7 +202,6 @@ describe("ReviewService", () => {
     ]);
   });
 
-  // A resolve GitHub refused used to be reverted by the next pull.
   it("keeps a status set in Revv over GitHub's until it is pushed", async () => {
     const { run, types } = harness();
     const onGitHub = { ...anchor, externalCommentId: "42" };

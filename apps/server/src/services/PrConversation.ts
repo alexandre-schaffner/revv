@@ -1,5 +1,3 @@
-// ── PR conversation service ─────────────────────────────────────────────────
-//
 // Serves the Conversation tab. GitHub is the source of truth: every read goes
 // to GitHub, and the last good answer is kept in the kv cache so the tab
 // paints instantly on reload and keeps something on screen when GitHub can't
@@ -126,8 +124,6 @@ function repoRef(ctx: PrContextBasic): Effect.Effect<RepoRef, GitHubNotFoundErro
     ? Effect.succeed({ owner, repo })
     : Effect.fail(new GitHubNotFoundError({ resource: "repo", id: ctx.repo.fullName }));
 }
-
-// ── Avatars ─────────────────────────────────────────────────────────────────
 
 function loginsOf(conversation: PrConversation): Set<string> {
   const logins = new Set<string>([conversation.author.login]);

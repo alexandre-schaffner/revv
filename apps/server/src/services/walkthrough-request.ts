@@ -1,5 +1,3 @@
-// ── Walkthrough request at a known head ─────────────────────────────────────
-//
 // The orchestrator side of the external `request_walkthrough` tool: an agent
 // outside Revv pushes commits and asks for a fresh review of exactly the head
 // it pushed. That agent cannot name a walkthrough row or a lifecycle state —
@@ -48,7 +46,6 @@ export type WalkthroughRequestRefusal =
   | { readonly kind: "head_mismatch"; readonly githubHeadSha: string }
   /** The user stopped Revv's run at this head; restarting it is theirs to do. */
   | { readonly kind: "stopped_by_user"; readonly walkthroughId: string }
-  /** A run budget is spent. */
   | {
       readonly kind: "budget_exhausted";
       readonly scope: "head" | "pr_hour";

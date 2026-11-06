@@ -8,9 +8,8 @@ import { Effect, Queue } from "effect";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 
 /**
- * Drain `agentStream`, forwarding its text and tool activity through `offer`.
- * Everything else the driver emits (reasoning, plans, questions) means nothing
- * to a one-shot run. A read error ends the pump like end-of-stream: the
+ * Only text and tool activity are forwarded: reasoning, plans and questions
+ * mean nothing to a one-shot run. A read error ends the pump like end-of-stream: the
  * caller's own verification of the worktree decides whether the run worked.
  */
 export const pumpAgentFrames = (
@@ -45,7 +44,6 @@ export const pumpAgentFrames = (
     }
   });
 
-/** The queue's frames as a stream that closes once the queue is shut down. */
 export const queueToStream = <F>(queue: Queue.Queue<F>): ReadableStream<F> =>
   new ReadableStream<F>({
     async start(controller) {

@@ -38,11 +38,9 @@ function run<A, E>(db: Db, effect: Effect.Effect<A, E, ChatSessionService>): Pro
 }
 
 describe("listTimeline ordering", () => {
-  // Regression: the chat panel rendered a turn's whole narration in one
-  // block with every tool call stacked above it. A turn's prose is written
-  // as one assistant row per run — sealed whenever a tool call lands — so
-  // the shared sequence interleaves them in the order the agent produced
-  // them. See `services/chat/turn-journal.ts`.
+  // A turn's prose is written as one assistant row per run, sealed whenever a
+  // tool call lands (`services/chat/turn-journal.ts`), so the shared sequence
+  // interleaves them in the order the agent produced them.
   it("interleaves a turn's assistant runs with the activities between them", async () => {
     const db = createDb(":memory:");
     seedChatSession(db);

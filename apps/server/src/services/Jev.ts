@@ -1,5 +1,3 @@
-// ─── JevService ──────────────────────────────────────────────────────────────
-//
 // Thin Effect wrapper over TypeSafe System One (`POST /v1/systemone`): one
 // state blob plus named questions, answered in parallel as typed
 // choice/score/noul judgments, never prose.
@@ -104,7 +102,6 @@ const RETRIED_STATUSES: ReadonlySet<number> = new Set([
   ...Array.from({ length: 100 }, (_, i) => 500 + i),
 ]);
 
-/** Map an SDK rejection onto the closed reason set. */
 function classify(cause: unknown): JevUnavailable {
   if (cause instanceof APITimeoutError || cause instanceof APIUserAbortError) {
     return new JevUnavailable({ reason: "timeout", cause });

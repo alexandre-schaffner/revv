@@ -41,21 +41,13 @@ export const prArchiveRetention: RetentionPolicy = {
       .all().length,
 };
 /**
- * Sized to cover the full backfill window in a single cycle for an active repo
- * (~13 closed PRs/day × 7 days ≈ 90, with headroom). The search returns the
- * whole window; this caps how many missing rows we individually fetch per repo
- * per cycle. At 25 a busy repo only imported ~2 days per cycle, so a fresh
- * mirror never showed the whole week. Only ever fetches PRs not already
- * mirrored, so the cost is a bounded one-time burst that converges to
- * near-zero.
+ * Covers the whole archive window in one cycle for an active repo (~13 closed
+ * PRs/day × 7 days ≈ 90, with headroom), so a fresh mirror shows the full week.
+ * Only unmirrored PRs are fetched, so the burst is one-time.
  */
 const ARCHIVE_BACKFILL_MAX_FETCHES_PER_REPO = 150;
 
 /**
- * Refresh repo metadata (owner avatar, default branch), broadcasting
- * `repos:updated` to each account whose repos changed. Returns whether any
- * repo's visible metadata changed.
- *
  * Bypasses the ETag cache: GitHub Enterprise's signed `avatar_url`s expire
  * without invalidating the endpoint's ETag, so a 304 would replay a dead URL.
  */

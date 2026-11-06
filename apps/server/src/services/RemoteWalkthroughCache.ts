@@ -1,10 +1,4 @@
-// ─── RemoteWalkthroughCache ──────────────────────────────────────────────────
-//
-// Snapshot-level layer above `BlobStore`. Three ops:
-//
-//   • probe — cheap existence check, used as a fast-path gate.
-//   • fetch — download + integrity-verify + parse.
-//   • push  — gzip + upload (fire-and-forget at the caller site).
+// Snapshot-level layer above `BlobStore`.
 //
 // The service is the only gate on sharing; callers don't re-check it:
 //   • cache.enabled         OFF → every op short-circuits (no-op / Option.none).
@@ -91,10 +85,9 @@ export class RemoteWalkthroughCache extends Context.Service<
     ) => Effect.Effect<Option.Option<WalkthroughSnapshotV2>>;
 
     /**
-     * Build a snapshot from the local DB and upload. Fire-and-forget at
-     * the call site — `WalkthroughJobs` schedules this on a forked fiber
-     * after `setStatus('complete')` lands. Failures log + return; never
-     * block the commit-first / broadcast-second contract (invariant #8).
+     * Build a snapshot from the local DB and upload. Fire-and-forget: the
+     * completion path forks it after the row commits `complete`. Failures
+     * log and never touch the completion (invariant #8).
      *
      * Preconditions enforced inside:
      *   • walkthroughs.status === 'complete', in the reviewer perspective
@@ -165,7 +158,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           const { body, metadata } = record.value;
 
-          // Cross-check schemaVersion metadata before paying for gunzip.
           const advertisedVersion = metadata[CACHE_METADATA_KEYS.schemaVersion];
           if (advertisedVersion && Number(advertisedVersion) !== CACHE_SCHEMA_VERSION) {
             logError(
@@ -175,7 +167,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             return Option.none<WalkthroughSnapshotV2>();
           }
 
-          // contentSha256 cross-check — defensive against silent corruption.
           const advertisedSha = metadata[CACHE_METADATA_KEYS.contentSha256];
           if (advertisedSha) {
             const actualSha = createHash("sha256").update(body).digest("hex");
@@ -188,7 +179,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             }
           }
 
-          // ── Signature verification (when mode != 'off') ──────────────────
           if (signingMode !== "off") {
             const signerHost = metadata[CACHE_METADATA_KEYS.signerHost];
             const signerLogin = metadata[CACHE_METADATA_KEYS.signerLogin];
@@ -203,10 +193,9 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                 );
                 return Option.none<WalkthroughSnapshotV2>();
               }
-              // permissive: log and continue
               logError("remote-cache", `unsigned blob accepted in permissive mode key=${key}`);
             } else {
-              // Verify trusted host first (cheap check before hitting the network).
+              // Before verify fetches the signer's public keys from `signerHost`.
               if (!trustedHosts.has(signerHost)) {
                 logError(
                   "remote-cache",
@@ -243,7 +232,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
                   `signature verification failed in permissive mode key=${key}: ${detail} — accepting anyway`,
                 );
               } else {
-                // Signature valid — now check signer eligibility.
                 const eligible = yield* eligibility
                   .isSignerEligible(repoFullName, signerHost, signerLogin)
                   .pipe(Effect.catch(() => Effect.succeed(false)));
@@ -334,7 +322,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           const repoFullName = repo.fullName;
 
-          // ── Eligibility gate ────────────────────────────────────────────
           const canPush = yield* eligibility
             .canPush(repo.id)
             .pipe(Effect.catch(() => Effect.succeed(false)));
@@ -370,7 +357,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
 
           const live = yield* settings.getSettings();
 
-          // ── Signing (when mode != 'off') ─────────────────────────────────
           const signingMode = live.cache.signing.mode;
           let signingMeta: Record<string, string> = {};
 

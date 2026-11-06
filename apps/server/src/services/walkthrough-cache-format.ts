@@ -1,5 +1,3 @@
-// ─── Remote walkthrough cache (GCS-backed) ──────────────────────────────────
-//
 // Wire format for the team-shared walkthrough cache. The local server
 // gzip-encodes a `WalkthroughSnapshotV2` and uploads it to:
 //
@@ -11,8 +9,8 @@
 //
 // Schema versioning: any payload-shape change MUST bump
 // `CACHE_SCHEMA_VERSION` (and a new `WalkthroughSnapshotV<N>` type lands
-// alongside). The importer rejects mismatched versions as
-// `CacheCorrupt` and falls back to local generation.
+// alongside). A fetch treats a mismatched version as a miss, so the
+// teammate falls back to local generation.
 
 import type {
   AcpAgentId,
@@ -25,14 +23,12 @@ import type {
   WalkthroughTokenUsage,
 } from "@revv/shared";
 
-/** Bump this when the snapshot shape changes. Importers reject mismatches. */
 export const CACHE_SCHEMA_VERSION = 2 as const;
 
 /**
- * Captured atomically at job start so a settings change mid-run doesn't
- * corrupt the recorded config. Travels with the snapshot to the bucket
- * and back, so cache-hit UI can render "claude-opus-4-8 • thinking: high
- * • 1m context" from the original run rather than the live settings.
+ * Captured at job start so a mid-run settings change doesn't alter it.
+ * Travels with the snapshot, so the cache-hit UI shows the original run's
+ * config rather than the live settings.
  */
 export interface GenerationProviderConfig {
   /**
@@ -55,9 +51,7 @@ export interface GenerationProviderConfig {
 export interface GeneratedBy {
   /** Stable numeric GitHub user id — survives login renames. */
   githubUserId: number;
-  /** GitHub login, e.g. `"alice"`. */
   githubLogin: string;
-  /** Optional GitHub display name. */
   displayName: string | null;
   /** Avatar data URL for the cache-hit badge. */
   avatarContent: string | null;
@@ -69,11 +63,10 @@ export interface GeneratedBy {
  * is the durable handle used by `issue.blockIndexes` and `rating.blockIndexes`.
  */
 export interface WalkthroughSnapshotBlock {
-  /** Always `"diff_analysis"` in v1 — Phase A/C blocks live on the row. */
+  /** Always `"diff_analysis"`: Phase A/C content lives on the row. */
   phase: "diff_analysis";
   semanticStepIndex: number;
   stepIndex: number;
-  /** Block type — discriminates the `data` payload. */
   type: WalkthroughBlock["type"];
   /** Typed payload — same shape as the on-row JSON. */
   data: WalkthroughBlock;
@@ -127,9 +120,7 @@ export interface WalkthroughSnapshotV2 {
   /** `"owner/repo"` — pairs with `prHeadSha` to locate the bucket object. */
   repoFullName: string;
   prHeadSha: string;
-  /** GitHub identity of the original generator. */
   generatedBy: GeneratedBy;
-  /** AI provider config captured at job start. */
   providerConfig: GenerationProviderConfig;
   /**
    * Retained for back-compat with existing `walkthroughs.modelUsed`
@@ -164,7 +155,6 @@ export function cacheObjectKey(repoFullName: string, prHeadSha: string): string 
 export const CACHE_METADATA_KEYS = {
   /** Stringified `CACHE_SCHEMA_VERSION`. */
   schemaVersion: "schemaVersion",
-  /** The exact model id that produced the snapshot. */
   modelUsed: "modelUsed",
   /** Hex SHA-256 of the gzipped body. Crosschecked on download. */
   contentSha256: "contentSha256",

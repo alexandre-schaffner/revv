@@ -1,8 +1,3 @@
-/**
- * The open-PR list phases of `PollScheduler.syncAllRepos`: deciding which repos
- * need a re-list, listing one repo and handing it to `PrMirror`, and settling
- * the PRs that left the open list.
- */
 import { type PullRequest, type Repository, sameStack } from "@revv/shared";
 import type { Context } from "effect";
 import { Effect } from "effect";
@@ -112,7 +107,7 @@ export function openListMoved(
 ): boolean {
   return prs.some((pr) => {
     const existing = existingMap.get(pr.id);
-    if (!existing) return true; // PR we had never seen
+    if (!existing) return true;
     return (
       existing.updatedAt !== pr.updatedAt ||
       existing.headSha !== pr.headSha ||
@@ -308,10 +303,7 @@ const listOpenPrsDelta = (
     return { ...open, kept };
   });
 
-/**
- * Bring one repo's open PRs in SQLite up to date with GitHub. Null when the
- * repo couldn't be listed this cycle — its rows are then left untouched.
- */
+/** Null when the repo couldn't be listed this cycle; its rows are then left untouched. */
 export const syncRepoOpenPrs = (
   svc: ListingServices,
   gate: AccountGate,
@@ -338,7 +330,6 @@ export const syncRepoOpenPrs = (
     const { prs } = listing;
     const kept = delta?.kept ?? [];
 
-    // Deduped by login: a prolific author appears on many of a repo's open PRs.
     const authorsByLogin = new Map<string, string | null>();
     for (const pr of prs) {
       if (!authorsByLogin.has(pr.authorLogin))

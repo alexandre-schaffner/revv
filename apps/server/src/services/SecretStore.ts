@@ -52,7 +52,6 @@ export class SecretStore extends Context.Service<
   }
 >()("SecretStore") {}
 
-/** Logical name of the TypeSafe System One API key in {@link SecretStore}. */
 export const JEV_API_KEY_SECRET = "jev-api-key";
 
 const KEYRING_USER_PREFIX = "github-tokens:";
@@ -95,13 +94,10 @@ export function deserialize(raw: string): TokenPair {
     const o = JSON.parse(raw) as Partial<TokenPair>;
     return { accessToken: o.accessToken ?? null, refreshToken: o.refreshToken ?? null };
   } catch {
-    // Tolerate a legacy raw-string access token (defensive — current writes
-    // always JSON-encode).
+    // A legacy raw-string access token; current writes always JSON-encode.
     return { accessToken: raw, refreshToken: null };
   }
 }
-
-// ── Encrypted-file fallback ────────────────────────────────────────────────
 
 function fallbackKeyPath(): string {
   return join(appDataDir(), "secret-store.key");
@@ -150,12 +146,10 @@ function loadFallbackSecret(): string {
   return secret;
 }
 
-/** Derive the AES-256 key from the resolved secret + persisted salt (scrypt). */
 function deriveFallbackKey(): Buffer {
   return scryptSync(loadFallbackSecret(), loadFallbackSalt(), 32);
 }
 
-/** Fallback map holds token pairs (keyed by account id) and generic secrets (keyed by `secret:<name>`), disjoint by prefix. */
 type FallbackEntry = TokenPair | string;
 type FallbackMap = Record<string, FallbackEntry>;
 

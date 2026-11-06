@@ -87,7 +87,6 @@ function padToYear(weeks: RepoActivityWeek[], now: Date): RepoActivityWeek[] {
 
 const activityKey = (repo: Repository) => `${repo.githubHost}:${repo.fullName}`;
 
-/** Ask GitHub once; cache a ready answer (briefly when churn is still computing). */
 const askActivity = (repo: Repository, client: GitHubClient) =>
   Effect.gen(function* () {
     const cache = yield* CacheService;

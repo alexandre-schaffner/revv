@@ -1,7 +1,3 @@
-/**
- * What a sync cycle tells the user: the per-account `prs:sync-summary`
- * notifications, and the walkthroughs auto-started for new review requests.
- */
 import { loginsMatch, type PullRequest, type Repository, type SyncChange } from "@revv/shared";
 import type { Context } from "effect";
 import { Cause, Effect } from "effect";
@@ -116,8 +112,8 @@ export const announceSyncChanges = (
       });
     }
 
-    // Fire-and-forget: the sync loop must not block on AI work, and
-    // `startJob` already daemon-forks the actual generation fiber.
+    // Detached: the sync loop must not wait on AI work. `startJob` runs the
+    // generation itself in a job fiber.
     for (const change of changes) {
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);

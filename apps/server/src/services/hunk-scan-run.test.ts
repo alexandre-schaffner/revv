@@ -58,7 +58,6 @@ interface StubOptions {
   readonly score?: (question: string, patch: string) => number;
 }
 
-/** A JevService that records what it was asked and answers (or fails) as told. */
 function stubJev(opts: StubOptions = {}) {
   const asked: string[] = [];
   const questionsByPath = new Map<string, string[]>();

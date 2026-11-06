@@ -24,8 +24,6 @@ import { type AiError, AiNotConfiguredError } from "../domain/errors";
 import { ChatMcpTokens } from "./ChatMcpTokens";
 import { SettingsService } from "./Settings";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 export interface ChatParams {
   /** The chat launch the session row is keyed on (`resolveAgentLaunch("chat")`). */
   readonly launch: AgentLaunch;
@@ -54,16 +52,12 @@ export interface ChatParams {
   readonly interactionMode?: InteractionMode;
 }
 
-// ── Service definition ───────────────────────────────────────────────────────
-
 export class AiService extends Context.Service<
   AiService,
   {
-    /** One walkthrough agent turn on its run's launch plan. */
     readonly walkthroughTurn: (
       params: WalkthroughTurnParams,
     ) => Effect.Effect<WalkthroughTurnResult, AiError>;
-    /** One right-pane chat turn on `params.launch`, streamed as chat frames. */
     readonly chat: (
       params: ChatParams,
     ) => Effect.Effect<ReadableStream<RawChatStreamFrame>, AiError>;
@@ -82,8 +76,6 @@ export class AiService extends Context.Service<
     readonly isConfigured: () => Effect.Effect<boolean>;
   }
 >()("AiService") {}
-
-// ── Live implementation ──────────────────────────────────────────────────────
 
 export const AiServiceLive = Layer.effect(
   AiService,

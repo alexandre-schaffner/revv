@@ -65,7 +65,6 @@ const GitHubAccountsWithDeps = GitHubAccountsLive.pipe(
 
 const GitHubEtagCacheWithDeps = GitHubEtagCacheLive.pipe(Layer.provide(DbServiceLive));
 
-// The gateway reports every account's 401s and rate limits to GitHubAccounts.
 const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
   Layer.provide(Layer.mergeAll(GitHubEtagCacheWithDeps, GitHubAccountsWithDeps)),
 );
@@ -84,7 +83,6 @@ const JevServiceWithDeps = JevServiceLive.pipe(
   Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
 );
 
-// Services every composed layer below may draw on.
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
   SecretStoreLive,
@@ -113,8 +111,6 @@ const BaseLayers = Layer.mergeAll(
 
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
 
-// PrConversation serves the Conversation tab: PrContext for repo + token,
-// plus the kv cache, remote-user avatars, and Realtime from BaseLayers.
 const PrConversationServiceWithDeps = PrConversationServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
@@ -135,7 +131,6 @@ const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLay
 
 const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive));
 
-// Team remote walkthrough cache — opt-in GCS-backed snapshot store.
 const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
 const SshSignerWithDeps = SshSignerLive.pipe(
   Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, GitHubAccountsWithDeps)),
@@ -149,8 +144,8 @@ const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
   ),
 );
 
-// The first pass, per PR head. One instance: the review page and
-// WalkthroughJobs must share its in-flight map so a head is scanned once.
+// One instance: the review page and WalkthroughJobs must share its in-flight
+// map so a head is scanned once.
 const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
 
 const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
@@ -168,8 +163,6 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
   ),
 );
 
-// The one writer of GitHub's view of a PR: supersedes walkthroughs on a head
-// move, reaps worktrees and marks stacks stale on a close.
 const PrMirrorWithDeps = PrMirrorLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -230,9 +223,6 @@ const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
   ),
 );
 
-// The PR's agent workspace: the chat turn, the push and the commit edits all
-// go through its one claim. RepoClone brings the worktree up; Ai runs the
-// conflict-resolve agent.
 const PrWorkspaceWithDeps = PrWorkspaceLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -251,8 +241,6 @@ const ChatTurnServiceWithDeps = ChatTurnServiceLive.pipe(
   ),
 );
 
-// BaseConflicts shares the branch push lock (BaseLayers) and reads the agent's
-// unpushed commits from the workspace before a rebase would strand them.
 const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -265,7 +253,6 @@ const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
   ),
 );
 
-// AppLayer merges everything together so consumers get all services
 export const AppLayer = Layer.mergeAll(
   BaseLayers,
   PrContextServiceWithDeps,
@@ -289,9 +276,7 @@ export const AppLayer = Layer.mergeAll(
   PrWorkspaceWithDeps,
   ChatTurnServiceWithDeps,
   BaseConflictsServiceWithDeps,
-  // Surface the remote-cache + blob + signing primitives in the runtime so
-  // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)
-  // can resolve them directly.
+  // Settings routes (cache status, signing test) resolve these directly.
   GcsBlobStoreWithDeps,
   RemoteWalkthroughCacheWithDeps,
   WalkthroughSnapshotImporterLive,

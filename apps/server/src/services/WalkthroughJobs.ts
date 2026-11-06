@@ -1,4 +1,3 @@
-// ── WalkthroughJobs ────────────────────────────────────────────────────────
 // The walkthrough orchestrator and the one owner of its lifecycle (invariants
 // #2, #11). Runs live on the durable agent-job kernel (`jobs/agent-jobs.ts`),
 // which owns the registry, the concurrency budget, cancel, resume-on-boot and
@@ -90,7 +89,6 @@ import { exportWalkthroughSnapshot } from "./walkthrough-snapshot";
 /** Cap on concurrent walkthrough runs. Additional runs queue on the kernel's semaphore. */
 const MAX_CONCURRENT_JOBS = 5;
 
-/** How long a run waits for its repository clone before giving up. */
 const CLONE_WAIT_MS = 20 * 60 * 1000;
 const CLONE_POLL_MS = 2_000;
 
@@ -123,7 +121,6 @@ export interface StartJobResult {
 const otherWalkthroughMode = (mode: WalkthroughMode): WalkthroughMode =>
   mode === REVIEW_MODE.author ? REVIEW_MODE.reviewer : REVIEW_MODE.author;
 
-/** Error union surfaced by `startJob`. Inherited from its transitive calls. */
 export type StartJobError =
   | AiError
   | CloneError
@@ -255,9 +252,6 @@ export const WalkthroughJobsLive = Layer.effect(
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    // ── Events ──────────────────────────────────────────────────────────
-
-    /** Where a walkthrough's events go: its PR, and the account owning the repo. */
     const eventTargets = (
       walkthroughId: string,
     ): Effect.Effect<{ prId: string; accountId: string } | null> =>
@@ -387,8 +381,6 @@ export const WalkthroughJobsLive = Layer.effect(
       },
       relaunch,
     });
-
-    // ── Runs ────────────────────────────────────────────────────────────
 
     /** Waits on a clone in progress; null once it is ready. */
     const awaitClone = (repoId: string, walkthroughId: string) =>
@@ -530,8 +522,6 @@ export const WalkthroughJobsLive = Layer.effect(
         });
       });
 
-    // ── Public API ──────────────────────────────────────────────────────
-
     const findActiveByPr = (
       prId: string,
       mode: WalkthroughMode = "reviewer",
@@ -582,7 +572,6 @@ export const WalkthroughJobsLive = Layer.effect(
 
     const startJob = (params: StartJobParams): Effect.Effect<StartJobResult, StartJobError> =>
       Effect.gen(function* () {
-        // A live run of this exact row: nothing to resolve.
         if (params.walkthroughId !== undefined && (yield* jobs.running(params.walkthroughId))) {
           return { walkthroughId: params.walkthroughId, reused: true };
         }
@@ -692,8 +681,8 @@ export const WalkthroughJobsLive = Layer.effect(
           Effect.provideService(DbService, { db }),
         );
 
-        // The sole "make a walkthrough row exist" call: MCP handlers only
-        // update. The commit list rides along for `get_commit_history`.
+        // Only the orchestrator creates walkthrough rows; MCP handlers only
+        // update them.
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
             ...((partial?.id ?? params.walkthroughId)

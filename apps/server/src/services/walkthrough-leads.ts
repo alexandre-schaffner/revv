@@ -1,5 +1,3 @@
-// ── First-pass leads, per walkthrough ───────────────────────────────────────
-//
 // Which leads one walkthrough's agent was handed, and its verdict on each.
 // The orchestrator records the selection once, at the first job start
 // (invariant 2's carve-out): a resume prompts with the rows already here, so
@@ -66,7 +64,6 @@ function rowToLead(row: Row): WalkthroughLead {
   };
 }
 
-/** The lead id the agent sees for the lead at `ordinal`. */
 export function leadKeyAt(ordinal: number): string {
   return `L${ordinal + 1}`;
 }
@@ -82,7 +79,6 @@ export function readWalkthroughLeads(db: Db, walkthroughId: string): Walkthrough
     .map(rowToLead);
 }
 
-/** One of this walkthrough's leads by the id the agent resolves it by. */
 export function readWalkthroughLead(
   db: Db,
   walkthroughId: string,

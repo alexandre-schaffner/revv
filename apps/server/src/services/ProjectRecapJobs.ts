@@ -1,4 +1,3 @@
-// ── ProjectRecapJobs ────────────────────────────────────────────────────────
 // Daily / weekly project recaps on the durable agent-job kernel
 // (`jobs/agent-jobs.ts`), which owns the run lifecycle, the resume budget and
 // the MCP token. What is recap-specific lives here:
@@ -9,9 +8,8 @@
 //   • A run assembles the window's source bundle once and records it on the
 //     row, so a resumed run reads the same pull requests its earlier attempt
 //     was writing entries for.
-//   • Live events fan out to the per-generation SSE stream's subscribers.
 //
-// Per CLAUDE.md invariants #2 and #11: agents never write `status`. Content
+// Agents never write `status` (invariants 2 and 11). Content
 // writes go through the recap MCP tool handlers in `ai/providers/recap-tools/`.
 
 import type {
@@ -124,7 +122,6 @@ export class ProjectRecapJobs extends Context.Service<
     /** The user's Stop. Settles a row whose run already died, too. */
     readonly cancel: (recapId: string) => Effect.Effect<void>;
 
-    /** Re-launch any rows left in `status='generating'` by a prior process. */
     readonly resumePending: () => Effect.Effect<void>;
 
     /**
@@ -136,7 +133,6 @@ export class ProjectRecapJobs extends Context.Service<
       onEvent: (event: RecapStreamEvent) => void,
     ) => Effect.Effect<SubscribeResult>;
 
-    /** Resolve a `/mcp/recap` bearer token to its run's tool context. */
     readonly resolveSessionToken: (token: string) => Effect.Effect<RecapToolContext | null>;
   }
 >()("ProjectRecapJobs") {}
@@ -231,13 +227,10 @@ export const ProjectRecapJobsLive = Layer.effect(
       relaunch: (recapId) => launch(recapId),
     });
 
-    // ── Diff loader (walkthrough-fallback path) ─────────────────────────
-    //
-    // For each archived PR without a complete walkthrough, surface the actual
-    // code change so the recap agent can describe it instead of guessing
-    // from title + +/- counts. Strategy: cache-then-GitHub, with hard caps
-    // on per-file patch size and per-PR file count so a single PR can't
-    // blow up the agent's context window.
+    // Archived PRs without a complete walkthrough surface their actual change
+    // so the recap agent can describe it instead of guessing from the title
+    // and +/- counts, capped per file and per PR so one PR can't blow up the
+    // agent's context window.
 
     /** The repo owner's client, or null: the recap then reads diffs from the cache only. */
     const resolveRepoClient = (repoId: string): Effect.Effect<GitHubClient | null> =>
@@ -255,11 +248,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         ),
       );
 
-    /**
-     * Materialize a {@link RecapSourcePrDiff} for a single PR, from the diff
-     * cache or GitHub (written through). Any failure degrades to a
-     * metadata-only PR rather than failing the recap.
-     */
+    /** Any failure degrades to a metadata-only PR rather than failing the recap. */
     const loadDiffForPr = (
       pr: ArchivedPrWithWalkthrough["pr"],
       repoFullName: string,
@@ -343,8 +332,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         ),
       );
 
-    // ── GitHub backfill for missing closed PRs ──────────────────────────
-    //
     // The local mirror is populated by the poll scheduler, which only
     // fetches *open* PRs. A PR that closes between two poll cycles or one
     // that closed before the user added the repo never lands in
@@ -352,10 +339,9 @@ export const ProjectRecapJobsLive = Layer.effect(
     // `listArchivedPrsForWindow`. For a recap whose whole job is "tell me
     // what shipped," that's silent data loss.
     //
-    // Strategy: hit GitHub's issue-search API for the period window,
-    // diff against the local DB, and `getPr` + upsert anything we're
-    // missing before the recap agent starts. Failure here is non-fatal —
-    // we log and continue with whatever the local mirror has.
+    // So before the agent starts, GitHub's issue search fills in what the
+    // mirror is missing. Failure is non-fatal: the recap goes ahead on the
+    // local mirror.
 
     /** Cap on per-PR GitHub fetches during one backfill pass — defends
      *  against a misconfigured search returning thousands of PRs. */
@@ -446,8 +432,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         return { addedCount: upsertable.length };
       });
 
-    // ── Source bundle ────────────────────────────────────────────────────
-
     /**
      * The window's pull requests, open work and digests. A window with nothing
      * in it is final once closed (`empty`), and "nothing yet" while open.
@@ -457,8 +441,6 @@ export const ProjectRecapJobsLive = Layer.effect(
       repoFullName: string,
     ): Effect.Effect<RecapSourceBundle | "empty" | "nothing-yet", DbError> =>
       Effect.gen(function* () {
-        // Read the local mirror first: if backfill finds nothing new, this is
-        // the only query.
         let windowed = yield* provideDb(
           prService.listArchivedPrsForWindow(
             recap.repositoryId,
@@ -558,8 +540,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         yield* provideDb(recapService.saveSourceBundle(recap.id, bundle));
         return bundle;
       });
-
-    // ── Run ──────────────────────────────────────────────────────────────
 
     const runRecap = (run: AgentRun<RecapRun>): Effect.Effect<RunEnd<string>, DbError> =>
       Effect.gen(function* () {
@@ -694,8 +674,6 @@ export const ProjectRecapJobsLive = Layer.effect(
         })
         .pipe(Effect.asVoid);
 
-    // ── Requests ─────────────────────────────────────────────────────────
-
     /**
      * The window has no pull request that closed in it or was open as it
      * closed, as far as the local mirror knows. Same boundary as the run's
@@ -741,7 +719,6 @@ export const ProjectRecapJobsLive = Layer.effect(
             }
 
             if (existing && plan === "rerun") {
-              // Stop any run still writing into the row before resetting it.
               yield* jobs.stop(existing.id, "user");
               yield* provideDb(recapService.resetForRerun(existing.id, window));
               const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(

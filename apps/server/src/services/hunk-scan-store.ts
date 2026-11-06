@@ -1,5 +1,3 @@
-// ── First-pass persistence ───────────────────────────────────────────────────
-//
 // `hunk_scans` + `hunk_scan_rows` are the journal for the per-head smell scan
 // (invariant 1): rows are seeded before the first Jev call, so a resumed scan
 // rebuilds the total and its progress from here alone. A scan is keyed on

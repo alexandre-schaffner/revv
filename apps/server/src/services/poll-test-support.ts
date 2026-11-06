@@ -93,10 +93,7 @@ export interface Harness {
   readonly recorded: Recorded;
 }
 
-/**
- * Build the harness. `github` is the gateway PrMirror sees (only
- * `recordPushedHead` calls it).
- */
+/** `github` is the gateway PrMirror sees (only `recordPushedHead` calls it). */
 export async function makeHarness(
   db: Db,
   github: Partial<Context.Service.Shape<typeof GitHubGateway>> = {},

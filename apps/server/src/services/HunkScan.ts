@@ -1,5 +1,3 @@
-// ── First pass, per PR head ──────────────────────────────────────────────────
-//
 // Owns when the first pass runs. It belongs to a PR head, not a walkthrough:
 // the review page starts it on open (`start`), and a walkthrough job for the
 // same head joins it or runs it itself (`run`). Either way one scan runs per
@@ -56,7 +54,6 @@ export class HunkScanService extends Context.Service<
      * A `failed` or `partial` scan is tried again: Jev may be back. Returns at once.
      */
     readonly start: (input: HunkScanInput) => Effect.Effect<void>;
-    /** What's persisted for one PR head. */
     readonly snapshot: (prId: string, headSha: string) => Effect.Effect<HunkScanSnapshot>;
   }
 >()("HunkScanService") {}

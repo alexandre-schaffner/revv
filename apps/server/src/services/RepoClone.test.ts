@@ -6,14 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isWorktreeHealthy } from "./RepoClone";
 
-// ── isWorktreeHealthy ────────────────────────────────────────────────────────
-//
-// `isWorktreeHealthy` is the read-only gate `acquirePrWorktree` consults
-// before falling through to its cold path (lock cleanup, ref deletion,
-// merge/rebase abort — all writes under `.git`). These tests build a real
-// git repo + worktree on disk (no mocks — the whole point is verifying
-// nothing on disk changes) and assert both the boolean result and, for the
-// healthy case, that not a single file under `.git` was touched.
+// Real git repos on disk, no mocks: the healthy case must leave every file
+// under `.git` untouched.
 
 const GIT_ENV: Record<string, string> = {
   ...process.env,
@@ -30,7 +24,6 @@ function git(cwd: string, args: string[]): string {
     .trim();
 }
 
-/** Recursively snapshots mtimes of every entry under `dir`, keyed by path relative to `dir`. */
 async function snapshotMtimes(dir: string): Promise<Map<string, number>> {
   const snapshot = new Map<string, number>();
   const walk = async (current: string, prefix: string): Promise<void> => {
@@ -65,9 +58,7 @@ describe("isWorktreeHealthy", () => {
     mkdirSync(join(base, "worktrees"), { recursive: true });
 
     git(clonePath, ["init", "--quiet", "--initial-branch=main"]);
-    // The user's global config may force commit signing (`commit.gpgsign`),
-    // which hangs/fails in a sandboxed test env with no signing agent.
-    // Scope the override to this throwaway repo only.
+    // A global `commit.gpgsign` hangs or fails with no signing agent.
     git(clonePath, ["config", "commit.gpgsign", "false"]);
     git(clonePath, ["config", "tag.gpgsign", "false"]);
     writeFileSync(join(clonePath, "README.md"), "hello\n");
@@ -82,7 +73,6 @@ describe("isWorktreeHealthy", () => {
     await rm(base, { recursive: true, force: true });
   });
 
-  /** Common healthy-baseline params — tests override just what they're probing. */
   function healthyParams(): Parameters<typeof isWorktreeHealthy>[0] {
     return { clonePath, branchName, worktreePath, prHeadSha: headSha, prNumber };
   }
@@ -123,9 +113,8 @@ describe("isWorktreeHealthy", () => {
   });
 
   // A linked repository can itself be a linked worktree of the user's own
-  // repository, so `<clone>/.git` is a file and the PR worktree's gitdir lives
-  // in the main repository. Probing `<clone>/.git/worktrees/...` on disk saw
-  // nothing there and called a worktree mid-merge healthy.
+  // repository: `<clone>/.git` is then a file and the PR worktree's gitdir
+  // lives in the main repository, not under `<clone>/.git/worktrees/`.
   it("sees a merge in progress when the clone is itself a linked worktree", async () => {
     const userClone = join(base, "user-linked");
     const prWorktree = join(base, "worktrees", "pr-7");

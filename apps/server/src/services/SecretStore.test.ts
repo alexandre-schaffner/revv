@@ -16,7 +16,6 @@ import {
   type TokenPair,
 } from "./SecretStore";
 
-/** In-memory stand-in for the OS secure store, exposing its backing map. */
 function makeFakeStore(initial?: Record<string, TokenPair>) {
   const map = new Map<string, TokenPair>(Object.entries(initial ?? {}));
   const secrets = new Map<string, string>();
@@ -94,7 +93,6 @@ describe("migrateLegacyTokens", () => {
   it("moves plaintext tokens into the store, nulls the columns, and is idempotent", async () => {
     const db = createDb(":memory:");
     seedAccount(db, { id: "acc-1", accessToken: "gho_plain", refreshToken: "ghr_plain" });
-    // Already-migrated row (null columns) must be skipped.
     seedAccount(db, { id: "acc-2", accessToken: null, refreshToken: null });
 
     const { layer, map } = makeFakeStore();

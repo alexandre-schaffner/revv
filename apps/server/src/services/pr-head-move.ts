@@ -1,32 +1,24 @@
-// ── Head-SHA move verdict ──────────────────────────────────────────────────
+// "GitHub reports a head SHA that differs from the stored one: did the head
+// really move forward?"
 //
-// Answers one question for the poll paths: "GitHub just told us this PR's head
-// SHA differs from the one we have stored — did the head really move forward?"
+// The answer is destructive. A head move makes PrMirror call
+// `WalkthroughJobs.supersedeForPr(prId, newHeadSha)`, which cancels every
+// walkthrough for the PR not pinned to `newHeadSha` and marks it `'superseded'`.
+// If `newHeadSha` is an *older* view of the PR, that kills the walkthrough
+// generating at the real head, leaving a contentless superseded row that also
+// poisons the next incremental run's base SHA.
 //
-// The question matters because the answer is destructive. A head-SHA move makes
-// PollScheduler call `WalkthroughJobs.supersedeForPr(prId, newHeadSha)`, which
-// cancels every in-flight walkthrough fiber for that PR whose `prHeadSha` is
-// not `newHeadSha` and marks its row `'superseded'`. If `newHeadSha` is itself
-// an *older* view of the PR, that sweep kills the walkthrough generating at the
-// real head: the row ends up `'superseded'` with zero content, the UI drops to
-// "No walkthrough generated yet for this PR" plus the outdated-walkthrough
-// toast, and the contentless row goes on to poison the next incremental run's
-// base SHA.
-//
-// Stale reads are normal, not exotic. GitHub's list-PRs endpoint (the poll's
-// source) is cache-fronted and lags the PR *detail* endpoint that `refreshPr`
-// and the walkthrough job read from, and the ETag cache in front of it happily
-// replays a body that was already stale when it was cached. So "list says
-// cc7d62f, we already know c5f7ac2" happens whenever the user pushes, syncs the
-// single PR, and starts a review inside the list endpoint's cache window.
+// Stale reads are normal. GitHub's list-PRs endpoint (the poll's source) is
+// cache-fronted and lags the PR detail endpoint that `refreshPr` and the
+// walkthrough job read, and the ETag cache in front of it replays bodies that
+// were already stale when cached. A push, a single-PR sync and a review started
+// inside the list endpoint's cache window is enough.
 //
 // `updated_at` is the tiebreaker: GitHub bumps it on every push, so a payload
-// whose `updated_at` predates what we already stored cannot be describing a
-// newer head. SQLite is authoritative (CLAUDE.md invariant #1) — when the fresh
-// read is provably older than the stored row, we keep the stored view and let a
-// later cycle (which will see a monotonically newer `updated_at`) act.
+// whose `updated_at` predates the stored one cannot describe a newer head.
+// SQLite is authoritative (invariant 1): the stored view stands, and a later
+// read with a newer `updated_at` acts.
 
-/** The subset of a PR row / payload needed to judge a head-SHA move. */
 export interface PrHeadSnapshot {
   readonly headSha: string | null;
   /** GitHub's `updated_at`, ISO 8601. Monotonic per PR. */
@@ -61,7 +53,6 @@ export interface PrRangeSnapshot extends PrHeadSnapshot {
 export function isTrustedHeadShaMove(stored: PrHeadSnapshot, fresh: PrHeadSnapshot): boolean {
   if (fresh.headSha === null) return false;
   if (stored.headSha === fresh.headSha) return false;
-  // No stored head yet → nothing to regress against; the fresh value wins.
   if (stored.headSha === null) return true;
   // Equal timestamps pass: two pushes inside the same second are legitimate,
   // and only a strictly-older payload proves a stale read.
@@ -86,18 +77,11 @@ function regressesStoredHead(stored: PrHeadSnapshot, fresh: PrHeadSnapshot): boo
 /**
  * Keep the stored head when `fresh` is a stale read, returning the row to write.
  *
- * Gating only the *supersede* on `isTrustedHeadShaMove` was half a fix: the
- * upsert ran first and unconditionally, so a lagging list body still wrote its
- * older `head_sha` and `updated_at` into `pull_requests`. Everything
- * head-derived then read the stale value — the "new commits → Pull" affordance,
- * `getVisitState`'s "New commits" row tint, the walkthrough snapshot's `stale`
- * flag — and, worse, the regressed `updated_at` re-opened the gate: the next
- * cycle compares against the row the stale read just wrote, so `>=` passes
- * trivially and the protection lasts exactly one cycle.
- *
- * SQLite is authoritative (CLAUDE.md invariant #1). When the fresh read is
- * provably older, the stored view stands and a later cycle — which will carry a
- * monotonically newer `updated_at` — is the one that acts.
+ * Gating the supersede alone is not enough: writing a stale body's older
+ * `head_sha` and `updated_at` would regress everything head-derived (the web's
+ * "new commits → Pull" and "New commits" tint, the walkthrough snapshot's
+ * `stale` flag), and the regressed `updated_at` would let the next cycle's
+ * `>=` check pass against the stale row.
  *
  * Only the three range-bearing fields are masked. Everything else in the
  * payload (title, draft state, reviewers, counts) is still worth writing; a

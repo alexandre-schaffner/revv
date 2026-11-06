@@ -4,17 +4,9 @@ import { preloadHighlighter } from "@pierre/diffs";
 import { preloadPatchDiff, preloadPatchFile } from "@pierre/diffs/ssr";
 import { PIERRE_DIFF_PRELOAD_LANGS, PIERRE_HIGHLIGHTER, PIERRE_THEMES } from "@revv/shared";
 
-/**
- * Server-side SSR cache for `@pierre/diffs`. Calls `preloadPatchFile` /
- * `preloadFile` inline (Highlights is fast once the shared highlighter is warm)
- * and memoizes the rendered HTML in an LRU.
- *
- * No DB, no Effect service — these are plain async functions consumed by
- * the PR files endpoint. State is reconstructible: every miss re-renders
- * from the inputs.
- */
-
-// ── Defaults ────────────────────────────────────────────────────────────────
+// Renders inline (Highlights is fast once the shared highlighter is warm) and
+// memoizes the HTML in an LRU. Every miss re-renders from its inputs, so the
+// cache is reconstructible.
 
 export const SSR_PATCH_BYTE_LIMIT = 256 * 1024;
 export const SSR_PATCH_LINE_LIMIT = 6_000;
@@ -37,15 +29,11 @@ function canPrerenderPatch(patch: string): boolean {
   );
 }
 
-// ── Highlighter priming ─────────────────────────────────────────────────────
-
 let highlighterReady: Promise<void> | null = null;
 
 /**
- * Idempotent. First call kicks off `preloadHighlighter`; concurrent callers
- * await the same promise so we don't spin up the highlighter twice. Called at server
- * boot and defensively at the top of each prerender call (boot might still
- * be racing the first walkthrough emit).
+ * Idempotent. Called at server boot and again by every prerender, since boot
+ * may still be racing the first walkthrough emit.
  */
 export function ensureHighlighter(): Promise<void> {
   if (highlighterReady === null) {
@@ -57,8 +45,6 @@ export function ensureHighlighter(): Promise<void> {
   }
   return highlighterReady;
 }
-
-// ── LRU ─────────────────────────────────────────────────────────────────────
 
 class LruCache<V> {
   private map = new Map<string, V>();
@@ -94,12 +80,9 @@ function stableOptionsKey(options: object): string {
   return Bun.hash(JSON.stringify(options, Object.keys(options).sort())).toString(36);
 }
 
-// ── Public API ──────────────────────────────────────────────────────────────
-
 /**
- * Options for SSR diff rendering. Subset of `FileDiffOptions` containing only
- * the serializable structural fields that affect rendered HTML — callbacks
- * and DOM-producing fields stay client-side where they belong.
+ * Only the serializable `FileDiffOptions` fields that affect rendered HTML;
+ * callbacks and DOM-producing fields stay client-side.
  */
 export type SsrDiffOptions = Pick<
   FileDiffOptions<unknown, undefined>,
@@ -117,12 +100,9 @@ export type SsrDiffOptions = Pick<
 >;
 
 /**
- * Render a unified diff patch to HTML via `preloadPatchFile`. Returns the
- * prerendered HTML for the first file in the patch (walkthrough blocks and
- * PR file rows are single-file by construction).
- *
- * Returns `null` if the patch can't be parsed — caller falls back to
- * client-side rendering.
+ * Renders only the patch's first file (walkthrough blocks and PR file rows are
+ * single-file by construction). `null` if the patch can't be parsed; the caller
+ * falls back to client-side rendering.
  */
 export async function prerenderDiff(
   patch: string,

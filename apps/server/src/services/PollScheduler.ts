@@ -63,14 +63,10 @@ type PollSchedulerService = {
    */
   readonly freshen: () => Effect.Effect<void>;
   /**
-   * Re-read ONE pull request from GitHub and reconcile it.
-   *
-   * The targeted counterpart to {@link syncNow}: bounded to a couple of
-   * requests instead of a full pass over every repo, so it is what the UI's
-   * per-PR refresh should call. It also uses GitHub's PR *detail* endpoint,
-   * which — unlike the list endpoint the poll runs on — carries
-   * additions/deletions/changed_files, making this the path by which an open PR
-   * acquires real diff stats.
+   * Re-read one PR from GitHub: what the UI's per-PR refresh calls instead of
+   * {@link syncNow}. GitHub's PR detail endpoint, unlike the list endpoint the
+   * poll runs on, carries additions/deletions/changed_files, so this is how an
+   * open PR gets real diff stats.
    */
   readonly refreshPr: (
     prId: string,
@@ -316,10 +312,6 @@ export const PollSchedulerLive = Layer.effect(
         );
       });
 
-    /**
-     * Re-read one PR's detail as its repo's account. Honours the account's
-     * re-auth and rate-limit pauses like every background read.
-     */
     const refreshPr = (prId: string) =>
       Effect.gen(function* () {
         const { pr, repo, accountId } = yield* prContext.forPr(prId);
@@ -335,7 +327,6 @@ export const PollSchedulerLive = Layer.effect(
         yield* mirror.apply([fresh], { prior: new Map([[pr.id, pr]]) });
       });
 
-    // ── Thread sweep ──────────────────────────────────────────────────────
     // Opening a PR syncs its threads on demand, so this background sweep stays
     // slow to keep clear of GitHub's rate limits.
     const threadLoop = yield* makeRestartableLoop;
@@ -343,8 +334,6 @@ export const PollSchedulerLive = Layer.effect(
     const syncThreadsForOpenPrs: Effect.Effect<void> = Effect.gen(function* () {
       const openPrs = (yield* withDb(prService.listPrs())).filter((p) => p.status === "open");
       const repoToAccountId = yield* withDb(repoService.accountIdsByRepo());
-      // Accounts that may be called now: a paused or signed-out account's PRs
-      // wait for the next tick.
       const callable = new Map<string, boolean>();
       for (const accountId of new Set(repoToAccountId.values())) {
         callable.set(accountId, (yield* accounts.backgroundClient(accountId, "core")) !== null);
@@ -461,8 +450,6 @@ export const PollSchedulerLive = Layer.effect(
 
       refreshPr: (prId) => refreshPr(prId).pipe(withGitHubOrigin(`poll:refresh-pr`)),
 
-      // `force: true`: a user-initiated sync must emit `threads:synced` even
-      // when nothing changed — that envelope clears the client's spinner.
       syncThreadsNow: (prId: string) =>
         withDb(syncService.syncThreads(prId, { force: true })).pipe(
           Effect.asVoid,

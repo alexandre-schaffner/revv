@@ -100,9 +100,6 @@ describe("resolveReviewModeForPr", () => {
     expect(await resolve(db, "nope")).toBe("reviewer");
   });
 
-  // Regression: the resolver used to read `db.select(...).from(user).limit(1)`
-  // with no WHERE, so a second identity could win arbitrarily. It now walks the
-  // PR's own repository to the account that owns it to that account's user.
   it("resolves against the PR's owning account, not an arbitrary user row", async () => {
     const db = seedIdentity({ authorLogin: "alex", userLogin: "alex" });
     const now = new Date();

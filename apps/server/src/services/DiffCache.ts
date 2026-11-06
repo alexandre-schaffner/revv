@@ -130,9 +130,8 @@ export function toGitHubFileShape(files: readonly CachedDiffFile[]): Array<{
  * `expectedChangedFiles` (GitHub's `changed_files`) is only the fallback, for
  * rows cached before that column existed. It is not reliable on its own:
  * GitHub counts file entries, and a path whose file type changed contributes
- * two of them (`removed` + `added`) while collapsing to one row. Treating that
- * permanent gap as "incomplete" made a 3 000-file PR re-fetch 30 pages of
- * GitHub JSON — ~18 s — on every page view.
+ * two of them (`removed` + `added`) while collapsing to one row, so the gap is
+ * permanent and a large PR would re-fetch every page on every view.
  */
 export function hasCompleteCachedFiles(
   cached: readonly CachedDiffFile[],
@@ -189,10 +188,6 @@ export const DiffCacheServiceLive = Layer.effect(
      * Replace a PR's cached files and record its diff size from the same list,
      * in one transaction; then tell the PR's clients the diff is in.
      *
-     * The size is derived here because this is the only place an open PR
-     * learns it: the poll's list endpoint carries no additions/deletions/
-     * changed_files.
-     *
      * `fetchedFor` is the PR row as read before the fetch started. The files
      * read as the PR's diff only while its head and base are still that row's,
      * so a fetch that raced a head move is refetched, never served.
@@ -200,8 +195,8 @@ export const DiffCacheServiceLive = Layer.effect(
     const cacheFiles = (fetchedFor: FetchedFor, files: readonly CachedDiffFile[]) =>
       Effect.gen(function* () {
         const prId = fetchedFor.id;
-        // Keyed on `(prId, path)`: collapse repeats (last wins) so the size
-        // counts stored rows.
+        // GitHub lists a type-changed path twice; rows are keyed on
+        // `(prId, path)`, so keep the last and count stored rows.
         const rows = [...new Map(files.map((f) => [f.path, f])).values()];
         let additions = 0;
         let deletions = 0;
@@ -229,9 +224,6 @@ export const DiffCacheServiceLive = Layer.effect(
                 )
                 .run();
             }
-            // `diffFilesCachedCount` is what completeness trusts: GitHub's
-            // `changed_files` disagrees with the distinct paths it lists
-            // whenever a file's type changed.
             tx.update(pullRequests)
               .set({
                 additions,

@@ -1,5 +1,3 @@
-// ─── WalkthroughService ──────────────────────────────────────────────────────
-//
 // The walkthrough row's DB adapter: the orchestrator's lifecycle writes
 // (invariants 2 and 11) and the read side. Content is written only by the MCP
 // tool handlers; its codec lives in `walkthrough/content.ts`.
@@ -50,8 +48,6 @@ import { deriveRoundFocusTitle } from "./walkthrough/round-title";
 import type { GenerationProviderConfig } from "./walkthrough-cache-format";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 
-// ── Row-to-domain converter ─────────────────────────────────────────────────
-
 function rowToWalkthrough(
   db: Db,
   row: typeof walkthroughs.$inferSelect,
@@ -97,7 +93,6 @@ function rowToWalkthrough(
   };
 }
 
-/** The newest walkthrough matching `where`, with its generator's avatar. */
 function readWalkthrough(
   db: Db,
   where: SQL | undefined,
@@ -128,30 +123,24 @@ export interface RestackSource {
   readonly diffFingerprint: DiffFingerprint;
 }
 
-// ── Service definition ──────────────────────────────────────────────────────
-
 export class WalkthroughService extends Context.Service<
   WalkthroughService,
   {
     /**
-     * Insert a new walkthrough row at start of generation. Behavior depends
-     * on whether a row already exists at `(prId, prHeadSha)`:
+     * The row a generation job writes into, decided by the active
+     * (non-superseded) row at `(prId, prHeadSha, mode, generationMode)`:
      *
-     *   • no row              → INSERT a fresh row, return its id.
-     *   • row in 'generating' → return the existing id (the in-flight job
-     *                            owns this row; concurrent startJob is
-     *                            idempotent).
-     *   • row in 'complete'   → return the existing id unless the caller
-     *                            explicitly requested a fresh round. Fresh
-     *                            rounds keep the old row as superseded audit
-     *                            history and insert a new row at the same SHA.
-     *   • row in 'superseded' → left in place as historical data. The active
-     *                            uniqueness index excludes superseded rows.
-     *   • row in 'error'      → mark historical and insert a fresh row. The
+     *   • no row              → insert a fresh row.
+     *   • row in 'generating' → return its id (the in-flight job owns it, so
+     *                            a concurrent startJob is idempotent).
+     *   • row in 'complete'   → return its id unless `forceNew`. A fresh
+     *                            round keeps the old row as superseded
+     *                            history and inserts a new row at the same SHA.
+     *   • row in 'error'      → supersede it and insert a fresh row. The
      *                            row is terminal and has no live fiber.
      *
-     * All-in-one transaction so the lookup + delete + insert can't race a
-     * concurrent startJob for the same (prId, prHeadSha).
+     * Superseded rows stay as history; the active uniqueness index excludes
+     * them. One transaction, so a concurrent startJob can't race it.
      */
     readonly createPartial: (params: {
       id?: string;
@@ -161,21 +150,15 @@ export class WalkthroughService extends Context.Service<
       prHeadSha: string;
       mode?: WalkthroughMode;
       /**
-       * PR commit list (oldest → newest, post-reverse) captured from GitHub
-       * at job start. Persisted as JSON on the walkthrough row; the agent
-       * fetches it via `get_commit_history` MCP read tool when authoring
-       * the required "How we got here" journey chapter. Optional for
-       * callers that haven't been migrated yet; new rows without commits
-       * will surface as an empty list to the agent and trigger the
-       * single-commit edge-case path.
+       * The PR's commits, oldest first, captured from GitHub at job start.
+       * The agent reads them through the `get_commit_history` MCP tool for
+       * the "How we got here" chapter; a row without them reads as an empty
+       * history and takes the single-commit path.
        */
       prCommits?: readonly PrCommit[];
       /**
-       * GitHub identity of the account that triggered this generation job.
-       * Stamped on the row at creation and carried along when the
-       * snapshot is exported to the remote cache. Optional so callers that
-       * predate the attribution columns continue to compile — the columns
-       * are nullable and the UI degrades gracefully.
+       * GitHub identity of the account that triggered the job. Travels with
+       * the snapshot to the remote cache.
        */
       generatedBy?: {
         readonly githubUserId: number;
@@ -184,9 +167,8 @@ export class WalkthroughService extends Context.Service<
         readonly avatarContent: string | null;
       };
       /**
-       * Snapshot of the AI provider config in effect at job start. Stored
-       * as JSON on `provider_config`. Pairs with `modelUsed` — the
-       * column survives a mid-job settings change.
+       * The AI provider config at job start. Pairs with `modelUsed` and
+       * survives a mid-job settings change.
        */
       providerConfig?: GenerationProviderConfig;
       generationMode?: WalkthroughGenerationMode;
@@ -262,17 +244,12 @@ export class WalkthroughService extends Context.Service<
     ) => Effect.Effect<void, DbError, DbService>;
 
     /**
-     * Mark all non-superseded walkthroughs for a PR as 'superseded'.
-     * `supersededBy` is left NULL — it gets backfilled when a new
-     * walkthrough row is subsequently created for the PR's new head SHA,
-     * or stays NULL if no new walkthrough is ever generated. Called by
-     * {@link WalkthroughJobs.supersedeForPr} in response to a detected
-     * head-SHA change.
+     * Supersede every active walkthrough for a PR, leaving `supersededBy`
+     * NULL. Callers go through {@link WalkthroughJobs.supersedeForPr}.
      *
-     * `exceptHeadSha`: rows whose `prHeadSha` matches this value are
-     * skipped. PollScheduler uses this to spare a freshly-created
-     * walkthrough at the just-detected new SHA from being marked
-     * superseded by the very poll cycle that observed the SHA change.
+     * `exceptHeadSha` spares rows at that head, so a walkthrough already
+     * started at a just-detected new head isn't superseded by the poll that
+     * observed the move.
      */
     readonly supersedeAllForPr: (
       prId: string,
@@ -280,7 +257,6 @@ export class WalkthroughService extends Context.Service<
       mode?: WalkthroughMode,
     ) => Effect.Effect<ReadonlyArray<string>, DbError, DbService>;
 
-    /** Get a complete (cached) walkthrough by PR + sha. */
     readonly getCached: (
       prId: string,
       headSha: string,
@@ -288,8 +264,8 @@ export class WalkthroughService extends Context.Service<
     ) => Effect.Effect<Walkthrough | null, DbError, DbService>;
 
     /**
-     * Get an incomplete (generating/error) walkthrough + its blocks for resume.
-     * Superseded rows are NOT returned — they're terminal from the job's perspective.
+     * The incomplete (generating/error) walkthrough at this head, for resume.
+     * Superseded rows are terminal from the job's perspective and never returned.
      */
     readonly getPartial: (
       prId: string,
@@ -303,9 +279,8 @@ export class WalkthroughService extends Context.Service<
     >;
 
     /**
-     * List all walkthroughs still in `status='generating'`. Used on server boot
-     * to find rows stranded by a previous crash/restart so {@link WalkthroughJobs}
-     * can re-launch their generators.
+     * Rows still `generating`. On boot these are the ones a crash stranded,
+     * for {@link WalkthroughJobs} to relaunch.
      */
     readonly listGenerating: () => Effect.Effect<
       Array<{
@@ -321,9 +296,7 @@ export class WalkthroughService extends Context.Service<
     >;
 
     /**
-     * Find the most recent non-superseded resumable walkthrough for a given
-     * PR. Used by the manual-resume HTTP endpoint to look up which
-     * walkthroughId to hand to {@link WalkthroughJobs.startJob}.
+     * The PR's newest resumable walkthrough, for the manual-resume endpoint.
      *
      * Resumable = `status` is `'generating'` or `'error'`. The error case is
      * a user-driven retry: the orchestrator revives the row to `generating`
@@ -346,46 +319,36 @@ export class WalkthroughService extends Context.Service<
       DbService
     >;
 
-    /**
-     * Bump the row's resume counter. Returns the new value so the caller can
-     * compare against `MAX_RESUME_ATTEMPTS` and give up cleanly.
-     */
+    /** Bump the row's resume counter and return the new value. */
     readonly incrementResumeAttempts: (
       walkthroughId: string,
     ) => Effect.Effect<number, DbError, DbService>;
 
     /**
-     * Stamp the given issue ids with `submittedAt` so the UI's "already
-     * posted to GitHub" state survives app restarts and PR-switches. Unknown
-     * ids are silently ignored — they might have been wiped by a regenerate
-     * between the reviewer opening the tab and clicking Submit. Returns the
-     * timestamp that was written so the caller can echo it back to the
-     * client for optimistic local state.
+     * Stamp the given issues as posted to GitHub and return the timestamp.
+     * Unknown ids are ignored: a regenerate may have wiped them between the
+     * reviewer opening the tab and clicking Submit.
      */
     readonly markIssuesSubmitted: (
       issueIds: readonly string[],
     ) => Effect.Effect<string, DbError, DbService>;
 
     /**
-     * Atomically increment `walkthroughs.next_seq` and return the value that
-     * was current before the increment. The returned value is the `seq` to
-     * stamp onto the outgoing `walkthrough:event` envelope; the post-bump
-     * value is what will be returned on the *next* call.
+     * Atomically take the next `seq` to stamp on an outgoing
+     * `walkthrough:event` envelope (the pre-increment value, starting at 0).
      *
-     * Sequence starts at 0 for a freshly-created walkthrough row. Survives
-     * `kill -9` and resume — invariant #1 (SQLite is authoritative). Chat-
-     * edit writes after `status='complete'` continue to use the same
-     * counter so it strictly grows for the lifetime of the row.
+     * Survives `kill -9` and resume (invariant #1). Chat-edit writes after
+     * `status='complete'` use the same counter, so it strictly grows for the
+     * lifetime of the row.
      */
     readonly bumpSeq: (walkthroughId: string) => Effect.Effect<number, DbError, DbService>;
 
     /**
-     * List in-flight (`status='generating'`) walkthroughs owned by the
-     * given account, returning the cursor (`seqAt = next_seq - 1`) the
-     * client uses to drop any in-flight events that arrived on the SSE
-     * before the snapshot. The client calls this once on SSE open to seed
-     * sidebar spinners and `lastSeenSeq` cursors for jobs the user isn't
-     * currently viewing.
+     * The account's `generating` walkthroughs, each with the cursor
+     * (`seqAt = next_seq - 1`) the client uses to drop events that arrived on
+     * the SSE before the snapshot. The client calls this once on SSE open to
+     * seed sidebar spinners and `lastSeenSeq` cursors for jobs the user isn't
+     * viewing.
      */
     readonly listActiveForAccount: (accountId: string) => Effect.Effect<
       Array<{
@@ -400,10 +363,9 @@ export class WalkthroughService extends Context.Service<
     >;
 
     /**
-     * Read the current `seqAt = next_seq - 1` cursor for a single walkthrough.
-     * Used by `GET /walkthrough/current` so the client can seed its
-     * `lastSeenSeq[walkthroughId]` cursor at hydration time and drop
-     * envelopes already covered by the REST snapshot.
+     * The `seqAt = next_seq - 1` cursor a REST snapshot ships with, so the
+     * client seeds `lastSeenSeq[walkthroughId]` and drops envelopes the
+     * snapshot already covers.
      */
     readonly getSeqAt: (walkthroughId: string) => Effect.Effect<number, DbError, DbService>;
 
@@ -500,8 +462,6 @@ function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
     .run();
 }
 
-// ── Live implementation ─────────────────────────────────────────────────────
-
 export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
   createPartial: (params) =>
     Effect.gen(function* () {
@@ -511,11 +471,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       const mode = params.mode ?? "reviewer";
       const generationMode = params.generationMode ?? "full";
 
-      // Atomically: look at any existing row at (prId, prHeadSha), mark
-      // terminal rows historical when a fresh row is needed, otherwise
-      // reuse active rows. The transaction ensures concurrent startJob
-      // calls for the same (prId, prHeadSha, mode, generationMode) can't race and produce
-      // duplicate rows or zero rows.
       const result = yield* dbTry("create walkthrough", () =>
         db.transaction((tx): { id: string } => {
           let supersededExistingId: string | null = null;
@@ -538,9 +493,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
           if (existing) {
             if (existing.status === "generating") {
-              // In-flight — keep the row. The orchestrator's
-              // idempotent-startJob path upstream of this call already
-              // handles this case; we only reach here on a race.
+              // startJob's idempotency check catches this upstream; reaching
+              // it here means a race.
               return { id: existing.id };
             }
             if (existing.status === "complete" && !params.forceNew) {
@@ -550,8 +504,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               supersedeRows(tx, [existing.id]);
               supersededExistingId = existing.id;
             }
-            // 'superseded' rows stay in place now that uniqueness only
-            // applies to active rows.
           }
 
           tx.insert(walkthroughs)
@@ -681,10 +633,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
   supersedeAllForPr: (prId, exceptHeadSha, mode) =>
     tryDb("supersedeAllForPr", (db) =>
       db.transaction(() => {
-        // Collect the IDs of every walkthrough that is about to be superseded.
-        // `exceptHeadSha` excludes a specific head-SHA from the sweep —
-        // that's how the SHA-aware PollScheduler path avoids marking the
-        // freshly-created walkthrough at the new head as stale.
         const baseConditions = [
           eq(walkthroughs.pullRequestId, prId),
           ne(walkthroughs.status, "superseded"),
@@ -724,7 +672,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
   getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
     tryDb("getPartial", (db) => {
-      // Superseded rows are terminal from a resume's perspective.
       const found = readWalkthrough(
         db,
         and(
@@ -947,13 +894,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
 
   findLatestReviewArtifact: (prId, mode = "reviewer") =>
     tryDb("findLatestReviewArtifact", (db) => {
-      // `lastCompletedPhase != 'none'` is the "this row actually reviewed
-      // something" test: Phase A's `set_overview` is the first write of the
-      // pipeline, so a row still at 'none' has no summary, no diff steps —
-      // nothing a follow-up incremental run could build on. Rows die at 'none'
-      // when a supersede sweep cancels them mid-exploration; treating one as
-      // the last reviewed artifact made the next incremental run's base SHA
-      // equal its own head, i.e. a review of an empty commit range.
+      // Phase A's `set_overview` is the pipeline's first write, so a row still
+      // at 'none' reviewed nothing. Rows die there when a supersede sweep
+      // cancels them mid-exploration; taking one as the base would make the
+      // next incremental run review an empty commit range.
       const reviewed = [
         eq(walkthroughs.mode, mode),
         inArray(walkthroughs.status, ["complete", "superseded"]),

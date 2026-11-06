@@ -1,11 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { isTrustedHeadShaMove, preserveHeadOnStaleRead } from "./pr-head-move";
 
-// ── isTrustedHeadShaMove ─────────────────────────────────────────────────────
-// Guards the destructive half of the poll: a head-SHA "move" reported by a
-// stale list read used to cancel + supersede the walkthrough generating at the
-// real head.
-
 describe("isTrustedHeadShaMove", () => {
   const OLD = "cc7d62fc2a837efe9f953ffa1e48ff72be280d6f";
   const NEW = "c5f7ac2d519f9494f19af19f7ba2a758f8a3fda5";
@@ -64,11 +59,6 @@ describe("isTrustedHeadShaMove", () => {
     ).toBe(true);
   });
 });
-
-// ── preserveHeadOnStaleRead ──────────────────────────────────────────────────
-// The write-side half of the same guard. Gating only the supersede left the
-// upsert free to write the stale head *and* the older `updated_at`, which then
-// re-opened the gate on the following cycle.
 
 describe("preserveHeadOnStaleRead", () => {
   const OLD = "cc7d62fc2a837efe9f953ffa1e48ff72be280d6f";

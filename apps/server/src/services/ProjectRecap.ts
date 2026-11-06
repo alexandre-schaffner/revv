@@ -1,15 +1,5 @@
-// ─── ProjectRecapService ────────────────────────────────────────────────────
-//
-// Thin Drizzle adapter for the `project_recaps` table. Scope mirrors
-// WalkthroughService:
-//
-//   • Orchestrator lifecycle (createPartial, finish, resetForRerun,
-//     incrementResumeAttempts, listGenerating, the source bundle).
-//   • Read-side (getById, listForRepo, getLatestForRepo,
-//     findActiveForPeriod).
-//
-// Per CLAUDE.md invariants #2 and #11: only `ProjectRecapJobs` calls
-// `finish`. Agents reach the DB only via the recap MCP tool surface.
+// Only `ProjectRecapJobs` calls `finish` (invariants 2 and 11). Agents reach
+// the DB only via the recap MCP tool surface.
 
 import type {
   ProjectRecap,
@@ -180,11 +170,9 @@ export class ProjectRecapService extends Context.Service<
   ProjectRecapService,
   {
     /**
-     * Insert a recap row at `status='generating'`. Returns the row.
-     *
      * There's no DB-level unique on (repo, period, periodStart): older
      * installs hold superseded rows beside the current one. The
-     * orchestrator's `startJob` mutex keeps one live row per period.
+     * orchestrator's per-window mutex keeps one live row per period.
      */
     readonly createPartial: (
       params: CreatePartialRecapParams,
@@ -194,7 +182,7 @@ export class ProjectRecapService extends Context.Service<
       id: string,
     ) => Effect.Effect<ProjectRecap, RecapNotFoundError | DbError, DbService>;
 
-    /** Look up a complete-or-generating recap for a specific period. */
+    /** The period's current (non-superseded) recap, whatever its status. */
     readonly findActiveForPeriod: (
       repoId: string,
       period: RecapPeriod,
@@ -246,22 +234,13 @@ export class ProjectRecapService extends Context.Service<
      */
     readonly markEmptyWindow: (recapId: string) => Effect.Effect<void, DbError, DbService>;
 
-    /**
-     * Reset an existing row for an in-place rerun. Clears all content /
-     * lifecycle fields back to a fresh `'generating'` state (lede → "",
-     * entries → deleted, theme summaries → deleted, status → 'generating',
-     * completedAt → null, errorMessage → null, resumeAttempts → 0,
-     * generatedAt → now). Used by `ProjectRecapJobs.requestRecap`
-     * to update a recap in place (per the recap "max 1 per period" rule).
-     */
+    /** Reruns happen in place: a window holds at most one active recap. */
     readonly resetForRerun: (
       recapId: string,
       newBoundaries?: { readonly periodStart?: string; readonly periodEnd?: string },
     ) => Effect.Effect<void, RecapNotFoundError | DbError, DbService>;
 
-    /**
-     * Enumerate rows still in `status='generating'` for boot-time resume.
-     */
+    /** For boot-time resume. */
     readonly listGenerating: () => Effect.Effect<
       ReadonlyArray<{
         readonly id: string;
@@ -456,9 +435,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           .orderBy(desc(projectRecaps.completedAt))
           .limit(limit)
           .all();
-        // `.map(rowToRecap)` would invoke with (row, index) and the index
-        // would conflict with our optional `entries` second arg. Use an
-        // explicit arrow to drop the index.
+        // `.map(rowToRecap)` would pass the index as the optional `entries` arg.
         return rows.map((r) => rowToRecap(r));
       });
     }),

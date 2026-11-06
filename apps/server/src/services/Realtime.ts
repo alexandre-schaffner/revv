@@ -1,5 +1,3 @@
-// ── Realtime ────────────────────────────────────────────────────────────────
-//
 // Who receives a server push. Features address an event to an account, or to
 // the repository or pull request it concerns, and this resolves the owning
 // account in one place; `Broadcaster` only moves the bytes.
@@ -22,9 +20,7 @@ export class Realtime extends Context.Service<
   Realtime,
   {
     readonly toAccount: (accountId: string, msg: ServerEventMessage) => Effect.Effect<void>;
-    /** To the account that tracks the repository. */
     readonly toRepo: (repoId: string, msg: ServerEventMessage) => Effect.Effect<void>;
-    /** To the account that tracks the pull request's repository. */
     readonly toPr: (prId: string, msg: ServerEventMessage) => Effect.Effect<void>;
     /** To every client. Only for server-global signals that carry no account data. */
     readonly toAll: (msg: ServerEventMessage) => Effect.Effect<void>;

@@ -42,7 +42,6 @@ function layerFor(jev: Partial<UserSettings["jev"]>, secrets: Record<string, str
   return JevServiceLive.pipe(Layer.provide(Layer.merge(fakeSettings(jev), fakeSecrets(secrets))));
 }
 
-/** Run with `fetch` booby-trapped, so any network use fails the test. */
 async function withoutNetwork<A>(run: () => Promise<A>): Promise<A> {
   const original = globalThis.fetch;
   globalThis.fetch = ((): never => {

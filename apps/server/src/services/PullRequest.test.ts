@@ -19,7 +19,6 @@ import { Realtime } from "./Realtime";
 const ACCOUNT_ID = "acc-1";
 const REPO_ID = "repo-1";
 
-// Seed one account/repo and a spread of PRs across statuses and authors.
 // closedAt values are deliberately out of insertion order so tests also
 // assert the `closedAt DESC` ordering, not just membership.
 function seed(db: Db): void {
@@ -159,12 +158,9 @@ describe("listArchivedPrs author filter", () => {
   });
 });
 
-// ── upsertPrs: what the poll is allowed to overwrite ────────────────────────
-//
-// The poll's only source for open PRs is GitHub's list-PRs endpoint, which
-// returns the "simple" PR object: no additions, deletions, or changed_files,
-// and therefore zeroes after mapping. These tests pin the two columns whose
-// prior values must survive that.
+// The poll lists open PRs from GitHub's list-PRs endpoint, which returns the
+// "simple" PR object: no additions, deletions or changed_files, so zeroes after
+// mapping. Stored stats must survive that.
 
 /** A PR as it arrives from the *list* endpoint: real metadata, zeroed stats. */
 function listSourcedPr(overrides: Partial<ObservedPr> = {}): ObservedPr {
@@ -220,10 +216,7 @@ function readRow(db: Db, id: string) {
   return row;
 }
 
-/**
- * Seed real diff stats the way production does — by caching a changed-file
- * list, which records the PR's size in the same transaction.
- */
+/** Seed real diff stats by caching a changed-file list, which records the PR's size with it. */
 function seedDiffStats(
   db: Db,
   prId: string,
@@ -283,7 +276,6 @@ describe("upsertPrs diff stats", () => {
     expect(row.additions).toBe(15);
     expect(row.deletions).toBe(3);
     expect(row.changedFiles).toBe(2);
-    // Everything else on the row still tracks GitHub.
     expect(row.title).toBe("updated title");
     expect(row.headSha).toBe("sha-new");
   });
@@ -333,11 +325,8 @@ describe("upsertPrs mentioned users", () => {
   });
 });
 
-// ── listOpenPrsAsOfWindow: "in flight" reconstructed from timestamps ────────
-//
-// The `status` column only ever describes *now*, so a recap for a window three
-// weeks back must decide membership from createdAt/closedAt instead. These
-// pin the four corners of that predicate.
+// `status` only describes *now*, so a recap for a past window decides "in
+// flight" from createdAt/closedAt. These pin the four corners of that predicate.
 
 const WINDOW_END = "2026-07-04T00:00:00Z";
 
@@ -354,7 +343,6 @@ function seedInFlight(db: Db): void {
   };
   db.insert(pullRequests)
     .values([
-      // Opened before the window closed, still open today.
       {
         ...base,
         id: "pr-still-open",
@@ -363,7 +351,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: null,
       },
-      // Opened before, closed *after* — in flight at that instant.
       {
         ...base,
         id: "pr-closed-after",
@@ -372,7 +359,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: "2026-07-10T00:00:00Z",
       },
-      // Opened before, closed *before* — already done by then.
       {
         ...base,
         id: "pr-closed-before",
@@ -381,7 +367,6 @@ function seedInFlight(db: Db): void {
         createdAt: "2026-06-20T00:00:00Z",
         closedAt: "2026-07-02T00:00:00Z",
       },
-      // Didn't exist yet.
       {
         ...base,
         id: "pr-created-after",
@@ -435,7 +420,6 @@ describe("listOpenPrsAsOfWindow", () => {
     const db = createDb(":memory:");
     seed(db);
     seedInFlight(db);
-    // A PR created exactly at `until` hadn't opened when the window shut.
     db.insert(pullRequests)
       .values({
         repositoryId: REPO_ID,
@@ -453,7 +437,6 @@ describe("listOpenPrsAsOfWindow", () => {
         closedAt: null,
       })
       .run();
-    // A PR closed exactly at `until` was still open for the whole window.
     db.insert(pullRequests)
       .values({
         repositoryId: REPO_ID,

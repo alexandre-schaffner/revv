@@ -67,12 +67,10 @@ export function rankThreadSweep<P extends Pick<PullRequest, "id" | "updatedAt">>
 }
 
 export interface PollState {
-  /** The signature of the repo's last list that landed, if still remembered. */
   readonly listed: (repoId: string) => ListedSignature | undefined;
   readonly recordListing: (repoId: string, listed: ListedSignature) => void;
   /** Forget a repo's list, so the next cycle lists it in full. */
   readonly forgetListing: (repoId: string) => void;
-  /** Drop what's remembered for repos no longer tracked. */
   readonly keepListingsFor: (repoIds: ReadonlySet<string>) => void;
 
   /** Whether to ask this account+host for stacks, or it recently refused them. */
@@ -80,16 +78,14 @@ export interface PollState {
   readonly noteStacksRefused: (accountHost: string, now: number) => void;
   readonly noteStacksAnswered: (accountHost: string) => void;
 
-  /** Open PRs in the order the thread sweep should visit them. */
   readonly sweepOrder: <P extends Pick<PullRequest, "id" | "updatedAt">>(
     openPrs: readonly P[],
     now: number,
   ) => Array<{ readonly pr: P; readonly recheck: boolean }>;
   readonly noteSwept: (pr: Pick<PullRequest, "id" | "updatedAt">, now: number) => void;
-  /** Drop sweep marks of PRs that left the open list. */
   readonly keepSweptFor: (openPrIds: ReadonlySet<string>) => void;
 
-  /** Whether an hourly pass is due; claims it when it is. Due at once after boot. */
+  /** Whether a pass is due, claiming it if so. Due at once after boot. */
   readonly claimDue: (
     pass: "metadata" | "archive-backfill",
     intervalMs: number,

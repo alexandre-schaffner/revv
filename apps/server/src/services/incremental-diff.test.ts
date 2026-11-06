@@ -8,8 +8,6 @@ import {
   resolveCounts,
 } from "./incremental-diff";
 
-// ── normalizeGitStatus ───────────────────────────────────────────────────────
-
 describe("normalizeGitStatus", () => {
   it("maps the git status letters", () => {
     expect(normalizeGitStatus("A")).toBe("added");
@@ -25,8 +23,6 @@ describe("normalizeGitStatus", () => {
     expect(normalizeGitStatus("X")).toBe("modified");
   });
 });
-
-// ── parseNameStatusZ ─────────────────────────────────────────────────────────
 
 describe("parseNameStatusZ", () => {
   it("parses plain modifications and additions", () => {
@@ -50,8 +46,6 @@ describe("parseNameStatusZ", () => {
     expect(parseNameStatusZ("\0\0")).toEqual([]);
   });
 });
-
-// ── parseNumstat ─────────────────────────────────────────────────────────────
 
 describe("parseNumstat", () => {
   it("keys counts by path", () => {
@@ -80,8 +74,6 @@ describe("parseNumstat", () => {
   });
 });
 
-// ── countPatchLines ──────────────────────────────────────────────────────────
-
 describe("countPatchLines", () => {
   it("counts added/removed lines and ignores file headers", () => {
     const patch = ["--- a/x.ts", "+++ b/x.ts", "@@ -1 +1,2 @@", "-old", "+new", "+extra"].join(
@@ -90,8 +82,6 @@ describe("countPatchLines", () => {
     expect(countPatchLines(patch)).toEqual({ additions: 2, deletions: 1 });
   });
 });
-
-// ── capPatch ─────────────────────────────────────────────────────────────────
 
 describe("capPatch", () => {
   it("returns null for empty or whitespace-only patches", () => {
@@ -115,14 +105,11 @@ describe("capPatch", () => {
     expect(result).not.toBeNull();
     expect(result?.startsWith("+".repeat(MAX_INCREMENTAL_PATCH_CHARS))).toBe(true);
     expect(result).toContain("diff truncated");
-    // The original length is recorded in the marker.
     expect(result).toContain(String(oversized.length));
     // The kept diff body never exceeds the cap (the marker is short metadata).
     expect(result?.length).toBeLessThan(MAX_INCREMENTAL_PATCH_CHARS + 200);
   });
 });
-
-// ── resolveCounts ────────────────────────────────────────────────────────────
 
 describe("resolveCounts", () => {
   const numstat = parseNumstat("12\t3\tsrc/a.ts\n");

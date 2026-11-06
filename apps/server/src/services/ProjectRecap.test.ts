@@ -237,8 +237,6 @@ describe("DB failures", () => {
       ),
     );
 
-  // Regression: a failed bump answered 0, so resume-on-boot kept relaunching a
-  // row past its resume budget.
   it("fails incrementResumeAttempts with DbError instead of answering 0", async () => {
     const db = createDb(":memory:");
     seed(db);
