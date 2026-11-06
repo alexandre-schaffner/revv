@@ -629,7 +629,8 @@
   --recap-gutter: 2.5rem; /* rail → column */
 
   /* Motion — durations
-       Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
+       src/lib/motion/tokens.ts is generated from the --duration-*, --ease-*
+       and --stagger-* variables here: `bun run gen:motion-tokens`. */
   --duration-instant: 80ms; /* hover, focus rings, micro-state */
   --duration-snap: 120ms; /* small surfaces, chevrons, badges */
   --duration-quick: 160ms; /* default UI motion */
