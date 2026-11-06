@@ -987,8 +987,12 @@ export function getReposFetchAttempted(): boolean {
   return reposFetchAttempted;
 }
 
+export function getRepoById(repoId: string): Repository | null {
+  return repositories.find((r) => r.id === repoId) ?? null;
+}
+
 export function getRepoOwner(repoId: string): string | null {
-  return repositories.find((r) => r.id === repoId)?.owner ?? null;
+  return getRepoById(repoId)?.owner ?? null;
 }
 
 export function getSelectedPrId(): string | null {

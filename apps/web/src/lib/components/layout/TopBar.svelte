@@ -8,12 +8,7 @@ import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shar
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
 import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
-import {
-  getIsLoading,
-  getRepositories,
-  getSelectedPr,
-  getSelectedPrId,
-} from "$lib/stores/prs.svelte";
+import { getIsLoading, getRepoById, getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
 
 interface Props {
@@ -29,9 +24,7 @@ let { subtitle, rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar
   $props();
 
 const pr = $derived(getSelectedPr());
-const repository = $derived(
-  pr ? (getRepositories().find((candidate) => candidate.id === pr.repositoryId) ?? null) : null,
-);
+const repository = $derived(pr ? getRepoById(pr.repositoryId) : null);
 const selectedPrId = $derived(getSelectedPrId());
 const linkCopied = $derived(getPrLinkCopied());
 

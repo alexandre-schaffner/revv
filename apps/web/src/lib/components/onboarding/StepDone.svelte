@@ -2,7 +2,7 @@
 import { onMount } from "svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
-import { completeOnboarding, getIsOnboarded } from "$lib/stores/auth.svelte";
+import { completeOnboarding, endOnboardingReplay, getIsOnboarded } from "$lib/stores/auth.svelte";
 
 interface Props {
   onFinish: () => void;
@@ -15,9 +15,7 @@ onMount(() => {
   const maxAttempts = 5;
 
   async function tryComplete() {
-    if (typeof sessionStorage !== "undefined") {
-      sessionStorage.removeItem("revv-onboarding-replay");
-    }
+    endOnboardingReplay();
     try {
       await completeOnboarding();
     } catch {

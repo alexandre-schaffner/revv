@@ -8,7 +8,7 @@
 //   first, then a fresh fetch replaces it. A conversation never replaces a
 //   newer one (`fetchedAt`), and a load that raced a write is dropped.
 // - Writes are optimistic. The local copy changes at once (a patch from
-//   `conversation-patches.ts`), the server applies the write on GitHub and
+//   `lib/conversation/patches.ts`), the server applies the write on GitHub and
 //   answers the re-read conversation, which replaces the optimistic copy; a
 //   failure undoes the rows the patch touched, nothing else.
 // - While the tab is on screen (`watchConversation`), pending CI is polled and
