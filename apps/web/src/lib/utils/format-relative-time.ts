@@ -5,11 +5,6 @@ interface RelativeTimeOptions {
   seconds?: boolean;
 }
 
-/**
- * Format an ISO timestamp as a short relative-time string ("just now",
- * "5m ago", "3h ago", "2d ago"). Rolls over to an ISO date once the delta
- * exceeds 10 days.
- */
 export function formatRelativeTime(iso: string, options: RelativeTimeOptions = {}): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return iso;

@@ -1,4 +1,3 @@
-/** Bring the desktop window to the front. */
 export async function surfaceWindow(): Promise<void> {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");

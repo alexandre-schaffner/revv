@@ -15,8 +15,6 @@ describe("compareServiceBuild", () => {
     });
   });
 
-  // The case that hid the #267 server fix from users: in-app updates moved
-  // the app forward while a server from before this field kept running.
   it("flags a server too old to report its commit", () => {
     expect(compareServiceBuild("ddfe9b8", undefined)).toEqual({
       kind: "mismatch",

@@ -1,9 +1,8 @@
-// The one client for the server's fetch-SSE streams (chat turns, recaps,
-// base-conflict and push-conflict runs, agent install/login). The server
-// heartbeats most of them (`: ping` every 15 s), so a stretch
-// with no bytes at all means the connection is dead, not that the agent is
-// thinking. A silent close (server crash, the OS reclaiming the WKWebView
-// socket) never resolves a pending read, so only a timer can notice it.
+// The client for the server's fetch-SSE streams. The server heartbeats most of
+// them (`: ping` every 15 s), so a stretch with no bytes at all means the
+// connection is dead, not that the agent is thinking. A silent close (server
+// crash, the OS reclaiming the WKWebView socket) never resolves a pending
+// read, so only a timer can notice it.
 
 import { SSE_DONE_DATA, SSE_ERROR_EVENT, type StreamErrorCode } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -13,10 +12,8 @@ import { authHeaders } from "$lib/session/token.svelte";
 const DEFAULT_IDLE_TIMEOUT_MS = 90 * 1000;
 
 interface SseStreamOptions<T> {
-  /** Path under the API origin, e.g. `/api/chat`. */
   readonly path: string;
   readonly method?: "GET" | "POST";
-  /** Sent as JSON. */
   readonly body?: unknown;
   readonly signal?: AbortSignal;
   /**
@@ -31,9 +28,7 @@ interface SseStreamOptions<T> {
 /** The server answered with a non-2xx status before streaming. */
 export class SseHttpError extends Error {
   override readonly name = "SseHttpError";
-  /** The parsed JSON body, or `null` when there wasn't one. */
   readonly body: unknown;
-  /** The body's `message` or `error` string, when it carries one. */
   readonly serverMessage: string | undefined;
 
   constructor(
@@ -60,7 +55,6 @@ export class SseFrameError extends Error {
   }
 }
 
-/** No bytes arrived within the idle timeout. */
 export class SseIdleError extends Error {
   override readonly name = "SseIdleError";
 
@@ -117,7 +111,6 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
     let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
-      // A frame the server left unterminated before closing still counts.
       buffer += done ? `${decoder.decode()}\n\n` : decoder.decode(value, { stream: true });
       if (value && value.byteLength > 0) armIdle();
 

@@ -14,7 +14,6 @@ import { repoKey } from "./add-repo";
 const MAX_AUTO_RETRIES = 3;
 const AUTO_RETRY_DELAY_MS = 2000;
 
-/** The tracked repository named `fullName`, compared case-insensitively. */
 export function getTrackedRepo(fullName: string): Repository | undefined {
   const key = repoKey(fullName);
   return getRepositories().find((repo) => repoKey(repo.fullName) === key);
@@ -49,14 +48,12 @@ export function useAvailableRepos() {
   });
 
   return {
-    /** Loading, or failed with automatic retries still to come. */
     get loading(): boolean {
       return (
         getAvailableReposLoading() ||
         (getAvailableReposFetchFailed() && autoRetries < MAX_AUTO_RETRIES)
       );
     },
-    /** Failed and out of automatic retries. */
     get failed(): boolean {
       return getAvailableReposFetchFailed() && autoRetries >= MAX_AUTO_RETRIES;
     },
@@ -67,7 +64,6 @@ export function useAvailableRepos() {
   };
 }
 
-/** Opens the native folder picker. Null when the user cancels or it fails. */
 export async function pickDirectory(): Promise<string | null> {
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");

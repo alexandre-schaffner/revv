@@ -1,9 +1,6 @@
-// ── First pass derivations ──────────────────────────────────────────────────
-//
-// Pure helpers over `HunkScanRow` rows. What the review made of each lead
-// comes from the verdicts its agent recorded (`resolve_lead`) when the
-// walkthrough tracked them. Older and imported walkthroughs carry none, and
-// for those it is inferred by overlapping the hunk with the issues.
+// What the review made of each lead comes from the verdicts its agent recorded
+// (`resolve_lead`). Older and imported walkthroughs carry none, so for those
+// it is inferred by overlapping the hunk with the issues.
 
 import {
   flaggedHunkSmells,
@@ -41,7 +38,6 @@ export type LeadOutcome =
   | { kind: "not_sent" }
   | { kind: "pending" };
 
-/** The recorded lead for a scan row, matched on file and hunk position. */
 function leadForRow(
   entry: HunkScanRow,
   leads: readonly WalkthroughLead[],
@@ -49,12 +45,7 @@ function leadForRow(
   return leads.find((l) => l.filePath === entry.filePath && l.hunkIndex === entry.hunkIndex);
 }
 
-/**
- * Issues on the row's file whose lines overlap the hunk's new-side range
- * `[newStart, newStart + newLines)`, which is empty for a pure deletion: a
- * hunk with no new-side lines never confirms. An issue without a start line
- * can't be placed, so it never overlaps.
- */
+/** Overlap is on the new side only, so a pure deletion never confirms. */
 export function overlappingIssueIds(
   entry: HunkScanRow,
   issues: readonly WalkthroughIssue[],
@@ -69,13 +60,7 @@ export function overlappingIssueIds(
     .map((issue) => issue.id);
 }
 
-/**
- * What the review made of a hunk's lead. `leads` is the walkthrough's
- * recorded selection, or null when it never recorded one — then a lead counts
- * as `confirmed` when an issue overlaps the hunk (`overlappingIssueIds`).
- * `isComplete` only decides between the outcomes a finished review can give
- * an unconfirmed lead and `pending`.
- */
+/** `leads` is null when the walkthrough never recorded a selection. */
 export function leadOutcome(
   entry: HunkScanRow,
   issues: readonly WalkthroughIssue[],
@@ -127,13 +112,12 @@ export function leadOutcomeNote(outcome: LeadOutcome): string | null {
 
 /**
  * Skipped because of what the hunk is (generated, deletion-only, …) rather
- * than because the call failed. These never count toward the scan's total.
+ * than because the call failed; never counted toward the scan's total.
  */
 function isContentSkip(entry: HunkScanRow): boolean {
   return entry.skipReason !== null && entry.skipReason !== "unscanned";
 }
 
-/** `answered` of `total` for "Scanning N of M hunks…"; content skips aren't in either. */
 export function scanProgress(rows: readonly HunkScanRow[]): {
   answered: number;
   total: number;
@@ -153,7 +137,6 @@ export function smellTone(smell: HunkSmell): SmellTone {
   return smell === "vulnerability" ? "danger" : "warning";
 }
 
-/** The tone of a hunk's worst flagged smell; null when nothing is flagged. */
 export function hunkTone(entry: HunkScanRow): SmellTone | null {
   const flagged = flaggedHunkSmells(entry.signals);
   if (flagged.length === 0) return null;
@@ -172,7 +155,6 @@ export function rowMatchesHunk(
   return entry.newStart === hunk.newStart && entry.newLines === hunk.newLines;
 }
 
-/** `L42–68`, or `L42` for a one-line hunk. */
 export function hunkRangeLabel(entry: HunkScanRow): string {
   const last = hunkNewEnd(entry);
   return last === entry.newStart ? `L${entry.newStart}` : `L${entry.newStart}–${last}`;
@@ -196,7 +178,6 @@ export interface ScanTick {
   hunks: HunkScanRow[];
 }
 
-/** Worst first: a tick shows the most urgent state among its hunks. */
 const TICK_PRIORITY: readonly ScanTickState[] = [
   "danger",
   "warning",
@@ -222,10 +203,8 @@ function hunkLevel(entry: HunkScanRow): number {
 }
 
 /**
- * The hunks the scan covers, in the order the server keeps them (diff order),
- * split into at most `maxTicks` contiguous ticks so the ribbon keeps its size
- * whatever the PR's size. Content skips are left out: they were never going
- * to be scanned.
+ * At most `maxTicks` contiguous ticks in diff order, so the ribbon keeps its
+ * size whatever the PR's size.
  */
 export function scanTicks(rows: readonly HunkScanRow[], maxTicks: number): ScanTick[] {
   const hunks = rows.filter((row) => !isContentSkip(row));
@@ -261,12 +240,10 @@ function leadKey(lead: UnraisedLead): number {
   return top ? (smellTone(top.smell) === "danger" ? 2 : 1) + top.probability : 0;
 }
 
-/** What the review made of the first pass, from one walk over the flagged rows. */
 interface FirstPassReview {
   /**
-   * Flagged hunks no live issue confirms, vulnerabilities first, then
-   * strongest smell first. The leads the review did take up show on their
-   * issue instead.
+   * Flagged hunks no live issue confirms. The leads the review did take up
+   * show on their issue instead.
    */
   unraised: UnraisedLead[];
   /** Per issue, the smells the first pass flagged on the hunks it confirmed. */
@@ -303,14 +280,10 @@ function reviewFirstPass(
   };
 }
 
-/** Everything the walkthrough shows of the first pass, for one head. */
 export interface FirstPassView extends FirstPassReview {
-  /** Empty when there's no first pass to show. */
   rows: readonly HunkScanRow[];
   running: boolean;
-  /** `Scanning 3 of 12`, while it runs. */
   scanning: string;
-  /** What it found once over: `4 leads in 12 hunks`, or `of 12` for a partial scan. */
   result: string;
   /** Why the scan didn't cover the whole diff, when it didn't. */
   note: string | null;

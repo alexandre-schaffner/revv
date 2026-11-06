@@ -12,37 +12,19 @@ import { createResource } from "$lib/stores/resource";
 import { monthGridRange } from "./period-window";
 import { abortRecapStream } from "./stream.svelte";
 
-// ── State ────────────────────────────────────────────────────────────────────
-
 /**
- * Recap summaries per repository, keyed by `repositoryId`. Each entry is
- * ordered newest → oldest by `generatedAt`. The detail row (`overview` etc.)
- * isn't carried here — it's fetched on demand via `loadRecap`.
- *
- * Semantics: this is **every summary we've loaded**, not "the first page".
- * The calendar fetches arbitrary historical grids by month, so both fetch
- * paths merge into this one map rather than replacing it. A parallel
- * by-month slice would force both SSE reducers to patch two structures
- * consistently, for no benefit.
- *
- * Consequence: a row the server later excludes (it became `superseded`)
- * lingers here until reload. Mostly handled already — `onRecapStatusChanged`
- * patches the status on broadcast and every consumer filters
- * `status !== "superseded"` — and any new consumer must do the same.
- * Tombstone tracking isn't worth it for a local desktop app.
+ * Recap summaries per repository, newest `generatedAt` first. This is every
+ * summary loaded so far (the calendar loads arbitrary historical months), not
+ * one page, so a row the server later supersedes lingers until reload: every
+ * consumer must filter out `status === "superseded"`.
  */
 let recapsByRepo = $state<Map<string, ProjectRecapSummary[]>>(new Map());
 
-/** Full recap (markdown + provenance + stats), keyed by `recapId`. */
 let recapDetailById = $state<Map<string, ProjectRecap>>(new Map());
-
-// The three reads below only schedule fetches; what they read merges into the
-// maps above, which SSE reducers patch too.
 
 /** A repo's newest page of summaries. */
 const repoReads = createResource<void, true>({ fetch: (repoId) => readRepoRecaps(repoId) });
 
-/** A calendar month's grid, by `repoId:monthKey`; a loaded month stays loaded. */
 const monthReads = createResource<{ readonly repoId: string; readonly monthKey: string }, true>({
   fetch: (_key, { repoId, monthKey }) => readMonthRecaps(repoId, monthKey),
   freshForMs: Number.POSITIVE_INFINITY,
@@ -54,11 +36,8 @@ function monthCacheKey(repoId: string, monthKey: string): string {
   return `${repoId}:${monthKey}`;
 }
 
-// In-flight destructive actions keyed by recapId. Drives the `disabled`
-// state on the floating Stop / Resume / Retry / Regenerate buttons so a
-// double-click can't fire two concurrent actions during the async
-// POST → stream-restart dance. Same shape as walkthrough's pending-action
-// map; mutations follow the Map-reassignment idiom enforced elsewhere.
+// Disables the floating Stop / Regenerate buttons while one is in flight, so a
+// double-click can't fire two concurrent actions.
 export type RecapPendingAction = "stop" | "regenerate";
 
 const pendingActions = $state({
@@ -76,16 +55,9 @@ function clearPending(recapId: string): void {
   pendingActions.map = new Map(pendingActions.map);
 }
 
-/**
- * In-flight destructive action for the given recap, or null. Consumed by
- * the RecapDetail floating bar to disable buttons during the async dance
- * after the user clicks one.
- */
 export function getRecapPendingAction(recapId: string): RecapPendingAction | null {
   return pendingActions.map.get(recapId) ?? null;
 }
-
-// ── Getters ──────────────────────────────────────────────────────────────────
 
 export function getRecapsForRepo(repoId: string): ProjectRecapSummary[] {
   return recapsByRepo.get(repoId) ?? [];
@@ -95,7 +67,6 @@ export function getRecapLoading(repoId: string): boolean {
   return repoReads.entry(repoId).loading;
 }
 
-/** True while the calendar grid for this month is being fetched. */
 export function getMonthRecapsLoading(repoId: string, monthKey: string): boolean {
   return monthReads.entry(monthCacheKey(repoId, monthKey)).loading;
 }
@@ -107,8 +78,6 @@ export function getRecapDetail(recapId: string): ProjectRecap | null {
 export function getRecapDetailLoading(recapId: string): boolean {
   return detailReads.entry(recapId).loading;
 }
-
-// ── Map-write helpers (per §4 conventions — reassign after Map.set) ─────────
 
 function setEntry<K, V>(map: Map<K, V>, key: K, value: V): Map<K, V> {
   const next = new Map(map);
@@ -127,12 +96,6 @@ function updateEntry<K, V>(
   return next;
 }
 
-// ── List fetches ─────────────────────────────────────────────────────────────
-
-/**
- * Upsert `incoming` into `current` by `id` (incoming wins), then re-sort
- * `generatedAt` DESC to preserve the list invariant every consumer relies on.
- */
 function mergeSummaries(
   current: readonly ProjectRecapSummary[],
   incoming: readonly ProjectRecapSummary[],
@@ -150,9 +113,8 @@ async function readRepoRecaps(repoId: string) {
   try {
     const { data, error } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
     if (error) throw new Error(apiErrorMessage(error, "Failed to load recaps"));
-    // Merge, don't replace. `generateRecap` calls this on every trigger,
-    // and a replace would wipe every historical month the calendar has
-    // loaded the instant the user generates anything.
+    // Merge, don't replace: this runs on every generate, and replacing would
+    // drop every historical month the calendar has loaded.
     recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
       mergeSummaries(cur ?? [], data.recaps),
     );
@@ -165,9 +127,8 @@ async function readRepoRecaps(repoId: string) {
 }
 
 /**
- * Fetch every recap whose window falls inside a calendar month's 6×7 grid and
- * merge it into {@link recapsByRepo}. Idempotent: a month already loaded or in
- * flight is a no-op, so the calendar's prefetch effects can fire freely.
+ * Fetch every recap whose window falls inside a calendar month's 6×7 grid. A
+ * month already loaded or in flight is a no-op, so prefetches can fire freely.
  *
  * `limit: "100"` (`MAX_RECAP_PAGE_LIMIT` on the server) is load-bearing, not
  * defensive. The default page limit is 30, but a 42-day grid can hold 42 daily
@@ -225,8 +186,6 @@ async function readRecap(recapId: string) {
   }
 }
 
-// ── Mutations ────────────────────────────────────────────────────────────────
-
 export async function generateRecap(
   repoId: string,
   period: RecapPeriod,
@@ -267,13 +226,6 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
   }
 }
 
-/**
- * Stop an in-flight recap generation. Aborts the client SSE immediately
- * (so the UI stops painting) and hits the server cancel endpoint so the
- * agent stops burning tokens. The server moves the row to `stopped` and
- * broadcasts it; the local patch below just doesn't wait for that.
- * Returns true on success.
- */
 export async function stopRecap(recapId: string): Promise<boolean> {
   if (pendingActions.map.has(recapId)) return false;
   setPending(recapId, "stop");
@@ -292,13 +244,6 @@ export async function stopRecap(recapId: string): Promise<boolean> {
   }
 }
 
-// ── SSE event reducers ──────────────────────────────────────────────────────
-
-/**
- * Patch the status of a recap in both the summary list (if loaded) and
- * the detail cache (if loaded). New status arrives via the
- * `recap:status-changed` envelope.
- */
 export function onRecapStatusChanged(data: {
   recapId: string;
   repoId: string;
@@ -317,11 +262,6 @@ export function onRecapStatusChanged(data: {
 type StatusPatch = Pick<ProjectRecapSummary, "status"> &
   Partial<Pick<ProjectRecapSummary, "completedAt" | "errorMessage">>;
 
-/**
- * Patch a recap's status in its repository's summary list and in the detail
- * cache, wherever either is loaded. `repoId` null: the recap's repository is
- * looked up in what is loaded.
- */
 function patchRecapStatus(recapId: string, repoId: string | null, patch: StatusPatch): void {
   const owner =
     repoId ??
@@ -337,19 +277,11 @@ function patchRecapStatus(recapId: string, repoId: string | null, patch: StatusP
   if (existing) recapDetailById = setEntry(recapDetailById, recapId, { ...existing, ...patch });
 }
 
-/**
- * Insert (or replace) a recap row from a `recap:added` envelope. Used for
- * both freshly-generated rows and completion broadcasts (which carry the
- * full row so the UI can render markdown without re-fetching).
- */
+/** `recap:added` carries the full row, both for new rows and on completion. */
 export function onRecapAdded(data: { recap: ProjectRecap }): void {
   const recap = data.recap;
-
-  // Cache the detail.
   recapDetailById = setEntry(recapDetailById, recap.id, recap);
 
-  // Patch the summary list. If we don't have an entry for this repo loaded
-  // yet, skip — `fetchRecapsForRepo` will pick the row up on next load.
   const list = recapsByRepo.get(recap.repositoryId);
   if (!list) return;
   const summary = recapSummaryOf(recap);
@@ -362,8 +294,6 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
     ]);
     return;
   }
-  // Newest-first ordering — insert at the position that keeps the list
-  // sorted by generatedAt DESC.
   const insertAt = list.findIndex((r) => r.generatedAt < summary.generatedAt);
   recapsByRepo = updateEntry(recapsByRepo, recap.repositoryId, () => {
     if (insertAt < 0) return [...list, summary];

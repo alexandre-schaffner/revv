@@ -49,7 +49,6 @@ export function groupByOwner<T extends Pick<Repository, "owner">>(
   return groups;
 }
 
-/** The owner holding a strict majority of `repos`, or null when none does. */
 export function majorityOwner(repos: readonly Pick<Repository, "owner">[]): string | null {
   const counts = new Map<string, number>();
   for (const repo of repos) counts.set(repo.owner, (counts.get(repo.owner) ?? 0) + 1);

@@ -1,12 +1,6 @@
-// Owner hue extraction from avatar images.
-//
-// Avatars are now served as base64 data URLs from the server (cached in
-// remote_users), so no network fetch or localStorage caching is needed.
-// Hue extraction runs on-demand from the data URL via the Canvas API.
-// A session-level cache (Map) deduplicates within-session extractions so
-// 20 avatars from the same owner only ever process one image per page load.
-
-// ── Hash (fallback) ───────────────────────────────────────────────────────────
+// Owner hue extracted from an avatar image (a data URL for tracked repos, a
+// GitHub URL in the add-repo catalog). Results are cached per session, so many
+// repos of one owner process one image.
 
 export function hashString(str: string): number {
   let h = 0;
@@ -27,13 +21,11 @@ export function fallbackOwnerPalette(repoFullName: string): OwnerPalette {
   return { kind: "color", hue: fallbackOwnerHue(repoFullName) };
 }
 
-/** Return the already-resolved palette for an avatar source, or undefined. */
 export function peekOwnerPalette(src: string): OwnerPalette | undefined {
   if (typeof document === "undefined") return undefined;
   return sessionPaletteCache.get(src);
 }
 
-/** Warm the session hue cache for every unique avatar in the repo list. */
 export async function preloadOwnerHues(
   repos: { avatarUrl: string | null; fullName: string }[],
 ): Promise<void> {
@@ -48,8 +40,6 @@ export async function preloadOwnerHues(
   }
   await Promise.all(loads);
 }
-
-// ── Hue extraction ────────────────────────────────────────────────────────────
 
 function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   const rN = r / 255;
@@ -68,19 +58,15 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   return [h * 360, s, l];
 }
 
-// Compute the circular median of a sorted array of hue values (0–360).
-// A naive linear median fails for hues near the 0/360 wrap boundary (e.g.
-// reds at 350° and 5° would average to ~177° teal). We detect a large gap
-// in the sorted distribution, rotate the array so the gap falls at the
-// boundary, compute the median, then unwrap back to 0–360.
+// Hue is circular: a linear median of reds at 350° and 5° lands near 177°
+// (teal), so the array is cut at its largest gap before taking the median.
 function circularMedian(sorted: number[]): number {
   const n = sorted.length;
   if (n === 0) return 0;
   if (n === 1) return sorted[0] ?? 0;
 
-  // Find the largest gap between consecutive values (including the wrap gap).
   let maxGap = 0;
-  let gapAfterIdx = n - 1; // index after which the largest gap occurs
+  let gapAfterIdx = n - 1;
   for (let i = 0; i < n - 1; i++) {
     const gap = (sorted[i + 1] ?? 0) - (sorted[i] ?? 0);
     if (gap > maxGap) {
@@ -88,16 +74,12 @@ function circularMedian(sorted: number[]): number {
       gapAfterIdx = i;
     }
   }
-  // Check the wrap-around gap: from sorted[n-1] back to sorted[0] + 360
   const wrapGap = (sorted[0] ?? 0) + 360 - (sorted[n - 1] ?? 0);
   if (wrapGap > maxGap) {
-    // The wrap boundary is already the largest gap — no rotation needed.
     const mid = sorted[Math.floor(n / 2)] ?? 0;
     return mid % 360;
   }
 
-  // Rotate: values after the gap are shifted by -360 so they become negative,
-  // placing the gap at the new boundary. Then compute the linear median.
   const rotated: number[] = [];
   for (let i = gapAfterIdx + 1; i < n; i++) rotated.push((sorted[i] ?? 0) - 360);
   for (let i = 0; i <= gapAfterIdx; i++) rotated.push(sorted[i] ?? 0);
@@ -164,17 +146,11 @@ function paletteFromSrc(src: string, fallbackPalette: OwnerPalette): Promise<Own
   });
 }
 
-// ── Session dedup + pending map ───────────────────────────────────────────────
-//
-// sessionPaletteCache is capped at SESSION_HUE_MAX entries. When the cap is hit the
-// oldest entries (insertion-order, courtesy of Map iteration) are evicted first.
-
 const SESSION_HUE_MAX = 200;
 const sessionPaletteCache = new Map<string, OwnerPalette>();
 const pendingLoads = new Map<string, Promise<OwnerPalette>>();
 
 function setSessionPalette(src: string, palette: OwnerPalette): void {
-  // Evict oldest entries if at cap (Map iterates insertion-order).
   if (sessionPaletteCache.size >= SESSION_HUE_MAX) {
     const oldest = sessionPaletteCache.keys().next().value;
     if (oldest !== undefined) sessionPaletteCache.delete(oldest);

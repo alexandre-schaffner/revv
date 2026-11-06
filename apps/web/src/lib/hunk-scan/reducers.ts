@@ -1,9 +1,5 @@
-// ── First pass reducers ─────────────────────────────────────────────────────
-//
-// Plain module (no runes) so the `hunk-scan:*` reducer and the hydrate merge
-// are unit-testable, same as `walkthrough-entry-equal.ts`. Every function
-// returns new arrays, never touching the ones it was given, so a store that
-// reassigns its entry sees the change.
+// Every function returns new arrays and never mutates its inputs, so a store
+// that reassigns its entry sees the change.
 
 import {
   type HunkScanEventMessage,

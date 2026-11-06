@@ -31,7 +31,6 @@ export function apiErrorMessage(error: ApiError, fallback: string): string {
   return bodyMessage(error.value) ?? `${fallback} (HTTP ${String(error.status)})`;
 }
 
-/** The error table's body, when the refusal carries one. */
 export function apiErrorBody(error: ApiError): ApiErrorBody | null {
   const body = error.value;
   return isRecord(body) && typeof body.error === "string" && typeof body.code === "string"

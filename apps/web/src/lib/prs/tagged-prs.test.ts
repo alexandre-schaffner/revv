@@ -170,12 +170,8 @@ describe("compareTaggedRows", () => {
     expect(sorted([low, high], "default")).toEqual(["high", "low"]);
   });
 
-  // ── Wire-type robustness ──────────────────────────────────────────────────
-  // The DTO types these fields as `string`, but the Eden treaty client's
-  // JSON reviver turns anything date-shaped into a `Date` while the SSE path
-  // leaves it a string, so the store array holds both. Comparators must not
-  // assume a string. Regression: `updatedAt.localeCompare is not a function`
-  // crashed the whole repo page.
+  // Eden's date reviver (`parseDate`, off in `api/client.ts`) would turn these
+  // `string` fields into `Date`s; the comparators survive either.
   const asWire = (v: unknown) => v as unknown as string;
 
   it("sorts by updated when the wire gave Dates instead of strings", () => {

@@ -1,12 +1,8 @@
-// ── First pass ──────────────────────────────────────────────────────────────
-//
-// The per-hunk smell scan for each PR head, independent of any walkthrough:
-// the review page asks for it once the diff has loaded (`ensureHunkScan`), and
-// its rows stream in over `hunk-scan:*`. A walkthrough for the same head reuses
-// the scan, so the Diff tab and the walkthrough read the same entry. Keyed on
-// `(prId, headSha)` like the sizing preview, not on `prId` alone: a pull starts
-// a new scan rather than changing the old one, and the diff on screen keeps
-// the scan of the head it was loaded at until the user pulls.
+// The per-hunk smell scan for each PR head, independent of any walkthrough: the
+// review page asks for it once the diff has loaded, and the Diff tab and a
+// walkthrough for the same head read the same entry. Keyed on
+// `(prId, headSha)`: a pull starts a new scan rather than changing the old one,
+// and the diff on screen keeps the scan of the head it was loaded at.
 
 import type {
   HunkScanCompleteEnvelope,
@@ -41,7 +37,7 @@ let entries = $state(new Map<string, HunkScanEntry>());
 
 /**
  * `hunk-scan:*` events seen per key, so a snapshot can tell whether the stream
- * moved while it was in flight. Plain Maps: nothing renders them.
+ * moved while it was in flight.
  */
 const eventsSeen = new Map<string, number>();
 const startsSeen = new Map<string, number>();
@@ -89,7 +85,6 @@ export function getHunkScanForFile(
  * `failed` one, rebuild one seeded from an older diff, or just return it — so
  * the client always asks rather than skipping a scan it holds as ended.
  * `pending` (the diff isn't cached yet) waits for the server's `diff:cached`.
- * The answer's rows merge into `entries`.
  */
 const asks = createResource<{ prId: string }, EnsureOutcome>({
   waitForSignalMs: DIFF_FILL_WAIT_MS,
@@ -112,12 +107,10 @@ const asks = createResource<{ prId: string }, EnsureOutcome>({
   },
 });
 
-/** Ask the server for the scan of the PR's head on screen. */
 export function ensureHunkScan(prId: string, headSha: string): Promise<void> {
   return asks.load(entryKey(prId, headSha), { prId }).then(() => undefined);
 }
 
-/** The diff a `pending` ask was waiting for is cached: ask again. */
 export function onDiffCached(data: { prId: string; headSha: string }): void {
   const key = entryKey(data.prId, data.headSha);
   if (asks.isWaiting(key)) void asks.refresh(key, { prId: data.prId });
