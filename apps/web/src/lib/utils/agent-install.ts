@@ -1,7 +1,7 @@
 import type { AcpAgentId, InstallEvent } from "@revv/shared";
-import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { SseHttpError, streamSse } from "$lib/api/sse-stream";
-import { authHeaders } from "$lib/session/token.svelte";
 
 export type AgentInstallState =
   | { kind: "idle" }
@@ -25,13 +25,9 @@ export function appendAgentInstallLog(
 }
 
 async function startAgentInstall(agent: AcpAgentId): Promise<{ jobId: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/onboarding/install`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ agent }),
-  });
-  if (!res.ok) throw new Error(`Failed to start installer (HTTP ${res.status})`);
-  return (await res.json()) as { jobId: string };
+  const { data, error } = await api.api.onboarding.install.post({ agent });
+  if (error) throw new Error(apiErrorMessage(error, "Failed to start installer"));
+  return data;
 }
 
 export async function runAgentInstall(

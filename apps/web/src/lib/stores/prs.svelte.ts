@@ -208,7 +208,7 @@ async function fetchArchivedPrs(): Promise<void> {
   const token = ++archivedFetchToken;
   try {
     const { data } = await api.api.prs.archived.get({ query: archivedAuthorsQuery() });
-    if (token !== archivedFetchToken || !data || !("prs" in data)) return;
+    if (token !== archivedFetchToken || !data) return;
     archivedPrs = [...data.prs];
     archivedNextCursor = data.nextCursor;
   } catch {
@@ -237,7 +237,7 @@ export async function fetchMoreArchived(): Promise<void> {
     const { data } = await api.api.prs.archived.get({
       query: { ...archivedAuthorsQuery(), cursor: archivedNextCursor },
     });
-    if (token !== archivedFetchToken || !data || !("prs" in data)) return;
+    if (token !== archivedFetchToken || !data) return;
     // A `pr:archived` patch may have landed between request and response.
     const existingIds = new Set(archivedPrs.map((p) => p.id));
     const fresh = data.prs.filter((p) => !existingIds.has(p.id));

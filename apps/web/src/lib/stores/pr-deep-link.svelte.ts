@@ -1,17 +1,16 @@
 import {
   GITHUB_CLIENT_ID_HINT,
   isLikelyGitHubClientId,
-  type PullRequest,
   type PullRequestLocator,
   parsePullRequestDeepLink,
   savedClientIdForHost,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
-import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { bodyMessage } from "$lib/api/errors";
 import { fetchDefaultCloneBaseDir, getDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
 import { switchSession } from "$lib/session/lifecycle.svelte";
-import { authHeaders } from "$lib/session/token.svelte";
 import {
   cancelSignIn,
   clearError,
@@ -25,7 +24,7 @@ import {
   signIn,
 } from "$lib/stores/auth.svelte";
 import { upsertPullRequest } from "$lib/stores/prs.svelte";
-import { fetchRepos } from "$lib/stores/repos.svelte";
+import { AddRepoError, addRepo } from "$lib/stores/repos.svelte";
 import {
   getGithubClientId,
   getGithubHost,
@@ -153,17 +152,6 @@ function locatorLabel(locator: PullRequestLocator): string {
   return `${locator.repositoryFullName} #${locator.number}`;
 }
 
-async function safeErrorMessage(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown; message?: unknown };
-    if (typeof body.error === "string" && body.error.length > 0) return body.error;
-    if (typeof body.message === "string" && body.message.length > 0) return body.message;
-  } catch {
-    // The fallback is intentionally safe and contains no transport internals.
-  }
-  return fallback;
-}
-
 async function showAccountRecovery(locator: PullRequestLocator): Promise<void> {
   const version = ++requestVersion;
   await fetchLocalAccounts();
@@ -200,19 +188,16 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
   }, 250);
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/prs/resolve-link`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify(locator),
-      signal: controller.signal,
+    const { data: result, error } = await api.api.prs["resolve-link"].post(locator, {
+      fetch: { signal: controller.signal },
     });
     if (version !== requestVersion) return;
 
-    if (response.status === 401) {
+    if (error?.status === 401) {
       await showAccountRecovery(locator);
       return;
     }
-    if (response.status === 403) {
+    if (error?.status === 403) {
       state = {
         kind: "error",
         locator,
@@ -221,7 +206,7 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
       };
       return;
     }
-    if (response.status === 404) {
+    if (error?.status === 404) {
       state = {
         kind: "error",
         locator,
@@ -230,24 +215,15 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
       };
       return;
     }
-    if (!response.ok) {
+    if (error) {
       state = {
         kind: "error",
         locator,
         reason: "network",
-        message: await safeErrorMessage(
-          response,
-          "The local Revv server could not resolve this link.",
-        ),
+        message: bodyMessage(error.value) ?? "The local Revv server could not resolve this link.",
       };
       return;
     }
-
-    const result = (await response.json()) as
-      | { status: "resolved"; pullRequest: PullRequest }
-      | { status: "account_mismatch"; activeHost: string; expectedHost: string }
-      | { status: "repository_not_tracked" };
-    if (version !== requestVersion) return;
 
     if (result.status === "account_mismatch") {
       await showAccountRecovery(locator);
@@ -395,33 +371,22 @@ export async function addPrDeepLinkRepository(): Promise<void> {
   const locator = state.locator;
   state = { kind: "adding-repository", locator };
   try {
-    const response = await fetch(`${API_BASE_URL}/api/repos`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ fullName: locator.repositoryFullName, mode: "clone" }),
-    });
-    if (!response.ok) {
-      const reason =
-        response.status === 403 ? "forbidden" : response.status === 404 ? "not-found" : "network";
-      state = {
-        kind: "error",
-        locator,
-        reason,
-        message: await safeErrorMessage(response, "Revv could not add this repository."),
-      };
-      return;
-    }
-    await fetchRepos();
+    await addRepo({ fullName: locator.repositoryFullName, mode: "clone" });
     state = pendingResolution(locator);
     await resolveActiveLocator(locator);
   } catch (error) {
     state = {
       kind: "error",
       locator,
-      reason: "network",
+      reason: refusalReason(error),
       message: error instanceof Error ? error.message : "Revv could not add this repository.",
     };
   }
+}
+
+function refusalReason(error: unknown): "forbidden" | "not-found" | "network" {
+  const code = error instanceof AddRepoError ? error.code : null;
+  return code === "FORBIDDEN" ? "forbidden" : code === "NOT_FOUND" ? "not-found" : "network";
 }
 
 export function retryPrDeepLink(): void {

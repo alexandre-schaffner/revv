@@ -23,7 +23,6 @@ const models = createResource<AcpAgentId, ModelOption[]>({
   fetch: async (_key, agent) => {
     const { data, error } = await api.api.settings.models.get({ query: { agent } });
     if (error) return { status: "error", error: apiErrorMessage(error, "Couldn't load models") };
-    if (!data || !("models" in data)) return { status: "error", error: "Unexpected response" };
     return { status: "ok", data: data.models };
   },
 });
@@ -112,7 +111,7 @@ export function isAutoEffortOffered(): boolean {
 export async function fetchSettings(): Promise<void> {
   try {
     const { data } = await api.api.settings.get();
-    if (data && "aiAgent" in data) loaded = data;
+    if (data) loaded = data;
   } catch {
     // Unreachable server: keep what we have; the defaults render meanwhile.
   }
@@ -191,7 +190,7 @@ export async function fetchAgentStatus(
     const { data } = await api.api.onboarding["agent-status"].get({
       query: options.refresh ? { refresh: "1" } : {},
     });
-    if (!data || !("agents" in data)) return agentStatus;
+    if (!data) return agentStatus;
     agentStatus = data;
     return data;
   } catch {
@@ -207,14 +206,8 @@ export async function fetchAgentStatus(
 export async function runAgentCheck(agent: AcpAgentId): Promise<AgentCheckResult> {
   try {
     const { data, error } = await api.api.agent.check.post({ agent });
-    if (error || !data || !("ok" in data)) {
-      return {
-        ok: false,
-        error: error
-          ? `Revv's service answered HTTP ${error.status}.`
-          : "Revv's service answered unexpectedly.",
-        guidance: null,
-      };
+    if (error) {
+      return { ok: false, error: `Revv's service answered HTTP ${error.status}.`, guidance: null };
     }
     return data;
   } catch (err) {

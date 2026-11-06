@@ -1,6 +1,7 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import {
   buildGitPatchHeader,
+  CHAT_SUGGESTION_FALLBACKS,
   type CommentThread,
   guessImageContentType,
   PR_DIFF_RENDER_OPTIONS,
@@ -10,7 +11,6 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import {
-  FALLBACK_PROMPTS,
   generateSuggestions,
   type SuggestionsWalkthroughContext,
 } from "../ai/providers/suggestions";
@@ -319,9 +319,9 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const repoCloneService = yield* RepoCloneService;
           const { accountId } = ctx.account;
 
+          // Every state is an answer the file peek shows, not a refusal.
           const pr = yield* prService.getPr(ctx.params.id, accountId);
           if (!pr.headSha) {
-            ctx.set.status = 404;
             return {
               status: "error" as const,
               message: "PR has no head SHA",
@@ -334,30 +334,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
             ctx.query.path,
           );
 
-          if (result.status === "cloning") {
-            ctx.set.status = 202;
-            return { status: "cloning" as const };
-          }
-          if (result.status === "not-found") {
-            ctx.set.status = 404;
-            return { status: "not-found" as const };
-          }
+          if (result.status === "cloning") return { status: "cloning" as const };
+          if (result.status === "not-found") return { status: "not-found" as const };
           if (result.status === "too-large") {
-            // 413 Payload Too Large — surfaces a distinct
-            // frontend state ("file too large to preview")
-            // without conflating with cloning/missing.
-            ctx.set.status = 413;
-            return {
-              status: "too-large" as const,
-              size: result.size,
-            };
+            return { status: "too-large" as const, size: result.size };
           }
           if (result.status === "error") {
-            ctx.set.status = 409;
-            return {
-              status: "error" as const,
-              message: result.message,
-            };
+            return { status: "error" as const, message: result.message };
           }
 
           return {
@@ -672,7 +655,7 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
     const diffCache = yield* DiffCacheService;
 
     const launch = yield* resolveAgentLaunch("suggestions");
-    if (!launch) return [...FALLBACK_PROMPTS];
+    if (!launch) return [...CHAT_SUGGESTION_FALLBACKS];
 
     const pr = yield* prService.getPr(prId, accountId);
     const headSha = pr.headSha ?? "no-head";
@@ -726,8 +709,8 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
       // rejects despite the provider's try/catch.
       catch: () => null as null,
     }).pipe(
-      Effect.catch(() => Effect.succeed([...FALLBACK_PROMPTS] as string[])),
-      Effect.map((v) => (v === null ? [...FALLBACK_PROMPTS] : v)),
+      Effect.catch(() => Effect.succeed([...CHAT_SUGGESTION_FALLBACKS] as string[])),
+      Effect.map((v) => (v === null ? [...CHAT_SUGGESTION_FALLBACKS] : v)),
     );
 
     writeSuggestionsCache(key, suggestions);

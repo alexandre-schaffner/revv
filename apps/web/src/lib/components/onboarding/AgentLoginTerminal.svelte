@@ -4,10 +4,10 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
-import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { SseHttpError, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
-import { authHeaders } from "$lib/session/token.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { cssTokens, openXterm, xtermTheme } from "$lib/utils/xterm";
 // xterm ships its own canvas/DOM — acceptable for a literal terminal. The
@@ -53,11 +53,7 @@ async function openBrowser(url: string): Promise<void> {
 async function sendInput(data: string): Promise<void> {
   if (!jobId) return;
   try {
-    await fetch(`${API_BASE_URL}/api/onboarding/login/input`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, data }),
-    });
+    await api.api.onboarding.login.input.post({ jobId, data });
   } catch {
     // A dropped keystroke is non-fatal — the user can retype.
   }
@@ -73,12 +69,9 @@ async function sendInput(data: string): Promise<void> {
 function cancelLogin(): void {
   if (!jobId) return;
   try {
-    void fetch(`${API_BASE_URL}/api/onboarding/login/cancel`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId }),
-      keepalive: true,
-    }).catch(() => {});
+    void api.api.onboarding.login.cancel
+      .post({ jobId }, { fetch: { keepalive: true } })
+      .catch(() => {});
   } catch {
     // Best-effort teardown — a server restart reclaims any straggler anyway.
   }
@@ -150,17 +143,13 @@ function terminalTheme(el: HTMLElement) {
 onMount(async () => {
   // 1. Start (or join) the login job.
   try {
-    const res = await fetch(`${API_BASE_URL}/api/onboarding/login`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ agent }),
-    });
-    if (!res.ok) {
+    const { data, error } = await api.api.onboarding.login.post({ agent });
+    if (error) {
       failed = true;
-      errorMsg = `Failed to start sign-in (HTTP ${res.status})`;
+      errorMsg = apiErrorMessage(error, "Failed to start sign-in");
       return;
     }
-    ({ jobId } = (await res.json()) as { jobId: string });
+    jobId = data.jobId;
   } catch (e) {
     failed = true;
     errorMsg = e instanceof Error ? e.message : "Failed to start sign-in";

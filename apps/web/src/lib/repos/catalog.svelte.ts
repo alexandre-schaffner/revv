@@ -71,7 +71,7 @@ async function fetchAvailablePrCounts(fullNames: string[]): Promise<void> {
   }
   try {
     const { data, error } = await api.api.github["pr-counts"].post({ fullNames });
-    if (error || !data || !("counts" in data)) return;
+    if (error) return;
     prCounts = { ...prCounts, ...data.counts };
   } catch {
     // The hint is optional; the list works without counts.
@@ -85,7 +85,7 @@ export async function fetchDefaultCloneBaseDir(): Promise<void> {
   if (defaultCloneBaseDir !== null) return;
   try {
     const { data, error } = await api.api.repos["clone-base-dir"].get();
-    if (error || !data || !("path" in data)) return;
+    if (error) return;
     defaultCloneBaseDir = data.path;
   } catch {
     // Stays null: the add omits `basePath` and the server applies its default.

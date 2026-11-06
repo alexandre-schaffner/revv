@@ -14,7 +14,6 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
-import { plain } from "$lib/api/wire";
 import { getUser } from "$lib/stores/auth.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
@@ -28,14 +27,13 @@ let wantedPrId: string | null = null;
 const reviews = createResource<string, true>({
   freshForMs: 60_000,
   fetch: async (prId) => {
-    const { data: body, error } = await api.api.reviews.active({ prId }).get();
+    const { data, error } = await api.api.reviews.active({ prId }).get();
     if (prId !== wantedPrId) return { status: "error", error: "Superseded" };
-    if (error || !body || !("threads" in body)) {
-      console.error("[review] Failed to load review:", error ?? body);
+    if (error) {
+      console.error("[review] Failed to load review:", error);
       toast.error("Failed to load review session");
       return { status: "error", error: "Failed to load review session" };
     }
-    const data = plain(body);
     if (shownPrId !== null && shownPrId !== prId) reviews.invalidate(shownPrId);
     shownPrId = prId;
     threads = data.threads;
@@ -129,12 +127,12 @@ export async function addThread(params: NewThread): Promise<CommentThread | null
     message: { ...reviewerAuthor(), body: params.body, messageType: "comment" },
   });
 
-  if (error || !data || "error" in data) {
-    console.error("[review] Failed to create thread:", error ?? data);
+  if (error) {
+    console.error("[review] Failed to create thread:", error);
     return null;
   }
 
-  const { thread, message } = plain(data);
+  const { thread, message } = data;
   // The SSE broadcast may have landed first.
   if (!threads.some((t) => t.id === thread.id)) {
     threads = [...threads, thread];
@@ -150,16 +148,15 @@ export async function addThreadMessage(threadId: string, body: string): Promise<
     .threads({ id: threadId })
     .messages.post({ ...reviewerAuthor(), body, messageType: "reply" });
 
-  if (error || !data || "error" in data) {
-    console.error("[review] Failed to add message:", error ?? data);
+  if (error) {
+    console.error("[review] Failed to add message:", error);
     return;
   }
 
-  const message = plain(data);
   // The SSE broadcast may have landed first.
   const existing = threadMessages[threadId] ?? [];
-  if (!existing.some((m) => m.id === message.id)) {
-    threadMessages = { ...threadMessages, [threadId]: [...existing, message] };
+  if (!existing.some((m) => m.id === data.id)) {
+    threadMessages = { ...threadMessages, [threadId]: [...existing, data] };
   }
 }
 

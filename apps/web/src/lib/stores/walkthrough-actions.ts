@@ -277,7 +277,7 @@ export async function startWhenCloned(
       let error: string | null = null;
       try {
         const { data } = await api.api.repos({ id: repoId })["clone-status"].get();
-        if (data && "status" in data) {
+        if (data) {
           status = data.status;
           error = data.error ?? null;
         }

@@ -7,6 +7,7 @@
 
 import { SSE_DONE_DATA, SSE_ERROR_EVENT, type StreamErrorCode } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { bodyMessage } from "$lib/api/errors";
 import { authHeaders } from "$lib/session/token.svelte";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90 * 1000;
@@ -40,7 +41,7 @@ export class SseHttpError extends Error {
     readonly statusText: string,
     body: unknown,
   ) {
-    const serverMessage = messageOf(body);
+    const serverMessage = bodyMessage(body);
     super(serverMessage ?? `HTTP ${status}`);
     this.body = body;
     this.serverMessage = serverMessage;
@@ -166,12 +167,4 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
-}
-
-function messageOf(body: unknown): string | undefined {
-  if (typeof body !== "object" || body === null) return undefined;
-  const { message, error } = body as { message?: unknown; error?: unknown };
-  if (typeof message === "string") return message;
-  if (typeof error === "string") return error;
-  return undefined;
 }

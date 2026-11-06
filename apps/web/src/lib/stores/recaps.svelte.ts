@@ -6,6 +6,7 @@ import type {
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import { monthGridRange } from "$lib/components/recaps/period-window";
 import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
 import { createResource } from "./resource";
@@ -146,19 +147,14 @@ export async function fetchRecapsForRepo(repoId: string): Promise<void> {
 
 async function readRepoRecaps(repoId: string) {
   try {
-    const { data } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
-    if (data) {
-      const page = data as {
-        recaps: ProjectRecapSummary[];
-        nextCursor: string | null;
-      };
-      // Merge, don't replace. `generateRecap` calls this on every trigger,
-      // and a replace would wipe every historical month the calendar has
-      // loaded the instant the user generates anything.
-      recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
-        mergeSummaries(cur ?? [], page.recaps),
-      );
-    }
+    const { data, error } = await api.api.repos({ id: repoId }).recaps.get({ query: {} });
+    if (error) throw new Error(apiErrorMessage(error, "Failed to load recaps"));
+    // Merge, don't replace. `generateRecap` calls this on every trigger,
+    // and a replace would wipe every historical month the calendar has
+    // loaded the instant the user generates anything.
+    recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
+      mergeSummaries(cur ?? [], data.recaps),
+    );
     return { status: "ok", data: true } as const;
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to load recaps";
@@ -190,16 +186,14 @@ export async function fetchRecapsForMonth(repoId: string, monthKey: string): Pro
 async function readMonthRecaps(repoId: string, monthKey: string) {
   try {
     const { from, to } = monthGridRange(monthKey);
-    const { data } = await api.api
+    const { data, error } = await api.api
       .repos({ id: repoId })
       .recaps.get({ query: { from, to, limit: "100" } });
-    if (!data) return { status: "error", error: "No recaps returned" } as const;
-    const page = data as {
-      recaps: ProjectRecapSummary[];
-      nextCursor: string | null;
-    };
+    if (error) {
+      return { status: "error", error: apiErrorMessage(error, "No recaps returned") } as const;
+    }
     recapsByRepo = updateEntry(recapsByRepo, repoId, (cur) =>
-      mergeSummaries(cur ?? [], page.recaps),
+      mergeSummaries(cur ?? [], data.recaps),
     );
     return { status: "ok", data: true } as const;
   } catch (e) {
@@ -219,10 +213,9 @@ export async function loadRecap(recapId: string, options?: { force?: boolean }):
 
 async function readRecap(recapId: string) {
   try {
-    const { data } = await api.api.recaps({ id: recapId }).get();
-    if (data) {
-      recapDetailById = setEntry(recapDetailById, recapId, data as ProjectRecap);
-    }
+    const { data, error } = await api.api.recaps({ id: recapId }).get();
+    if (error) throw new Error(apiErrorMessage(error, "Failed to load recap"));
+    recapDetailById = setEntry(recapDetailById, recapId, data);
     return { status: "ok", data: true } as const;
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to load recap";
@@ -248,13 +241,10 @@ export async function generateRecap(
     const { data, error } = await api.api
       .repos({ id: repoId })
       .recaps.generate.post(body, { query });
-    if (error) throw new Error(`HTTP ${error.status}`);
-    if (data) {
-      // Refresh the list so the new placeholder row appears.
-      void fetchRecapsForRepo(repoId);
-      return data as { recapId: string };
-    }
-    return null;
+    if (error) throw new Error(apiErrorMessage(error, "Failed to start recap"));
+    // Refresh the list so the new placeholder row appears.
+    void fetchRecapsForRepo(repoId);
+    return data;
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to start recap");
     return null;
@@ -266,8 +256,8 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
   setPending(recapId, "regenerate");
   try {
     const { data, error } = await api.api.recaps({ id: recapId }).regenerate.post();
-    if (error) throw new Error(`HTTP ${error.status}`);
-    return data as { recapId: string } | null;
+    if (error) throw new Error(apiErrorMessage(error, "Failed to regenerate recap"));
+    return data;
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to regenerate recap");
     return null;
@@ -289,33 +279,9 @@ export async function stopRecap(recapId: string): Promise<boolean> {
   try {
     abortRecapStream(recapId);
     const { error } = await api.api.recaps({ id: recapId }).stop.post();
-    if (error) throw new Error(`HTTP ${error.status}`);
-    // Optimistically patch local state so the UI flips out of
-    // "generating" immediately instead of waiting for the SSE broadcast.
-    const existing = recapDetailById.get(recapId);
-    if (existing) {
-      const patched: ProjectRecap = {
-        ...existing,
-        status: "stopped",
-        errorMessage: null,
-        completedAt: null,
-      };
-      recapDetailById = setEntry(recapDetailById, recapId, patched);
-    }
-    recapsByRepo = updateEntry(recapsByRepo, existing?.repositoryId ?? "", (current) => {
-      const list = current ?? [];
-      const idx = list.findIndex((r) => r.id === recapId);
-      if (idx < 0) return list;
-      const row = list[idx];
-      if (!row) return list;
-      const patched: ProjectRecapSummary = {
-        ...row,
-        status: "stopped",
-        errorMessage: null,
-        completedAt: null,
-      };
-      return [...list.slice(0, idx), patched, ...list.slice(idx + 1)];
-    });
+    if (error) throw new Error(apiErrorMessage(error, "Failed to stop recap"));
+    // The server broadcasts the stop too; the UI doesn't wait for it.
+    patchRecapStatus(recapId, null, { status: "stopped", errorMessage: null, completedAt: null });
     return true;
   } catch (e) {
     toast.error(e instanceof Error ? e.message : "Failed to stop recap");
@@ -340,33 +306,34 @@ export function onRecapStatusChanged(data: {
   completedAt?: string | null;
   errorMessage?: string | null;
 }): void {
-  // List: in-place patch the status column.
-  recapsByRepo = updateEntry(recapsByRepo, data.repoId, (current) => {
-    const list = current ?? [];
-    const idx = list.findIndex((r) => r.id === data.recapId);
-    if (idx < 0) return list;
-    const row = list[idx];
-    if (!row) return list;
-    const patched: ProjectRecapSummary = {
-      ...row,
-      status: data.status,
-      ...(data.completedAt !== undefined ? { completedAt: data.completedAt } : {}),
-      ...(data.errorMessage !== undefined ? { errorMessage: data.errorMessage } : {}),
-    };
-    return [...list.slice(0, idx), patched, ...list.slice(idx + 1)];
+  patchRecapStatus(data.recapId, data.repoId, {
+    status: data.status,
+    ...(data.completedAt !== undefined ? { completedAt: data.completedAt } : {}),
+    ...(data.errorMessage !== undefined ? { errorMessage: data.errorMessage } : {}),
   });
+}
 
-  // Detail: same patch if we have it cached.
-  const existing = recapDetailById.get(data.recapId);
-  if (existing) {
-    const patched: ProjectRecap = {
-      ...existing,
-      status: data.status,
-      ...(data.completedAt !== undefined ? { completedAt: data.completedAt } : {}),
-      ...(data.errorMessage !== undefined ? { errorMessage: data.errorMessage } : {}),
-    };
-    recapDetailById = setEntry(recapDetailById, data.recapId, patched);
+type StatusPatch = Pick<ProjectRecapSummary, "status"> &
+  Partial<Pick<ProjectRecapSummary, "completedAt" | "errorMessage">>;
+
+/**
+ * Patch a recap's status in its repository's summary list and in the detail
+ * cache, wherever either is loaded. `repoId` null: the recap's repository is
+ * looked up in what is loaded.
+ */
+function patchRecapStatus(recapId: string, repoId: string | null, patch: StatusPatch): void {
+  const owner =
+    repoId ??
+    recapDetailById.get(recapId)?.repositoryId ??
+    [...recapsByRepo].find(([, list]) => list.some((r) => r.id === recapId))?.[0] ??
+    null;
+  if (owner !== null) {
+    recapsByRepo = updateEntry(recapsByRepo, owner, (current) =>
+      (current ?? []).map((row) => (row.id === recapId ? { ...row, ...patch } : row)),
+    );
   }
+  const existing = recapDetailById.get(recapId);
+  if (existing) recapDetailById = setEntry(recapDetailById, recapId, { ...existing, ...patch });
 }
 
 /**

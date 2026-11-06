@@ -1,12 +1,11 @@
 import type { RuntimeHealth } from "@revv/shared";
-import { API_BASE_URL, APP_CHANNEL } from "$lib/api/base-url";
+import { APP_CHANNEL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
 
 export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
-  const res = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`API health check failed with HTTP ${res.status}`);
-  }
-  return (await res.json()) as RuntimeHealth;
+  const { data, error } = await api.api.health.get({ fetch: { cache: "no-store" } });
+  if (error) throw new Error(`API health check failed with HTTP ${String(error.status)}`);
+  return data;
 }
 
 export function assertRuntimeChannel(health: RuntimeHealth): void {

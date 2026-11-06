@@ -2,9 +2,9 @@
 // Shown while a PR has no conversation: an intro and starter prompts. The
 // PR-aware prompts are asked for only here, so a PR the user already chatted
 // about never spends tokens on them.
+import { CHAT_SUGGESTION_FALLBACKS } from "@revv/shared";
 import Robot from "phosphor-svelte/lib/Robot";
 import {
-  FALLBACK_PROMPTS,
   fetchSuggestions,
   getSuggestions,
   isSuggestionsLoading,
@@ -23,7 +23,7 @@ interface Props {
 let { prId, stacked, bottomInset, onSelect }: Props = $props();
 
 const suggestions = $derived(prId ? getSuggestions(prId) : null);
-const prompts = $derived<readonly string[]>(suggestions ?? FALLBACK_PROMPTS);
+const prompts = $derived<readonly string[]>(suggestions ?? CHAT_SUGGESTION_FALLBACKS);
 const loading = $derived(prId ? isSuggestionsLoading(prId) && suggestions === null : false);
 
 $effect(() => {

@@ -8,7 +8,7 @@ import {
 } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
-import { plain, thrownMessage } from "$lib/api/wire";
+import { thrownMessage } from "$lib/api/wire";
 import { layerOf, neighbourOf } from "$lib/stacks/locate";
 import { RequestState } from "./_types";
 import type { NavigationDirection } from "./navigation-intent.svelte";
@@ -56,17 +56,15 @@ async function fetchStack(key: string, prId: string): Promise<void> {
   }
   try {
     const { data, error } = await api.api.prs({ id: prId }).stack.get();
-    if (error || !data || !("stack" in data)) {
-      const message = error
-        ? apiErrorMessage(error, "Couldn't load the stack")
-        : "Unexpected response";
+    if (error) {
+      const message = apiErrorMessage(error, "Couldn't load the stack");
       const current = entries.get(key);
       if (current?.request.status !== "ok") {
         setEntry(key, { request: RequestState.error(message), viaPrId: prId, loadedAt: 0 });
       }
       return;
     }
-    const stack = data.stack ? (plain(data.stack) as PrStackDetail) : null;
+    const stack = data.stack ? data.stack : null;
     if (!stack) {
       deleteEntry(key);
       return;
@@ -177,7 +175,7 @@ export async function startStackReview(
 ): Promise<StackReviewStarted | null> {
   try {
     const { data, error } = await api.api.prs({ id: prId }).stack.review.post({ scope });
-    if (error || !data || !("queued" in data)) return null;
+    if (error) return null;
     void refreshStack(prId);
     return data;
   } catch {
@@ -188,7 +186,7 @@ export async function startStackReview(
 export async function requestStackBrief(prId: string): Promise<string | null> {
   try {
     const { data, error } = await api.api.prs({ id: prId }).stack.brief.post();
-    if (error || !data || !("briefId" in data)) return null;
+    if (error) return null;
     void refreshStack(prId);
     return data.briefId;
   } catch {

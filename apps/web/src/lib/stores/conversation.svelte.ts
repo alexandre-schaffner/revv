@@ -21,7 +21,6 @@ import type {
   ConversationWrite,
   ConversationWriteResult,
   PrConversation,
-  PrConversationResponse,
   PrLabel,
   ReviewerOptions,
 } from "@revv/shared";
@@ -29,7 +28,7 @@ import { ciHasPending, hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
-import { plain, thrownMessage } from "$lib/api/wire";
+import { thrownMessage } from "$lib/api/wire";
 import {
   addAssigneesPatch,
   addLabelsPatch,
@@ -155,11 +154,6 @@ function accept(prId: string, conversation: PrConversation, stale: boolean): voi
   });
 }
 
-/** A conversation off the wire, ready to render. */
-function received(value: unknown): PrConversation {
-  return hydrateConversationAvatars(plain(value) as PrConversation);
-}
-
 function describeFailure(error: { status: number; value?: unknown }): string {
   if (error.status === 429) return "GitHub's rate limit is exhausted. Try again shortly.";
   // A 502 is any upstream failure GitHub answered badly, not only an outage;
@@ -188,7 +182,7 @@ async function loadSnapshot(prId: string): Promise<void> {
   try {
     const { data } = await api.api.prs({ id: prId }).conversation.cached.get();
     if (data && "conversation" in data && data.conversation) {
-      accept(prId, received(data.conversation), getConversation(prId).stale);
+      accept(prId, hydrateConversationAvatars(data.conversation), getConversation(prId).stale);
     }
   } catch {
     // Whoever asked has something better to fall back on.
@@ -216,16 +210,13 @@ async function fetchConversation(prId: string): Promise<Answer<true>> {
 
   try {
     const { data, error } = await api.api.prs({ id: prId }).conversation.get();
-    if (error || !data || !("conversation" in data)) {
-      return failed(error ? describeFailure(error) : "Unexpected response");
-    }
+    if (error) return failed(describeFailure(error));
     // A write began meanwhile; this answer may predate it.
     if ((writeGeneration.get(prId) ?? 0) !== generation && dataOf(prId) !== null) {
       return { status: "ok", data: true };
     }
-    const response = plain(data) as PrConversationResponse;
-    accept(prId, hydrateConversationAvatars(response.conversation), response.stale);
-    return response.stale
+    accept(prId, hydrateConversationAvatars(data.conversation), data.stale);
+    return data.stale
       ? { status: "error", error: "GitHub couldn't be reached" }
       : { status: "ok", data: true };
   } catch (e) {
@@ -237,8 +228,8 @@ async function fetchConversation(prId: string): Promise<Answer<true>> {
 async function refreshChecks(prId: string): Promise<{ rollup: CiRollup | null } | null> {
   try {
     const { data, error } = await api.api.prs({ id: prId }).checks.get();
-    if (error || !data || !("rollup" in data)) return null;
-    const rollup = plain(data.rollup) as CiRollup | null;
+    if (error) return null;
+    const rollup = data.rollup;
     const ciAccess = data.access;
     updateData(prId, (c) => ({ ...c, ci: rollup, ciAccess }));
     refreshSettledDetails(prId, rollup);
@@ -265,11 +256,11 @@ export async function loadCheckDetails(prId: string, checkRunId: number): Promis
   put(RequestState.loading());
   try {
     const { data, error } = await api.api.prs({ id: prId }).checks({ checkRunId }).get();
-    if (error || !data || !("checkRunId" in data)) {
-      put(RequestState.error(error ? describeFailure(error) : "Unexpected response"));
+    if (error) {
+      put(RequestState.error(describeFailure(error)));
       return;
     }
-    put(RequestState.ok(plain(data) as CheckDetails));
+    put(RequestState.ok(data));
   } catch (e) {
     put(RequestState.error(thrownMessage(e)));
   }
@@ -292,7 +283,7 @@ function refreshSettledDetails(prId: string, rollup: CiRollup | null): void {
 
 export async function loadReviewerOptions(prId: string, q: string): Promise<ReviewerOptions> {
   const { data, error } = await api.api.prs({ id: prId })["reviewer-options"].get({ query: { q } });
-  if (error || !data || !("users" in data)) throw new Error("Reviewer options failed");
+  if (error) throw new Error(apiErrorMessage(error, "Reviewer options failed"));
   return data;
 }
 
@@ -426,7 +417,7 @@ function bumpGeneration(prId: string): void {
  */
 export function acceptWriteResult(prId: string, result: ConversationWriteResult): void {
   bumpGeneration(prId);
-  if (result.conversation) accept(prId, received(result.conversation), false);
+  if (result.conversation) accept(prId, hydrateConversationAvatars(result.conversation), false);
   else void loadConversation(prId, { force: true });
 }
 

@@ -57,10 +57,8 @@ export async function rebaseStack(prId: string, stack: PrStackDetail): Promise<v
     const { data, error } = await api.api
       .prs({ id: prId })
       .stack.rebase.post({ expectedHeads: expectedHeads(stack.layers.filter(isOpenLayer)) });
-    if (error || !data || !("rebased" in data)) {
-      const message = error
-        ? apiErrorMessage(error, "Couldn't rebase the stack")
-        : "Unexpected response";
+    if (error) {
+      const message = apiErrorMessage(error, "Couldn't rebase the stack");
       setRequest(key, RequestState.error(message));
       toast.error(message);
       return;

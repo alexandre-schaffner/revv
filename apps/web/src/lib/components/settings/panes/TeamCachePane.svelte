@@ -114,7 +114,7 @@ $effect(() => stopAdcPolling);
 
 async function startAdcLogin(): Promise<void> {
   const { data } = await api.api.settings.cache["adc-login"].post().catch(() => ({ data: null }));
-  if (!data || !("started" in data) || !data.started) return;
+  if (!data?.started) return;
   // Poll until ADC becomes available, for at most a minute.
   stopAdcPolling();
   adcPolling = true;

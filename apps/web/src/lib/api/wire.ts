@@ -1,12 +1,3 @@
-/**
- * Eden revives ISO strings into `Date`s on the way in; the shared types say
- * `string`, and SSE delivers strings. A JSON round trip puts them back, so
- * code downstream never has to ask which one it holds.
- */
-export function plain<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 /** The success body of an Eden call, e.g. `EdenData<typeof api.api.settings.get>`. */
 export type EdenData<Call extends (...args: never[]) => Promise<{ data: unknown }>> = NonNullable<
   Awaited<ReturnType<Call>>["data"]

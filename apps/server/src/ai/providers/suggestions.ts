@@ -15,20 +15,13 @@
 //     text deltas, and parse the first JSON object out of them.
 //
 // On any failure (agent missing, model error, JSON parse failure, timeout) we
-// return {@link FALLBACK_PROMPTS} so the UI always renders three sensible
-// defaults instead of going blank. This is the same array the right panel
-// historically hardcoded — keeping it server-side means the client doesn't
-// need to know about the fallback policy.
+// return {@link CHAT_SUGGESTION_FALLBACKS} so the UI always renders sensible
+// defaults instead of going blank.
 
+import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS } from "@revv/shared";
 import { debug, logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
 import { promptOnce } from "../acp/run-turn";
-
-export const FALLBACK_PROMPTS: readonly string[] = [
-  "What's the riskiest change here?",
-  "Summarize the security implications",
-  "Suggest a test plan",
-];
 
 const SUGGESTIONS_TIMEOUT_MS = 30_000;
 const MAX_PROMPT_LENGTH = 80;
@@ -173,8 +166,8 @@ function parsePrompts(raw: string): string[] | null {
     .split("\n")
     .map((l) => l.replace(/^[\s-*0-9.)]+/, "").trim())
     .filter((l) => l.length > 0 && l.length <= 200);
-  if (bulletLines.length >= 3) {
-    const cleaned = sanitizePrompts(bulletLines.slice(0, 3));
+  if (bulletLines.length >= CHAT_SUGGESTION_COUNT) {
+    const cleaned = sanitizePrompts(bulletLines.slice(0, CHAT_SUGGESTION_COUNT));
     if (cleaned.length > 0) return cleaned;
   }
 
@@ -190,7 +183,7 @@ function sanitizePrompts(values: unknown[]): string[] {
     const capped =
       trimmed.length > MAX_PROMPT_LENGTH ? `${trimmed.slice(0, MAX_PROMPT_LENGTH - 1)}…` : trimmed;
     out.push(capped);
-    if (out.length === 3) break;
+    if (out.length === CHAT_SUGGESTION_COUNT) break;
   }
   return out;
 }
@@ -230,6 +223,6 @@ export async function generateSuggestions(input: GenerateSuggestionsInput): Prom
       `falling back to defaults:`,
       err instanceof Error ? err.message : String(err),
     );
-    return [...FALLBACK_PROMPTS];
+    return [...CHAT_SUGGESTION_FALLBACKS];
   }
 }
