@@ -80,6 +80,7 @@ The project uses **Drizzle's code-first migration workflow**.
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) — not Svelte 4 stores/writables.
 - **Stores** (in `src/lib/stores/`): `auth.svelte.ts`, `prs.svelte.ts`, `events.svelte.ts`, `settings.svelte.ts`. These expose getter/setter functions, not subscribables.
 - **Session** (in `src/lib/session/`): `token.svelte.ts` is the leaf bearer token every transport reads; `lifecycle.svelte.ts` starts, switches and ends the signed-in session (SSE connect, first reads, every store's `reset()`). The client never polls GitHub on a timer: the server's PollScheduler is the only sync cadence.
+- **Chat**: state lives in `src/lib/chat/` (`timeline`, `proposed`, `session`, `queue`, and `turn`, which sends turns and owns the PR-level actions), its UI in `components/chat/`. Tool-call cards, peeks and token gauges shared by chat, walkthrough and recaps are in `components/agent-activity/`.
 - **API client**: Eden (Elysia type-safe client) — import from `@revv/server` types.
 - **Deep-link handling**: OAuth callback comes in via `revv://auth/callback?token=…` scheme (Tauri) or polling `/api/auth/pending-token` (browser dev mode).
 - **Component library**: shadcn-svelte + Tailwind CSS v4.
