@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ProjectRecap, RecapPeriod } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod, RecapStreamPhase } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
@@ -51,23 +51,21 @@ const hasAnyContent = $derived((recap?.lede.length ?? 0) > 0 || entryCount > 0);
 
 const isEmptyComplete = $derived(!!recap && recap.status === "complete" && entryCount === 0);
 
+const PHASE_LABEL: Record<RecapStreamPhase, string> = {
+  analyzing: "Analyzing pull requests…",
+  writing_lede: "Writing the lede…",
+  categorizing: "Categorizing pull requests…",
+  finalizing: "Finalizing recap…",
+  connecting: "Connecting…",
+  other: "Generating recap…",
+};
+
 const phaseLabel = $derived(
-  stream ? stream.phaseMessage || phaseMessage(stream.phase) : "Starting recap…",
+  stream ? stream.phaseMessage || PHASE_LABEL[stream.phase] : "Starting recap…",
 );
 const thoughtText = $derived(stream?.thoughts ?? "");
 const hasThoughtText = $derived(thoughtText.trim().length > 0);
 const thoughtBlocks = $derived.by(() => renderThoughtBlocks(thoughtText));
-
-function phaseMessage(phase: string): string {
-  const labels: Record<string, string> = {
-    analyzing: "Analyzing pull requests…",
-    writing_lede: "Writing the lede…",
-    categorizing: "Categorizing pull requests…",
-    finalizing: "Finalizing recap…",
-    connecting: "Connecting…",
-  };
-  return labels[phase] ?? "Generating recap…";
-}
 
 const COMPLETED_AT_FMT = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",

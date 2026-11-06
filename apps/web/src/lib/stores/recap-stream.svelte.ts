@@ -3,6 +3,7 @@ import type {
   ProjectRecap,
   RecapPrEntry,
   RecapStreamEvent,
+  RecapStreamPhase,
   RecapThemeSummary,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -23,7 +24,7 @@ export interface RecapStreamEntry {
    */
   themeSummaries: Map<string, RecapThemeSummary>;
   thoughts: string;
-  phase: string;
+  phase: RecapStreamPhase;
   phaseMessage: string;
   activities: Array<Activity & { id: string }>;
   isStreaming: boolean;
