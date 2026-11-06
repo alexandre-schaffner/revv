@@ -37,7 +37,6 @@ const lead = (filePath: string, hunkIndex: number, newStart: number) => ({
 
 function seed(phase: WalkthroughPipelinePhase = "B"): Db {
   const db = createDb(":memory:");
-  // The walkthrough's PR and review-session parents are irrelevant here.
   foreignKeys(db, false);
   db.insert(walkthroughs)
     .values({

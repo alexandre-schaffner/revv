@@ -62,8 +62,8 @@ function seed() {
 }
 
 describe("collectIssueGateInput", () => {
-  // flag_issue writes the concern before it is judged; comparing it with
-  // itself made every concern look like a duplicate of an existing one.
+  // flag_issue writes the concern before it is judged, so it would otherwise
+  // match itself as a duplicate.
   it("leaves the judged issue out of the issues it might duplicate", () => {
     const input = collectIssueGateInput(seed(), WT, "i2", {
       severity: "warning",

@@ -1,8 +1,5 @@
-// ── Handler: resolve_lead (Phase B onward) ──────────────────────────────────
-//
-// The agent's verdict on one first-pass lead. The lead row was recorded by
-// the orchestrator before the prompt went out; this writes only its verdict
-// columns, keyed on (walkthrough_id, lead_key), so a replay is a no-op.
+// The orchestrator records each lead row before the prompt goes out;
+// resolve_lead writes only its verdict columns (CLAUDE.md invariant 2).
 
 import type { WalkthroughLead } from "@revv/shared";
 import { and, eq } from "drizzle-orm";

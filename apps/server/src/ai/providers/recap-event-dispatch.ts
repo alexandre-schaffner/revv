@@ -6,13 +6,11 @@ import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
 import { isAgentBuiltinTool } from "../agent-stream/tool-activity";
 import { buildRecapActivity } from "./recap-activity";
 
-/** Minimum gap between `phase: "analyzing"` heartbeats emitted from
- *  reasoning-delta bursts. Keeps the UI from spamming "Model is thinking…"
- *  on every token while still showing progress during extended thinking. */
+/** Keeps "Model is thinking…" from repeating on every token while still showing
+ *  progress during extended thinking. */
 export const REASONING_HEARTBEAT_MS = 30_000;
 
 export interface RecapDispatchState {
-  /** Last `Date.now()` we emitted a reasoning heartbeat. */
   lastReasoningPushAt: number;
 }
 
@@ -21,7 +19,6 @@ export function createRecapDispatchState(): RecapDispatchState {
 }
 
 /**
- * Translate one normalized agent event into zero or more recap SSE envelopes.
  * Visible text is discarded: content flows through tool args. MCP tool calls
  * are reported by the `/mcp/recap` route, which knows their names.
  */
@@ -52,5 +49,4 @@ export function dispatchRecapStreamEvent(
     emit({ type: "activity", data: buildRecapActivity(ev.toolName, ev.input) });
     return;
   }
-  // Everything else (tool results, task lists, usage) is ignored by recap.
 }

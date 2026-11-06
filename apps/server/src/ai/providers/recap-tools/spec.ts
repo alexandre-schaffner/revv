@@ -1,32 +1,5 @@
-// ─── recap-tools/spec ────────────────────────────────────────────────────────
-//
-// MCP tool surface for project-recap generation. Replaces the prior
-// text-buffer / single-blob pipeline with a structured pipeline:
-//
-//   Phase 1 — Read source data:
-//     • get_recap_state  → period boundaries, source PR + walkthrough roll-up
-//     • list_open_prs    → open PRs with diffDigest, written as active-work
-//                          entries inside theme chapters alongside shipped work
-//     • get_repo_context → prior recaps for rolling continuity
-//
-//   Phase 2 — Write the lede (one atomic call):
-//     • set_lede(text) → 1–3 sentences, `<strong>`/`<em>` only.
-//
-//   Phase 3 — Write per-PR entries (one atomic idempotent call per PR):
-//     • add_pr_entry(prId, position, theme, verb, description,
-//                    linesAdded, linesRemoved)
-//       Upsert on `(recap_id, pr_id)`; replay-safe. Restamps the recap's
-//       derived fields in the same transaction: `summary_stats` from the
-//       source bundle, `source_pr_ids` / `source_walkthrough_ids` from the
-//       entries.
-//
-//   Phase 4 — Finalize:
-//     • complete_recap → validation gate. Requires non-empty lede + ≥1 entry.
-//       Writes nothing.
-//
-// Per CLAUDE.md invariants #2 + #11: agents never write `status` directly.
-// `complete_recap` only validates; the orchestrator observes the run's natural
-// end and flips `status` to `'complete'` after.
+// Agents never write `status` (CLAUDE.md invariants 2 and 11): `complete_recap`
+// only validates, and the orchestrator marks the recap complete after the run.
 
 import type { ProjectRecap, RecapStreamEvent } from "@revv/shared";
 import type { Effect } from "effect";
@@ -35,46 +8,19 @@ import type { Db } from "../../../db";
 import type { RecapSourceBundle } from "../../../db/schema/project-recaps";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
 
-// ── Handler execution context ────────────────────────────────────────────────
-
-/**
- * Per-call binding given to every recap MCP handler. Built by the transport
- * layer (Claude SDK adapter in `index.ts`, HTTP-MCP route in the future).
- */
 export interface RecapToolContext {
-  /** Direct DB handle. */
   readonly db: Db;
-  /** The recap row this call mutates / reads. */
   readonly recapId: string;
-  /**
-   * Source bundle the agent reads via `get_recap_state`. Computed once at
-   * job start by the orchestrator and threaded through here so the read
-   * tool doesn't re-query the archive for every agent turn.
-   */
+  /** Computed once at job start, so `get_recap_state` doesn't re-query the archive every turn. */
   readonly sourceBundle: RecapSourceBundle;
-  /**
-   * Prior recaps for the same repo (typically 1 daily + 1 weekly). Used by
-   * `get_repo_context` to give the agent rolling continuity.
-   */
   readonly priorRecaps: ReadonlyArray<ProjectRecap>;
-  /**
-   * Lazy diff loader called by the `get_pr_diff` MCP handler. The
-   * orchestrator wires this to `loadDiffForPr` at job-start time.
-   * Returns null when the prId is not in the source bundle or when
-   * both diff cache and GitHub are unavailable.
-   */
+  /** Null when the PR isn't in the source bundle, or neither the diff cache nor GitHub has it. */
   readonly getPrDiff: (prId: string) => Effect.Effect<RecapSourcePrDiff | null>;
   /**
-   * Hook fired the moment the agent calls `complete_recap` and validation
-   * passes. The orchestrator subscribes here so it knows the agent
-   * reached the validation gate cleanly — distinct from the agent's
-   * natural stream end (which may happen on errors / cancellation too).
+   * Fired when `complete_recap` passes validation — unlike the stream ending,
+   * which also happens on errors and cancellation.
    */
   readonly onCompleted: () => void;
-  /**
-   * Stream emitter for live recap generation. Called by handlers that
-   * produce content so the SSE endpoint can forward it to subscribers.
-   */
   readonly emit: (event: RecapStreamEvent) => void;
   /** A tool call reached the route, before its handler runs. */
   readonly onToolCall: (toolName: string) => void;
@@ -91,13 +37,9 @@ export type RecapToolHandler<TInput> = (
 
 export type RecapToolSpecRecord = GatewayToolSpec<RecapToolContext, RecapToolResult>;
 
-// ── Source bundle: the structured input the agent sees ───────────────────────
-
 /**
- * One file from a PR's diff, surfaced to the recap agent for PRs that have no
- * walkthrough. Mirrors the shape stored in `pr_diff_files` (see
- * `DiffCacheService`) but with patch text optionally truncated to keep the
- * agent's context bounded.
+ * A `pr_diff_files` row with its patch clipped to a per-file budget, for PRs
+ * with no walkthrough.
  */
 export interface RecapSourcePrDiffFile {
   readonly path: string;
@@ -108,20 +50,17 @@ export interface RecapSourcePrDiffFile {
   readonly deletions: number;
   /** Unified-diff patch text. Null when GitHub omitted it (binary / too large). */
   readonly patch: string | null;
-  /** True when the patch was clipped server-side to fit the per-file char budget. */
   readonly patchTruncated: boolean;
 }
 
 /**
- * Compact diff payload threaded to the recap agent for PRs without
- * walkthroughs. Bounded by the orchestrator so a 1000-file PR doesn't blow
- * up the agent's context — see `loadDiffForRecap` in `ProjectRecapJobs`.
+ * Bounded so a 1000-file PR can't blow up the agent's context; see
+ * `loadDiffForPr` in `ProjectRecapJobs`.
  */
 export interface RecapSourcePrDiff {
   readonly files: ReadonlyArray<RecapSourcePrDiffFile>;
   /** Total files in the original PR diff (before any per-recap truncation). */
   readonly totalFiles: number;
-  /** True when some files were dropped server-side to fit the bundle. */
   readonly filesTruncated: boolean;
   /**
    * Where the bytes came from. 'cache' = served from `pr_diff_files`;
@@ -132,8 +71,6 @@ export interface RecapSourcePrDiff {
   /** Optional human-readable hint about truncation / missing data for the agent. */
   readonly note: string | null;
 }
-
-// ── Tool input schemas ───────────────────────────────────────────────────────
 
 export const getRecapStateSchema = z.object({});
 
@@ -158,12 +95,7 @@ export const listOpenPrsSchema = z.object({
 });
 
 export const getRepoContextSchema = z.object({
-  /**
-   * Optional period filter for the prior-recap lookup. Defaults to "any
-   * period" (returns the most recent across daily and weekly).
-   */
   period: z.enum(["daily", "weekly"]).nullable().optional(),
-  /** Optional cap on returned rows. Defaults to 3. */
   limit: z.coerce.number().int().positive().max(10).nullable().optional(),
 });
 
@@ -246,8 +178,6 @@ export const getPrDiffSchema = z.object({
       "The `id` of the PR to fetch the diff for, as returned in the `prs` array by get_recap_state. Use this for archived PRs where `walkthrough` is null to get per-file status, +/- counts, and unified patch text before composing the recap.",
     ),
 });
-
-// ── Type exports ─────────────────────────────────────────────────────────────
 
 export type GetRecapStateInput = z.infer<typeof getRecapStateSchema>;
 export type ListOpenPrsInput = z.infer<typeof listOpenPrsSchema>;

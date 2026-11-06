@@ -9,9 +9,6 @@ import {
   normalizeDiffPatch,
 } from "./walkthrough-blocks";
 
-// A valid unified-diff hunk header must carry `@@ -a,b +c,d @@` ranges. The
-// regex models do not always produce — they emit a bare `@@` — which parses
-// into zero hunks and renders a blank panel. normalizeDiffPatch repairs that.
 const VALID_HEADER = /^@@ -\d+,\d+ \+\d+,\d+ @@/m;
 
 function artifact(html: string): BlockVariantInput {
@@ -220,14 +217,12 @@ describe("blockContentError", () => {
 
 describe("normalizeDiffPatch", () => {
   it("synthesizes a header for a bare `@@` hunk (the blank-panel bug)", () => {
-    // The exact shape seen in PR 1105: bare `@@`, one removal, three additions.
     const patch = ["@@", "-const a = old();", "+// note", "+// note 2", "+const a = new();"].join(
       "\n",
     );
     const out = normalizeDiffPatch(patch);
     expect(out).toMatch(VALID_HEADER);
     expect(out).toContain("@@ -1,1 +1,3 @@");
-    // Body is preserved verbatim.
     expect(out).toContain("-const a = old();");
     expect(out).toContain("+const a = new();");
   });
@@ -254,7 +249,7 @@ describe("normalizeDiffPatch", () => {
   it("repairs only malformed headers in a multi-hunk patch", () => {
     const patch = ["@@ -1,1 +1,1 @@", "-a", "+b", "@@", "-c", "+d"].join("\n");
     const out = normalizeDiffPatch(patch);
-    expect(out).toContain("@@ -1,1 +1,1 @@"); // valid one kept
+    expect(out).toContain("@@ -1,1 +1,1 @@");
     expect(out).toContain("@@ -1,1 +1,1 @@\n-a\n+b\n@@ -1,1 +1,1 @@\n-c\n+d");
   });
 

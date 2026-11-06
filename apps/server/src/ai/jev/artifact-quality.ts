@@ -1,4 +1,3 @@
-// ── Artifact craft bar ───────────────────────────────────────────────────────
 // The `artifact` block variant requires live state, a reader-varied control, and a verdict
 // (see `add_diff_step`'s schema). Three nouls turn that contract into a judgment, one per
 // clause, so a rejection names what failed.
@@ -25,9 +24,8 @@ export const ARTIFACT_CLAUSE_FLOOR = 0.35;
 export const ARTIFACT_MAX_FAILED_CLAUSES = 1;
 
 export interface ArtifactVerdict {
-  /** Clause keys that fell below the floor, in contract order. */
+  /** Labels of the clauses that fell below the floor, in contract order. */
   readonly failed: readonly string[];
-  /** Whether the handler should refuse the block. */
   readonly reject: boolean;
 }
 
@@ -82,7 +80,7 @@ export function judgeArtifact(
     const answers = result.answers;
     const failed = CLAUSE_KEYS.filter((key) => {
       const answer: unknown = answers[key];
-      // Missing answer counts as pass, not fail (per-clause version of the rule above).
+      // A missing answer passes, as an unavailable Jev does.
       if (answer === null || typeof answer !== "object" || !("noul" in answer)) return false;
       return typeof answer.noul === "number" && answer.noul < ARTIFACT_CLAUSE_FLOOR;
     });
@@ -94,7 +92,6 @@ export function judgeArtifact(
   });
 }
 
-/** Agent-facing rejection text: what failed, and what to do instead. */
 export function renderArtifactRejection(verdict: ArtifactVerdict): string {
   return [
     `Error: this artifact does not clear the craft bar — ${verdict.failed.join("; ")}.`,

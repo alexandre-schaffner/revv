@@ -63,7 +63,6 @@ describe("listOpencodeModels", () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  /** A stand-in `opencode` whose `api` call fails `apiFailures` times first. */
   function fakeOpencode(options: { apiFailures: number; verbose?: string }): string {
     const dir = mkdtempSync(join(tmpdir(), "revv-opencode-"));
     dirs.push(dir);

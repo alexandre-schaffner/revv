@@ -1,5 +1,3 @@
-// ── chat-edit-tools ─────────────────────────────────────────────────────────
-//
 // The chat-edit tool surface (CLAUDE.md invariant 7), served to the in-app
 // chat through `chat-mcp-tools.ts` and to external agents through
 // `external-review-tools.ts`.
@@ -48,8 +46,6 @@ import {
 } from "./spec";
 
 export type { ChatWalkthroughEditContext } from "./spec";
-
-// ── Canonical spec list ─────────────────────────────────────────────────────
 
 export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
   {

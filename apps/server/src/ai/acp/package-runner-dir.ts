@@ -1,5 +1,3 @@
-// ── Package-runner working directory ─────────────────────────────────────────
-//
 // Most ACP adapters are launched through a package runner (`npx -y <adapter>`,
 // or `bunx` when npm is missing). A package runner is not a neutral launcher:
 // `npm exec` loads the dependency tree of the project it runs in, so spawning

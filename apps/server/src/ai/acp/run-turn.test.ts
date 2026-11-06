@@ -14,7 +14,6 @@ const launch: AgentLaunch = {
 interface FakeAgent {
   readonly handle: AcpConnectionHandle;
   readonly calls: string[];
-  /** Push a session update to the registered listener. */
   readonly update: (update: SessionUpdate) => void;
   readonly prompts: ContentBlock[][];
   refcount: number;

@@ -1,10 +1,3 @@
-// ── Normalized event ────────────────────────────────────────────────────────
-
-/**
- * Discriminated union of everything an ACP agent emits during a turn, decoded
- * from `session/update` by `decodeAcpSessionUpdate`. Callers switch on `kind`
- * to map into their own output frame (ChatStreamFrame or WalkthroughStreamEvent).
- */
 /**
  * Snapshot entry inside a `task-list-update`. Mirrors the shared `ChatTask`
  * shape without the persistence id (the server assigns one downstream).
@@ -17,6 +10,7 @@ export interface NormalizedTask {
   readonly priority: "low" | "medium" | "high" | null;
 }
 
+/** What an ACP agent emits during a turn, decoded from `session/update`. */
 export type NormalizedAgentEvent =
   | { readonly kind: "text-delta"; readonly data: string }
   | { readonly kind: "reasoning-delta"; readonly data: string }
@@ -31,13 +25,9 @@ export type NormalizedAgentEvent =
       readonly callId?: string;
     }
   /**
-   * Terminal result of a previously-emitted `tool-call`, decoded from the ACP
-   * `tool_call_update` notification once its `status` reaches `completed` /
-   * `failed`. `callId` correlates back to the originating `tool-call`. `output`
-   * is best-effort textual content (text content blocks joined; diffs rendered
-   * to text); producers truncate it to keep the journal small. Surfaced to the
-   * UI as a clickable output peek (chat `activity-result` /
-   * walkthrough `exploration-result`).
+   * Decoded from the ACP `tool_call_update` notification once its `status`
+   * reaches `completed` / `failed`. `output` is best-effort text (diffs
+   * rendered to text); producers truncate it to keep the journal small.
    */
   | {
       readonly kind: "tool-result";
@@ -46,11 +36,9 @@ export type NormalizedAgentEvent =
       readonly isError: boolean;
     }
   /**
-   * Late-arriving tool input for a previously-emitted `tool-call`, decoded from
-   * the first `tool_call_update` that carries a usable `rawInput`/`locations`.
-   * Some adapters send the initial `tool_call` with an empty input and only fill
-   * it in on a follow-up update; this lets the UI back-fill the activity's
-   * filename/command (and file peek) by `callId`.
+   * Some adapters send the initial `tool_call` with an empty input and only
+   * fill it in on a follow-up `tool_call_update`; this lets the UI back-fill
+   * the activity by `callId`.
    */
   | {
       readonly kind: "tool-call-update";
@@ -66,12 +54,10 @@ export type NormalizedAgentEvent =
       readonly tasks: ReadonlyArray<NormalizedTask>;
     }
   /**
-   * Point-in-time context-window occupancy from the agent. ACP's
-   * `usage_update` carries only `used` (tokens currently in context) and
-   * `size` (window size) — NOT the input/output/cache throughput breakdown —
-   * so this event populates the occupancy gauge only. Consumers that track
-   * `WalkthroughTokenUsage` fold it via `mergeContextOccupancy`; chat ignores
-   * it. Not all ACP agents emit it; consumers must not depend on one arriving.
+   * ACP's `usage_update` carries only `used` (tokens currently in context) and
+   * `size` (window size) — not the input/output/cache throughput breakdown —
+   * so this feeds the occupancy gauge only. Not all ACP agents emit it;
+   * consumers must not depend on one arriving.
    */
   | {
       readonly kind: "usage";

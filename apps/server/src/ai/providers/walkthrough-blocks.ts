@@ -1,5 +1,3 @@
-// ── walkthrough-blocks ───────────────────────────────────────────────────────
-//
 // Block content for every tool that writes `walkthrough_blocks`: the
 // generation pipeline and the post-completion edit path accept the same four
 // variants (markdown | code | diff | artifact), validate them with the same
@@ -57,7 +55,7 @@ export interface BlockVariantInput {
     | undefined;
 }
 
-/** Count the populated variants. Both tool surfaces require exactly 1. */
+/** Both tool surfaces require exactly 1. */
 export function blockVariantCount(input: BlockVariantInput): number {
   let n = 0;
   if (input.markdown != null) n++;
@@ -67,12 +65,6 @@ export function blockVariantCount(input: BlockVariantInput): number {
   return n;
 }
 
-/**
- * Reject blocks whose payload would render as an empty box. An annotation on a
- * code/diff block reads as commentary *about* code that isn't there — use a
- * markdown block for prose-only content instead. Returns a recoverable error
- * string for the agent, or null when the content is acceptable.
- */
 function emptyBlockError(input: BlockVariantInput): string | null {
   if (input.markdown && input.markdown.content.trim().length === 0) {
     return "Error: markdown block requires non-empty content. Either fill it in or omit the block.";
@@ -112,10 +104,6 @@ function diagramBearingFields(input: BlockVariantInput): readonly (readonly [str
 }
 
 /**
- * The full content gate both write paths run before a block is persisted:
- * empty payloads, then unrenderable `prlens` diagrams. Returns a recoverable
- * error string for the agent, or null when the block is safe to store.
- *
  * Diagram validation is a hard rejection rather than the warn-and-save the
  * artifact theming lint uses, because the two failures differ in kind. A
  * hardcoded color still renders — wrong in one theme, readable in the other.
@@ -333,7 +321,6 @@ export function normalizeDiffPatch(patch: string): string {
   const lines = patch.split("\n");
   const firstHunk = lines.findIndex(isHunkHeader);
 
-  // No hunk header at all: treat the whole body as one headerless hunk.
   if (firstHunk === -1) {
     if (patch.trim().length === 0) return patch;
     return `${synthesizeHunkHeader(lines)}\n${patch}`;
@@ -353,11 +340,7 @@ export function normalizeDiffPatch(patch: string): string {
   return out.join("\n");
 }
 
-/**
- * Construct a typed `WalkthroughBlock` from exactly one populated variant, or
- * null when none is present. Callers check {@link blockVariantCount} and
- * {@link blockContentError} first.
- */
+/** Callers check {@link blockVariantCount} and {@link blockContentError} first. */
 export function buildBlock(
   blockId: string,
   semanticStepIndex: number,

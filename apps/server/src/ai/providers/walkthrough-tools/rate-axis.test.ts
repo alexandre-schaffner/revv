@@ -12,8 +12,6 @@ const CITATION = { file_path: "a.ts", start_line: 1, end_line: 2, note: null };
 
 function seed(opts: { emptyRows?: boolean } = {}): Db {
   const db = createDb(":memory:");
-  // Only the two tables under test are seeded; the walkthrough's PR and
-  // review-session parents are irrelevant to rate_axis.
   (db as unknown as { session: { client: { run: (sql: string) => void } } }).session.client.run(
     "PRAGMA foreign_keys = OFF",
   );
@@ -142,15 +140,12 @@ describe("rate_axis", () => {
   });
 
   it("advances on the ninth rationale, not the ninth row", async () => {
-    // Legacy rows from the verdict pass already exist; the phase must not
-    // move until the agent has written prose for every axis.
     const db = seed({ emptyRows: true });
     const ctx = ctxFor(db);
     for (const [i, axis] of RATING_AXES.entries()) {
       await rateAxisHandler(ctx, rating({ axis }));
       expect(phaseOf(db)).toBe(i === RATING_AXES.length - 1 ? "D" : "C");
     }
-    // The agent's verdict replaces the seeded one.
     const verdicts = db.select({ v: walkthroughRatings.verdict }).from(walkthroughRatings).all();
     expect(verdicts.every((r) => r.v === "pass")).toBe(true);
   });

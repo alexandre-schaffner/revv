@@ -1,4 +1,3 @@
-// ── Auto-continuation adjudication ───────────────────────────────────────────
 // Two small hooks on the budget-exhaustion path: decline to spend an auto-
 // continuation when the next turn clearly won't finish, and name the probable
 // failure cause for the user-facing message. Neither can change a terminal
@@ -22,7 +21,6 @@ export type ContinuationVerdict =
 
 const PROCEED: ContinuationVerdict = { kind: "proceed" };
 
-/** Budget for the call. Counters only, so the request is tiny. */
 export const CONTINUATION_TIMEOUT_MS = 6_000;
 
 /** Confidence floor for a stop; both answers must clear it. "Stop" costs the user a walkthrough; "proceed" only costs one turn the budget already bounds. */
@@ -43,7 +41,6 @@ const FINISH_CRITERIA = {
 } as const;
 
 export interface AdjudicateInput extends ContinuationInput {
-  /** Kill switch. Off returns `proceed` without a call. */
   readonly enabled: boolean;
 }
 
@@ -109,7 +106,6 @@ const FAILURE_CRITERIA = {
   unknown: "None of the above fits, or there is not enough signal to tell.",
 } as const;
 
-/** Budget for the enrichment. Strictly cosmetic, so it gets very little. */
 export const FAILURE_CLASSIFY_TIMEOUT_MS = 5_000;
 
 /** Guesses why a run failed, for the user-facing message. Strictly cosmetic: changes a string, never a status. Returns `null` when it can't help. */

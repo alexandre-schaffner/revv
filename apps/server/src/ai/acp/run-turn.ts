@@ -1,5 +1,3 @@
-// ── ACP turn runner ──────────────────────────────────────────────────────────
-//
 // The one way an agent turn runs: connect, open (or reload) a session with
 // Revv's MCP server, set its mode, prompt, and stream `session/update`s to the
 // caller, under the turn's deadlines. Chat, walkthrough, recap, stack brief and

@@ -17,7 +17,6 @@ const STATE: ContinuationInput = {
   totalTokens: 90_000,
 };
 
-/** A JevService that answers with fixed choices, and records whether it ran. */
 function stubJev(answers: Record<string, { choice: string; confidence: number }>) {
   const calls = { count: 0 };
   const layer = Layer.succeed(JevService, {

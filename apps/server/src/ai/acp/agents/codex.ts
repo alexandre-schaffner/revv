@@ -7,7 +7,6 @@ import { commandSucceeds, hostEnv, resolveCommandPath } from "../host";
 import { staticModels } from "./static-models";
 import { type AgentAdapter, type AgentAuthStatus, NOT_SIGNED_IN } from "./types";
 
-// Revv tier → Codex `model_reasoning_effort`.
 const CODEX_REASONING_EFFORT: Partial<Record<ThinkingEffort, string>> = {
   ultra: "ultra",
   max: "max",

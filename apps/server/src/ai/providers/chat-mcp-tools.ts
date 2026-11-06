@@ -1,5 +1,3 @@
-// ── chat-mcp-tools ──────────────────────────────────────────────────────────
-//
 // The chat agent's MCP tools: `get_review_context` (here) and the chat-edit
 // tools (`chat-edit-tools/`), invariant 7's post-completion mutation path.
 
@@ -39,11 +37,6 @@ interface ParsedBlock {
   readonly endLine: number | null;
 }
 
-/**
- * Parse the `data` JSON column of a walkthrough_blocks row into a stable
- * shape suitable for the agent. Best-effort — corrupt JSON falls back to
- * "type:unknown content:''".
- */
 function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
   let parsed: Record<string, unknown> = {};
   try {
@@ -70,8 +63,7 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
       break;
     case "artifact": {
       // An artifact is a full HTML document (up to 256 KB) the chat agent
-      // can't act on; surface a compact placeholder plus the human-readable
-      // annotation instead of dumping the verbatim markup into its context.
+      // can't act on; keep the markup out of its context.
       const note = str("annotation").trim();
       content = note ? `[interactive artifact: ${note}]` : "[interactive artifact]";
       break;
@@ -88,8 +80,6 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
     endLine: num("endLine"),
   };
 }
-
-// ── Tool: get_review_context ────────────────────────────────────────────────
 
 const getReviewContextSchema = z.object({}).strict();
 
@@ -131,8 +121,6 @@ const getReviewContextHandler: ChatEditToolHandler<GetReviewContextInput> = asyn
     if (t.walkthroughIssueId) linkedThreadByIssue.set(t.walkthroughIssueId, t);
   }
 
-  // Standalone reviewer comments: every comment thread on this PR that isn't
-  // linked to a walkthrough issue.
   const standaloneThreads = db
     .select({ thread: commentThreads })
     .from(commentThreads)
@@ -162,9 +150,6 @@ const getReviewContextHandler: ChatEditToolHandler<GetReviewContextInput> = asyn
     blockRows.map((b) => b.semanticStepIndex),
   );
 
-  // Build the structured payload. We return JSON-stringified text so the
-  // agent can reason over it (and callers don't have to JSON-parse a result
-  // shape outside of `content`).
   const payload = {
     pr: {
       id: prRow.id,
@@ -274,8 +259,6 @@ const getReviewContextHandler: ChatEditToolHandler<GetReviewContextInput> = asyn
 
   return ok(JSON.stringify(payload, null, 2));
 };
-
-// ── Tool registry ───────────────────────────────────────────────────────────
 
 export const CHAT_TOOL_SPECS: ReadonlyArray<ChatEditToolSpecRecord> = [
   {

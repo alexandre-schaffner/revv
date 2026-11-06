@@ -1,7 +1,4 @@
-// ── chat-edit-review-handlers ────────────────────────────────────────────────
-//
-// Ratings, issues, and issue comments. A GitHub-submitted issue and its
-// comments are immutable (invariant 7).
+// A GitHub-submitted issue and its comments are immutable (invariant 7).
 
 import type { RatingCitation, ThreadEventMessage, WalkthroughRating } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
@@ -53,10 +50,6 @@ function issueIn(db: Db, walkthroughId: string, id: string) {
     .get();
 }
 
-/**
- * The AI comment message and its thread, when its issue belongs to the
- * edited walkthrough and is still editable; otherwise the refusal.
- */
 function editableIssueComment(
   db: Db,
   walkthroughId: string,
@@ -111,8 +104,6 @@ function citationsFrom(
   }));
 }
 
-// ── Tool: update_rating ─────────────────────────────────────────────────────
-
 export const updateRatingHandler: ChatEditToolHandler<UpdateRatingInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = ratingAt(ctx.db, wt.id, input.axis);
@@ -165,8 +156,6 @@ export const updateRatingHandler: ChatEditToolHandler<UpdateRatingInput> = async
     };
   });
 
-// ── Tool: delete_rating ─────────────────────────────────────────────────────
-
 export const deleteRatingHandler: ChatEditToolHandler<DeleteRatingInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = ratingAt(ctx.db, wt.id, input.axis);
@@ -177,8 +166,6 @@ export const deleteRatingHandler: ChatEditToolHandler<DeleteRatingInput> = async
       events: [{ type: "rating:deleted", data: { axis: input.axis } }],
     };
   });
-
-// ── Tool: add_issue ─────────────────────────────────────────────────────────
 
 export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async (ctx, input) => {
   // Normalized before hashing: the id derives from the title.
@@ -225,8 +212,6 @@ export const addIssueEditHandler: ChatEditToolHandler<AddIssueEditInput> = async
   });
 };
 
-// ── Tool: update_issue ──────────────────────────────────────────────────────
-
 export const updateIssueHandler: ChatEditToolHandler<UpdateIssueInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = issueIn(ctx.db, wt.id, input.issue_id);
@@ -269,8 +254,6 @@ export const updateIssueHandler: ChatEditToolHandler<UpdateIssueInput> = async (
     };
   });
 
-// ── Tool: delete_issue ──────────────────────────────────────────────────────
-
 export const deleteIssueHandler: ChatEditToolHandler<DeleteIssueInput> = async (ctx, input) =>
   runChatEdit(ctx, (wt) => {
     const existing = issueIn(ctx.db, wt.id, input.issue_id);
@@ -298,8 +281,6 @@ export const deleteIssueHandler: ChatEditToolHandler<DeleteIssueInput> = async (
       events: [{ type: "issue:deleted", data: { id: input.issue_id } }],
     };
   });
-
-// ── Tool: add_issue_comment ─────────────────────────────────────────────────
 
 export const addIssueCommentEditHandler: ChatEditToolHandler<AddIssueCommentEditInput> = async (
   ctx,
@@ -341,8 +322,6 @@ export const addIssueCommentEditHandler: ChatEditToolHandler<AddIssueCommentEdit
   });
 };
 
-// ── Tool: update_issue_comment ──────────────────────────────────────────────
-
 export const updateIssueCommentHandler: ChatEditToolHandler<UpdateIssueCommentInput> = async (
   ctx,
   input,
@@ -369,8 +348,6 @@ export const updateIssueCommentHandler: ChatEditToolHandler<UpdateIssueCommentIn
       ],
     };
   });
-
-// ── Tool: delete_issue_comment ──────────────────────────────────────────────
 
 export const deleteIssueCommentHandler: ChatEditToolHandler<DeleteIssueCommentInput> = async (
   ctx,

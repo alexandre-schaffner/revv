@@ -1,7 +1,3 @@
-// ─── walkthrough-phase-b-handlers ────────────────────────────────────────────
-//
-// Phase B: chapters, blocks, issues and their inline comments.
-
 import type {
   CommentThread,
   ThreadMessage,
@@ -42,11 +38,9 @@ import type {
   WalkthroughToolResult,
 } from "./spec";
 
-// ── Handler: add_semantic_step (Phase B chapter declaration) ─────────────────
-//
 // Writes the chapter and its step_index=0 block in one transaction: models
 // that stopped between opening a chapter and filling it left empty chapters
-// the completion gate rejected. The first call owns the A → B transition.
+// the completion gate rejected.
 
 export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput> = async (
   ctx,
@@ -93,11 +87,6 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     }
     const { phase } = open;
 
-    // Sequencing: a NEW chapter (no existing row at this index) may only be
-    // opened if the immediately previous chapter exists. Retries of an
-    // existing chapter (update path) bypass this check. The atomic
-    // open+first-block design means "previous chapter has a block" is
-    // implied by "previous chapter exists" — no separate fill check needed.
     const existingChapter = ctx.db
       .select({ id: walkthroughSemanticSteps.id })
       .from(walkthroughSemanticSteps)
@@ -193,10 +182,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   );
 };
 
-// ── Handler: add_diff_step (Phase B) ─────────────────────────────────────────
-
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
-  // Exactly one of {markdown, code, diff, artifact} must be provided.
   if (blockVariantCount(input) !== 1) {
     return fail(
       "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
@@ -276,7 +262,6 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   );
 };
 
-/** Chapter title for context, or a placeholder when the chapter is brand new. */
 function chapterTitleFor(db: Db, walkthroughId: string, semanticStepIndex: number): string {
   return (
     db
@@ -292,8 +277,6 @@ function chapterTitleFor(db: Db, walkthroughId: string, semanticStepIndex: numbe
   );
 }
 
-// ── Handler: flag_issue (during Phase B) ─────────────────────────────────────
-//
 // The row writes unconditionally; a Jev judgment scheduled behind it
 // (ai/jev/issue-relevance.ts) may retract or relabel it later. Scheduled, not
 // awaited — blocking would cost each concern a round trip. The completion
@@ -342,9 +325,6 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     }
     const blockIds = guard.blockIds;
 
-    // Issue `order` is the post-row insertion order within this walkthrough —
-    // compute it inside the transaction so concurrent writes (which can't
-    // happen today, but defended anyway) don't collide.
     const existing = ctx.db
       .select({ id: walkthroughIssues.id, order: walkthroughIssues.order })
       .from(walkthroughIssues)
@@ -430,8 +410,6 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
     ctx.emit({ type: "issue", data: issueEvent });
   }
 
-  // Fire-and-forget: the row is already durable; the judgment can only
-  // remove or relabel it.
   ctx.jev.scheduleIssueJudgment(issueId, {
     severity: input.severity,
     title,
@@ -451,8 +429,6 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   return ok(`Issue flagged: ${title} (id: ${issueId}).${nextStepHint}`);
 };
 
-// ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────
-//
 // One thread per anchor, keyed deterministically, so a retry replaces the body
 // instead of stacking threads. The thread joins the walkthrough's review
 // session, where the diff view picks it up.

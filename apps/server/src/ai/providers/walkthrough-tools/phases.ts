@@ -76,7 +76,6 @@ export const TOOL_PHASES = {
 
 export type WriteToolName = keyof typeof TOOL_PHASES;
 
-/** `description`, opened with the phase `tool` belongs to. */
 export function phaseDescription(tool: WriteToolName, description: string): string {
   const { label } = TOOL_PHASES[tool];
   return label === null ? description : `${label}. ${description}`;

@@ -1,5 +1,3 @@
-// ── walkthrough-content-schema ──────────────────────────────────────────────
-//
 // The tool-input shapes of walkthrough content, shared by the generation
 // tools and the chat-edit tools so a change to the contract reaches both.
 

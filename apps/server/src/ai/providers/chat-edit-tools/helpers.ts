@@ -1,5 +1,3 @@
-// ── chat-edit-helpers ────────────────────────────────────────────────────────
-//
 // `runChatEdit` is every chat edit's frame: resolve the target walkthrough,
 // re-check it inside the transaction, apply the edit, stamp it, and publish
 // what changed only after the commit (invariants 7 and 8). A handler supplies
@@ -73,10 +71,8 @@ export function runChatEdit(
 }
 
 /**
- * Drop `blockIds` from the issues that cite them, ahead of deleting those
- * blocks. Refused when a cited issue was submitted to GitHub (immutable), or
- * when a warning or critical issue would be left citing no block. Returns the
- * issues as rewritten.
+ * Call before deleting `blockIds`. GitHub-submitted issues are immutable, and a
+ * warning or critical issue must keep citing at least one block.
  */
 export function scrubBlockReferences(
   db: Db,

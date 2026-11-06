@@ -1,5 +1,3 @@
-// ── ACP agent adapters ───────────────────────────────────────────────────────
-//
 // One adapter per registry agent, keyed by `AcpAgentId`: adding an agent to
 // `ACP_AGENTS` without an adapter here is a compile error. Everything outside
 // `ai/acp/agents/` asks these functions, never an agent id, about per-agent
@@ -30,7 +28,6 @@ export function agentAdapter(id: AcpAgentId): AgentAdapter {
   return AGENT_ADAPTERS[id];
 }
 
-/** The environment for a process Revv runs for this agent (see `AgentProcessPurpose`). */
 export function agentProcessEnv(
   id: AcpAgentId,
   purpose: AgentProcessPurpose,
@@ -72,7 +69,6 @@ export function invalidateAgentProbes(): void {
   forgetClaudeAuthProbe();
 }
 
-/** Installed + signed in + manual login hint for every registry agent. */
 export function detectAgentStatus(): AgentStatusReport {
   const agents = Object.fromEntries(
     ACP_AGENT_IDS.map((id) => {

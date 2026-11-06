@@ -1,5 +1,3 @@
-// ── Tool-call activities ─────────────────────────────────────────────────────
-//
 // How an agent's tool call reads in the chat timeline and the walkthrough
 // exploration feed: canonical name, kind, one-line summary, and an input whose
 // paths are relative to the worktree.
@@ -9,14 +7,9 @@ import type { ActivityKind } from "@revv/shared";
 import { classifyTool, normalizeToolName, TOOL_PATH_INPUT_KEYS } from "@revv/shared";
 
 /**
- * Render a tool's path argument relative to the agent's working directory
- * (the per-job git worktree). Agents are handed absolute worktree paths, so
- * the raw `file_path` is a long `/Users/…/worktree/apps/server/…` string that
- * clips in the narrow exploration feed. Relativizing against `cwd` yields the
- * familiar repo-relative form (`apps/server/…`). Falls back to the original
- * path when no `cwd` is supplied, the path isn't absolute (already relative,
- * e.g. Grep's `.`), or it resolves outside the worktree (so we never surface a
- * confusing `../../` escape).
+ * Agents are handed absolute worktree paths, which clip in the narrow
+ * exploration feed. A path outside the worktree is left absolute rather than
+ * surfaced as a confusing `../../` escape.
  */
 function toRepoRelative(p: string, cwd?: string): string {
   if (!p || !cwd || !isAbsolute(p)) return p;
@@ -43,8 +36,7 @@ function buildExplorationDescription(toolName: string, input: unknown, cwd?: str
     case "Edit":
       return `Edited ${path("file_path") || "file"}`;
     case "Bash": {
-      // Single-line, truncated. The first line of the command is enough
-      // signal for the chat panel; full command is in the agent transcript.
+      // The full command is in the agent transcript.
       const cmd = str("command");
       if (!cmd) return "Running shell command";
       const firstLine = cmd.split("\n")[0] ?? cmd;
@@ -85,20 +77,6 @@ export function relativizeToolInput(input: unknown, cwd?: string): unknown {
   return next ?? input;
 }
 
-/**
- * Build a renderable Activity from a raw tool name + input. Composes
- * `normalizeToolName` (lowercase → canonical), `classifyTool`
- * (canonical → ActivityKind), and `buildExplorationDescription` (canonical +
- * input → user-friendly summary).
- *
- * Used by every provider that surfaces tool calls in the UI. Centralising
- * this means a future change to how we describe Bash commands or MCP tools
- * only needs to land in one place.
- *
- * `cwd` (the agent's working directory — the per-job git worktree) is optional:
- * when supplied, absolute path arguments are rendered relative to it so the
- * feed shows `apps/server/…` instead of the full `/Users/…/worktree/…` path.
- */
 export function buildActivity(
   rawToolName: string,
   input: unknown,

@@ -1,5 +1,3 @@
-// ── Sizing answers → launch config ──────────────────────────────────────────
-//
 // Jev never names a model; it answers an abstract depth tier and effort tier,
 // and this module maps each onto something concrete for the selected agent
 // via a local table, so an external API can never emit a model id the agent
@@ -66,7 +64,6 @@ const EFFORT_TIERS: Readonly<Record<ReasoningEffort, ThinkingEffort>> = {
   exhaustive: "max",
 };
 
-/** Position of `model` on the agent's ladder, or `null` when it isn't on it. */
 function ladderIndex(agent: AcpAgentId, model: string | null | undefined): number | null {
   const ladder = DEPTH_LADDERS[agent];
   if (!ladder || !model) return null;
@@ -82,7 +79,6 @@ function ladderIndex(agent: AcpAgentId, model: string | null | undefined): numbe
 export interface RouteSizingInput {
   readonly agent: AcpAgentId;
   readonly depth: ReviewDepth;
-  /** Calibrated confidence in `depth`, from the choice answer. */
   readonly confidence: number;
   /** Per-label probabilities, used for the runner-up margin. */
   readonly probabilities: Readonly<Record<string, number>>;
@@ -103,14 +99,10 @@ export interface RouteSizingInput {
 }
 
 /**
- * Resolve the model half. `null` means "leave the configured model alone" —
- * returned when the agent has no depth ladder, confidence/margin is below
- * floor, or a pinned model is already at or above the routed tier.
- *
- * Biased upward against a pin, never down: the cost is asymmetric (an
- * over-powered model wastes cents, an under-powered one erodes trust), so a
- * downgrade only happens once the user has explicitly declined to pin
- * ({@link AUTO_SENTINEL}).
+ * `null` means "leave the configured model alone". Biased upward against a
+ * pin, never down: the cost is asymmetric (an over-powered model wastes cents,
+ * an under-powered one erodes trust), so a downgrade only happens once the
+ * user has explicitly declined to pin ({@link AUTO_SENTINEL}).
  */
 function routeModel(input: RouteSizingInput): string | null {
   const ladder = DEPTH_LADDERS[input.agent];
@@ -144,10 +136,6 @@ function routeEffort(input: RouteSizingInput): ThinkingEffort | null {
   return clampThinkingEffort(input.agent, EFFORT_TIERS[input.reasoningEffort]) ?? null;
 }
 
-/**
- * Resolve a launch override, or `null` when neither half applies. The two
- * halves are decided independently and either can be absent.
- */
 export function routeSizing(input: RouteSizingInput): GenerationLaunchOverride | null {
   const model = routeModel(input);
   const thinkingEffort = routeEffort(input);
@@ -158,7 +146,6 @@ export function routeSizing(input: RouteSizingInput): GenerationLaunchOverride |
   };
 }
 
-/** Gap between the top two probabilities; `1` when there's only one label. */
 function margin(probabilities: Readonly<Record<string, number>>): number {
   const sorted = Object.values(probabilities).sort((a, b) => b - a);
   if (sorted.length < 2) return 1;

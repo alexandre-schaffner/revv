@@ -1,8 +1,3 @@
-// ─── walkthrough-read-handler ────────────────────────────────────────────────
-//
-// Read-only MCP tool handler: get_walkthrough_state. The first call every
-// agent run makes, including resumes.
-
 import type {
   RatingAxis,
   RiskLevel,
@@ -38,11 +33,7 @@ import type {
   WalkthroughToolHandler,
 } from "./spec";
 
-// ── Handler: get_walkthrough_state ───────────────────────────────────────────
-//
-// The first call every agent run makes, including resumes. Returns enough
-// state for the agent to figure out where to pick up: which phase is
-// complete, which diff steps exist, which axes have been rated.
+// The first call every agent run makes, including resumes (invariant 6).
 
 export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughStateInput> = async (
   ctx,
@@ -256,11 +247,9 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     leadsNeedingVerdict,
   };
 
-  // Loud, plain-text banner when the agent has unfinished comment work.
-  // The JSON state still contains the full list, but the prefix makes it
-  // impossible for the model to skim past — especially on resume, where
-  // missing this would lead straight back to the same complete_walkthrough
-  // validation failure.
+  // Models skim past the lists inside the JSON; a plain-text prefix they
+  // can't miss keeps a resume from walking back into the same
+  // complete_walkthrough refusal.
   const stateJson = JSON.stringify(state);
   const warnings = [
     ...(issuesNeedingInlineComment.length > 0
@@ -281,20 +270,10 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
   };
 };
 
-// ── Handler: get_commit_history ──────────────────────────────────────────────
-//
-// Read-only. Returns the PR commit list captured at job start (orchestrator
-// writes `walkthroughs.pr_commits` as JSON inside `createPartial`).
-//
-// The agent calls this once before opening the required journey chapter at
-// `semantic_step_index: 0`. Surfacing commits via a tool — rather than the
-// user prompt — keeps the prompt token-bounded on long-running PRs (cap is
-// 300 commits ≈ 4.5K tokens otherwise paid on every run + every resume).
-//
-// Returns commits in oldest → newest order (already stored that way by the
-// orchestrator). A NULL `pr_commits` column (legacy row, or pre-migration)
-// surfaces as an empty array — the agent's single-commit edge-case path
-// then writes a one-paragraph journey chapter and moves on.
+// The commit list `createPartial` captured at job start. A tool rather than
+// the prompt, so long PRs (GitHub returns up to 250 commits) don't pay for it
+// on every run and resume. Stored head first, as `github.prs.commits` returns
+// them. A legacy row's NULL `pr_commits` reads as an empty list.
 
 export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInput> = async (
   ctx,
@@ -308,9 +287,6 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
 
   const commits = decodePrCommits(row.prCommits);
 
-  // Return as a structured JSON payload. The agent reads commits in
-  // oldest → newest order and writes the journey chapter from it; the
-  // narrative shape is governed by the system prompt, not this tool.
   if (row.mode === "author") {
     const payload = {
       walkthroughId: row.id,
@@ -345,17 +321,6 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
   };
 };
 
-// ── Handler: get_repo_context ────────────────────────────────────────────────
-//
-// Read-only. Returns the most-recent complete project recaps for the
-// repository this walkthrough belongs to. Used by the walkthrough agent in
-// Phase A to ground its summary in recent repo context — what shipped, what
-// themes recur, what risk patterns to watch for.
-//
-// We resolve the repoId by walking walkthrough → pull_request → repository.
-// No round-trip through services — this handler runs in the tool's
-// transaction-free read path, just like get_commit_history.
-
 interface RecapForAgent {
   readonly id: string;
   readonly period: "daily" | "weekly";
@@ -378,16 +343,14 @@ export const getRepoContextHandler: WalkthroughToolHandler<GetRepoContextInput> 
     );
   }
 
-  // walkthrough.pullRequestId → pullRequests.repositoryId
   const prRow = ctx.db
     .select({ repositoryId: pullRequests.repositoryId })
     .from(pullRequests)
     .where(eq(pullRequests.id, walkthroughRow.pullRequestId))
     .get();
   if (!prRow) {
-    // PR vanished (deleted repo, foreign-key cascade in flight). Return
-    // empty context rather than failing — the agent can still produce a
-    // walkthrough.
+    // PR vanished (deleted repo, FK cascade in flight); the agent can still
+    // review without repo context.
     return {
       content: [
         {

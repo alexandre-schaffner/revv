@@ -1,9 +1,7 @@
-// ── chat-edit-tool-spec ─────────────────────────────────────────────────────
-//
-// Input schemas and context of the chat-edit tools: the single path that may
-// change a walkthrough after it completed (CLAUDE.md invariant 7). They never
-// touch `status` or `lastCompletedPhase`; `runChatEdit` stamps
-// `lastEditedAt` / `lastEditedBy` and publishes the edit.
+// The chat-edit tools are the single path that may change a walkthrough after
+// it completed (CLAUDE.md invariant 7). They never touch `status` or
+// `lastCompletedPhase`; `runChatEdit` stamps `lastEditedAt` / `lastEditedBy`
+// and publishes the edit.
 
 import type {
   ExternalAgentProvider,
@@ -31,8 +29,6 @@ import {
   severitySchema,
   verdictSchema,
 } from "../walkthrough-content-schema";
-
-// ── Handler execution context ───────────────────────────────────────────────
 
 /**
  * Stamped on `walkthroughs.lastEditedBy`: in-app chat, or the external coding
@@ -63,8 +59,6 @@ export type ChatEditToolSpecRecord = GatewayToolSpec<
   ChatWalkthroughEditContext,
   ChatEditToolResult
 >;
-
-// ── Shared content sub-schemas ──────────────────────────────────────────────
 
 /** Exactly one variant, as `add_diff_step` takes it. */
 export const blockContentSchema = z
@@ -101,8 +95,6 @@ export const blockContentSchema = z
  */
 const CHAPTER_INDEX_NOTE =
   "This is NOT the chapter number the user sees in the UI: map the user's 'chapter N' through `chapterNumber` in get_walkthrough_for_edit (the Overview is chapter 0, the walkthrough summary).";
-
-// ── Tool input schemas ──────────────────────────────────────────────────────
 
 export const getWalkthroughForEditSchema = z.object({});
 
@@ -325,8 +317,6 @@ export const deleteIssueCommentSchema = z.object({
       "thread_messages.id of the comment to delete. If this was the only message on the thread, the thread is also removed. Rejected if the parent issue has submittedAt!=null.",
     ),
 });
-
-// ── Type exports ────────────────────────────────────────────────────────────
 
 export type GetWalkthroughForEditInput = z.infer<typeof getWalkthroughForEditSchema>;
 export type UpdateOverviewInput = z.infer<typeof updateOverviewSchema>;

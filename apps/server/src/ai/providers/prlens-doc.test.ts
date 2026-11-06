@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { prLensDiagramError, prLensFenceBodies } from "./prlens-doc";
 
-// The prompt's own architecture example, which the web-side drift test already
-// parses against the live schema. Used here as the "renderable" baseline so a
-// schema bump breaks the negative cases too, not just the positive ones.
+// The prompt's own architecture example, also parsed against the live schema
+// by `prompts/prlens-examples.test.ts`. The "renderable" baseline, so a schema
+// bump breaks the negative cases too, not just the positive ones.
 const VALID_DOC = `{
   "title": "Auth check moves ahead of the loader",
   "lenses": ["architecture"],
@@ -17,7 +17,6 @@ const VALID_DOC = `{
   ]
 }`;
 
-/** A ```prlens fence wrapped in prose, the way an agent writes one. */
 function fence(body: string, lang = "prlens"): string {
   return `Some prose first.\n\n\`\`\`${lang}\n${body}\n\`\`\`\n\nAnd prose after.`;
 }
@@ -39,15 +38,11 @@ describe("prLensFenceBodies", () => {
   });
 
   it("reads a fence whose newlines arrived as literal escapes", () => {
-    // `renderMarkdown` normalizes these before parsing, so a diagram written
-    // this way still renders — and so must still be validated.
     const escaped = `Prose.\\n\`\`\`prlens\\n${VALID_DOC.replace(/\n/g, "\\n")}\\n\`\`\`\\n`;
     expect(prLensFenceBodies(escaped)).toHaveLength(1);
   });
 
   it("ignores a prlens fence nested inside a longer fence", () => {
-    // This is how the walkthrough prompt shows its own examples. marked renders
-    // the outer fence as sample text, so the inner body is never a diagram.
     const nested = "````markdown\n```prlens\n{ not a document }\n```\n````";
     expect(prLensFenceBodies(nested)).toEqual([]);
   });

@@ -1,5 +1,3 @@
-// ── Job-start judgment ──────────────────────────────────────────────────────
-//
 // One request, every question the diff alone can answer: risk tier, depth
 // tier, reasoning effort, split recommendation, per-file attention score.
 // Batched because none depends on another's answer, and the state (patches)
@@ -127,7 +125,6 @@ function filePriorityKey(index: number): string {
   return `file_${index}`;
 }
 
-/** Ask every job-start question in one request. Fails only with {@link JevUnavailable}. */
 export function askJobStart(
   input: JobStartStateInput,
 ): Effect.Effect<JobStartAnswers, JevUnavailable, JevService> {
@@ -228,7 +225,6 @@ export function filePriorityOrder(
     .map(({ filename, tier }) => ({ filename, tier }));
 }
 
-/** The split recommendation, or `null` when it isn't confident enough to make. */
 export function splitRecommendation(answers: JobStartAnswers): { readonly pieces: number } | null {
   if (answers.splitScore === undefined || answers.splitScore < SPLIT_RECOMMENDATION_FLOOR) {
     return null;

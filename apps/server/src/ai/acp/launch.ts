@@ -1,5 +1,3 @@
-// ── ACP process launch ───────────────────────────────────────────────────────
-//
 // Turns a registry agent plus Revv's model/effort selection into the
 // subprocess to spawn. Per-agent behaviour comes from the adapters
 // (`agents/`); what is generic lives here: the `REVV_ACP_COMMAND` override,
@@ -46,7 +44,6 @@ function stripNpxYes(args: readonly string[]): readonly string[] {
   return args[0] === "-y" || args[0] === "--yes" ? args.slice(1) : args;
 }
 
-/** `npx` → `bunx` → `bun x`, whichever the PATH has. */
 function resolvePackageRunner(
   command: string,
   args: readonly string[],

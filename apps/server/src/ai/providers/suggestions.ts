@@ -1,22 +1,12 @@
-// ── suggestions ────────────────────────────────────────────────────────────
+// PR-aware chat starter prompts for the right-panel empty state: a `promptOnce`
+// turn, deliberately outside the chat pipeline. No MCP servers are attached,
+// and the session id is never surfaced, persisted, or resumed into, so these
+// throwaway turns can't appear in any history the user can resume. (The ACP
+// agent may still spool a session file to its own store; that orphan is
+// unreachable from Revv.)
 //
-// One-shot, no-tools provider for PR-aware chat starter prompts (rendered in
-// the right-panel empty-state). A `promptOnce` turn, deliberately outside the
-// chat pipeline:
-//
-//   • No MCP tools — the agent gets a fresh ACP session with NO MCP servers
-//     attached, so it has only its built-in tools (which the prompt tells it
-//     not to use). It just reads the inlined PR metadata and writes back JSON.
-//   • Ephemeral — the session id is never surfaced, persisted, or resumed into,
-//     so these throwaway turns can't appear in any history the user can resume.
-//     (The ACP agent may still spool a session file to its own store; that
-//     orphan is unreachable from Revv.)
-//   • Single turn, capped output — we issue one prompt, collect the agent's
-//     text deltas, and parse the first JSON object out of them.
-//
-// On any failure (agent missing, model error, JSON parse failure, timeout) we
-// return {@link CHAT_SUGGESTION_FALLBACKS} so the UI always renders sensible
-// defaults instead of going blank.
+// On any failure we return {@link CHAT_SUGGESTION_FALLBACKS} so the UI always
+// renders sensible defaults instead of going blank.
 
 import { CHAT_SUGGESTION_COUNT, CHAT_SUGGESTION_FALLBACKS } from "@revv/shared";
 import { debug, logError } from "../../logger";
@@ -27,13 +17,6 @@ const SUGGESTIONS_TIMEOUT_MS = 30_000;
 const MAX_PROMPT_LENGTH = 80;
 const MAX_FILES_LISTED = 30;
 
-/**
- * Subset of the completed walkthrough we feed into the suggestions prompt.
- * Optional — when the PR has no completed walkthrough yet, we fall back to
- * PR metadata only. When present, the model can ground prompts in what the
- * review agent already noticed (the riskiest file, a specific issue, a
- * sentiment) instead of generic "review the change" phrasing.
- */
 export interface SuggestionsWalkthroughContext {
   readonly summary: string;
   readonly riskLevel: string;
@@ -79,11 +62,6 @@ function buildUserMessage(input: GenerateSuggestionsInput): string {
       ? `\n…and ${input.changedFiles.length - MAX_FILES_LISTED} more`
       : "";
 
-  // Walkthrough context (when present) is the highest-signal input — the
-  // review agent has already digested the diff and called out a risk
-  // level, an overall sentiment, and zero or more issues. Including this
-  // up front lets the suggestions model anchor its prompts to what the
-  // reviewer would actually want to dig into.
   let walkthroughSection: string | null = null;
   if (input.walkthrough) {
     const w = input.walkthrough;
@@ -122,16 +100,13 @@ function buildUserMessage(input: GenerateSuggestionsInput): string {
 }
 
 /**
- * Extract three short, sanitized prompts from raw model output. Accepts both
- * the strict JSON shape we ask for and a few permissive fallbacks (raw JSON
- * embedded in prose, bullet lists) so a model that prepends "Here you go:"
- * doesn't blow the whole feature up.
+ * Permissive on purpose: models wrap the JSON in fences or prose ("Here you
+ * go:") or answer with a bullet list.
  */
 function parsePrompts(raw: string): string[] | null {
   const text = raw.trim();
   if (text.length === 0) return null;
 
-  // 1. Strict JSON, possibly wrapped in ```json fences.
   const stripped = text
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```\s*$/i, "")
@@ -147,7 +122,6 @@ function parsePrompts(raw: string): string[] | null {
     /* fall through to permissive parsing */
   }
 
-  // 2. Find the first {…} that contains "prompts".
   const objMatch = text.match(/\{[\s\S]*?"prompts"[\s\S]*?\]\s*\}/);
   if (objMatch) {
     try {
@@ -161,7 +135,6 @@ function parsePrompts(raw: string): string[] | null {
     }
   }
 
-  // 3. Bullet / numbered list fallback (e.g. "- prompt one\n- prompt two").
   const bulletLines = text
     .split("\n")
     .map((l) => l.replace(/^[\s-*0-9.)]+/, "").trim())
@@ -188,8 +161,6 @@ function sanitizePrompts(values: unknown[]): string[] {
   return out;
 }
 
-// ── ACP one-shot ─────────────────────────────────────────────────────────────
-
 async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]> {
   const collected = await promptOnce({
     label: "suggestions-acp",
@@ -204,8 +175,6 @@ async function generateViaAcp(input: GenerateSuggestionsInput): Promise<string[]
   return parsed;
 }
 
-// ── Public entry point ───────────────────────────────────────────────────────
-
 export async function generateSuggestions(input: GenerateSuggestionsInput): Promise<string[]> {
   try {
     const result = await generateViaAcp(input);
@@ -215,9 +184,6 @@ export async function generateSuggestions(input: GenerateSuggestionsInput): Prom
     );
     return result;
   } catch (err) {
-    // Any failure path — CLI missing, model error, JSON parse fail,
-    // timeout, daemon refuse — collapses to the static fallback. The
-    // UI never sees an empty list.
     logError(
       "suggestions",
       `falling back to defaults:`,

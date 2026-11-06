@@ -1,34 +1,20 @@
-// ── Fluid stream chunker ────────────────────────────────────────────────────
-
 import type { NormalizedAgentEvent } from "./normalized-events";
 
 /**
- * Target chars per emitted text/reasoning chunk before the fluid splitter
- * kicks in. Tuned to feel like a natural typewriter cadence: small enough
- * that a paragraph-sized delta doesn't dump in one go, large enough that
- * we're not flooding the chat UI with single-character updates.
+ * Tuned for a typewriter cadence: a paragraph-sized delta doesn't dump in one
+ * go, and the chat UI isn't flooded with single-character updates.
  */
 const FLUID_DEFAULT_CHUNK_LEN = 12;
 
 /**
- * Wrap an `emit` function so `text-delta` and `reasoning-delta` events
- * longer than `targetChunkLen` are split into smaller word-boundary-aligned
- * chunks. All other event kinds pass through untouched, and deltas already
- * shorter than the target emit as-is (no overhead).
+ * ACP agents don't all stream at the same granularity — some hand back a whole
+ * content block (several paragraphs) as one `agent_message_chunk`, others pace
+ * per token but flush in bursts — so long text/reasoning deltas are re-split
+ * to give the chat bubble a uniform cadence.
  *
- * Why this exists: ACP agents don't all stream at the same granularity —
- * some hand back a whole content block (several paragraphs) as one
- * `agent_message_chunk`, others pace per token but flush in bursts. Routing
- * through `fluidEmit` gives the chat bubble a uniform, typewriter-like
- * cadence regardless of upstream behaviour.
- *
- * Splits prefer the next whitespace/punctuation within a 2x lookahead so
- * words aren't sliced mid-letter. Long unbroken runs (URLs, identifier
- * chains) hard-cut at `2 * targetChunkLen` rather than emit one long
- * chunk. When the wrapped `emit` carries state (e.g. the chat drivers'
- * `hasEmittedText` / `lastWasNonText` separator tracking), that state is
- * updated by the first sub-chunk only — subsequent sub-chunks see the
- * post-first state and skip the separator, which is exactly what we want.
+ * A stateful `emit` (the chat driver's `hasEmittedText` / `lastWasNonText`
+ * separator tracking) is updated by the first sub-chunk, so later sub-chunks
+ * correctly skip the separator.
  */
 export function fluidEmit(
   emit: (ev: NormalizedAgentEvent) => void,
@@ -50,13 +36,6 @@ export function fluidEmit(
   };
 }
 
-/**
- * Split `text` into chunks targeting `targetLen` chars, snapping to the
- * next whitespace/punctuation boundary within a 2x lookahead window when
- * one exists. Falls back to a hard cut at `2 * targetLen` for long
- * unbroken runs (URLs, identifier chains) so a worst-case input still
- * emits as multiple chunks. The trailing remainder is always emitted as-is.
- */
 export function splitForFluidStream(text: string, targetLen: number): string[] {
   const out: string[] = [];
   const boundary = /[\s.,;:!?\-—)\]}>"']/;

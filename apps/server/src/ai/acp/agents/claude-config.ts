@@ -1,5 +1,3 @@
-// ── Claude config-dir isolation ──────────────────────────────────────────────
-//
 // Claude Code (and, via it, ecosystem tooling) keeps a session registry under
 // `~/.claude/projects`, one entry per working directory it has ever been run
 // in. VS Code's Copilot Chat extension force-opens the git repository of
@@ -9,8 +7,7 @@
 //
 // Pointing `CLAUDE_CONFIG_DIR` at a Revv-private directory (injected by the
 // claude-code adapter, configured in `config.ts`) keeps Revv's sessions out of
-// `~/.claude` entirely. Conductor uses the same trick for its own worktrees
-// (`~/.conductor`).
+// `~/.claude` entirely.
 //
 // This module only prepares that directory before an agent spawns into it —
 // it stores no credential of its own. Everything the user configured under
@@ -21,24 +18,19 @@
 // OAuth token; a copy of `skills/` goes stale the moment the user edits a
 // skill.
 //
-// Isolation is about the session *registry*, not about the user's toolbox.
-// Linking nothing but the credentials meant the agent Revv spawned saw only
-// the checkout's own `.claude/skills` plus the CLI built-ins: a user-level
-// skill (`~/.claude/skills/make-pr-easy-to-review`) was offered by `claude`
-// in a terminal and absent from Revv's `/` menu, for no reason the user could
-// see.
+// Isolation is about the session *registry*, not about the user's toolbox:
+// Revv's `/` menu must offer every user-level skill `claude` offers in a
+// terminal.
 //
-// macOS Keychain auth is NOT global across config dirs, as first assumed —
-// confirmed empirically (see the runbook). Claude Code scopes its
+// macOS Keychain auth is NOT global across config dirs. Claude Code scopes its
 // Keychain-backed OAuth item to the resolved config dir: the true default
 // (`CLAUDE_CONFIG_DIR` unset, reading `~/.claude.json`) stores under the
 // service name `Claude Code-credentials`, while ANY explicit `CLAUDE_CONFIG_DIR`
 // — including a literal `~/.claude` — gets its own `Claude Code-credentials-
 // <hash>` service. Seeding `.claude.json` with copied account metadata does
-// NOT unlock the default item; the isolated dir needs its OWN one-time login
-// (`resolveClaudeConfigDir` below is the shared resolution that keeps the
-// probe, the login PTY, and the agent spawn all pointed at the same dir, so
-// that one-time login lands where the spawn will actually look for it).
+// NOT unlock the default item; the isolated dir needs its OWN one-time login,
+// so the probe, the login PTY and the agent spawn must all resolve the same
+// dir (`resolveClaudeConfigDir`).
 
 import {
   existsSync,
@@ -74,8 +66,7 @@ const LINKED_ENTRIES = [
   // File-based auth — see the module header on why this is a link.
   ".credentials.json",
   // The user's toolbox: skills, slash commands, subagents, and the plugins
-  // that carry their own. Linked (not copied) so an edit in `~/.claude` is
-  // live in Revv's next turn.
+  // that carry their own.
   "skills",
   "commands",
   "agents",
@@ -164,9 +155,9 @@ export function ensureClaudeConfigDir(dir: string, globalDir: string = GLOBAL_CL
  * isolated dir's own `settings.json`, keeping every other key in that file.
  *
  * Linking `plugins/` only makes the installed plugins reachable: Claude Code
- * turns a plugin on only when `enabledPlugins` in `settings.json` lists it, so
- * without this every plugin skill was missing from Revv's `/` menu. Copied on
- * every spawn so a plugin enabled in a terminal shows up on the next one.
+ * turns a plugin on only when `enabledPlugins` in `settings.json` lists it.
+ * Copied on every spawn so a plugin enabled in a terminal shows up on the next
+ * one.
  *
  * Skipped when the isolated `settings.json` is a symlink: the user linked the
  * whole file on purpose, and writing would land in their real settings.

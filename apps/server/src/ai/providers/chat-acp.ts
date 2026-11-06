@@ -42,13 +42,10 @@ function attachmentUri(name: string): string {
   return `attachment://${encodeURIComponent(name)}`;
 }
 
-// Resolve `@path/to/file` mentions in the user's message into ACP
-// `resource_link` blocks. Tokenization uses the shared grammar
-// (`extractMentionTokens`) so the server and the web composer agree on what a
-// mention is; here we add the server-only concerns: reject path traversal /
-// absolute paths, and emit a link only for paths that resolve to a real file
-// inside the worktree — so dangling `@TODO`-style prose tokens never become
-// `file://` links the agent might try (and fail) to read.
+// `@path` mentions become ACP `resource_link` blocks. The shared grammar keeps
+// the server and the web composer agreeing on what a mention is; the server
+// adds the worktree confinement, and links only real files so `@TODO`-style
+// prose never becomes a `file://` link the agent fails to read.
 function extractFileReferences(message: string, cwd: string): ContentBlock[] {
   const blocks: ContentBlock[] = [];
   for (const path of extractMentionTokens(message)) {
@@ -66,7 +63,6 @@ function extractFileReferences(message: string, cwd: string): ContentBlock[] {
 
 function buildPromptBlocks(opts: {
   readonly promptText: string;
-  /** The raw user message — `@`-mentions are scanned from this, not promptText. */
   readonly message: string;
   readonly cwd: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
@@ -129,7 +125,6 @@ export function streamChatViaAcp(
       let hasEmittedText = false;
       let lastWasNonText = false;
       const planTextBuffer: string[] = [];
-      // Paragraph break between text and whatever non-text came before it.
       const emit = (ev: NormalizedAgentEvent): void => {
         if (ev.kind === "text-delta") {
           if (planMode) planTextBuffer.push(ev.data);

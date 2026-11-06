@@ -29,14 +29,11 @@ describe("token-usage accumulation algebra", () => {
     const afterSecond = accumulateTokenUsage(afterFirst, second);
 
     expect(afterSecond).toEqual({
-      // Throughput accumulates across both deltas.
       inputTokens: 300,
       outputTokens: 60,
       cacheReadInputTokens: 90,
       cacheCreationInputTokens: 15,
-      // Occupancy is point-in-time: the latest delta wins.
       contextTokens: 300,
-      // Window is a fixed model property: keep the largest seen.
       contextWindowTokens: 1_000_000,
     });
   });
@@ -47,8 +44,6 @@ describe("token-usage accumulation algebra", () => {
       contextTokens: 500,
       contextWindowTokens: 200_000,
     });
-    // A later delta with no occupancy (e.g. a codex/opencode `usage` event that
-    // reports throughput only) must leave the previously-observed occupancy.
     const merged = mergeContextOccupancy(known, ZERO_TOKEN_USAGE);
     expect(merged.contextTokens).toBe(500);
     expect(merged.contextWindowTokens).toBe(200_000);
@@ -63,7 +58,6 @@ describe("token-usage accumulation algebra", () => {
     };
     const preview = addThroughput(acc, { ...ZERO_TOKEN_USAGE, inputTokens: 5, contextTokens: 999 });
     expect(preview.inputTokens).toBe(15);
-    // Occupancy is preserved from the accumulator, not the delta.
     expect(preview.contextTokens).toBe(42);
     expect(preview.contextWindowTokens).toBe(200_000);
   });
