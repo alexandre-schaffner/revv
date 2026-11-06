@@ -198,36 +198,48 @@ export function dayKey(iso: string): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
-/** Apply `strip` until the text stops changing: one pass can leave a tag behind
- *  when markup is nested inside itself (`<scr<script>ipt>`). */
-function stripUntilStable(text: string, strip: (t: string) => string): string {
-  let current = text;
-  for (let previous = ""; previous !== current; ) {
-    previous = current;
-    current = strip(current);
+/**
+ * Markup out, text kept: drops HTML comments and tags in one left-to-right
+ * scan. Every `<` opens something to skip and every stray `>` is dropped, so
+ * the result never holds an angle bracket, however the markup nests
+ * (`<scr<script>ipt>`, `<!<!-- -->-- -->`). A regex pass can't promise that.
+ */
+function stripMarkup(source: string): string {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    if (source.startsWith("<!--", i)) {
+      const close = source.indexOf("-->", i + 4);
+      i = close === -1 ? source.length : close + 3;
+    } else if (source[i] === "<") {
+      const close = source.indexOf(">", i + 1);
+      i = close === -1 ? source.length : close + 1;
+    } else {
+      if (source[i] !== ">") out += source[i];
+      i += 1;
+    }
   }
-  return current;
+  return out;
 }
 
 /**
  * A bot comment's one-line gist: its first heading, else its first line of
  * text, with the markdown and HTML taken out. Bots post reports, and the
- * report's title is what tells one from the next.
+ * report's title is what tells one from the next. Display text only: it is
+ * rendered escaped, never as HTML.
  */
 export function commentGist(body: string, max = 90): string {
-  const lines = stripUntilStable(body, (t) => t.replace(/<!--[\s\S]*?-->/g, ""))
+  const lines = stripMarkup(body)
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
   const heading = lines.find((l) => /^#{1,6}\s/.test(l));
   const raw = heading ?? lines[0] ?? "";
-  // Display text only (rendered escaped), so any angle bracket a bot left
-  // after the tags are gone has no business in a one-line gist either.
-  const text = stripUntilStable(raw.replace(/^#{1,6}\s+/, ""), (t) => t.replace(/<[^>]*>/g, ""))
-    .replace(/[<>]/g, "")
+  const text = raw
+    .replace(/^#{1,6}\s+/, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/[*_`~>|]/g, "")
+    .replace(/[*_`~|]/g, "")
     .replace(/:[a-z0-9_+-]+:/g, "")
     .replace(/\p{Extended_Pictographic}\uFE0F?/gu, "")
     .replace(/\s+/g, " ")
