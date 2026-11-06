@@ -194,9 +194,10 @@ export interface AuthReauthClearedEnvelope {
   data: { host: string };
 }
 
+/** Delta: a thread and its first message, on `prId`'s review. */
 export interface ThreadCreatedEnvelope {
   type: "thread:created";
-  data: { sessionId: string; thread: CommentThread; message: ThreadMessage };
+  data: { prId: string; thread: CommentThread; message: ThreadMessage };
 }
 
 export interface ThreadUpdatedEnvelope {
@@ -205,6 +206,7 @@ export interface ThreadUpdatedEnvelope {
   data: { threadId: string; status: ThreadStatus; resolvedAt: string | null };
 }
 
+/** Delta: a new message on a thread. An edit to an existing one is `thread:message:edited`. */
 export interface ThreadMessageEnvelope {
   type: "thread:message";
   data: { threadId: string; message: ThreadMessage };
@@ -213,11 +215,6 @@ export interface ThreadMessageEnvelope {
 export interface ThreadsSyncedEnvelope {
   type: "threads:synced";
   data: { prId: string; summary: ThreadSummary; timestamp: string };
-}
-
-export interface ThreadsNewReplyEnvelope {
-  type: "threads:new-reply";
-  data: { prId: string; thread: CommentThread; message: ThreadMessage };
 }
 
 export interface PrsSyncSummaryEnvelope {
@@ -230,6 +227,7 @@ export interface ThreadDeletedEnvelope {
   data: { threadId: string };
 }
 
+/** Full state of one message whose body changed, in Revv or on GitHub. */
 export interface ThreadMessageEditedEnvelope {
   type: "thread:message:edited";
   data: { threadId: string; message: ThreadMessage };
@@ -267,7 +265,6 @@ export type ThreadEventMessage =
   | ThreadUpdatedEnvelope
   | ThreadMessageEnvelope
   | ThreadsSyncedEnvelope
-  | ThreadsNewReplyEnvelope
   | ThreadDeletedEnvelope
   | ThreadMessageEditedEnvelope
   | ThreadMessageDeletedEnvelope

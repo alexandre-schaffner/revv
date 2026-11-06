@@ -1,17 +1,15 @@
-// Opening a PR on the review page: its view state, its diff and its review
-// session, under the lens the signed-in user has on it.
+// Opening a PR on the review page: its view state, its diff and its review.
 
-import type { ReviewMode } from "@revv/shared";
 import { clearReviewFiles, loadReviewFiles } from "$lib/stores/diff-files.svelte";
 import { switchPrViewState } from "$lib/stores/pr-view-state.svelte";
 import { clearSession, loadSession } from "$lib/stores/review.svelte";
 
-export function openReview(prId: string, mode: ReviewMode): void {
+export function openReview(prId: string): void {
   switchPrViewState(prId);
-  const session = loadSession(prId, mode).catch((e) =>
+  const session = loadSession(prId).catch((e) =>
     console.error("[review] Session load failed (non-blocking):", e),
   );
-  void loadReviewFiles(prId, mode, session);
+  void loadReviewFiles(prId, session);
 }
 
 /** The review page is gone: nothing still loading may write into the next one. */

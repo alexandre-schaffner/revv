@@ -643,7 +643,7 @@ export const addIssueCommentEditHandler: ChatEditToolHandler<AddIssueCommentEdit
 
   ctx.broadcastThreadEvent({
     type: "thread:created",
-    data: { sessionId, thread: createdThread, message: createdMessage },
+    data: { prId: ctx.prId, thread: createdThread, message: createdMessage },
   });
   return ok(
     `Comment posted on ${input.file_path}:${input.start_line}${

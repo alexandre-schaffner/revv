@@ -31,13 +31,6 @@ const OWNING_REPOSITORY = {
       .from(pullRequests)
       .where(eq(pullRequests.id, id))
       .get()?.repositoryId,
-  "review session": (db: Db, id: string) =>
-    db
-      .select({ repositoryId: pullRequests.repositoryId })
-      .from(reviewSessions)
-      .innerJoin(pullRequests, eq(pullRequests.id, reviewSessions.pullRequestId))
-      .where(eq(reviewSessions.id, id))
-      .get()?.repositoryId,
   thread: (db: Db, id: string) =>
     db
       .select({ repositoryId: pullRequests.repositoryId })

@@ -655,6 +655,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
   let createdThread: CommentThread | null = null;
   let createdMessage: ThreadMessage | null = null;
   let sessionId = "";
+  let prId = "";
   ctx.db.transaction(() => {
     const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
     if (!row) {
@@ -699,6 +700,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
     }
 
     sessionId = row.reviewSessionId;
+    prId = row.pullRequestId;
     const now = new Date().toISOString();
 
     // Upsert comment_threads row keyed on deterministic threadId.
@@ -809,7 +811,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
   ctx.broadcastThreadEvent({
     type: "thread:created",
     data: {
-      sessionId,
+      prId,
       thread: createdThread,
       message: createdMessage,
     },

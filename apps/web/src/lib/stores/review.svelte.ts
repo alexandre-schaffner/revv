@@ -1,16 +1,14 @@
-// The review session of the PR on screen: its comment threads and their
-// messages. Only one session is on screen at a time.
+// The review of the PR on screen: its comment threads and their messages.
+// Only one PR's review is on screen at a time.
 
 import type {
   CommentThread,
-  ReviewMode,
   ThreadCreatedEnvelope,
   ThreadDeletedEnvelope,
   ThreadMessage,
   ThreadMessageDeletedEnvelope,
   ThreadMessageEditedEnvelope,
   ThreadMessageEnvelope,
-  ThreadsNewReplyEnvelope,
   ThreadsSyncedEnvelope,
   ThreadUpdatedEnvelope,
 } from "@revv/shared";
@@ -18,81 +16,60 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { plain } from "$lib/api/wire";
 import { getUser } from "$lib/stores/auth.svelte";
-import { getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { createResource } from "./resource";
 
-let sessionId = $state<string | null>(null);
-/** The PR of the session on screen. */
-let sessionPrId: string | null = null;
+/** The PR whose threads are on screen, and the one most recently asked for. */
+let shownPrId: string | null = null;
+let wantedPrId: string | null = null;
 
-function sessionKeyOf(prId: string, mode: ReviewMode): string {
-  return `${prId}:${mode}`;
-}
-
-/** The session the threads below belong to, and the one most recently asked for. */
-let appliedSessionKey: string | null = null;
-let wantedSessionKey: string | null = null;
-
-/** A session hydration stays fresh for a minute, so re-entering a PR doesn't re-read it. */
-const sessions = createResource<{ prId: string; mode: ReviewMode }, string>({
+/** A review read stays fresh for a minute, so re-entering a PR doesn't re-read it. */
+const reviews = createResource<string, true>({
   freshForMs: 60_000,
-  fetch: async (key, { prId, mode }) => {
-    const { data: body, error } = await api.api.reviews.active({ prId }).get({ query: { mode } });
-    if (key !== wantedSessionKey) return { status: "error", error: "Superseded" };
-    if (error || !body || !("session" in body)) {
-      console.error("[review] Failed to load session:", error ?? body);
+  fetch: async (prId) => {
+    const { data: body, error } = await api.api.reviews.active({ prId }).get();
+    if (prId !== wantedPrId) return { status: "error", error: "Superseded" };
+    if (error || !body || !("threads" in body)) {
+      console.error("[review] Failed to load review:", error ?? body);
       toast.error("Failed to load review session");
       return { status: "error", error: "Failed to load review session" };
     }
     const data = plain(body);
-    if (appliedSessionKey !== null && appliedSessionKey !== key) {
-      sessions.invalidate(appliedSessionKey);
-    }
-    appliedSessionKey = key;
-    sessionPrId = prId;
-    sessionId = data.session.id;
+    if (shownPrId !== null && shownPrId !== prId) reviews.invalidate(shownPrId);
+    shownPrId = prId;
     threads = data.threads;
     threadMessages = { ...data.messages };
     threadsVersion++;
-    return { status: "ok", data: data.session.id };
+    return { status: "ok", data: true };
   },
 });
 
-function dropShownSession(): void {
-  appliedSessionKey = null;
-  sessionPrId = null;
-  sessionId = null;
+function dropShownReview(): void {
+  shownPrId = null;
   threads = [];
   threadMessages = {};
   threadsVersion++;
 }
 
-/** Forget every session; a hydration still in flight can't write back. */
+/** Forget every review; a read still in flight can't write back. */
 export function clearSession(): void {
-  sessions.reset();
-  wantedSessionKey = null;
-  dropShownSession();
+  reviews.reset();
+  wantedPrId = null;
+  dropShownReview();
 }
 
 /**
- * Load (or create) the active review session for a PR, hydrating all state.
- * Another PR's or lens's threads leave the screen at once. Callers that just
- * mutated server state (e.g. submitting a review) pass `force`, otherwise
- * stale local rows (missing the externalId stamped on just-pushed comments)
- * would survive and get re-submitted as duplicates.
+ * Load a PR's review: every comment thread with its messages. Another PR's
+ * threads leave the screen at once. Callers that just mutated server state
+ * (e.g. submitting a review) pass `force`, otherwise stale local rows (missing
+ * the externalId stamped on just-pushed comments) would survive and get
+ * re-submitted as duplicates.
  */
-export async function loadSession(
-  prId: string,
-  mode: ReviewMode = getReviewModeForPr(prId),
-  force = false,
-): Promise<void> {
-  const key = sessionKeyOf(prId, mode);
-  if (appliedSessionKey !== null && appliedSessionKey !== key) dropShownSession();
-  wantedSessionKey = key;
-  const arg = { prId, mode };
-  await (force ? sessions.refresh(key, arg) : sessions.load(key, arg));
+export async function loadSession(prId: string, force = false): Promise<void> {
+  if (shownPrId !== null && shownPrId !== prId) dropShownReview();
+  wantedPrId = prId;
+  await (force ? reviews.refresh(prId, prId) : reviews.load(prId, prId));
 }
 
 // --- Comment threads ---
@@ -136,15 +113,15 @@ export interface NewThread {
 
 /**
  * Start a comment thread on a line range. Pessimistic: waits for the server's
- * ids. Returns null when there is no session or the server refused.
+ * ids. Returns null when no PR is on screen or the server refused.
  */
 export async function addThread(params: NewThread): Promise<CommentThread | null> {
-  if (!sessionId) {
-    console.error("[review] No active session — cannot create thread");
+  if (!shownPrId) {
+    console.error("[review] No review on screen — cannot create thread");
     return null;
   }
 
-  const { data, error } = await api.api.reviews({ id: sessionId }).threads.post({
+  const { data, error } = await api.api.reviews({ id: shownPrId }).threads.post({
     filePath: params.filePath,
     startLine: params.startLine,
     endLine: params.endLine,
@@ -233,39 +210,22 @@ export function onThreadUpdated({
   threadsVersion++;
 }
 
-/** Threads of other sessions (another PR, the other lens) are not on screen. */
-export function onThreadCreated({
-  sessionId: threadSession,
-  thread,
-  message,
-}: ThreadCreatedEnvelope["data"]): void {
-  if (threadSession !== sessionId) return;
-  addThreadFromEvent(thread, message);
-}
-
-/** A GitHub sync brought in a comment: a new thread, or a reply to a known one. */
-export function onThreadsNewReply({ thread, message }: ThreadsNewReplyEnvelope["data"]): void {
-  if (thread.reviewSessionId !== sessionId) return;
-  addThreadFromEvent(thread, message);
-}
-
-function addThreadFromEvent(thread: CommentThread, message: ThreadMessage): void {
+/** Another PR's threads are not on screen. */
+export function onThreadCreated({ prId, thread, message }: ThreadCreatedEnvelope["data"]): void {
+  if (prId !== shownPrId) return;
   if (!threads.some((t) => t.id === thread.id)) {
     threads = [...threads, thread];
     threadsVersion++;
   }
-  // Always add the message if not already present
   const existing = threadMessages[thread.id] ?? [];
   if (!existing.some((m) => m.id === message.id)) {
-    threadMessages = {
-      ...threadMessages,
-      [thread.id]: [...existing, message],
-    };
+    threadMessages = { ...threadMessages, [thread.id]: [...existing, message] };
   }
 }
 
+/** A new message; a changed one comes as `thread:message:edited`. Another PR's threads are not on screen. */
 export function onThreadMessage({ threadId, message }: ThreadMessageEnvelope["data"]): void {
-  // Avoid duplicates
+  if (!threads.some((t) => t.id === threadId)) return;
   const existing = threadMessages[threadId] ?? [];
   if (existing.some((m) => m.id === message.id)) return;
   threadMessages = {
@@ -316,7 +276,7 @@ export async function pushThreadToGitHub(threadId: string): Promise<boolean> {
     return false;
   }
 
-  if (sessionPrId !== null) await loadSession(sessionPrId, undefined, true);
+  if (shownPrId !== null) await loadSession(shownPrId, true);
   toast.success("Comment sent to GitHub");
   return true;
 }
@@ -428,7 +388,7 @@ export async function applyCommentSuggestion(threadId: string, suggestion: strin
  * inside the freshness window.
  */
 export function onThreadsSynced({ prId }: ThreadsSyncedEnvelope["data"]): void {
-  if (prId === getSelectedPrId()) void loadSession(prId, undefined, true);
+  if (prId === getSelectedPrId()) void loadSession(prId, true);
 }
 
 /**
@@ -440,7 +400,7 @@ export function onEventsReconnected(): void {
   const prId = getSelectedPrId();
   if (!prId) return;
   requestThreadSync(prId);
-  void loadSession(prId, undefined, true);
+  void loadSession(prId, true);
   refreshPrHead(prId);
 }
 

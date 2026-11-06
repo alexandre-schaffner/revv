@@ -1,44 +1,35 @@
-import { canUserModifyComment, type ThreadStatus } from "@revv/shared";
+import { canUserModifyComment } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ForbiddenError, NotFoundError } from "../domain/errors";
-import { Realtime } from "../services/Realtime";
+import { logError } from "../logger";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
+import { threadMessageBody } from "./thread-message";
 
 export const threadRoutes = new Elysia({ prefix: "/api/threads" })
   .use(withAccount)
   .onBeforeHandle(ownedBy({ id: "thread" }))
-  // PATCH /api/threads/:id — update thread status
   .patch(
     "/:id",
     (ctx) =>
       runRoute(
         Effect.gen(function* () {
-          const reviewService = yield* ReviewService;
-          const realtime = yield* Realtime;
+          const review = yield* ReviewService;
           const sync = yield* SyncService;
-
-          const thread = yield* reviewService.updateThreadStatus(
-            ctx.params.id,
-            ctx.body.status as ThreadStatus,
-          );
-
-          yield* realtime.toAccount(ctx.account.accountId, {
-            type: "thread:updated",
-            data: {
-              threadId: ctx.params.id,
-              status: thread.status,
-              resolvedAt: thread.resolvedAt,
-            },
-          });
-
-          // Push resolve/unresolve to GitHub if the thread has been synced.
-          // Best-effort — don't fail the local update if GitHub push fails.
-          yield* sync.pushThreadStatus(ctx.params.id).pipe(Effect.catch(() => Effect.void));
-
+          const thread = yield* review.setStatus(ctx.params.id, ctx.body.status);
+          // The local change stands when GitHub refuses it.
+          yield* sync
+            .pushThreadStatus(ctx.params.id)
+            .pipe(
+              Effect.catch((e) =>
+                Effect.sync(() =>
+                  logError("threads", `push status of ${ctx.params.id} to GitHub:`, e.message),
+                ),
+              ),
+            );
           return thread;
         }),
       ),
@@ -55,14 +46,12 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     },
   )
 
-  // POST /api/threads/:id/push — push this thread to GitHub (create the review comment).
-  // Used by the frontend immediately after creating a thread to get it round-tripping.
+  // Push this thread to GitHub as a review comment.
   .post("/:id/push", (ctx) =>
     runRoute(
       Effect.gen(function* () {
-        const reviewService = yield* ReviewService;
-        const messages = yield* reviewService.getMessages(ctx.params.id);
-        const firstMessage = messages[0];
+        const review = yield* ReviewService;
+        const [firstMessage] = yield* review.getMessages(ctx.params.id);
         if (!firstMessage) {
           return yield* Effect.fail(
             new NotFoundError({ resource: "thread message", id: ctx.params.id }),
@@ -82,54 +71,30 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     ),
   )
 
-  // DELETE /api/threads/:id — delete a pending (unsynced) thread.
   .delete("/:id", (ctx) =>
     runRoute(
-      Effect.gen(function* () {
-        const reviewService = yield* ReviewService;
-        const realtime = yield* Realtime;
-
-        yield* reviewService.deleteThreadAsUser(ctx.params.id, ctx.account.githubLogin);
-
-        yield* realtime.toAccount(ctx.account.accountId, {
-          type: "thread:deleted",
-          data: { threadId: ctx.params.id },
-        });
-      }).pipe(Effect.as({ success: true })),
+      Effect.flatMap(ReviewService, (review) =>
+        review.discardThread(ctx.params.id, ctx.account.githubLogin),
+      ).pipe(Effect.as({ success: true })),
     ),
   )
 
-  // PATCH /api/threads/:id/messages/:messageId — edit a pending message body
   .patch(
     "/:id/messages/:messageId",
     (ctx) =>
       runRoute(
-        Effect.gen(function* () {
-          const reviewService = yield* ReviewService;
-          const realtime = yield* Realtime;
-
-          const message = yield* reviewService.editMessage(
+        Effect.flatMap(ReviewService, (review) =>
+          review.editDraft(
+            ctx.params.id,
             ctx.params.messageId,
             ctx.body.body,
             ctx.account.githubLogin,
-          );
-
-          yield* realtime.toAccount(ctx.account.accountId, {
-            type: "thread:message:edited",
-            data: { threadId: ctx.params.id, message },
-          });
-
-          return message;
-        }),
+          ),
+        ),
       ),
-    {
-      body: t.Object({
-        body: t.String(),
-      }),
-    },
+    { body: t.Object({ body: t.String() }) },
   )
 
-  // POST /api/threads/:id/messages/:messageId/push — push a single reply.
   .post("/:id/messages/:messageId/push", (ctx) =>
     runRoute(
       Effect.flatMap(SyncService, (s) => s.pushReply(ctx.params.messageId)).pipe(
@@ -138,85 +103,24 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     ),
   )
 
-  // DELETE /api/threads/:id/messages/:messageId — discard a pending (unsynced) reply.
-  // Service-level guards enforce: message exists, externalId is null, and the
-  // message isn't the thread's first message.
   .delete("/:id/messages/:messageId", (ctx) =>
     runRoute(
-      Effect.gen(function* () {
-        const reviewService = yield* ReviewService;
-        const realtime = yield* Realtime;
-
-        yield* reviewService.deleteMessage(ctx.params.messageId, ctx.account.githubLogin);
-
-        yield* realtime.toAccount(ctx.account.accountId, {
-          type: "thread:message:deleted",
-          data: {
-            threadId: ctx.params.id,
-            messageId: ctx.params.messageId,
-          },
-        });
-      }).pipe(Effect.as({ success: true })),
+      Effect.flatMap(ReviewService, (review) =>
+        review.discardReply(ctx.params.id, ctx.params.messageId, ctx.account.githubLogin),
+      ).pipe(Effect.as({ success: true })),
     ),
   )
 
-  // POST /api/threads/:id/messages — add a message to a thread
   .post(
     "/:id/messages",
     (ctx) =>
       runRoute(
         Effect.gen(function* () {
-          const reviewService = yield* ReviewService;
-          const realtime = yield* Realtime;
-
-          const msg = yield* reviewService.addMessage(ctx.params.id, {
-            authorRole: ctx.body.authorRole,
-            authorName: ctx.body.authorName,
-            ...(ctx.body.authorLogin !== undefined ? { authorLogin: ctx.body.authorLogin } : {}),
-            body: ctx.body.body,
-            messageType: ctx.body.messageType,
-            ...(ctx.body.codeSuggestion !== undefined
-              ? { codeSuggestion: ctx.body.codeSuggestion }
-              : {}),
-          });
-
-          // Auto-transition thread status based on author role.
-          const transitioned = yield* reviewService
-            .transitionStatus(ctx.params.id, ctx.body.authorRole)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-
-          yield* realtime.toAccount(ctx.account.accountId, {
-            type: "thread:message",
-            data: { threadId: ctx.params.id, message: msg },
-          });
-          if (transitioned) {
-            yield* realtime.toAccount(ctx.account.accountId, {
-              type: "thread:updated",
-              data: {
-                threadId: ctx.params.id,
-                status: transitioned.status,
-                resolvedAt: transitioned.resolvedAt,
-              },
-            });
-          }
-
+          const review = yield* ReviewService;
+          const { message } = yield* review.reply(ctx.params.id, ctx.body);
           ctx.set.status = 201;
-          return msg;
+          return message;
         }),
       ),
-    {
-      body: t.Object({
-        authorRole: t.Union([t.Literal("reviewer"), t.Literal("coder"), t.Literal("ai_agent")]),
-        authorName: t.String(),
-        authorLogin: t.Optional(t.String()),
-        body: t.String(),
-        messageType: t.Union([
-          t.Literal("comment"),
-          t.Literal("reply"),
-          t.Literal("suggestion"),
-          t.Literal("resolution"),
-        ]),
-        codeSuggestion: t.Optional(t.String()),
-      }),
-    },
+    { body: threadMessageBody },
   );

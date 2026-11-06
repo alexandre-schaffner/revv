@@ -1,7 +1,11 @@
-import { REVIEW_MODE, type ReviewMode } from "@revv/shared";
-import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { pullRequests } from "./pull-requests";
 
+/**
+ * A pull request's review: what its comment threads, walkthroughs and review
+ * rounds hang off. A PR has one conversation on GitHub, so it has one review,
+ * whoever is looking at it.
+ */
 export const reviewSessions = sqliteTable(
   "review_sessions",
   {
@@ -9,16 +13,9 @@ export const reviewSessions = sqliteTable(
     pullRequestId: text("pull_request_id")
       .notNull()
       .references(() => pullRequests.id, { onDelete: "cascade" }),
-    mode: text("mode").$type<ReviewMode>().notNull().default(REVIEW_MODE.reviewer),
     startedAt: text("started_at").notNull(),
-    completedAt: text("completed_at"),
-    status: text("status").notNull().default("active"),
   },
   (t) => ({
-    prModeStatusIdx: index("review_sessions_pr_mode_status_idx").on(
-      t.pullRequestId,
-      t.mode,
-      t.status,
-    ),
+    prUnique: uniqueIndex("review_sessions_pull_request_id_unique").on(t.pullRequestId),
   }),
 );

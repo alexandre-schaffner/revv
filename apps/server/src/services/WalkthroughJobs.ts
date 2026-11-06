@@ -1276,7 +1276,7 @@ export const WalkthroughJobsLive = Layer.effect(
         }
 
         // One perspective at a time. Both perspectives write their AI threads
-        // into the same identity session, so a fresh user start retires the
+        // into the PR's one review, so a fresh user start retires the
         // other perspective's rows (and their unsubmitted threads) the same
         // way Regenerate retires this one's. Otherwise Submit would post both
         // walkthroughs' comments.
@@ -1299,8 +1299,7 @@ export const WalkthroughJobsLive = Layer.effect(
           partial = null;
         }
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(pr.id));
-        const reviewSessionId = partial?.reviewSessionId ?? reviewSession.id;
+        const reviewSessionId = yield* provideDb(reviewService.sessionIdFor(pr.id));
         const settings = yield* provideDb(settingsService.getSettings());
         const agent = yield* provideDb(settingsService.resolveAgent());
 
@@ -1793,10 +1792,10 @@ export const WalkthroughJobsLive = Layer.effect(
 
         const snapshot = snapshotOpt.value;
 
-        const reviewSession = yield* provideDb(reviewService.getOrCreateIdentitySession(prId));
+        const reviewSessionId = yield* provideDb(reviewService.sessionIdFor(prId));
         const walkthroughId = yield* provideDb(
           walkthroughService.createPartial({
-            reviewSessionId: reviewSession.id,
+            reviewSessionId,
             prId,
             modelUsed: snapshot.modelUsed,
             prHeadSha: headSha,

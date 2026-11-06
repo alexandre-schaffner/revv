@@ -85,7 +85,7 @@ export const requestWalkthroughAtHead = (params: {
     // unresolved identity is still the right answer to write under: the web
     // falls back to the same `reviewer` while identity is unknown.
     const lastMode = yield* walkthroughService.getLatestMode(params.prId);
-    const mode = lastMode ?? (yield* resolveReviewModeForPr(params.prId)).mode;
+    const mode = lastMode ?? (yield* resolveReviewModeForPr(params.prId));
 
     const runsAtHead = yield* dbTry("requestWalkthroughAtHead: runs at head", () =>
       db

@@ -55,10 +55,11 @@ function seededDb(): Db {
       now,
     ],
   );
-  db.$client.run(
-    "INSERT INTO review_sessions (id, pull_request_id, started_at, status) VALUES (?, ?, ?, ?)",
-    ["session-1", "pr-1", now, "active"],
-  );
+  db.$client.run("INSERT INTO review_sessions (id, pull_request_id, started_at) VALUES (?, ?, ?)", [
+    "session-1",
+    "pr-1",
+    now,
+  ]);
   db.$client.run(
     `INSERT INTO walkthroughs
       (id, review_session_id, pull_request_id, status, last_completed_phase, generated_at, completed_at, model_used, pr_head_sha)

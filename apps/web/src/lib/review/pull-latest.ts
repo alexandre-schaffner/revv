@@ -4,7 +4,6 @@
 import type { WalkthroughMode } from "@revv/shared";
 import { reloadChatForNewHead } from "$lib/chat/turn.svelte";
 import { reloadReviewFiles } from "$lib/stores/diff-files.svelte";
-import { getReviewModeForPr } from "$lib/stores/prs.svelte";
 import { createResource } from "$lib/stores/resource";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough-actions";
 import { reviewNewCommits } from "./review-new-commits";
@@ -33,7 +32,7 @@ export async function pullLatestCommit(prId: string): Promise<boolean> {
 }
 
 async function runPull(prId: string): Promise<boolean> {
-  if (!(await reloadReviewFiles(prId, getReviewModeForPr(prId)))) return false;
+  if (!(await reloadReviewFiles(prId))) return false;
   await invalidateForPull(prId);
   reloadChatForNewHead(prId);
   return true;

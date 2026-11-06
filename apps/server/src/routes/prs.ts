@@ -42,7 +42,6 @@ import { ReviewService } from "../services/Review";
 import { WalkthroughService } from "../services/Walkthrough";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
-import { coerceReviewMode } from "./reviews/handlers/active-session";
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //
@@ -281,9 +280,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
               : toCachedDiffFiles(
                   yield* github.prs.compareFiles(repo.fullName, pr.baseSha, atSha, token),
                 );
-          const mode = coerceReviewMode(ctx.query.mode);
-          const session = yield* reviewService.getActiveSession(pr.id, mode);
-          const threads = session ? yield* reviewService.getThreadsForSession(session.id) : [];
+          const threads = yield* reviewService.threadsForPr(pr.id);
 
           // SSR only the first visible file. Shiki tokenization is synchronous CPU
           // work, so rendering every file before returning makes cold /files calls
@@ -313,7 +310,6 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     {
       query: t.Object({
         active: t.Optional(t.String()),
-        mode: t.Optional(t.String()),
         // Malformed SHAs are rejected with a 400 before the handler runs, so
         // the compare path can only ever be reached with a plausible ref.
         at: t.Optional(t.String({ pattern: "^[0-9a-fA-F]{7,40}$" })),

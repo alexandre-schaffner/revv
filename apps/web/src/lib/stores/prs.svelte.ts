@@ -61,40 +61,13 @@ export function getPrById(prId: string): PullRequest | null {
 
 /**
  * The review lens for a PR, derived purely from identity: `"author"` when the
- * signed-in user is the PR author, otherwise `"reviewer"`. This is the single
- * source of truth for the review session — there is no manual override. It is
- * also the default walkthrough perspective, which the user can change per
- * generation (`getSelectedMode` in the walkthrough store).
+ * signed-in user is the PR author, otherwise `"reviewer"`. It is the default
+ * walkthrough perspective, which the user can change per generation
+ * (`getSelectedMode` in the walkthrough store).
  */
 export function getReviewModeForPr(prId: string): ReviewMode {
   const pr = getPrById(prId);
-  // Shared with the server's `resolveReviewModeForPr` — see `reviewModeFor`.
-  // Sessions are keyed on `(pullRequestId, mode)`, so the two must never
-  // disagree, including on login casing.
   return reviewModeFor(pr?.authorLogin, getCurrentUserLogin());
-}
-
-/**
- * Whether {@link getReviewModeForPr} can give a real answer yet.
- *
- * The lens needs two async inputs — the PR row (for `authorLogin`) and the
- * signed-in user's GitHub login. Missing either, `getReviewModeForPr` quietly
- * reports `"reviewer"`, which is indistinguishable from a genuine reviewer
- * verdict. On a cold start that provisional answer is wrong for every PR the
- * user authored, and any caller that *fetches* on it pays for the request
- * twice — once against the wrong lens, once again when the real mode lands.
- * For a 3 000-file PR that is two ~12 MB `/files` responses per app launch.
- *
- * Callers that only render the mode can keep reading it directly; callers that
- * issue requests should wait for this.
- */
-export function isReviewModeResolved(prId: string): boolean {
-  if (!hasAttemptedIdentityLoad()) return false;
-  if (getPrById(prId)) return true;
-  // The row may never arrive — a deep link can point at a PR outside the
-  // synced set. Once the list fetch has settled, "reviewer" is the real
-  // answer rather than a placeholder, so callers must not keep waiting.
-  return prsFetchAttempted;
 }
 
 /**

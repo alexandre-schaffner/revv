@@ -1,29 +1,30 @@
-import { isPublishableDraftComment } from "@revv/shared";
+import { draftCommentBody, isPublishableDraftComment } from "@revv/shared";
 import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
-import { DiffCacheService } from "../../../services/DiffCache";
-import { fitAnchorToPatch } from "../../../services/diff-anchors";
+import { logError } from "../../../logger";
+import { type CachedDiffFile, DiffCacheService } from "../../../services/DiffCache";
 import { GitHubGateway } from "../../../services/GitHub";
+import {
+  diffFileFor,
+  type GitHubReviewComment,
+  toGitHubComment,
+} from "../../../services/github-review-comment";
+import { PollScheduler } from "../../../services/PollScheduler";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
-import { Realtime } from "../../../services/Realtime";
 import { RepositoryService } from "../../../services/Repository";
-import { ReviewService } from "../../../services/Review";
+import { type Conversation, ReviewService } from "../../../services/Review";
+import { SyncService } from "../../../services/Sync";
 import { WalkthroughService } from "../../../services/Walkthrough";
-
-export interface SubmitReviewCommentInput {
-  path: string;
-  body: string;
-  line: number;
-  side: "LEFT" | "RIGHT";
-  startLine?: number;
-  threadId: string;
-}
 
 export interface SubmitReviewInput {
   action: "approve" | "request_changes" | "comment";
   body?: string;
-  comments?: SubmitReviewCommentInput[];
+  /**
+   * The draft threads the reviewer is posting. Each one still not on GitHub
+   * becomes one review comment; any other id is ignored.
+   */
+  threadIds?: string[];
   /**
    * Walkthrough issue ids included in this submission. Persisted onto the
    * issue rows so the UI's "already posted" state survives reloads and
@@ -32,46 +33,98 @@ export interface SubmitReviewInput {
   issueIds?: string[];
 }
 
-export function isExistingPendingReviewError(error: unknown): boolean {
-  // GitHub answers the duplicate-review case with a 422, which the REST helpers
-  // surface as `GitHubApiError`. `GitHubNetworkError` stays accepted for the
-  // synthetic failure this module raises itself when the pending review can't
-  // be located.
-  const isSniffable = error instanceof GitHubApiError || error instanceof GitHubNetworkError;
-  if (!isSniffable || typeof error.cause !== "string") {
-    return false;
-  }
+export interface PostedThread {
+  threadId: string;
+  draftIds: string[];
+  comment: GitHubReviewComment;
+}
 
-  const cause = error.cause;
-  if (cause.includes("User can only have one pending review per pull request")) {
-    return true;
-  }
-
-  return (
-    cause.includes("422 Unprocessable Entity") && cause.toLowerCase().includes("pending review")
-  );
+export interface SkippedComment {
+  threadId: string;
+  path: string;
+  line: number;
+  reason: string;
 }
 
 /**
- * POST /api/reviews/:id/github-submit — submit a review to GitHub with
- * line-level comments. Maps our internal action type to GitHub's `event`
- * enum and builds the multi-line comment payloads the REST API expects.
- *
- * After posting, we fetch the created review comments from GitHub and link
- * them back to the corresponding local threads/messages via their external IDs.
- * This prevents pullComments (called by sync-threads immediately after) from
- * treating our own comments as new and creating duplicate threads.
+ * The review comments the chosen threads post: one per thread still not on
+ * GitHub, from its drafts. A comment on a file the cached diff no longer holds
+ * would make GitHub reject the whole review, so it stays a local draft, as
+ * does one whose lines left the diff; with no cached diff nothing is known to
+ * be stale.
+ */
+export function planReviewComments(
+  { threads, messages }: Conversation,
+  chosen: ReadonlySet<string>,
+  cachedFiles: readonly CachedDiffFile[] | null,
+): { posted: PostedThread[]; skippedComments: SkippedComment[] } {
+  const knowsDiff = cachedFiles !== null && cachedFiles.length > 0;
+  const posted: PostedThread[] = [];
+  const skippedComments: SkippedComment[] = [];
+  for (const thread of threads) {
+    if (!chosen.has(thread.id)) continue;
+    const drafts = messages[thread.id] ?? [];
+    const text = draftCommentBody(thread, drafts);
+    if (text === null) continue;
+    const skip = (reason: string) =>
+      skippedComments.push({
+        threadId: thread.id,
+        path: thread.filePath,
+        line: thread.endLine,
+        reason,
+      });
+    const file = diffFileFor(cachedFiles, thread.filePath);
+    if (knowsDiff && !file) {
+      skip("the file is no longer part of the diff");
+      continue;
+    }
+    const fit = toGitHubComment(thread, text, file?.patch ?? null);
+    if (!fit.ok) {
+      skip(fit.reason);
+      continue;
+    }
+    posted.push({
+      threadId: thread.id,
+      draftIds: drafts.filter(isPublishableDraftComment).map((m) => m.id),
+      comment: fit.comment,
+    });
+  }
+  return { posted, skippedComments };
+}
+
+/** GitHub refuses a second pending review per user and PR with this 422. */
+export function isExistingPendingReviewError(error: unknown): boolean {
+  return (
+    error instanceof GitHubApiError &&
+    error.status === 422 &&
+    String(error.cause).toLowerCase().includes("pending review")
+  );
+}
+
+const logged =
+  (what: string) =>
+  <E extends { readonly message?: string }>(e: E) =>
+    Effect.sync(() => logError("github-submit", `${what}:`, e.message ?? e));
+
+/**
+ * POST /api/reviews/:id/github-submit — post the review to GitHub, its line
+ * comments built from the chosen draft threads, then bring the local review in
+ * line with what GitHub now holds: each posted thread is linked to its GitHub
+ * comment (so neither it nor its drafts is ever posted again), the reviewer's
+ * pending replies on threads already on GitHub go up, and the PR's threads are
+ * pulled back.
  */
 export function submitGithubReviewHandler(prId: string, userId: string, body: SubmitReviewInput) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
-    const reviewService = yield* ReviewService;
+    const review = yield* ReviewService;
+    const sync = yield* SyncService;
     const walkthroughService = yield* WalkthroughService;
     const repoService = yield* RepositoryService;
-    const realtime = yield* Realtime;
     const diffCache = yield* DiffCacheService;
     const conversations = yield* PrConversationService;
+    const pollScheduler = yield* PollScheduler;
 
     const ctx = yield* prContext.resolveBasic(prId, userId);
     const { pr, repo, token: ghToken } = ctx;
@@ -83,76 +136,17 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       comment: "COMMENT",
     } as const;
 
-    // Fit every anchor onto the diff before sending. GitHub rejects the
-    // whole review — approve included — with a 422 if a single comment
-    // names a line outside the diff or spanning two hunks, and both of our
-    // anchor sources can do that: the walkthrough agent flags ranges it read
-    // in the full file, and the file viewer lets a reviewer comment anywhere.
-    //
-    // Cache-only, and only ever a judgement on a patch we hold: a path with
-    // no cached patch is sent as-is. The cache trails the PR by a poll cycle
-    // and is capped at PR_FILES_MAX_COUNT, so treating "absent here" as "not
-    // in the diff" would silently drop comments GitHub would have taken.
     const cachedFiles = yield* diffCache.getCachedFiles(pr.id);
-    const patchByPath = new Map(
-      (cachedFiles ?? []).flatMap((f) =>
-        f.oldPath
-          ? [[f.path, f.patch] as const, [f.oldPath, f.patch] as const]
-          : [[f.path, f.patch] as const],
-      ),
+    const { posted, skippedComments } = planReviewComments(
+      yield* review.getConversation(pr.id),
+      new Set(body.threadIds ?? []),
+      cachedFiles,
     );
-
-    const inputComments = body.comments ?? [];
-    const skippedComments: Array<{
-      threadId: string;
-      path: string;
-      line: number;
-      reason: string;
-    }> = [];
-    const submittable: Array<{
-      input: SubmitReviewCommentInput;
-      comment: {
-        path: string;
-        body: string;
-        line: number;
-        side: "LEFT" | "RIGHT";
-        startLine?: number;
-        startSide?: "LEFT" | "RIGHT";
-      };
-    }> = [];
-
-    for (const c of inputComments) {
-      const fit = fitAnchorToPatch(patchByPath.get(c.path) ?? null, {
-        startLine: c.startLine ?? c.line,
-        endLine: c.line,
-        side: c.side,
-      });
-      if (!fit.ok) {
-        skippedComments.push({
-          threadId: c.threadId,
-          path: c.path,
-          line: c.line,
-          reason: fit.reason,
-        });
-        continue;
-      }
-      const comment: (typeof submittable)[number]["comment"] = {
-        path: c.path,
-        body: c.body,
-        line: fit.endLine,
-        side: c.side,
-      };
-      if (fit.startLine !== fit.endLine) {
-        comment.startLine = fit.startLine;
-        comment.startSide = c.side;
-      }
-      submittable.push({ input: c, comment });
-    }
 
     const reviewInput = {
       event: eventMap[body.action],
       body: body.body ?? "",
-      comments: submittable.map((s) => s.comment),
+      comments: posted.map((p) => p.comment),
     };
 
     // Everything the reviewer picked fell outside the diff, leaving a
@@ -171,7 +165,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
       );
     }
 
-    const review = yield* github.reviews
+    const submitted = yield* github.reviews
       .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
       .pipe(
         Effect.catchIf(isExistingPendingReviewError, () =>
@@ -198,71 +192,68 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
         ),
       );
 
-    // Link local threads to GitHub comment IDs so that the subsequent
-    // sync-threads call doesn't create duplicate entries.
-    if (submittable.length > 0) {
+    // GitHub's review response carries no per-comment ids, so each posted
+    // thread is matched back to one of the review's comments.
+    if (posted.length > 0) {
       const ghComments = yield* github.reviews
-        .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
-        .pipe(Effect.orElseSucceed(() => []));
+        .commentsForReview(repo.fullName, pr.externalId, submitted.id, ghToken)
+        .pipe(
+          Effect.catch((e) => logged("list the review's comments")(e).pipe(Effect.as([] as const))),
+        );
 
-      for (const { input, comment } of submittable) {
-        // The fitted line, not the one the thread carries — a clamped anchor
-        // comes back from GitHub on the line we actually sent.
-        const effectiveLine = comment.line;
+      for (const { threadId, draftIds, comment } of posted) {
         // Prefer an exact path+line+body match; fall back to path+line, then
         // path+body. The `/reviews/:id/comments` response can return a null
         // `line` and GitHub may normalize the body, so requiring all three
-        // exactly would miss — leaving the comment unlinked and re-postable.
+        // exactly would miss. `comment.line` is the fitted line: a clamped
+        // anchor comes back on the line that was sent.
+        const lineOf = (gh: (typeof ghComments)[number]) => gh.line ?? gh.originalLine;
         const match =
-          ghComments.find((gh) => {
-            const ghLine = gh.line ?? gh.originalLine;
-            return gh.path === input.path && ghLine === effectiveLine && gh.body === input.body;
-          }) ??
-          ghComments.find((gh) => {
-            const ghLine = gh.line ?? gh.originalLine;
-            return gh.path === input.path && ghLine === effectiveLine;
-          }) ??
-          ghComments.find((gh) => gh.path === input.path && gh.body === input.body);
+          ghComments.find(
+            (gh) =>
+              gh.path === comment.path && lineOf(gh) === comment.line && gh.body === comment.body,
+          ) ??
+          ghComments.find((gh) => gh.path === comment.path && lineOf(gh) === comment.line) ??
+          ghComments.find((gh) => gh.path === comment.path && gh.body === comment.body);
 
-        if (!match) {
-          // We couldn't tie this just-pushed comment to its GitHub id (the
-          // review API returns no per-comment ids, and GitHub can normalize
-          // the body, defeating a body match). Rather than leave an unlinked
-          // local draft that a later submit would re-post, delete it — the
-          // sync-threads call that follows re-creates it from GitHub with a
-          // real externalCommentId. Local-only metadata (a freshly authored
-          // comment has none worth keeping) is sacrificed to guarantee no
-          // duplicate ever reaches GitHub.
-          yield* reviewService
-            .deleteThread(input.threadId)
-            .pipe(Effect.orElseSucceed(() => undefined));
-          yield* realtime.toAccount(accountId, {
-            type: "thread:deleted",
-            data: { threadId: input.threadId },
-          });
+        if (match) {
+          yield* review
+            .linkPostedDrafts(threadId, draftIds, String(match.id), comment.body)
+            .pipe(Effect.catch(logged(`link thread ${threadId}`)));
           continue;
         }
-
-        // Set external ID on the thread row
-        yield* reviewService
-          .setThreadExternalIds(input.threadId, {
-            externalCommentId: String(match.id),
-          })
-          .pipe(Effect.orElseSucceed(() => undefined));
-
-        // Link the local draft, whether written by the reviewer or Revv, to
-        // the GitHub comment created under the authenticated user's identity.
-        const messages = yield* reviewService
-          .getMessages(input.threadId)
-          .pipe(Effect.orElseSucceed(() => []));
-        const unsyncedMsg = [...messages].reverse().find(isPublishableDraftComment);
-        if (unsyncedMsg) {
-          yield* reviewService
-            .setMessageExternalId(unsyncedMsg.id, String(match.id))
-            .pipe(Effect.orElseSucceed(() => undefined));
-        }
+        // Unlinked, the draft would be posted again by the next submit. The
+        // pull below re-creates it from GitHub with its real id instead.
+        yield* review.dropThread(threadId).pipe(Effect.catch(logged(`drop thread ${threadId}`)));
       }
     }
+
+    // The reviewer's replies on threads GitHub already has, one at a time so
+    // each thread's replies land in the order they were written.
+    const after = yield* review.getConversation(pr.id);
+    const pendingReplies = after.threads
+      .filter((t) => t.externalCommentId !== null)
+      .flatMap((t) =>
+        (after.messages[t.id] ?? []).filter(
+          (m) => m.externalId === null && m.authorRole === "reviewer",
+        ),
+      );
+    let failedReplies = 0;
+    for (const reply of pendingReplies) {
+      yield* sync.pushReply(reply.id).pipe(
+        Effect.catch((e) =>
+          logged(`push reply ${reply.id}`)(e).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                failedReplies++;
+              }),
+            ),
+          ),
+        ),
+      );
+    }
+
+    yield* pollScheduler.syncThreadsNow(pr.id);
 
     // Persist which walkthrough issues the reviewer just sent so the
     // "already posted" treatment (grayed-out, unselectable) survives
@@ -276,14 +267,15 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     const { conversation } = yield* conversations.afterWrite(ctx, accountId);
 
     return {
-      id: review.id,
-      htmlUrl: review.htmlUrl,
+      id: submitted.id,
+      htmlUrl: submitted.htmlUrl,
       issuesSubmittedAt,
       submittedIssueIds: issueIds,
       // Comments GitHub could never have accepted. Their local threads are
       // left intact so the reviewer can re-anchor or discard them; the UI
       // names them rather than letting them vanish.
       skippedComments,
+      failedReplies,
       conversation,
     };
   });

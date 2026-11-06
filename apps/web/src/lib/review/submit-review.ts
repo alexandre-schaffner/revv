@@ -1,38 +1,18 @@
-// Posting "Your review" to GitHub: one review carrying the chosen walkthrough
-// issues and every pending line comment, then the replies on threads already
-// on GitHub, then bringing the local session back in line with what GitHub
-// now holds.
+// Posting "Your review" to GitHub. The server builds the review from the
+// chosen issues and the pending line comments, posts it, pushes the
+// reviewer's pending replies and pulls the threads back; this asks for it and
+// reports the outcome.
 
-import type { WalkthroughIssue } from "@revv/shared";
+import { draftCommentBody, type WalkthroughIssue } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
-import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
 import { markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
-import { reviewBody, reviewComments } from "./review-payload";
+import { reviewBody } from "./review-payload";
 
 export type ReviewAction = "approve" | "request_changes" | "comment";
-
-function diffPaths(): Set<string> {
-  return new Set(getReviewFiles().flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path])));
-}
-
-/** Push reviewer replies on threads GitHub already has. Resolves how many failed. */
-async function pushReplies(): Promise<number> {
-  const pushes = getThreads()
-    .filter((t) => t.externalCommentId != null)
-    .flatMap((thread) =>
-      getThreadMessages(thread.id)
-        .filter((msg) => msg.externalId == null && msg.authorRole === "reviewer")
-        .map((msg) =>
-          api.api.threads({ id: thread.id }).messages({ messageId: msg.id }).push.post(),
-        ),
-    );
-  const results = await Promise.allSettled(pushes);
-  return results.filter((r) => r.status === "rejected" || r.value.error).length;
-}
 
 function actionLabel(action: ReviewAction): string {
   if (action === "approve") return "Approved";
@@ -50,25 +30,26 @@ export async function submitReview(
   issues: readonly WalkthroughIssue[],
 ): Promise<boolean> {
   const issueIds = issues.map((issue) => issue.id);
+  // The drafts on screen, so nothing the reviewer hasn't seen goes up.
+  const threadIds = getThreads()
+    .filter((t) => draftCommentBody(t, getThreadMessages(t.id)) !== null)
+    .map((t) => t.id);
   try {
     const { data, error } = await api.api.reviews({ id: prId })["github-submit"].post({
       action,
       body: reviewBody(issues),
-      comments: reviewComments(getThreads(), getThreadMessages, diffPaths()),
+      threadIds,
       issueIds,
     });
     if (error) throw new Error(apiErrorMessage(error, "Failed to submit review"));
     const result = data && "htmlUrl" in data ? data : null;
     acceptWriteResult(prId, { conversation: result?.conversation ?? null });
-
-    const failedReplies = await pushReplies();
-    // Pull back the GitHub ids of what was just posted, then re-read the
-    // session past its freshness window: rows still missing their externalId
+    // Re-read past the freshness window: rows still missing their externalId
     // would be posted again by the next submit.
-    await api.api.prs({ id: prId })["sync-threads"].post();
-    await loadSession(prId, undefined, true);
+    await loadSession(prId, true);
 
     toast.success(`${actionLabel(action)} on GitHub`);
+    const failedReplies = result?.failedReplies ?? 0;
     if (failedReplies > 0) {
       toast.warning(
         failedReplies === 1

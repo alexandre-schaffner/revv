@@ -438,7 +438,7 @@ possible combinations; only ~4 are legal.
 `<EventName>` is the event message `type` with the colon dropped and segments PascalCased
 (`thread:created` → `onThreadCreated`; `recap:status-changed` → `onRecapStatusChanged`).
 Each takes the envelope's `data` whole, and the store filters on its fields itself (the review
-store drops `thread:created` for a session it isn't showing). Several stores may handle one
+store drops `thread:created` for a PR it isn't showing). Several stores may handle one
 message, each with its own `on<EventName>`; the router lists them all in the message's arm.
 
 The router knows nothing else about a store. A store whose state comes from the stream also
