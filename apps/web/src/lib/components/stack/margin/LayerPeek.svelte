@@ -4,7 +4,7 @@ import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import Warning from "phosphor-svelte/lib/Warning";
 import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { layerRole } from "$lib/stacks/stack-layer-facts";
+import { LAYER_STATUS_LABEL, layerRole } from "$lib/stacks/stack-layer-facts";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
 import { layerHint, plainTitle, richText, type StackPlace } from "./stack-margin";
 
@@ -18,14 +18,6 @@ interface Props {
 }
 
 let { layer, place, x, y, from }: Props = $props();
-
-const STATUS_LABEL: Record<StackLayer["status"], string> = {
-  merged: "Merged",
-  ready: "Ready",
-  not_ready: "Not ready",
-  draft: "Draft",
-  closed: "Closed",
-};
 
 const chapter = $derived(
   place.chapters.find((c) => c.layers.some((l) => l.number === layer.number))?.name ?? null,
@@ -53,7 +45,7 @@ const openable = $derived(layer.number !== place.here.number);
 		<StackLayerGlyph status={layer.status} size={13} />
 		<span class="num">#{layer.number}</span>
 		<span class="where">{chapter ? `${chapter} · ` : ''}{layer.position} of {place.total}</span>
-		<span class="status">{STATUS_LABEL[layer.status]}</span>
+		<span class="status">{LAYER_STATUS_LABEL[layer.status]}</span>
 	</div>
 	<div class="title">{plainTitle(layer.title)}</div>
 	{#if role}

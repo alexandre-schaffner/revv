@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ConversationActor, TimelineItem } from "@revv/shared";
-import { groupTimeline } from "./conversation-timeline";
+import { describeEvent, type EventLine, groupTimeline, type Phrase } from "./timeline";
 
 const actor = (login: string): ConversationActor => ({
   login,
@@ -118,5 +118,56 @@ describe("groupTimeline", () => {
     const line = rows[0]?.kind === "events" ? rows[0].lines[0] : null;
     expect(line?.kind === "labels" && line.added.map((l) => l.name)).toEqual(["api"]);
     expect(line?.kind === "labels" && line.removed.map((l) => l.name)).toEqual(["api"]);
+  });
+});
+
+/** The sentence as it reads on screen, label chips by name. */
+function sentence(phrases: readonly Phrase[]): string {
+  return phrases
+    .map((p) => (p.kind === "labels" ? p.labels.map((l) => `[${l.name}]`).join(" ") : p.text))
+    .join(" ");
+}
+
+function lineOf(items: TimelineItem[]): EventLine {
+  const row = groupTimeline(items)[0];
+  if (row?.kind !== "events" || !row.lines[0]) throw new Error("expected an event line");
+  return row.lines[0];
+}
+
+describe("describeEvent", () => {
+  it("reads a label burst as one sentence", () => {
+    const line = lineOf([label("l1", "alice", 0, "api"), label("l2", "alice", 1, "bug")]);
+    const described = describeEvent(line, "alice");
+    expect(described.icon).toBe("labels");
+    expect(sentence(described.phrases)).toBe("added [api] [bug] labels");
+  });
+
+  it("says self-assigned whatever the login's case", () => {
+    const line = lineOf([
+      {
+        kind: "assigned",
+        id: "a1",
+        createdAt: at(0),
+        actor: actor("Alice"),
+        assignee: "alice",
+      },
+    ]);
+    expect(sentence(describeEvent(line, "Alice").phrases)).toBe("self-assigned this");
+  });
+
+  it("colours state changes the way GitHub does", () => {
+    const merged = lineOf([
+      {
+        kind: "merged",
+        id: "m1",
+        createdAt: at(0),
+        actor: actor("alice"),
+        commitSha: "0123456789abcdef",
+        baseRef: "main",
+      },
+    ]);
+    const described = describeEvent(merged, "alice");
+    expect(described.tone).toBe("merged");
+    expect(sentence(described.phrases)).toBe("merged 0123456 into main");
   });
 });

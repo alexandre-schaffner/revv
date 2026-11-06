@@ -2,7 +2,7 @@
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { cancelSignIn } from "$lib/stores/auth.svelte";
-import { copyFeedback } from "./copy-feedback.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 interface Props {
   userCode: string;

@@ -4,18 +4,18 @@ import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import Trash from "phosphor-svelte/lib/Trash";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
 import MarkdownBody from "./MarkdownBody.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 
-// A markdown post in the conversation: the PR description (verb "opened")
-// or a comment. Editing swaps the body for the editor in place.
+// A markdown post in the conversation: the PR description or a comment.
+// Editing swaps the body for the editor in place.
 
 interface Props {
   author: ConversationActor;
-  verb: string;
+  kind: "description" | "comment";
   createdAt: string;
   body: string;
   url: string;
@@ -30,7 +30,7 @@ interface Props {
 
 let {
   author,
-  verb,
+  kind,
   createdAt,
   body,
   url,
@@ -41,10 +41,15 @@ let {
   ondelete,
 }: Props = $props();
 
+/** A description may be emptied; a comment may not. */
+const POST = {
+  description: { verb: "opened", placeholder: "Describe this pull request", allowEmpty: true },
+  comment: { verb: "commented", placeholder: "Edit your comment", allowEmpty: false },
+} as const;
+const post = $derived(POST[kind]);
+
 let editing = $state(false);
 let confirmingDelete = $state(false);
-
-const absolute = $derived(new Date(createdAt).toLocaleString());
 
 async function save(next: string): Promise<boolean> {
   if (!onsave) return false;
@@ -67,8 +72,8 @@ async function confirmDelete(): Promise<void> {
 			<span class="card-author">{author.login}</span>
 			{#if author.kind === 'bot'}<span class="card-tag">bot</span>{/if}
 			{#if isAuthor}<span class="card-tag">author</span>{/if}
-			<span class="card-verb">{verb}</span>
-			<time datetime={createdAt} title={absolute}>{formatRelativeTime(createdAt)}</time>
+			<span class="card-verb">{post.verb}</span>
+			<RelativeTime iso={createdAt} />
 			{#if edited}<span class="card-verb">· edited</span>{/if}
 		</p>
 		<div class="card-actions">
@@ -119,9 +124,9 @@ async function confirmDelete(): Promise<void> {
 		<div class="card-editor">
 			<MarkdownEditor
 				initial={body}
-				placeholder={verb === 'opened' ? 'Describe this pull request' : 'Edit your comment'}
+				placeholder={post.placeholder}
 				submitLabel="Save"
-				allowEmpty={verb === 'opened'}
+				allowEmpty={post.allowEmpty}
 				autofocus
 				onsubmit={save}
 				oncancel={() => (editing = false)}

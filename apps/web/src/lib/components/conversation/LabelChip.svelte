@@ -1,29 +1,39 @@
 <script lang="ts">
 import type { PrLabel } from "@revv/shared";
-import { labelHue } from "$lib/utils/label-colors";
+import { labelHue } from "$lib/conversation/label-colors";
 
 interface Props {
   label: PrLabel;
+  /** Just the label's colour, as a dot (a picker row's leading slot). */
+  swatch?: boolean;
 }
 
-let { label }: Props = $props();
+let { label, swatch = false }: Props = $props();
 
 const hue = $derived(labelHue(label.color));
 </script>
 
 <!-- The label's hue on a fixed lightness ramp (see label-colors.ts); a gray
      label (no chroma) stays neutral rather than picking up a stray hue. -->
-<span
-	class="label-chip"
-	style="--label-h: {hue.h}; --label-c: {hue.c}"
-	title={label.description ?? undefined}
->
-	{label.name}
-</span>
+{#if swatch}
+	<span class="label-swatch" style="--label-h: {hue.h}; --label-c: {hue.c}" aria-hidden="true"></span>
+{:else}
+	<span
+		class="label-chip"
+		style="--label-h: {hue.h}; --label-c: {hue.c}"
+		title={label.description ?? undefined}
+	>
+		{label.name}
+	</span>
+{/if}
 
 <style>
-	.label-chip {
+	.label-chip,
+	.label-swatch {
 		--chip-c: min(var(--label-c), 0.13);
+	}
+
+	.label-chip {
 		display: inline-flex;
 		align-items: center;
 		max-width: 100%;
@@ -39,6 +49,13 @@ const hue = $derived(labelHue(label.color));
 		color: oklch(42% var(--chip-c) var(--label-h));
 		background: oklch(94% min(var(--label-c), 0.05) var(--label-h));
 		border: 1px solid oklch(86% min(var(--label-c), 0.07) var(--label-h));
+	}
+
+	.label-swatch {
+		width: 10px;
+		height: 10px;
+		border-radius: 999px;
+		background: oklch(62% var(--chip-c) var(--label-h));
 	}
 
 	:global(:root.dark) .label-chip {

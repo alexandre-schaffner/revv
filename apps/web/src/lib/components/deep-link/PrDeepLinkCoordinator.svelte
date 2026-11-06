@@ -8,7 +8,7 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { tick } from "svelte";
-import { copyFeedback } from "$lib/components/auth/copy-feedback.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";

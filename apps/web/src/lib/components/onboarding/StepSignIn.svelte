@@ -3,7 +3,7 @@ import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
 import { onMount } from "svelte";
-import { copyFeedback } from "$lib/components/auth/copy-feedback.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import {
   cancelSignIn,

@@ -1,42 +1,30 @@
 <script lang="ts">
-import type { PrStackDetail, StackEntryStatus, StackLayer } from "@revv/shared";
+import type { PrStackDetail, StackLayer } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import RebaseStackConfirm from "$lib/components/stack/RebaseStackConfirm.svelte";
-import StackLayerGlyph from "$lib/components/stack/StackLayerGlyph.svelte";
-import StackLayerList from "$lib/components/stack/StackLayerList.svelte";
 import { Button } from "$lib/components/ui/button";
 import { openStackLayer } from "$lib/stacks/open-layer";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
-import { getStackRebase, rebaseNeed, rebaseStack } from "$lib/stores/stack-rebase.svelte";
+import { LAYER_STATUS_LABEL } from "$lib/stacks/stack-layer-facts";
+import { getStackRebase, rebaseNeed } from "$lib/stores/stack-rebase.svelte";
+import { getLayer } from "$lib/stores/stacks.svelte";
+import RebaseStackAction from "./RebaseStackAction.svelte";
+import SpineGlyph from "./SpineGlyph.svelte";
+import StackLayerGlyph from "./StackLayerGlyph.svelte";
+import StackLayerList from "./StackLayerList.svelte";
 
-// The stack this PR belongs to, top of the stack first and the base branch
+// The stack a PR belongs to, top of the stack first and the base branch
 // last, the way GitHub draws it: you read down toward what lands first.
 
 interface Props {
+  prId: string;
   stack: PrStackDetail;
-  /** The PR on screen. */
-  number: number;
 }
 
-let { stack, number }: Props = $props();
+let { prId, stack }: Props = $props();
 
-const STATUS_LABEL: Record<StackEntryStatus, string> = {
-  merged: "Merged",
-  closed: "Closed",
-  draft: "Draft",
-  ready: "Ready",
-  not_ready: "Not ready",
-};
-
-const selectedId = $derived(getSelectedPr()?.id ?? null);
-const entries = $derived(stack.layers);
-const baseRefName = $derived(stack.baseRefName);
-const topFirst = $derived([...entries].reverse());
-
+const here = $derived(getLayer(prId)?.number ?? null);
+const topFirst = $derived([...stack.layers].reverse());
 const need = $derived(rebaseNeed(stack));
 const rebase = $derived(getStackRebase(stack));
-const rebasing = $derived(rebase.status === "loading");
-let confirmingRebase = $state(false);
 
 const needText = $derived.by(() => {
   if (!need) return "";
@@ -53,93 +41,49 @@ const needText = $derived.by(() => {
   }
 });
 
-function open(entry: StackLayer): void {
-  if (!selectedId) return;
-  openStackLayer(selectedId, entry);
+function open(layer: StackLayer): void {
+  openStackLayer(prId, layer);
 }
 </script>
 
-<section class="stack" aria-labelledby="side-stack">
-	<header class="stack-head">
-		<h3 id="side-stack">Stack #{stack.number}</h3>
-		<span class="stack-count">{entries.length} pull requests</span>
-	</header>
-	{#if need}
-		<div class="stack-rebase" role="status">
-			<span class="stack-rebase-text">{needText}</span>
-			{#if stack.viewerCanPush && selectedId}
-				{@const prId = selectedId}
-				<Button
-					variant="outline"
-					size="xs"
-					disabled={rebasing}
-					onclick={() => (confirmingRebase = true)}
-					title="Replay every open layer onto the one below it, the bottom onto {baseRefName}, and force-push them together. Nothing is pushed if any layer conflicts or moved meanwhile."
-				>
+{#if need}
+	<div class="stack-rebase" role="status">
+		<span class="stack-rebase-text">{needText}</span>
+		<RebaseStackAction {prId} {stack}>
+			{#snippet trigger({ rebasing, title, onclick })}
+				<Button variant="outline" size="xs" disabled={rebasing} {onclick} {title}>
 					<ArrowsClockwise size={12} weight="bold" class={rebasing ? 'motion-essential-spin' : ''} />
 					{rebasing ? 'Rebasing…' : 'Rebase stack'}
 				</Button>
-				<RebaseStackConfirm
-					open={confirmingRebase}
-					{stack}
-					onOpenChange={(open) => (confirmingRebase = open)}
-					onConfirm={() => {
-						confirmingRebase = false;
-						void rebaseStack(prId, stack);
-					}}
-				/>
-			{/if}
-		</div>
-		{#if rebase.status === 'error'}
-			<p class="stack-rebase-error">{rebase.error}</p>
-		{/if}
+			{/snippet}
+		</RebaseStackAction>
+	</div>
+	{#if rebase.status === 'error'}
+		<p class="stack-rebase-error">{rebase.error}</p>
 	{/if}
-	<StackLayerList layers={topFirst} {baseRefName} --stack-spine-bottom="10px">
-		{#snippet row(entry)}
-			{@const current = entry.number === number}
-			<button
-				type="button"
-				class="stack-entry"
-				class:stack-entry--current={current}
-				aria-current={current ? 'page' : undefined}
-				disabled={current}
-				onclick={() => open(entry)}
-			>
-				<span class="stack-layer-glyph stack-glyph" aria-hidden="true">
-					<StackLayerGlyph status={entry.status} />
-				</span>
-				<span class="stack-text">
-					<span class="stack-title">{entry.title}</span>
-					<span class="stack-meta">#{entry.number} · {entry.headRef}</span>
-				</span>
-				<span class="stack-status stack-status--{entry.status}">{STATUS_LABEL[entry.status]}</span>
-			</button>
-		{/snippet}
-	</StackLayerList>
-</section>
+{/if}
+<StackLayerList layers={topFirst} baseRefName={stack.baseRefName} --stack-spine-bottom="10px">
+	{#snippet row(layer)}
+		{@const current = layer.number === here}
+		<button
+			type="button"
+			class="stack-entry"
+			class:stack-entry--current={current}
+			aria-current={current ? 'page' : undefined}
+			disabled={current}
+			onclick={() => open(layer)}
+		>
+			<SpineGlyph><StackLayerGlyph status={layer.status} /></SpineGlyph>
+			<span class="stack-text">
+				<span class="stack-title">{layer.title}</span>
+				<span class="stack-meta">#{layer.number} · {layer.headRef}</span>
+			</span>
+			<span class="stack-status stack-status--{layer.status}">{LAYER_STATUS_LABEL[layer.status]}</span>
+		</button>
+	{/snippet}
+</StackLayerList>
 
 <style>
-	.stack-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		min-height: 24px;
-		margin-bottom: 6px;
-	}
-
-	.stack-head h3 {
-		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-		color: var(--color-text-secondary);
-	}
-
-	.stack-count {
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-	}
-
 	.stack-rebase {
 		display: flex;
 		align-items: center;
@@ -170,7 +114,7 @@ function open(entry: StackLayer): void {
 		align-items: flex-start;
 		gap: 8px;
 		width: 100%;
-		padding: 6px 8px;
+		padding: 6px var(--stack-row-inset);
 		border: none;
 		border-radius: 6px;
 		background: none;
@@ -191,9 +135,10 @@ function open(entry: StackLayer): void {
 		background: var(--color-tree-active-bg);
 	}
 
-	.stack-entry--current .stack-glyph,
-	.stack-entry:hover:not(:disabled) .stack-glyph {
-		background: transparent;
+	/* The row's own background carries the glyph; the spine shows through. */
+	.stack-entry--current,
+	.stack-entry:hover:not(:disabled) {
+		--spine-knockout: transparent;
 	}
 
 	.stack-text {

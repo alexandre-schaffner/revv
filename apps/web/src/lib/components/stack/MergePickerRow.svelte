@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { StackMergePlanLayer } from "@revv/shared";
 import { gsapFade, tokens } from "$lib/motion";
+import SpineGlyph from "./SpineGlyph.svelte";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 
 interface Props {
@@ -25,9 +26,9 @@ let { layer, refusal, inRange, isTarget, onpick }: Props = $props();
 	title={refusal ?? `Merge everything through #${layer.number}`}
 	onclick={onpick}
 >
-	<span class="stack-layer-glyph" aria-hidden="true">
+	<SpineGlyph>
 		<StackLayerGlyph status={layer.status} />
-	</span>
+	</SpineGlyph>
 	<span class="layer-text">
 		<span class="layer-title">{layer.title}</span>
 		<span class="layer-meta">

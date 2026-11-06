@@ -1,40 +1,42 @@
 <script lang="ts">
-import {
-  type CheckDetails,
-  type CiCheck,
-  type CiCheckBucket,
-  type CiRollup,
-  ciStanding,
-} from "@revv/shared";
+import { type CiCheck, type CiCheckBucket, ciStanding, type PrConversation } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
-import CaretRight from "phosphor-svelte/lib/CaretRight";
 import LockSimple from "phosphor-svelte/lib/LockSimple";
 import MinusCircle from "phosphor-svelte/lib/MinusCircle";
 import { SvelteSet } from "svelte/reactivity";
+import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapSlide } from "$lib/motion";
 import { RequestState } from "$lib/stores/_types";
+import {
+  getAbilities,
+  getConversation,
+  loadCheckDetails,
+  rerunFailedRuns,
+  rerunJob,
+} from "$lib/stores/conversation.svelte";
 import { openExternal } from "$lib/utils/open-external";
 import CheckDetailsPanel from "./CheckDetailsPanel.svelte";
 import CiGlyph from "./CiGlyph.svelte";
+import MergeBoxCard from "./MergeBoxCard.svelte";
 
 interface Props {
-  rollup: CiRollup | null;
-  /** The token can't read checks (a GitHub App without `checks: read`). */
-  denied: boolean;
-  /** The PR on GitHub, where the checks can still be seen. */
-  prUrl: string;
-  details: ReadonlyMap<number, RequestState<CheckDetails>>;
-  /** The viewer may re-run Actions jobs. */
-  canRerun: boolean;
-  onExpand: (checkRunId: number) => void;
-  onRerunRuns: (runIds: number[]) => Promise<void>;
-  onRerunJob: (jobId: number) => Promise<void>;
+  prId: string;
+  conversation: PrConversation;
 }
 
-let { rollup, denied, prUrl, details, canRerun, onExpand, onRerunRuns, onRerunJob }: Props =
-  $props();
+let { prId, conversation }: Props = $props();
+
+const rollup = $derived(conversation.ci);
+/** The token can't read checks (a GitHub App without `checks: read`). */
+const denied = $derived(conversation.ciAccess === "denied");
+const details = $derived(getConversation(prId).checkDetails);
+const canRerun = $derived(getAbilities(prId).canRerun);
+
+function expand(checkRunId: number): void {
+  void loadCheckDetails(prId, checkRunId);
+}
 
 const ORDER: Record<CiCheckBucket, number> = { fail: 0, pending: 1, pass: 2, skip: 3 };
 
@@ -81,7 +83,7 @@ $effect(() => {
   if (!first || autoExpanded === first.key) return;
   autoExpanded = first.key;
   expanded.add(first.key);
-  if (first.checkRunId !== null) onExpand(first.checkRunId);
+  if (first.checkRunId !== null) expand(first.checkRunId);
 });
 
 const counts = $derived(
@@ -137,7 +139,7 @@ function toggle(check: CiCheck): void {
     expanded.delete(check.key);
   } else {
     expanded.add(check.key);
-    if (check.checkRunId !== null) onExpand(check.checkRunId);
+    if (check.checkRunId !== null) expand(check.checkRunId);
   }
 }
 
@@ -154,7 +156,7 @@ function duration(check: CiCheck): string | null {
 async function rerunAll(): Promise<void> {
   rerunning = true;
   try {
-    await onRerunRuns(failedRunIds);
+    await rerunFailedRuns(prId, failedRunIds);
   } finally {
     rerunning = false;
   }
@@ -164,8 +166,8 @@ async function rerunAll(): Promise<void> {
 {#snippet summary(check: CiCheck, open: boolean)}
 	{@const time = duration(check)}
 	{@const sub = subtitle(check)}
-	<span class="check-caret" class:check-caret--open={open} aria-hidden="true">
-		{#if check.checkRunId !== null}<CaretRight size={10} weight="bold" />{/if}
+	<span class="check-caret" aria-hidden="true">
+		{#if check.checkRunId !== null}<DisclosureCaret {open} />{/if}
 	</span>
 	<CiGlyph bucket={check.bucket} />
 	<span class="check-name">
@@ -207,7 +209,7 @@ async function rerunAll(): Promise<void> {
 						size="icon-xs"
 						aria-label="Re-run {check.name}"
 						title="Re-run this job"
-						onclick={() => void onRerunJob(jobId)}
+						onclick={() => void rerunJob(prId, jobId)}
 					>
 						<ArrowClockwise />
 					</Button>
@@ -231,46 +233,49 @@ async function rerunAll(): Promise<void> {
 			<div id={detailsId} transition:gsapSlide>
 				<CheckDetailsPanel
 					request={details.get(id) ?? RequestState.idle()}
-					onretry={() => onExpand(id)}
+					onretry={() => expand(id)}
 				/>
 			</div>
 		{/if}
 	</li>
 {/snippet}
 
-<section class="checks" class:checks--rerun={rerunColumn} aria-label="Checks">
-	<header class="checks-head">
-		<span class="checks-mark" class:checks-mark--muted={!headBucket} aria-hidden="true">
-			{#if headBucket}
-				<CiGlyph bucket={headBucket} size={20} />
-			{:else if denied}
-				<LockSimple size={16} />
-			{:else}
-				<MinusCircle size={16} />
-			{/if}
-		</span>
-		<div class="checks-text">
-			<h2 class="checks-title">{headline}</h2>
-			<p class="checks-detail">{detail}</p>
-		</div>
-		<div class="checks-actions">
-			{#if canRerun && failedRunIds.length > 0}
-				<Button variant="outline" size="sm" disabled={rerunning} onclick={() => void rerunAll()}>
-					<ArrowClockwise />
-					{rerunning ? 'Re-running…' : 'Re-run failed jobs'}
-				</Button>
-			{/if}
-			{#if denied}
-				<Button variant="outline" size="sm" onclick={() => void openExternal(`${prUrl}/checks`)}>
-					<ArrowSquareOut />
-					View on GitHub
-				</Button>
-			{/if}
-		</div>
-	</header>
+<MergeBoxCard
+	label="Checks"
+	title={headline}
+	{detail}
+	markTone={headBucket ? null : 'muted'}
+>
+	{#snippet mark()}
+		{#if headBucket}
+			<CiGlyph bucket={headBucket} size={20} />
+		{:else if denied}
+			<LockSimple size={16} />
+		{:else}
+			<MinusCircle size={16} />
+		{/if}
+	{/snippet}
+	{#snippet actions()}
+		{#if canRerun && failedRunIds.length > 0}
+			<Button variant="outline" size="sm" disabled={rerunning} onclick={() => void rerunAll()}>
+				<ArrowClockwise />
+				{rerunning ? 'Re-running…' : 'Re-run failed jobs'}
+			</Button>
+		{/if}
+		{#if denied}
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={() => void openExternal(`${conversation.url}/checks`)}
+			>
+				<ArrowSquareOut />
+				View on GitHub
+			</Button>
+		{/if}
+	{/snippet}
 
 	{#if checks.length > 0}
-		<ul class="check-list">
+		<ul class="check-list" class:check-list--rerun={rerunColumn}>
 			{#each needsAttention as check (check.key)}
 				{@render row(check)}
 			{/each}
@@ -285,9 +290,7 @@ async function rerunAll(): Promise<void> {
 						aria-controls="checks-settled"
 						onclick={() => (showSettled = !showSettled)}
 					>
-						<span class="check-caret" class:check-caret--open={showSettled} aria-hidden="true">
-							<CaretRight size={10} weight="bold" />
-						</span>
+						<span class="check-caret" aria-hidden="true"><DisclosureCaret open={showSettled} /></span>
 						{showSettled ? 'Hide' : 'Show'} {settledLabel}
 					</button>
 				</li>
@@ -303,68 +306,9 @@ async function rerunAll(): Promise<void> {
 			{/if}
 		</ul>
 	{/if}
-</section>
+</MergeBoxCard>
 
 <style>
-	.checks {
-		overflow: clip;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-card);
-		background: var(--color-bg-primary);
-	}
-
-	.checks-head {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 12px 12px 12px 14px;
-	}
-
-	.checks-mark {
-		display: grid;
-		place-items: center;
-		flex-shrink: 0;
-		width: 32px;
-		height: 32px;
-		border-radius: 50%;
-		background: var(--color-bg-secondary);
-	}
-
-	.checks-mark--muted {
-		color: var(--color-text-secondary);
-	}
-
-	.checks-text {
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-		flex: 1;
-		min-width: 0;
-	}
-
-	.checks-title {
-		margin: 0;
-		font-size: 0.875rem;
-		font-weight: 600;
-		line-height: 1.35;
-		color: var(--color-text-primary);
-	}
-
-	.checks-detail {
-		margin: 0;
-		font-size: 0.8125rem;
-		line-height: 1.4;
-		color: var(--color-text-secondary);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.checks-actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-shrink: 0;
-	}
-
 	.check-list,
 	.check-settled > ul {
 		margin: 0;
@@ -430,15 +374,10 @@ async function rerunAll(): Promise<void> {
 		width: 20px;
 		height: 20px;
 		color: var(--color-text-muted);
-		transition: rotate var(--duration-snap) var(--ease-soft);
 	}
 
 	button.check-summary:hover .check-caret {
 		color: var(--color-text-primary);
-	}
-
-	.check-caret--open {
-		rotate: 90deg;
 	}
 
 	.check-name {
@@ -501,7 +440,7 @@ async function rerunAll(): Promise<void> {
 	}
 
 	/* Two icon-xs buttons and their gap. */
-	.checks--rerun .check-actions {
+	.check-list--rerun .check-actions {
 		justify-content: flex-end;
 		min-width: 50px;
 	}

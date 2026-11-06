@@ -1,24 +1,17 @@
 <script lang="ts">
-import { ciHasPending } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
-import { onMount, untrack } from "svelte";
+import { untrack } from "svelte";
 import YourReview from "$lib/components/review/YourReview.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import { prefersReducedMotion } from "$lib/motion";
 import {
-  changeAssignees,
-  changeLabels,
-  changeReviewers,
-  deleteComment,
   editBody,
-  editComment,
+  getAbilities,
   getConversation,
-  loadCheckDetails,
   loadConversation,
   postComment,
-  rerunFailedRuns,
-  rerunJob,
-  watchChecks,
+  watchConversation,
 } from "$lib/stores/conversation.svelte";
 import { getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
@@ -40,41 +33,17 @@ let { prId, isActive }: Props = $props();
 
 const entry = $derived(getConversation(prId));
 const conversation = $derived(entry.request.status === "ok" ? entry.request.data : null);
-const canEdit = $derived(!!conversation?.viewerCanUpdate && !entry.denied.has("edit"));
-const canComment = $derived(!entry.denied.has("edit"));
-const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("rerun"));
-const shouldPollChecks = $derived(
-  isActive && (ciHasPending(conversation?.ci) || entry.awaitingRerun),
-);
+const abilities = $derived(getAbilities(prId));
 
 let composer = $state<HTMLTextAreaElement | null>(null);
 let reviewersOpen = $state(false);
 let assigneesOpen = $state(false);
 let labelsOpen = $state(false);
 
-// Load when the tab comes on screen; the store skips a fetch younger than 30s.
-// `untrack` keeps this effect from subscribing to the store's map, which
-// every write replaces.
 $effect(() => {
   if (!isActive || !prId) return;
   const id = prId;
-  untrack(() => void loadConversation(id));
-});
-
-// The tab owns CI polling: on while it's on screen and something is pending
-// (or a re-run hasn't shown up yet); the store stops on its own once settled.
-$effect(() => {
-  if (!shouldPollChecks) return;
-  const id = prId;
-  return untrack(() => watchChecks(id));
-});
-
-onMount(() => {
-  const onFocus = () => {
-    if (isActive) void loadConversation(prId);
-  };
-  window.addEventListener("focus", onFocus);
-  return () => window.removeEventListener("focus", onFocus);
+  return untrack(() => watchConversation(id));
 });
 
 function onKeydown(e: KeyboardEvent): void {
@@ -83,11 +52,14 @@ function onKeydown(e: KeyboardEvent): void {
   // The sidebar's file tree binds the same letters (`l` opens a file).
   if (getActivePanel() === "sidebar") return;
   const key = e.key.toLowerCase();
-  if (key === "c" && canComment && composer) {
+  if (key === "c" && abilities.canComment && composer) {
     e.preventDefault();
     composer.focus();
-    composer.scrollIntoView({ block: "center", behavior: "smooth" });
-  } else if (canEdit && (key === "r" || key === "a" || key === "l")) {
+    composer.scrollIntoView({
+      block: "center",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  } else if (abilities.canEdit && (key === "r" || key === "a" || key === "l")) {
     e.preventDefault();
     if (key === "r") reviewersOpen = true;
     if (key === "a") assigneesOpen = true;
@@ -113,39 +85,25 @@ function onKeydown(e: KeyboardEvent): void {
 			<div class="slot-description">
 				<CommentCard
 					author={conversation.author}
-					verb="opened"
+					kind="description"
 					createdAt={conversation.createdAt}
 					body={conversation.body}
 					url={conversation.url}
 					emptyText="No description provided."
-					onsave={canEdit ? (body) => editBody(prId, body) : undefined}
+					onsave={abilities.canEdit ? (body) => editBody(prId, body) : undefined}
 				/>
 			</div>
 
 
 			<div class="slot-timeline">
-				<Timeline
-					{conversation}
-					canEdit={canComment}
-					onEditComment={(id, body) => editComment(prId, id, body)}
-					onDeleteComment={(id) => deleteComment(prId, id)}
-				/>
+				<Timeline {prId} {conversation} />
 			</div>
 
 			<!-- Where CI stands now, after the history that led here: GitHub's merge
 			     box sits in the same place. Each commit above carries its own CI
 			     state in the timeline. -->
 			<div class="slot-checks">
-				<CiChecks
-					rollup={conversation.ci}
-					denied={conversation.ciAccess === 'denied'}
-					prUrl={conversation.url}
-					details={entry.checkDetails}
-					{canRerun}
-					onExpand={(id) => void loadCheckDetails(prId, id)}
-					onRerunRuns={(runIds) => rerunFailedRuns(prId, runIds)}
-					onRerunJob={(jobId) => rerunJob(prId, jobId)}
-				/>
+				<CiChecks {prId} {conversation} />
 			</div>
 
 			<!-- The other half of GitHub's merge box: conflicts with the base. -->
@@ -153,7 +111,7 @@ function onKeydown(e: KeyboardEvent): void {
 				<BaseConflicts {prId} {conversation} />
 			</div>
 
-			{#if canComment && conversation.state === 'open'}
+			{#if abilities.canComment && conversation.state === 'open'}
 				<div class="slot-composer">
 					<MarkdownEditor
 						placeholder="Add a comment"
@@ -196,10 +154,6 @@ function onKeydown(e: KeyboardEvent): void {
 			<ConversationSidebar
 				{prId}
 				{conversation}
-				{canEdit}
-				onReviewers={(added, removed) => void changeReviewers(prId, added, removed)}
-				onAssignees={(added, removed) => void changeAssignees(prId, added, removed)}
-				onLabels={(added, removed) => void changeLabels(prId, added, removed)}
 				bind:reviewersOpen
 				bind:assigneesOpen
 				bind:labelsOpen

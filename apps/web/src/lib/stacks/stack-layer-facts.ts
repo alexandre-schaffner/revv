@@ -3,10 +3,19 @@ import {
   type ReviewVerdict,
   type RiskLevel,
   type StackBrief,
+  type StackEntryStatus,
   type StackLayer,
 } from "@revv/shared";
 import { VERDICT_TONE } from "$lib/conversation/verdict";
 import { plural } from "$lib/utils/plural";
+
+export const LAYER_STATUS_LABEL: Record<StackEntryStatus, string> = {
+  merged: "Merged",
+  closed: "Closed",
+  draft: "Draft",
+  ready: "Ready",
+  not_ready: "Not ready",
+};
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   low: "Low risk",

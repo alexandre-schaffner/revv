@@ -7,14 +7,15 @@ import {
   type ReviewVerdict,
   reviewerVerdict,
 } from "@revv/shared";
-import CaretRight from "phosphor-svelte/lib/CaretRight";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
 import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
+import SidebarSection from "./SidebarSection.svelte";
 import VerdictGlyph from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base
@@ -94,11 +95,10 @@ function stateLabel(row: OwnerRow): string {
 </script>
 
 {#if paths.length > 0 && (rows.length > 0 || unowned > 0)}
-	<section aria-labelledby="side-codeowners">
-		<header class="co-head">
-			<h3 id="side-codeowners">Code owners</h3>
+	<SidebarSection id="side-codeowners" title="Code owners" align="baseline">
+		{#snippet aside()}
 			<span class="co-source" title="Read from {codeowners.path} on {codeowners.ref}">{codeowners.path}</span>
-		</header>
+		{/snippet}
 		<ul class="co-list">
 			{#each rows as row (row.owner)}
 				{@const expanded = open.has(row.owner)}
@@ -110,9 +110,7 @@ function stateLabel(row: OwnerRow): string {
 						title={row.owner}
 						onclick={() => toggle(row.owner)}
 					>
-						<span class="co-caret" class:co-caret--open={expanded} aria-hidden="true">
-							<CaretRight size={9} weight="bold" />
-						</span>
+						<span class="co-caret"><DisclosureCaret open={expanded} size={9} /></span>
 						{#if row.team}
 							<span class="co-team" aria-hidden="true"><UsersThree size={12} /></span>
 						{:else}
@@ -150,27 +148,10 @@ function stateLabel(row: OwnerRow): string {
 		{#if unowned > 0}
 			<p class="co-note">{unowned} {unowned === 1 ? 'file has' : 'files have'} no code owner</p>
 		{/if}
-	</section>
+	</SidebarSection>
 {/if}
 
 <style>
-	.co-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 8px;
-		min-height: 24px;
-		margin-bottom: 6px;
-	}
-
-	.co-head h3 {
-		margin: 0;
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-		color: var(--color-text-secondary);
-	}
-
 	.co-source {
 		min-width: 0;
 		overflow: hidden;
@@ -210,11 +191,6 @@ function stateLabel(row: OwnerRow): string {
 	.co-caret {
 		display: inline-flex;
 		color: var(--color-text-muted);
-		transition: rotate var(--duration-snap) var(--ease-soft);
-	}
-
-	.co-caret--open {
-		rotate: 90deg;
 	}
 
 	.co-team {

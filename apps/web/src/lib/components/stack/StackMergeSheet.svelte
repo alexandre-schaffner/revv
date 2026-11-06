@@ -475,7 +475,7 @@ function onOpenChange(open: boolean): void {
 		align-items: flex-start;
 		gap: 8px;
 		width: 100%;
-		padding: 6px 8px;
+		padding: 6px var(--stack-row-inset);
 		border: 1px solid transparent;
 		border-radius: 8px;
 	}
