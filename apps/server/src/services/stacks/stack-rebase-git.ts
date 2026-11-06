@@ -1,8 +1,8 @@
 // Nothing here names a local branch: the clone shares refs with the PR
 // worktrees (and, for linked repos, with the user's own checkouts), so the
 // rebase works on SHAs and the push maps them straight onto the remote
-// branches. Commits are written with the user's own identity, but neither
-// their hooks nor their signing setup run: nobody is there to answer them.
+// branches. Commits are written with the user's own identity and signed the
+// way they sign; their hooks don't run.
 
 import {
   abortRebase,

@@ -19,6 +19,7 @@ import {
 import {
   ensureSignalHandlersInstalled,
   type GitAttempt,
+  type GitPolicy,
   gitAttempt,
   gitSucceeds,
   killStaleCloneProcesses,
@@ -52,6 +53,14 @@ export function assertNotFlagLike(value: string, label: string): void {
     throw new Error(`refusing to use ${label} that looks like a flag: ${value}`);
   }
 }
+
+/**
+ * Every command below that writes commits writes ones that end up on the
+ * user's branches: the chat push's merge and cherry-picks, the agent branch's
+ * rebuilds (pushed with it later), base sync and stack rebase. They are signed
+ * the way the user signs.
+ */
+const PUSHED_COMMITS: GitPolicy = { signing: "user" };
 
 const lines = (out: string) => out.split("\n").filter((line) => line.length > 0);
 
@@ -460,11 +469,12 @@ export async function merge(
     cwd,
     ["merge", ...(opts.noFastForward ? ["--no-ff"] : []), "--no-edit", "-m", opts.message, ref],
     opts.timeoutMs ?? 60_000,
+    PUSHED_COMMITS,
   );
 }
 
 export async function cherryPick(cwd: string, sha: string): Promise<GitAttempt> {
-  return gitAttempt(cwd, ["cherry-pick", sha], 60_000);
+  return gitAttempt(cwd, ["cherry-pick", sha], 60_000, PUSHED_COMMITS);
 }
 
 /**
@@ -494,6 +504,7 @@ export async function rebaseOnto(
       tip,
     ],
     timeoutMs,
+    PUSHED_COMMITS,
   );
 }
 

@@ -18,8 +18,10 @@ A rebase is **already in progress**: the commits of the PR's branch `{{SOURCE_BR
 
 2. Once every file at this stop is resolved and staged, continue:
    ```
-   GIT_EDITOR=true git -c core.hooksPath=/dev/null -c commit.gpgSign=false rebase --continue
+   GIT_EDITOR=true git -c core.hooksPath=/dev/null rebase --continue
    ```
+
+   The commits are signed the way the user signs. If signing fails, stop and report the error; never turn signing off.
 
 3. Later PR commits may stop the rebase again. Repeat steps 1 and 2 until `git status` no longer reports a rebase in progress.
 

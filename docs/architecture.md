@@ -100,8 +100,9 @@ SSE channel. Client-initiated sync requests are REST commands; server-to-client 
 #### Local Git
 
 `services/git/` is the only code that runs git. Its runner (`runner.ts`, private to the
-directory) gives every command one policy: no prompts, none of the user's hooks or commit
-signing, a timeout, the process registry the shutdown reaper kills, and token redaction. `ops.ts`
+directory) gives every command one policy: no prompts, none of the user's hooks, commit
+signing per `GitPolicy` (the user's own config for commits pushed to their branches, off
+otherwise), a timeout, the process registry the shutdown reaper kills, and token redaction. `ops.ts`
 is the command surface; `remote.ts` builds the authenticated remote URL; `push.ts` pushes and
 reads push failures; `scratch.ts` is the detached scratch worktree base sync and stack rebase run
 in; `pr-refs.ts` names every ref, branch and worktree Revv creates; `BranchPushLock` allows one

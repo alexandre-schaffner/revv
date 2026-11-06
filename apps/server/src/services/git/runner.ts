@@ -2,12 +2,15 @@
 //
 // The one place Revv spawns git. Every command gets the same policy:
 //
-//   - `GIT_ENV`: no prompt can block a command. The production LaunchAgent has
-//     no TTY, so a credential helper waiting for input would freeze the job.
-//   - `UNATTENDED`: the user's hooks and commit signing never run. Revv's
-//     clones are often the user's own repository; their husky post-checkout or
-//     pre-push test run is theirs to trigger, and a signing prompt nobody sees
-//     hangs the command until it times out.
+//   - `GIT_ENV`: nothing may prompt. The production LaunchAgent has no TTY, so
+//     a credential helper or signer waiting for input would freeze the job.
+//   - `core.hooksPath=/dev/null`: the user's hooks never run. Revv's clones are
+//     often the user's own repository; their husky post-checkout or pre-push
+//     test run is theirs to trigger.
+//   - commit signing per `GitPolicy`: off, unless the command writes commits
+//     that are pushed to the user's branches, which follow their own
+//     `commit.gpgSign`. A signer that needs a prompt can't get one, so it fails
+//     (or hits the timeout) and its stderr says why.
 //   - a hard timeout, SIGTERM then SIGKILL;
 //   - registration in `activeProcs`, so a server shutdown kills every git
 //     process it started (orphaned `git clone`s otherwise fight the next
@@ -19,14 +22,28 @@
 import { serverEnv } from "../../config";
 import { redactGitAuth } from "./remote";
 
+const { GPG_TTY: _gpgTty, ...inherited } = process.env;
 const GIT_ENV: Record<string, string> = {
-  ...process.env,
+  ...inherited,
   GIT_TERMINAL_PROMPT: "0",
   GIT_ASKPASS: "echo",
   GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no",
+  // An SSH signing key's passphrase may not be asked for through askpass.
+  SSH_ASKPASS_REQUIRE: "never",
 } as Record<string, string>;
 
-const UNATTENDED = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] as const;
+export interface GitPolicy {
+  /** `user`: commits this command writes follow the user's `commit.gpgSign`. */
+  readonly signing: "off" | "user";
+}
+
+const UNSIGNED: GitPolicy = { signing: "off" };
+
+const policyConfig = (policy: GitPolicy): string[] => [
+  "-c",
+  "core.hooksPath=/dev/null",
+  ...(policy.signing === "off" ? ["-c", "commit.gpgSign=false"] : []),
+];
 
 const STDERR_TAIL_CHARS = 16_384;
 
@@ -112,11 +129,12 @@ export async function gitAttempt(
   cwd: string | undefined,
   args: readonly string[],
   timeoutMs: number,
+  policy: GitPolicy = UNSIGNED,
 ): Promise<GitAttempt> {
   ensureSignalHandlersInstalled();
   let proc: SpawnedProc;
   try {
-    proc = Bun.spawn(["git", ...UNATTENDED, ...args], {
+    proc = Bun.spawn(["git", ...policyConfig(policy), ...args], {
       ...(cwd !== undefined ? { cwd } : {}),
       stdout: "pipe",
       stderr: "pipe",

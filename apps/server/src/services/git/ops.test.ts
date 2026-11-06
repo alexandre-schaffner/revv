@@ -25,6 +25,7 @@ import {
 } from "./ops";
 import { classifyPushFailure, workflowPermissionRejection } from "./push";
 import { redactGitAuth } from "./remote";
+import { gitAttempt } from "./runner";
 
 // ── checkoutDetachedAt ───────────────────────────────────────────────────────
 //
@@ -418,13 +419,44 @@ describe("redactGitAuth", () => {
 // ── The runner's policy ──────────────────────────────────────────────────────
 //
 // Revv's clone is often the user's own repository. Their hooks (a husky
-// post-checkout, a pre-push test run) and their signing setup are theirs to
-// trigger; run unattended, a failing hook aborts the push and a signing prompt
-// hangs it until it times out.
+// post-checkout, a pre-push test run) are theirs to trigger and never run. The
+// commits Revv writes for their branches are signed the way they sign, but
+// nothing may prompt: a signer that would ask fails (or times out) with its
+// reason, instead of hanging the push.
+
+/** A stand-in `gpg.program`: `ok` signs, `refuse` fails, `hang` never answers. */
+function fakeSigner(dir: string, behaviour: "ok" | "refuse" | "hang"): string {
+  const path = join(dir, `gpg-${behaviour}`);
+  const body = {
+    ok:
+      'cat >/dev/null\necho >&2\necho "[GNUPG:] SIG_CREATED D 1 8 00 1700000000 FAKE" >&2\n' +
+      'printf -- "-----BEGIN PGP SIGNATURE-----\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n"',
+    refuse: 'echo "gpg: signing failed: Inappropriate ioctl for device" >&2\nexit 2',
+    hang: "exec sleep 30",
+  }[behaviour];
+  writeFileSync(path, `#!/bin/sh\n${body}\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** Sign with `signer` as an OpenPGP program, whatever format the developer's own config picks. */
+function signWith(clonePath: string, signer: string): void {
+  git(clonePath, ["config", "commit.gpgsign", "true"]);
+  git(clonePath, ["config", "gpg.format", "openpgp"]);
+  git(clonePath, ["config", "gpg.program", signer]);
+}
 
 describe("every git command Revv runs", () => {
   let fixture: Fixture;
   let ran: string;
+
+  const detachOntoSource = async () => {
+    const detached = await checkoutDetached(
+      fixture.revvWorktree,
+      `refs/remotes/origin/${SOURCE_BRANCH}`,
+    );
+    expect(detached.ok).toBe(true);
+  };
 
   beforeEach(() => {
     fixture = makeFixture("revv-gitops-policy-");
@@ -441,22 +473,64 @@ describe("every git command Revv runs", () => {
       chmodSync(join(hooks, hook), 0o755);
     }
     git(fixture.clonePath, ["config", "core.hooksPath", hooks]);
-    git(fixture.clonePath, ["config", "commit.gpgsign", "true"]);
-    git(fixture.clonePath, ["config", "gpg.program", "/usr/bin/false"]);
   });
 
   afterEach(async () => {
     await rm(fixture.base, { recursive: true, force: true });
   });
 
-  it("runs none of the user's hooks and never signs", async () => {
-    expect(
-      (await checkoutDetached(fixture.revvWorktree, `refs/remotes/origin/${SOURCE_BRANCH}`)).ok,
-    ).toBe(true);
+  it("runs none of the user's hooks", async () => {
+    await detachOntoSource();
     const merged = await merge(fixture.revvWorktree, AGENT_BRANCH, { message: "merge" });
     expect(merged.ok).toBe(true);
     expect(git(fixture.revvWorktree, ["log", "-1", "--format=%P"]).split(" ")).toHaveLength(2);
     expect(existsSync(ran)).toBe(false);
+  });
+
+  it("signs the commits it writes for the user's branch the way the user signs", async () => {
+    signWith(fixture.clonePath, fakeSigner(fixture.base, "ok"));
+    await detachOntoSource();
+
+    const merged = await merge(fixture.revvWorktree, AGENT_BRANCH, { message: "merge" });
+    expect(merged.ok).toBe(true);
+    expect(git(fixture.revvWorktree, ["cat-file", "commit", "HEAD"])).toContain("gpgsig ");
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  it("surfaces a signer that refuses, at once", async () => {
+    signWith(fixture.clonePath, fakeSigner(fixture.base, "refuse"));
+    await detachOntoSource();
+
+    const startedAt = Date.now();
+    const merged = await merge(fixture.revvWorktree, AGENT_BRANCH, { message: "merge" });
+    expect(merged.ok).toBe(false);
+    expect(merged.timedOut).toBe(false);
+    expect(merged.stderr).toMatch(/sign/i);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
+  it("gives up on a signer that never answers instead of hanging", async () => {
+    signWith(fixture.clonePath, fakeSigner(fixture.base, "hang"));
+
+    const attempt = await gitAttempt(
+      fixture.revvWorktree,
+      ["commit", "--allow-empty", "-m", "signed"],
+      1_500,
+      { signing: "user" },
+    );
+    expect(attempt.ok).toBe(false);
+    expect(attempt.timedOut).toBe(true);
+  });
+
+  it("writes internal commits unsigned whatever the user's config says", async () => {
+    signWith(fixture.clonePath, fakeSigner(fixture.base, "refuse"));
+
+    const attempt = await gitAttempt(
+      fixture.revvWorktree,
+      ["commit", "--allow-empty", "-m", "internal"],
+      10_000,
+    );
+    expect(attempt.ok).toBe(true);
   });
 });
 
