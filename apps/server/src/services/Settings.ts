@@ -333,14 +333,10 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
   };
 }
 
-// ── JSON file migration (one-time) ───────────────────────────────────────────
-
+/** Load the settings row, creating it (legacy-upgrade: settingsJson) from the pre-DB JSON file. */
 async function migrateJsonToDb(db: Db): Promise<UserSettings> {
   const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const { homedir } = await import("node:os");
-
-  const settingsPath = process.env.REVV_SETTINGS_PATH ?? join(homedir(), ".revv", "settings.json");
+  const settingsPath = serverEnv.legacySettingsPath;
 
   const [row] = await db.select().from(userSettings).where(eq(userSettings.id, "default")).limit(1);
 

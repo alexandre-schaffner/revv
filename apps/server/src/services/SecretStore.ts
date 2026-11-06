@@ -299,7 +299,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
 });
 
 /**
- * One-time boot migration: copy any plaintext tokens still living in the
+ * legacy-upgrade: plaintextTokens. Copy any plaintext tokens still living in the
  * `account.access_token` / `refresh_token` columns into the secure store, then
  * null the columns. Idempotent — rows already migrated have null columns and
  * are skipped. Returns the number of accounts migrated.
