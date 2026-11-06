@@ -158,7 +158,39 @@ export function chapterNumbersByIndex(
  */
 export type IssueSeverity = "info" | "warning" | "critical";
 
+/** Most severe first: the order every issue list renders its severity groups in. */
+export const ISSUE_SEVERITIES: readonly IssueSeverity[] = ["critical", "warning", "info"];
+
+export const ISSUE_SEVERITY_LABEL: Readonly<Record<IssueSeverity, string>> = {
+  critical: "Critical",
+  warning: "Warning",
+  info: "Info",
+};
+
+/** Higher is more severe. */
+export function severityRank(severity: IssueSeverity): number {
+  return ISSUE_SEVERITIES.length - ISSUE_SEVERITIES.indexOf(severity);
+}
+
 export type IssueResolutionStatus = "open" | "addressed" | "wont_fix";
+
+/** A resolution status that closes the issue. */
+export function isResolvedIssueStatus(
+  status: string | null | undefined,
+): status is Exclude<IssueResolutionStatus, "open"> {
+  return status === "addressed" || status === "wont_fix";
+}
+
+export function isIssueResolved(issue: Pick<WalkthroughIssue, "resolutionStatus">): boolean {
+  return isResolvedIssueStatus(issue.resolutionStatus);
+}
+
+/** Badge text for a resolved issue; null while it is open. */
+export function issueResolutionLabel(status: IssueResolutionStatus | undefined): string | null {
+  if (status === "addressed") return "Addressed";
+  if (status === "wont_fix") return "Won't fix";
+  return null;
+}
 
 export interface WalkthroughIssue {
   id: string;

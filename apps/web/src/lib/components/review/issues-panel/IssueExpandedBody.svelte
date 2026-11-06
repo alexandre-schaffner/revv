@@ -12,6 +12,7 @@
 
 import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
+  issueResolutionLabel,
   type WalkthroughBlock,
   type WalkthroughIssue,
 } from "@revv/shared";
@@ -30,6 +31,8 @@ interface Props {
 }
 
 let { issue, blocks, onFileClick, onBlockJump }: Props = $props();
+
+const resolutionLabel = $derived(issueResolutionLabel(issue.resolutionStatus));
 
 // Resolve blockIds to step numbers using the blocks array. Filter out ids
 // that don't resolve — matches the gating in IssueTestRow's original
@@ -59,13 +62,13 @@ const hasReferences = $derived(
         <p class="description-text">{issue.description}</p>
     </div>
 
-    {#if issue.resolutionStatus === 'addressed' || issue.resolutionStatus === 'wont_fix'}
+    {#if resolutionLabel}
         <div class="section-divider" aria-hidden="true">
             <span class="section-divider-label">resolution</span>
         </div>
         <div class="resolution">
             <p class="resolution-head">
-                <strong>{issue.resolutionStatus === 'addressed' ? 'Addressed' : "Won't fix"}</strong>
+                <strong>{resolutionLabel}</strong>
                 {#if issue.resolvedBy}
                     <span class="resolution-agent"
                         >by {EXTERNAL_AGENT_PROVIDER_NAMES[issue.resolvedBy]}</span

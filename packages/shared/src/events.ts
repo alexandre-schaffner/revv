@@ -208,7 +208,8 @@ export interface ThreadCreatedEnvelope {
 
 export interface ThreadUpdatedEnvelope {
   type: "thread:updated";
-  data: { threadId: string; status: ThreadStatus };
+  /** Full state of the thread's status: `resolvedAt` is null unless the status resolves it. */
+  data: { threadId: string; status: ThreadStatus; resolvedAt: string | null };
 }
 
 export interface ThreadMessageEnvelope {

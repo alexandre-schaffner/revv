@@ -1,5 +1,10 @@
 <script lang="ts">
-import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import {
+  type IssueSeverity,
+  severityRank,
+  type WalkthroughBlock,
+  type WalkthroughSemanticStep,
+} from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
@@ -10,8 +15,6 @@ import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
 import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
 
-type Severity = "info" | "warning" | "critical";
-
 interface BlockEntry {
   block: WalkthroughBlock;
   delay: number;
@@ -21,9 +24,9 @@ interface BlockEntry {
 interface Props {
   section: WalkthroughSemanticStep;
   entries: BlockEntry[];
-  blockIssueSeverity: Map<string, Severity>;
+  blockIssueSeverity: Map<string, IssueSeverity>;
   selectedIssueBlockId: string | null;
-  selectedIssueSeverity: Severity | null;
+  selectedIssueSeverity: IssueSeverity | null;
   /**
    * Number shown in the "Chapter N / M" eyebrow, or null for the Overview —
    * chapter 0, which carries no eyebrow so the printed numbers match what
@@ -58,17 +61,12 @@ let collapsed = $state(false);
 
 // Roll up child block severities so a collapsed section can still
 // telegraph the worst issue inside it via a colored dot.
-const SEVERITY_RANK: Record<Severity, number> = {
-  info: 1,
-  warning: 2,
-  critical: 3,
-};
-const rolledSeverity = $derived.by<Severity | null>(() => {
-  let worst: Severity | null = null;
+const rolledSeverity = $derived.by<IssueSeverity | null>(() => {
+  let worst: IssueSeverity | null = null;
   for (const e of entries) {
     const s = blockIssueSeverity.get(e.block.id);
     if (!s) continue;
-    if (!worst || SEVERITY_RANK[s] > SEVERITY_RANK[worst]) worst = s;
+    if (!worst || severityRank(s) > severityRank(worst)) worst = s;
   }
   return worst;
 });

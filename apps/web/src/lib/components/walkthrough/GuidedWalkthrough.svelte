@@ -4,6 +4,7 @@ import type {
   WalkthroughReviewRound,
   WalkthroughSemanticStep,
 } from "@revv/shared";
+import { type IssueSeverity, severityRank } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Warning from "phosphor-svelte/lib/Warning";
 import { onDestroy, onMount, untrack } from "svelte";
@@ -34,7 +35,6 @@ import {
   getPendingWalkthroughBlockJump,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";
-import { getSettings } from "$lib/stores/settings.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import {
@@ -48,6 +48,7 @@ import {
   getGeneratedBy,
   getIsLiveGeneration,
   getIsStreaming,
+  getIssueSignal,
   getIssues,
   getLastCompletedPhase,
   getLastWalkthroughEventAt,
@@ -92,17 +93,14 @@ import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { firstPassView } from "$lib/utils/hunk-scan";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { authHeaders } from "$lib/utils/session-token";
-import {
-  groupIssuesBySeverityWithIndex,
-  partitionBySignal,
-  shouldHideLowSignal,
-} from "$lib/utils/walkthrough-issues";
+import { sortBySeverity } from "$lib/utils/walkthrough-issues";
 import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
 import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
 import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
 import FirstPassPreview from "./first-pass/FirstPassPreview.svelte";
 import FirstPassRibbon from "./first-pass/FirstPassRibbon.svelte";
 import IssueCard from "./IssueCard.svelte";
+import IssueGroups from "./IssueGroups.svelte";
 import LowSignalDisclosure from "./LowSignalDisclosure.svelte";
 import MergedStamp from "./MergedStamp.svelte";
 import WalkthroughRatingsGrid from "./WalkthroughRatingsGrid.svelte";
@@ -128,15 +126,11 @@ const explorationInputs = $derived(getExplorationInputs());
 const timeline = $derived(getTimeline());
 const phase = $derived(getPhase());
 const streamStartedAt = $derived(getStreamStartedAt());
-const allIssues = $derived(getIssues());
 // Low-signal issues are split out, not dropped: the count is always
 // rendered and the disclosure holds the rest.
-const issueSignal = $derived(
-  partitionBySignal(allIssues, { hideLowSignal: shouldHideLowSignal(getSettings()) }),
-);
+const issueSignal = $derived(getIssueSignal());
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
-const issueGroups = $derived(groupIssuesBySeverityWithIndex(issues));
 const ratings = $derived(getRatings());
 // The first pass for the head on screen. It runs on its own, so it's here
 // before Generate; a stale walkthrough reviewed an older head, and its issues
@@ -145,7 +139,7 @@ const ratings = $derived(getRatings());
 const firstPass = $derived.by(() => {
   const scan = getHunkScan(prId, getLoadedHeadSha(prId));
   const rows = getWalkthroughUiState().kind === "complete-stale" ? [] : scan.rows;
-  return firstPassView(rows, scan.status, allIssues, !isStreaming, getLeads());
+  return firstPassView(rows, scan.status, getIssues(), !isStreaming, getLeads());
 });
 let firstPassOpen = $state(false);
 const isLiveGeneration = $derived(getIsLiveGeneration());
@@ -735,7 +729,7 @@ const stack = new WalkthroughStack(
         block.type === "code" || block.type === "diff" ? [block.filePath] : [],
       ),
     })),
-    issues: issueGroups.flatMap((g) => g.issues.map(({ issue }) => issue)),
+    issues: sortBySeverity(issues),
   }),
 );
 
@@ -865,17 +859,12 @@ function chapterTagFor(blockId: string): string | null {
 // severity across all issues pointing at it. Used to render a colored dot
 // to the left of the block so the reader can spot flagged steps while
 // scrolling without having to cross-reference the Issues section.
-const SEVERITY_RANK: Record<"info" | "warning" | "critical", number> = {
-  info: 1,
-  warning: 2,
-  critical: 3,
-};
 const blockIssueSeverity = $derived.by(() => {
-  const map = new Map<string, "info" | "warning" | "critical">();
+  const map = new Map<string, IssueSeverity>();
   for (const issue of issues) {
     for (const bid of issue.blockIds) {
       const current = map.get(bid);
-      if (!current || SEVERITY_RANK[issue.severity] > SEVERITY_RANK[current]) {
+      if (!current || severityRank(issue.severity) > severityRank(current)) {
         map.set(bid, issue.severity);
       }
     }
@@ -1270,47 +1259,34 @@ function handleResume(): void {
 						<Warning size={13} weight="fill" />
 						<span>{issues.length} issue{issues.length !== 1 ? 's' : ''} flagged</span>
 					</div>
-					<div class="issues-groups">
-						{#each issueGroups as group (group.severity)}
-							<div class="issues-group">
-								<div class="issues-group-header issues-group-header--{group.severity}">
-									<span class="issues-group-dot"></span>
-									<span class="issues-group-label">{group.label}</span>
-									<span class="issues-group-count">{group.issues.length}</span>
-								</div>
-								<div class="issues-list">
-									{#each group.issues as { issue, globalIndex } (issue.id)}
-										{@const targetBlockId = issue.blockIds?.[0] ?? null}
-										{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
-										{@const chapterTag = targetBlockId ? chapterTagFor(targetBlockId) : null}
-										<!-- Gate clickability on the referenced block actually existing in
-										     the current render. `blockIds` can point to a block that isn't in
-										     `blocks` (kept issues after regenerate, or a mid-stream race
-										     between the issue arriving and its block rendering) — in which
-										     case jumpToStep would silently no-op and the click would feel
-										     broken. stepN is null whenever the lookup fails, which catches
-										     both a missing targetBlockId and an id that doesn't resolve. -->
-										{@const target = stepN !== null ? targetBlockId : null}
-										<IssueStackNote {stack} issueId={issue.id}>
-											<IssueCard
-												{issue}
-												clickable={target !== null}
-												onclick={() => {
-													if (target) selectIssue(issue.id, target);
-												}}
-												stepTag={target ? (chapterTag ?? `→ Step ${stepN}`) : null}
-												animationDelay="{Math.min(globalIndex, 6) * 50}ms"
-												noAnim={issueDelayById.get(issue.id) === -1}
-												onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-												hideFileBadge={true}
-												firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
-											/>
-										</IssueStackNote>
-									{/each}
-								</div>
-							</div>
-						{/each}
-					</div>
+					<IssueGroups {issues}>
+						{#snippet item(issue, globalIndex)}
+							{@const targetBlockId = issue.blockIds?.[0] ?? null}
+							{@const stepN = targetBlockId ? stepNumberFor(targetBlockId) : null}
+							{@const chapterTag = targetBlockId ? chapterTagFor(targetBlockId) : null}
+							<!-- Gate clickability on the referenced block actually existing in
+							     the current render. `blockIds` can point to a block that isn't in
+							     `blocks` (kept issues after regenerate, or a mid-stream race
+							     between the issue arriving and its block rendering) — in which
+							     case jumpToStep would silently no-op and the click would feel
+							     broken. stepN is null whenever the lookup fails, which catches
+							     both a missing targetBlockId and an id that doesn't resolve. -->
+							{@const target = stepN !== null ? targetBlockId : null}
+							<IssueStackNote {stack} issueId={issue.id}>
+								<IssueCard
+									{issue}
+									clickable={target !== null}
+									onclick={() => {
+										if (target) selectIssue(issue.id, target);
+									}}
+									stepTag={target ? (chapterTag ?? `→ Step ${stepN}`) : null}
+									animationDelay="{Math.min(globalIndex, 6) * 50}ms"
+									noAnim={issueDelayById.get(issue.id) === -1}
+									firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
+								/>
+							</IssueStackNote>
+						{/snippet}
+					</IssueGroups>
 
 					<LowSignalDisclosure count={filteredIssues.length}>
 						{#each filteredIssues as issue (issue.id)}
@@ -1318,8 +1294,6 @@ function handleResume(): void {
 								{issue}
 								stepTag={null}
 								noAnim
-								onfileclick={(filePath, line) => jumpToDiffLine(filePath, line)}
-								hideFileBadge={true}
 								firstPassSmells={firstPass.smellsByIssue.get(issue.id)}
 							/>
 						{/each}
@@ -1784,56 +1758,6 @@ function handleResume(): void {
 		letter-spacing: 0.05em;
 	}
 
-	.issues-groups {
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-	}
-
-	.issues-group {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.issues-group-header {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-text-secondary);
-	}
-
-	.issues-group-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--severity-color, var(--color-text-muted));
-	}
-
-	.issues-group-label {
-		color: var(--severity-color, var(--color-text-secondary));
-	}
-
-	.issues-group-count {
-		color: var(--color-text-muted);
-		font-variant-numeric: tabular-nums;
-		font-weight: 500;
-	}
-
-	.issues-group-header--critical { --severity-color: var(--color-danger); }
-	.issues-group-header--warning { --severity-color: var(--color-warning); }
-	.issues-group-header--info { --severity-color: var(--color-accent); }
-
-	.issues-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
 	/* ── Blocks ──────────────────────────────────────────────────────── */
 
 	/* Give every Separator inside the walkthrough content breathing room */
@@ -1913,18 +1837,6 @@ function handleResume(): void {
 		border-radius: 50%;
 		background: transparent;
 	}
-	.block-step-dot--info {
-		background: var(--color-accent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
-	}
-	.block-step-dot--warning {
-		background: var(--color-warning);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 18%, transparent);
-	}
-	.block-step-dot--critical {
-		background: var(--color-danger);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
-	}
 
 	.block-wrapper {
 		position: relative;
@@ -1944,24 +1856,9 @@ function handleResume(): void {
 		100% { outline-color: transparent; }
 	}
 
-	.block-wrapper--highlighted {
+	/* Added from script by jumpToStep, which Svelte's unused-selector check can't see. */
+	.block-wrapper:global(.block-wrapper--highlighted) {
 		animation: block-pulse var(--duration-ceremonial-slow) var(--ease-soft) forwards;
-	}
-
-	/* Persistent severity-colored outline on the block linked to the currently
-	   selected issue. Stays on until another issue is clicked, so the reader
-	   can scroll around without losing the visual anchor. The brief pulse
-	   above is animation-driven (transparent at end) while this is a static
-	   outline-color override — they don't fight because nothing else sets
-	   outline-color on .block-wrapper. */
-	.block-wrapper--selected-info {
-		outline-color: var(--color-accent);
-	}
-	.block-wrapper--selected-warning {
-		outline-color: var(--color-warning);
-	}
-	.block-wrapper--selected-critical {
-		outline-color: var(--color-danger);
 	}
 
 	.block-wrapper--no-anim {
@@ -1980,21 +1877,6 @@ function handleResume(): void {
 		display: flex;
 		flex-direction: column;
 		width: 100%;
-	}
-
-	.walkthrough-phase-trigger {
-		display: flex;
-		width: 100%;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem;
-		padding: 0.125rem 0;
-		text-align: left;
-		background: transparent;
-		border: 0;
-		color: inherit;
-		cursor: pointer;
-		font: inherit;
 	}
 
 	.walkthrough-activity-stack {
@@ -2034,55 +1916,6 @@ function handleResume(): void {
 	   prose layer (see app.css); `.walkthrough-inline-thought` only sets the
 	   quieter muted body tone. */
 
-	/* ── Annotation rail ─────────────────────────────────────────────────
-	   Sits top-aligned beside its block in the grid row. No sticky — CSS
-	   sticky has no cross-sibling awareness, so two annotations in adjacent
-	   rows will collide at top: 24px during the row-transition (while row N
-	   is still partially on screen, row N+1's annotation has already started
-	   sticking). Since code/diff blocks are capped at `min(70vh, 640px)` with
-	   their own internal overflow, the outer page never scrolls past a single
-	   block for long enough to need the annotation pinned — the whole row
-	   (block + annotation) scrolls as a unit. */
-	.block-annotation {
-		align-self: start;
-		padding: 4px 0;
-		/* Match the block's entrance timing so rail text appears in sync
-		   with its block. Paired with the --enter-delay inline style. */
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
-		animation-delay: var(--enter-delay, 0ms);
-	}
-
-	.block-annotation--no-anim {
-		animation: none;
-		opacity: 1;
-		transform: none;
-		filter: none;
-	}
-
-	.block-annotation-inner {
-		/* Outlined card — matches the bordered treatment of the code/diff blocks
-		   in the content column, so the rail reads as a balanced peer instead
-		   of loose text next to a bordered panel. Uses the same border token
-		   the code/diff blocks use (--color-border). */
-		background: var(--color-bg-primary);
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
-		padding: 14px 16px;
-		font-size: 14px;
-		line-height: 1.6;
-		color: var(--color-text-secondary);
-		/* Allow long identifiers inside inline <code> (e.g. dotted API paths
-		   like AuthService.isTokenRevoked(payload.jti)) to break anywhere so
-		   they don't overflow the 380px card. `overflow-wrap: anywhere`
-		   (rather than `break-word`) contributes to min-content sizing, which
-		   keeps the card honest if a future narrower viewport lets grid col 5
-		   shrink. */
-		overflow-wrap: anywhere;
-	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
-
 	.loading-text {
 		font-size: 13px;
 		color: var(--color-text-muted);
@@ -2093,12 +1926,6 @@ function handleResume(): void {
 		color: var(--color-text-muted);
 		opacity: 0.6;
 		margin: 0;
-	}
-
-	.error-inline {
-		font-size: 12px;
-		color: var(--color-danger);
-		margin-top: 8px;
 	}
 
 	.partial-error {
@@ -2156,11 +1983,9 @@ function handleResume(): void {
 
 	@media (prefers-reduced-motion: reduce) {
 		.block-wrapper,
-		.block-annotation,
 		.issues-section,
 		.walkthrough-content,
-		.walkthrough-stepper-header,
-		.dotmatrix-dot {
+		.walkthrough-stepper-header {
 			animation-duration: 0.01ms !important;
 			animation-delay: 0ms !important;
 			transition: none !important;
@@ -2334,13 +2159,5 @@ function handleResume(): void {
 			grid-column: auto;
 		}
 
-		/* Annotation card stacks directly below its block. Sticky was already
-		   removed at the wide layer; here we just give the stacked card a
-		   small top margin so it reads as attached-to-but-distinct-from
-		   its block. */
-		.block-annotation {
-			padding: 0;
-			margin-top: 10px;
-		}
 	}
 </style>

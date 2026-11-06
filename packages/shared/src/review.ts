@@ -48,6 +48,11 @@ export function reviewModeFor(
 
 export type ThreadStatus = "open" | "pending_coder" | "pending_reviewer" | "resolved" | "wont_fix";
 
+/** `wont_fix` closes a thread just as `resolved` does. */
+export function isThreadResolved(status: string): boolean {
+  return status === "resolved" || status === "wont_fix";
+}
+
 export type AuthorRole = "reviewer" | "coder" | "ai_agent";
 
 export type MessageType = "comment" | "reply" | "suggestion" | "resolution";

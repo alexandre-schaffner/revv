@@ -15,10 +15,11 @@
  *     toggles expand-all, `x` toggles selection of the focused row.
  */
 import type { WalkthroughBlock, WalkthroughIssue } from "@revv/shared";
+import { isIssueResolved } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import LowSignalDisclosure from "$lib/components/walkthrough/LowSignalDisclosure.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
-import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
+import { countBySeverity, sortBySeverity } from "$lib/utils/walkthrough-issues";
 import IssueSummaryBar from "./IssueSummaryBar.svelte";
 import IssueTestRow from "./IssueTestRow.svelte";
 
@@ -53,37 +54,22 @@ let {
 
 // ── Derived: sorted issue list + counts ──────────────────
 
-// Flatten the severity-grouped output into a single sorted array.
-// `groupIssuesBySeverityWithIndex` preserves within-group arrival order
-// and sorts groups critical → warning → info, which is exactly the lint
-// convention (errors first).
-const sortedIssues = $derived(
-  groupIssuesBySeverityWithIndex(issues).flatMap((g) => g.issues.map((gi) => gi.issue)),
-);
-
-function isResolved(issue: WalkthroughIssue): boolean {
-  return issue.resolutionStatus === "addressed" || issue.resolutionStatus === "wont_fix";
-}
+// Errors first, like a linter.
+const sortedIssues = $derived(sortBySeverity(issues));
 
 const counts = $derived.by(() => {
-  let critical = 0;
-  let warning = 0;
-  let info = 0;
   let selected = 0;
   let submittable = 0;
   for (const issue of issues) {
-    if (issue.severity === "critical") critical++;
-    else if (issue.severity === "warning") warning++;
-    else info++;
-    if (!isResolved(issue) && selectedIds.has(issue.id)) selected++;
-    if (!submittedIds.has(issue.id) && !isResolved(issue)) submittable++;
+    if (!isIssueResolved(issue) && selectedIds.has(issue.id)) selected++;
+    if (!submittedIds.has(issue.id) && !isIssueResolved(issue)) submittable++;
   }
-  return { critical, warning, info, total: issues.length, selected, submittable };
+  return { ...countBySeverity(issues), total: issues.length, selected, submittable };
 });
 
 const allSelected = $derived(
   counts.submittable > 0 &&
-    issues.every((i) => isResolved(i) || submittedIds.has(i.id) || selectedIds.has(i.id)),
+    issues.every((i) => isIssueResolved(i) || submittedIds.has(i.id) || selectedIds.has(i.id)),
 );
 
 // ── Expand / collapse state (tri-state) ──────────────────
@@ -135,7 +121,9 @@ const visibleIssues = $derived.by(() => {
     list = list.filter((i) => i.severity === "critical");
   }
   if (onlyUnselected) {
-    list = list.filter((i) => !isResolved(i) && !selectedIds.has(i.id) && !submittedIds.has(i.id));
+    list = list.filter(
+      (i) => !isIssueResolved(i) && !selectedIds.has(i.id) && !submittedIds.has(i.id),
+    );
   }
   return list;
 });
@@ -159,7 +147,7 @@ function focusIssue(id: string): void {
 
 function focusableIssues(): WalkthroughIssue[] {
   return visibleIssues.filter(
-    (issue) => !isResolved(issue) && !submittedIds.has(issue.id) && rowRefs.get(issue.id),
+    (issue) => !isIssueResolved(issue) && !submittedIds.has(issue.id) && rowRefs.get(issue.id),
   );
 }
 
@@ -195,7 +183,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
     // mark keys. Space already triggers the Collapsible by default,
     // so we avoid hijacking it.
     const focusedIssue = visibleIssues.find((issue) => issue.id === focusedId);
-    if (focusedIssue && !isResolved(focusedIssue) && !submittedIds.has(focusedId)) {
+    if (focusedIssue && !isIssueResolved(focusedIssue) && !submittedIds.has(focusedId)) {
       e.preventDefault();
       onToggleSelect(focusedId);
     }
@@ -257,7 +245,7 @@ function onPanelKeydown(e: KeyboardEvent): void {
                 {#each visibleIssues as issue, i (issue.id)}
                     <IssueTestRow
                         {issue}
-                        selected={selectedIds.has(issue.id) && !isResolved(issue)}
+                        selected={selectedIds.has(issue.id) && !isIssueResolved(issue)}
                         submitted={submittedIds.has(issue.id)}
                         open={isRowOpen(issue.id)}
                         index={i}

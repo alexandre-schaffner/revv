@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ISSUE_SEVERITY_LABEL, issueResolutionLabel } from "@revv/shared";
 /*
  * IssueTestRow — one row in the Issues panel.
  *
@@ -85,23 +86,11 @@ const severityCode: Record<WalkthroughIssue["severity"], string> = {
   info: "I",
 };
 
-const severityLabels: Record<WalkthroughIssue["severity"], string> = {
-  critical: "Critical",
-  warning: "Warning",
-  info: "Info",
-};
-
-const resolutionLabel = $derived(
-  issue.resolutionStatus === "addressed"
-    ? "Addressed"
-    : issue.resolutionStatus === "wont_fix"
-      ? "Won't fix"
-      : null,
-);
+const resolutionLabel = $derived(issueResolutionLabel(issue.resolutionStatus));
 const resolved = $derived(resolutionLabel !== null);
 
 const ariaLabel = $derived(
-  `${severityLabels[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}${resolutionLabel ? ` (${resolutionLabel})` : ""}`,
+  `${ISSUE_SEVERITY_LABEL[issue.severity]}: ${issue.title}${submitted ? " (posted)" : ""}${resolutionLabel ? ` (${resolutionLabel})` : ""}`,
 );
 
 // Cascade-entry delay. Cap at 6 so long lists resolve quickly.
@@ -161,7 +150,7 @@ function handleCheckboxClick(e: MouseEvent): void {
         {#snippet label()}
             <span
                 class="severity-code severity-code--{issue.severity}"
-                title={severityLabels[issue.severity]}
+                title={ISSUE_SEVERITY_LABEL[issue.severity]}
             >
                 {severityCode[issue.severity]}
             </span>

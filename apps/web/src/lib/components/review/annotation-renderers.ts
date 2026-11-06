@@ -3,7 +3,9 @@
  * Centralizes the host wrapper, the collapsed-state marker dot, and the
  * AnnotationThread prop bundle so DiffViewer and FileViewer stay in sync.
  */
+
 import type { CommentThread, ThreadMessage } from "@revv/shared";
+import { isThreadResolved } from "@revv/shared";
 import { mountInto } from "$lib/utils/annotation-mount";
 import AnnotationThread from "./AnnotationThread.svelte";
 
@@ -14,7 +16,7 @@ export const ANNOTATION_HOST_STYLE = "display:block;max-width:720px;margin:8px 0
  * when its thread is not expanded. Color matches thread status.
  */
 export function createMarkerDot(meta: { status: string }, onClick: () => void): HTMLElement {
-  const isResolved = meta.status === "resolved" || meta.status === "wont_fix";
+  const isResolved = isThreadResolved(meta.status);
   const isPending = meta.status === "pending_coder" || meta.status === "pending_reviewer";
   const color = isResolved
     ? "var(--color-border)"

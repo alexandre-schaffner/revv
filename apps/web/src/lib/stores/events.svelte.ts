@@ -331,7 +331,7 @@ function dispatch(msg: ServerEventMessage): void {
       onThreadCreated(msg.data.thread, msg.data.message);
       break;
     case "thread:updated":
-      onThreadUpdated(msg.data.threadId, msg.data.status);
+      onThreadUpdated(msg.data.threadId, msg.data.status, msg.data.resolvedAt);
       break;
     case "thread:message":
       onThreadMessage(msg.data.threadId, msg.data.message);

@@ -654,20 +654,12 @@ export async function reopenThread(threadId: string): Promise<void> {
   }
 }
 
-/**
- * Update a thread's status from an SSE event (no API call needed).
- */
-export function onThreadUpdated(threadId: string, status: ThreadStatus): void {
-  const isResolved = status === "resolved" || status === "wont_fix";
-  threads = threads.map((t) =>
-    t.id === threadId
-      ? {
-          ...t,
-          status,
-          resolvedAt: isResolved ? new Date().toISOString() : null,
-        }
-      : t,
-  );
+export function onThreadUpdated(
+  threadId: string,
+  status: ThreadStatus,
+  resolvedAt: string | null,
+): void {
+  threads = threads.map((t) => (t.id === threadId ? { ...t, status, resolvedAt } : t));
   threadsVersion++;
 }
 

@@ -1,5 +1,10 @@
 <script lang="ts">
-import { type CommentThread, canUserModifyComment, type ThreadMessage } from "@revv/shared";
+import {
+  type CommentThread,
+  canUserModifyComment,
+  isThreadResolved,
+  type ThreadMessage,
+} from "@revv/shared";
 import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
 import CaretUp from "phosphor-svelte/lib/CaretUp";
 import CheckSquare from "phosphor-svelte/lib/CheckSquare";
@@ -48,7 +53,7 @@ let {
   isPending = false,
 }: Props = $props();
 
-const isResolved = $derived(thread.status === "resolved" || thread.status === "wont_fix");
+const isResolved = $derived(isThreadResolved(thread.status));
 const currentUserLogin = $derived(getCurrentUserLogin());
 const firstMessage = $derived(messages[0] ?? null);
 const canDiscardThread = $derived(

@@ -40,9 +40,15 @@ import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
 import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
+import { getSettings } from "$lib/stores/settings.svelte";
 import { updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
 import { addressesActiveWalkthrough } from "$lib/stores/walkthrough-event-target";
 import { authHeaders } from "$lib/utils/session-token";
+import {
+  partitionBySignal,
+  type SignalPartition,
+  shouldHideLowSignal,
+} from "$lib/utils/walkthrough-issues";
 import { wtTrace } from "$lib/utils/wt-trace";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
@@ -364,6 +370,14 @@ export function getIssues(): WalkthroughIssue[] {
 export function getIssuesForFile(filePath: string): WalkthroughIssue[] {
   const issues = _active?.issues ?? [];
   return issues.filter((i) => i.filePath === filePath);
+}
+/**
+ * The issues to show, with low-signal ones split out while TypeSafe is on.
+ * Every issue list reads this, so none can show (or post) an issue another hides.
+ */
+export function getIssueSignal(filePath?: string): SignalPartition {
+  const issues = filePath === undefined ? getIssues() : getIssuesForFile(filePath);
+  return partitionBySignal(issues, { hideLowSignal: shouldHideLowSignal(getSettings()) });
 }
 export function getRatings(): WalkthroughRating[] {
   return _active?.ratings ?? [];
