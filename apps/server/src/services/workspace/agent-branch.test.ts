@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isWorktreeHealthy } from "../RepoClone";
 import {
   type AgentBranch,
+  commitsStrandedBy,
   countProposed,
   dropProposedCommits,
   healAbandonedMerge,
@@ -204,5 +206,89 @@ describe("healAbandonedMerge", () => {
     writeFileSync(join(worktree, "a.ts"), "uncommitted agent edit\n");
     expect(await healAbandonedMerge(branch)).toBe(false);
     expect(git(worktree, ["status", "--porcelain"])).toContain("a.ts");
+  });
+});
+
+// The PR head moved under the agent's unpushed commits. Moving the worktree to
+// the new head would reset them away, so the next turn is refused with the
+// commits instead; rebasing them (or discarding them) and advancing is the way
+// out, and nothing is lost on the way.
+describe("commitsStrandedBy", () => {
+  let agentCommit: string;
+  let newHead: string;
+
+  beforeEach(() => {
+    agentCommit = commitFile(worktree, "agent.ts", "agent\n", "agent: add");
+    // Someone pushes to the PR: its new head is built on the old one.
+    git(worktree, ["branch", "pr-source", prHead]);
+    git(worktree, ["checkout", "-q", "pr-source"]);
+    newHead = commitFile(worktree, "upstream.ts", "upstream\n", "pr: pushed elsewhere");
+    git(worktree, ["checkout", "-q", "revv/pr-1"]);
+  });
+
+  const turnAllowed = async () =>
+    (await commitsStrandedBy(branch, newHead, [prHead])) === null &&
+    (await isWorktreeHealthy({
+      clonePath: worktree,
+      branchName: "revv/pr-1",
+      worktreePath: worktree,
+      prHeadSha: newHead,
+      prNumber: 1,
+    }));
+
+  it("blocks the move, naming the old head and the commits it would lose", async () => {
+    expect(await commitsStrandedBy(branch, newHead, [prHead])).toEqual({
+      oldHeadSha: prHead,
+      commits: [expect.objectContaining({ sha: agentCommit, subject: "agent: add" })],
+    });
+  });
+
+  it("is resolved by rebasing the commits onto the new head, losing none", async () => {
+    const oldTip = git(worktree, ["rev-parse", "revv/pr-1"]);
+    expect(await replayAgentCommits(branch, { onto: newHead, upstream: prHead, oldTip })).toEqual({
+      ok: true,
+    });
+
+    expect(await turnAllowed()).toBe(true);
+    expect(subjects(worktree, `${newHead}..revv/pr-1`)).toEqual(["agent: add"]);
+    expect(git(worktree, ["show", "revv/pr-1:agent.ts"])).toBe("agent");
+  });
+
+  it("is resolved by discarding the commits", async () => {
+    expect(await dropProposedCommits(branch, prHead, new Set([agentCommit]))).toEqual({
+      kind: "dropped",
+      count: 1,
+    });
+    expect(await commitsStrandedBy(branch, newHead, [prHead])).toBeNull();
+  });
+
+  it("lets a move through when the branch carries no agent commits", async () => {
+    git(worktree, ["reset", "-q", "--hard", prHead]);
+    expect(await commitsStrandedBy(branch, newHead, [prHead])).toBeNull();
+  });
+
+  it("lets a move through when the branch is already built on the new head", async () => {
+    git(worktree, ["reset", "-q", "--hard", newHead]);
+    commitFile(worktree, "agent.ts", "agent\n", "agent: add");
+    expect(await commitsStrandedBy(branch, newHead, [prHead, newHead])).toBeNull();
+  });
+});
+
+describe("rewrites that a signer refuses", () => {
+  it("report a failure, not a conflict, and leave the branch as it was", async () => {
+    const one = commitFile(worktree, "one.ts", "1\n", "agent: one");
+    commitFile(worktree, "two.ts", "2\n", "agent: two");
+    const tip = git(worktree, ["rev-parse", "HEAD"]);
+    const signer = join(base, "gpg-refuse");
+    writeFileSync(signer, '#!/bin/sh\necho "gpg: signing failed: No pinentry" >&2\nexit 2\n');
+    chmodSync(signer, 0o755);
+    git(worktree, ["config", "commit.gpgsign", "true"]);
+    git(worktree, ["config", "gpg.format", "openpgp"]);
+    git(worktree, ["config", "gpg.program", signer]);
+
+    const dropped = await dropProposedCommits(branch, prHead, new Set([one]));
+    expect(dropped.kind).toBe("failed");
+    expect(dropped.kind === "failed" && dropped.message).toMatch(/sign/i);
+    expect(git(worktree, ["rev-parse", "revv/pr-1"])).toBe(tip);
   });
 });

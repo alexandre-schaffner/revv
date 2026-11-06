@@ -135,6 +135,12 @@ export class ChatSessionService extends Context.Service<
       model: string,
       prHeadSha: string,
     ) => Effect.Effect<ChatSessionRow | null, DbError>;
+    /** The most recently active session of the PR for (agent, model), at any head. */
+    readonly findLatest: (
+      prId: string,
+      agent: string,
+      model: string,
+    ) => Effect.Effect<ChatSessionRow | null, DbError>;
     /**
      * The PR heads the PR's sessions were last pinned to, most recently active
      * first: the candidate baselines of the agent branch (`PrWorkspace`).
@@ -419,6 +425,24 @@ export const ChatSessionServiceLive = Layer.effect(
                 eq(chatSessions.prHeadSha, prHeadSha),
               ),
             )
+            .get();
+          return row ? rowToSessionRow(row) : null;
+        }),
+
+      findLatest: (prId, agent, model) =>
+        dbTry("chat findLatest", () => {
+          const row = db
+            .select()
+            .from(chatSessions)
+            .where(
+              and(
+                eq(chatSessions.pullRequestId, prId),
+                eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
+              ),
+            )
+            .orderBy(desc(chatSessions.lastActivityAt))
+            .limit(1)
             .get();
           return row ? rowToSessionRow(row) : null;
         }),

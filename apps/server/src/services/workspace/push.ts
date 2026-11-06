@@ -337,7 +337,11 @@ export function makeAgentPush(deps: PushDeps) {
         }),
       );
       if (merged.ok) return { status: "merged" as const };
-      if (!(yield* Effect.promise(() => isMergeInProgress(branch.worktreePath)))) {
+      const inProgress = yield* Effect.promise(() => isMergeInProgress(branch.worktreePath));
+      const files = inProgress ? yield* gitStep(() => unmergedPaths(branch.worktreePath)) : [];
+      // No conflict, yet no merge commit: git or the user's signer refused it.
+      if (files.length === 0) {
+        if (inProgress) yield* Effect.promise(() => abortMerge(branch.worktreePath));
         yield* Effect.promise(() => restoreAgentBranch(branch));
         return yield* Effect.fail(
           new GitOperationError({
@@ -345,7 +349,6 @@ export function makeAgentPush(deps: PushDeps) {
           }),
         );
       }
-      const files = yield* gitStep(() => unmergedPaths(branch.worktreePath));
       if (abortOnConflict) {
         yield* Effect.promise(() => abortMerge(branch.worktreePath));
         yield* Effect.promise(() => restoreAgentBranch(branch));

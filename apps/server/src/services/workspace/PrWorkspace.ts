@@ -30,6 +30,7 @@ import {
   ValidationError,
   WorkspaceBusyError,
   type WorkspaceHolder,
+  WorktreeBlockedByUnpushedCommits,
 } from "../../domain/errors";
 import { logError } from "../../logger";
 import { AiService } from "../Ai";
@@ -51,6 +52,7 @@ import {
   type AgentBranch,
   type CommitFile,
   commitFiles,
+  commitsStrandedBy,
   countProposed,
   dropProposedCommits,
   listProposedCommits,
@@ -85,7 +87,8 @@ type EditError =
   | AgentBranchConflictError
   | GitOperationError
   | CloneError
-  | CloneNotReadyError;
+  | CloneNotReadyError
+  | WorktreeBlockedByUnpushedCommits;
 
 export class PrWorkspace extends Context.Service<
   PrWorkspace,
@@ -102,7 +105,11 @@ export class PrWorkspace extends Context.Service<
       holder: WorkspaceHolder,
     ) => Effect.Effect<
       { readonly claim: WorkspaceClaim; readonly branch: AgentBranch },
-      WorkspaceBusyError | CloneError | CloneNotReadyError,
+      | WorkspaceBusyError
+      | WorktreeBlockedByUnpushedCommits
+      | CloneError
+      | CloneNotReadyError
+      | DbError,
       Scope.Scope
     >;
     /** The PR's agent worktree and branch, if the agent ever worked on it. */
@@ -249,6 +256,37 @@ export const PrWorkspaceLive = Layer.effect(
         }),
       );
 
+    /**
+     * Bring the agent worktree to `headSha`, refusing when that would throw
+     * away the agent's unpushed commits (the PR moved underneath them). The
+     * way out is `rebaseOnto` or `discard`, then `advance`.
+     */
+    const acquireAgentWorktree = (ctx: PrContextBasic, headSha: string) =>
+      Effect.gen(function* () {
+        const branch = agentBranchOf(ctx);
+        if (branch) {
+          const pinned = yield* chatSessions.baselinesForPr(ctx.pr.id);
+          const stranded = yield* Effect.promise(() => commitsStrandedBy(branch, headSha, pinned));
+          if (stranded) {
+            return yield* Effect.fail(
+              new WorktreeBlockedByUnpushedCommits({
+                worktreePath: branch.worktreePath,
+                branchName: branch.branchName,
+                oldHeadSha: stranded.oldHeadSha,
+                newHeadSha: headSha,
+                commits: stranded.commits,
+              }),
+            );
+          }
+        }
+        return yield* repoClone.acquirePrWorktree({
+          repoId: ctx.repo.id,
+          prNumber: ctx.pr.externalId,
+          prHeadSha: headSha,
+          githubToken: ctx.token,
+        });
+      });
+
     const push = makeAgentPush({
       resolve: (prId, userId) => prCtx.resolveBasic(prId, userId),
       claim,
@@ -267,13 +305,7 @@ export const PrWorkspaceLive = Layer.effect(
       open: (ctx, headSha, holder) =>
         Effect.gen(function* () {
           const held = yield* claim(ctx.pr.id, holder);
-          const branch = yield* repoClone.acquirePrWorktree({
-            repoId: ctx.repo.id,
-            prNumber: ctx.pr.externalId,
-            prHeadSha: headSha,
-            githubToken: ctx.token,
-          });
-          return { claim: held, branch };
+          return { claim: held, branch: yield* acquireAgentWorktree(ctx, headSha) };
         }),
 
       agentBranch: agentBranchOf,
@@ -388,7 +420,9 @@ export const PrWorkspaceLive = Layer.effect(
               );
               if (!replayed.ok) {
                 return yield* Effect.fail(
-                  new AgentBranchConflictError({ message: replayed.message }),
+                  replayed.kind === "conflict"
+                    ? new AgentBranchConflictError({ message: replayed.message })
+                    : new GitOperationError({ message: replayed.message }),
                 );
               }
             }),
@@ -404,16 +438,15 @@ export const PrWorkspaceLive = Layer.effect(
           });
           yield* editBranch(prId, userId, (ctx) =>
             Effect.gen(function* () {
-              const current = yield* session(ctx.pr);
-              yield* repoClone.acquirePrWorktree({
-                repoId: ctx.repo.id,
-                prNumber: ctx.pr.externalId,
-                prHeadSha: newHeadSha,
-                githubToken: ctx.token,
-              });
-              if (current) {
+              yield* acquireAgentWorktree(ctx, newHeadSha);
+              // The conversation the block interrupted continues at the new head.
+              const { agent, model } = yield* resolveAgentLaunch("chat").pipe(
+                Effect.provide(context),
+              );
+              const interrupted = yield* chatSessions.findLatest(ctx.pr.id, agent, model);
+              if (interrupted) {
                 yield* chatSessions.updatePrHeadSha({
-                  chatSessionId: current.id,
+                  chatSessionId: interrupted.id,
                   prHeadSha: newHeadSha,
                 });
               }

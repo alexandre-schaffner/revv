@@ -27,6 +27,7 @@ import {
   type GitHubError,
   PlanGateError,
   type WorkspaceBusyError,
+  type WorktreeBlockedByUnpushedCommits,
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
@@ -53,6 +54,7 @@ export interface ChatTurnParams {
 export type ChatTurnError =
   | PlanGateError
   | WorkspaceBusyError
+  | WorktreeBlockedByUnpushedCommits
   | PrContextError
   | GitHubError
   | CloneError

@@ -22,6 +22,7 @@ import {
   commitFileNames,
   forceBranch,
   gitDirs,
+  isAncestor,
   isMergeInProgress,
   isValidSha,
   proposedCommitCount,
@@ -97,6 +98,27 @@ export async function listProposedCommits(
     });
   }
   return commits;
+}
+
+/**
+ * The agent's commits that moving the worktree to `headSha` would throw away:
+ * the branch isn't built on `headSha` (the PR moved underneath it) and carries
+ * proposed commits on the head it is built on. `pinned` are the PR heads the
+ * chat sessions were pinned to. Null when the move loses nothing.
+ */
+export async function commitsStrandedBy(
+  branch: AgentBranch,
+  headSha: string,
+  pinned: readonly string[],
+): Promise<{ readonly oldHeadSha: string; readonly commits: ProposedCommit[] } | null> {
+  const tip = await resolveRef(branch.worktreePath, branch.branchName);
+  if (tip === null || tip === headSha || (await isAncestor(branch.worktreePath, headSha, tip))) {
+    return null;
+  }
+  const oldHeadSha = await resolveBaseSha(branch, [...pinned, headSha]);
+  if (oldHeadSha === null) return null;
+  const commits = await listProposedCommits(branch, oldHeadSha);
+  return commits.length > 0 ? { oldHeadSha, commits } : null;
 }
 
 /** The proposed commits in `range`, oldest first. */
@@ -187,20 +209,33 @@ export async function moveAgentBranch(branch: AgentBranch, sha: string): Promise
 export async function replayAgentCommits(
   branch: AgentBranch,
   params: { readonly onto: string; readonly upstream: string; readonly oldTip: string },
-): Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }> {
+): Promise<
+  | { readonly ok: true }
+  | { readonly ok: false; readonly kind: "conflict" | "failed"; readonly message: string }
+> {
   const { worktreePath, branchName } = branch;
   const rebased = await rebaseOnto(worktreePath, params.onto, params.upstream, params.oldTip);
   const newTip = rebased.ok ? await resolveRef(worktreePath, "HEAD") : null;
   if (newTip === null) {
+    const kind = await failureKind(worktreePath);
     await abortRebase(worktreePath);
     await forceBranch(worktreePath, branchName, params.oldTip);
     await restoreAgentBranch(branch);
-    return { ok: false, message: rebased.stderr || "Couldn't read the rebased tip" };
+    return { ok: false, kind, message: rebased.stderr || "Couldn't read the rebased tip" };
   }
   if (!(await moveAgentBranch(branch, newTip))) {
-    return { ok: false, message: `Couldn't move ${branchName} to the rebased tip` };
+    return { ok: false, kind: "failed", message: `Couldn't move ${branchName} to the rebased tip` };
   }
   return { ok: true };
+}
+
+/**
+ * Why a rewrite stopped: a conflict leaves unmerged paths; anything else (a
+ * signer that refused, a lock) is a failure whose stderr says what.
+ */
+async function failureKind(worktreePath: string): Promise<"conflict" | "failed"> {
+  const unmerged = await unmergedPaths(worktreePath).catch(() => []);
+  return unmerged.length > 0 ? "conflict" : "failed";
 }
 
 /**
@@ -237,8 +272,9 @@ export async function dropProposedCommits(
   for (const sha of keep) {
     const picked = await cherryPick(worktreePath, sha);
     if (!picked.ok) {
+      const kind = await failureKind(worktreePath);
       await restore();
-      return { kind: "conflict", message: picked.stderr || "Cherry-pick conflict" };
+      return { kind, message: picked.stderr || "git cherry-pick failed" };
     }
   }
   const newTip = await resolveRef(worktreePath, "HEAD");
