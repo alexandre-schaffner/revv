@@ -7,6 +7,7 @@ import type { WalkthroughReviewRound } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
+import { agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 import {
   getLastWalkthroughEventAt,
   getReviewRounds,
@@ -16,8 +17,7 @@ import {
   loadReviewRounds,
   selectWalkthroughReport,
   watchWalkthrough,
-} from "$lib/stores/walkthrough.svelte";
-import { agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
+} from "./store.svelte";
 
 /**
  * The report a PR's page should show when the one on screen isn't a visible

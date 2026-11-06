@@ -14,7 +14,7 @@
 
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 
-import { appendPillContents } from "$lib/utils/file-glyph";
+import { appendPillContents } from "$lib/chat/file-glyph";
 
 export const PILL_CLASS = "composer-pill";
 

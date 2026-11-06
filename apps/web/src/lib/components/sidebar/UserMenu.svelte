@@ -11,11 +11,11 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
+import { githubHostLabel } from "$lib/session/github-host";
 import { signOut, switchSession } from "$lib/session/lifecycle.svelte";
 import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { toggleSettings } from "$lib/stores/settingsModal.svelte";
-import { githubHostLabel } from "$lib/utils/github-host";
 
 interface Props {
   collapsed?: boolean;

@@ -9,7 +9,7 @@ import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
 import { getThreadMessages, getThreads, loadSession } from "$lib/stores/review.svelte";
-import { markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
+import { markIssuesAsSubmitted } from "$lib/walkthrough/store.svelte";
 import { reviewBody } from "./review-payload";
 
 export type ReviewAction = "approve" | "request_changes" | "comment";

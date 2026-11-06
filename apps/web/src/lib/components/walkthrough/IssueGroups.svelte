@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { WalkthroughIssue } from "@revv/shared";
 import type { Snippet } from "svelte";
-import { groupIssuesBySeverityWithIndex } from "$lib/utils/walkthrough-issues";
+import { groupIssuesBySeverityWithIndex } from "$lib/walkthrough/issues";
 
 /**
  * Issues bucketed by severity, Critical → Warning → Info, each bucket under a

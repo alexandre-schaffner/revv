@@ -3,7 +3,7 @@
 
 import { api } from "$lib/api/client";
 import { RequestState } from "$lib/stores/_types";
-import { preloadOwnerHues } from "$lib/utils/avatarPalette";
+import { preloadOwnerHues } from "./avatar-palette";
 
 /** A repository the account can add. */
 export interface AvailableRepo {

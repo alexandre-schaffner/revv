@@ -5,8 +5,7 @@ import type { WalkthroughMode } from "@revv/shared";
 import { reloadChatForNewHead } from "$lib/chat/turn.svelte";
 import { reloadReviewFiles } from "$lib/stores/diff-files.svelte";
 import { createResource } from "$lib/stores/resource";
-import { invalidateForPull, regenerate } from "$lib/stores/walkthrough-actions";
-import { reviewNewCommits } from "./review-new-commits";
+import { invalidateForPull, regenerate } from "$lib/walkthrough/actions";
 
 /** Concurrent pulls of one PR share a request; `loading` drives the pull button's spinner. */
 const pulls = createResource<string, true>({
@@ -40,10 +39,7 @@ async function runPull(prId: string): Promise<boolean> {
 
 /** Pull the current head, then start the incremental walkthrough the superseded toast offers. */
 export async function reviewLatestCommit(prId: string, mode: WalkthroughMode): Promise<void> {
-  await reviewNewCommits({
-    pull: () => pullLatestCommit(prId),
-    regenerate: () => regenerate(prId, mode, "incremental"),
-  });
+  if (await pullLatestCommit(prId)) await regenerate(prId, mode, "incremental");
 }
 
 export function reset(): void {

@@ -7,7 +7,7 @@ import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import { toast } from "svelte-sonner";
-import { fetchProposedDiffFiles, type ProposedChanges, type ProposedDiffFile } from "$lib/api/chat";
+import { fetchProposedDiffFiles, type ProposedChanges, type ProposedDiffFile } from "$lib/chat/api";
 import {
   batchCherryPickSelectedAction,
   batchDiscardSelectedAction,

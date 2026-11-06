@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { HunkScanEventMessage, HunkScanRow, HunkScanStatus, HunkSmell } from "@revv/shared";
-import {
-  type EventsSinceAsked,
-  mergeHydratedHunkScan,
-  reduceHunkScanEvent,
-} from "./hunk-scan-reducers";
+import { type EventsSinceAsked, mergeHydratedHunkScan, reduceHunkScanEvent } from "./reducers";
 
 const SIGNALS: Record<HunkSmell, number> = {
   vulnerability: 0.1,

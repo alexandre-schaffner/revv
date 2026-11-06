@@ -3,6 +3,7 @@
 // replied to. A viewer creates one and hands it to its Pierre renderer.
 
 import type { DiffLineAnnotation } from "@pierre/diffs";
+import type { CommentThread, ThreadMessage } from "@revv/shared";
 import type { DiffLineRange, DiffSide } from "$lib/pierre/diff-rows";
 import {
   addThread,
@@ -18,7 +19,6 @@ import {
   reopenThread,
   resolveThread,
 } from "$lib/stores/review.svelte";
-import type { CommentThread, ThreadMessage } from "$lib/types/review";
 import type { ThreadMeta } from "./pierre-diff-adapter";
 
 export class ThreadAnnotations {

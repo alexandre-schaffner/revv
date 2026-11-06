@@ -5,7 +5,7 @@ import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { authHeaders } from "$lib/session/token.svelte";
-import type { ReviewFile } from "$lib/types/review";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 
 interface Props {
   prId: string;

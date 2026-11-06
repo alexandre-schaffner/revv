@@ -7,9 +7,9 @@ import type {
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
-import { monthGridRange } from "$lib/components/recaps/period-window";
-import { abortRecapStream } from "$lib/stores/recap-stream.svelte";
-import { createResource } from "./resource";
+import { createResource } from "$lib/stores/resource";
+import { monthGridRange } from "./period-window";
+import { abortRecapStream } from "./stream.svelte";
 
 // ── State ────────────────────────────────────────────────────────────────────
 

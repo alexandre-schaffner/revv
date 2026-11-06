@@ -9,10 +9,10 @@
 
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 import { decorationAction } from "$lib/markdown/decorate";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import { openFileInDiff } from "$lib/stores/review-nav.svelte";
-import type { ReviewFile } from "$lib/types/review";
-import { appendPillContents } from "$lib/utils/file-glyph";
 import { basename } from "$lib/utils/path";
+import { appendPillContents } from "./file-glyph";
 
 const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";

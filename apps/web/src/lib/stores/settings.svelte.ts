@@ -9,12 +9,28 @@ import {
   getAgentCapabilities,
   getModelThinkingEfforts,
   type SettingsUpdate,
+  THINKING_EFFORT_ORDER,
+  type ThinkingEffort,
   type UserSettings,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
-import { type ModelOption, THINKING_EFFORT_OPTIONS } from "$lib/constants/models";
 import { createResource } from "./resource";
+
+export type ModelOption = { label: string; value: string };
+
+const THINKING_EFFORT_LABELS: Record<ThinkingEffort, string> = {
+  ultra: "Ultra",
+  ultrathink: "Ultrathink",
+  max: "Max",
+  "extra-high": "Extra High",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
+const THINKING_EFFORT_OPTIONS: { label: string; value: ThinkingEffort }[] =
+  THINKING_EFFORT_ORDER.map((value) => ({ label: THINKING_EFFORT_LABELS[value], value }));
 
 let loaded = $state<UserSettings | null>(null);
 /** A failed read keeps the last list: the cached (possibly empty) list is the best fallback. */

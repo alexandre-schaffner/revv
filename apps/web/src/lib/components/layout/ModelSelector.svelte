@@ -9,7 +9,6 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import type { ModelOption } from "$lib/constants/models";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   areModelsLoaded,
@@ -17,10 +16,11 @@ import {
   getReviewModelOptions,
   getSettings,
   isAutoModelOffered,
+  type ModelOption,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
-import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/stores/walkthrough-sizing.svelte";
+import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/walkthrough/sizing.svelte";
+import { getIsStreaming, getWalkthroughModelUsed } from "$lib/walkthrough/store.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);

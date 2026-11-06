@@ -9,10 +9,10 @@ import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { deleteThread, getThreadMessages, getThreads } from "$lib/stores/review.svelte";
 import { jumpToDiffLine, jumpToWalkthroughBlock } from "$lib/stores/review-nav.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
-import { getBlocks, getIssueSignal } from "$lib/stores/walkthrough.svelte";
-import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
-import { outstandingItemsPhrase } from "$lib/utils/walkthrough-issues";
+import { outstandingItemsPhrase } from "$lib/walkthrough/issues";
+import { getBlocks, getIssueSignal } from "$lib/walkthrough/store.svelte";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
+import { buildAddressIssuesPrompt } from "./address-issues-prompt";
 import CommentsPanel from "./spec-panel/CommentsPanel.svelte";
 import IssuesPanel from "./spec-panel/IssuesPanel.svelte";
 

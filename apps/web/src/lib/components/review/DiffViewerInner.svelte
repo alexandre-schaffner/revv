@@ -9,8 +9,11 @@ import {
   parsePatchFiles,
   VirtualizedFileDiff,
 } from "@pierre/diffs";
+import type { CommentThread, ThreadMessage } from "@revv/shared";
 import { buildGitPatchHeader, PIERRE_THEME, PR_DIFF_RENDER_OPTIONS } from "@revv/shared";
 import { onDestroy, onMount, untrack } from "svelte";
+import { getHunkScanForFile } from "$lib/hunk-scan/store.svelte";
+import { AnnotationMounts } from "$lib/pierre/annotation-mount";
 import {
   type DiffLineRange,
   diffRowCount,
@@ -19,6 +22,8 @@ import {
   rowIndexForNewLine,
 } from "$lib/pierre/diff-rows";
 import { createDiffsHost } from "$lib/pierre/mount";
+import { workerManager } from "$lib/pierre/worker-pool";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import {
@@ -28,12 +33,8 @@ import {
   isInLineCursorMode,
   setTotalLineCount,
 } from "$lib/stores/focus-mode.svelte";
-import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
 import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review-nav.svelte";
-import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
-import { AnnotationMounts } from "$lib/utils/annotation-mount";
 import { phosphorMarkup } from "$lib/utils/phosphor-markup";
-import { workerManager } from "$lib/utils/worker-pool";
 import { renderThreadAnnotation } from "./annotation-renderers";
 import {
   type CommentRowsTrigger,

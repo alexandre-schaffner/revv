@@ -1,4 +1,4 @@
-import { hashString } from "$lib/utils/avatarPalette";
+import { hashString } from "$lib/repos/avatar-palette";
 import {
   drawCabin,
   drawRock,
@@ -8,7 +8,7 @@ import {
   drawTuft,
   fenceProps,
   makeTrack,
-} from "$lib/utils/engraving-land";
+} from "./land";
 import {
   blade,
   brokenLine,
@@ -19,16 +19,10 @@ import {
   makeRng,
   pick,
   type Rng,
-} from "$lib/utils/engraving-marks";
-import {
-  type EngravingOptions,
-  type Ground,
-  makeGround,
-  type Prop,
-  paintProps,
-} from "$lib/utils/engraving-props";
-import { drawDistantSail, drawHeadland, drawSailboat, drawSeaRock } from "$lib/utils/engraving-sea";
-import { drawDaySky, drawNightSky } from "$lib/utils/engraving-sky";
+} from "./marks";
+import { type EngravingOptions, type Ground, makeGround, type Prop, paintProps } from "./props";
+import { drawDistantSail, drawHeadland, drawSailboat, drawSeaRock } from "./sea";
+import { drawDaySky, drawNightSky } from "./sky";
 
 interface Ridge {
   at: (x: number) => number;

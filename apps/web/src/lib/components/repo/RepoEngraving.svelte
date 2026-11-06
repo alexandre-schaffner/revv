@@ -1,8 +1,8 @@
 <script lang="ts">
 import type { Attachment } from "svelte/attachments";
+import { drawEngraving } from "$lib/components/repo/engraving/engraving";
+import type { EngravingOptions, Inks } from "$lib/components/repo/engraving/props";
 import { gsap, turnLook } from "$lib/motion";
-import { drawEngraving } from "$lib/utils/engraving";
-import type { EngravingOptions, Inks } from "$lib/utils/engraving-props";
 
 interface Props extends Inks {
   seed: string;

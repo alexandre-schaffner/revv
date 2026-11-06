@@ -4,7 +4,6 @@ import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
 import StackMergeSheet from "$lib/components/stack/StackMergeSheet.svelte";
-import { RAIL_WIDTH } from "$lib/constants";
 import { gsap, gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { takeNavigationIntent } from "$lib/stores/navigation-intent.svelte";
 import { getSelectedPr } from "$lib/stores/route.svelte";
@@ -16,6 +15,7 @@ import {
   getRightPanelWidth,
   getSidebarCollapsed,
   getSidebarWidth,
+  RAIL_WIDTH,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
   resetRightPanelWidth,

@@ -6,7 +6,7 @@ import {
   Virtualizer,
 } from "@pierre/diffs";
 import type { HunkScanRow } from "@revv/shared";
-import { hunkTone, rowMatchesHunk, type SmellTone } from "$lib/utils/hunk-scan";
+import { hunkTone, rowMatchesHunk, type SmellTone } from "$lib/hunk-scan/first-pass";
 
 /**
  * A request to open a comment over rendered rows, numbered 1.. in display

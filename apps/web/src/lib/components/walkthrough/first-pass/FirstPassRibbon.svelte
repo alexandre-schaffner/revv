@@ -1,7 +1,7 @@
 <script lang="ts">
 import { flaggedHunkSmells, HUNK_SMELL_META, type HunkScanRow } from "@revv/shared";
+import { hunkRangeLabel, type ScanTick, scanTicks } from "$lib/hunk-scan/first-pass";
 import { gsapRise, tokens } from "$lib/motion";
-import { hunkRangeLabel, type ScanTick, scanTicks } from "$lib/utils/hunk-scan";
 
 /**
  * The first pass as one strip: a tick per scanned hunk in diff order, rising

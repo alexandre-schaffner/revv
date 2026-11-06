@@ -1,6 +1,6 @@
 <script lang="ts">
-import { ownerPalette } from "$lib/utils/owner-palette.svelte";
-import { repoGradientDataUrl } from "$lib/utils/repoGradient";
+import { ownerPalette } from "$lib/repos/owner-palette.svelte";
+import { repoGradientDataUrl } from "./repo-gradient";
 
 interface Props {
   fullName: string;

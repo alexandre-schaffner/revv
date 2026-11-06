@@ -1,9 +1,4 @@
-import type { StreamErrorCode } from "@revv/shared";
-
 const MAX_AGENT_ERROR_CHARS = 200;
-
-/** The server's code for an agent that isn't signed in, or whose login Revv can't read. */
-export const AGENT_AUTH_REQUIRED: StreamErrorCode = "AGENT_AUTH_REQUIRED";
 
 /**
  * The agent's own error, without the guidance the server appends after it

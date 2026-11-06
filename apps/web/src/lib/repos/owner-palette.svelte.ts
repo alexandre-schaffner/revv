@@ -5,7 +5,7 @@ import {
   type OwnerPalette,
   ownerPaletteFromAvatar,
   peekOwnerPalette,
-} from "$lib/utils/avatarPalette";
+} from "./avatar-palette";
 
 /**
  * A repo's owner palette (its homepage and gradient avatar are printed in

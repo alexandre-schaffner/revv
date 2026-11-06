@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { shallowEntryEqual, updateEntryInMap } from "./walkthrough-entry-equal";
+import { shallowEntryEqual, updateEntryInMap } from "./entry-equal";
 
 // Regression guard for the new-commit freeze: `updateEntry` relies on this
 // detecting a no-op update so it can skip the reactive `store.entries` write.

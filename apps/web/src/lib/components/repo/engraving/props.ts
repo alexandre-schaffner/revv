@@ -1,4 +1,4 @@
-import { clamp01, type Rng } from "$lib/utils/engraving-marks";
+import { clamp01, type Rng } from "./marks";
 
 export interface Inks {
   ink: string;

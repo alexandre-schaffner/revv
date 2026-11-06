@@ -1,6 +1,6 @@
+import type { Inks } from "$lib/components/repo/engraving/props";
+import type { OwnerPalette } from "$lib/repos/avatar-palette";
 import type { ResolvedTheme } from "$lib/stores/theme.svelte";
-import type { OwnerPalette } from "$lib/utils/avatarPalette";
-import type { Inks } from "$lib/utils/engraving-props";
 
 const PAPER = { light: [0.95, 0.028, 85], dark: [0.86, 0.03, 85] } as const;
 

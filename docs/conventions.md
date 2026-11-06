@@ -349,10 +349,10 @@ in ways the store doesn't control.
 
 **Canonical example.** `apps/web/src/lib/stores/sync.svelte.ts` declares module-scope
 `$state` and exposes only `getLastSyncAt`, `getThreadsSyncing`, `requestSync`, etc.
-`apps/web/src/lib/stores/walkthrough.svelte.ts` keeps its maps private and exposes getters that
+`apps/web/src/lib/walkthrough/store.svelte.ts` keeps its maps private and exposes getters that
 take the PR (`getBlocks(prId)`, `getWalkthroughUiState(prId)`); a store never reads an implicit
-"active" key. Its pure folding lives beside it in `walkthrough-reducer.ts` (unit-tested), its
-user verbs in `walkthrough-actions.ts`.
+"active" key. Its pure folding lives beside it in `reducer.ts` (unit-tested), its
+user verbs in `actions.ts`.
 
 **Anti-pattern.** `export function createWalkthroughStore() { ... }` returning an object with
 methods — the consumer instantiates per-component and reactive sharing across components breaks.
@@ -372,7 +372,7 @@ gets its own mutation helper that obeys the reactive-Map idiom (§4.3).
 `summaries/lastSyncAtByPr/syncErrorByPr`). Picking one means future per-PR stores compose
 trivially with existing dispatchers and don't reinvent the API surface.
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts` declares
+**Canonical example.** `apps/web/src/lib/walkthrough/store.svelte.ts` declares
 `entries = new SvelteMap<string, WalkthroughEntry>()`; `setEntry`, `deleteEntry` and
 `updateEntry` own all writes, and every write stores a new entry object (§4.3).
 
@@ -391,10 +391,10 @@ object and `set` the same reference again.
 
 **Why.** `SvelteMap.set` notifies readers only when the stored reference changes; an in-place
 mutation followed by a same-reference `set` lands the data and re-renders nothing (the
-"walkthrough empty on reload" bug). `updateEntryInMap` (`walkthrough-entry-equal.ts`) clones,
+"walkthrough empty on reload" bug). `updateEntryInMap` (`walkthrough/entry-equal.ts`) clones,
 lets the updater change the clone, and skips the write when nothing changed.
 
-**Canonical example.** `apps/web/src/lib/stores/walkthrough.svelte.ts`: the reducer returns a
+**Canonical example.** `apps/web/src/lib/walkthrough/store.svelte.ts`: the reducer returns a
 new entry, `hydrateFromCache` stores the merged snapshot as a new object. The chat modules
 (`apps/web/src/lib/chat/*.svelte.ts`) and `createResource` hold their per-PR entries the same way.
 
@@ -424,7 +424,7 @@ to the component. `stacks.svelte.ts` and `conversation.svelte.ts` keep `RequestS
 their own entries.
 
 **Anti-pattern.** Boolean + nullable shape from
-`apps/web/src/lib/stores/walkthrough-reducer.ts` (`WalkthroughEntry`): `isStreaming: boolean; streamError: string | null`
+`apps/web/src/lib/walkthrough/reducer.ts` (`WalkthroughEntry`): `isStreaming: boolean; streamError: string | null`
 plus separate `summary: string | null; blocks: WalkthroughBlock[]`. The four fields form 16
 possible combinations; only ~4 are legal.
 
@@ -515,9 +515,9 @@ primitive gives one answer to "is this in flight, fresh, retrying, superseded or
 
 **Canonical example.** `apps/web/src/lib/stores/merge-eligibility.svelte.ts` (versioned by the
 question, the settled answer pushed as `pr:merge-eligibility`), `repo-activity.svelte.ts`
-(waits for `repo-activity:settled`, keeps data on error), `walkthrough-sizing.svelte.ts` (key
+(waits for `repo-activity:settled`, keeps data on error), `walkthrough/sizing.svelte.ts` (key
 includes the routing settings, waits for `diff:cached`).
-`stacks.svelte.ts` and `hunk-scan.svelte.ts` keep their own entries and use a resource only to
+`stacks.svelte.ts` and `hunk-scan/store.svelte.ts` keep their own entries and use a resource only to
 schedule asks.
 
 **Anti-pattern.** A module-level `const inFlight = new Map<string, Promise<void>>()` next to a

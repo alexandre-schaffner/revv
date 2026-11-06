@@ -17,7 +17,7 @@ import {
   type WalkthroughEntry,
   type WalkthroughSnapshot,
   walkthroughUiState,
-} from "./walkthrough-reducer";
+} from "./reducer";
 
 function block(
   id: string,

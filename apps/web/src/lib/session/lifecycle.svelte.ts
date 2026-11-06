@@ -8,6 +8,9 @@
 
 import { goto } from "$app/navigation";
 import { reset as resetChat } from "$lib/chat/turn.svelte";
+import { reset as resetHunkScan } from "$lib/hunk-scan/store.svelte";
+import { reset as resetRecaps } from "$lib/recaps/store.svelte";
+import { reset as resetRecapStream } from "$lib/recaps/stream.svelte";
 import { reset as resetRepoCatalog } from "$lib/repos/catalog.svelte";
 import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
@@ -26,14 +29,11 @@ import { reset as resetBaseConflicts } from "$lib/stores/base-conflicts.svelte";
 import { reset as resetConversation } from "$lib/stores/conversation.svelte";
 import { reset as resetDiffFiles } from "$lib/stores/diff-files.svelte";
 import { connect, disconnect } from "$lib/stores/events.svelte";
-import { reset as resetHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { reset as resetMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
 import { reset as resetOrgTeams } from "$lib/stores/org-teams.svelte";
 import { reset as resetPrFilters } from "$lib/stores/pr-filters.svelte";
 import { reset as resetPrViewState } from "$lib/stores/pr-view-state.svelte";
 import { fetchPinnedPrs, fetchPrs, reset as resetPrs } from "$lib/stores/prs.svelte";
-import { reset as resetRecapStream } from "$lib/stores/recap-stream.svelte";
-import { reset as resetRecaps } from "$lib/stores/recaps.svelte";
 import { reset as resetRepoActivity } from "$lib/stores/repo-activity.svelte";
 import { fetchRepos, reset as resetRepos } from "$lib/stores/repos.svelte";
 import { reset as resetReview } from "$lib/stores/review.svelte";
@@ -45,8 +45,8 @@ import { reset as resetStackMerge } from "$lib/stores/stack-merge.svelte";
 import { reset as resetStackRebase } from "$lib/stores/stack-rebase.svelte";
 import { reset as resetStacks } from "$lib/stores/stacks.svelte";
 import { reset as resetSync } from "$lib/stores/sync.svelte";
-import { reset as resetWalkthrough } from "$lib/stores/walkthrough.svelte";
-import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
+import { reset as resetWalkthroughSizings } from "$lib/walkthrough/sizing.svelte";
+import { reset as resetWalkthrough } from "$lib/walkthrough/store.svelte";
 import { heldToken, releaseSession } from "./held-sessions";
 import { getToken, setToken } from "./token.svelte";
 

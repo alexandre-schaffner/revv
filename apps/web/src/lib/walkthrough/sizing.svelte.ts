@@ -9,9 +9,9 @@ import type { WalkthroughSizing } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { getPrById } from "$lib/stores/prs.svelte";
+import { createResource } from "$lib/stores/resource";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { createResource } from "./resource";
 
 /**
  * How long a preview waits for its PR's diff to reach the server's cache

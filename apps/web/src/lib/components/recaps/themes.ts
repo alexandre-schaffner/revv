@@ -1,6 +1,6 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
 import { prefersReducedMotion } from "$lib/motion";
-import { formatRecapTitle, openSpan, recapSpan } from "./period-window";
+import { formatRecapTitle, openSpan, recapSpan } from "$lib/recaps/period-window";
 
 function relativeFromNow(iso: string): string {
   const t = new Date(iso).getTime();

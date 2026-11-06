@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { addressesActiveWalkthrough, type EventTargetEntry } from "./walkthrough-event-target";
+import { addressesActiveWalkthrough, type EventTargetEntry } from "./event-target";
 
 const A = "walkthrough-a";
 const B = "walkthrough-b";

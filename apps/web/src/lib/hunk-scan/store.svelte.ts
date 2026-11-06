@@ -20,14 +20,10 @@ import type {
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
+import { type Answer, createResource } from "$lib/stores/resource";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
-import {
-  type EventsSinceAsked,
-  mergeHydratedHunkScan,
-  reduceHunkScanEvent,
-} from "./hunk-scan-reducers";
-import { type Answer, createResource } from "./resource";
-import { DIFF_FILL_WAIT_MS } from "./walkthrough-sizing.svelte";
+import { DIFF_FILL_WAIT_MS } from "$lib/walkthrough/sizing.svelte";
+import { type EventsSinceAsked, mergeHydratedHunkScan, reduceHunkScanEvent } from "./reducers";
 
 /** What a settled ask learned: TypeSafe is off, or the scan came back. */
 type EnsureOutcome = Exclude<HunkScanEnsureResult["status"], "pending">;

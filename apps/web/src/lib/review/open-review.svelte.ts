@@ -4,11 +4,10 @@
 // only names the PR.
 
 import { onDestroy, untrack } from "svelte";
-import { useWalkthroughWatch } from "$lib/components/walkthrough/walkthrough-watch.svelte";
+import { ensureHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
 import { clearReviewFiles, getLoadedHeadSha, loadReviewFiles } from "$lib/stores/diff-files.svelte";
-import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getActiveTab, switchPrViewState } from "$lib/stores/pr-view-state.svelte";
 import { markVisited } from "$lib/stores/pr-visits.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
@@ -17,11 +16,9 @@ import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
-import { getRiskLevel } from "$lib/stores/walkthrough.svelte";
-import {
-  fetchWalkthroughSizing,
-  getWalkthroughSizing,
-} from "$lib/stores/walkthrough-sizing.svelte";
+import { fetchWalkthroughSizing, getWalkthroughSizing } from "$lib/walkthrough/sizing.svelte";
+import { getRiskLevel } from "$lib/walkthrough/store.svelte";
+import { useWalkthroughWatch } from "$lib/walkthrough/watch.svelte";
 
 /** Called by the review page during its init. */
 export function useOpenReview(getPrId: () => string | null): void {

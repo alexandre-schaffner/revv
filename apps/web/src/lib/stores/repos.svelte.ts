@@ -5,8 +5,8 @@ import type { ApiErrorCode, CloneStatus, Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorBody, apiErrorMessage } from "$lib/api/errors";
+import { clearOwnerHueCache, preloadOwnerHues } from "$lib/repos/avatar-palette";
 import { requestSync } from "$lib/stores/sync.svelte";
-import { clearOwnerHueCache, preloadOwnerHues } from "$lib/utils/avatarPalette";
 import { fetchPrs, removeRepoPrsLocally } from "./prs.svelte";
 
 let repositories = $state<Repository[]>([]);

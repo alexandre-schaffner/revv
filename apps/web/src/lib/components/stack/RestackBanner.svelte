@@ -13,8 +13,8 @@ import Warning from "phosphor-svelte/lib/Warning";
 import X from "phosphor-svelte/lib/X";
 import { gsapFadeY } from "$lib/motion";
 import { getLayer, getStack } from "$lib/stores/stacks.svelte";
-import { getWalkthroughUiState } from "$lib/stores/walkthrough.svelte";
-import { regenerate } from "$lib/stores/walkthrough-actions";
+import { getWalkthroughUiState } from "$lib/walkthrough/store.svelte";
+import { regenerate } from "$lib/walkthrough/actions";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import RebaseStackAction from "./RebaseStackAction.svelte";
 

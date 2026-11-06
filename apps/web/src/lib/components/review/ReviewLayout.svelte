@@ -2,6 +2,7 @@
 import { isImagePath } from "@revv/shared";
 import { onDestroy } from "svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import type { ReviewFile } from "$lib/stores/diff-files.svelte";
 import {
   enterLineMode,
   enterScrollMode,
@@ -22,7 +23,6 @@ import {
   setActiveFilePath,
 } from "$lib/stores/pr-view-state.svelte";
 import { scrollPane } from "$lib/stores/review-nav.svelte";
-import type { ReviewFile } from "$lib/types/review";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
 import FileFirstPass from "./FileFirstPass.svelte";

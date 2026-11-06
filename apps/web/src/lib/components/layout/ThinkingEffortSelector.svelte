@@ -20,7 +20,7 @@ import {
   isAutoEffortOffered,
   updateSettings,
 } from "$lib/stores/settings.svelte";
-import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/stores/walkthrough-sizing.svelte";
+import { ensureSelectedPrSizing, getSelectedPrSizing } from "$lib/walkthrough/sizing.svelte";
 import SelectTrigger from "./SelectTrigger.svelte";
 
 let open = $state(false);

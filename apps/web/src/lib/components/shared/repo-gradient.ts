@@ -1,4 +1,4 @@
-import { hashString, type OwnerPalette } from "./avatarPalette";
+import { hashString, type OwnerPalette } from "$lib/repos/avatar-palette";
 
 const BLEND_MODES = [
   "color-dodge",

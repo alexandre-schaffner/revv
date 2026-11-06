@@ -4,6 +4,7 @@
 
 import type { WalkthroughMode } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { startingEntry } from "./reducer";
 import {
   clearPendingAction,
   deleteEntry,
@@ -16,9 +17,8 @@ import {
   setEntry,
   setPendingAction,
   updateEntry,
-} from "$lib/stores/walkthrough.svelte";
-import { startingEntry } from "$lib/stores/walkthrough-reducer";
-import { wtTrace } from "$lib/utils/wt-trace";
+} from "./store.svelte";
+import { wtTrace } from "./trace";
 
 type GenerationMode = "full" | "incremental";
 

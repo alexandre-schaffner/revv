@@ -3,12 +3,12 @@ import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
-import { utcDayKey } from "$lib/components/recaps/period-window";
 import RecapActions from "$lib/components/recaps/RecapActions.svelte";
 import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import { RecapController } from "$lib/components/recaps/recap-controller.svelte";
-import { fetchRecapsForRepo, getRecapsForRepo } from "$lib/stores/recaps.svelte";
+import { utcDayKey } from "$lib/recaps/period-window";
+import { fetchRecapsForRepo, getRecapsForRepo } from "$lib/recaps/store.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
 const recapId = $derived(page.params.recapId ?? "");

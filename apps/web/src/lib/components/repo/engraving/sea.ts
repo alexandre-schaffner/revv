@@ -1,6 +1,6 @@
-import { drawCabin, drawRock } from "$lib/utils/engraving-land";
-import { blade, hatchClip, makeNoise1d, type Rng } from "$lib/utils/engraving-marks";
-import { type Ground, groundShadow, type Inks } from "$lib/utils/engraving-props";
+import { drawCabin, drawRock } from "./land";
+import { blade, hatchClip, makeNoise1d, type Rng } from "./marks";
+import { type Ground, groundShadow, type Inks } from "./props";
 
 export function drawSailboat(
   ctx: CanvasRenderingContext2D,

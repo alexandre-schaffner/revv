@@ -5,6 +5,7 @@
 import type { ActivityKind } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
+import { createResource } from "$lib/stores/resource";
 import {
   advanceWorktree,
   batchCherryPickProposedCommits,
@@ -19,8 +20,7 @@ import {
   pushProposedChanges,
   rebaseProposedCommits,
   resolveConflictsAndPush,
-} from "$lib/api/chat";
-import { createResource } from "$lib/stores/resource";
+} from "./api";
 import { appendItem, writeTurn } from "./timeline.svelte";
 
 /**

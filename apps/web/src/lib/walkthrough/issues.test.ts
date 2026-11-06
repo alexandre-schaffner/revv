@@ -5,7 +5,7 @@ import {
   outstandingItemsPhrase,
   partitionBySignal,
   sortBySeverity,
-} from "./walkthrough-issues";
+} from "./issues";
 
 function issue(over: Partial<WalkthroughIssue> & { id: string }): WalkthroughIssue {
   return {

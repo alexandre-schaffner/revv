@@ -10,7 +10,7 @@ import {
   rowMatchesHunk,
   scanProgress,
   scanTicks,
-} from "./hunk-scan";
+} from "./first-pass";
 
 function row(over: Partial<HunkScanRow> = {}): HunkScanRow {
   return {

@@ -11,7 +11,7 @@ import {
   agentInstallLog,
   appendAgentInstallLog,
   runAgentInstall,
-} from "$lib/utils/agent-install";
+} from "./install";
 
 let install = $state<AgentInstallState>({ kind: "idle" });
 let signingInAgent = $state<AcpAgentId | null>(null);

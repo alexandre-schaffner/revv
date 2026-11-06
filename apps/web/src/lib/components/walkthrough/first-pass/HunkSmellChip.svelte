@@ -2,7 +2,7 @@
 import { HUNK_SMELL_META, type HunkSmell } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Minus from "phosphor-svelte/lib/Minus";
-import { type LeadOutcome, leadOutcomeNote, smellTone } from "$lib/utils/hunk-scan";
+import { type LeadOutcome, leadOutcomeNote, smellTone } from "$lib/hunk-scan/first-pass";
 import { SMELL_ICONS } from "./smell-icons";
 
 /**

@@ -18,18 +18,18 @@ import {
   isExplorationActivity,
 } from "$lib/components/agent-activity/activity-groups";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import { type FirstPassView, firstPassView } from "$lib/hunk-scan/first-pass";
+import { getHunkScan } from "$lib/hunk-scan/store.svelte";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
-import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
+import { WALKTHROUGH_PERSPECTIVES } from "$lib/walkthrough/perspective";
+import { type WalkthroughEntry, walkthroughUiState } from "$lib/walkthrough/reducer";
 import {
   getIsHydrating,
   getIssueSignal,
   getSelectedMode,
   getWalkthroughEntry,
-} from "$lib/stores/walkthrough.svelte";
-import { type WalkthroughEntry, walkthroughUiState } from "$lib/stores/walkthrough-reducer";
-import { type FirstPassView, firstPassView } from "$lib/utils/hunk-scan";
-import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
+} from "$lib/walkthrough/store.svelte";
 
 /** Which state the tab is in, in the order the checks apply. */
 export type WalkthroughPage =

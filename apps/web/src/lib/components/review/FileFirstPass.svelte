@@ -1,16 +1,16 @@
 <script lang="ts">
 import { flaggedHunkSmells, splitHunks } from "@revv/shared";
 import HunkSmellChip from "$lib/components/walkthrough/first-pass/HunkSmellChip.svelte";
+import { hunkRangeLabel, leadOutcome, rowMatchesHunk } from "$lib/hunk-scan/first-pass";
+import { getHunkScanForFile } from "$lib/hunk-scan/store.svelte";
 import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
-import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import {
   getIsStreaming,
   getIssuesForFile,
   getLeads,
   getReviewsLoadedHead,
-} from "$lib/stores/walkthrough.svelte";
-import { hunkRangeLabel, leadOutcome, rowMatchesHunk } from "$lib/utils/hunk-scan";
+} from "$lib/walkthrough/store.svelte";
 
 /**
  * The first pass's flagged hunks for one file, as a strip of jump targets

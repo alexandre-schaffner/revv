@@ -8,16 +8,16 @@ import {
 import { RadioGroup } from "bits-ui";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Warning from "phosphor-svelte/lib/Warning";
-import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
-import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
-import { Button } from "$lib/components/ui/button/index.js";
 import {
   endAgentSignIn,
   getAgentInstall,
   getSigningInAgent,
   startAgentInstall,
   startAgentSignIn,
-} from "$lib/stores/agent-setup.svelte";
+} from "$lib/agent-setup/store.svelte";
+import { acpAgentIcon } from "$lib/components/icons/acpAgentIcon";
+import AgentLoginTerminal from "$lib/components/onboarding/AgentLoginTerminal.svelte";
+import { Button } from "$lib/components/ui/button/index.js";
 import { fetchAgentStatus } from "$lib/stores/settings.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
 import type { SettingsRowRef } from "../settings-panes";

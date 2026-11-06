@@ -1,5 +1,5 @@
-import { blade, clamp01, hatchClip, makeNoise1d, type Rng } from "$lib/utils/engraving-marks";
-import { type Ground, groundShadow, type Inks, type Prop } from "$lib/utils/engraving-props";
+import { blade, clamp01, hatchClip, makeNoise1d, type Rng } from "./marks";
+import { type Ground, groundShadow, type Inks, type Prop } from "./props";
 
 function curledBlade(
   ctx: CanvasRenderingContext2D,

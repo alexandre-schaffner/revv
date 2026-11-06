@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { DEFAULT_USER_SETTINGS } from "@revv/shared";
-import type { ChatCallbacks, ResolvePushCallbacks } from "$lib/api/chat";
+import type { ChatCallbacks, ResolvePushCallbacks } from "./api";
 
 let chatStreams: ChatCallbacks[] = [];
 let resolveStreams: ResolvePushCallbacks[] = [];
 let historyReads = 0;
 
-mock.module("$lib/api/chat", () => ({
+mock.module("./api", () => ({
   streamChatMessage: (_params: unknown, callbacks: ChatCallbacks) => {
     chatStreams.push(callbacks);
     return new AbortController();

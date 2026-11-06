@@ -26,10 +26,12 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { getReviewModeForPr } from "$lib/stores/prs.svelte";
+import { createResource } from "$lib/stores/resource";
 import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
-import { shallowEntryEqual, updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
-import { addressesActiveWalkthrough } from "$lib/stores/walkthrough-event-target";
+import { shallowEntryEqual, updateEntryInMap } from "./entry-equal";
+import { addressesActiveWalkthrough } from "./event-target";
+import { partitionBySignal, type SignalPartition, shouldHideLowSignal } from "./issues";
 import {
   applyEvents,
   hasAllContent,
@@ -41,14 +43,8 @@ import {
   type WalkthroughUiState,
   walkthroughUiState,
   ZERO_TOKEN_USAGE,
-} from "$lib/stores/walkthrough-reducer";
-import {
-  partitionBySignal,
-  type SignalPartition,
-  shouldHideLowSignal,
-} from "$lib/utils/walkthrough-issues";
-import { wtTrace } from "$lib/utils/wt-trace";
-import { createResource } from "./resource";
+} from "./reducer";
+import { wtTrace } from "./trace";
 
 // ── State ───────────────────────────────────────────────────────────────────
 

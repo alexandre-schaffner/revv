@@ -7,7 +7,7 @@ import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
-import { countBySeverity, outstandingItemsPhrase } from "$lib/utils/walkthrough-issues";
+import { countBySeverity, outstandingItemsPhrase } from "$lib/walkthrough/issues";
 
 interface Props {
   open: boolean;
