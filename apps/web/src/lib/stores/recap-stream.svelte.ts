@@ -134,10 +134,7 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
         entry.phaseMessage = event.data.message;
         break;
       case "activity":
-        entry.activities = [
-          ...entry.activities,
-          { ...normalizeRecapActivity(event.data), id: crypto.randomUUID() },
-        ];
+        entry.activities = [...entry.activities, { ...event.data, id: crypto.randomUUID() }];
         break;
       case "done":
         entry.doneReceived = true;
@@ -155,72 +152,6 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
   }
 
   setEntry(recapId, entry);
-}
-
-function normalizeRecapActivity(activity: Activity): Activity {
-  const toolName = normalizeRecapToolName(activity.toolName);
-  if (toolName === activity.toolName && !activity.summary.startsWith("Using ")) return activity;
-  return {
-    ...activity,
-    toolName,
-    activityKind: recapActivityKind(toolName) ?? activity.activityKind,
-    summary: recapActivitySummary(toolName) ?? activity.summary,
-  };
-}
-
-function normalizeRecapToolName(toolName: string): string {
-  const known = [
-    "get_recap_state",
-    "get_pr_diff",
-    "list_open_prs",
-    "get_repo_context",
-    "set_lede",
-    "add_pr_entry",
-    "set_theme_summary",
-    "complete_recap",
-    "Bash",
-  ];
-  return known.find((name) => toolName === name || toolName.endsWith(`_${name}`)) ?? toolName;
-}
-
-function recapActivityKind(toolName: string): Activity["activityKind"] | null {
-  if (
-    toolName === "get_recap_state" ||
-    toolName === "get_pr_diff" ||
-    toolName === "get_repo_context"
-  ) {
-    return "tool.read";
-  }
-  if (toolName === "list_open_prs") return "tool.ls";
-  if (toolName === "set_lede" || toolName === "add_pr_entry" || toolName === "set_theme_summary")
-    return "tool.write";
-  if (toolName === "Bash") return "tool.bash";
-  return null;
-}
-
-function recapActivitySummary(toolName: string): string | null {
-  switch (toolName) {
-    case "get_recap_state":
-      return "Reading recap state";
-    case "get_pr_diff":
-      return "Reading PR diff";
-    case "list_open_prs":
-      return "Listing open pull requests";
-    case "get_repo_context":
-      return "Reading prior recaps";
-    case "set_lede":
-      return "Writing lede";
-    case "add_pr_entry":
-      return "Cataloguing PR";
-    case "set_theme_summary":
-      return "Writing theme summary";
-    case "complete_recap":
-      return "Finalizing recap";
-    case "Bash":
-      return null;
-    default:
-      return null;
-  }
 }
 
 // ── Stream lifecycle ─────────────────────────────────────────────────────────
