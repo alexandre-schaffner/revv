@@ -66,6 +66,82 @@ describe("createResource", () => {
     });
   });
 
+  it("waits on a pending answer for a signal instead of asking again", async () => {
+    let calls = 0;
+    const r = createResource<void, string>({
+      waitForSignalMs: 1_000,
+      fetch: async () => {
+        calls += 1;
+        return calls === 1 ? { status: "pending" } : { status: "ok", data: "ready" };
+      },
+    });
+    await r.load("k", undefined);
+    await tick(20);
+    expect(calls).toBe(1);
+    expect(r.isWaiting("k")).toBe(true);
+    expect(r.waitingKeys()).toEqual(["k"]);
+    await r.load("k", undefined);
+    expect(calls).toBe(1);
+    await r.refresh("k", undefined);
+    expect(calls).toBe(2);
+    expect(r.data("k")).toBe("ready");
+    expect(r.isWaiting("k")).toBe(false);
+  });
+
+  it("gives up a signal that never comes, or one that says so", async () => {
+    const r = createResource<void, string>({
+      waitForSignalMs: 5,
+      gaveUpError: "never ready",
+      fetch: async () => ({ status: "pending" }),
+    });
+    await r.load("timeout", undefined);
+    await tick(20);
+    expect(r.entry("timeout").gaveUp).toBe(true);
+    expect(r.entry("timeout").request).toEqual({ status: "error", error: "never ready" });
+
+    const s = createResource<void, string>({
+      waitForSignalMs: 1_000,
+      fetch: async () => ({ status: "pending", data: "partial" }),
+    });
+    await s.load("told", undefined);
+    s.giveUp("told");
+    expect(s.entry("told").gaveUp).toBe(true);
+    expect(s.entry("told").loading).toBe(false);
+    expect(s.data("told")).toBe("partial");
+  });
+
+  it("a signal that beats the pending response asks again once it lands", async () => {
+    const gate = deferred<Answer<string>>();
+    let calls = 0;
+    const r = createResource<void, string>({
+      waitForSignalMs: 1_000,
+      fetch: () => {
+        calls += 1;
+        return calls === 1 ? gate.promise : Promise.resolve({ status: "ok", data: "ready" });
+      },
+    });
+    const asked = r.load("k", undefined);
+    expect(r.isWaiting("k")).toBe(true);
+    void r.refresh("k", undefined);
+    gate.resolve({ status: "pending" });
+    await asked;
+    await tick(5);
+    expect(calls).toBe(2);
+    expect(r.data("k")).toBe("ready");
+  });
+
+  it("put settles a key with pushed data and drops the ask it supersedes", async () => {
+    const gate = deferred<Answer<string>>();
+    const r = createResource<void, string>({ fetch: () => gate.promise });
+    const asked = r.load("k", undefined);
+    r.put("k", "pushed");
+    gate.resolve({ status: "ok", data: "late" });
+    await asked;
+    expect(r.data("k")).toBe("pushed");
+    r.put("unknown", "ignored");
+    expect(r.entry("unknown").request.status).toBe("idle");
+  });
+
   it("keeps pending data on screen and gives up with it", async () => {
     const r = createResource<void, string>({
       retryDelaysMs: [],

@@ -148,8 +148,8 @@ are the import-direction guardrails for keeping those modules deep.
 <a id="feature-pr-context"></a>
 ### 2.5.1 Feature modules use PR Context
 
-**Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubService`,
-`RepositoryService`, or `TokenProvider` directly. PR-scoped GitHub context flows through
+**Rule.** Walkthrough, Chat, and Recap feature modules must not import `GitHubGateway`,
+`RepositoryService`, or `GitHubAccounts` directly. PR-scoped GitHub context flows through
 `PrContextService`.
 
 **Why.** Feature modules should express product lifecycle and user workflow logic, not token
@@ -163,8 +163,8 @@ waves migrate them.
 **Canonical example.** `WalkthroughJobs` depends on `PrContextService` for PR/repo/token/diff
 context before starting a walkthrough job.
 
-**Anti-pattern.** A chat or recap route importing `GitHubService` to fetch PR metadata or
-`TokenProvider` to resolve an access token.
+**Anti-pattern.** A chat or recap route importing `GitHubGateway` to fetch PR metadata or
+`GitHubAccounts` to resolve an access token.
 
 <a id="settings-agent-resolution"></a>
 ### 2.5.2 Settings owns provider selection
@@ -503,15 +503,20 @@ error: any concurrent SSE broadcast between snapshot and rollback is silently dr
 freshness timestamp, generation counter or retry loop. The key carries every input the answer
 depends on — `(prId, headSha, agent, model)` for the sizing preview — so a settings change
 needs no cross-store invalidation: the next read simply misses. A server answer that is still
-`pending` is re-asked on the resource's bounded `retryDelaysMs` schedule.
+`pending` waits for the server's completion envelope (`waitForSignalMs`: the store's handler
+calls `refresh`, `put` or `giveUp`, and its reconnect hook refreshes `waitingKeys()`); a
+pending answer the server never announces is re-asked on the bounded `retryDelaysMs` schedule.
+A client poll is the fallback, not the design: when the server knows a computation finished,
+it says so.
 
 **Why.** Ten stores each had their own de-dupe, freshness window and backoff, with drifted
 semantics (some re-asked while a retry was scheduled, some cached errors forever). One
 primitive gives one answer to "is this in flight, fresh, retrying, superseded or reset".
 
 **Canonical example.** `apps/web/src/lib/stores/merge-eligibility.svelte.ts` (versioned by the
-question, re-asked while GitHub settles), `repo-activity.svelte.ts` (escalating backoff,
-keeps data on error), `walkthrough-sizing.svelte.ts` (key includes the routing settings).
+question, the settled answer pushed as `pr:merge-eligibility`), `repo-activity.svelte.ts`
+(waits for `repo-activity:settled`, keeps data on error), `walkthrough-sizing.svelte.ts` (key
+includes the routing settings, waits for `diff:cached`).
 `stacks.svelte.ts` and `hunk-scan.svelte.ts` keep their own entries and use a resource only to
 schedule asks.
 

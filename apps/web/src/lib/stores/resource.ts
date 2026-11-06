@@ -2,9 +2,9 @@
 //
 // The one way a store fetches something per key: concurrent asks de-dupe onto
 // one request, an answer can be served fresh for a while, a `pending` answer
-// (the server is still working) is asked again on a bounded schedule, a
-// superseded or reset ask can't write back, and every key's state is a
-// `RequestState<T>`. The reactive map is a `SvelteMap`, so components reading
+// (the server is still working) waits for the server's completion signal or is
+// asked again on a bounded schedule, a superseded or reset ask can't write
+// back, and every key's state is a `RequestState<T>`. The reactive map is a `SvelteMap`, so components reading
 // `entry()` / `data()` re-render on change.
 //
 // A store either keeps its data here (`data(key)`), or keeps its own state and
@@ -13,7 +13,7 @@
 import { SvelteMap } from "svelte/reactivity";
 import { RequestState } from "./_types";
 
-/** One ask's outcome. `pending` is asked again after the next retry delay. */
+/** One ask's outcome. `pending` waits for a signal, or is asked again after the next retry delay. */
 export type Answer<T> =
   | { readonly status: "ok"; readonly data: T }
   | { readonly status: "pending"; readonly data?: T }
@@ -38,6 +38,12 @@ export interface ResourceOptions<A, T> {
   readonly freshForMs?: number;
   /** Delay before re-asking after each `pending` answer; once used up, the key gives up. */
   readonly retryDelaysMs?: readonly number[];
+  /**
+   * A `pending` answer is not asked again on a timer: the server announces
+   * completion, and the store's handler calls `refresh`, `put` or `giveUp`.
+   * The key gives up on its own after this long without one.
+   */
+  readonly waitForSignalMs?: number;
   /** An error after an `ok` keeps the data on screen instead of replacing it. */
   readonly keepDataOnError?: boolean;
   /** The error a key with no data shows when it gives up. */
@@ -55,6 +61,18 @@ export interface Resource<A, T> {
   load(key: string, arg: A, version?: string): Promise<RequestState<T>>;
   /** Ask now; if an ask is in flight, ask once more after it lands. */
   refresh(key: string, arg: A): Promise<RequestState<T>>;
+  /** Settle `key` with data the server pushed, superseding any ask. */
+  put(key: string, data: T): void;
+  /** Stop waiting on a `pending` key: the server stopped working on it. */
+  giveUp(key: string): void;
+  /**
+   * Whether a signal for `key` is due: it holds a `pending` answer, or an ask
+   * whose answer may be `pending` is in flight (the signal can beat the
+   * response). Always false without `waitForSignalMs`.
+   */
+  isWaiting(key: string): boolean;
+  /** Every key {@link isWaiting} is true for. */
+  waitingKeys(): string[];
   /** Forget `key`; an ask in flight for it can't write back. */
   invalidate(key: string): void;
   /** Forget every key. */
@@ -75,6 +93,7 @@ function thrownMessage(e: unknown): string {
 
 export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A, T> {
   const { freshForMs = 0, retryDelaysMs = [], keepDataOnError = false } = options;
+  const waitForSignalMs = options.waitForSignalMs;
   const entries = new SvelteMap<string, ResourceEntry<T>>();
   const inflight = new Map<string, Promise<RequestState<T>>>();
   const askAgain = new Map<string, A>();
@@ -144,18 +163,10 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
         const hasData = answer.data !== undefined;
         const request = hasData ? RequestState.ok(answer.data as T) : previous.request;
         const loadedAt = hasData ? now : previous.loadedAt;
-        const delay = retryDelaysMs[attempt];
+        const delay = waitForSignalMs ?? retryDelaysMs[attempt];
         if (delay === undefined) {
-          entries.set(key, {
-            ...previous,
-            request:
-              request.status === "ok"
-                ? request
-                : RequestState.error(options.gaveUpError ?? "Still not ready; gave up waiting"),
-            loading: false,
-            gaveUp: true,
-            loadedAt,
-          });
+          entries.set(key, { ...previous, loadedAt });
+          markGaveUp(key, request);
           return;
         }
         entries.set(key, { ...previous, request, loading: true, loadedAt });
@@ -163,11 +174,28 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
           key,
           setTimeout(() => {
             retryTimers.delete(key);
-            retry();
+            if (waitForSignalMs === undefined) retry();
+            else markGaveUp(key, entry(key).request);
           }, delay),
         );
       }
     }
+  }
+
+  function markGaveUp(key: string, request: RequestState<T>): void {
+    entries.set(key, {
+      ...entry(key),
+      request:
+        request.status === "ok"
+          ? request
+          : RequestState.error(options.gaveUpError ?? "Still not ready; gave up waiting"),
+      loading: false,
+      gaveUp: true,
+    });
+  }
+
+  function isWaiting(key: string): boolean {
+    return waitForSignalMs !== undefined && (retryTimers.has(key) || inflight.has(key));
   }
 
   function ask(key: string, arg: A, generation: number, attempt: number): Promise<RequestState<T>> {
@@ -219,6 +247,27 @@ export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A
         return running;
       }
       return start(key, arg, entry(key).version);
+    },
+    put(key, data) {
+      if (!entries.has(key)) return;
+      cancel(key);
+      settled.add(key);
+      entries.set(key, {
+        ...entry(key),
+        request: RequestState.ok(data),
+        loading: false,
+        gaveUp: false,
+        loadedAt: Date.now(),
+      });
+    },
+    giveUp(key) {
+      if (!isWaiting(key)) return;
+      cancel(key);
+      markGaveUp(key, entry(key).request);
+    },
+    isWaiting,
+    waitingKeys() {
+      return [...new Set([...retryTimers.keys(), ...inflight.keys()])].filter(isWaiting);
     },
     invalidate(key) {
       cancel(key);

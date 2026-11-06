@@ -13,11 +13,10 @@ import { loadCachedPrDiff } from "./cached-pr-diff";
  * shared with `startJobBody` — same TypeSafe call, moved earlier, not an extra one.
  *
  * Reads the cached diff only (`loadCachedPrDiff`). Reports `pending` until
- * the diff lands; client retries.
+ * the diff lands, which `DiffCacheService` announces as `diff:cached`.
  */
 export function getWalkthroughSizingHandler(
   prId: string,
-  userId: string,
 ): Effect.Effect<WalkthroughSizing, unknown, AppServices> {
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
@@ -28,7 +27,7 @@ export function getWalkthroughSizingHandler(
       return { status: "off" as const };
     }
 
-    const diff = yield* loadCachedPrDiff(prId, userId);
+    const diff = yield* loadCachedPrDiff(prId);
     if (diff === null) return { status: "pending" as const };
 
     const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {

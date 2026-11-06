@@ -13,12 +13,13 @@ export interface MergeQuestion {
 
 /**
  * Per PR, versioned by the question: a different question supersedes the
- * running ask, while the PR's last answer stays up. An answer GitHub is still
- * settling (it computes mergeability lazily after a push) is asked again.
+ * running ask, while the PR's last answer stays up. GitHub computes
+ * mergeability lazily after a push; the server keeps asking and pushes the
+ * settled answer (`pr:merge-eligibility`).
  */
 const answers = createResource<void, MergeEligibility>({
   freshForMs: 15_000,
-  retryDelaysMs: [3_000, 3_000, 3_000, 3_000],
+  waitForSignalMs: 30_000,
   fetch: async (prId) => {
     const { data: eligibility, error } = await api.api.prs({ id: prId })["merge-eligibility"].get();
     if (error || !eligibility || !("mergeStateStatus" in eligibility))
@@ -58,6 +59,15 @@ export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility
 /** Asks GitHub unless an equal question is in flight, retrying, or answered recently. */
 export function askMergeEligibility(question: MergeQuestion): void {
   void answers.load(question.prId, undefined, questionVersion(question));
+}
+
+export function onPrMergeEligibility(data: { prId: string; eligibility: MergeEligibility }): void {
+  answers.put(data.prId, data.eligibility);
+}
+
+/** A `pr:merge-eligibility` sent while the stream was down reached no one: ask again. */
+export function onEventsReconnected(): void {
+  for (const prId of answers.waitingKeys()) void answers.refresh(prId, undefined);
 }
 
 export function reset(): void {

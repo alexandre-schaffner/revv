@@ -7,9 +7,15 @@
 // REST endpoints instead of this stream.
 
 import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
-import type { CloneStatus, PullRequest, Repository, SyncChange } from "./pull-requests";
+import type {
+  CloneStatus,
+  MergeEligibility,
+  PullRequest,
+  Repository,
+  SyncChange,
+} from "./pull-requests";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
-import type { CommentThread, ThreadMessage, ThreadStatus, ThreadSummary } from "./review";
+import type { CommentThread, ThreadMessage, ThreadStatus } from "./review";
 import type { StackBriefStatus, StackMergeRun } from "./stacks";
 import type { WalkthroughStreamEvent } from "./walkthrough";
 
@@ -101,6 +107,38 @@ export interface PrArchivedEnvelope {
     status: "closed" | "merged";
     closedAt: string;
   };
+}
+
+/**
+ * Signal: the PR's diff files for `headSha` landed in the server's diff cache.
+ * Previews that answered `pending` because the diff wasn't cached yet (sizing,
+ * the first pass) ask again for that head.
+ */
+export interface DiffCachedEnvelope {
+  type: "diff:cached";
+  data: { prId: string; headSha: string };
+}
+
+/**
+ * Full state: whether the viewer can merge the PR, once GitHub finished
+ * computing mergeability (or the server stopped waiting; the answer may then
+ * still be settling). Follows a `GET /api/prs/:id/merge-eligibility` that
+ * answered while GitHub was still computing.
+ */
+export interface PrMergeEligibilityEnvelope {
+  type: "pr:merge-eligibility";
+  data: { prId: string; eligibility: MergeEligibility };
+}
+
+/**
+ * Signal: the server stopped waiting on GitHub's repo statistics after a
+ * `GET /api/repos/:id/activity` answered `computing`. `ready` is whether
+ * they're in; when they are, re-read the activity. When not, GitHub is still
+ * computing and the client stops waiting.
+ */
+export interface RepoActivitySettledEnvelope {
+  type: "repo-activity:settled";
+  data: { repoId: string; ready: boolean };
 }
 
 /**
@@ -212,7 +250,7 @@ export interface ThreadMessageEnvelope {
 
 export interface ThreadsSyncedEnvelope {
   type: "threads:synced";
-  data: { prId: string; summary: ThreadSummary; timestamp: string };
+  data: { prId: string; timestamp: string };
 }
 
 export interface ThreadsNewReplyEnvelope {
@@ -279,6 +317,9 @@ export type ServerEventMessage =
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope
   | PrConversationUpdatedEnvelope
+  | DiffCachedEnvelope
+  | PrMergeEligibilityEnvelope
+  | RepoActivitySettledEnvelope
   | StackUpdatedEnvelope
   | StackMergeProgressEnvelope
   | StackBriefStatusChangedEnvelope

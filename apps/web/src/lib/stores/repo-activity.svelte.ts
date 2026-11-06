@@ -12,13 +12,14 @@ export interface RepoActivityData {
 }
 
 /**
- * GitHub answers its commit statistics with 202 while it computes them, and
- * says nothing when they're ready, so a computing answer is asked again with
- * a growing delay. The PR flow arrives with the first answer and stays up.
+ * GitHub answers its commit statistics with 202 while it computes them; the
+ * server keeps asking and announces the outcome (`repo-activity:settled`), so
+ * a computing answer waits for that. The PR flow arrives with the first
+ * answer and stays up.
  */
 const activity = createResource<void, Omit<RepoActivityData, "commitsPending">>({
   freshForMs: Number.POSITIVE_INFINITY,
-  retryDelaysMs: [2_000, 4_000, 8_000, 15_000, 30_000],
+  waitForSignalMs: 3 * 60_000,
   keepDataOnError: true,
   fetch: async (repoId) => {
     const res = await api.api
@@ -45,6 +46,21 @@ export function getRepoActivity(repoId: string): RequestState<RepoActivityData> 
 
 export async function loadRepoActivity(repoId: string): Promise<void> {
   await activity.load(repoId, undefined);
+}
+
+/**
+ * The server stopped waiting on GitHub. Ready: re-read, which also brings in
+ * code churn that arrived after the heatmap. Not ready: stop waiting.
+ */
+export function onRepoActivitySettled(data: { repoId: string; ready: boolean }): void {
+  if (activity.entry(data.repoId).request.status === "idle") return;
+  if (data.ready) void activity.refresh(data.repoId, undefined);
+  else activity.giveUp(data.repoId);
+}
+
+/** A `repo-activity:settled` sent while the stream was down reached no one: ask again. */
+export function onEventsReconnected(): void {
+  for (const repoId of activity.waitingKeys()) void activity.refresh(repoId, undefined);
 }
 
 export function reset(): void {

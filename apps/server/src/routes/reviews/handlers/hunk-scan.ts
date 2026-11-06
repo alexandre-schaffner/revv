@@ -22,13 +22,12 @@ import { loadCachedPrDiff } from "./cached-pr-diff";
  */
 export function ensureHunkScanHandler(
   prId: string,
-  userId: string,
 ): Effect.Effect<HunkScanEnsureResult, unknown, AppServices> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     if (!(yield* jev.isAvailable())) return { status: "off" as const };
 
-    const diff = yield* loadCachedPrDiff(prId, userId);
+    const diff = yield* loadCachedPrDiff(prId);
     if (diff === null) return { status: "pending" as const };
     const { pr, headSha, files } = diff;
 
