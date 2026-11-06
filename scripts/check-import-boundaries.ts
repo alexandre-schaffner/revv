@@ -6,6 +6,8 @@ const repoRoot = import.meta.dir.replace(/\/scripts$/, "");
 const featureRoots = [
   /^apps\/server\/src\/services\/WalkthroughJobs\.ts$/,
   /^apps\/server\/src\/services\/walkthrough-[^/]+\.ts$/,
+  /^apps\/server\/src\/services\/walkthrough\//,
+  /^apps\/server\/src\/services\/jobs\/agent-jobs\.ts$/,
   /^apps\/server\/src\/routes\/chat(?:-|\.ts)/,
   /^apps\/server\/src\/services\/Chat[A-Za-z].*\.ts$/,
   /^apps\/server\/src\/services\/ProjectRecapJobs\.ts$/,
@@ -59,11 +61,11 @@ const broadcasterAllowedImporters = new Set([
 // ── Agent turn boundary ─────────────────────────────────────────────────────
 // Every agent turn runs through the turn runner, which owns connect, session,
 // deadlines and cancel. Nothing else may reach into the connection pool;
-// process shutdown may stop it.
+// the boot layer's finalizer stops it at shutdown.
 const acpConnectionModule = "apps/server/src/ai/acp/acp-connection";
 const acpConnectionAllowedImporters = new Set([
   "apps/server/src/ai/acp/run-turn.ts",
-  "apps/server/src/index.ts",
+  "apps/server/src/boot.ts",
 ]);
 
 function listTsFiles(dir: string): string[] {
