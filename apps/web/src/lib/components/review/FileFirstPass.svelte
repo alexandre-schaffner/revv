@@ -2,7 +2,8 @@
 import { flaggedHunkSmells } from "@revv/shared";
 import HunkSmellChip from "$lib/components/walkthrough/first-pass/HunkSmellChip.svelte";
 import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import { getLoadedHeadSha, jumpToDiffLine } from "$lib/stores/review.svelte";
+import { getLoadedHeadSha } from "$lib/stores/review.svelte";
+import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import {
   getIsStreaming,
   getIssuesForFile,
@@ -29,12 +30,12 @@ let { prId, filePath, patch }: Props = $props();
 
 const hunkRanges = $derived(patch === null ? [] : patchHunkRanges(patch));
 
-const reviewed = $derived(getReviewsLoadedHead());
+const reviewed = $derived(getReviewsLoadedHead(prId));
 
 const hunks = $derived.by(() => {
-  const issues = getIssuesForFile(filePath);
-  const isComplete = !getIsStreaming();
-  const leads = getLeads();
+  const issues = getIssuesForFile(prId, filePath);
+  const isComplete = !getIsStreaming(prId);
+  const leads = getLeads(prId);
   return getHunkScanForFile(prId, getLoadedHeadSha(prId), filePath)
     .filter((row) => {
       const hunk = hunkRanges[row.hunkIndex];

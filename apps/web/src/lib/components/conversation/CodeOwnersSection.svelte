@@ -6,7 +6,8 @@ import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { gsapSlide } from "$lib/motion";
-import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
+import { getReviewFiles } from "$lib/stores/review.svelte";
+import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base

@@ -33,7 +33,7 @@ const lastSyncAt = $derived(getLastSyncAt(selectedPrId));
 const syncing = $derived(getThreadsSyncing(selectedPrId));
 const syncError = $derived(getSyncError(selectedPrId));
 
-const usage = $derived(getTokenUsage(selectedPrId ?? undefined));
+const usage = $derived(getTokenUsage(selectedPrId ?? ""));
 const usedTokens = $derived(usage.contextTokens);
 // `contextWindowTokens` is reported by the Claude Agent SDK only; codex and
 // opencode runs leave it unset. Revv always runs at the full window, so the

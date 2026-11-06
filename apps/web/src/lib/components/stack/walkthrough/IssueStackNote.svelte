@@ -38,7 +38,7 @@ const note = $derived(stack.notes?.issues.get(issueId));
 		width: 380px;
 	}
 
-	@container (max-width: 1335px) {
+	@container review (max-width: 1335px) {
 		.issue-rail-note {
 			position: static;
 			width: auto;

@@ -98,7 +98,7 @@ let { icon: Icon, label, aside, children, foot }: Props = $props();
 		border-top-color: var(--color-border);
 	}
 
-	@container (max-width: 1335px) {
+	@container review (max-width: 1335px) {
 		.note {
 			display: flex;
 			flex-wrap: wrap;

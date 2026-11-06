@@ -30,6 +30,7 @@ import { reset as resetRecapStream } from "$lib/stores/recap-stream.svelte";
 import { reset as resetRecaps } from "$lib/stores/recaps.svelte";
 import { reset as resetRepoActivity } from "$lib/stores/repo-activity.svelte";
 import { reset as resetReview } from "$lib/stores/review.svelte";
+import { reset as resetReviewNav } from "$lib/stores/review-nav.svelte";
 import { fetchSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { reset as resetStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { reset as resetStackMerge } from "$lib/stores/stack-merge.svelte";
@@ -57,6 +58,7 @@ let sessionHost: string | undefined;
 function resetAccountStores(): void {
   resetPrs();
   resetReview();
+  resetReviewNav();
   resetSync();
   resetWalkthrough();
   resetWalkthroughSizings();

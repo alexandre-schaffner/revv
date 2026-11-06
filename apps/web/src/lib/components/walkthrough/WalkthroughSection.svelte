@@ -1,116 +1,95 @@
 <script lang="ts">
-import type { WalkthroughBlock, WalkthroughSemanticStep } from "@revv/shared";
+import type { IssueSeverity, WalkthroughSemanticStep } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { type EnterCascade, enterOnce } from "$lib/motion";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
 import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
-
-type Severity = "info" | "warning" | "critical";
-
-interface BlockEntry {
-  block: WalkthroughBlock;
-  delay: number;
-  renderedAnnotation: string | null;
-}
+import type { ChapterEntry } from "./walkthrough-view.svelte";
 
 interface Props {
   section: WalkthroughSemanticStep;
-  entries: BlockEntry[];
-  blockIssueSeverity: Map<string, Severity>;
+  entries: ChapterEntry[];
+  blockSeverity: ReadonlyMap<string, IssueSeverity>;
   selectedIssueBlockId: string | null;
-  selectedIssueSeverity: Severity | null;
+  selectedIssueSeverity: IssueSeverity | null;
   /**
-   * Number shown in the "Chapter N / M" eyebrow, or null for the Overview —
-   * chapter 0, which carries no eyebrow so the printed numbers match what
-   * the chat agent reads as `chapterNumber` (see `chapterNumbersByIndex`).
+   * The "Chapter N / M" eyebrow, or null for the Overview, which carries none
+   * so the printed numbers match what the chat agent reads as `chapterNumber`.
    */
   chapterNumber: number | null;
-  /** Total Phase B chapter count for the "Chapter N / M" eyebrow. */
   chapterCount: number;
-  /**
-   * Optional DOM id placed on the section header so the chapters stepper
-   * can jump to a specific chapter (e.g. id="walkthrough-overview" on the
-   * virtual overview chapter, id="walkthrough-diff" on the first Phase B
-   * chapter). When omitted, only the per-block step anchors are jump targets.
-   */
+  /** The stepper's jump target, on the section header. */
   id?: string | undefined;
   margin?: Snippet<[number]> | undefined;
+  /** Prefix of each block's entrance key: the walkthrough it belongs to. */
+  enterScope: string;
+  /** Blocks arriving together cascade; the Overview enters on its own. */
+  cascade?: boolean;
 }
 
 let {
   section,
   entries,
-  blockIssueSeverity,
+  blockSeverity,
   selectedIssueBlockId,
   selectedIssueSeverity,
   chapterNumber,
   chapterCount,
   id = undefined,
   margin = undefined,
+  enterScope,
+  cascade = true,
 }: Props = $props();
 
 let collapsed = $state(false);
 
-// Roll up child block severities so a collapsed section can still
-// telegraph the worst issue inside it via a colored dot.
-const SEVERITY_RANK: Record<Severity, number> = {
-  info: 1,
-  warning: 2,
-  critical: 3,
-};
-const rolledSeverity = $derived.by<Severity | null>(() => {
-  let worst: Severity | null = null;
+const SEVERITY_RANK: Record<IssueSeverity, number> = { info: 1, warning: 2, critical: 3 };
+
+// A collapsed section still shows the worst issue inside it.
+const rolledSeverity = $derived.by<IssueSeverity | null>(() => {
+  let worst: IssueSeverity | null = null;
   for (const e of entries) {
-    const s = blockIssueSeverity.get(e.block.id);
-    if (!s) continue;
-    if (!worst || SEVERITY_RANK[s] > SEVERITY_RANK[worst]) worst = s;
+    const s = blockSeverity.get(e.block.id);
+    if (s && (!worst || SEVERITY_RANK[s] > SEVERITY_RANK[worst])) worst = s;
   }
   return worst;
 });
 
 const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
 
-const MARGIN_ROW_SPAN = { headerOnly: 1, headerAndFirstBlock: 2 } as const;
+// The margin note takes the first block's row too when that block has no
+// annotation of its own in the rail.
+const marginRows = $derived(!collapsed && entries[0]?.renderedAnnotation === null ? 2 : 1);
 
-const firstBlockRailIsFree = $derived(!collapsed && entries[0]?.renderedAnnotation === null);
-const marginRowSpan = $derived(
-  firstBlockRailIsFree ? MARGIN_ROW_SPAN.headerAndFirstBlock : MARGIN_ROW_SPAN.headerOnly,
-);
-
-function toggle(): void {
-  collapsed = !collapsed;
+function blockCascade(blockId: string): EnterCascade | undefined {
+  return cascade ? { group: "walkthrough-blocks", step: 0.085, cap: 10, beat: blockId } : undefined;
 }
 
-// Auto-expand when an issue inside this section is selected so the
-// reader's click on the issue card always lands on a visible block.
+// Selecting an issue inside a collapsed section opens it, so the jump lands.
 $effect(() => {
   if (!selectedIssueBlockId) return;
-  const inside = entries.some((e) => e.block.id === selectedIssueBlockId);
-  if (inside) collapsed = false;
+  if (entries.some((e) => e.block.id === selectedIssueBlockId)) collapsed = false;
 });
 </script>
 
-<!-- `display: contents` so the section participates transparently in the
-     outer `.blocks` 6-col grid: the header lands in col 3 via its own
-     class, and child block-groups continue to use their col-3/col-5
-     mapping. -->
+<!-- `display: contents`: the header, margin note and blocks are items of
+     the parent `.blocks` review grid. -->
 <div class="walkthrough-section">
 	<button
 		type="button"
 		class="section-header"
+		data-col="content"
 		class:section-header--collapsed={collapsed}
-		class:section-header--info={rolledSeverity === 'info'}
-		class:section-header--warning={rolledSeverity === 'warning'}
-		class:section-header--critical={rolledSeverity === 'critical'}
 		aria-expanded={!collapsed}
 		aria-controls={`section-body-${section.semanticStepIndex}`}
 		{id}
-		onclick={toggle}
+		onclick={() => (collapsed = !collapsed)}
 	>
 		<div class="section-header-rail">
 			{#if chapterNumber !== null}
@@ -126,10 +105,7 @@ $effect(() => {
 		<div class="section-title-row">
 			{#if rolledSeverity !== null && collapsed}
 				<span
-					class="section-severity-dot"
-					class:section-severity-dot--info={rolledSeverity === 'info'}
-					class:section-severity-dot--warning={rolledSeverity === 'warning'}
-					class:section-severity-dot--critical={rolledSeverity === 'critical'}
+					class="section-severity-dot section-severity-dot--{rolledSeverity}"
 					aria-label="Section contains a flagged {rolledSeverity} issue"
 				></span>
 			{/if}
@@ -141,7 +117,7 @@ $effect(() => {
 	</button>
 
 	{#if margin}
-		<div class="section-margin" style:grid-row="span {marginRowSpan}">
+		<div class="section-margin" data-col="rail" style:--rail-rows={marginRows}>
 			{@render margin(section.semanticStepIndex)}
 		</div>
 	{/if}
@@ -153,27 +129,27 @@ $effect(() => {
 			role="region"
 			aria-label={section.title}
 		>
-			{#each entries as { block, delay, renderedAnnotation } (block.id)}
-				{@const hasAnnotation = renderedAnnotation !== null}
-				{@const blockSeverity = blockIssueSeverity.get(block.id) ?? null}
-
+			{#each entries as { block, renderedAnnotation } (block.id)}
+				{@const severity = blockSeverity.get(block.id) ?? null}
+				{@const selected = selectedIssueBlockId === block.id ? selectedIssueSeverity : null}
 				<div class="block-group">
 					<span
 						class="block-step-dot"
-						class:block-step-dot--info={blockSeverity === 'info'}
-						class:block-step-dot--warning={blockSeverity === 'warning'}
-						class:block-step-dot--critical={blockSeverity === 'critical'}
+						class:block-step-dot--info={severity === 'info'}
+						class:block-step-dot--warning={severity === 'warning'}
+						class:block-step-dot--critical={severity === 'critical'}
+						data-col="gutter"
 						aria-hidden="true"
 					></span>
 					<div
 						id="step-{block.id}"
 						class="block-wrapper"
-						data-prlens-breakout={hasAnnotation ? "" : undefined}
-						class:block-wrapper--no-anim={delay === -1}
-						class:block-wrapper--selected-info={selectedIssueBlockId === block.id && selectedIssueSeverity === 'info'}
-						class:block-wrapper--selected-warning={selectedIssueBlockId === block.id && selectedIssueSeverity === 'warning'}
-						class:block-wrapper--selected-critical={selectedIssueBlockId === block.id && selectedIssueSeverity === 'critical'}
-						style:--enter-delay="{delay}ms"
+						class:block-wrapper--selected-info={selected === 'info'}
+						class:block-wrapper--selected-warning={selected === 'warning'}
+						class:block-wrapper--selected-critical={selected === 'critical'}
+						data-col="content"
+						data-prlens-breakout={renderedAnnotation !== null ? "" : undefined}
+						use:enterOnce={{ key: `${enterScope}:block:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
 					>
 						{#if block.type === 'markdown'}
 							<WalkthroughMarkdownBlock content={block.content} />
@@ -186,13 +162,13 @@ $effect(() => {
 						{/if}
 					</div>
 
-					{#if hasAnnotation}
+					{#if renderedAnnotation !== null}
 						<aside
 							class="block-annotation"
+							data-col="rail"
 							data-prlens-breakout=""
-							class:block-annotation--no-anim={delay === -1}
-							style:--enter-delay="{delay}ms"
 							aria-label="Annotation"
+							use:enterOnce={{ key: `${enterScope}:note:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
 						>
 							<div class="block-annotation-inner prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
 								{@html renderedAnnotation}
@@ -206,18 +182,11 @@ $effect(() => {
 </div>
 
 <style>
-	/* Transparent wrapper so the section's header + body participate
-	   directly in the parent `.blocks` 6-col grid declared by
-	   GuidedWalkthrough.svelte. */
 	.walkthrough-section {
 		display: contents;
 	}
 
-	/* Header lives in col 3 (the 820 content column), span across the
-	   gutter on the right so the chevron lines up with the annotation
-	   rail edge. */
 	.section-header {
-		grid-column: 3;
 		appearance: none;
 		background: transparent;
 		border: none;
@@ -328,47 +297,22 @@ $effect(() => {
 	}
 
 	.section-margin {
-		grid-column: 5;
 		align-self: start;
 		position: relative;
 		z-index: 2;
 		min-width: 0;
 	}
 
-	/* Density + body tone come from `prose prose-sm prose-dense`; this only
-	   sets the reading measure. */
 	.section-summary {
 		max-width: 720px;
 	}
 
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.section-summary` only owns the reading measure. */
-
-	/* `display: contents` lets the per-block grid items (block-step-dot
-	   in col 2, block-wrapper in col 3, block-annotation in col 5)
-	   inherit the parent `.blocks` grid placement they already use. */
-	.section-body {
-		display: contents;
-	}
-
-	/* Per-block grid placement — duplicated from the parent
-	   GuidedWalkthrough so the block-group + block-wrapper +
-	   block-annotation triplet still lands in cols 2 / 3 / 5 when
-	   rendered from this component. */
+	.section-body,
 	.block-group {
 		display: contents;
 	}
 
-	.block-group > .block-wrapper {
-		grid-column: 3;
-	}
-
-	.block-group > .block-annotation {
-		grid-column: 5;
-	}
-
 	.block-step-dot {
-		grid-column: 2;
 		justify-self: end;
 		align-self: flex-start;
 		width: 8px;
@@ -392,19 +336,14 @@ $effect(() => {
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 18%, transparent);
 	}
 
-	/* `backwards`, not `both`, and no `will-change`: either one keeps every
-	   block (and annotation) on its own compositing layer after the entrance
-	   ends — `both` by holding `filter: blur(0)` + an identity transform. A
-	   long walkthrough then runs WKWebView out of layer budget and the page
-	   flickers as tiles are dropped and repainted deep into the scroll. */
+	/* `--jump-highlight` (0–1) is driven by `pulseHighlight` after a jump. */
 	.block-wrapper {
 		position: relative;
 		max-width: 100%;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
-		animation-delay: var(--enter-delay, 0ms);
 		scroll-margin-top: 16px;
 		border-radius: 8px;
-		outline: 2px solid transparent;
+		outline: 2px solid
+			color-mix(in srgb, var(--color-accent) calc(var(--jump-highlight, 0) * 100%), transparent);
 		outline-offset: 2px;
 		transition: outline-color var(--duration-snap) var(--ease-soft);
 	}
@@ -419,25 +358,9 @@ $effect(() => {
 		outline-color: var(--color-danger);
 	}
 
-	.block-wrapper--no-anim {
-		animation: none;
-		opacity: 1;
-		transform: none;
-		filter: none;
-	}
-
 	.block-annotation {
 		align-self: start;
 		padding: 4px 0;
-		animation: block-slide-up var(--duration-ceremonial-medium) var(--ease-standard) backwards;
-		animation-delay: var(--enter-delay, 0ms);
-	}
-
-	.block-annotation--no-anim {
-		animation: none;
-		opacity: 1;
-		transform: none;
-		filter: none;
 	}
 
 	.block-annotation-inner {
@@ -451,54 +374,11 @@ $effect(() => {
 		overflow-wrap: anywhere;
 	}
 
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.block-annotation-inner` only owns the card box. */
-
-	@keyframes block-slide-up {
-		from {
-			opacity: 0;
-			transform: translateY(10px);
-			filter: blur(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.block-wrapper,
-		.block-annotation,
-		.section-toggle {
-			animation-duration: 0.01ms !important;
-			transition: none !important;
-		}
-	}
-
-	/* Narrow layout — mirrors the @container block in GuidedWalkthrough, which
-	   flips the parent `.blocks` from grid to `display: block` below 1336px.
-	   Svelte scopes that rule to GuidedWalkthrough's own elements, so the
-	   per-block placement declared here has to be unwound on this side too.
-
-	   `.block-group` is `display: contents`, so once `.blocks` stops being a
-	   grid the dot stops being a grid item and falls back to `display: inline`
-	   — width/height no longer apply and its 3px shadow spread paints as a thin
-	   vertical bar next to the block (visible whenever the left sidebar is
-	   expanded). Give the group a box and hang the dot in the stacked layout's
-	   72px left gutter: still a dot, still costs no vertical space, and the 16px
-	   gap to the content edge matches the wide layout's margin-right. */
-	@container (max-width: 1335px) {
-		.block-group {
-			display: block;
-			position: relative;
-		}
-
-		.block-step-dot {
-			position: absolute;
-			left: -24px;
-			top: 18px;
-			margin: 0;
+	/* Rail items stack under their block (see review-columns.css). */
+	@container review (max-width: 1335px) {
+		.block-annotation {
+			padding: 0;
+			margin-top: 10px;
 		}
 
 		.section-margin {

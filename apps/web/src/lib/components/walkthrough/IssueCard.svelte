@@ -3,6 +3,7 @@ import { HUNK_SMELL_META, type HunkSmell, type WalkthroughIssue } from "@revv/sh
 import Waveform from "phosphor-svelte/lib/Waveform";
 import { Checkbox } from "$lib/components/ui/checkbox";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { type EnterParams, enterOnce } from "$lib/motion";
 
 interface Props {
   issue: WalkthroughIssue;
@@ -13,14 +14,8 @@ interface Props {
   disabled?: boolean;
   oncheck?: (checked: boolean) => void;
   submitted?: boolean;
-  animationDelay?: string;
-  /**
-   * When true, suppress the entrance animation entirely. Used on tab
-   * revisits where the card has already animated once — browsers otherwise
-   * restart CSS animations when a subtree re-enters the render tree after
-   * `display: none`.
-   */
-  noAnim?: boolean;
+  /** The card's one-shot entrance; none when absent. */
+  entrance?: EnterParams | undefined;
   onfileclick?: (filePath: string, line: number) => void;
   stepTag?: string | null;
   hideFileBadge?: boolean;
@@ -37,8 +32,7 @@ let {
   disabled = false,
   oncheck,
   submitted = false,
-  animationDelay = "0ms",
-  noAnim = false,
+  entrance,
   onfileclick,
   stepTag = null,
   hideFileBadge = false,
@@ -65,22 +59,6 @@ const resolutionLabel = $derived(
       : null,
 );
 const resolved = $derived(resolutionLabel !== null);
-
-// Once the entrance animation completes (or if the parent tells us to skip
-// it), lock the card into its final visual state by applying `--no-anim`.
-// Without this, browsers restart CSS animations on elements that re-enter
-// the render tree after `display: none` — so every tab switch back to the
-// Walkthrough would replay the card's fade-in.
-let animEnded = $state(false);
-const animLocked = $derived(noAnim || animEnded);
-
-function onAnimEnd(event: AnimationEvent): void {
-  // Only react to the card's own animation, not descendants bubbling up.
-  if (event.target !== event.currentTarget) return;
-  if (event.animationName === "issue-card-enter") {
-    animEnded = true;
-  }
-}
 </script>
 
 {#if clickable}
@@ -89,9 +67,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
 		class:issue-card--resolved={resolved}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
+		use:enterOnce={entrance}
 		{onclick}
 	>
 		{@render cardContent()}
@@ -106,9 +82,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		class:issue-card--submitted={submitted}
 		class:issue-card--resolved={resolved}
 		class:issue-card--checked={checked}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
+		use:enterOnce={entrance}
 		onclick={(e) => {
 			// The bits-ui Checkbox is a button, not an input, so the native
 			// label→input forward we used to rely on no longer fires. Forward
@@ -127,9 +101,7 @@ function onAnimEnd(event: AnimationEvent): void {
 		class="issue-card issue-card--{issue.severity}"
 		class:issue-card--submitted={submitted}
 		class:issue-card--resolved={resolved}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
+		use:enterOnce={entrance}
 	>
 		{@render cardContent()}
 	</div>
@@ -201,8 +173,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		flex-direction: row;
 		align-items: flex-start;
 		gap: 10px;
-		animation: issue-card-enter var(--duration-ceremonial-medium) var(--ease-standard) both;
-		animation-delay: var(--issue-delay, 0ms);
 		text-align: left;
 		font: inherit;
 		color: inherit;
@@ -219,15 +189,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		   containing-block side effect is inert. */
 		container-type: inline-size;
 		container-name: issue-card;
-	}
-
-	/* Suppress the entrance animation on tab revisits. Browsers restart CSS
-	   animations when an element re-enters the render tree after `display:
-	   none`, which would otherwise replay issue-card-enter on every hop back
-	   to the Walkthrough tab. */
-	.issue-card--no-anim {
-		animation: none;
-		opacity: 1;
 	}
 
 	/* Severity left-border + hover shadow color */
@@ -497,29 +458,4 @@ function onAnimEnd(event: AnimationEvent): void {
 		border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
 	}
 
-	/* ── Animation ───────────────────────────────────────────────────── */
-	@keyframes issue-card-enter {
-		from {
-			opacity: 0;
-			transform: translateY(4px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.issue-card {
-			animation-duration: 0.01ms !important;
-			animation-delay: 0ms !important;
-		}
-		button.issue-card,
-		label.issue-card {
-			transition: none !important;
-		}
-		button.issue-card:hover {
-			transform: none;
-		}
-	}
 </style>

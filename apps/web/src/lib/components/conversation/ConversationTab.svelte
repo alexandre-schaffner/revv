@@ -98,7 +98,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="conversation">
+<div class="conversation review-columns">
 	<div class="conversation-main">
 		{#if conversation}
 			{#if entry.stale}
@@ -191,7 +191,7 @@ function onKeydown(e: KeyboardEvent): void {
 		</section>
 	</div>
 
-	<aside class="conversation-side" aria-label="Pull request details">
+	<aside class="conversation-side" data-col="rail" aria-label="Pull request details">
 		{#if conversation}
 			<ConversationSidebar
 				{prId}
@@ -213,21 +213,9 @@ function onKeydown(e: KeyboardEvent): void {
 </div>
 
 <style>
-	/* The main-area-anchored 6-col grid every review tab shares (see
-	   GuidedWalkthrough.svelte's `.walkthrough-content` for the col_1
-	   derivation): the timeline takes col 3, the sidebar the 380px
-	   annotation rail in col 5. Col 3 is a FIXED 820px, not minmax, because
-	   the Your review panels set `container-type: inline-size` and would
-	   report a 0 max-content, collapsing a content-sized track. */
+	/* The review grid (review-columns.css): the timeline in the content
+	   column, the sidebar in the rail. */
 	.conversation {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			820px
-			40px
-			380px
-			minmax(24px, 1fr);
 		align-items: start;
 		/* Clears the floating review action bar. */
 		padding: 16px 0 100px;
@@ -239,7 +227,6 @@ function onKeydown(e: KeyboardEvent): void {
 	}
 
 	.conversation-main {
-		grid-column: 3;
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
@@ -247,7 +234,6 @@ function onKeydown(e: KeyboardEvent): void {
 	}
 
 	.conversation-side {
-		grid-column: 5;
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
@@ -366,7 +352,7 @@ function onKeydown(e: KeyboardEvent): void {
 	   flow so the sidebar can slot in right under the description, where
 	   GitHub's mobile layout puts it. Gated on `.review-content`'s width,
 	   not the viewport (the sidebar and right panel both move it). */
-	@container (max-width: 1335px) {
+	@container review (max-width: 1335px) {
 		/* Left edge pinned at col_3's x (72px), like the title and the
 		   walkthrough's narrow layout, so all three stay aligned. */
 		.conversation {

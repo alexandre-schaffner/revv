@@ -21,11 +21,8 @@ import {
   setTotalLineCount,
 } from "$lib/stores/focus-mode.svelte";
 import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import {
-  clearPendingDiffJump,
-  getLoadedHeadSha,
-  getPendingDiffJump,
-} from "$lib/stores/review.svelte";
+import { getLoadedHeadSha } from "$lib/stores/review.svelte";
+import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review-nav.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
 import { cleanupAllMounted, mountInto, pruneDetachedMounts } from "$lib/utils/annotation-mount";
 import { countPatchLines } from "$lib/utils/count-patch-lines";

@@ -4,7 +4,7 @@ import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME } from "@revv/shared"
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
-import { jumpToDiffLine } from "$lib/stores/review.svelte";
+import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { workerManager } from "$lib/utils/worker-pool";

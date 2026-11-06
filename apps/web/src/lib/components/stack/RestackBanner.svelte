@@ -14,7 +14,8 @@ import X from "phosphor-svelte/lib/X";
 import { gsapFadeY } from "$lib/motion";
 import { getStackRebase, rebaseStack } from "$lib/stores/stack-rebase.svelte";
 import { getLayer, getStack } from "$lib/stores/stacks.svelte";
-import { getWalkthroughUiState, regenerate } from "$lib/stores/walkthrough.svelte";
+import { getWalkthroughUiState } from "$lib/stores/walkthrough.svelte";
+import { regenerate } from "$lib/stores/walkthrough-actions";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import RebaseStackConfirm from "./RebaseStackConfirm.svelte";
 
@@ -36,7 +37,7 @@ const layer = $derived(getLayer(prId));
 // `layer-changed` while the review of the new head runs. Clicking again would
 // cancel that run and start over.
 const reviewRunning = $derived(
-  layer?.review.kind === "generating" || getWalkthroughUiState().kind === "streaming",
+  layer?.review.kind === "generating" || getWalkthroughUiState(prId).kind === "streaming",
 );
 
 const banner = $derived.by((): Banner | null => {

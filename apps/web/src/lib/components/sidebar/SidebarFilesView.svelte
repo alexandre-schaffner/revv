@@ -7,10 +7,10 @@ import {
   getActiveTab,
   getIsLoadingFiles,
   getReviewFiles,
-  requestDiffScrollReset,
   setActiveFilePath,
   setActiveTab,
 } from "$lib/stores/review.svelte";
+import { scrollDiffToTop } from "$lib/stores/review-nav.svelte";
 import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 import PierreFileTree from "./PierreFileTree.svelte";
 import SidebarFilesSearch from "./SidebarFilesSearch.svelte";
@@ -71,7 +71,7 @@ export function navigate(key: string): "handled" | "exit" | "ignored" {
 function handleSelect(path: string): void {
   if (!filePaths.has(path)) return;
   setActiveFilePath(path);
-  requestDiffScrollReset();
+  scrollDiffToTop();
   if (getActiveTab() !== "diff") setActiveTab("diff");
   enterScrollMode();
 }

@@ -22,6 +22,7 @@ import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
+import { useWalkthroughWatch } from "$lib/components/walkthrough/walkthrough-watch.svelte";
 import { getToken } from "$lib/session/token.svelte";
 import { useCommands } from "$lib/stores/commands.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
@@ -35,7 +36,6 @@ import {
   getFilesError,
   getIsLoadingFiles,
   getLoadedHeadSha,
-  getPrScrollPosition,
   getReviewFiles,
   getReviewMode,
   loadSession,
@@ -44,7 +44,6 @@ import {
   setFilesError,
   setIsLoadingFiles,
   setLoadedHeadSha,
-  setPrScrollPosition,
   setActiveTab,
   setReviewFiles,
   switchPrViewState,
@@ -53,10 +52,8 @@ import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
 import { requestThreadSync } from "$lib/stores/sync.svelte";
-import {
-  deactivate as deactivateWalkthrough,
-  getRiskLevel as getWalkthroughRiskLevel,
-} from "$lib/stores/walkthrough.svelte";
+import { scrollPane } from "$lib/stores/review-nav.svelte";
+import { getRiskLevel as getWalkthroughRiskLevel } from "$lib/stores/walkthrough.svelte";
 import {
   fetchWalkthroughSizing,
   getWalkthroughSizing,
@@ -94,8 +91,13 @@ const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
 const loadError = $derived(getFilesError());
 const activeTab = $derived(getActiveTab());
+const routePrIdOrEmpty = $derived(page.params.prId ?? "");
+useWalkthroughWatch(
+  () => routePrIdOrEmpty,
+  () => activeTab === "walkthrough",
+);
 // The tier a generated walkthrough carries. Null until one exists.
-const generatedRiskLevel = $derived(getWalkthroughRiskLevel());
+const generatedRiskLevel = $derived(getWalkthroughRiskLevel(routePrIdOrEmpty));
 
 // …and the same tier resolved from the diff before generation, so opening a
 // PR shows attention needed without a review. Same cached answer either way,
@@ -172,63 +174,7 @@ const riskClasses: Record<string, string> = {
   high: "risk-badge risk-badge--high",
 };
 
-let scrollRootEl: HTMLDivElement | undefined = $state(undefined);
-
-// Per-PR scroll persistence for the walkthrough / conversation tabs.
-// (Diff tab has its own scroll container inside ReviewLayout.svelte and
-// persists itself there.) The `prViewStates` map in `review.svelte.ts` is
-// the single source of truth: `handleScrollRootScroll` writes on every
-// scroll, the `$effect` below restores once per (prId, tab) change.
-function tabScrollKey(tab: string): "walkthrough" | "conversation" | null {
-  if (tab === "walkthrough") return "walkthrough";
-  if (tab === "conversation") return "conversation";
-  return null;
-}
-
-// Latch: the scroll handler fires immediately when we restore (because
-// setting scrollTop emits a 'scroll' event), which would clobber the
-// freshly-restored value with whatever the *previous* PR's scrollTop
-// happened to be at that microtask. Suppress one event per restore.
-let suppressNextScroll = false;
-
-function handleScrollRootScroll(): void {
-  if (suppressNextScroll) {
-    suppressNextScroll = false;
-    return;
-  }
-  const tab = activeTab;
-  const prId = page.params.prId;
-  if (!scrollRootEl || tab === "diff" || !prId) return;
-  const key = tabScrollKey(tab);
-  if (key) setPrScrollPosition(prId, key, scrollRootEl.scrollTop);
-}
-
-// Restore AFTER the DOM update (container is now visible again).
-// Re-runs on tab change AND on PR change — both flows need to land at
-// the right scroll offset. `restoredFor` keys on `${prId}:${tab}` so
-// repeated reactive ticks for the same active tab don't refight the
-// user's scrolling. We MUST clear it when the user passes through the
-// diff tab: diff hides `.review-content` via display:none, and browsers
-// don't reliably preserve scrollTop across that toggle — the re-entry
-// into walkthrough/conversation needs a fresh restore, otherwise
-// the stamp would still match and we'd land at the top.
-let restoredFor: string | null = null;
-$effect(() => {
-  const tab = activeTab;
-  const prId = page.params.prId;
-  if (!scrollRootEl || !prId) return;
-  if (tab === "diff") {
-    restoredFor = null;
-    return;
-  }
-  const stamp = `${prId}:${tab}`;
-  if (stamp === restoredFor) return;
-  restoredFor = stamp;
-  const key = tabScrollKey(tab);
-  const saved = key ? getPrScrollPosition(prId, key) : 0;
-  suppressNextScroll = true;
-  scrollRootEl.scrollTop = saved;
-});
+const scrollRootPane = $derived(activeTab === "diff" ? null : activeTab);
 
 // ⌘1/2/3 → the review tabs, in the order the tab bar shows them.
 useCommands(
@@ -410,13 +356,6 @@ onDestroy(() => {
   // Invalidate any in-flight request and clean up store state
   currentRequestId++;
   clearReviewFiles();
-  // Drops the SSE subscription for this PR (so the controllers map
-  // doesn't keep an orphaned, possibly-stalled handle that would block
-  // the next mount from opening a fresh stream). The server-side job
-  // keeps running — walkthrough generation is decoupled from which PR
-  // is on screen, so two concurrent walkthroughs progress in parallel
-  // even after navigating between them.
-  deactivateWalkthrough();
 });
 </script>
 
@@ -426,7 +365,7 @@ onDestroy(() => {
 
 {#snippet walkthroughActions()}
 	{#if pr}
-		<WalkthroughActionBar prId={pr.id} scrollRoot={scrollRootEl ?? null} />
+		<WalkthroughActionBar prId={pr.id} />
 	{/if}
 {/snippet}
 
@@ -456,13 +395,9 @@ onDestroy(() => {
 	<div
 		class="review-content"
 		class:review-content--hidden={activeTab === 'diff'}
-		bind:this={scrollRootEl}
-		onscroll={handleScrollRootScroll}
+		use:scrollPane={{ prId: routePrIdOrEmpty, pane: scrollRootPane }}
 	>
-		<div
-			class="page-title-section"
-			class:page-title-section--narrow={activeTab === 'walkthrough' || activeTab === 'conversation'}
-		>
+		<div class="page-title-section review-columns">
 			<h1 class="page-title">{pr.title}</h1>
 			<span class="page-subtitle">#{pr.externalId} · {pr.sourceBranch} → {pr.targetBranch}</span>
 			{#if stackPlace}
@@ -486,11 +421,7 @@ onDestroy(() => {
 		<!-- Walkthrough: always mounted to avoid re-render freeze on tab switch.
 		     Heavy blocks (PierreFile, FileDiff, markdown) stay alive in DOM. -->
 		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'walkthrough'}>
-			<GuidedWalkthrough
-				prId={page.params['prId'] ?? ''}
-				scrollRoot={scrollRootEl}
-				isActive={activeTab === 'walkthrough'}
-			/>
+			<GuidedWalkthrough prId={routePrIdOrEmpty} />
 		</div>
 
 		<div class="tab-wrapper" class:tab-wrapper--hidden={activeTab !== 'conversation'}>
@@ -531,7 +462,8 @@ onDestroy(() => {
 		   one, so the grid never reflows. */
 		overflow-y: scroll;
 		scrollbar-gutter: stable;
-		container-type: inline-size;
+		/* The review-columns grid of both tabs sizes against this pane. */
+		container: review / inline-size;
 	}
 
 	.review-content--hidden {
@@ -551,51 +483,13 @@ onDestroy(() => {
 	/* ── Title section (scrolls away naturally with content) ─────────── */
 
 	.page-title-section {
-		display: flex;
-		flex-direction: column;
 		row-gap: 4px;
-		padding: 76px 32px 16px;
+		padding: 76px 0 16px;
 		flex-shrink: 0;
 	}
 
-	/* Walkthrough / Conversation tabs: title row lands on the exact same
-	   6-col grid used by every container inside GuidedWalkthrough (content,
-	   loading skeleton, stepper header, blocks, …). See the derivation in
-	   GuidedWalkthrough.svelte → `.walkthrough-content` for the col_1 math
-	   (main-area-anchored centring that re-centres on every sidebar/right-panel
-	   toggle). Template must stay byte-for-byte identical to the walkthrough
-	   grids so the title above and the content below align pixel-for-pixel. */
-	.page-title-section--narrow {
-		display: grid;
-		grid-template-columns:
-			max(24px, min(calc(50% - 458px), calc(100% - 1312px)))
-			48px
-			minmax(0, 820px)
-			40px
-			380px
-			minmax(24px, 1fr);
-		padding-left: 0;
-		padding-right: 0;
-		/* No transition on grid-template-columns: .app-shell already animates
-		   the parent grid, and the @container (max-width: 1335px) rule
-		   flipping mid-collapse interpolates linearly between rules that
-		   reallocate ~488px across tracks, briefly squeezing col_3 and
-		   wrapping the title. Per-frame formula re-eval keeps col_3 stable.
-		   The walkthrough grids below match. */
-	}
-
-	/* `:global(*)` is required here because the Badge rendered by this section
-	   (for the risk level) lives in a different Svelte component's CSS scope,
-	   so a scoped `> *` selector won't match it — Svelte would rewrite the
-	   child as `*.svelte-hash`, and Badge has a different hash. Without this,
-	   Badge falls to grid auto-placement and lands in cols 4/5/6 (far right
-	   of the title column), which is the "misplaced" symptom. */
-	.page-title-section--narrow > :global(*) {
-		grid-column: 3;
-	}
-
-	.page-title-section--narrow > .title-stack-thumb,
-	.page-title-section--narrow > .title-stack-note {
+	.page-title-section > .title-stack-thumb,
+	.page-title-section > .title-stack-note {
 		grid-row: 1;
 		align-self: start;
 		position: relative;
@@ -603,52 +497,34 @@ onDestroy(() => {
 		height: 0;
 	}
 
-	.page-title-section--narrow > .title-stack-thumb {
+	.page-title-section > .title-stack-thumb {
 		grid-column: 2;
 		display: flex;
 		justify-content: flex-end;
 		padding: 9px 14px 0 0;
 	}
 
-	.page-title-section--narrow > .title-stack-note {
+	.page-title-section > .title-stack-note {
 		grid-column: 5;
 		padding-top: 9px;
 	}
 
-	.page-title-section--narrow > .title-stack-line {
+	.page-title-section > .title-stack-line {
 		display: none;
 		min-width: 0;
 	}
 
-	@container (max-width: 1335px) {
-		.page-title-section--narrow > .title-stack-thumb {
+	@container review (max-width: 1335px) {
+		.page-title-section > .title-stack-thumb {
 			grid-column: 1;
 		}
 
-		.page-title-section--narrow > .title-stack-note {
+		.page-title-section > .title-stack-note {
 			display: none;
 		}
 
-		.page-title-section--narrow > .title-stack-line {
+		.page-title-section > .title-stack-line {
 			display: block;
-		}
-	}
-
-	@container (max-width: 1335px) {
-		/* Collapse the annotation-rail tracks below the 1336-px geometric
-		   minimum while keeping the same 6-track grid shape. Matching track
-		   counts lets the right-pane resize animate through this breakpoint
-		   instead of snapping from grid layout to block layout. Col_3 still
-		   starts at 72px (the base grid's 24 + 48), so the title text remains
-		   aligned with the walkthrough content at the threshold. */
-		.page-title-section--narrow {
-			grid-template-columns:
-				72px
-				0
-				minmax(0, 820px)
-				0
-				0
-				minmax(32px, 1fr);
 		}
 	}
 

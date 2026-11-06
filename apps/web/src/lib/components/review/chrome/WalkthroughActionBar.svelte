@@ -7,19 +7,21 @@ import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
 import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
+import { getScrollRoot, scrollToAnchor } from "$lib/stores/review-nav.svelte";
 import {
-  abort as abortWalkthrough,
-  generateWalkthrough,
   getHasUnreviewedCommits,
   getSelectedMode,
   getPendingAction as getWalkthroughPendingAction,
   getRatings as getWalkthroughRatings,
   getWalkthroughUiState,
-  loadReviewRounds,
+} from "$lib/stores/walkthrough.svelte";
+import {
+  abort as abortWalkthrough,
+  generateWalkthrough,
   regenerate as regenerateWalkthrough,
   regenerateFromScratch as regenerateWalkthroughFromScratch,
   resume as resumeWalkthrough,
-} from "$lib/stores/walkthrough.svelte";
+} from "$lib/stores/walkthrough-actions";
 import {
   WALKTHROUGH_PERSPECTIVE_OPTIONS,
   WALKTHROUGH_PERSPECTIVES,
@@ -27,11 +29,11 @@ import {
 
 interface Props {
   prId: string;
-  /** The page's walkthrough scroll container; null until it mounts. */
-  scrollRoot: HTMLElement | null;
 }
 
-let { prId, scrollRoot }: Props = $props();
+let { prId }: Props = $props();
+
+const scrollRoot = $derived(getScrollRoot("walkthrough"));
 
 let userScrolledUp = $state(false);
 let scrollHeightWhenLeft = $state(0);
@@ -74,29 +76,17 @@ function scrollToBottom(): void {
   scrollRoot.scrollTo({ top: scrollRoot.scrollHeight, behavior: "smooth" });
 }
 
-// Same 16px breathing room above the anchor as GuidedWalkthrough's own
-// rating button, so both land at the same offset.
 function scrollToRatings(): void {
-  if (!scrollRoot) return;
-  const el = document.getElementById("walkthrough-rating");
-  if (!el) return;
-  const containerRect = scrollRoot.getBoundingClientRect();
-  const elRect = el.getBoundingClientRect();
-  const offset = elRect.top - containerRect.top + scrollRoot.scrollTop - 16;
-  scrollRoot.scrollTo({ top: offset, behavior: "smooth" });
+  scrollToAnchor("walkthrough", "walkthrough-rating");
 }
 
-const walkthroughUiState = $derived(getWalkthroughUiState());
+const walkthroughUiState = $derived(getWalkthroughUiState(prId));
 const walkthroughPendingAction = $derived(getWalkthroughPendingAction(prId));
-const walkthroughHasRatings = $derived(getWalkthroughRatings().length > 0);
+const walkthroughHasRatings = $derived(getWalkthroughRatings(prId).length > 0);
 const chatStreaming = $derived(isChatStreaming(prId));
 const selectedMode = $derived(getSelectedMode(prId));
 const hasUnreviewedCommits = $derived(getHasUnreviewedCommits(prId));
 const reviewNewCommitsLabel = "Review new commits";
-
-$effect(() => {
-  void loadReviewRounds(prId);
-});
 
 /** Map walkthrough-specific state to the normalised GenActionState. */
 const genActionState = $derived.by((): GenActionState | null => {
