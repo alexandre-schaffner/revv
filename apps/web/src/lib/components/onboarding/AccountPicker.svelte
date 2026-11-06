@@ -6,7 +6,8 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import Sun from "phosphor-svelte/lib/Sun";
 import User from "phosphor-svelte/lib/User";
 import { gsapFade, tokens } from "$lib/motion";
-import { getIsSwitching, getLocalAccounts, switchAccount } from "$lib/stores/auth.svelte";
+import { switchSession } from "$lib/session/lifecycle.svelte";
+import { getIsSwitching, getLocalAccounts } from "$lib/stores/auth.svelte";
 import {
   getThemePreference,
   setThemePreference,
@@ -34,7 +35,7 @@ async function handlePick(userId: string, host: string): Promise<void> {
   if (isSwitching) return;
   switchingId = `${userId}:${host}`;
   try {
-    await switchAccount(userId, host);
+    await switchSession(userId, host);
   } finally {
     // Clear local state in case it fails. On success, OnboardingGate
     // swaps to the app shell automatically.

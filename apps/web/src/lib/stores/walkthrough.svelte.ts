@@ -22,8 +22,10 @@ import type {
   Activity,
   ActivityResult,
   CloneStatus,
+  PullRequest,
   RiskLevel,
   WalkthroughBlock,
+  WalkthroughEventEnvelope,
   WalkthroughIssue,
   WalkthroughLead,
   WalkthroughLifecyclePhase,
@@ -39,11 +41,12 @@ import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { api } from "$lib/api/client";
-import { getReviewModeForPr, updateRepoCloneStatus } from "$lib/stores/prs.svelte";
+import { authHeaders } from "$lib/session/token.svelte";
+import { getReviewModeForPr, getSelectedPrId, onReposCloneStatus } from "$lib/stores/prs.svelte";
 import { updateEntryInMap } from "$lib/stores/walkthrough-entry-equal";
 import { addressesActiveWalkthrough } from "$lib/stores/walkthrough-event-target";
-import { authHeaders } from "$lib/utils/session-token";
 import { wtTrace } from "$lib/utils/wt-trace";
+import { createResource } from "./resource";
 
 // ── Entry shape ─────────────────────────────────────────────────────────────
 
@@ -489,64 +492,40 @@ const pendingActions = $state({
   map: new SvelteMap<string, PendingAction>(),
 });
 
-type ReviewRoundsEntry =
-  | { status: "idle" | "loading" }
-  | { status: "error"; error: string }
-  | { status: "ready"; data: WalkthroughReviewRoundsResponse };
-
-const reviewRounds = $state({
-  entries: new SvelteMap<string, ReviewRoundsEntry>(),
+const reviewRounds = createResource<string, WalkthroughReviewRoundsResponse>({
+  fetch: async (_key, prId) => {
+    const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds`, {
+      headers: authHeaders(),
+      credentials: "include",
+    });
+    if (!res.ok) return { status: "error", error: `HTTP ${res.status}` };
+    return { status: "ok", data: (await res.json()) as WalkthroughReviewRoundsResponse };
+  },
 });
-
-const pendingReviewRoundLoads = new Map<string, Promise<WalkthroughReviewRoundsResponse | null>>();
 
 /** A PR's review rounds, both perspectives in one timeline (each round
  *  carries its `mode`): only one perspective is active per PR at a time. */
 export function getReviewRounds(prId: string): WalkthroughReviewRoundsResponse | null {
-  const entry = reviewRounds.entries.get(prId);
-  return entry?.status === "ready" ? entry.data : null;
+  return reviewRounds.data(prId);
 }
 
 export function getHasUnreviewedCommits(prId: string): boolean {
   return getReviewRounds(prId)?.hasNewCommits ?? false;
 }
 
-export async function loadReviewRounds(
-  prId: string,
-): Promise<WalkthroughReviewRoundsResponse | null> {
-  const inflight = pendingReviewRoundLoads.get(prId);
-  if (inflight) return inflight;
-
-  const promise = (async () => {
-    reviewRounds.entries.set(prId, { status: "loading" });
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/reviews/${prId}/walkthrough/rounds`, {
-        headers: authHeaders(),
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as WalkthroughReviewRoundsResponse;
-      reviewRounds.entries.set(prId, { status: "ready", data });
-      return data;
-    } catch (e) {
-      reviewRounds.entries.set(prId, {
-        status: "error",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return null;
-    } finally {
-      pendingReviewRoundLoads.delete(prId);
-    }
-  })();
-
-  pendingReviewRoundLoads.set(prId, promise);
-  return promise;
+export async function loadReviewRounds(prId: string): Promise<void> {
+  await reviewRounds.load(prId, prId);
 }
 
-export function refreshReviewRoundsForPrs(prIds: readonly string[]): void {
-  for (const prId of prIds) {
-    if (reviewRounds.entries.has(prId) || store.entries.has(prId) || store.activePrId === prId) {
-      void loadReviewRounds(prId);
+/** A PR moving changes its rounds; re-read them for every PR this store follows. */
+export function onPrsUpdated(prs: readonly PullRequest[]): void {
+  for (const { id } of prs) {
+    if (
+      reviewRounds.entry(id).request.status !== "idle" ||
+      store.entries.has(id) ||
+      store.activePrId === id
+    ) {
+      void loadReviewRounds(id);
     }
   }
 }
@@ -860,12 +839,12 @@ export function applyEvents(prId: string, events: WalkthroughStreamEvent[]): voi
 
 // ── Global SSE event entry point ────────────────────────────────────────────
 
-export function onWalkthroughEvent(
-  prId: string,
-  walkthroughId: string,
-  seq: number,
-  event: WalkthroughStreamEvent,
-): void {
+export function onWalkthroughEvent({
+  prId,
+  walkthroughId,
+  seq,
+  event,
+}: WalkthroughEventEnvelope["data"]): void {
   const selectedReportId = store.selectedReportIds.get(prId) ?? null;
   const entry = store.entries.get(prId);
   const foreign =
@@ -952,7 +931,7 @@ export function onWalkthroughEvent(
  * the UI would drop already-written events without ever rendering the content
  * they represent.
  */
-export async function hydrateActiveWalkthroughs(): Promise<void> {
+async function hydrateActiveWalkthroughs(): Promise<void> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/walkthroughs/active`, {
       headers: authHeaders(),
@@ -1062,7 +1041,19 @@ export function deactivate(): void {
 
 // ── Cache hydration ─────────────────────────────────────────────────────────
 
-const pendingHydration = new Map<string, Promise<boolean>>();
+interface HydrateOptions {
+  activate?: boolean;
+  replace?: boolean;
+  reportId?: string | null;
+}
+
+/** Concurrent hydrations of one PR's report share a request; the first caller's options win. */
+const hydrations = createResource<{ prId: string; options: HydrateOptions | undefined }, boolean>({
+  fetch: async (_key, { prId, options }) => ({
+    status: "ok",
+    data: await doHydrateFromCache(prId, options),
+  }),
+});
 
 // ── Walkthrough perspective ─────────────────────────────────────────────────
 //
@@ -1089,39 +1080,13 @@ export function getSelectedMode(prId: string): WalkthroughMode {
  * `GuidedWalkthrough.onMount` to render instantly on cache hit; live
  * progress for an in-flight job arrives via the global SSE bus.
  */
-export async function hydrateFromCache(
-  prId: string,
-  options?: {
-    activate?: boolean;
-    replace?: boolean;
-    reportId?: string | null;
-  },
-): Promise<boolean> {
-  const reportId = options?.reportId ?? null;
-  const key = `${prId}:${reportId ?? "current"}`;
-  const inflight = pendingHydration.get(key);
-  if (inflight) {
-    wtTrace("lifecycle", `hydrateFromCache deduped prId=${prId}`);
-    return inflight;
-  }
-
-  const promise = doHydrateFromCache(prId, options);
-  pendingHydration.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    pendingHydration.delete(key);
-  }
+export async function hydrateFromCache(prId: string, options?: HydrateOptions): Promise<boolean> {
+  const key = `${prId}:${options?.reportId ?? "current"}`;
+  const request = await hydrations.load(key, { prId, options });
+  return request.status === "ok" && request.data;
 }
 
-async function doHydrateFromCache(
-  prId: string,
-  options?: {
-    activate?: boolean;
-    replace?: boolean;
-    reportId?: string | null;
-  },
-): Promise<boolean> {
+async function doHydrateFromCache(prId: string, options?: HydrateOptions): Promise<boolean> {
   const reportId = options?.reportId ?? null;
   wtTrace("lifecycle", `hydrateFromCache enter prId=${prId}`);
   // A fresh run is starting: `/current` would still answer with the row it
@@ -1382,7 +1347,7 @@ export async function pollCloneUntilResolved(
 
       if (token.cancelled) return;
 
-      updateRepoCloneStatus(repoId, status, error ?? undefined);
+      onReposCloneStatus({ repoId, status, ...(error ? { error } : {}) });
 
       if (status === "ready") {
         // Clone finished — kick off generation; server will broadcast
@@ -1713,6 +1678,41 @@ export function clearAnimationTrackers(prId: string): void {
   animatedBlocks.delete(prId);
   animatedIssues.delete(prId);
   animatedContainers.delete(prId);
+}
+
+// ── Stream and session hooks ────────────────────────────────────────────────
+
+/**
+ * Every (re)connect: seed the sidebar and the seq cursors for in-flight
+ * walkthroughs the user wasn't watching. Best-effort: a failure means the
+ * sidebar spinner shows up late, not data loss.
+ */
+export function onEventsOpened(): void {
+  void hydrateActiveWalkthroughs();
+}
+
+/**
+ * Events broadcast while the stream was down reached no one; merge the open
+ * PR's DB snapshot back in. Background PRs catch up when their view mounts.
+ */
+export function onEventsReconnected(): void {
+  const prId = getSelectedPrId();
+  if (prId) void hydrateFromCache(prId, { activate: false });
+}
+
+export function reset(): void {
+  for (const prId of [...clonePollers.keys()]) stopClonePoll(prId);
+  store.entries.clear();
+  store.lastSeenSeq.clear();
+  store.selectedReportIds.clear();
+  store.activePrId = null;
+  pendingActions.map.clear();
+  reviewRounds.reset();
+  hydrations.reset();
+  lastEventAtByPr.clear();
+  animatedBlocks.clear();
+  animatedIssues.clear();
+  animatedContainers.clear();
 }
 
 export function hasBlockAnimated(prId: string, blockId: string): boolean {

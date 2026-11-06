@@ -1,7 +1,7 @@
 <script lang="ts">
 import "../app.css";
 import IconContext from "phosphor-svelte/lib/IconContext";
-import { onMount } from "svelte";
+import { onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel, fetchRuntimeHealth } from "$lib/api/runtime";
@@ -11,19 +11,16 @@ import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
 import { Toaster } from "$lib/components/ui/sonner";
 import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
-import { startPolling, stopPolling } from "$lib/services/sync";
-import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
+import { detachSession, restoreSession, startSession } from "$lib/session/lifecycle.svelte";
+import { getUser } from "$lib/stores/auth.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import {
-  fetchPinnedPrs,
-  fetchPrs,
-  fetchRepos,
   getSelectedPr,
   getSelectedPrId,
   setSelectedPrId,
   setSelectedRepoId,
 } from "$lib/stores/prs.svelte";
-import { fetchAllModels, fetchSettings, getSettings } from "$lib/stores/settings.svelte";
+import { fetchAllModels, fetchSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
 import { initTheme } from "$lib/stores/theme.svelte";
@@ -31,7 +28,6 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
-let hydrated = false;
 
 // Keep `selectedPrId` in sync with the URL.
 //
@@ -87,25 +83,21 @@ $effect(() => {
   setSidebarView(getSelectedPrId() ? "files" : "prs");
 });
 
-// When user becomes authenticated, hydrate app data.
+// An identity appearing (restore, sign-in) starts its session.
+// Only the user id is tracked: the session reads the token synchronously, and
+// subscribing to it would restart the session on every token rotation.
 $effect(() => {
-  const user = getUser();
-  if (user && !hydrated) {
-    hydrated = true;
-    hydrate();
-  }
-  if (!user) {
-    hydrated = false;
-  }
+  const userId = getUser()?.id;
+  if (userId) untrack(() => startSession(userId));
 });
 
 // Runs once, on mount. Deliberately `onMount` and not `$effect`: several of
-// these helpers read reactive state synchronously (`loadUser()` and
+// these helpers read reactive state synchronously (`restoreSession()` and
 // `fetchAllModels()` both touch the auth token before their first `await`), so
 // an effect would subscribe to it. A token change — better-auth handing back a
 // refreshed `set-auth-token` on sign-in — then tore the whole thing down and
-// re-ran it: polling restarted and, worse, the updater re-armed and fired a
-// second immediate check, producing a duplicate "Update available" toast.
+// re-ran it: the updater re-armed and fired a second immediate check,
+// producing a duplicate "Update available" toast.
 onMount(() => {
   initGsap();
   const cleanupTheme = initTheme();
@@ -136,10 +128,7 @@ onMount(() => {
       });
     });
 
-  // On mount: try to restore auth from localStorage.
-  // If the token is valid, loadUser() sets the user, which triggers
-  // the hydration effect above.
-  loadUser();
+  restoreSession();
   // Fetch settings before arming the updater check loop.
   // Model prefetch doesn't block anything, so it starts in parallel.
   void fetchAllModels();
@@ -156,23 +145,10 @@ onMount(() => {
     cleanupTheme();
     cleanupShortcuts();
     cleanupDeepLinks?.();
-    stopPolling();
+    detachSession();
     stopUpdater();
   };
 });
-
-async function hydrate() {
-  // Load cached data first (instant UI)
-  await Promise.all([fetchPrs(), fetchRepos(), fetchPinnedPrs(), fetchSettings()]);
-
-  // Then kick off a live sync from GitHub
-  const token = getToken();
-  if (!token) return;
-
-  const s = getSettings();
-  const interval = s?.autoFetchInterval ?? 5;
-  startPolling(interval, token);
-}
 </script>
 
 <!-- Iconography defaults (phosphor-svelte). One place decides how every icon

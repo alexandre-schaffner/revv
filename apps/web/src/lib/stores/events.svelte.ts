@@ -1,374 +1,159 @@
 // ── Global SSE event stream ─────────────────────────────────────────────────
 //
-// Owns the long-lived `EventSource` to `GET /api/events?token=…` for the
-// authenticated session. Replaces the per-PR walkthrough SSE — walkthrough
-// events now arrive on this single connection regardless of which PR the
-// user is viewing.
+// Owns the long-lived `EventSource` to `GET /api/events?token=…` and routes
+// each envelope, whole, to the stores that own its state. Stores filter on
+// envelope fields themselves and own their reconcile after a reconnect or a
+// return to the window; this module only knows who listens to what.
 //
-// Why SSE: `EventSource` provides free reconnect with
-// `Last-Event-ID`. We don't use the server-side replay (no event buffer —
-// reconciliation happens via REST snapshots), but we still get automatic
-// reconnect-on-disconnect and a one-directional channel that matches the
-// access pattern (server pushes only).
+// There is no server-side replay: a client that missed events re-reads the
+// DB (invariant 8), through the hooks below.
 //
-// Auth: `?token=` query param. `EventSource` cannot set custom headers,
-// so we mirror the pattern used by authenticated realtime routes.
+// Auth: `?token=` query param. `EventSource` cannot set custom headers.
 
-import type { ServerEventMessage, SyncChange } from "@revv/shared";
-import { toast } from "svelte-sonner";
+import type { ServerEventMessage } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { applyUserUpdate, clearReauthRequired, setReauthRequired } from "./auth.svelte";
+import { getToken } from "$lib/session/token.svelte";
+import * as auth from "./auth.svelte";
 import { onChatQuestionResolved } from "./chat.svelte";
 import { onPrConversationUpdated } from "./conversation.svelte";
 import { setError } from "./errors.svelte";
-import {
-  ensureHunkScan,
-  onHunkScanComplete,
-  onHunkScanHunk,
-  onHunkScanStarted,
-} from "./hunk-scan.svelte";
-import {
-  fetchPinnedPrs,
-  fetchPrs,
-  fetchRepos,
-  getSelectedPrId,
-  onPrArchived,
-  replacePullRequests,
-  setRepositories,
-  updateRepoCloneStatus,
-} from "./prs.svelte";
+import * as hunkScan from "./hunk-scan.svelte";
+import * as prs from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
-import {
-  getLoadedHeadSha,
-  loadSession,
-  onThreadCreated,
-  onThreadDeleted,
-  onThreadMessage,
-  onThreadMessageDeleted,
-  onThreadMessageEdited,
-  onThreadUpdated,
-} from "./review.svelte";
+import * as review from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
-import { onStackHeadlineSignal } from "./stack-headlines.svelte";
+import * as stackHeadlines from "./stack-headlines.svelte";
 import { onStackMergeProgress } from "./stack-merge.svelte";
-import {
-  onMemberWalkthroughLifecycle,
-  onStackBriefStatusChanged,
-  onStackUpdated,
-} from "./stacks.svelte";
-import {
-  applySynced,
-  freshenPrList,
-  refreshPrHead,
-  requestThreadSync,
-  setPrListSyncing,
-  setSyncError,
-} from "./sync.svelte";
-import {
-  hydrateActiveWalkthroughs,
-  hydrateFromCache,
-  onWalkthroughEvent,
-  refreshReviewRoundsForPrs,
-} from "./walkthrough.svelte";
+import * as stacks from "./stacks.svelte";
+import * as sync from "./sync.svelte";
+import * as walkthrough from "./walkthrough.svelte";
 
-let source: EventSource | null = null;
-let activeHostOverride: string | null = null;
-// EventSource fires `open` on the first connect AND on every auto-reconnect;
-// we use this counter to distinguish them (see the `open` handler below).
-let openCount = 0;
-let lastEventTime = 0;
-let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+/** Every (re)connect, the first included. */
+const ON_OPEN: ReadonlyArray<() => void> = [walkthrough.onEventsOpened, sync.onEventsOpened];
+
+/** A reconnect: events sent while the stream was down reached no one. */
+const ON_RECONNECT: ReadonlyArray<() => void> = [
+  prs.onEventsReconnected,
+  walkthrough.onEventsReconnected,
+  hunkScan.onEventsReconnected,
+  review.onEventsReconnected,
+];
+
+/** The window came back to the foreground while a stream exists. */
+const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
+  sync.onWindowForeground,
+  review.onWindowForeground,
+  prs.onWindowForeground,
+];
 
 const DEAD_CONNECTION_THRESHOLD_MS = 60_000;
 const KEEPALIVE_CHECK_INTERVAL_MS = 30_000;
 const RECONNECT_RECONCILE_DEBOUNCE_MS = 4_000;
-let lastReconcileAt = 0;
+const RECOVER_BASE_MS = 1_000;
+const RECOVER_MAX_MS = 30_000;
 
-function notifySyncChanges(changes: SyncChange[]): void {
-  if (changes.length === 0) return;
-  if (changes.length > 3) {
-    toast.info(`${changes.length} pull request updates`);
-    return;
-  }
-  for (const change of changes) {
-    const description = `${change.repoFullName} #${change.prNumber}: ${change.prTitle}`;
-    switch (change.kind) {
-      case "review_requested":
-        toast.info("Review requested", { description });
-        break;
-      case "pr_updated":
-        toast.info("PR updated", { description });
-        break;
-      case "pr_closed":
-        toast.info("PR closed", { description });
-        break;
-      case "pr_authored":
-        toast.info("Your new PR", { description });
-        break;
-    }
-  }
-}
-
-function startWatchdog(token: string): void {
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  watchdogTimer = setInterval(() => {
-    if (
-      source &&
-      source.readyState === EventSource.OPEN &&
-      Date.now() - lastEventTime > DEAD_CONNECTION_THRESHOLD_MS
-    ) {
-      const host = activeHostOverride ?? undefined;
-      source.close();
-      source = null;
-      connect(token, host);
-    }
-  }, KEEPALIVE_CHECK_INTERVAL_MS);
-}
-
-function reconcileOnReconnect(): void {
-  const now = Date.now();
-  if (now - lastReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
-  lastReconcileAt = now;
-
-  void Promise.all([fetchRepos(), fetchPrs(), fetchPinnedPrs()]);
-  const selectedPrId = getSelectedPrId();
-  if (selectedPrId) {
-    void hydrateFromCache(selectedPrId, { activate: false });
-    const loadedHeadSha = getLoadedHeadSha(selectedPrId);
-    if (loadedHeadSha) void ensureHunkScan(selectedPrId, loadedHeadSha);
-    requestThreadSync(selectedPrId);
-    void loadSession(selectedPrId);
-    // A dropped connection means we may also have missed a head-SHA move; the
-    // reads above are DB-only, so ask GitHub about this one PR.
-    refreshPrHead(selectedPrId);
-  }
-}
-
-/**
- * Re-read local state when the window comes back to the foreground.
- *
- * The server's poll fiber sleeps between cycles, so after the machine suspends
- * — or the app simply sits in the background — the first thing the user sees on
- * return is up to a full interval stale, with no event inbound to correct it.
- * The list reads are DB-only REST (no GitHub traffic), so running them on every
- * focus is cheap; the same debounce as the reconnect path keeps a rapid
- * alt-tab from firing repeatedly.
- *
- * The selected PR gets one step more: a GitHub-backed head-SHA refresh. Coming
- * back to the window is exactly the moment the user pushed from a terminal, and
- * a DB read can't see a commit the poll fiber hasn't fetched yet — which is what
- * left the "Pull" affordance dark for up to a full poll interval. `refreshPrHead`
- * carries its own longer debounce because it costs a GitHub request.
- *
- * The list gets the same treatment through `freshenPrList`: the DB reads can
- * only show what the poll fiber already fetched, so the server is also asked
- * to check GitHub, and patches the list over SSE if anything moved.
- */
-function reconcileOnForeground(): void {
-  if (document.visibilityState !== "visible") return;
-  if (!source || source.readyState === EventSource.CLOSED) return;
-  // CONNECTING defers to the `open` handler, which asks once the stream that
-  // carries the answer is registered.
-  if (source.readyState === EventSource.OPEN) freshenPrList();
-  const selectedPrId = getSelectedPrId();
-  if (selectedPrId) refreshPrHead(selectedPrId);
-  const now = Date.now();
-  if (now - lastReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
-  lastReconcileAt = now;
-  void Promise.all([fetchRepos(), fetchPrs(), fetchPinnedPrs()]);
-}
-
+let source: EventSource | null = null;
+let activeHostOverride: string | null = null;
+// EventSource fires `open` on the first connect AND on every auto-reconnect.
+let openCount = 0;
+let lastEventTime = 0;
+let lastReconnectReconcileAt = 0;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let recoverTimer: ReturnType<typeof setTimeout> | null = null;
+let recoverAttempts = 0;
 let foregroundListenersBound = false;
-
-function bindForegroundReconcile(): void {
-  if (foregroundListenersBound || typeof document === "undefined") return;
-  foregroundListenersBound = true;
-  document.addEventListener("visibilitychange", reconcileOnForeground);
-  window.addEventListener("focus", reconcileOnForeground);
-}
-
-/**
- * Open the global SSE stream for the given bearer token. Closes any
- * existing connection first. Called from `auth.svelte.ts` on sign-in /
- * account-switch.
- *
- * `hostOverride` lets account-switch hand
- * us a specific host the local settings store is still empty for, we
- * pass it explicitly so the server binds the connection to the right
- * account on the first attempt.
- */
-export function connect(token: string, hostOverride?: string): void {
-  if (source) {
-    disconnect();
-  }
-  if (hostOverride !== undefined) activeHostOverride = hostOverride;
-  const host = activeHostOverride ?? getGithubHost();
-  const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
-  const url = `${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}${hostParam}`;
-  const es = new EventSource(url);
-  source = es;
-  openCount = 0;
-  lastEventTime = Date.now();
-  startWatchdog(token);
-  bindForegroundReconcile();
-
-  es.addEventListener("open", () => {
-    lastEventTime = Date.now();
-    openCount += 1;
-    // On (re)connect: seed sidebar + lastSeenSeq cursors for any
-    // in-flight walkthroughs the user wasn't watching. Best-effort —
-    // failures here mean the sidebar spinner shows up late, not data loss.
-    void hydrateActiveWalkthroughs();
-
-    // The list just painted from SQLite can be a poll interval behind GitHub.
-    // Asked here rather than at hydration because the answer comes back over
-    // this stream, which is only guaranteed to be registered once it's open.
-    freshenPrList();
-
-    // On RECONNECT only, refetch the active PR's snapshot. Events broadcast
-    // during the disconnect gap hit zero writers and are gone from this
-    // client; hydrateFromCache merges the DB snapshot back into the entry.
-    // Background PRs catch up via the component-mount hydration path.
-    if (openCount > 1) {
-      reconcileOnReconnect();
-    }
-  });
-
-  es.addEventListener("error", () => {
-    // EventSource auto-reconnects on transient failures (its built-in
-    // backoff). We don't manually reconnect because that would race the
-    // browser's retry. If `readyState === CLOSED` after a hard failure,
-    // the next sign-in / account-switch will create a fresh source.
-  });
-
-  es.addEventListener("heartbeat", () => {
-    lastEventTime = Date.now();
-  });
-
-  es.addEventListener("message", (event: MessageEvent<string>) => {
-    lastEventTime = Date.now();
-    let msg: ServerEventMessage;
-    try {
-      msg = JSON.parse(event.data) as ServerEventMessage;
-    } catch (err) {
-      console.warn("[events] malformed message:", err);
-      return;
-    }
-    dispatch(msg);
-  });
-}
 
 function dispatch(msg: ServerEventMessage): void {
   switch (msg.type) {
     case "walkthrough:event":
-      onWalkthroughEvent(msg.data.prId, msg.data.walkthroughId, msg.data.seq, msg.data.event);
-      if (msg.data.event.type.startsWith("lifecycle:")) onMemberWalkthroughLifecycle(msg.data.prId);
+      walkthrough.onWalkthroughEvent(msg.data);
+      stacks.onWalkthroughEvent(msg.data);
       break;
     case "stack:updated":
-      onStackUpdated(msg.data);
-      onStackHeadlineSignal(msg.data);
+      stacks.onStackUpdated(msg.data);
+      stackHeadlines.onStackUpdated(msg.data);
       break;
     case "stack-merge:progress":
       onStackMergeProgress(msg.data);
       break;
     case "stack-brief:status-changed":
-      onStackBriefStatusChanged(msg.data);
-      onStackHeadlineSignal(msg.data);
+      stacks.onStackBriefStatusChanged(msg.data);
+      stackHeadlines.onStackBriefStatusChanged(msg.data);
       break;
     case "hunk-scan:started":
-      onHunkScanStarted(msg.data);
+      hunkScan.onHunkScanStarted(msg.data);
       break;
     case "hunk-scan:hunk":
-      onHunkScanHunk(msg.data);
+      hunkScan.onHunkScanHunk(msg.data);
       break;
     case "hunk-scan:complete":
-      onHunkScanComplete(msg.data);
+      hunkScan.onHunkScanComplete(msg.data);
       break;
     case "prs:updated":
-      replacePullRequests(msg.data);
-      refreshReviewRoundsForPrs(msg.data.map((pr) => pr.id));
+      prs.onPrsUpdated(msg.data);
+      walkthrough.onPrsUpdated(msg.data);
       break;
     case "pr:archived":
-      onPrArchived(msg.data);
+      prs.onPrArchived(msg.data);
       break;
     case "pr:conversation-updated":
       onPrConversationUpdated(msg.data);
       break;
     case "prs:sync-started":
-      setPrListSyncing(true);
+      sync.onPrsSyncStarted();
       break;
     case "prs:sync-complete":
-      setPrListSyncing(false);
+      sync.onPrsSyncComplete();
+      break;
+    case "prs:sync-summary":
+      sync.onPrsSyncSummary(msg.data);
       break;
     case "repos:updated":
-      void setRepositories(msg.data);
+      prs.onReposUpdated(msg.data);
       break;
     case "repos:clone-status":
-      updateRepoCloneStatus(msg.data.repoId, msg.data.status, msg.data.error);
+      prs.onReposCloneStatus(msg.data);
       break;
     case "user:updated":
-      applyUserUpdate({
-        image: msg.data.image,
-        githubLogin: msg.data.githubLogin,
-        name: msg.data.name,
-        email: msg.data.email,
-      });
+      auth.onUserUpdated(msg.data);
       break;
     case "error":
-      // A sync failure is a terminal outcome for that sync, and no
-      // `prs:sync-complete` follows it — so release the sidebar spinner here or
-      // it spins until the next successful cycle.
-      if (msg.data.code === "SYNC_ERROR") setPrListSyncing(false);
+      sync.onError(msg.data);
       setError(msg.data);
       break;
     case "auth:reauth-required":
-      setReauthRequired({ host: msg.data.host, githubLogin: msg.data.githubLogin });
+      auth.onAuthReauthRequired(msg.data);
       break;
     case "auth:reauth-cleared":
-      clearReauthRequired();
+      auth.onAuthReauthCleared();
       break;
     case "thread:created":
-      onThreadCreated(msg.data.thread, msg.data.message);
+      review.onThreadCreated(msg.data);
       break;
     case "thread:updated":
-      onThreadUpdated(msg.data.threadId, msg.data.status);
+      review.onThreadUpdated(msg.data);
       break;
     case "thread:message":
-      onThreadMessage(msg.data.threadId, msg.data.message);
+      review.onThreadMessage(msg.data);
       break;
     case "thread:deleted":
-      onThreadDeleted(msg.data.threadId);
+      review.onThreadDeleted(msg.data);
       break;
     case "thread:message:edited":
-      onThreadMessageEdited(msg.data.threadId, msg.data.message);
+      review.onThreadMessageEdited(msg.data);
       break;
     case "thread:message:deleted":
-      onThreadMessageDeleted(msg.data.threadId, msg.data.messageId);
+      review.onThreadMessageDeleted(msg.data);
       break;
     case "threads:synced":
-      applySynced(msg.data.prId, msg.data.summary, msg.data.timestamp);
-      if (msg.data.prId === getSelectedPrId()) {
-        // Forced: the server only emits this envelope when the pull actually
-        // moved something (or the user asked for the sync), which is precisely
-        // the case `loadSession`'s 60 s short-circuit must not swallow. Opening
-        // a PR hydrates the session and immediately force-syncs its threads, so
-        // without this the comments that sync brought in stay invisible until
-        // the window lapses.
-        void loadSession(msg.data.prId, undefined, true);
-      }
+      sync.onThreadsSynced(msg.data);
+      review.onThreadsSynced(msg.data);
       break;
     case "threads:sync-error":
-      setSyncError(msg.data.prId, msg.data.message);
-      toast.error("Comment sync failed", {
-        description: msg.data.message,
-        duration: 6000,
-      });
+      sync.onThreadsSyncError(msg.data);
       break;
     case "threads:new-reply":
-      onThreadCreated(msg.data.thread, msg.data.message);
-      break;
-    case "prs:sync-summary":
-      notifySyncChanges(msg.data);
+      review.onThreadsNewReply(msg.data);
       break;
     case "chat:question-resolved":
       onChatQuestionResolved(
@@ -393,14 +178,130 @@ function dispatch(msg: ServerEventMessage): void {
   }
 }
 
+function onStreamOpen(): void {
+  lastEventTime = Date.now();
+  recoverAttempts = 0;
+  openCount += 1;
+  for (const hook of ON_OPEN) hook();
+  if (openCount === 1) return;
+  const now = Date.now();
+  if (now - lastReconnectReconcileAt < RECONNECT_RECONCILE_DEBOUNCE_MS) return;
+  lastReconnectReconcileAt = now;
+  for (const hook of ON_RECONNECT) hook();
+}
+
+function onWindowForeground(): void {
+  if (document.visibilityState !== "visible" || !source) return;
+  if (source.readyState === EventSource.CLOSED) {
+    recoverAttempts = 0;
+    reopen();
+    return;
+  }
+  const streamOpen = source.readyState === EventSource.OPEN;
+  for (const hook of ON_FOREGROUND) hook(streamOpen);
+}
+
+function bindForegroundListeners(): void {
+  if (foregroundListenersBound || typeof document === "undefined") return;
+  foregroundListenersBound = true;
+  document.addEventListener("visibilitychange", onWindowForeground);
+  window.addEventListener("focus", onWindowForeground);
+}
+
+function clearRecoverTimer(): void {
+  if (recoverTimer) clearTimeout(recoverTimer);
+  recoverTimer = null;
+}
+
+/** Replace the stream; `openCount` carries over, so its `open` counts as a reconnect. */
+function reopen(): void {
+  clearRecoverTimer();
+  source?.close();
+  source = null;
+  open();
+}
+
+/**
+ * A hard failure (401/5xx on a reconnect) leaves the `EventSource` CLOSED
+ * and the browser stops retrying; reopen it with backoff.
+ */
+function scheduleRecover(): void {
+  if (recoverTimer) return;
+  const delay = Math.min(RECOVER_BASE_MS * 2 ** recoverAttempts, RECOVER_MAX_MS);
+  recoverAttempts += 1;
+  recoverTimer = setTimeout(reopen, delay);
+}
+
+function startWatchdog(): void {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(() => {
+    if (!source) return;
+    if (source.readyState === EventSource.CLOSED) {
+      scheduleRecover();
+    } else if (
+      source.readyState === EventSource.OPEN &&
+      Date.now() - lastEventTime > DEAD_CONNECTION_THRESHOLD_MS
+    ) {
+      reopen();
+    }
+  }, KEEPALIVE_CHECK_INTERVAL_MS);
+}
+
+function open(): void {
+  const token = getToken();
+  if (!token) return;
+  const host = activeHostOverride ?? getGithubHost();
+  const hostParam = host ? `&host=${encodeURIComponent(host)}` : "";
+  const es = new EventSource(
+    `${API_BASE_URL}/api/events?token=${encodeURIComponent(token)}${hostParam}`,
+  );
+  source = es;
+  lastEventTime = Date.now();
+
+  es.addEventListener("open", () => {
+    if (source === es) onStreamOpen();
+  });
+  es.addEventListener("error", () => {
+    // The browser retries transient failures itself; only a source it gave
+    // up on needs us.
+    if (source === es && es.readyState === EventSource.CLOSED) scheduleRecover();
+  });
+  es.addEventListener("heartbeat", () => {
+    lastEventTime = Date.now();
+  });
+  es.addEventListener("message", (event: MessageEvent<string>) => {
+    lastEventTime = Date.now();
+    let msg: ServerEventMessage;
+    try {
+      msg = JSON.parse(event.data) as ServerEventMessage;
+    } catch (err) {
+      console.warn("[events] malformed message:", err);
+      return;
+    }
+    dispatch(msg);
+  });
+}
+
+/**
+ * Open the stream for the current session token, closing any open one.
+ * `hostOverride` binds the stream to an account whose host the settings
+ * store doesn't hold yet (an account switch); it sticks across reconnects.
+ */
+export function connect(hostOverride?: string): void {
+  disconnect();
+  if (hostOverride !== undefined) activeHostOverride = hostOverride;
+  openCount = 0;
+  recoverAttempts = 0;
+  startWatchdog();
+  bindForegroundListeners();
+  open();
+}
+
 export function disconnect(): void {
-  if (watchdogTimer) {
-    clearInterval(watchdogTimer);
-    watchdogTimer = null;
-  }
-  if (source) {
-    source.close();
-    source = null;
-  }
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = null;
+  clearRecoverTimer();
+  source?.close();
+  source = null;
   activeHostOverride = null;
 }

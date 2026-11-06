@@ -1,7 +1,7 @@
 import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
 import { isMergeStateSettling } from "$lib/utils/merge-blocker";
-import { RequestState } from "./_types";
 import { getMergeEligibility } from "./prs.svelte";
+import { createResource } from "./resource";
 
 /** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
 export interface MergeQuestion {
@@ -11,30 +11,23 @@ export interface MergeQuestion {
   readonly ciState: CiRollupState | null;
 }
 
-interface Entry {
-  readonly question: MergeQuestion;
-  readonly request: RequestState<MergeEligibility>;
-  readonly askedAt: number;
-}
-
-const RETRY_MS = 3_000;
-const MAX_RETRIES = 4;
-const FRESH_FOR_MS = 15_000;
-
-let entries = $state(new Map<string, Entry>());
-
-const generations = new Map<string, number>();
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function setEntry(prId: string, entry: Entry): void {
-  entries.set(prId, entry);
-  entries = new Map(entries);
-}
-
-function updateEntry(prId: string, update: (entry: Entry) => Entry): void {
-  const entry = entries.get(prId);
-  if (entry) setEntry(prId, update(entry));
-}
+/**
+ * Per PR, versioned by the question: a different question supersedes the
+ * running ask, while the PR's last answer stays up. An answer GitHub is still
+ * settling (it computes mergeability lazily after a push) is asked again.
+ */
+const answers = createResource<void, MergeEligibility>({
+  freshForMs: 15_000,
+  retryDelaysMs: [3_000, 3_000, 3_000, 3_000],
+  fetch: async (prId) => {
+    const eligibility = await getMergeEligibility(prId);
+    if (!eligibility)
+      return { status: "error", error: "Couldn't check whether this can be merged" };
+    return isMergeStateSettling(eligibility.mergeStateStatus)
+      ? { status: "pending", data: eligibility }
+      : { status: "ok", data: eligibility };
+  },
+});
 
 /**
  * The question for a PR as Revv currently sees it. Everyone who asks about
@@ -53,67 +46,20 @@ export function mergeQuestionFor(
   };
 }
 
-function sameQuestion(a: MergeQuestion, b: MergeQuestion): boolean {
-  return (
-    a.prId === b.prId &&
-    a.headSha === b.headSha &&
-    a.reviewDecision === b.reviewDecision &&
-    a.ciState === b.ciState
-  );
+function questionVersion(q: MergeQuestion): string {
+  return `${q.headSha}|${q.reviewDecision}|${q.ciState}`;
 }
 
 /** The PR's latest answer; null without a question. */
 export function getMergeAnswer(question: MergeQuestion | null): MergeEligibility | null {
-  const request = question ? entries.get(question.prId)?.request : undefined;
-  return request?.status === "ok" ? request.data : null;
+  return question ? answers.data(question.prId) : null;
 }
 
-/**
- * Asks GitHub unless an equal question is in flight, retrying, or answered
- * under `FRESH_FOR_MS` ago. The PR's last answer stays up meanwhile.
- */
+/** Asks GitHub unless an equal question is in flight, retrying, or answered recently. */
 export function askMergeEligibility(question: MergeQuestion): void {
-  const { prId } = question;
-  const entry = entries.get(prId);
-  if (
-    entry &&
-    sameQuestion(entry.question, question) &&
-    (entry.request.status === "loading" ||
-      retryTimers.has(prId) ||
-      Date.now() - entry.askedAt < FRESH_FOR_MS)
-  ) {
-    return;
-  }
-  clearTimeout(retryTimers.get(prId));
-  retryTimers.delete(prId);
-  const generation = (generations.get(prId) ?? 0) + 1;
-  generations.set(prId, generation);
-  setEntry(prId, {
-    question,
-    request: entry?.request.status === "ok" ? entry.request : RequestState.loading(),
-    askedAt: Date.now(),
-  });
-  ask(prId, generation, MAX_RETRIES);
+  void answers.load(question.prId, undefined, questionVersion(question));
 }
 
-function ask(prId: string, generation: number, retriesLeft: number): void {
-  void getMergeEligibility(prId).then((eligibility) => {
-    if (generations.get(prId) !== generation) return;
-    updateEntry(prId, (entry) => ({
-      ...entry,
-      request: eligibility
-        ? RequestState.ok(eligibility)
-        : RequestState.error("Couldn't check whether this can be merged"),
-      askedAt: Date.now(),
-    }));
-    if (eligibility && isMergeStateSettling(eligibility.mergeStateStatus) && retriesLeft > 0) {
-      retryTimers.set(
-        prId,
-        setTimeout(() => {
-          retryTimers.delete(prId);
-          if (generations.get(prId) === generation) ask(prId, generation, retriesLeft - 1);
-        }, RETRY_MS),
-      );
-    }
-  });
+export function reset(): void {
+  answers.reset();
 }

@@ -4,8 +4,8 @@ import ImageBroken from "phosphor-svelte/lib/ImageBroken";
 import { onDestroy } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { authHeaders } from "$lib/session/token.svelte";
 import type { ReviewFile } from "$lib/types/review";
-import { authHeaders } from "$lib/utils/session-token";
 
 interface Props {
   prId: string;

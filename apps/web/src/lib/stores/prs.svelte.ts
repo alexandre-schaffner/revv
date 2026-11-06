@@ -331,7 +331,7 @@ export function getTaggedPrsResolved(): boolean {
  * The server sends the canonical DB list for the active account, so replacing
  * avoids stale closed/reopened rows and preserves server ordering.
  */
-export function replacePullRequests(incoming: PullRequest[]): void {
+export function onPrsUpdated(incoming: PullRequest[]): void {
   pullRequests = incoming;
   if (incoming.length === 0 || archivedPrs.length === 0) return;
 
@@ -357,7 +357,7 @@ export function upsertPullRequest(pullRequest: PullRequest): void {
 
 let repositoryLoadSeq = 0;
 
-export async function setRepositories(repos: Repository[]): Promise<void> {
+async function setRepositories(repos: Repository[]): Promise<void> {
   const seq = ++repositoryLoadSeq;
   await preloadOwnerHues(repos);
   if (seq === repositoryLoadSeq) repositories = repos;
@@ -394,10 +394,47 @@ function removeRepoLocally(repoId: string): void {
   }
 }
 
-export function updateRepoCloneStatus(repoId: string, status: CloneStatus, error?: string): void {
+export function onReposUpdated(repos: Repository[]): void {
+  void setRepositories(repos);
+}
+
+export function onReposCloneStatus(data: {
+  repoId: string;
+  status: CloneStatus;
+  error?: string;
+}): void {
   repositories = repositories.map((r) =>
-    r.id === repoId ? { ...r, cloneStatus: status, cloneError: error ?? r.cloneError } : r,
+    r.id === data.repoId
+      ? { ...r, cloneStatus: data.status, cloneError: data.error ?? r.cloneError }
+      : r,
   );
+}
+
+// The list reads are DB-only (no GitHub traffic), so they're cheap; the
+// debounce only keeps a reconnect and a focus, or a rapid alt-tab, from
+// reading twice.
+const LIST_REREAD_DEBOUNCE_MS = 4_000;
+let lastListRereadAt = 0;
+
+function rereadLists(): void {
+  const now = Date.now();
+  if (now - lastListRereadAt < LIST_REREAD_DEBOUNCE_MS) return;
+  lastListRereadAt = now;
+  void Promise.all([fetchRepos(), fetchPrs(), fetchPinnedPrs()]);
+}
+
+/** Updates broadcast while the stream was down reached no one. */
+export function onEventsReconnected(): void {
+  rereadLists();
+}
+
+/**
+ * The server's poll fiber sleeps between cycles, so after the machine
+ * suspends, or the app sits in the background, the list can be up to a full
+ * interval stale with no event inbound to correct it.
+ */
+export function onWindowForeground(): void {
+  rereadLists();
 }
 
 export async function fetchPrs(): Promise<void> {
@@ -923,17 +960,15 @@ export async function mergePr(prId: string, mergeMethod: MergeMethod): Promise<v
 }
 
 export async function retryClone(id: string): Promise<void> {
-  // Optimistic flip so the spinner appears immediately. The server's
-  // background fiber will broadcast 'cloning' then 'ready'/'error' via the
-  // `repos:clone-status` SSE message, which `events.svelte.ts` routes through
-  // `updateRepoCloneStatus`. If the POST itself fails, we surface the error
-  // state here so the indicator stays actionable.
-  updateRepoCloneStatus(id, "pending", "");
+  // Optimistic flip so the spinner appears immediately; the server's
+  // background fiber then broadcasts `repos:clone-status`. If the POST itself
+  // fails, the error state keeps the indicator actionable.
+  onReposCloneStatus({ repoId: id, status: "pending", error: "" });
   try {
     await api.api.repos({ id })["retry-clone"].post();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed to retry clone";
-    updateRepoCloneStatus(id, "error", msg);
+    onReposCloneStatus({ repoId: id, status: "error", error: msg });
     toast.error(msg);
     throw e;
   }
@@ -1080,7 +1115,9 @@ export function reset(): void {
   teamsLoadingByOrg = new Map();
   teamsFailedByOrg = new Map();
   isLoading = false;
+  prsFetchAttempted = false;
   reposFetchAttempted = false;
+  lastListRereadAt = 0;
   archivedPrs = [];
   linkedPrs = new Map();
   archivedNextCursor = null;

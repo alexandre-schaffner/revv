@@ -1,4 +1,5 @@
 <script lang="ts">
+import { AUTO_FETCH_DEFAULT_INTERVAL } from "@revv/shared";
 import ArrowCounterClockwise from "phosphor-svelte/lib/ArrowCounterClockwise";
 import Columns from "phosphor-svelte/lib/Columns";
 import Desktop from "phosphor-svelte/lib/Desktop";
@@ -11,7 +12,6 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { SegmentedControl, type SegmentedOption } from "$lib/components/ui/segmented-control";
 import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
-import { restartPolling } from "$lib/services/sync";
 import { resetOnboarding } from "$lib/stores/auth.svelte";
 import { getDiffWrap, setDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
@@ -56,7 +56,7 @@ const intervalOptions = [
   { label: "Every 30 minutes", value: 30 },
 ];
 
-const interval = $derived(getSettings()?.autoFetchInterval ?? 5);
+const interval = $derived(getSettings()?.autoFetchInterval ?? AUTO_FETCH_DEFAULT_INTERVAL);
 const intervalLabel = $derived(
   intervalOptions.find((o) => o.value === interval)?.label ?? `Every ${interval} minutes`,
 );
@@ -65,7 +65,6 @@ function handleIntervalChange(value: string | undefined): void {
   if (!value) return;
   const minutes = Number(value);
   void updateSettings({ autoFetchInterval: minutes });
-  restartPolling(minutes);
 }
 
 let replaying = $state(false);

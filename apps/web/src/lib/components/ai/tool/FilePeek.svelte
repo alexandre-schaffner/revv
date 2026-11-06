@@ -10,7 +10,7 @@
 import { onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
-import { authHeaders } from "$lib/utils/session-token";
+import { authHeaders } from "$lib/session/token.svelte";
 import CodePeek from "./CodePeek.svelte";
 
 interface Props {

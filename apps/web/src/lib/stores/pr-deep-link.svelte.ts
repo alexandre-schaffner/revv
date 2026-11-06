@@ -8,6 +8,8 @@ import {
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { switchSession } from "$lib/session/lifecycle.svelte";
+import { authHeaders } from "$lib/session/token.svelte";
 import {
   cancelSignIn,
   clearError,
@@ -19,7 +21,6 @@ import {
   getLocalAccounts,
   getUser,
   signIn,
-  switchAccount,
 } from "$lib/stores/auth.svelte";
 import {
   fetchDefaultCloneBaseDir,
@@ -31,9 +32,8 @@ import {
   getGithubClientId,
   getGithubHost,
   setGithubConfigStrict,
-  updateSettings,
 } from "$lib/stores/settings.svelte";
-import { authHeaders } from "$lib/utils/session-token";
+import { surfaceWindow } from "$lib/utils/surface-window";
 
 export interface AccountChoice {
   readonly userId: string;
@@ -139,15 +139,9 @@ function cancelResolution(): void {
   clearLoadingTimer();
 }
 
-async function surfaceWindow(): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const window = getCurrentWindow();
-    await window.show();
-    await window.unminimize();
-    await window.setFocus();
-  } catch {
-    // Browser development has no native window; resolving still works.
+async function switchTo(account: AccountChoice): Promise<void> {
+  if (!(await switchSession(account.userId, account.host))) {
+    throw new Error(getError() ?? "Revv could not switch accounts.");
   }
 }
 
@@ -322,8 +316,7 @@ export async function choosePrDeepLinkAccount(account: AccountChoice): Promise<v
   const locator = state.locator;
   state = pendingResolution(locator);
   try {
-    await switchAccount(account.userId, account.host);
-    await updateSettings({ githubHost: account.host }, { strict: true });
+    await switchTo(account);
     if (getIsAuthenticated() && getIsOnboarded()) await resolveActiveLocator(locator);
   } catch (error) {
     state = {
@@ -380,8 +373,7 @@ export async function settlePrDeepLinkAuthorization(authError: string | null): P
       (choice) => email === undefined || choice.email === email,
     );
     if (account) {
-      await switchAccount(account.userId, account.host);
-      await updateSettings({ githubHost: account.host }, { strict: true });
+      await switchTo(account);
       if (version !== requestVersion) return;
     }
     state = pendingResolution(locator);

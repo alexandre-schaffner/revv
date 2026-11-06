@@ -1,6 +1,6 @@
 import { createAuthClient } from "better-auth/svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { getToken, setToken } from "$lib/stores/auth.svelte";
+import { getToken, setToken } from "$lib/session/token.svelte";
 
 export const authClient = createAuthClient({
   baseURL: API_BASE_URL,

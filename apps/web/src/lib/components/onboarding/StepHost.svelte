@@ -2,12 +2,8 @@
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import GithubLogo from "phosphor-svelte/lib/GithubLogo";
-import {
-  cancelSignIn,
-  clearToken,
-  getIsAuthenticated,
-  setForceOnboardingFlow,
-} from "$lib/stores/auth.svelte";
+import { endSession } from "$lib/session/lifecycle.svelte";
+import { cancelSignIn, getIsAuthenticated, setForceOnboardingFlow } from "$lib/stores/auth.svelte";
 import { getGithubClientId, getGithubHost, setGithubConfig } from "$lib/stores/settings.svelte";
 import ContinueArrow from "./ContinueArrow.svelte";
 
@@ -76,7 +72,7 @@ async function handleContinue() {
     // flow and about to re-authenticate with the new host.
     setForceOnboardingFlow();
     cancelSignIn();
-    clearToken();
+    endSession();
   }
 
   isSaving = true;

@@ -32,6 +32,7 @@ const EMPTY: Entry = { headSha: null, check: RequestState.idle(), askedAt: 0, ru
 let entries = $state(new Map<string, Entry>());
 
 const generations = new Map<string, number>();
+const resolveStreams = new Map<string, AbortController>();
 
 function setEntry(prId: string, entry: Entry): void {
   entries.set(prId, entry);
@@ -166,11 +167,26 @@ export function resolveBaseConflicts(prId: string, expectedHeadSha: string): voi
     ...entry,
     run: { status: "Starting…", rows: [], agentText: "", outcome: RequestState.loading() },
   }));
+  const controller = new AbortController();
+  resolveStreams.set(prId, controller);
   void streamBaseConflictResolve(prId, expectedHeadSha, {
+    signal: controller.signal,
     onFrame: (frame) => onFrame(prId, frame),
     onError: (message) => {
       if (getBaseConflicts(prId).run?.outcome.status !== "loading") return;
       updateRun(prId, (run) => ({ ...run, status: null, outcome: RequestState.error(message) }));
     },
-  }).finally(() => checkBaseConflicts(prId, getBaseConflicts(prId).headSha, { force: true }));
+  }).finally(() => {
+    if (controller.signal.aborted) return;
+    resolveStreams.delete(prId);
+    checkBaseConflicts(prId, getBaseConflicts(prId).headSha, { force: true });
+  });
+}
+
+/** Resolve runs carry on server-side; only this window stops listening. */
+export function reset(): void {
+  for (const controller of resolveStreams.values()) controller.abort();
+  resolveStreams.clear();
+  for (const prId of entries.keys()) generations.set(prId, (generations.get(prId) ?? 0) + 1);
+  entries = new Map();
 }

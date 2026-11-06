@@ -1,0 +1,234 @@
+// ── Keyed async resource ────────────────────────────────────────────────────
+//
+// The one way a store fetches something per key: concurrent asks de-dupe onto
+// one request, an answer can be served fresh for a while, a `pending` answer
+// (the server is still working) is asked again on a bounded schedule, a
+// superseded or reset ask can't write back, and every key's state is a
+// `RequestState<T>`. The reactive map is a `SvelteMap`, so components reading
+// `entry()` / `data()` re-render on change.
+//
+// A store either keeps its data here (`data(key)`), or keeps its own state and
+// lets its fetcher write it, using the resource only to schedule asks.
+
+import { SvelteMap } from "svelte/reactivity";
+import { RequestState } from "./_types";
+
+/** One ask's outcome. `pending` is asked again after the next retry delay. */
+export type Answer<T> =
+  | { readonly status: "ok"; readonly data: T }
+  | { readonly status: "pending"; readonly data?: T }
+  | { readonly status: "error"; readonly error: string };
+
+export interface ResourceEntry<T> {
+  /** The last answer. An `ok` stays up while the key is asked again. */
+  readonly request: RequestState<T>;
+  /** An ask is in flight, or a `pending` answer will be asked again. */
+  readonly loading: boolean;
+  /** The retry schedule ran out while the answer was still `pending`. */
+  readonly gaveUp: boolean;
+  /** Identity of the inputs the answer was asked with; a different one supersedes it. */
+  readonly version: string;
+  /** When data last arrived; 0 before any. */
+  readonly loadedAt: number;
+}
+
+export interface ResourceOptions<A, T> {
+  readonly fetch: (key: string, arg: A) => Promise<Answer<T>>;
+  /** How long a settled `ok` is served without asking again. 0 (default): every load asks. */
+  readonly freshForMs?: number;
+  /** Delay before re-asking after each `pending` answer; once used up, the key gives up. */
+  readonly retryDelaysMs?: readonly number[];
+  /** An error after an `ok` keeps the data on screen instead of replacing it. */
+  readonly keepDataOnError?: boolean;
+  /** The error a key with no data shows when it gives up. */
+  readonly gaveUpError?: string;
+}
+
+export interface Resource<A, T> {
+  entry(key: string): ResourceEntry<T>;
+  data(key: string): T | null;
+  /**
+   * Ask for `key` unless an ask with the same `version` is in flight, being
+   * retried, or answered within `freshForMs`. A different `version` supersedes
+   * whatever is running. Resolves with the key's state once this ask lands.
+   */
+  load(key: string, arg: A, version?: string): Promise<RequestState<T>>;
+  /** Ask now; if an ask is in flight, ask once more after it lands. */
+  refresh(key: string, arg: A): Promise<RequestState<T>>;
+  /** Forget `key`; an ask in flight for it can't write back. */
+  invalidate(key: string): void;
+  /** Forget every key. */
+  reset(): void;
+}
+
+const IDLE: ResourceEntry<never> = Object.freeze({
+  request: RequestState.idle<never>(),
+  loading: false,
+  gaveUp: false,
+  version: "",
+  loadedAt: 0,
+});
+
+function thrownMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export function createResource<A, T>(options: ResourceOptions<A, T>): Resource<A, T> {
+  const { freshForMs = 0, retryDelaysMs = [], keepDataOnError = false } = options;
+  const entries = new SvelteMap<string, ResourceEntry<T>>();
+  const inflight = new Map<string, Promise<RequestState<T>>>();
+  const askAgain = new Map<string, A>();
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const generations = new Map<string, number>();
+  /** Keys whose last answer was `ok`; only those are ever served fresh. */
+  const settled = new Set<string>();
+
+  function entry(key: string): ResourceEntry<T> {
+    return entries.get(key) ?? IDLE;
+  }
+
+  function isFresh(key: string, e: ResourceEntry<T>): boolean {
+    return settled.has(key) && Date.now() - e.loadedAt < freshForMs;
+  }
+
+  function cancel(key: string): number {
+    clearTimeout(retryTimers.get(key));
+    retryTimers.delete(key);
+    askAgain.delete(key);
+    inflight.delete(key);
+    settled.delete(key);
+    const generation = (generations.get(key) ?? 0) + 1;
+    generations.set(key, generation);
+    return generation;
+  }
+
+  function start(key: string, arg: A, version: string): Promise<RequestState<T>> {
+    const generation = cancel(key);
+    const previous = entry(key);
+    entries.set(key, {
+      request: previous.request.status === "ok" ? previous.request : RequestState.loading(),
+      loading: true,
+      gaveUp: false,
+      version,
+      loadedAt: previous.loadedAt,
+    });
+    return ask(key, arg, generation, 0);
+  }
+
+  function settle(key: string, answer: Answer<T>, attempt: number, retry: () => void): void {
+    const previous = entry(key);
+    const now = Date.now();
+    if (answer.status === "ok") settled.add(key);
+    else settled.delete(key);
+    switch (answer.status) {
+      case "ok":
+        entries.set(key, {
+          ...previous,
+          request: RequestState.ok(answer.data),
+          loading: false,
+          gaveUp: false,
+          loadedAt: now,
+        });
+        return;
+      case "error":
+        entries.set(key, {
+          ...previous,
+          request:
+            keepDataOnError && previous.request.status === "ok"
+              ? previous.request
+              : RequestState.error(answer.error),
+          loading: false,
+        });
+        return;
+      case "pending": {
+        const hasData = answer.data !== undefined;
+        const request = hasData ? RequestState.ok(answer.data as T) : previous.request;
+        const loadedAt = hasData ? now : previous.loadedAt;
+        const delay = retryDelaysMs[attempt];
+        if (delay === undefined) {
+          entries.set(key, {
+            ...previous,
+            request:
+              request.status === "ok"
+                ? request
+                : RequestState.error(options.gaveUpError ?? "Still not ready; gave up waiting"),
+            loading: false,
+            gaveUp: true,
+            loadedAt,
+          });
+          return;
+        }
+        entries.set(key, { ...previous, request, loading: true, loadedAt });
+        retryTimers.set(
+          key,
+          setTimeout(() => {
+            retryTimers.delete(key);
+            retry();
+          }, delay),
+        );
+      }
+    }
+  }
+
+  function ask(key: string, arg: A, generation: number, attempt: number): Promise<RequestState<T>> {
+    const current = () => generations.get(key) === generation;
+    const promise: Promise<RequestState<T>> = (async () => {
+      let answer: Answer<T>;
+      try {
+        answer = await options.fetch(key, arg);
+      } catch (e) {
+        answer = { status: "error", error: thrownMessage(e) };
+      }
+      if (current()) {
+        settle(key, answer, attempt, () => {
+          if (current()) void ask(key, arg, generation, attempt + 1);
+        });
+      }
+      return entry(key).request;
+    })().finally(() => {
+      if (inflight.get(key) !== promise) return;
+      inflight.delete(key);
+      if (askAgain.has(key)) {
+        const next = askAgain.get(key) as A;
+        void start(key, next, entry(key).version);
+      }
+    });
+    inflight.set(key, promise);
+    return promise;
+  }
+
+  return {
+    entry,
+    data(key) {
+      const request = entry(key).request;
+      return request.status === "ok" ? request.data : null;
+    },
+    load(key, arg, version = "") {
+      const e = entries.get(key);
+      if (e && e.version === version) {
+        const running = inflight.get(key);
+        if (running) return running;
+        if (retryTimers.has(key) || isFresh(key, e)) return Promise.resolve(e.request);
+      }
+      return start(key, arg, version);
+    },
+    refresh(key, arg) {
+      const running = inflight.get(key);
+      if (running) {
+        askAgain.set(key, arg);
+        return running;
+      }
+      return start(key, arg, entry(key).version);
+    },
+    invalidate(key) {
+      cancel(key);
+      entries.delete(key);
+    },
+    reset() {
+      for (const key of new Set([...entries.keys(), ...inflight.keys(), ...retryTimers.keys()])) {
+        cancel(key);
+      }
+      entries.clear();
+    },
+  };
+}

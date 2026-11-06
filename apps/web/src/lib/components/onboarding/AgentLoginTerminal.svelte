@@ -5,10 +5,10 @@ import type { ITheme, Terminal } from "@xterm/xterm";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { SseHttpError, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
+import { authHeaders } from "$lib/session/token.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { authHeaders } from "$lib/utils/session-token";
-import { parseSSEBuffer } from "$lib/utils/sse-parser";
 // xterm ships its own canvas/DOM — acceptable for a literal terminal. The
 // stylesheet is required for layout; the JS is dynamically imported in onMount
 // so it never runs during SSR / prerender.
@@ -104,24 +104,21 @@ function applyEvent(event: LoginEvent): void {
 }
 
 async function streamLoginEvents(id: string, signal: AbortSignal): Promise<void> {
-  const url = `${API_BASE_URL}/api/onboarding/login/stream?jobId=${encodeURIComponent(id)}`;
-  const res = await fetch(url, { headers: authHeaders(), signal });
-  if (!res.ok || !res.body) {
+  try {
+    await streamSse<LoginEvent>({
+      path: `/api/onboarding/login/stream?jobId=${encodeURIComponent(id)}`,
+      signal,
+      onEvent: applyEvent,
+    });
+  } catch (e) {
+    if (signal.aborted) return;
     failed = true;
-    errorMsg = `Sign-in stream failed (HTTP ${res.status})`;
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const result = parseSSEBuffer<LoginEvent>(buffer);
-    buffer = result.remaining;
-    for (const event of result.events) applyEvent(event);
-    if (result.done) break;
+    errorMsg =
+      e instanceof SseHttpError
+        ? `Sign-in stream failed (HTTP ${e.status})`
+        : e instanceof Error
+          ? e.message
+          : "Sign-in stream failed";
   }
 }
 

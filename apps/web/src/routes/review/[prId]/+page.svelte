@@ -12,7 +12,7 @@ import StackThumbIndex from "$lib/components/stack/margin/StackThumbIndex.svelte
 import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
-import { getToken } from "$lib/stores/auth.svelte";
+import { getToken } from "$lib/session/token.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
 import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";

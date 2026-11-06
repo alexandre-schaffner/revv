@@ -8,7 +8,6 @@ import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Sun from "phosphor-svelte/lib/Sun";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
-import { fetchOrgs } from "$lib/stores/orgs.svelte";
 import { copySelectedPrLink, getPrLinkCopied } from "$lib/stores/pr-link.svelte";
 import {
   getIsLoading,
@@ -53,9 +52,6 @@ function handleSyncPrs(): void {
   } else {
     requestSync();
   }
-  // Re-pull the org list — picks up newly-joined orgs and rotates
-  // any signed avatar URLs without requiring re-auth.
-  void fetchOrgs();
 }
 const cycle: Record<ThemePreference, ThemePreference> = {
   system: "light",

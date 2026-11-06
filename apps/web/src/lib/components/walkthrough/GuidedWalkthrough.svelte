@@ -25,6 +25,7 @@ import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
+import { authHeaders } from "$lib/session/token.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
@@ -91,7 +92,6 @@ import {
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { firstPassView } from "$lib/utils/hunk-scan";
 import { renderMarkdown } from "$lib/utils/markdown";
-import { authHeaders } from "$lib/utils/session-token";
 import {
   groupIssuesBySeverityWithIndex,
   partitionBySignal,

@@ -4,6 +4,7 @@ import {
   type StackReviewScope,
   type StackReviewStarted,
   stackKey,
+  type WalkthroughEventEnvelope,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
@@ -12,7 +13,7 @@ import { layerOf, neighbourOf } from "$lib/stacks/locate";
 import { RequestState } from "./_types";
 import type { NavigationDirection } from "./navigation-intent.svelte";
 import { getPrById } from "./prs.svelte";
-import { singleFlight } from "./single-flight";
+import { createResource } from "./resource";
 
 interface StackEntry {
   readonly request: RequestState<PrStackDetail>;
@@ -85,7 +86,12 @@ async function fetchStack(key: string, prId: string): Promise<void> {
   }
 }
 
-const reads = singleFlight(fetchStack);
+const reads = createResource<string, void>({
+  fetch: async (key, prId) => {
+    await fetchStack(key, prId);
+    return { status: "ok", data: undefined };
+  },
+});
 
 /** Read the stack `prId` is filed under as `stackNumber`, unless a fresh read is on hand. */
 export function ensureStack(prId: string, stackNumber: number): Promise<void> {
@@ -96,12 +102,12 @@ export function ensureStack(prId: string, stackNumber: number): Promise<void> {
   if (entry?.request.status === "ok" && Date.now() - entry.loadedAt < FRESH_FOR_MS) {
     return Promise.resolve();
   }
-  return reads.run(key, prId);
+  return reads.load(key, prId).then(() => undefined);
 }
 
 export function refreshStack(prId: string): Promise<void> {
   const key = keyForPr(prId);
-  return key ? reads.runFromNow(key, prId) : Promise.resolve();
+  return key ? reads.refresh(key, prId).then(() => undefined) : Promise.resolve();
 }
 
 export function getStackRequest(prId: string): RequestState<PrStackDetail> {
@@ -135,7 +141,7 @@ function scheduleRefresh(key: string): void {
     setTimeout(() => {
       refreshTimers.delete(key);
       const current = entries.get(key);
-      if (current) void reads.runFromNow(key, current.viaPrId);
+      if (current) void reads.refresh(key, current.viaPrId);
     }, REFRESH_DEBOUNCE_MS),
   );
 }
@@ -151,9 +157,18 @@ export function onStackBriefStatusChanged(data: {
   onStackUpdated(data);
 }
 
-export function onMemberWalkthroughLifecycle(prId: string): void {
-  const key = keyForPr(prId);
+/** A member's walkthrough starting or settling changes the stack's review state. */
+export function onWalkthroughEvent(data: WalkthroughEventEnvelope["data"]): void {
+  if (!data.event.type.startsWith("lifecycle:")) return;
+  const key = keyForPr(data.prId);
   if (key) scheduleRefresh(key);
+}
+
+export function reset(): void {
+  reads.reset();
+  for (const timer of refreshTimers.values()) clearTimeout(timer);
+  refreshTimers.clear();
+  entries = new Map();
 }
 
 export async function startStackReview(

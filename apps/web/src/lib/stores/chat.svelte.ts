@@ -1666,6 +1666,37 @@ export function clearQueuedMessages(prId: string): void {
 }
 
 /**
+ * Forget every PR's chat state and stop listening to in-flight turns (they
+ * finish server-side and land in the persisted timeline).
+ */
+export function reset(): void {
+  for (const controller of abortControllers.values()) controller.abort();
+  abortControllers.clear();
+  chatHistories = new Map();
+  streamingPrIds = new Set();
+  activeTurnIds = new Map();
+  loadedPrIds = new Set();
+  proposedChanges = new Map();
+  pushingPrIds = new Set();
+  resolvingPushPrIds = new Set();
+  interactionModes = new Map();
+  availableAgents = null;
+  availableAgentsLoading = false;
+  sessionContexts = new Map();
+  sessionContextLoading = new Set();
+  warmedPrIds.clear();
+  warmingPrIds.clear();
+  proposedComments = new Map();
+  worktreeBlocked = new Map();
+  discardingCommits = new Set();
+  cherryPickingCommits = new Set();
+  rebasingPrIds = new Set();
+  selectedCommitShas = new Map();
+  batchOpInFlightPrIds = new Set();
+  queuedMessages = new Map();
+}
+
+/**
  * Pop the first queued message and send it. Called internally by the
  * streaming onDone callback when the turn finishes.
  */

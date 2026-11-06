@@ -10,13 +10,8 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import {
-  getIsSwitching,
-  getLocalAccounts,
-  getUser,
-  signOut,
-  switchAccount,
-} from "$lib/stores/auth.svelte";
+import { signOut, switchSession } from "$lib/session/lifecycle.svelte";
+import { getIsSwitching, getLocalAccounts, getUser } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
 import { toggleSettings } from "$lib/stores/settingsModal.svelte";
 
@@ -87,7 +82,7 @@ async function handleSwitchEntry(entry: SwitcherEntry): Promise<void> {
   if (isEntryActive(entry) || isSwitching) return;
   switchingId = entryKey(entry);
   try {
-    await switchAccount(entry.userId, entry.host);
+    await switchSession(entry.userId, entry.host);
     open = false;
   } finally {
     switchingId = null;
