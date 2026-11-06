@@ -3,25 +3,11 @@ import { join } from "node:path";
 import { API_PORT, type AppChannel, DEFAULT_APP_CHANNEL } from "@revv/shared";
 import { Config, Effect } from "effect";
 
-/**
- * Server configuration schema resolved from environment variables via Effect's
- * `Config` module. Prefer consuming this inside `Effect.gen` blocks (services,
- * routes) — it keeps the dependency on env explicit and testable:
- *
- *     const { githubClientId } = yield* ServerConfig;
- *
- * For top-level module initialization that can't easily live inside Effect
- * (bare singletons like `auth.ts`, `db/index.ts`, `logger.ts`), use the
- * eagerly-resolved {@link serverEnv} snapshot instead.
- *
- * Authentication secrets are *not* handled here:
- *   • `GITHUB_CLIENT_SECRET` is no longer used — GitHub's device-code flow
- *     (the only auth path Revv exposes) does not require it.
- *   • `BETTER_AUTH_SECRET` is generated on first run and persisted to the
- *     per-user support directory (see {@link ./auth loadOrCreateAuthSecret}).
- *     The env var is still honored as an escape hatch for dev/CI.
- */
-export const ServerConfig = Config.all({
+// The only module that reads Revv's environment. Everything else reads
+// `serverEnv`. Third-party tool variables (PATH, SHELL, CODEX_HOME, provider
+// API keys) are read where a child process's environment is assembled, since
+// they describe what that tool will see, not how Revv is configured.
+const EnvConfig = Config.all({
   desktopPid: Config.Int("REVV_DESKTOP_PID").pipe(Config.withDefault(0)),
   port: Config.Int("PORT").pipe(Config.withDefault(API_PORT)),
   // Bind interface. Loopback-only by default so the API is unreachable off-box.
@@ -63,7 +49,27 @@ export const ServerConfig = Config.all({
     Config.withDefault("Iv23lixUYaPwtByygekJ"),
   ),
   githubHost: Config.String("GITHUB_HOST").pipe(Config.withDefault("github.com")),
-  revDebug: Config.Boolean("REV_DEBUG").pipe(Config.withDefault(false)),
+  // `REV_DEBUG` is the older spelling, still set by existing `.env` files.
+  debug: Config.Boolean("REVV_DEBUG").pipe(
+    Config.orElse(() => Config.Boolean("REV_DEBUG")),
+    Config.withDefault(false),
+  ),
+  // Escape hatch for dev/CI/containers; otherwise the secret is generated on
+  // first run and persisted under the app-data dir.
+  betterAuthSecret: Config.String("BETTER_AUTH_SECRET").pipe(Config.withDefault("")),
+  // `0` disables, `1` writes beside the DB, any other value is a file path.
+  // Empty means "on in the dev channel only".
+  githubLedger: Config.String("REVV_GITHUB_LEDGER").pipe(Config.withDefault("")),
+  pyroscopeEndpoint: Config.String("REVV_PYROSCOPE_ENDPOINT").pipe(Config.withDefault("")),
+  integrationsDir: Config.String("REVV_INTEGRATIONS_DIR").pipe(Config.withDefault("")),
+  // A fake-gcs-server endpoint for the team cache. Deliberately not
+  // STORAGE_EMULATOR_HOST: with that set, `@google-cloud/storage` forces
+  // bare-bucket URLs that the emulator doesn't serve.
+  cacheApiEndpoint: Config.String("REVV_CACHE_API_ENDPOINT").pipe(Config.withDefault("")),
+  // Pre-DB installs kept settings in this JSON file (see `upgrades.ts`).
+  legacySettingsPath: Config.String("REVV_SETTINGS_PATH").pipe(
+    Config.withDefault(join(homedir(), ".revv", "settings.json")),
+  ),
   // Set by a package manager that owns the install (the Nix Home Manager
   // module sets "nix"). Non-empty turns the in-app updater into a no-op:
   // `/api/update-manifest` answers 204 so the desktop app never swaps a
@@ -112,19 +118,9 @@ export const ServerConfig = Config.all({
   jevApiKey: Config.String("REVV_JEV_API_KEY").pipe(Config.withDefault("")),
 });
 
-export type ServerConfig = Config.Success<typeof ServerConfig>;
-
-/**
- * Eagerly-resolved snapshot of {@link ServerConfig} read once at module load.
- *
- * Use this for top-level singletons (auth, db, logger) that initialize at
- * import time and can't easily switch to Effect idioms. Code already living
- * inside an `Effect.gen` block should prefer `yield* ServerConfig` so the env
- * dependency stays explicit.
- */
 const resolved = Effect.runSync(
   Effect.gen(function* () {
-    return yield* ServerConfig;
+    return yield* EnvConfig;
   }),
 );
 
@@ -136,8 +132,13 @@ function normalizeEdition(value: string): "oss" | "pro" {
   return value === "pro" ? "pro" : "oss";
 }
 
+const trimmed = (value: string) => value.trim();
+
 export const serverEnv = {
   ...resolved,
   channel: normalizeChannel(resolved.channel),
   edition: normalizeEdition(resolved.edition),
+  githubLedger: trimmed(resolved.githubLedger),
+  integrationsDir: trimmed(resolved.integrationsDir),
+  cacheApiEndpoint: trimmed(resolved.cacheApiEndpoint),
 } as const;

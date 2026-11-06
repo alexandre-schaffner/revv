@@ -1,4 +1,4 @@
-import type { StackBriefSnapshot } from "../providers/stack-brief-tools";
+import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
 
 export const STACK_BRIEF_SYSTEM_PROMPT = `You write the brief for a stack of pull requests: a few lines a reviewer reads before opening any layer, so they know what the whole stack is for, what each layer adds, and where to look hardest.
 

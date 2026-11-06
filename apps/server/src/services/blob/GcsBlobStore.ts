@@ -19,6 +19,7 @@
 // runtime will surface the breakage via `tryPromise` → `BlobStoreUnavailable`.
 
 import { Effect, Layer, Option, Ref, Stream } from "effect";
+import { serverEnv } from "../../config";
 import { BlobStoreUnavailable } from "../../domain/errors";
 import { logError } from "../../logger";
 import { SettingsService } from "../Settings";
@@ -145,17 +146,10 @@ export const GcsBlobStoreLive = Layer.effect(
 
         const mod = yield* loadGcs();
         const opts: Record<string, unknown> = {};
-        // Emulator override (REVV_CACHE_API_ENDPOINT). We deliberately
-        // do NOT use the SDK's own `STORAGE_EMULATOR_HOST`: with that
-        // env var set, `@google-cloud/storage` v7 forces bare-bucket
-        // URL routing (`/b/<name>`) regardless of any `apiEndpoint`
-        // constructor option, and fake-gcs-server only serves the JSON
-        // API at `/storage/v1/b/<name>`. Using our own var lets us
-        // pick the JSON-API path via `apiEndpoint` while keeping
-        // STORAGE_EMULATOR_HOST out of the SDK's environment entirely.
-        // Real-GCS unaffected when the env var is unset.
-        const emulatorHost = process.env.REVV_CACHE_API_ENDPOINT?.trim();
-        if (emulatorHost && emulatorHost.length > 0) {
+        // fake-gcs-server only serves the JSON API at `/storage/v1/b/<name>`,
+        // which `apiEndpoint` selects (see `serverEnv.cacheApiEndpoint`).
+        const emulatorHost = serverEnv.cacheApiEndpoint;
+        if (emulatorHost) {
           opts.apiEndpoint = emulatorHost;
           opts.projectId = opts.projectId ?? "revv-cache-emulator";
           // With valid SA credentials, the SDK fetches a real OAuth token and

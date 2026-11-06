@@ -4,13 +4,9 @@ import type {
   WalkthroughStackSnapshot,
 } from "@revv/shared";
 import { Effect } from "effect";
+import type { DiffFingerprint } from "../db/schema/walkthroughs";
 import type { DbService } from "./Db";
-import {
-  changedFiles,
-  type DiffFingerprint,
-  fingerprintFiles,
-  isComparable,
-} from "./stacks/fingerprint";
+import { changedFiles, fingerprintFiles, isComparable } from "./stacks/fingerprint";
 import { type RestackSource, WalkthroughService } from "./Walkthrough";
 
 export interface RestackCarry {

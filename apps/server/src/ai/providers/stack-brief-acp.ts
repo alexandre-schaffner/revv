@@ -1,7 +1,8 @@
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
+import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
 import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
-import type { StackBriefSnapshot, StackBriefToolContext } from "./stack-brief-tools";
+import type { StackBriefToolContext } from "./stack-brief-tools";
 import { STACK_BRIEF_MCP_SERVER } from "./stack-brief-tools";
 
 export interface RunStackBriefAcpParams {

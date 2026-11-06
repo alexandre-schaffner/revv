@@ -3,15 +3,14 @@ import { isOpenLayer, resolveThinkingEffort, type StackBriefStatus } from "@revv
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable } from "../../ai/acp/presets";
+import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../ai/agent-stream";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
-  type StackBriefSnapshot,
   type StackBriefToolContext,
   stackBriefCompletionBlocker,
 } from "../../ai/providers/stack-brief-tools";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { pullRequests } from "../../db/schema/pull-requests";
-import { stackBriefs } from "../../db/schema/stack-briefs";
+import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import { DbError } from "../../domain/errors";
 import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";

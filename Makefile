@@ -23,13 +23,13 @@ install-deps: ## Install project dependencies only (skip tool checks)
 
 # Dev env: use a different port/db/clone-dir so dev doesn't clash with the
 # installed (production) Revv instance running in the background.
-DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 REV_DEBUG=1
+DEV_ENV = REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev VITE_REVV_CHANNEL=dev VITE_API_PORT=45679 REVV_DEBUG=1
 
 dev: kill-server ## Start all services in development mode
 	$(DEV_ENV) bun run dev
 
 dev-server: kill-server ## Start only the API server (port 45679)
-	REV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
+	REVV_DEBUG=1 REVV_CHANNEL=dev PORT=45679 REVV_DB_PATH=./revv-dev.db REVV_CLONE_DIR=$$HOME/.revv/repos-dev bun run dev:server
 
 dev-desktop: kill-server ## Start the Tauri desktop app + Grafana (http://localhost:3000)
 	@printf "\033[36m[dev-desktop]\033[0m telemetry dashboard → \033[1mhttp://localhost:3000/d/revv-overview\033[0m (collector API/OTLP on :45680)\n"

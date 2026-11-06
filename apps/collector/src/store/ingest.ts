@@ -9,6 +9,7 @@
 // never blinds the dashboard to everything else.
 
 import type { DuckDBConnection } from "@duckdb/node-api";
+import { SPAN_ATTR } from "@revv/shared/telemetry";
 import type { SpanStatusCode } from "../shared/types";
 import { SPAN_COLUMNS } from "./schema";
 
@@ -179,7 +180,7 @@ export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSp
           provider: str(
             pick(attrs, "provider", "ai.provider", "gen_ai.provider.name", "gen_ai.system"),
           ),
-          toolCallCount: num(pick(attrs, "tool_call_count", "toolCallCount")),
+          toolCallCount: num(pick(attrs, SPAN_ATTR.toolCallCount, "toolCallCount")),
           inputTokens: num(
             pick(
               attrs,
@@ -198,9 +199,9 @@ export function parseOtlpBatch(body: unknown): { spans: SpanInsert[]; rejectedSp
               "llm.usage.completion_tokens",
             ),
           ),
-          httpMethod: str(pick(attrs, "http.request.method", "http.method")),
-          httpPath: str(pick(attrs, "url.path", "http.route", "http.target")),
-          httpStatus: num(pick(attrs, "http.response.status_code", "http.status_code")),
+          httpMethod: str(pick(attrs, SPAN_ATTR.httpMethod, "http.method")),
+          httpPath: str(pick(attrs, SPAN_ATTR.urlPath, "http.route", "http.target")),
+          httpStatus: num(pick(attrs, SPAN_ATTR.httpStatus, "http.status_code")),
         });
       }
     }

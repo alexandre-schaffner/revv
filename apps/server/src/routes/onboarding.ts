@@ -3,13 +3,15 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { invalidateCliAgentCache } from "../ai/providers/cli-agent";
-import { db } from "../auth";
 import { user } from "../db/schema";
 import { AppRuntime } from "../runtime";
 import { AgentLoginService } from "../services/AgentLogin";
+import { appDatabase } from "../services/Db";
 import { OnboardingService } from "../services/Onboarding";
 import { handleAppError, withAuth } from "./middleware";
 import { createSseStream, sseHeaders } from "./reviews/sse";
+
+const db = appDatabase();
 
 /**
  * Stream a job's events over SSE. Validates `jobId`, opens an SSE stream,

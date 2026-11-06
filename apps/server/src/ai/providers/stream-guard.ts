@@ -1,10 +1,17 @@
 import type { WalkthroughStreamEvent } from "@revv/shared";
-import {
-  WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS,
-  WALKTHROUGH_INACTIVITY_TIMEOUT_MS,
-} from "../../constants";
 import { debug } from "../../logger";
 import { ZERO_TOKEN_USAGE } from "../agent-stream/token-usage";
+
+/** Inactivity timeout for walkthrough stream guard (no events for this long = abort).
+ *  Providers emit a periodic phase heartbeat every WALKTHROUGH_HEARTBEAT_MS, so this
+ *  needs to comfortably exceed that interval. 4× heartbeat margin tolerates a missed
+ *  beat without killing a still-running agent. Note the heartbeat is synthetic, so
+ *  this timer cannot detect a stalled-but-connected agent — that is the job of
+ *  AGENT_IDLE_TIMEOUT_MS in withAgentTurn. */
+const WALKTHROUGH_INACTIVITY_TIMEOUT_MS = 180_000; // 180 seconds -- 3 min
+
+/** Timeout for the first event from the AI provider — shorter since healthy providers emit immediately. */
+const WALKTHROUGH_FIRST_EVENT_TIMEOUT_MS = 90_000; // 90 seconds
 
 // Wraps the walkthrough driver's generator:
 //   - inactivity + first-event timeouts,

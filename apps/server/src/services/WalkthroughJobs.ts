@@ -38,6 +38,7 @@ import {
   type WalkthroughStreamEvent,
   type WalkthroughTokenUsage,
 } from "@revv/shared";
+import { SPAN } from "@revv/shared/telemetry";
 import { eq } from "drizzle-orm";
 import {
   Cause,
@@ -51,7 +52,11 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
-import { type ActivityBeacon, makeActivityBeacon } from "../ai/agent-stream/agent-turn";
+import {
+  type ActivityBeacon,
+  CLI_WALKTHROUGH_TIMEOUT_MS,
+  makeActivityBeacon,
+} from "../ai/agent-stream";
 import {
   accumulateTokenUsage,
   addThroughput,
@@ -63,11 +68,11 @@ import { resolveJobStart } from "../ai/jev/job-start-resolution";
 import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
 import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
+import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
-import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
-import { walkthroughs } from "../db/schema/walkthroughs";
+import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import {
   type AiError,
   AiGenerationError,
@@ -84,7 +89,6 @@ import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
-import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
 import { AiService } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
@@ -100,7 +104,6 @@ import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
-import type { DiffFingerprint } from "./stacks/fingerprint";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
@@ -417,7 +420,7 @@ export const WalkthroughJobsLive = Layer.effect(
       status: WalkthroughStatus,
       options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
     ) =>
-      Effect.withSpan("WalkthroughJobs.setStatus", {
+      Effect.withSpan(SPAN.walkthroughSetStatus, {
         attributes: { walkthroughId, status },
       })(
         provideDb(
@@ -966,7 +969,7 @@ export const WalkthroughJobsLive = Layer.effect(
       });
 
     const launchJob = (job: ActiveJob, ctx: ResolvedContext, trigger: StartJobTrigger) =>
-      Effect.withSpan("WalkthroughJobs.job")(
+      Effect.withSpan(SPAN.walkthroughJob)(
         Effect.gen(function* () {
           yield* Effect.annotateCurrentSpan("walkthroughId", job.walkthroughId);
           yield* Effect.annotateCurrentSpan("prId", job.prId);
@@ -1127,7 +1130,7 @@ export const WalkthroughJobsLive = Layer.effect(
             // walkthrough-gen-duration KPI. KPI attributes (`input_tokens`,
             // `output_tokens`, `tool_call_count`) are annotated from inside
             // `buildJobBody` on completion.
-            Effect.withSpan("WalkthroughJobs.generate", {
+            Effect.withSpan(SPAN.walkthroughGenerate, {
               attributes: {
                 walkthroughId: job.walkthroughId,
                 prId: job.prId,
@@ -1680,7 +1683,7 @@ export const WalkthroughJobsLive = Layer.effect(
       walkthroughId: string,
       event: WalkthroughStreamEvent,
     ): Effect.Effect<EmitResult> =>
-      Effect.withSpan("WalkthroughJobs.emitEvent", {
+      Effect.withSpan(SPAN.walkthroughEmitEvent, {
         attributes: { walkthroughId, eventType: event.type },
       })(
         Effect.gen(function* () {

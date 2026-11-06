@@ -12,7 +12,7 @@ import { type Context, Effect } from "effect";
 import type { Db } from "../db/index";
 import { account } from "../db/schema/auth";
 import { GitHubAccessDeniedError, GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
-import { extractHostFromProviderId } from "../domain/provider-id";
+import { hostFromProviderId } from "../domain/provider-id";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import type { Broadcaster } from "./Broadcaster";
@@ -232,7 +232,7 @@ export const openSyncCycle = (
           .broadcastToAccount(meta.id, {
             type: "auth:reauth-required",
             data: {
-              host: extractHostFromProviderId(meta.providerId),
+              host: hostFromProviderId(meta.providerId),
               githubLogin: meta.githubLogin,
             },
           })
@@ -241,7 +241,7 @@ export const openSyncCycle = (
       accountRows.push({
         id: meta.id,
         userId: meta.userId,
-        host: extractHostFromProviderId(meta.providerId),
+        host: hostFromProviderId(meta.providerId),
         accessToken: token,
         githubLogin: meta.githubLogin,
         avatarUrl: meta.avatarUrl,

@@ -20,6 +20,7 @@ function fakeSettings(jev: Partial<UserSettings["jev"]>) {
     getSettings: () => Effect.succeed(settings),
     updateSettings: () => Effect.succeed(settings),
     settingsChanges: () => Stream.empty,
+    githubHost: () => Effect.succeed(settings.githubHost),
     resolveAgent: () => Effect.succeed("opencode" as const),
     resolveRecapAgent: () => Effect.succeed("opencode" as const),
     resolveChatAgentId: () => Effect.succeed("opencode" as const),

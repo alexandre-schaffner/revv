@@ -1,12 +1,11 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AcpAgentId, AgentStatusReport, InstallEvent } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import {
   ACP_CLI_NAME,
+  addInstalledBinDirs,
   detectAgentStatus,
-  invalidateCliAgentCache,
   isCommandOnPath,
 } from "../ai/providers/cli-agent";
 import { debug, logError } from "../logger";
@@ -62,23 +61,6 @@ const AGENT_INSTALL: Record<
     binDirs: [".local/bin"],
   },
 };
-
-/**
- * Prepend the directories the given agent's official installer writes to
- * (e.g. `~/.opencode/bin`, `~/.local/bin`) onto `process.env.PATH`, so the next
- * availability probe finds the freshly-installed binary without waiting for the
- * user's shell config to be re-sourced or for a server restart.
- */
-function augmentPathForInstall(binDirs: readonly string[]): void {
-  const home = homedir();
-  const dirs = binDirs.map((d) => join(home, d));
-  const current = process.env.PATH ?? "";
-  const existing = current.split(":");
-  const toPrepend = dirs.filter((d) => existsSync(d) && !existing.includes(d));
-  if (toPrepend.length > 0) {
-    process.env.PATH = [...toPrepend, current].join(":");
-  }
-}
 
 export class OnboardingService extends Context.Service<
   OnboardingService,
@@ -186,8 +168,7 @@ export const OnboardingServiceLive = Layer.effect(
           drainStream(broadcast, proc.stderr),
         ]);
         const code = await proc.exited;
-        augmentPathForInstall(spec.binDirs);
-        invalidateCliAgentCache();
+        addInstalledBinDirs(spec.binDirs.map((dir) => join(homedir(), dir)));
         // Confirm the install with a strict PATH probe — NOT the auth-inclusive
         // availability check. An already-authed agent (e.g. Claude creds in the
         // Keychain) would make that check pass even if the installer exited 0

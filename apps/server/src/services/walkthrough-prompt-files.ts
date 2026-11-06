@@ -1,5 +1,6 @@
 import type { WalkthroughGenerationMode, WalkthroughStackSnapshot } from "@revv/shared";
 import { Effect } from "effect";
+import type { DiffFingerprint } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import {
   commitExists,
@@ -16,7 +17,7 @@ import {
   parseNumstat,
   resolveCounts,
 } from "./incremental-diff";
-import { changedFiles, type DiffFingerprint, fingerprintFiles } from "./stacks/fingerprint";
+import { changedFiles, fingerprintFiles } from "./stacks/fingerprint";
 
 export interface PromptFile {
   readonly filename: string;

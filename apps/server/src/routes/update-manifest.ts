@@ -32,6 +32,7 @@
 // truth — going through the server only matters for writes so the in-memory
 // SettingsService cache stays consistent with the persisted column).
 
+import { REPO_SLUG } from "@revv/shared/desktop-contract";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { serverEnv } from "../config";
@@ -39,15 +40,14 @@ import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
 import { updateChannelSchema } from "./schemas";
 
-const GITHUB_REPO = "alexandre-schaffner/revv";
-const STABLE_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
+const STABLE_MANIFEST_URL = `https://github.com/${REPO_SLUG}/releases/latest/download/latest.json`;
 // Nightly uses per-SHA tags (`nightly-<short-sha>`) because GitHub's
 // immutable-releases feature permanently reserves any tag used by a release,
 // making a moving `nightly` tag a one-shot. We resolve "latest nightly" at
 // request time by listing releases and picking the newest prerelease whose
 // tag starts with `nightly-`. The asset filename inside each release is just
 // `latest.json` (same as stable) so no post-build rename step is needed.
-const NIGHTLY_RELEASES_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30`;
+const NIGHTLY_RELEASES_API_URL = `https://api.github.com/repos/${REPO_SLUG}/releases?per_page=30`;
 const NIGHTLY_TAG_PREFIX = "nightly-";
 
 interface GitHubAsset {

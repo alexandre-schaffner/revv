@@ -94,7 +94,7 @@ The codebase currently has **zero test files** (`*.test.ts`, `*.spec.ts`, etc.).
 - [ ] Every `logError` on the walkthrough emit path (`WalkthroughJobs.ts` `emitEvent` + the `Broadcaster` global-bus broadcast) includes `walkthroughId`.
 - [ ] Emit drops / fan-out errors include the event type being processed.
 - [ ] Prerender failures include the block index.
-- [ ] Logs are queryable by `walkthroughId` in development (`REV_DEBUG=1`).
+- [ ] Logs are queryable by `walkthroughId` in development (`REVV_DEBUG=1`).
 
 ### US-008: Add health-check endpoint with dependency status
 

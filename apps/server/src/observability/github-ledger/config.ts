@@ -6,7 +6,7 @@ import { repositories, userSettings } from "../../db/schema";
 import { appDataDir } from "../../paths";
 
 export function githubLedgerPath(): string | null {
-  const setting = process.env.REVV_GITHUB_LEDGER?.trim() ?? "";
+  const setting = serverEnv.githubLedger;
   if (setting === "0") return null;
   if (setting === "" && serverEnv.channel !== "dev") return null;
   if (setting !== "" && setting !== "1") return resolve(setting);

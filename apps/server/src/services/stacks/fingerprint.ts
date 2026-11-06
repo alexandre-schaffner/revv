@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { isOpenLayer } from "@revv/shared";
-
-export type DiffFingerprint = Readonly<Record<string, string>>;
+import type { DiffFingerprint } from "../../db/schema/walkthroughs";
 
 interface FingerprintFile {
   readonly filename: string;

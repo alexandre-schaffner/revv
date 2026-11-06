@@ -53,11 +53,10 @@ import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
 import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
 import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
-import { walkthroughs } from "../db/schema/walkthroughs";
+import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
-import type { DiffFingerprint } from "./stacks/fingerprint";
 import { decodeWalkthroughIssue } from "./walkthrough-issue";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 

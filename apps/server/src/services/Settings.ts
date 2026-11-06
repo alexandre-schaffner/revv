@@ -22,6 +22,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import { applyAcpAgentOverride } from "../ai/acp/presets";
+import { serverEnv } from "../config";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
@@ -332,14 +333,10 @@ function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
   };
 }
 
-// ── JSON file migration (one-time) ───────────────────────────────────────────
-
+/** Load the settings row, creating it (legacy-upgrade: settingsJson) from the pre-DB JSON file. */
 async function migrateJsonToDb(db: Db): Promise<UserSettings> {
   const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const { homedir } = await import("node:os");
-
-  const settingsPath = process.env.REVV_SETTINGS_PATH ?? join(homedir(), ".revv", "settings.json");
+  const settingsPath = serverEnv.legacySettingsPath;
 
   const [row] = await db.select().from(userSettings).where(eq(userSettings.id, "default")).limit(1);
 
@@ -387,6 +384,8 @@ export class SettingsService extends Context.Service<
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
+    /** The GitHub host for flows with no repository in hand: the settings host, else `GITHUB_HOST`. */
+    githubHost: () => Effect.Effect<string>;
     resolveAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
     resolveRecapAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
     /**
@@ -454,6 +453,11 @@ export const SettingsServiceLive = Layer.effect(
         }),
 
       settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
+
+      githubHost: () =>
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.map((s) => s.githubHost.trim() || serverEnv.githubHost),
+        ),
 
       resolveAgent: () =>
         SubscriptionRef.get(settingsRef).pipe(

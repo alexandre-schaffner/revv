@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect";
 import { auth } from "../auth";
 import type { GitHubAuthError } from "../domain/errors";
+import { hostFromProviderId } from "../domain/provider-id";
 import type { DbService } from "./Db";
 import type { SecretStore, TokenPair } from "./SecretStore";
 import { migrateLegacyTokens } from "./SecretStore";
@@ -15,11 +16,7 @@ export interface AccountIdentity {
   readonly accessToken: string;
   readonly providerId: string;
   readonly githubLogin: string | null;
-  readonly host: string | null;
-}
-
-function hostFromProviderId(providerId: string): string | null {
-  return providerId.split(":")[1] ?? null;
+  readonly host: string;
 }
 
 export class Identity extends Context.Service<

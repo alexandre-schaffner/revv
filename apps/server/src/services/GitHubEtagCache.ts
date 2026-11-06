@@ -1,8 +1,28 @@
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { githubEtagCache } from "../db/schema/index";
 import { DbService } from "./Db";
+
+/**
+ * Rows here carry no expiry (an ETag stays valid indefinitely), and two things
+ * grow the table fast: `listReviewComments` folds its advancing `since`
+ * watermark into the key, leaving an unreachable row per move, and `listPrs`
+ * stores the whole multi-page body. A week outlasts any live key's reuse (the
+ * poll touches active keys every few minutes); reaping a live key costs one
+ * unconditional refetch. `fetched_at` is stamped on 200 and left on 304, so a
+ * key only replayed via 304s can be reaped too, which is the safe direction.
+ */
+export const etagCacheRetention: RetentionPolicy = {
+  table: "github_etag_cache",
+  sweep: (db, now) =>
+    db
+      .delete(githubEtagCache)
+      .where(lt(githubEtagCache.fetchedAt, daysBefore(now, 7)))
+      .returning({ key: githubEtagCache.cacheKey })
+      .all().length,
+};
 
 /** Serialized-body shape stored in `github_etag_cache.body_json`. */
 export interface CachedBody {

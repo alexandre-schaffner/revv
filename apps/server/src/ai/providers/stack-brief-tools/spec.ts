@@ -1,28 +1,6 @@
-import type { StackEntryStatus } from "@revv/shared";
 import { z } from "zod";
 import type { Db } from "../../../db";
 import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gateway";
-
-interface StackBriefSnapshotLayer {
-  readonly position: number;
-  readonly number: number;
-  readonly title: string;
-  readonly headSha: string | null;
-  readonly status: StackEntryStatus;
-  readonly prId: string | null;
-  readonly additions: number;
-  readonly deletions: number;
-  readonly changedFiles: number;
-  readonly body: string | null;
-}
-
-export interface StackBriefSnapshot {
-  readonly stackNumber: number;
-  readonly baseRefName: string;
-  readonly layers: ReadonlyArray<StackBriefSnapshotLayer>;
-  readonly merged: ReadonlyArray<{ readonly number: number; readonly title: string }>;
-  readonly capturedAt: string;
-}
 
 export interface StackBriefToolContext {
   readonly db: Db;

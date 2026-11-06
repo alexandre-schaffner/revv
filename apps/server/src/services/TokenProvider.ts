@@ -4,6 +4,11 @@ import { serverEnv } from "../config";
 import { account, user } from "../db/schema";
 import { userSettings } from "../db/schema/user-settings";
 import { GitHubAuthError } from "../domain/errors";
+import {
+  hostFromProviderId,
+  LEGACY_GITHUB_PROVIDER_ID,
+  providerIdForHost,
+} from "../domain/provider-id";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import { clientIdForHost, tokenUrlForHost } from "../github-oauth";
 import { githubTryPromise } from "../observability/github-ledger/origin";
@@ -107,11 +112,6 @@ export const TokenProviderLive = Layer.effect(
     // out per-repo and would otherwise fire N parallel refresh grants, each
     // invalidating the previous one's rotated refresh token.
     const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError>();
-
-    /** Derive the GitHub host from a `github:{host}` (or legacy `github`) providerId. */
-    function hostFromProviderId(providerId: string): string {
-      return providerId.split(":")[1] ?? serverEnv.githubHost;
-    }
 
     /** Exchange the stored refresh token for a fresh access token. Composed as
      * an Effect end-to-end — secret-store reads/writes and the SSE broadcast are
@@ -319,8 +319,12 @@ export const TokenProviderLive = Layer.effect(
         // user owns (mirrors the prior behavior for non-default GHE hosts that
         // open an SSE stream without a `host=` param — see git history).
         const providerIds = host
-          ? [`github:${host}`, "github"]
-          : ["github:github.com", `github:${serverEnv.githubHost}`, "github"];
+          ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
+          : [
+              providerIdForHost("github.com"),
+              providerIdForHost(serverEnv.githubHost),
+              LEGACY_GITHUB_PROVIDER_ID,
+            ];
         const ordered: typeof rows = [];
         for (const pid of providerIds) {
           const m = rows.find((r) => r.providerId === pid);

@@ -14,11 +14,11 @@ import {
   generateSuggestions,
   type SuggestionsWalkthroughContext,
 } from "../ai/providers/suggestions";
-import { db } from "../auth";
 import { pinnedPullRequests } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
+import { appDatabase } from "../services/Db";
 import {
   type CachedDiffFile,
   DiffCacheService,
@@ -44,6 +44,8 @@ import { SettingsService } from "../services/Settings";
 import { WalkthroughService } from "../services/Walkthrough";
 import { handleAppError, withAccount } from "./middleware";
 import { coerceReviewMode } from "./reviews/handlers/active-session";
+
+const db = appDatabase();
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //
@@ -149,7 +151,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     "/resolve-link",
     async (ctx) => {
       const expectedHost = ctx.body.githubHost.toLowerCase();
-      const activeHost = (ctx.account.host ?? "github.com").toLowerCase();
+      const activeHost = ctx.account.host.toLowerCase();
 
       // This branch must stay before AppRuntime/service access. A mismatched
       // account is a recovery state, not permission to probe another

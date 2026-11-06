@@ -1,40 +1,31 @@
-import { and, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { Context, Duration, Effect, Layer, Schedule } from "effect";
-import { githubEtagCache, kvCache, pullRequests } from "../db/schema/index";
+import type { RetentionPolicy } from "../db/retention";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { logError } from "../logger";
+import { kvCacheRetention } from "./Cache";
 import { DbService } from "./Db";
+import { etagCacheRetention } from "./GitHubEtagCache";
+import { prArchiveRetention } from "./poll-maintenance";
 
 const SWEEP_INTERVAL_HOURS = 6;
-const PR_RETENTION_DAYS = 7;
-/**
- * Retention for `github_etag_cache`.
- *
- * Unlike `kv_cache`, rows here carry no `expires_at` — an
- * ETag stays valid indefinitely — so without a sweep the table only grows. Two
- * things grow it fast: `listReviewComments` folds its advancing `since`
- * watermark into the cache key, so every watermark move for every PR leaves a
- * permanently-unreachable row behind; and `listPrs` stores the entire
- * accumulated multi-page body, which is megabytes for a repo with hundreds of
- * open PRs.
- *
- * A week is comfortably longer than any live key's reuse interval (the poll
- * touches every active key every few minutes), so this only ever reaps rows
- * nothing will ask for again. Reaping a still-live key would cost one
- * unconditional refetch, not a correctness bug.
- */
-const ETAG_CACHE_RETENTION_DAYS = 7;
+
+const POLICIES: readonly RetentionPolicy[] = [
+  kvCacheRetention,
+  prArchiveRetention,
+  etagCacheRetention,
+];
 
 type DbMaintenanceService = {
   readonly start: () => Effect.Effect<void>;
   readonly stop: () => Effect.Effect<void>;
-  readonly runNow: () => Effect.Effect<void>;
 };
 
 export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceService>()(
   "DbMaintenance",
 ) {}
 
+/** Runs every feature's retention policy, then checkpoints the WAL, on start and every 6 hours. */
 export const DbMaintenanceLive = Layer.effect(
   DbMaintenance,
   Effect.gen(function* () {
@@ -42,64 +33,15 @@ export const DbMaintenanceLive = Layer.effect(
     const { db } = yield* DbService;
 
     const runMaintenance: Effect.Effect<void> = Effect.sync(() => {
-      const nowIso = new Date().toISOString();
-      const prCutoffIso = new Date(
-        Date.now() - PR_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-      ).toISOString();
-
-      const expiredKv = db
-        .select({ n: sql<number>`COUNT(*)` })
-        .from(kvCache)
-        .where(lt(kvCache.expiresAt, nowIso))
-        .get();
-      const kvSwept = expiredKv?.n ?? 0;
-      if (kvSwept > 0) {
-        db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run();
-      }
-
-      // Cascades clean walkthroughs, review sessions, chat sessions, diff
-      // files, and pinned rows via the schema's onDelete: "cascade" declarations.
-      const expiredPrsPredicate = and(
-        inArray(pullRequests.status, ["closed", "merged"]),
-        isNotNull(pullRequests.closedAt),
-        lt(pullRequests.closedAt, prCutoffIso),
-      );
-      const expiredPrs = db
-        .select({ n: sql<number>`COUNT(*)` })
-        .from(pullRequests)
-        .where(expiredPrsPredicate)
-        .get();
-      const prsSwept = expiredPrs?.n ?? 0;
-      if (prsSwept > 0) {
-        db.delete(pullRequests).where(expiredPrsPredicate).run();
-      }
-
-      // `fetched_at` is refreshed on every 200 AND left alone on a 304, so it
-      // is a last-write time, not a last-use time — which is the conservative
-      // direction: a key still being replayed via 304s can be reaped, costing
-      // one unconditional refetch, whereas a key genuinely in use as a 200
-      // target keeps getting stamped and survives.
-      const etagCutoffIso = new Date(
-        Date.now() - ETAG_CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-      ).toISOString();
-      const expiredEtags = db
-        .select({ n: sql<number>`COUNT(*)` })
-        .from(githubEtagCache)
-        .where(lt(githubEtagCache.fetchedAt, etagCutoffIso))
-        .get();
-      const etagsSwept = expiredEtags?.n ?? 0;
-      if (etagsSwept > 0) {
-        db.delete(githubEtagCache).where(lt(githubEtagCache.fetchedAt, etagCutoffIso)).run();
-      }
-
+      const now = new Date();
+      const swept = POLICIES.map((policy) => ({
+        table: policy.table,
+        rows: policy.sweep(db, now),
+      }));
       db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
-
-      const total = kvSwept + prsSwept + etagsSwept;
-      if (total > 0) {
-        logError(
-          "DbMaintenance",
-          `sweep complete — kv_cache: ${kvSwept} rows, pull_requests: ${prsSwept} rows, github_etag_cache: ${etagsSwept} rows, WAL checkpointed`,
-        );
+      if (swept.some((s) => s.rows > 0)) {
+        const counts = swept.map((s) => `${s.table}: ${s.rows} rows`).join(", ");
+        logError("DbMaintenance", `sweep complete — ${counts}, WAL checkpointed`);
       }
     }).pipe(
       Effect.catchCause((cause) =>
@@ -110,15 +52,11 @@ export const DbMaintenanceLive = Layer.effect(
     );
 
     return {
-      // Run once immediately on start, then repeat every 6 hours
       start: () =>
         sweep.start(
           runMaintenance.pipe(Effect.repeat(Schedule.spaced(Duration.hours(SWEEP_INTERVAL_HOURS)))),
         ),
-
       stop: () => sweep.stop,
-
-      runNow: () => runMaintenance,
     };
   }),
 );

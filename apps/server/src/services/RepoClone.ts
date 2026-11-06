@@ -5,8 +5,6 @@ import { dirname, join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { and, eq, or } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { serverEnv } from "../config";
-import { CLONE_TIMEOUT_MS } from "../constants";
 import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import {
   CloneError,
@@ -39,6 +37,9 @@ import {
   runGitCloneWithTimeout,
 } from "./git-runner";
 import { TokenProvider } from "./TokenProvider";
+
+/** Maximum time to wait for a git clone to complete. */
+const CLONE_TIMEOUT_MS = 600_000; // 10 minutes
 
 /**
  * Hard upper bound on file sizes the frontend will render. Anything bigger
@@ -1001,7 +1002,7 @@ export const RepoCloneServiceLive = Layer.effect(
                     throw new CloneNotReadyError({ repoId });
                   }
 
-                  const gitHost = row.githubHost ?? serverEnv.githubHost;
+                  const gitHost = row.githubHost;
                   const clonePath = row.clonePath;
                   const prDirName = `pr-${prNumber}`;
                   const branchName = `revv/pr-${prNumber}`;

@@ -59,7 +59,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             const cloneSvc = yield* RepoCloneService;
 
             const { accountId, accessToken: token } = ctx.account;
-            const githubHost = ctx.account.host ?? "github.com";
+            const githubHost = ctx.account.host;
             // Query the account's own host: the settings-derived fallback base
             // can point at a different host than the token was minted for.
             const repoData = yield* github.repos
@@ -131,7 +131,7 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
     "/inspect-local",
     async (ctx) => {
       const localPath = ctx.body.path;
-      const githubHost = ctx.account.host ?? "github.com";
+      const githubHost = ctx.account.host;
       try {
         return await AppRuntime.runPromise(
           Effect.gen(function* () {

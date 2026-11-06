@@ -10,7 +10,8 @@ import {
   type StackLayerReview,
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
-import { changedFiles, type DiffFingerprint, isComparable } from "./fingerprint";
+import type { DiffFingerprint } from "../../db/schema/walkthroughs";
+import { changedFiles, isComparable } from "./fingerprint";
 import type { GitHubStack, GitHubStackLayer } from "./map";
 
 export interface WalkthroughFact {

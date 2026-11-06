@@ -3,17 +3,19 @@ import { isMaintainerLogin } from "@revv/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db } from "../auth";
 import { account, repositories, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
 import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
+import { appDatabase } from "../services/Db";
 import { GitHubGateway } from "../services/GitHub";
 import { Identity } from "../services/Identity";
 import { PullRequestService } from "../services/PullRequest";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { handleAppError, withAuth } from "./middleware";
+
+const db = appDatabase();
 
 /**
  * Return the current user's GitHub identity and (optionally) their role for a PR.
@@ -57,11 +59,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
             Effect.gen(function* () {
               const identityService = yield* Identity;
               const github = yield* GitHubGateway;
-              const settingsService = yield* SettingsService;
-              const settings = yield* settingsService
-                .getSettings()
-                .pipe(Effect.orElseSucceed(() => null));
-              const host = settings?.githubHost?.trim() || undefined;
+              const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
               const token = yield* identityService.tokenForUser(userId, host);
               const gh = yield* github.users.authenticatedFresh(token);
               return gh;
@@ -137,22 +135,18 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         const reauth = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const identityService = yield* Identity;
-            const settingsService = yield* SettingsService;
-            const settings = yield* settingsService
-              .getSettings()
-              .pipe(Effect.orElseSucceed(() => null));
-            const hostPref = settings?.githubHost?.trim() || undefined;
+            const hostPref = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
             const resolved = yield* identityService.resolveAccount(userId, hostPref);
             const accountRow = db
               .select({ reauthRequiredAt: account.reauthRequiredAt })
               .from(account)
               .where(eq(account.id, resolved.accountId))
               .get();
-            const host = resolved.providerId.split(":")[1] ?? null;
+            const { host } = resolved;
             if (accountRow?.reauthRequiredAt) {
               const github = yield* GitHubGateway;
               const tokenStillWorks = yield* github.users
-                .authenticatedFreshForHost(resolved.accessToken, host ?? "github.com")
+                .authenticatedFreshForHost(resolved.accessToken, host)
                 .pipe(
                   Effect.as(true),
                   Effect.orElseSucceed(() => false),
@@ -208,16 +202,12 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         Effect.gen(function* () {
           const identityService = yield* Identity;
           const github = yield* GitHubGateway;
-          const settingsService = yield* SettingsService;
-          const settings = yield* settingsService
-            .getSettings()
-            .pipe(Effect.orElseSucceed(() => null));
-          const host = settings?.githubHost?.trim() || undefined;
+          const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
           const token = yield* identityService.tokenForUser(userId, host);
           const cache = yield* CacheService;
           return yield* cache.getOrFetch(
             "github-orgs",
-            `${userId}:${host ?? ""}`,
+            `${userId}:${host}`,
             () => github.repos.orgsForUser(token),
             { ttlMs: 10 * 60 * 1000 },
           );

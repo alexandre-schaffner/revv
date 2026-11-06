@@ -1,10 +1,14 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
+import {
+  hostFromProviderId,
+  LEGACY_GITHUB_PROVIDER_ID,
+  providerIdForHost,
+} from "../domain/provider-id";
 import {
   clientIdForHost,
   clientIdIsGitHubApp,
@@ -15,10 +19,13 @@ import {
 } from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { appDatabase } from "../services/Db";
 import { Identity } from "../services/Identity";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { withAuth } from "./middleware";
+
+const db = appDatabase();
 
 // The device-code flow needs `client_id` only — no client_secret. An empty
 // `GITHUB_CLIENT_ID` is now normal: GHE hosts supply their client ID during
@@ -26,7 +33,10 @@ import { withAuth } from "./middleware";
 // fixed self-hosted deployment. We warn only if it's been set to an obvious
 // placeholder, and otherwise diagnose missing-client-id at request time (see
 // `clientIdForHost`).
-if (GITHUB_CLIENT_ID.startsWith("BUNDLED_") || GITHUB_CLIENT_ID.startsWith("REPLACE_")) {
+if (
+  serverEnv.githubClientId.startsWith("BUNDLED_") ||
+  serverEnv.githubClientId.startsWith("REPLACE_")
+) {
   logError(
     "device-auth",
     "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. " +
@@ -66,10 +76,12 @@ async function resolveGithubUrls(
   userUrl: string;
   emailsUrl: string;
 }> {
-  const settings = await AppRuntime.runPromise(
-    Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(Effect.orElseSucceed(() => null)),
+  const [settings, settingsHost] = await AppRuntime.runPromise(
+    Effect.flatMap(SettingsService, (s) =>
+      Effect.all([s.getSettings().pipe(Effect.orElseSucceed(() => null)), s.githubHost()]),
+    ),
   );
-  const host = hostOverride?.trim() || settings?.githubHost?.trim() || serverEnv.githubHost;
+  const host = hostOverride?.trim() || settingsHost;
   const githubBase = `https://${host}`;
   const apiBase = isPublicGitHub(host) ? "https://api.github.com" : `https://api.${host}`;
   // The BYO client ID applies only to the host it was saved with. github.com
@@ -355,7 +367,7 @@ async function upsertUserAndSession(
   // Upsert account by providerId + accountId. Token bytes go to the secure
   // store keyed on the account row id — never the DB columns. Expiry
   // timestamps and the cleared `reauthRequiredAt` flag stay on the row.
-  const providerId = `github:${urls.host}`;
+  const providerId = providerIdForHost(urls.host);
   const existingAccounts = await db.select().from(account).where(eq(account.accountId, accountId));
   const existingAccount = existingAccounts.find((a) => a.providerId === providerId);
   const accountRowId = existingAccount?.id ?? crypto.randomUUID();
@@ -416,7 +428,7 @@ async function upsertAccountForUser(
   userId: string,
 ): Promise<void> {
   const githubUser = await retryFetch(() => fetchGitHubUser(tokens.accessToken, urls), 2, 1000);
-  const providerId = `github:${urls.host}`;
+  const providerId = providerIdForHost(urls.host);
   const accountId = githubUser.id.toString();
   const now = new Date();
 
@@ -502,8 +514,7 @@ const publicAuthRoutes = new Elysia()
       Array<{ host: string; githubLogin: string | null; avatarUrl: string | null }>
     >();
     for (const acc of accounts) {
-      const host = acc.providerId.split(":")[1];
-      if (!host) continue;
+      const host = hostFromProviderId(acc.providerId);
       const existing = accountsByUserId.get(acc.userId) ?? [];
       existing.push({
         host,
@@ -712,8 +723,7 @@ const protectedAuthRoutes = new Elysia()
 
     const byHost = new Map<string, { githubLogin: string | null; avatarUrl: string | null }>();
     for (const r of rows) {
-      const host = r.providerId.split(":")[1];
-      if (!host) continue;
+      const host = hostFromProviderId(r.providerId);
       byHost.set(host, { githubLogin: r.githubLogin ?? null, avatarUrl: r.avatarUrl ?? null });
     }
 
@@ -732,7 +742,10 @@ const protectedAuthRoutes = new Elysia()
     "/api/auth/accounts/disconnect",
     async (ctx) => {
       const { host } = ctx.body;
-      const providerId = `github:${host}`;
+      const providerIds =
+        host === serverEnv.githubHost
+          ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
+          : [providerIdForHost(host)];
       const userId = ctx.session.user.id;
 
       // We cannot revoke the grant on GitHub's side: the only OAuth flow Revv
@@ -743,16 +756,15 @@ const protectedAuthRoutes = new Elysia()
       // operation: delete the account row and wipe its stored tokens. Users who
       // want to revoke the grant upstream do so from their GitHub app
       // connections page (linked from the settings UI).
-      const accountRow = await db
+      const accountRows = await db
         .select({ id: account.id })
         .from(account)
-        .where(and(eq(account.providerId, providerId), eq(account.userId, userId)))
-        .then((r) => r[0] ?? null);
+        .where(and(inArray(account.providerId, providerIds), eq(account.userId, userId)));
 
       await db
         .delete(account)
-        .where(and(eq(account.providerId, providerId), eq(account.userId, userId)));
-      if (accountRow) {
+        .where(and(inArray(account.providerId, providerIds), eq(account.userId, userId)));
+      for (const accountRow of accountRows) {
         await AppRuntime.runPromise(
           Effect.flatMap(Identity, (identity) => identity.deleteAccountTokens(accountRow.id)),
         );

@@ -5,7 +5,6 @@
 import type { McpServer } from "@agentclientprotocol/sdk";
 import type { AcpAgentId, ThinkingEffort } from "@revv/shared";
 import { serverEnv } from "../../config";
-import { AGENT_IDLE_TIMEOUT_MS, CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { debug, logError } from "../../logger";
 import {
   type AcpConnectionHandle,
@@ -13,7 +12,12 @@ import {
   getAcpConnection,
 } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
-import { makeActivityBeacon, withAgentTurn } from "../agent-stream";
+import {
+  AGENT_IDLE_TIMEOUT_MS,
+  CLI_WALKTHROUGH_TIMEOUT_MS,
+  makeActivityBeacon,
+  withAgentTurn,
+} from "../agent-stream";
 
 export interface RunMcpAgentAcpParams {
   readonly acpAgentId: AcpAgentId;

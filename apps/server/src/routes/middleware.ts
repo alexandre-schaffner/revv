@@ -1,6 +1,5 @@
 import { Cause, Effect, Option } from "effect";
 import { Elysia, status } from "elysia";
-import { serverEnv } from "../config";
 import {
   AiNotConfiguredError,
   BaseConflictsRejectedError,
@@ -73,14 +72,9 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
         );
         if (!session) return { __noSession: true as const };
 
-        const settingsService = yield* SettingsService;
-        const settings = yield* settingsService
-          .getSettings()
-          .pipe(Effect.orElseSucceed(() => null));
         const host =
           queryHost(ctx.query as Record<string, unknown>) ??
-          settings?.githubHost?.trim() ??
-          serverEnv.githubHost;
+          (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
         const account = yield* identity.resolveAccount(session.user.id, host);
         return { session, account };
       }),

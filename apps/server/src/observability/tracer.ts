@@ -2,7 +2,7 @@
 //
 // In-memory span ring buffer backed by an OpenTelemetry SpanExporter.
 // Provides both a custom ring-buffer exporter (always active) and an
-// optional ConsoleSpanExporter gated on REV_DEBUG=1.
+// optional ConsoleSpanExporter gated on REVV_DEBUG=1.
 //
 // Why not use Effect's built-in Tracer directly? We do — via
 // @effect/opentelemetry's NodeSdk.layer, which wires Effect's Tracer to
@@ -229,7 +229,7 @@ const processors: (SimpleSpanProcessor | BatchSpanProcessor)[] = [
   new SimpleSpanProcessor(new RevSpanExporter()),
 ];
 
-if (serverEnv.revDebug) {
+if (serverEnv.debug) {
   processors.push(new BatchSpanProcessor(new ConsoleSpanExporter()));
 }
 
