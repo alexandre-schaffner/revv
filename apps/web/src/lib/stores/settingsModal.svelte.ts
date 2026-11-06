@@ -1,4 +1,4 @@
-import type { SettingsSectionId } from "$lib/components/settings/panes";
+import type { SettingsSectionId } from "$lib/components/settings/settings-panes";
 
 let open = $state(false);
 let targetSection = $state<SettingsSectionId | null>(null);
