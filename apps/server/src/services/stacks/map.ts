@@ -149,7 +149,6 @@ function openMembership(
     .join(",");
 }
 
-/** The poll wrote `mirror` after `read` was taken, and puts different PRs at the open positions. */
 export function membershipSupersededByPoll(
   read: GitHubStack,
   mirror: readonly MirroredLayer[],

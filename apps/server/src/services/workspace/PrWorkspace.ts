@@ -1,5 +1,3 @@
-// ── PrWorkspace ────────────────────────────────────────────────────────────
-//
 // The one owner of a PR's agent workspace: the worktree `<holder>/pr-N` on the
 // agent branch `revv/pr-N`, where the chat agent works and commits. Everything
 // that touches it goes through here:
@@ -109,7 +107,6 @@ export class PrWorkspace extends Context.Service<
       readonly id: string;
       readonly headSha: string | null;
     }) => Effect.Effect<ChatSessionRow | null, DbError>;
-    /** How many proposed commits wait on the agent branch. */
     readonly unpushedCount: (ctx: PrContextBasic) => Effect.Effect<number, DbError>;
     readonly proposed: (prId: string) => Effect.Effect<ProposedChanges, ReadError>;
     readonly commitPatch: (
@@ -120,12 +117,10 @@ export class PrWorkspace extends Context.Service<
       prId: string,
       sha: string,
     ) => Effect.Effect<readonly CommitFile[], ReadError | ValidationError | GitOperationError>;
-    /** Drop proposed commits, rebuilding the agent branch without them. */
     readonly discard: (
       prId: string,
       shas: readonly string[],
     ) => Effect.Effect<{ readonly discardedCount: number }, EditError>;
-    /** Replay the agent's commits from `oldHeadSha` onto `newHeadSha`. */
     readonly rebaseOnto: (
       prId: string,
       oldHeadSha: string,
@@ -214,7 +209,6 @@ export const PrWorkspaceLive = Layer.effect(
         : Effect.fail(new ValidationError({ message: `Invalid commit SHA: ${invalid}` }));
     };
 
-    /** Run `edit` holding the workspace, on the PR's agent branch. */
     const editBranch = <A, E>(
       prId: string,
       edit: (ctx: PrContextBasic, branch: AgentBranch) => Effect.Effect<A, E>,

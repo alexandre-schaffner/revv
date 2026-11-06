@@ -38,7 +38,6 @@ function temporaryHome(): string {
   return directory;
 }
 
-/** Minimal stand-in for the repository's `integrations/` directory. */
 function assets(root: string): string {
   const directory = join(root, "integrations");
   mkdirSync(join(directory, "external-mcp-bridge"), { recursive: true });
@@ -64,7 +63,6 @@ function input(root: string, token: string): BridgeInstallInput {
   };
 }
 
-/** Text of a location, reading the Claude plugin's `.mcp.json` for a directory. */
 function credentialText(location: string): string {
   const file = statSync(location).isDirectory() ? join(location, ".mcp.json") : location;
   return readFileSync(file, "utf8");

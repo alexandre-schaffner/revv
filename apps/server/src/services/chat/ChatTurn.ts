@@ -1,5 +1,3 @@
-// ── ChatTurnService ────────────────────────────────────────────────────────
-//
 // One chat turn, from a user message to a journaled stream of frames. It holds
 // the PR's workspace for the whole turn (a push or a commit edit is refused
 // meanwhile, and vice versa), brings the worktree to the PR head, keys the
@@ -88,7 +86,6 @@ export const ChatTurnServiceLive = Layer.effect(
     const chatSessions = yield* ChatSessionService;
     const ai = yield* AiService;
 
-    /** The latest complete walkthrough, for a fresh agent session's system prompt. */
     const walkthroughContext = (prId: string) =>
       dbTry("chat walkthrough context", (): ChatWalkthroughContext | null => {
         const row = latestCompleteWalkthrough(db, prId);

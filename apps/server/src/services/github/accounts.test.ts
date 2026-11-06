@@ -15,8 +15,6 @@ import { githubClient } from "./transport";
 const HOST = "ghe.example.com";
 const HOUR = 60 * 60 * 1000;
 
-// ── Fakes ──────────────────────────────────────────────────────────────────
-
 function makeFakeStore(initial?: Record<string, TokenPair>) {
   const map = new Map<string, TokenPair>(Object.entries(initial ?? {}));
   const layer = Layer.succeed(SecretStore, {
@@ -104,10 +102,6 @@ function seedAccount(
     .run();
 }
 
-/**
- * Stub `fetch`: the refresh grant answers `grant`, `GET /user` answers
- * `userStatus` (as `{ id: 7, login: "octo" }` when 200).
- */
 function stubGitHub(opts: { grant?: unknown; userStatus?: number }) {
   const calls = { grant: 0, user: 0 };
   globalThis.fetch = (async (input: string | URL | Request) => {
@@ -153,8 +147,6 @@ const reauthAt = (db: Db, id: string) =>
     .from(account)
     .where(eq(account.id, id))
     .get()?.reauthRequiredAt ?? null;
-
-// ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("GitHubAccounts.clientFor", () => {
   it("returns the stored token, addressed at the account's host", async () => {

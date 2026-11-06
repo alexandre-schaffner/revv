@@ -130,10 +130,7 @@ export interface OperationInput {
   readonly sourceBranch: string;
 }
 
-/**
- * Start merging the base into the PR head, or replaying the PR onto the base.
- * A conflict leaves the operation paused in the scratch worktree for the agent.
- */
+/** A conflict leaves the merge or rebase paused in the scratch worktree for the agent. */
 export async function startOperation(
   input: OperationInput,
 ): Promise<

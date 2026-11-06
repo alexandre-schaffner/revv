@@ -7,7 +7,6 @@ import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
 import type { GitHubClient, GitHubHttp } from "./transport";
 
-/** Split `owner/repo`, failing as not found when it isn't one. */
 export function splitFullName(
   fullName: string,
 ): Effect.Effect<{ owner: string; repo: string }, GitHubNotFoundError> {

@@ -9,7 +9,6 @@
  */
 export const agentBranch = (prNumber: number) => `revv/pr-${prNumber}`;
 
-/** Directory name of the PR's agent worktree inside the repo's worktree holder. */
 export const agentWorktreeDir = (prNumber: number) => `pr-${prNumber}`;
 
 /** Where the PR head is fetched, in a namespace that shares no name with a branch. */
@@ -22,7 +21,6 @@ export const prFetchRef = (prNumber: number) => `refs/revv-pull/${prNumber}`;
  */
 export const legacyPrRef = (prNumber: number) => `refs/revv/pr-${prNumber}`;
 
-/** Refs a scratch run fetches into: `refs/revv/<feature>/<key>/<name>`. */
 export const scratchRef = (feature: "base-conflicts" | "stack-rebase", key: number, name: string) =>
   `refs/revv/${feature}/${key}/${name}`;
 
@@ -36,7 +34,6 @@ export const scratchWorktreeDir = {
   review: (walkthroughId: string) => `review-${walkthroughId}`,
 } as const;
 
-/** The walkthrough id a review scratch worktree belongs to, if `dir` is one. */
 export function reviewWorktreeId(dir: string): string | null {
   return dir.startsWith("review-") ? dir.slice("review-".length) : null;
 }

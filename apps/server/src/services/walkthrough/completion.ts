@@ -1,4 +1,3 @@
-// ── When a walkthrough is finished ───────────────────────────────────────────
 // The one journal check behind both `complete_walkthrough` (the agent's gate)
 // and the orchestrator's decision to mark a row `complete` (invariant 12).
 // Every blocker refuses the gate. The orchestrator ignores the `gate-only`

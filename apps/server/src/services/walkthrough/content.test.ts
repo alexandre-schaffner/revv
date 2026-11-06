@@ -62,7 +62,7 @@ async function subtleSha256(input: string): Promise<string> {
 }
 
 describe("deterministic identities", () => {
-  // Rows written before the ids moved here were keyed with WebCrypto; a
+  // Rows already in users' databases were keyed with WebCrypto SHA-256; a
   // replay must still land on them (invariant 3).
   it("derives the ids the tools always derived", async () => {
     expect(issueId("wt", "Missing check — é", "a.ts", 3)).toBe(

@@ -1,10 +1,3 @@
-// ── GitHub: PR conversation ─────────────────────────────────────────────────
-//
-// The GitHub calls behind the Conversation tab: one GraphQL query for the
-// page, a rollup-only query for polling pending checks, REST for check
-// details and Actions logs, and the pickers' search queries. The writes live
-// in `conversation-writes.ts`.
-
 import type {
   ActorOption,
   CheckAnnotation,
@@ -59,8 +52,6 @@ export interface RepoRef {
   readonly owner: string;
   readonly repo: string;
 }
-
-// ── Fetching ────────────────────────────────────────────────────────────────
 
 /**
  * One GraphQL ask that survives fields the token may not read. A GitHub App
@@ -389,8 +380,6 @@ export function fetchCheckDetails(
     };
   }).pipe(retryTransient);
 }
-
-// ── Picker sources ──────────────────────────────────────────────────────────
 
 export function listRepoLabels(http: GitHubHttp, client: GitHubClient, ref: RepoRef) {
   return http

@@ -1,4 +1,3 @@
-/** Pull-request reviews, review comments and review threads on GitHub. */
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
 import { splitFullName } from "./graphql-batch";

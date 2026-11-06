@@ -1,5 +1,3 @@
-// ── BaseConflictsService ───────────────────────────────────────────────────
-//
 // The Conversation tab's "conflicts with the base branch" card. `check` asks
 // git which files conflict (`git merge-tree` over freshly fetched tips; GitHub
 // only says *whether*). `resolve` brings the PR up to date with its base the
@@ -49,7 +47,6 @@ import {
   verifyResolution,
 } from "./git";
 
-/** A check this fresh, for the same PR head, is served from memory. */
 const CHECK_FRESH_MS = 30_000;
 
 export type BaseConflictsError =
@@ -219,7 +216,6 @@ export const BaseConflictsServiceLive = Layer.effect(
         );
       });
 
-    /** Everything up to the paused (or clean) operation, failing as a refusal. */
     const prepare = (
       ctx: PrContextBasic,
       expectedHeadSha: string,

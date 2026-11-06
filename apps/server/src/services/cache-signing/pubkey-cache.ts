@@ -1,7 +1,7 @@
 import { SshKeysFetchFailed } from "../../domain/errors";
 
-const TTL_MS = 15 * 60 * 1000; // 15 minutes for successful fetches
-const NOTFOUND_TTL_MS = 60 * 1000; // 1 minute for 404s
+const TTL_MS = 15 * 60 * 1000;
+const NOTFOUND_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -12,18 +12,14 @@ interface Entry {
 }
 
 /**
- * In-memory TTL cache for public keys served at
- * `https://<host>/<login>.keys`. Each entry is a list of raw key lines
- * (OpenSSH authorized_keys format) that can be fed directly to
- * `ssh-keygen -Y verify`'s `allowed_signers` file.
+ * Public keys GitHub serves at `https://<host>/<login>.keys`: raw
+ * authorized_keys lines, ready for an `ssh-keygen -Y verify` `allowed_signers`
+ * file.
  */
 export class PubkeyCache {
   private readonly cache = new Map<string, Entry>();
 
-  /**
-   * Return the public keys for `login` on `host`. Fetches on miss or TTL
-   * expiry. Throws `SshKeysFetchFailed` on network errors.
-   */
+  /** An unknown login (404) yields no keys; any other failure throws `SshKeysFetchFailed`. */
   async getKeys(host: string, login: string): Promise<string[]> {
     const cacheKey = `${host}:${login}`;
     const now = Date.now();
@@ -74,7 +70,6 @@ export class PubkeyCache {
     }
   }
 
-  /** Remove all entries (used when settings change). */
   invalidate(): void {
     this.cache.clear();
   }

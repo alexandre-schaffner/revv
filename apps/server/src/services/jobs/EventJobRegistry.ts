@@ -1,8 +1,6 @@
 import type { AcpAgentId } from "@revv/shared";
 import { logError } from "../../logger";
 
-// ── Generic event-job registry ────────────────────────────────────────────────
-//
 // Shared backbone for the onboarding install (`Onboarding.ts`) and interactive
 // login (`AgentLogin.ts`) services. Both run one process-lifetime-idempotent job
 // per `AcpAgentId`, accumulate the job's events in an ephemeral replay buffer,
@@ -12,9 +10,6 @@ import { logError } from "../../logger";
 //
 // State is intentionally ephemeral. A `kill -9` mid-job just means the user
 // re-runs it from the onboarding picker; nothing here needs to survive a crash.
-//
-// Per-feature extras (the login PTY handle, its auth-url scan buffer) ride on the
-// job's `meta` slot so neither service has to re-implement the pub/sub plumbing.
 
 /** Any event a job can broadcast; `{ type: 'done' }` closes the job. */
 type JobEvent = { type: string };
@@ -30,7 +25,6 @@ export interface Job<E extends JobEvent, M> {
   meta: M;
 }
 
-/** Subscription handle returned by {@link EventJobRegistry.subscribe}. */
 export interface JobSubscription {
   /** True when the job id matched and the subscriber is registered. */
   found: boolean;
@@ -39,18 +33,13 @@ export interface JobSubscription {
 }
 
 export class EventJobRegistry<E extends JobEvent, M> {
-  // Per-agent job state: read and written only from the owning service's
-  // handlers, so a plain Map (not a Ref) is sufficient — ref-style
-  // serialization buys nothing here.
   private readonly jobs = new Map<AcpAgentId, Job<E, M>>();
 
   constructor(private readonly logTag: string) {}
 
   /**
-   * Commit `event` to the job's replay buffer, then fan it out to a snapshot of
-   * the current subscribers (listeners may unsubscribe themselves synchronously
-   * when they see `done`, mutating the live set). A terminal `{ type: 'done' }`
-   * marks the job done and clears its subscribers.
+   * Fans out to a snapshot of the subscribers: a listener may unsubscribe
+   * itself synchronously when it sees `done`.
    */
   broadcast(job: Job<E, M>, event: E): void {
     job.events.push(event);
@@ -72,13 +61,7 @@ export class EventJobRegistry<E extends JobEvent, M> {
     }
   }
 
-  /**
-   * Start-or-join. Returns the in-flight job's id when one is already running for
-   * `agentId`; otherwise creates a fresh job (its `meta` seeded by `makeMeta`),
-   * registers it, and invokes `spawn` to drive it. `spawn` receives the job plus
-   * a `broadcast` bound to it. Idempotent per agent — racing callers ride the
-   * first job.
-   */
+  /** Start-or-join: while `agentId` has a job running, callers get its id and nothing spawns. */
   start(
     agentId: AcpAgentId,
     makeMeta: () => M,
@@ -101,7 +84,6 @@ export class EventJobRegistry<E extends JobEvent, M> {
     return { jobId: job.jobId };
   }
 
-  /** Resolve a job by its id across all per-agent slots. */
   findById(jobId: string): Job<E, M> | undefined {
     for (const job of this.jobs.values()) {
       if (job.jobId === jobId) return job;

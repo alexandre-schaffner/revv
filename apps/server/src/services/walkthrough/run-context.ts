@@ -1,4 +1,3 @@
-// ── One walkthrough run's ephemeral state ────────────────────────────────────
 // Created when WalkthroughJobs launches a run, reached by the MCP route through
 // the run's token, and dropped with the run. Everything here is a
 // reconstructible cache (invariant 1): the background-judgment tracker, the

@@ -16,7 +16,7 @@ import type {
   TimelineItem,
 } from "@revv/shared";
 
-// ── Raw response shapes (only what the mapper reads) ────────────────────────
+// Raw GraphQL shapes: only the fields the mapper reads.
 
 export interface RawActor {
   readonly __typename?: string;
@@ -47,7 +47,7 @@ export interface RawPage<N> extends RawConnection<N> {
   readonly pageInfo: { readonly hasPreviousPage: boolean; readonly startCursor: string | null };
 }
 
-// One shape per timeline fragment in `queries.ts`.
+// One shape per timeline fragment in `../github/conversation-queries.ts`.
 
 interface RawEventBase {
   readonly id: string;
@@ -262,8 +262,6 @@ export interface RawConversation {
   } | null;
 }
 
-// ── Mapping ─────────────────────────────────────────────────────────────────
-
 export function nodesOf<N>(connection: RawConnection<N> | null | undefined): N[] {
   return (connection?.nodes ?? []).filter((n): n is N => n !== null);
 }
@@ -338,7 +336,6 @@ function toRollupState(raw: string | null | undefined): CiRollupState | null {
   }
 }
 
-/** Where a check run or status lands, from GitHub's status + conclusion. */
 export function checkBucket(
   source: "check_run" | "status",
   status: string,
@@ -436,7 +433,6 @@ export function mapRollup(commits: RawRollupCommits | null | undefined): CiRollu
   };
 }
 
-/** One raw timeline node → zero or one item. Partial nodes drop. */
 function toTimelineItem(node: RawTimelineNode): TimelineItem | null {
   switch (node.__typename) {
     case "IssueComment":
@@ -732,7 +728,6 @@ export function mapConversation(
   };
 }
 
-/** The accounts a timeline node names, as GitHub sent them. */
 function nodeActors(node: RawTimelineNode): Array<RawActor | null | undefined> {
   switch (node.__typename) {
     case "IssueComment":
@@ -749,7 +744,6 @@ function nodeActors(node: RawTimelineNode): Array<RawActor | null | undefined> {
   }
 }
 
-/** Every login the conversation renders, with the avatar URL GitHub sent. */
 export function collectAvatarUrls(
   raw: RawConversation,
   olderTimeline: readonly RawTimelineNode[] = [],

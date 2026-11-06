@@ -1,5 +1,3 @@
-// ── git ops ────────────────────────────────────────────────────────────────
-//
 // The git command surface: every git command Revv runs is one of these. They
 // share one convention: a command whose failure is an outcome the caller acts
 // on (a merge that conflicts, a fetch that can't reach the remote) returns a
@@ -39,7 +37,6 @@ import {
  */
 export const PROPOSED_COMMIT_RANGE_FLAGS = ["--first-parent", "--no-merges"] as const;
 
-/** A git SHA, abbreviated or full. */
 export function isValidSha(sha: string): boolean {
   return /^[0-9a-f]{7,40}$/i.test(sha);
 }
@@ -63,8 +60,6 @@ export function assertNotFlagLike(value: string, label: string): void {
 const PUSHED_COMMITS: GitPolicy = { signing: "user" };
 
 const lines = (out: string) => out.split("\n").filter((line) => line.length > 0);
-
-// ── Working tree state ──────────────────────────────────────────────────────
 
 /**
  * Whether the worktree has no uncommitted *tracked* change: modifications,
@@ -122,7 +117,6 @@ export async function isRebaseInProgress(cwd: string): Promise<boolean> {
   return false;
 }
 
-/** The worktree's own gitdir and the repository's common one, both absolute. */
 export async function gitDirs(
   cwd: string,
 ): Promise<{ readonly gitDir: string; readonly commonDir: string } | null> {
@@ -167,9 +161,6 @@ export async function remotes(
   return found;
 }
 
-// ── Commits and refs ────────────────────────────────────────────────────────
-
-/** The commit `ref` names, or null when it names none. */
 export async function resolveRef(cwd: string, ref: string): Promise<string | null> {
   const r = await gitAttempt(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], 10_000);
   const sha = r.stdout.trim();
@@ -190,20 +181,18 @@ export async function mergeBase(cwd: string, a: string, b: string): Promise<stri
   return r.ok && sha.length > 0 ? sha : null;
 }
 
-/** The commit's parents, in order; empty when it can't be read. */
 export async function commitParents(cwd: string, rev: string): Promise<string[]> {
   const r = await gitAttempt(cwd, ["rev-list", "--parents", "-n", "1", rev], 10_000);
   return r.ok ? r.stdout.trim().split(/\s+/).slice(1) : [];
 }
 
-/** Every commit in `range`, merges included; null when git can't count it. */
+/** Counts merge commits too, unlike {@link proposedCommitCount}. */
 export async function revListCount(cwd: string, range: string): Promise<number | null> {
   const r = await gitAttempt(cwd, ["rev-list", "--count", range], 30_000);
   const n = Number.parseInt(r.stdout.trim(), 10);
   return r.ok && Number.isFinite(n) ? n : null;
 }
 
-/** The number of proposed commits in `range` ({@link PROPOSED_COMMIT_RANGE_FLAGS}); null when git can't say. */
 export async function proposedCommitCount(cwd: string, range: string): Promise<number | null> {
   const r = await gitAttempt(
     cwd,
@@ -273,7 +262,6 @@ export async function commitPatch(cwd: string, sha: string): Promise<string> {
   return runGit(cwd, ["show", "--patch", "--pretty=format:", sha], 15_000);
 }
 
-/** `<rev>:<path>`, or null when the path doesn't exist there. */
 export async function showFile(cwd: string, rev: string, path: string): Promise<string | null> {
   const r = await gitAttempt(cwd, ["show", `${rev}:${path}`], 10_000);
   return r.ok ? r.stdout : null;
@@ -317,8 +305,6 @@ export async function deleteBranch(cwd: string, branch: string): Promise<boolean
   return gitSucceeds(cwd, ["branch", "-D", branch], 15_000);
 }
 
-// ── Diffs between two revisions ─────────────────────────────────────────────
-
 export async function diffNameStatus(
   cwd: string,
   base: string,
@@ -334,9 +320,8 @@ export async function diffNameStatus(
 }
 
 /**
- * Per-path added/deleted counts, computed by git in one call. `core.quotePath`
- * is off so non-ASCII paths come back verbatim and key the same as
- * {@link diffNameStatus}'s.
+ * `core.quotePath` is off so non-ASCII paths come back verbatim and key the
+ * same as {@link diffNameStatus}'s.
  */
 export async function diffNumstat(
   cwd: string,
@@ -361,7 +346,6 @@ export async function diffPatchForPath(
   return runGit(cwd, ["diff", "--find-renames", "--unified=80", base, head, "--", path], 30_000);
 }
 
-/** Paths under `pathspec` that differ between `a` and `b`. */
 export async function changedPaths(
   cwd: string,
   a: string,
@@ -372,7 +356,6 @@ export async function changedPaths(
   return r.ok ? lines(r.stdout) : [];
 }
 
-/** Whether any of `paths` still carries a conflict marker line at `rev`. */
 export async function hasConflictMarkers(
   cwd: string,
   rev: string,
@@ -403,8 +386,6 @@ export async function mergeTreeWriteTree(
     60_000,
   );
 }
-
-// ── Moving a worktree ───────────────────────────────────────────────────────
 
 export async function fetch(
   cwd: string,
@@ -521,8 +502,6 @@ export async function abortCherryPick(cwd: string): Promise<boolean> {
   return gitSucceeds(cwd, ["cherry-pick", "--abort"], 30_000);
 }
 
-// ── Worktrees ───────────────────────────────────────────────────────────────
-
 export async function listWorktrees(clonePath: string): Promise<WorktreeEntry[]> {
   const r = await gitAttempt(clonePath, ["worktree", "list", "--porcelain"], 15_000);
   return r.ok ? parseWorktreeList(r.stdout) : [];
@@ -557,8 +536,6 @@ export async function removeWorktree(clonePath: string, path: string): Promise<b
   return gitSucceeds(clonePath, ["worktree", "remove", "--force", path], 15_000);
 }
 
-// ── Cloning ─────────────────────────────────────────────────────────────────
-
 export async function shallowClone(
   url: string,
   dest: string,
@@ -567,8 +544,6 @@ export async function shallowClone(
 ): Promise<GitAttempt> {
   return gitAttempt(undefined, [...authConfig, "clone", "--depth=1", url, dest], timeoutMs);
 }
-
-// ── Process lifetime ────────────────────────────────────────────────────────
 
 /**
  * Called once at boot, before the first clone: kill git processes a previous

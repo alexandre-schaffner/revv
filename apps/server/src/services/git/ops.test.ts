@@ -27,26 +27,11 @@ import { classifyPushFailure, workflowPermissionRejection } from "./push";
 import { redactGitAuth } from "./remote";
 import { gitAttempt } from "./runner";
 
-// ── checkoutDetachedAt ───────────────────────────────────────────────────────
-//
-// Regression cover for the chat-push failure "git checkout failed: fatal:
-// '<branch>' is already used by worktree at '<path>'".
-//
-// The push flows position the per-PR worktree at the PR's source-branch tip
-// before merging the agent commits. They used to do that with
-// `git checkout -B {sourceBranch} origin/{sourceBranch}`, which git refuses
-// whenever another worktree of the same repository already has that branch
-// checked out — the normal state once Revv adopts a repo the user is also
-// working in. Detaching HEAD has the same effect on the working tree (the
-// push targets `HEAD:refs/heads/{sourceBranch}`) without touching branches.
-
 const GIT_ENV: Record<string, string> = {
   ...process.env,
-  // Neutralise the developer's own git config. Without this the tests inherit
-  // whatever is in `~/.gitconfig` — `commit.gpgsign=true` makes every
-  // `commitFile` prompt or fail, and a global `core.hooksPath` runs the
-  // developer's hooks inside throwaway fixture repos. CI is unaffected, which
-  // is exactly what makes the failure confusing when it happens locally.
+  // Neutralise the developer's own `~/.gitconfig`: `commit.gpgsign=true` makes
+  // every `commitFile` prompt or fail, and a global `core.hooksPath` runs their
+  // hooks inside the fixture repos. CI has neither, so only local runs break.
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_SYSTEM: "/dev/null",
   GIT_AUTHOR_NAME: "Revv Test",
@@ -69,7 +54,7 @@ function commitFile(cwd: string, name: string, body: string, message: string): s
   return git(cwd, ["rev-parse", "HEAD"]);
 }
 
-// A branch name with a slash, matching the shape that surfaced the checkout bug.
+// Slashed, the shape of branch that surfaced the worktree collision.
 const SOURCE_BRANCH = "iam/1-authn-service";
 const AGENT_BRANCH = "revv/pr-1";
 
@@ -87,13 +72,10 @@ interface Fixture {
 }
 
 /**
- * The repository shape every test here needs: a bare origin, one clone, and
- * **two linked worktrees** of that clone — the user's and Revv's.
- *
- * Two worktrees is the whole point rather than incidental setup. It is what
- * makes `git checkout -B {sourceBranch}` illegal in Revv's worktree, and it is
- * what makes `.git` a *file* there, which is what defeated the old
- * `existsSync(.git/MERGE_HEAD)` probe.
+ * A bare origin, one clone, and **two linked worktrees** of that clone: the
+ * user's and Revv's. Being linked makes `.git` a *file* in each, and the user's
+ * holding the source branch makes `git checkout -B {sourceBranch}` illegal in
+ * Revv's.
  */
 function makeFixture(prefix: string): Fixture {
   const base = mkdtempSync(join(tmpdir(), prefix));
@@ -102,7 +84,6 @@ function makeFixture(prefix: string): Fixture {
   const userWorktree = join(base, "user-worktree");
   const revvWorktree = join(base, "revv-worktree");
 
-  // Upstream repo with `main` plus the PR's source branch.
   const seed = join(base, "seed");
   git(base, ["init", "-q", "-b", "main", "seed"]);
   commitFile(seed, "README.md", "seed\n", "seed");
@@ -131,7 +112,6 @@ describe("checkoutDetached", () => {
 
   beforeEach(() => {
     ({ base, userWorktree, revvWorktree, sourceTip } = makeFixture("revv-gitops-"));
-    // One agent commit on top of the PR head.
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: tweak authn");
   });
 
@@ -149,7 +129,6 @@ describe("checkoutDetached", () => {
     await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
 
     expect(await resolveRef(revvWorktree, "HEAD")).toBe(sourceTip);
-    // Detached: HEAD names no branch, and the user's worktree is untouched.
     expect(() => git(revvWorktree, ["symbolic-ref", "--short", "HEAD"])).toThrow();
     expect(git(userWorktree, ["rev-parse", "HEAD"])).toBe(sourceTip);
     expect(git(userWorktree, ["symbolic-ref", "--short", "HEAD"])).toBe(sourceBranch);
@@ -181,16 +160,6 @@ describe("checkoutDetached", () => {
   });
 });
 
-// ── isMergeInProgress ────────────────────────────────────────────────────────
-//
-// Every per-PR worktree Revv creates is a *linked* worktree, where `.git` is a
-// file (`gitdir: …/.git/worktrees/<name>`) rather than a directory. The old
-// `existsSync(<worktree>/.git/MERGE_HEAD)` probe therefore answered "no merge
-// in progress" for every conflict, which made `performMerge` treat a conflict
-// as a hard failure: no `git merge --abort`, no conflict-resolution flow, and
-// a worktree stranded mid-merge that dead-ended every later push on "worktree
-// has uncommitted changes".
-
 describe("isMergeInProgress", () => {
   const sourceBranch = SOURCE_BRANCH;
   const agentBranch = AGENT_BRANCH;
@@ -202,7 +171,6 @@ describe("isMergeInProgress", () => {
   beforeEach(() => {
     ({ base, userWorktree, revvWorktree } = makeFixture("revv-gitops-merge-"));
 
-    // Both sides edit the same line — an unavoidable merge conflict.
     commitFile(revvWorktree, "authn.ts", "export const authn = 2;\n", "agent: authn = 2");
     commitFile(userWorktree, "authn.ts", "export const authn = 3;\n", "upstream: authn = 3");
     git(userWorktree, ["push", "-q", "origin", sourceBranch]);
@@ -218,8 +186,7 @@ describe("isMergeInProgress", () => {
   });
 
   it("is true after a conflicted merge in a linked worktree", async () => {
-    // Guard the premise: `.git` really is a file here, which is what broke the
-    // old filesystem probe.
+    // Premise: in a linked worktree `.git` is a file, not a directory.
     expect(statSync(join(revvWorktree, ".git")).isFile()).toBe(true);
 
     await checkoutDetached(revvWorktree, `refs/remotes/origin/${sourceBranch}`);
@@ -278,13 +245,10 @@ describe("isMergeInProgress", () => {
   });
 });
 
-// ── classifyPushFailure ──────────────────────────────────────────────────────
-//
-// Only `remote-moved` should reach the user as "the branch was updated
-// remotely. Sync the latest changes and try again" — telling them that when
-// a pre-receive hook declined the push sends them to do something that
-// cannot help. git prints both cases with the word "rejected", which is what
-// the previous bare-substring match got wrong.
+// Only `remote-moved` may reach the user as "the branch was updated remotely.
+// Sync the latest changes and try again": told that after a pre-receive hook
+// declined the push, they'd do something that cannot help. git prints both
+// cases with the word "rejected".
 
 describe("classifyPushFailure", () => {
   it("treats git's own local refusals as a moved remote", () => {
@@ -340,8 +304,6 @@ describe("classifyPushFailure", () => {
   });
 });
 
-// ── workflowPermissionRejection ──────────────────────────────────────────────
-//
 // An agent fixing CI is routine, and the push that ships the fix is refused by
 // GitHub on both of Revv's auth paths. Echoing git's wording made users retry
 // a push that can never succeed, so the rejection is recognised and rewritten.
@@ -385,7 +347,6 @@ describe("workflowPermissionRejection", () => {
           " ! [remote rejected] HEAD -> main (protected branch hook declined)",
       ),
     ).toBeNull();
-    // A hook that merely mentions workflows is not this.
     expect(
       workflowPermissionRejection(
         "remote: your commit touches `.github/workflows/ci.yml`; ask #ci first\n" +
@@ -395,8 +356,6 @@ describe("workflowPermissionRejection", () => {
     expect(workflowPermissionRejection("")).toBeNull();
   });
 });
-
-// ── redactGitAuth ────────────────────────────────────────────────────────────
 
 describe("redactGitAuth", () => {
   it("strips the token out of the echoed remote URL", () => {
@@ -416,8 +375,6 @@ describe("redactGitAuth", () => {
   });
 });
 
-// ── The runner's policy ──────────────────────────────────────────────────────
-//
 // Revv's clone is often the user's own repository. Their hooks (a husky
 // post-checkout, a pre-push test run) are theirs to trigger and never run. The
 // commits Revv writes for their branches are signed the way they sign, but

@@ -22,26 +22,18 @@ export interface SshSignResult {
   signatureNamespace: string;
 }
 
-// ── Context tag ───────────────────────────────────────────────────────────────
-
 export class SshSigner extends Context.Service<
   SshSigner,
   {
     /**
-     * Sign `message` as the GitHub account `accountId` (the one tracking the
-     * repository the message is about), with the configured SSH key.
-     * Auto-detects the key path on first call when settings leave it empty.
-     * Fails with `SshSigningUnavailable` if no usable key is found.
+     * `accountId` is the account tracking the repository the message is about.
+     * With no key path in settings, the first call picks the `~/.ssh` key that
+     * account publishes on GitHub and saves it to settings.
      */
     readonly sign: (
       message: string,
       accountId: string,
     ) => Effect.Effect<SshSignResult, SshSigningUnavailable>;
-    /**
-     * Verify that `signature` was produced by `signerLogin` on `signerHost`
-     * for exactly `message`.
-     * Fails with `SshSignatureInvalid` or `SshKeysFetchFailed`.
-     */
     readonly verify: (
       message: string,
       signature: string,
@@ -50,8 +42,6 @@ export class SshSigner extends Context.Service<
     ) => Effect.Effect<void, SshSignatureInvalid | SshKeysFetchFailed>;
   }
 >()("SshSigner") {}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const SSH_KEY_PATTERNS = /^id_(ed25519|ecdsa|rsa)$/;
 
@@ -86,15 +76,11 @@ async function autoDetectKeyPath(
       if (publishedKeys.some((k) => k.trim() === pubContent)) {
         return join(sshDir, candidate);
       }
-    } catch {
-      // unreadable .pub — skip
-    }
+    } catch {}
   }
 
   return null;
 }
-
-// ── Layer ─────────────────────────────────────────────────────────────────────
 
 export const SshSignerLive = Layer.effect(
   SshSigner,
@@ -103,7 +89,6 @@ export const SshSignerLive = Layer.effect(
     const accounts = yield* GitHubAccounts;
     const pubkeyCache = new PubkeyCache();
 
-    // Invalidate pubkey cache whenever settings change (host set may change).
     yield* Effect.forkScoped(
       settingsSvc
         .settingsChanges()

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { createWorkspaceClaims, type WorkspaceClaim } from "./claims";
 
-// The regression the expiry exists for: a chat turn claimed the PR's
-// worktree, its stream never ran the cleanup that gave the claim back, and
-// every push for that PR was refused until the server restarted.
+// What the expiry exists for: a chat turn whose stream never runs the cleanup
+// that gives its claim back would otherwise refuse every push for that PR until
+// the server restarts.
 
 const IDLE_MS = 15 * 60 * 1000;
 const PR = "repo-uuid:2945";

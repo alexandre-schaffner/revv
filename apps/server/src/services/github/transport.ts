@@ -23,9 +23,9 @@ import { githubTryPromise } from "../../observability/github-ledger/origin";
 import { buildCacheKey, type EtagCache } from "../GitHubEtagCache";
 
 /**
- * Who a request is made as and where it goes. Minted by `GitHubAccounts`
- * (an account's client) or `PrContext` (the client of the account that owns
- * a repo); never derived from the settings host.
+ * Who a request is made as and where it goes. Minted only by `GitHubAccounts`
+ * (`PrContext` hands out the one of the account that owns a repo); never
+ * derived from the settings host.
  */
 export interface GitHubClient {
   readonly host: string;
@@ -59,7 +59,6 @@ export const retryTransientBeforeFallback = <A, R>(
     }),
   );
 
-/** Pass through known GitHub errors; wrap unknown ones in GitHubNetworkError. */
 function toGitHubError(e: unknown): GitHubError {
   if (
     e instanceof GitHubAuthError ||
@@ -189,8 +188,6 @@ export function parseLinkNext(linkHeader: string | null): string | null {
   return linkHeader.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null;
 }
 
-// ── Requests ────────────────────────────────────────────────────────────────
-
 export interface RequestSpec {
   readonly method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   /** An API path (`/repos/…`), or an absolute URL (a `Link: next` page). */
@@ -251,9 +248,7 @@ function exchange<A>(
 
 /** Callbacks the gateway hands the transport so an account's failures reach `GitHubAccounts`. */
 export interface TransportObserver {
-  /** A request made as this account answered 401. */
   readonly unauthorized: (client: GitHubClient) => Effect.Effect<void>;
-  /** A request made as this account hit a rate limit. */
   readonly rateLimited: (client: GitHubClient, error: GitHubRateLimitError) => Effect.Effect<void>;
 }
 
@@ -499,9 +494,6 @@ export function makeHttp(
   };
 }
 
-// ── GraphQL ─────────────────────────────────────────────────────────────────
-
-/** One entry of a GraphQL response's `errors` array. */
 export interface GraphqlError {
   readonly message: string;
   readonly type?: string;
@@ -607,7 +599,6 @@ export function withSchemaFallback<A, R>(
   );
 }
 
-/** One page of a GraphQL connection, as selected out of a query's response. */
 export interface GraphqlConnection<N> {
   readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
   readonly nodes: ReadonlyArray<N | null>;
@@ -647,8 +638,6 @@ export function paginateGraphql<T, N>(
     return out;
   });
 }
-
-// ── Unauthenticated requests ────────────────────────────────────────────────
 
 /**
  * Fetch an image (an avatar) as a `data:` URL. Sent without credentials: on

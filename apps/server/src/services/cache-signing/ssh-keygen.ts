@@ -39,10 +39,7 @@ function isMissingExecutable(e: unknown): boolean {
   return m.includes("enoent") || m.includes("not found") || m.includes("no such file");
 }
 
-/**
- * Sign `message` with the private key at `keyPath` using SSHSIG.
- * Returns the armored SSHSIG block (includes BEGIN/END headers).
- */
+/** Returns the armored SSHSIG block, BEGIN/END lines included. */
 export async function sshSign(
   message: string,
   keyPath: string,
@@ -63,9 +60,8 @@ export async function sshSign(
 }
 
 /**
- * Verify `signature` (armored SSHSIG block) against `message`.
- * `publicKeys` is the content of `https://<host>/<login>.keys`
- * split into individual key lines.
+ * `signature` is an armored SSHSIG block; `publicKeys` is the content of
+ * `https://<host>/<login>.keys`, one key per line.
  */
 export async function sshVerify(
   message: string,

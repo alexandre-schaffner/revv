@@ -1,22 +1,11 @@
-// ─── GcsBlobStore ────────────────────────────────────────────────────────────
+// `BlobStore` over Google Cloud Storage. With `cache.enabled` off every op
+// fails `BlobStoreUnavailable`, which callers treat as a miss; the only place
+// that error reaches the user is Settings' "Test connection" button.
 //
-// `BlobStore` implementation against Google Cloud Storage. Lazy-init:
-// the underlying `@google-cloud/storage` client is constructed once from
-// `Settings.cache`, then rebuilt whenever the relevant settings fields
-// change (bucket / credentials).
-//
-// The store is settings-aware: when `cache.enabled` is false, every op
-// short-circuits to `BlobStoreUnavailable` — the caller treats that as a
-// miss. The orchestrator never escalates; the only place this error is
-// user-visible is the "Test connection" button in Settings.
-//
-// **Install note.** The `@google-cloud/storage` package is declared as a
-// dependency in `apps/server/package.json` but is not pulled into the
-// TypeScript program here — the SDK has a heavy type surface we don't
-// need, and a dynamic import keeps cold-start cheap when the cache
-// feature is off. The shapes we touch (`Storage`, `Bucket`, `File`) are
-// captured in the narrow local types below; if the SDK API drifts, the
-// runtime will surface the breakage via `tryPromise` → `BlobStoreUnavailable`.
+// `@google-cloud/storage` is imported dynamically and typed by the narrow
+// local interfaces below instead of the SDK's own heavy types, so it costs
+// nothing at startup while the cache is off. Those interfaces aren't checked
+// against the SDK: API drift shows up at runtime as `BlobStoreUnavailable`.
 
 import { Effect, Layer, Option, Ref, Stream } from "effect";
 import { serverEnv } from "../../config";
@@ -24,9 +13,6 @@ import { BlobStoreUnavailable } from "../../domain/errors";
 import { logError } from "../../logger";
 import { SettingsService } from "../Settings";
 import { type BlobRecord, BlobStore, type BlobStoreStatus } from "./BlobStore";
-
-// ── Local typings for the slice of @google-cloud/storage we touch ────────
-// Kept minimal so the heavy SDK doesn't need to land in our `tsc` program.
 
 interface GcsFile {
   exists(): Promise<[boolean]>;
@@ -67,11 +53,6 @@ interface ResolvedClient {
 }
 
 interface ClientCache {
-  /**
-   * Stringified config that produced this client. We compare against
-   * the live settings on each op; if it changed, we rebuild lazily.
-   * Cheaper than tearing down + recreating per settings stream tick.
-   */
   configKey: string;
   client: ResolvedClient | null;
 }
@@ -106,7 +87,6 @@ export const GcsBlobStoreLive = Layer.effect(
       ),
     );
 
-    // Dynamic import — keeps cold-start fast when the feature is off.
     let gcsModule: GcsModule | null = null;
     const loadGcs = (): Effect.Effect<GcsModule, BlobStoreUnavailable> =>
       Effect.tryPromise({
@@ -205,10 +185,9 @@ export const GcsBlobStoreLive = Layer.effect(
             try: () =>
               file.save(body, {
                 resumable: false,
-                // Store as application/gzip without a Content-Encoding header.
-                // Setting Content-Encoding: gzip causes GCS (and emulators) to
-                // serve the body transparently decompressed, which breaks our
-                // own gunzip + SHA256 pipeline in RemoteWalkthroughCache.
+                // No Content-Encoding: with `gzip` set, GCS (and emulators) serve
+                // the body decompressed, breaking RemoteWalkthroughCache's own
+                // gunzip + sha256 check.
                 contentType: "application/gzip",
                 metadata: {
                   contentType: "application/gzip",

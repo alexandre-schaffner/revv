@@ -1,4 +1,3 @@
-/** The authenticated viewer on GitHub. */
 import { Effect } from "effect";
 import type { GitHubError } from "../../domain/errors";
 import { type GitHubClient, type GitHubHttp, retryTransient } from "./transport";

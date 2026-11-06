@@ -1,4 +1,3 @@
-// ── Walkthrough status transitions ───────────────────────────────────────────
 // Every write of `walkthroughs.status` after a row is created, and the event
 // announcing it after the commit (invariants 8 and 11). WalkthroughJobs is the
 // only caller.
