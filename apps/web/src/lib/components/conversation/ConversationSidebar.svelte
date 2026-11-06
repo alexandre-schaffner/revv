@@ -181,7 +181,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 							</span>
 						{:else}
 							{@const login = reviewer.actor.login}
-							<Avatar handle={login} avatarContent={reviewer.actor.avatarContent} size={20} />
+							<Avatar name={login} src={reviewer.actor.avatarContent} size={20} />
 							<span class="side-name">{login}</span>
 							{#if reviewer.asCodeOwner}{@render codeOwnerMark()}{/if}
 							{#if canEdit && reviewer.verdict !== null && !reviewer.requested}
@@ -261,7 +261,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 			<ul class="side-list">
 				{#each conversation.assignees as assignee (assignee.login)}
 					<li class="side-person">
-						<Avatar handle={assignee.login} avatarContent={assignee.avatarContent} size={20} />
+						<Avatar name={assignee.login} src={assignee.avatarContent} size={20} />
 						<span class="side-name">{assignee.login}</span>
 					</li>
 				{/each}
@@ -337,7 +337,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 			<div class="side-avatars">
 				{#each conversation.participants as person (person.login)}
 					<span title={person.login}>
-						<Avatar handle={person.login} avatarContent={person.avatarContent} size={24} />
+						<Avatar name={person.login} src={person.avatarContent} size={24} />
 					</span>
 				{/each}
 			</div>

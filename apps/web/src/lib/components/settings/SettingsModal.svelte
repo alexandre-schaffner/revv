@@ -12,6 +12,7 @@ import Robot from "phosphor-svelte/lib/Robot";
 import User from "phosphor-svelte/lib/User";
 import X from "phosphor-svelte/lib/X";
 import { type Component, tick, untrack } from "svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import {
   bitsAnim,
@@ -210,14 +211,6 @@ function handleKeydown(e: KeyboardEvent): void {
     searchEl?.select();
   }
 }
-
-// ── Avatar ────────────────────────────────────────────────────────────────
-// URL-keyed: failed state is only true while the current URL is the one that
-// errored. If the URL rotates (e.g. after re-login), the new URL is retried.
-let avatarFailedForUrl = $state<string | null>(null);
-const avatarFailed = $derived(
-  avatarFailedForUrl !== null && avatarFailedForUrl === (getUser()?.image ?? null),
-);
 </script>
 
 <DialogPrimitive.Root
@@ -337,19 +330,13 @@ const avatarFailed = $derived(
 
 						{#if getUser()}
 							<div class="sidebar-user">
-								{#if getUser()?.image && !avatarFailed}
-									<img
-										src={getUser()?.image}
-										alt=""
-										class="sidebar-avatar"
-										referrerpolicy="no-referrer"
-										onerror={() => (avatarFailedForUrl = getUser()?.image ?? null)}
-									/>
-								{:else}
-									<span class="sidebar-avatar sidebar-avatar--fallback" aria-hidden="true">
-										<User size={11} />
-									</span>
-								{/if}
+								<Avatar src={getUser()?.image} size={22}>
+									{#snippet fallback()}
+										<span class="sidebar-avatar" aria-hidden="true">
+											<User size={11} />
+										</span>
+									{/snippet}
+								</Avatar>
 								<span class="sidebar-username">{getUser()?.githubLogin ?? getUser()?.name ?? 'Account'}</span>
 							</div>
 						{/if}
@@ -631,10 +618,6 @@ const avatarFailed = $derived(
 		height: 22px;
 		flex-shrink: 0;
 		border-radius: 50%;
-		object-fit: cover;
-	}
-
-	.sidebar-avatar--fallback {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;

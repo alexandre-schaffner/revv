@@ -4,6 +4,7 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import Warning from "phosphor-svelte/lib/Warning";
 import SignInButton from "$lib/components/auth/SignInButton.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { getUser, removeAccount, signOut } from "$lib/stores/auth.svelte";
 import { getGithubHost } from "$lib/stores/settings.svelte";
@@ -15,13 +16,6 @@ import { SETTINGS_PANES } from "../settings-index";
 
 const user = $derived(getUser());
 const host = $derived(getGithubHost() ?? "github.com");
-
-// URL-keyed: failed state is only true while the current URL is the one that
-// errored. If the URL rotates (e.g. after re-login), the new URL is retried.
-let avatarFailedForUrl = $state<string | null>(null);
-const avatarFailed = $derived(
-  avatarFailedForUrl !== null && avatarFailedForUrl === (user?.image ?? null),
-);
 
 let showDeleteConfirm = $state(false);
 let deleting = $state(false);
@@ -46,19 +40,13 @@ async function handleRemoveAccount(): Promise<void> {
 		<SettingsGroup>
 			<SettingsRow id="account-identity" label={user.name}>
 				{#snippet leading()}
-					{#if user.image && !avatarFailed}
-						<img
-							src={user.image}
-							alt=""
-							class="identity-avatar"
-							referrerpolicy="no-referrer"
-							onerror={() => (avatarFailedForUrl = user?.image ?? null)}
-						/>
-					{:else}
-						<span class="identity-avatar identity-avatar--fallback" aria-hidden="true">
-							<User size={16} />
-						</span>
-					{/if}
+					<Avatar src={user.image} size={32}>
+						{#snippet fallback()}
+							<span class="identity-avatar" aria-hidden="true">
+								<User size={16} />
+							</span>
+						{/snippet}
+					</Avatar>
 				{/snippet}
 				{#snippet hint()}
 					<span class="identity-meta">
@@ -152,10 +140,6 @@ async function handleRemoveAccount(): Promise<void> {
 		height: 32px;
 		flex-shrink: 0;
 		border-radius: 50%;
-		object-fit: cover;
-	}
-
-	.identity-avatar--fallback {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;

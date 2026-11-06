@@ -33,7 +33,7 @@ function toggle(sha: string): void {
 		<span class="commits-icon" aria-hidden="true"><GitCommit size={14} weight="bold" /></span>
 		<p class="commits-text">
 			{#if first}
-				<Avatar handle={first.author.login} avatarContent={first.author.avatarContent} size={16} />
+				<Avatar name={first.author.login} src={first.author.avatarContent} size={16} />
 			{/if}
 			<strong>{authors.length === 1 ? authors[0] : `${authors.length} people`}</strong>
 			added {commits.length === 1 ? 'a commit' : `${commits.length} commits`}

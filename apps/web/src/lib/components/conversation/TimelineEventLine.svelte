@@ -74,7 +74,7 @@ const list = (names: readonly string[]) =>
 	<p class="event-text">
 		<span class="event-actor">
 			{#if actor.kind !== 'ghost'}
-				<Avatar handle={actor.login} avatarContent={actor.avatarContent} size={16} />
+				<Avatar name={actor.login} src={actor.avatarContent} size={16} />
 			{/if}
 			<strong>{actor.login}</strong>
 		</span>

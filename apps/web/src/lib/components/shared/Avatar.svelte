@@ -1,80 +1,122 @@
 <script lang="ts">
+import Robot from "phosphor-svelte/lib/Robot";
+import User from "phosphor-svelte/lib/User";
+import UsersThree from "phosphor-svelte/lib/UsersThree";
+import type { Snippet } from "svelte";
+import { hash32 } from "$lib/utils/hash";
+
+type Fallback = "initials" | "user" | "team" | "robot" | Snippet;
+
 interface Props {
-  handle: string;
-  /** Base64 data URL or remote URL of the avatar image. */
-  avatarContent?: string | null;
-  size?: number;
+  /** Data URL or remote URL. GHE avatar URLs are signed and expire, so a
+   *  failed load falls back rather than showing a broken image. */
+  src: string | null | undefined;
+  /** Login or display name: initials, swatch hue, default alt and title. */
+  name?: string;
+  alt?: string;
+  size: number;
+  radius?: string;
+  fallback?: Fallback;
+  /** Glyph size for the `user` / `team` / `robot` fallbacks. */
+  glyphSize?: number;
+  /** Applied to the image and to the built-in fallbacks. Use global classes. */
+  class?: string;
 }
 
-let { handle, avatarContent = null, size = 22 }: Props = $props();
+let {
+  src,
+  name = "",
+  alt,
+  size,
+  radius = "50%",
+  fallback = "initials",
+  glyphSize,
+  class: className = "",
+}: Props = $props();
 
-let imgFailed = $state(false);
+let failedSrc = $state<string | null>(null);
+const showImage = $derived(!!src && failedSrc !== src);
 
-$effect(() => {
-  avatarContent;
-  imgFailed = false;
-});
-
-// Stable hue from the handle — used only when the real avatar image is
-// unavailable. Avatars are cross-recap so we don't use the per-recap palette
-// distribution that themes use.
 function swatchFor(handle: string): string {
   if (!handle) return "oklch(60% 0 0)";
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < handle.length; i++) {
-    hash ^= handle.charCodeAt(i);
-    hash = (hash * 0x01000193) >>> 0;
-  }
-  const hue = (hash / 0xffffffff) * 360;
-  // Lightness 52% with chroma 0.13 gives enough saturation to read as
-  // identity-coded, while OKLCH keeps perceptual lightness flat across the
-  // hue wheel so off-white initials stay legible on every swatch.
+  const hue = (hash32(handle) / 0xffffffff) * 360;
+  // OKLCH keeps perceptual lightness flat across the hue wheel so off-white
+  // initials stay legible on every swatch.
   return `oklch(52% 0.13 ${hue.toFixed(1)})`;
 }
 
-const initial = $derived((handle?.charAt(0) ?? "?").toUpperCase());
-const swatch = $derived(swatchFor(handle ?? ""));
-const showImage = $derived(!!avatarContent && !imgFailed);
+const glyph = $derived(glyphSize ?? Math.round(size * 0.55));
 </script>
 
 {#if showImage}
-  <img
-    class="avatar avatar-img"
-    src={avatarContent}
-    alt={handle}
-    style="--avatar-size: {size}px"
-    loading="lazy"
-    referrerpolicy="no-referrer"
-    onerror={() => (imgFailed = true)}
-  />
+	<img
+		class="pavatar pavatar-img {className}"
+		{src}
+		alt={alt ?? name}
+		style:--avatar-size="{size}px"
+		style:--avatar-radius={radius}
+		loading="lazy"
+		referrerpolicy="no-referrer"
+		onerror={() => (failedSrc = src ?? null)}
+	/>
+{:else if typeof fallback === 'function'}
+	{@render fallback()}
+{:else if fallback === 'initials'}
+	<span
+		class="pavatar pavatar-initials {className}"
+		style:--avatar-size="{size}px"
+		style:--avatar-radius={radius}
+		style:--avatar-swatch={swatchFor(name)}
+		aria-hidden="true"
+		title={name}
+	>{(name.charAt(0) || "?").toUpperCase()}</span>
 {:else}
-  <span
-    class="avatar"
-    style="--avatar-size: {size}px; --avatar-swatch: {swatch}"
-    aria-hidden="true"
-    title={handle}
-  >{initial}</span>
+	<span
+		class="pavatar pavatar-glyph {className}"
+		style:--avatar-size="{size}px"
+		style:--avatar-radius={radius}
+		title={name || undefined}
+	>
+		{#if fallback === 'team'}
+			<UsersThree size={glyph} aria-hidden="true" />
+		{:else if fallback === 'robot'}
+			<Robot size={glyph} aria-hidden="true" />
+		{:else}
+			<User size={glyph} aria-hidden="true" />
+		{/if}
+	</span>
 {/if}
 
 <style>
-.avatar {
-  display: inline-grid;
-  place-items: center;
-  width: var(--avatar-size);
-  height: var(--avatar-size);
-  border-radius: 50%;
-  font-size: calc(var(--avatar-size) * 0.5);
-  font-weight: 600;
-  color: oklch(98% 0.003 80);
-  line-height: 1;
-  letter-spacing: 0;
-  user-select: none;
-  background: var(--avatar-swatch, var(--color-text-muted));
-}
+	.pavatar {
+		width: var(--avatar-size);
+		height: var(--avatar-size);
+		border-radius: var(--avatar-radius);
+		flex-shrink: 0;
+	}
 
-.avatar-img {
-  object-fit: cover;
-  background: transparent;
-  display: inline-block;
-}
+	.pavatar-img {
+		display: inline-block;
+		object-fit: cover;
+	}
+
+	.pavatar-initials {
+		display: inline-grid;
+		place-items: center;
+		font-size: calc(var(--avatar-size) * 0.5);
+		font-weight: 600;
+		color: oklch(98% 0.003 80);
+		line-height: 1;
+		letter-spacing: 0;
+		user-select: none;
+		background: var(--avatar-swatch);
+	}
+
+	.pavatar-glyph {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--color-bg-elevated);
+		color: var(--color-text-muted);
+	}
 </style>

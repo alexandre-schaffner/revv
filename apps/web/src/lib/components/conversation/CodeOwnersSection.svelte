@@ -108,7 +108,7 @@ function stateLabel(row: OwnerRow): string {
 						{#if row.team}
 							<span class="co-team" aria-hidden="true"><UsersThree size={12} /></span>
 						{:else}
-							<Avatar handle={row.name} avatarContent={row.avatarContent} size={18} />
+							<Avatar name={row.name} src={row.avatarContent} size={18} />
 						{/if}
 						<span class="co-name">{row.name}</span>
 						<span class="co-count">{row.files.length} {row.files.length === 1 ? 'file' : 'files'}</span>

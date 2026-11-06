@@ -142,7 +142,7 @@ function onNav(event: MouseEvent): void {
 			takes its own "·" with it, and the row sheds five DOM nodes.
 		-->
 		<span class="meta">
-			<Avatar handle={pr.authorLogin} avatarContent={pr.authorAvatarContent} size={14} />
+			<Avatar name={pr.authorLogin} src={pr.authorAvatarContent} size={14} />
 			<span class="author">{pr.authorLogin}</span>
 			<span class="num led">#{pr.externalId}</span>
 			<span class="when led" title={updatedAtExact}>
