@@ -12,7 +12,7 @@ import {
   type AcpSessionUpdate,
   getAcpConnection,
 } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { describeAgentError } from "../acp/agent-errors";
 import { makeActivityBeacon, withAgentTurn } from "../agent-stream";
 
 export interface RunMcpAgentAcpParams {
@@ -112,10 +112,7 @@ export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<M
     });
   } catch (err) {
     if (params.isValidated()) return { validated: true };
-    const message = withAgentKeychainHint(
-      params.acpAgentId,
-      err instanceof Error ? err.message : String(err),
-    );
+    const { message } = describeAgentError(params.acpAgentId, err);
     logError(label, "run failed:", message);
     return { validated: false, error: message };
   } finally {

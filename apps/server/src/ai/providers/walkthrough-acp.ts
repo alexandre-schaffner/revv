@@ -56,7 +56,7 @@ import {
 } from "../../observability/walkthrough-metrics";
 import type { PrFileMeta } from "../../services/GitHub";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { describeAgentError } from "../acp/agent-errors";
 import type { AcpLaunchConfig } from "../acp/presets";
 import {
   buildActivity,
@@ -544,10 +544,8 @@ export function streamWalkthroughViaAcp(
         },
       });
     } catch (err) {
-      const message = withAgentKeychainHint(
-        params.acpAgentId,
-        err instanceof Error ? err.message : String(err),
-      );
+      const failure = describeAgentError(params.acpAgentId, err);
+      const { message } = failure;
       if (timedOut) {
         // A timeout is not a failure. Everything the agent already wrote is
         // committed (invariant #1), so end the stream WITHOUT an error event:
@@ -559,6 +557,19 @@ export function streamWalkthroughViaAcp(
         return tokenUsage;
       }
       logError("walkthrough-acp", "queryTask error:", message);
+
+      // A spent quota is the exception: no turn can succeed until the account
+      // has quota again, so falling into auto-continuation would only rerun
+      // the same failure (and spend whatever's left). End the run here, even
+      // over committed content — that content stays durable for a later
+      // regenerate.
+      if (failure.terminal && params.abortController?.signal.aborted !== true) {
+        if (!errorEmitted) {
+          errorEmitted = true;
+          push({ type: "error", data: { code: "AgentUsageLimit", message } });
+        }
+        return tokenUsage;
+      }
 
       // Same reasoning as the timeout above: a mid-turn failure here is the
       // transport's fault, not a verdict on the review, and everything
@@ -653,12 +664,15 @@ export function streamWalkthroughViaAcp(
       }
     }
 
-    if (summaryPersisted) {
+    if (errorEmitted) {
+      // The run already ended on an error event; a trailing `done` would
+      // contradict it.
+    } else if (summaryPersisted) {
       yield {
         type: "done" as const,
         data: { walkthroughId: params.walkthroughId, tokenUsage: finalTokenUsage },
       };
-    } else if (!errorEmitted) {
+    } else {
       debug("walkthrough-acp", "Session ended without producing content — emitting fallback error");
       // A timeout that wrote nothing has no partial for auto-continuation to
       // build on, so it surfaces as a terminal error — but say what actually
