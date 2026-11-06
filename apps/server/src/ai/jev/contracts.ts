@@ -22,4 +22,6 @@ export interface IssueJudgment {
 export interface JudgmentSink {
   readonly emit: (event: WalkthroughStreamEvent) => void;
   readonly broadcastThread: (threadId: string) => void;
+  /** Lets `add_issue_comment` answer a retracted id with an explanation. */
+  readonly markRetracted: (issueId: string) => void;
 }

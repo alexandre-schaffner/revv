@@ -46,7 +46,7 @@ function seedWalkthroughRound(db: Db): void {
     .run();
 }
 
-describe("setStatus", () => {
+describe("finish", () => {
   it("updates walkthrough and review round status together with one completion timestamp", async () => {
     const db = createDb(":memory:");
     seedWalkthroughRound(db);
@@ -54,7 +54,7 @@ describe("setStatus", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* WalkthroughService;
-        yield* service.setStatus("wt-1", "complete");
+        yield* service.finish("wt-1", "complete");
       }).pipe(
         Effect.provide(WalkthroughServiceLive),
         Effect.provide(Layer.succeed(DbService, { db })),
@@ -87,7 +87,7 @@ describe("setStatus", () => {
     db.$client.close();
 
     const exit = await Effect.runPromiseExit(
-      Effect.flatMap(WalkthroughService, (service) => service.setStatus("wt-1", "complete")).pipe(
+      Effect.flatMap(WalkthroughService, (service) => service.finish("wt-1", "complete")).pipe(
         Effect.provide(WalkthroughServiceLive),
         Effect.provide(Layer.succeed(DbService, { db })),
       ),

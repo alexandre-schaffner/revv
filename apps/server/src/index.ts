@@ -1,11 +1,8 @@
 import { cors } from "@elysiajs/cors";
-import type { RuntimeHealth } from "@revv/shared";
 import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
-import { stopAllAcpConnections } from "./ai/acp/acp-connection";
 import { auth } from "./auth";
-import { SOURCE_COMMIT } from "./build-info";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
 import { watchDesktopParent } from "./desktop-parent";
@@ -22,6 +19,7 @@ import { debugRoutes } from "./routes/debug";
 import { deviceAuthRoutes } from "./routes/device-auth";
 import { eventsRoute } from "./routes/events";
 import { githubRoutes } from "./routes/github";
+import { healthRoute } from "./routes/health";
 import { externalIntegrationRoutes } from "./routes/integrations";
 import { mcpChatContextRoute } from "./routes/mcp/chat-context";
 import { mcpExternalAgentRoute } from "./routes/mcp/external-agent";
@@ -44,16 +42,6 @@ import { userRoutes } from "./routes/user";
 import { walkthroughRoutes } from "./routes/walkthrough";
 import { AppRuntime } from "./runtime";
 import { appDatabase } from "./services/Db";
-import { DbMaintenance } from "./services/DbMaintenance";
-import { GitHubAccounts } from "./services/github/accounts";
-import { PollScheduler } from "./services/PollScheduler";
-import { ensureHighlighter } from "./services/PrerenderCache";
-import { ProjectRecapJobs } from "./services/ProjectRecapJobs";
-import { RecapScheduler } from "./services/RecapScheduler";
-import { RepoCloneService } from "./services/RepoClone";
-import { StackBriefJobs } from "./services/stacks/StackBriefJobs";
-import { StackMergeService } from "./services/stacks/StackMerge";
-import { WalkthroughJobs } from "./services/WalkthroughJobs";
 import { acquireSingleInstance } from "./singleInstance";
 
 // ── Single-instance guard ────────────────────────────────────────────────────
@@ -165,16 +153,7 @@ const app = new Elysia()
   .use(mcpExternalAgentRoute)
   .use(externalIntegrationRoutes)
   .use(agentCheckRoutes)
-  .get(
-    "/api/health",
-    (): RuntimeHealth => ({
-      status: "ok",
-      channel: serverEnv.channel,
-      commit: SOURCE_COMMIT,
-      port,
-      timestamp: new Date().toISOString(),
-    }),
-  )
+  .use(healthRoute)
   .listen({
     port,
     // Loopback only — without a hostname Bun binds to 0.0.0.0 (every interface).
@@ -220,22 +199,19 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Don't let this timer keep the process alive past a normal exit.
   hardKill.unref();
 
-  // 1. Stop accepting new connections (drains in-flight requests).
+  // Stop accepting connections, then dispose the runtime: it interrupts the
+  // schedulers and job fibers (their rows stay `generating` for resume) and
+  // stops the agent connection pool.
   try {
     app.stop();
-  } catch {}
+  } catch (err) {
+    logError("server", "stopping the HTTP server failed:", err);
+  }
+  await AppRuntime.dispose().catch((err) => {
+    logError("server", "disposing the runtime failed:", err);
+  });
 
-  // 2. Dispose the Effect runtime — stops PollScheduler, WalkthroughJobs, etc.
-  try {
-    await AppRuntime.dispose();
-  } catch {}
-
-  // 2b. Tear down any pooled ACP agent subprocesses (chat transport).
-  try {
-    stopAllAcpConnections();
-  } catch {}
-
-  // 3. Release the PID file so the next startup doesn't treat us as stale.
+  // Release the PID file so the next startup doesn't treat us as stale.
   releasePidFile();
 
   process.exit(0);
@@ -245,103 +221,10 @@ process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 watchDesktopParent(serverEnv.desktopPid, () => void gracefulShutdown("desktop exited"));
 
-// Migrate any plaintext GitHub tokens left in the `account` table into the OS
-// secure store, then null the columns. Awaited before the sync scheduler boots
-// so the first poll cycle reads tokens from their new home. One-time and
-// idempotent — a no-op once every row has been migrated.
-await AppRuntime.runPromise(
-  Effect.flatMap(GitHubAccounts, (accounts) => accounts.migrateLegacyTokens),
-)
-  .then((n) => {
-    if (n > 0) logError("secret-store", `migrated ${n} GitHub token(s) into secure storage`);
-  })
-  .catch((err) => {
-    logError("secret-store", "legacy token migration failed:", err);
-  });
-
-// Re-launch walkthrough fibers for any rows left in `status='generating'`
-// by a previous run. Runs in the background so boot isn't blocked by slow
-// git clones or GitHub API calls; any per-row failures are logged and
-// retries are capped via `resumeAttempts` so a poisoned row can't loop
-// forever. Best-effort: we never want this to crash the server.
-AppRuntime.runPromise(Effect.flatMap(WalkthroughJobs, (jobs) => jobs.resumePending())).catch(
-  (err) => {
-    logError("walkthrough-resume", "resumePending failed on boot:", err);
-  },
-);
-
-// Start the background sync scheduler on boot, decoupled from any UI
-// client. Previously this was triggered from the realtime transport handler,
-// which meant sync only ran while the desktop window was open. With the
-// Tauri app running in tray mode (window hidden / closed to tray), the
-// server is the only long-lived process — it must drive its own polling.
-//
-// `start()` is idempotent (guards against duplicate fibers internally) and
-// the sync loop gracefully no-ops when no GitHub token is available yet,
-// so it's safe to call before the user has signed in.
-AppRuntime.runPromise(Effect.flatMap(PollScheduler, (s) => s.start())).catch((err) => {
-  logError("poll-scheduler", "start failed on boot:", err);
+// The runtime builds lazily: force it now, which runs the boot sequence
+// (`boot.ts`) — resume-on-boot, the schedulers and the sweeps.
+await AppRuntime.runPromise(Effect.void).catch((err) => {
+  logError("server", "runtime failed to start:", err);
 });
-
-// Resume pending recap jobs, then start the recap scheduler. Order matters:
-// `resumePending` must run before the scheduler kicks off its first sweep
-// so a crashed-mid-generation recap finishes (or fails terminally) before
-// the scheduler is allowed to consider that period "already covered" or
-// re-enqueue a duplicate. See plan: cross-cutting decisions.
-AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.resumePending()))
-  .then(() =>
-    AppRuntime.runPromise(Effect.flatMap(RecapScheduler, (s) => s.start())).catch((err) => {
-      logError("recap-scheduler", "start failed on boot:", err);
-    }),
-  )
-  .catch((err) => {
-    logError("recap-jobs", "resumePending failed on boot:", err);
-  });
-
-AppRuntime.runPromise(Effect.flatMap(StackBriefJobs, (jobs) => jobs.resumePending())).catch(
-  (err) => {
-    logError("stack-brief", "resumePending failed on boot:", err);
-  },
-);
-
-AppRuntime.runPromise(Effect.flatMap(StackMergeService, (svc) => svc.expireStale())).catch(
-  (err) => {
-    logError("stack-merge", "expireStale failed on boot:", err);
-  },
-);
-
-// Resume any repos with cloneStatus 'pending' or 'error' on boot so that
-// repos that failed to clone (e.g. due to a server restart mid-clone) are
-// automatically retried without requiring user intervention.
-AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.resumePendingClones())).catch(
-  (err) => {
-    logError("repo-clone", "resumePendingClones failed on boot:", err);
-  },
-);
-
-// Reap Revv-owned review worktrees + `revv/pr-N` branches for PRs that are
-// closed/merged (or no longer tracked), left behind by prior runs. Bounds
-// accumulation in the user's clone so VSCode isn't overwhelmed. Runs after
-// `resumePending` so any in-flight generation's worktree is protected by
-// `pruneWorktree`'s `generating` guard. Best-effort; never crashes boot.
-AppRuntime.runPromise(Effect.flatMap(RepoCloneService, (svc) => svc.sweepStaleWorktrees())).catch(
-  (err) => {
-    logError("repo-clone", "sweepStaleWorktrees failed on boot:", err);
-  },
-);
-
-// Start DB maintenance scheduler: sweeps expired cache rows and checkpoints
-// the WAL every 6 hours to prevent unbounded disk growth.
-AppRuntime.runPromise(Effect.flatMap(DbMaintenance, (svc) => svc.start())).catch((err) => {
-  logError("db-maintenance", "start failed on boot:", err);
-});
-
-// Warm the shared highlighter used by every @pierre/diffs/ssr call.
-// Idempotent and defensively re-awaited inside each prerender call, so a
-// slow boot doesn't block the listen() above; we just want the first real
-// walkthrough emit to hit a warm cache instead of paying the highlighter's startup.
-ensureHighlighter()
-  .then(() => logError("prerender", "highlighter preloaded"))
-  .catch((err) => logError("prerender", "ensureHighlighter failed on boot:", err));
 
 export type App = typeof app;

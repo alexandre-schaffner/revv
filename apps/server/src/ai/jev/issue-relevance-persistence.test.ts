@@ -43,7 +43,7 @@ describe("applyJudgment", () => {
       "i1",
       candidate,
       { score: 0.9, lowSignal: false, discard: false, severity: "critical" },
-      { emit: (event) => events.push(event), broadcastThread: () => {} },
+      { emit: (event) => events.push(event), broadcastThread: () => {}, markRetracted: () => {} },
     );
 
     expect(events).toHaveLength(1);

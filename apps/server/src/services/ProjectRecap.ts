@@ -3,13 +3,13 @@
 // Thin Drizzle adapter for the `project_recaps` table. Scope mirrors
 // WalkthroughService:
 //
-//   • Orchestrator lifecycle (createPartial, setStatus, supersede,
-//     incrementResumeAttempts, listGenerating).
+//   • Orchestrator lifecycle (createPartial, finish, resetForRerun,
+//     incrementResumeAttempts, listGenerating, the source bundle).
 //   • Read-side (getById, listForRepo, getLatestForRepo,
 //     findActiveForPeriod).
 //
 // Per CLAUDE.md invariants #2 and #11: only `ProjectRecapJobs` calls
-// `setStatus`. Agents reach the DB only via the recap MCP tool surface.
+// `finish`. Agents reach the DB only via the recap MCP tool surface.
 
 import type {
   ProjectRecap,
@@ -30,6 +30,7 @@ import {
   remoteUsers,
   repositories,
 } from "../db/schema/index";
+import type { RecapSourceBundle } from "../db/schema/project-recaps";
 import { type DbError, RecapNotFoundError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
@@ -234,15 +235,26 @@ export class ProjectRecapService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ProjectRecap>, DbError, DbService>;
 
     /**
-     * Orchestrator-only status transition. Stamps `completedAt = now()`
-     * on the `'complete'` transition (single-writer per invariant #11,
-     * mirrors the walkthrough pattern).
+     * The orchestrator's terminal transition, from `generating` only
+     * (invariant #11). Stamps `completedAt` on `complete`. False when the row
+     * had already left `generating`.
      */
-    readonly setStatus: (
+    readonly finish: (
       recapId: string,
-      status: ProjectRecapStatus,
-      options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
+      status: "complete" | "error" | "stopped",
+      options?: { modelUsed?: string; errorMessage?: string },
+    ) => Effect.Effect<boolean, DbError, DbService>;
+
+    /** Record the window's source bundle once the first run has assembled it. */
+    readonly saveSourceBundle: (
+      recapId: string,
+      bundle: RecapSourceBundle,
     ) => Effect.Effect<void, DbError, DbService>;
+
+    /** The source bundle an earlier run of this recap assembled, if any. */
+    readonly getSourceBundle: (
+      recapId: string,
+    ) => Effect.Effect<RecapSourceBundle | null, DbError, DbService>;
 
     /**
      * Fill in a recap for a historical window that held no activity at all.
@@ -474,27 +486,48 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
       });
     }),
 
-  setStatus: (recapId, status, options) =>
+  finish: (recapId, status, options) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      // `complete` stamps a fresh completedAt; any other terminal/non-terminal
-      // status (generating/error/superseded) clears it so a previously-complete
-      // row can't ship a stale timestamp to the client after regenerate.
-      const completedAtPatch =
-        status === "complete" ? { completedAt: new Date().toISOString() } : { completedAt: null };
-      const tokenPatch = options?.tokenUsage
-        ? { tokenUsage: JSON.stringify(options.tokenUsage) }
-        : {};
-      const modelPatch = options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {};
-      const errorPatch =
-        options?.errorMessage !== undefined ? { errorMessage: options.errorMessage } : {};
-      yield* dbTry("setStatus", () =>
+      const moved = yield* dbTry("finish", () =>
         db
           .update(projectRecaps)
-          .set({ status, ...completedAtPatch, ...tokenPatch, ...modelPatch, ...errorPatch })
+          .set({
+            status,
+            completedAt: status === "complete" ? new Date().toISOString() : null,
+            ...(options?.modelUsed !== undefined ? { modelUsed: options.modelUsed } : {}),
+            errorMessage: options?.errorMessage ?? null,
+          })
+          .where(and(eq(projectRecaps.id, recapId), eq(projectRecaps.status, "generating")))
+          .returning({ id: projectRecaps.id })
+          .all(),
+      );
+      return moved.length > 0;
+    }),
+
+  saveSourceBundle: (recapId, bundle) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      yield* dbTry("saveSourceBundle", () =>
+        db
+          .update(projectRecaps)
+          .set({ sourceBundle: bundle })
           .where(eq(projectRecaps.id, recapId))
           .run(),
       );
+    }),
+
+  getSourceBundle: (recapId) =>
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
+      const row = yield* dbTry("getSourceBundle", () =>
+        db
+          .select({ sourceBundle: projectRecaps.sourceBundle })
+          .from(projectRecaps)
+          .where(eq(projectRecaps.id, recapId))
+          .get(),
+      );
+      return row?.sourceBundle ?? null;
     }),
 
   markEmptyWindow: (recapId) =>
@@ -537,6 +570,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         sourceWalkthroughIds: "[]",
         summaryStats: "{}",
         tokenUsage: "{}",
+        sourceBundle: null,
       };
       if (newBoundaries?.periodStart !== undefined) {
         patch.periodStart = newBoundaries.periodStart;

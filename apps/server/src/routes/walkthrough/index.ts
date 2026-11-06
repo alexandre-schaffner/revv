@@ -32,14 +32,11 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
       runRoute(
         Effect.gen(function* () {
           const jobs = yield* WalkthroughJobs;
-          // `mode` is the walkthrough's perspective, the user's pick; the
-          // review session is identity-derived and `startJob` owns it.
+          // `mode` is the walkthrough's perspective, the user's pick. A live
+          // run at the PR's head is joined by `startJob` itself.
           const mode = ctx.body?.mode ?? "reviewer";
-          const existing = yield* jobs.findActiveByPr(ctx.params.id, mode);
-          if (existing !== null) return { walkthroughId: existing.walkthroughId };
           return yield* jobs.startJob({
             prId: ctx.params.id,
-            userId: ctx.session.user.id,
             trigger: "user",
             mode,
             generationMode: ctx.body?.generationMode ?? "full",
@@ -152,7 +149,6 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
           if (row.status === "error") yield* jobs.reviveFromError(row.id);
           const { walkthroughId } = yield* jobs.startJob({
             prId: ctx.params.id,
-            userId: ctx.session.user.id,
             trigger: "resume",
             walkthroughId: row.id,
             mode: mode ?? row.mode,
@@ -164,9 +160,8 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
     { body: perspectiveBody },
   )
 
-  // The Stop button. The orchestrator marks the row `error` with code
-  // `Cancelled` and broadcasts `lifecycle:error`; the row is not superseded,
-  // so Resume can revive it. A no-op when no job is live.
+  // The Stop button: the row ends `error` with end reason `cancelled`, not
+  // superseded, so Resume can revive it. A no-op when no run is live.
   .post(
     "/:id/walkthrough/abort",
     (ctx) =>

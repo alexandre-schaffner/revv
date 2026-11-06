@@ -6,12 +6,16 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
-import { JOB_TURN, runAcpTurn } from "../acp/run-turn";
+import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";
 
 export interface RunMcpAgentAcpParams {
   readonly launch: AgentLaunch;
   readonly workingDir: string;
   readonly abortController: AbortController;
+  /** The job's liveness beacon; its MCP route notes every call it authenticates. */
+  readonly activity: ActivityBeacon;
+  /** The job id its trace anchor is published under. */
+  readonly traceKey: string;
   readonly route: string;
   readonly mcpServerName: string;
   readonly sessionToken: string;
@@ -43,7 +47,9 @@ export async function runMcpAgentViaAcp(params: RunMcpAgentAcpParams): Promise<M
         required: true,
       },
       deadlines: JOB_TURN,
+      activity: params.activity,
       signal: params.abortController.signal,
+      traceKey: params.traceKey,
       prompt: () => [{ type: "text", text: params.prompt }],
       onUpdate: (update) => params.onSessionUpdate?.(update),
     });

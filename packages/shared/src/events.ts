@@ -17,27 +17,18 @@ import type {
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
 import type { CommentThread, ThreadMessage, ThreadStatus } from "./review";
 import type { StackBriefStatus, StackMergeRun } from "./stacks";
-import type { WalkthroughStreamEvent } from "./walkthrough";
+import type { WalkthroughDurableEvent, WalkthroughLiveEvent } from "./walkthrough";
 
 /**
- * Per-event envelope for walkthrough content + lifecycle. Replaces the
- * legacy per-PR walkthrough SSE stream and the four standalone WS
- * lifecycle envelopes (`walkthrough:complete`, `walkthrough:error`,
- * `walkthrough:cache-hit`, `walkthrough:edited`).
+ * A walkthrough's content or lifecycle event (see `WalkthroughDurableEvent`).
  *
- *   prId           — the PR this walkthrough belongs to (route key on the
- *                    client; entries are stored by prId for sidebar +
- *                    detail-view consumption regardless of active page).
- *   walkthroughId  — DB row id; used to scope `lastSeenSeq` cursors so the
- *                    cursor naturally resets across regenerate/supersede
- *                    boundaries.
- *   seq            — monotonic per-walkthrough counter sourced from
- *                    `walkthroughs.next_seq` (atomic with content writes).
- *                    Client drops envelopes with `seq <= lastSeenSeq` for
- *                    the in-flight reconnect race. See SSE-rewrite plan §4.2.
- *   event          — the actual payload (content event, lifecycle event,
- *                    or chat-edit deletion). Same union the legacy SSE used,
- *                    extended with `lifecycle:*` variants.
+ *   prId           — the PR this walkthrough belongs to; the client keys its
+ *                    entries on it.
+ *   walkthroughId  — the row; scopes the client's `lastSeenSeq` cursor so it
+ *                    resets across regenerate/supersede.
+ *   seq            — `walkthroughs.next_seq`, bumped in the DB for every
+ *                    durable event. The client drops `seq <= lastSeenSeq`
+ *                    (the reconnect race) and re-reads the row to catch up.
  */
 export interface WalkthroughEventEnvelope {
   type: "walkthrough:event";
@@ -45,7 +36,17 @@ export interface WalkthroughEventEnvelope {
     prId: string;
     walkthroughId: string;
     seq: number;
-    event: WalkthroughStreamEvent;
+    event: WalkthroughDurableEvent;
+  };
+}
+
+/** A live-only walkthrough event (see `WalkthroughLiveEvent`): no seq, never replayed. */
+export interface WalkthroughLiveEnvelope {
+  type: "walkthrough:live";
+  data: {
+    prId: string;
+    walkthroughId: string;
+    event: WalkthroughLiveEvent;
   };
 }
 
@@ -310,6 +311,7 @@ export type ThreadEventMessage =
 
 export type ServerEventMessage =
   | WalkthroughEventEnvelope
+  | WalkthroughLiveEnvelope
   | HunkScanEventMessage
   | PrsUpdatedEnvelope
   | PrArchivedEnvelope

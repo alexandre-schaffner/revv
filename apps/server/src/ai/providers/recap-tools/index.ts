@@ -32,11 +32,8 @@ import {
 } from "./spec";
 
 export type {
-  RecapSourceBundle,
-  RecapSourcePr,
   RecapSourcePrDiff,
   RecapSourcePrDiffFile,
-  RecapSourcePrDigest,
   RecapToolContext,
   RecapToolResult,
 } from "./spec";

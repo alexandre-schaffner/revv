@@ -24,11 +24,7 @@ import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
 import type { WalkthroughService } from "./Walkthrough";
-import {
-  type StartJobError,
-  WALKTHROUGH_CANCELLED_MESSAGE,
-  WalkthroughJobs,
-} from "./WalkthroughJobs";
+import { type StartJobError, WalkthroughJobs } from "./WalkthroughJobs";
 import { walkthroughPerspective } from "./walkthrough/perspective";
 
 /** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
@@ -65,7 +61,6 @@ export type WalkthroughRequestError =
 
 export const requestWalkthroughAtHead = (params: {
   readonly prId: string;
-  readonly userId: string;
   /** Lowercase, 40 hex characters. */
   readonly headSha: string;
   readonly generationMode: WalkthroughGenerationMode;
@@ -87,7 +82,7 @@ export const requestWalkthroughAtHead = (params: {
         .select({
           id: walkthroughs.id,
           status: walkthroughs.status,
-          errorMessage: walkthroughs.errorMessage,
+          endReason: walkthroughs.endReason,
         })
         .from(walkthroughs)
         .where(
@@ -107,7 +102,7 @@ export const requestWalkthroughAtHead = (params: {
     }
 
     const latest = runsAtHead[0];
-    if (latest?.status === "error" && latest.errorMessage === WALKTHROUGH_CANCELLED_MESSAGE) {
+    if (latest?.status === "error" && latest.endReason === "cancelled") {
       return { kind: "stopped_by_user", walkthroughId: latest.id };
     }
 
@@ -141,7 +136,6 @@ export const requestWalkthroughAtHead = (params: {
     return yield* jobs
       .startJob({
         prId: params.prId,
-        userId: params.userId,
         trigger: "external_agent",
         mode,
         generationMode: params.generationMode,

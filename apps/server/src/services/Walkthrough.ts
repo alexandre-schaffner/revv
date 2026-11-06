@@ -7,6 +7,7 @@
 import type {
   RiskLevel,
   Walkthrough,
+  WalkthroughEndReason,
   WalkthroughGenerationMode,
   WalkthroughMode,
   WalkthroughPipelinePhase,
@@ -25,7 +26,11 @@ import { avatarOfPrLogin } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { reviewRounds } from "../db/schema/review-rounds";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
-import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
+import {
+  type DiffFingerprint,
+  type WalkthroughLaunchPlan,
+  walkthroughs,
+} from "../db/schema/walkthroughs";
 import type { DbError } from "../domain/errors";
 import { dbTry, tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
@@ -77,6 +82,7 @@ function rowToWalkthrough(
     mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
+    endReason: row.endReason ?? null,
     riskLevel: row.riskLevel as RiskLevel,
     riskConfidence: row.riskConfidence,
     generatedAt: row.generatedAt,
@@ -196,6 +202,7 @@ export class WalkthroughService extends Context.Service<
       risk?: { readonly level: RiskLevel; readonly confidence: number };
       stackContext?: WalkthroughStackSnapshot | null;
       diffFingerprint?: DiffFingerprint | null;
+      launchPlan?: WalkthroughLaunchPlan | null;
     }) => Effect.Effect<string, DbError, DbService>;
 
     readonly getStackInputs: (walkthroughId: string) => Effect.Effect<
@@ -227,14 +234,31 @@ export class WalkthroughService extends Context.Service<
     ) => Effect.Effect<void, DbError, DbService>;
 
     /**
-     * Set `walkthroughs.status`. The ONLY caller is {@link WalkthroughJobs};
-     * every other module that needs to transition lifecycle goes through
-     * the orchestrator (doctrine invariant #11).
+     * End a run: `generating` → `complete` | `error`, with the review round
+     * in step. A row that already left `generating` is untouched (false).
+     * The ONLY caller is {@link WalkthroughJobs} (invariant #11).
      */
-    readonly setStatus: (
+    readonly finish: (
       walkthroughId: string,
-      status: WalkthroughStatus,
-      options?: { tokenUsage?: WalkthroughTokenUsage; errorMessage?: string },
+      status: "complete" | "error",
+      options?: {
+        tokenUsage?: WalkthroughTokenUsage;
+        errorMessage?: string;
+        endReason?: WalkthroughEndReason;
+      },
+    ) => Effect.Effect<boolean, DbError, DbService>;
+
+    /**
+     * A user's Resume of an `error` row: back to `generating` with a fresh
+     * resume budget, keeping its content. False when the row isn't in `error`.
+     */
+    readonly revive: (walkthroughId: string) => Effect.Effect<boolean, DbError, DbService>;
+
+    /** Record the launch a row's runs use, and the model and provider config it shows. */
+    readonly recordLaunch: (
+      walkthroughId: string,
+      plan: WalkthroughLaunchPlan,
+      providerConfig: GenerationProviderConfig,
     ) => Effect.Effect<void, DbError, DbService>;
 
     /**
@@ -254,7 +278,7 @@ export class WalkthroughService extends Context.Service<
       prId: string,
       exceptHeadSha?: string,
       mode?: WalkthroughMode,
-    ) => Effect.Effect<void, DbError, DbService>;
+    ) => Effect.Effect<ReadonlyArray<string>, DbError, DbService>;
 
     /** Get a complete (cached) walkthrough by PR + sha. */
     readonly getCached: (
@@ -324,33 +348,11 @@ export class WalkthroughService extends Context.Service<
 
     /**
      * Bump the row's resume counter. Returns the new value so the caller can
-     * compare against `WALKTHROUGH_MAX_RESUME_ATTEMPTS` and give up cleanly.
+     * compare against `MAX_RESUME_ATTEMPTS` and give up cleanly.
      */
     readonly incrementResumeAttempts: (
       walkthroughId: string,
     ) => Effect.Effect<number, DbError, DbService>;
-
-    /**
-     * Reset the row's resume counter to 0. Called by the orchestrator on a
-     * user-driven resume so the boot-time auto-resume budget restarts —
-     * the user just expressed fresh intent to finish, and the prior
-     * accumulation no longer reflects how many *unattended* attempts the
-     * row has survived.
-     */
-    readonly resetResumeAttempts: (
-      walkthroughId: string,
-    ) => Effect.Effect<void, DbError, DbService>;
-
-    /**
-     * Update the model/agent recorded on a walkthrough row. Called by the
-     * orchestrator on resume when the user has changed their AI agent since
-     * the row was originally created — the new agent should be the one that
-     * picks up the work.
-     */
-    readonly updateModelUsed: (
-      walkthroughId: string,
-      modelUsed: string,
-    ) => Effect.Effect<void, DbError, DbService>;
 
     /**
      * Stamp the given issue ids with `submittedAt` so the UI's "already
@@ -466,6 +468,38 @@ export class WalkthroughService extends Context.Service<
   }
 >()("WalkthroughService") {}
 
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/**
+ * The one way a row becomes `superseded`: its AI comment threads go with it
+ * (Submit would otherwise post a retired review's comments), its
+ * review round follows, and a run cut off mid-generation records why.
+ */
+function supersedeRows(tx: Db | Tx, ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const issueIds = tx
+    .select({ id: walkthroughIssues.id })
+    .from(walkthroughIssues)
+    .where(inArray(walkthroughIssues.walkthroughId, [...ids]))
+    .all()
+    .map((r) => r.id);
+  if (issueIds.length > 0) {
+    tx.delete(commentThreads).where(inArray(commentThreads.walkthroughIssueId, issueIds)).run();
+  }
+  tx.update(walkthroughs)
+    .set({ status: "superseded", endReason: "superseded" })
+    .where(and(inArray(walkthroughs.id, [...ids]), eq(walkthroughs.status, "generating")))
+    .run();
+  tx.update(walkthroughs)
+    .set({ status: "superseded" })
+    .where(and(inArray(walkthroughs.id, [...ids]), ne(walkthroughs.status, "superseded")))
+    .run();
+  tx.update(reviewRounds)
+    .set({ status: "superseded" })
+    .where(inArray(reviewRounds.walkthroughId, [...ids]))
+    .run();
+}
+
 // ── Live implementation ─────────────────────────────────────────────────────
 
 export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
@@ -513,15 +547,8 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               return { id: existing.id };
             }
             if (existing.status === "error" || existing.status === "complete") {
-              tx.update(walkthroughs)
-                .set({ status: "superseded" })
-                .where(eq(walkthroughs.id, existing.id))
-                .run();
+              supersedeRows(tx, [existing.id]);
               supersededExistingId = existing.id;
-              tx.update(reviewRounds)
-                .set({ status: "superseded" })
-                .where(eq(reviewRounds.walkthroughId, existing.id))
-                .run();
             }
             // 'superseded' rows stay in place now that uniqueness only
             // applies to active rows.
@@ -555,6 +582,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               generatedByDisplayName: params.generatedBy?.displayName ?? null,
               generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
               providerConfig: params.providerConfig ? JSON.stringify(params.providerConfig) : null,
+              launchPlan: params.launchPlan ?? null,
             })
             .run();
           if (supersededExistingId) {
@@ -592,38 +620,66 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return result.id;
     }),
 
-  setStatus: (walkthroughId, status, options) =>
-    tryDb("setStatus", (db) => {
-      // `completedAt` is stamped exactly when status transitions to
-      // 'complete'. This is the canonical "walkthrough finished" timestamp
-      // the recap pipeline windows on — distinct from `generatedAt`
-      // (job-start) so a walkthrough that started in period N but finished
-      // in period N+1 lands in N+1's recap. We deliberately do NOT clear
-      // it on any other transition: a row that briefly hit 'complete'
-      // then got 'superseded' retains its completedAt for audit.
-      const completedAt = status === "complete" ? new Date().toISOString() : null;
+  finish: (walkthroughId, status, options) =>
+    tryDb("finish", (db) =>
       db.transaction(() => {
-        db.update(walkthroughs)
+        // The canonical "walkthrough finished" timestamp the recap pipeline
+        // windows on, distinct from `generatedAt` (job start). Kept through a
+        // later supersede.
+        const completedAt = status === "complete" ? new Date().toISOString() : null;
+        const moved = db
+          .update(walkthroughs)
           .set({
             status,
             errorMessage: status === "error" ? (options?.errorMessage ?? null) : null,
+            endReason: status === "error" ? (options?.endReason ?? null) : null,
             ...(completedAt ? { completedAt } : {}),
             ...(options?.tokenUsage ? { tokenUsage: JSON.stringify(options.tokenUsage) } : {}),
           })
-          .where(eq(walkthroughs.id, walkthroughId))
-          .run();
+          .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "generating")))
+          .returning({ id: walkthroughs.id })
+          .all();
+        if (moved.length === 0) return false;
         db.update(reviewRounds)
-          .set({
-            status,
-            ...(completedAt ? { completedAt } : {}),
-          })
+          .set({ status, ...(completedAt ? { completedAt } : {}) })
           .where(eq(reviewRounds.walkthroughId, walkthroughId))
           .run();
-      });
+        return true;
+      }),
+    ),
+
+  revive: (walkthroughId) =>
+    tryDb("revive", (db) =>
+      db.transaction(() => {
+        const moved = db
+          .update(walkthroughs)
+          .set({ status: "generating", errorMessage: null, endReason: null, resumeAttempts: 0 })
+          .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.status, "error")))
+          .returning({ id: walkthroughs.id })
+          .all();
+        if (moved.length === 0) return false;
+        db.update(reviewRounds)
+          .set({ status: "generating" })
+          .where(eq(reviewRounds.walkthroughId, walkthroughId))
+          .run();
+        return true;
+      }),
+    ),
+
+  recordLaunch: (walkthroughId, plan, providerConfig) =>
+    tryDb("recordLaunch", (db) => {
+      db.update(walkthroughs)
+        .set({
+          launchPlan: plan,
+          modelUsed: plan.model,
+          providerConfig: JSON.stringify(providerConfig),
+        })
+        .where(eq(walkthroughs.id, walkthroughId))
+        .run();
     }),
 
   supersedeAllForPr: (prId, exceptHeadSha, mode) =>
-    tryDb("supersedeAllForPr", (db) => {
+    tryDb("supersedeAllForPr", (db) =>
       db.transaction(() => {
         // Collect the IDs of every walkthrough that is about to be superseded.
         // `exceptHeadSha` excludes a specific head-SHA from the sweep —
@@ -646,29 +702,10 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           .all()
           .map((r) => r.id);
 
-        if (activeIds.length === 0) return;
-
-        // Drop all AI-authored comment threads linked to those walkthroughs'
-        // issues before marking the rows superseded.
-        const issueIds = db
-          .select({ id: walkthroughIssues.id })
-          .from(walkthroughIssues)
-          .where(inArray(walkthroughIssues.walkthroughId, activeIds))
-          .all()
-          .map((r) => r.id);
-        if (issueIds.length > 0) {
-          db.delete(commentThreads)
-            .where(inArray(commentThreads.walkthroughIssueId, issueIds))
-            .run();
-        }
-
-        db.update(walkthroughs).set({ status: "superseded" }).where(condition).run();
-        db.update(reviewRounds)
-          .set({ status: "superseded" })
-          .where(inArray(reviewRounds.walkthroughId, activeIds))
-          .run();
-      });
-    }),
+        supersedeRows(db, activeIds);
+        return activeIds;
+      }),
+    ),
 
   getCached: (prId, headSha, mode = "reviewer") =>
     tryDb(
@@ -844,19 +881,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         .where(eq(walkthroughs.id, walkthroughId))
         .run();
       return next;
-    }),
-
-  resetResumeAttempts: (walkthroughId) =>
-    tryDb("resetResumeAttempts", (db) => {
-      db.update(walkthroughs)
-        .set({ resumeAttempts: 0 })
-        .where(eq(walkthroughs.id, walkthroughId))
-        .run();
-    }),
-
-  updateModelUsed: (walkthroughId, modelUsed) =>
-    tryDb("updateModelUsed", (db) => {
-      db.update(walkthroughs).set({ modelUsed }).where(eq(walkthroughs.id, walkthroughId)).run();
     }),
 
   markIssuesSubmitted: (issueIds) =>

@@ -31,6 +31,7 @@ export { reviewRounds } from "./review-rounds";
 export { reviewSessions } from "./review-sessions";
 export { stackBriefLayers, stackBriefs } from "./stack-briefs";
 export { stackMergeRuns } from "./stack-merge-runs";
+export { stackReviews } from "./stack-reviews";
 export { threadMessages } from "./thread-messages";
 export { userSettings } from "./user-settings";
 export { walkthroughBlocks } from "./walkthrough-blocks";

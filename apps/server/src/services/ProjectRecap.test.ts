@@ -258,3 +258,54 @@ describe("DB failures", () => {
     expect(JSON.stringify(broken)).toContain("DbError");
   });
 });
+
+// A resumed run reads the window its first attempt assembled; a rerun starts over.
+describe("recap source bundle and terminal status", () => {
+  const run = <A, E>(
+    db: Db,
+    use: (svc: Context.Service.Shape<typeof ProjectRecapService>) => Effect.Effect<A, E, DbService>,
+  ) =>
+    Effect.runPromise(
+      Effect.flatMap(ProjectRecapService, use).pipe(
+        Effect.provide(ProjectRecapServiceLive),
+        Effect.provide(Layer.succeed(DbService, { db })),
+      ),
+    );
+  const bundle = {
+    repoId: REPO_ID,
+    repoFullName: "acme/web",
+    period: "daily" as const,
+    periodStart: "2026-06-01T00:00:00.000Z",
+    periodEnd: "2026-06-01T23:59:59.999Z",
+    prs: [],
+    openPrs: [],
+    stats: {
+      prCount: 0,
+      mergedCount: 0,
+      closedCount: 0,
+      authorCount: 0,
+      riskBreakdown: { low: 0, medium: 0, high: 0 },
+      walkthroughsMissingCount: 0,
+    },
+  };
+
+  it("keeps the bundle across a restart and drops it on a rerun", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    const id = "daily-2026-06-01";
+    await run(db, (svc) => svc.saveSourceBundle(id, bundle));
+    expect(await run(db, (svc) => svc.getSourceBundle(id))).toEqual(bundle);
+    await run(db, (svc) => svc.resetForRerun(id));
+    expect(await run(db, (svc) => svc.getSourceBundle(id))).toBeNull();
+  });
+
+  it("finishes only a generating row", async () => {
+    const db = createDb(":memory:");
+    seed(db);
+    const id = "daily-2026-06-01";
+    expect(await run(db, (svc) => svc.finish(id, "stopped"))).toBe(false);
+    await run(db, (svc) => svc.resetForRerun(id));
+    expect(await run(db, (svc) => svc.finish(id, "stopped"))).toBe(true);
+    expect((await run(db, (svc) => svc.getById(id))).status).toBe("stopped");
+  });
+});

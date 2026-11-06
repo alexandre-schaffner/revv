@@ -89,7 +89,6 @@ async function resolveContext(
         AppRuntime.runPromise(
           requestWalkthroughAtHead({
             prId: resolved.prId,
-            userId: resolved.userId,
             headSha,
             generationMode,
           }).pipe(Effect.mapError((error) => new Error(describeWalkthroughRequestError(error)))),

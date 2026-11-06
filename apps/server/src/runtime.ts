@@ -1,10 +1,18 @@
 import { Layer, ManagedRuntime } from "effect";
+import { BootLive } from "./boot";
 import { seedOriginFromAmbient } from "./observability/github-ledger/origin";
 import { ContinuousProfilingLive } from "./observability/profiler";
 import { TracingLive } from "./observability/tracer";
 import { AppLayer } from "./services/AppLayer";
 
-const managed = ManagedRuntime.make(Layer.mergeAll(AppLayer, TracingLive, ContinuousProfilingLive));
+const managed = ManagedRuntime.make(
+  Layer.mergeAll(
+    AppLayer,
+    TracingLive,
+    ContinuousProfilingLive,
+    BootLive.pipe(Layer.provide(Layer.mergeAll(AppLayer, TracingLive))),
+  ),
+);
 
 /** Every service an effect run on {@link AppRuntime} may require. */
 export type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof managed>;

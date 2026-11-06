@@ -32,7 +32,7 @@ describe("addressesActiveWalkthrough", () => {
     const seeded = entry({ walkthroughId: null, isStreaming: true });
     expect(addressesActiveWalkthrough(seeded, A, "lifecycle:superseded")).toBe(false);
     expect(addressesActiveWalkthrough(seeded, A, "lifecycle:error")).toBe(false);
-    expect(addressesActiveWalkthrough(seeded, A, "done")).toBe(false);
+    expect(addressesActiveWalkthrough(seeded, A, "lifecycle:complete")).toBe(false);
   });
 
   it("still takes content while waiting for its own lifecycle:started", () => {
@@ -54,7 +54,7 @@ describe("addressesActiveWalkthrough", () => {
   it("rejects a stale terminal envelope for a live generation that isn't streaming yet", () => {
     const requested = entry({ walkthroughId: null, isStreaming: false, liveGeneration: true });
     expect(addressesActiveWalkthrough(requested, A, "lifecycle:superseded")).toBe(false);
-    expect(addressesActiveWalkthrough(requested, A, "done")).toBe(false);
+    expect(addressesActiveWalkthrough(requested, A, "lifecycle:complete")).toBe(false);
   });
 
   it("still takes content for a live generation that isn't streaming yet", () => {

@@ -78,30 +78,9 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         return;
       }
 
-      // Live: generating.
-      // Ensure the job is running (idempotent — startJob reuses existing).
-      const started = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const jobs = yield* ProjectRecapJobs;
-          // We need the period boundaries from the row to start/resume.
-          return yield* jobs.startJob({
-            recapId: row.id,
-            repoId: row.repositoryId,
-            period: row.period,
-            periodStart: row.periodStart,
-            periodEnd: row.periodEnd,
-          });
-        }),
-      ).catch(() => null);
-
-      if (!started) {
-        channel.send({
-          type: "error",
-          data: { code: "StartFailed", message: "Could not start or attach to recap job." },
-        });
-        channel.close();
-        return;
-      }
+      // Live: generating. Make sure a run is live — the budgeted resume when
+      // the one writing this row died.
+      await AppRuntime.runPromise(Effect.flatMap(ProjectRecapJobs, (jobs) => jobs.attach(row.id)));
 
       // Subscribe in buffered mode BEFORE reading the DB snapshot.
       const sub = await AppRuntime.runPromise(
@@ -116,7 +95,7 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
       );
 
       if (!sub.found) {
-        // Job finished between startJob and subscribe.
+        // No live run: it finished, or its resume was refused.
         // Re-read the row to get final state.
         const finalRow = await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),

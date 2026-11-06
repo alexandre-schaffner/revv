@@ -7,6 +7,7 @@
 import type { RecapStreamEvent } from "@revv/shared";
 import { logError } from "../../logger";
 import type { AgentLaunch } from "../acp/agent-launch";
+import type { ActivityBeacon } from "../acp/run-turn";
 import { decodeAcpSessionUpdate, makeAcpDecodeState } from "../agent-stream/acp-decoders";
 import type { NormalizedAgentEvent } from "../agent-stream/normalized-events";
 import { buildRecapUserMessage, RECAP_SYSTEM_PROMPT } from "../prompts/recap";
@@ -25,6 +26,7 @@ export interface RunRecapAgentAcpParams {
   /** Working dir the ACP connection is pooled under (repo clone path / server cwd). */
   readonly workingDir: string;
   readonly abortController: AbortController;
+  readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
   /** True once `complete_recap` passed during this run. */
   readonly isValidated: () => boolean;
@@ -65,6 +67,8 @@ export async function runRecapAgentViaAcp(
     launch: params.launch,
     workingDir: params.workingDir,
     abortController: params.abortController,
+    activity: params.activity,
+    traceKey: params.ctx.recapId,
     route: "/mcp/recap",
     mcpServerName: `${RECAP_MCP_SERVER}-${params.ctx.recapId}`,
     sessionToken: params.sessionToken,

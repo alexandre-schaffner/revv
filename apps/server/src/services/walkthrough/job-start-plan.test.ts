@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { JobStartAnswers } from "./job-start";
-import { buildJobStartPlan, shouldResolveJobStart } from "./job-start-plan";
+import type { JobStartAnswers } from "../../ai/jev/job-start";
+import { buildJobStartPlan, shouldResolveJobStart } from "./launch-plan";
 
 const settings = { aiModel: "revv:auto", aiThinkingEffort: "revv:auto" } as const;
 

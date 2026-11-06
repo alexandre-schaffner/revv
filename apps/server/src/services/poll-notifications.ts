@@ -122,8 +122,7 @@ export const announceSyncChanges = (
       if (change.kind !== "review_requested") continue;
       const pr = allPrs.find((p) => p.id === change.prId);
       if (!pr || pr.headSha === null) continue;
-      const userId = viewers.userIdByAccount.get(changeAccountByPrId.get(pr.id) ?? "");
-      if (userId === undefined) continue;
+      if (!viewers.userIdByAccount.has(changeAccountByPrId.get(pr.id) ?? "")) continue;
       const uncached = yield* withDb(
         svc.db,
         svc.walkthroughService.getCached(pr.id, pr.headSha),
@@ -138,7 +137,7 @@ export const announceSyncChanges = (
       );
       if (!uncached) continue;
       yield* Effect.forkDetach(
-        svc.walkthroughJobs.startJob({ prId: pr.id, userId, trigger: "review_requested" }).pipe(
+        svc.walkthroughJobs.startJob({ prId: pr.id, trigger: "review_requested" }).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => {
               logError(

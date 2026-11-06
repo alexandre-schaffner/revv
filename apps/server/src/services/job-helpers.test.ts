@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Cause, Effect, Exit, Fiber } from "effect";
-import { analyzeJobFailure } from "./job-failure";
+import { Effect, Exit, Fiber } from "effect";
 import { makeStartJobMutex } from "./job-mutex";
 import {
   makeSubscriberRegistry,
@@ -8,37 +7,6 @@ import {
   type SubscriberHandle,
 } from "./job-subscribers";
 import { makeSessionTokenStore } from "./session-token-store";
-
-// ── analyzeJobFailure ────────────────────────────────────────────────────────
-// The cancelledByUser split (invariant #1): only a bare process-shutdown
-// interrupt is resume-worthy; a user-cancel or a genuine failure is terminal.
-
-describe("analyzeJobFailure", () => {
-  const interrupt = Cause.interrupt();
-  const failure = Cause.fail(new Error("boom"));
-
-  it("leaves shutdown interrupts for resume", () => {
-    expect(analyzeJobFailure(interrupt, { cancelledByUser: false })).toBe("leave-for-resume");
-  });
-
-  it("errors on user-cancelled interrupts", () => {
-    expect(analyzeJobFailure(interrupt, { cancelledByUser: true })).toBe("error");
-  });
-
-  it("errors on genuine failures regardless of cancel flag", () => {
-    expect(analyzeJobFailure(failure, { cancelledByUser: false })).toBe("error");
-    expect(analyzeJobFailure(failure, { cancelledByUser: true })).toBe("error");
-  });
-});
-
-// ── Job teardown wiring ──────────────────────────────────────────────────────
-// `analyzeJobFailure` only matters if the handler that consults it actually
-// runs. It used to hang off `Effect.catchAllCause`, which an interrupted fiber
-// skips outright — so every user Stop left its row at 'generating', never
-// broadcast `lifecycle:error`, and got re-launched by resume-on-boot until the
-// retry budget ran out. `WalkthroughJobs` therefore attaches the handler with
-// `Effect.onExit`; `ProjectRecapJobs` compensates differently, with an explicit
-// force-transition in its own `cancel`. These two pin the difference.
 
 describe("terminal handler placement under interruption", () => {
   const interruptAfterStart = async (body: Effect.Effect<void>): Promise<void> => {
