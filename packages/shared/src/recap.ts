@@ -152,6 +152,22 @@ export interface ProjectRecapSummary {
   readonly errorMessage: string | null;
 }
 
+export function recapSummaryOf(recap: ProjectRecap): ProjectRecapSummary {
+  return {
+    id: recap.id,
+    repositoryId: recap.repositoryId,
+    period: recap.period,
+    periodStart: recap.periodStart,
+    periodEnd: recap.periodEnd,
+    status: recap.status,
+    generatedAt: recap.generatedAt,
+    completedAt: recap.completedAt,
+    sourcePrCount: recap.sourcePrIds.length,
+    summaryStats: recap.summaryStats,
+    errorMessage: recap.errorMessage,
+  };
+}
+
 /**
  * Fixed lede written for a *historical* window that turned out to hold no
  * activity at all — no PR closed in it, none in flight across it. The

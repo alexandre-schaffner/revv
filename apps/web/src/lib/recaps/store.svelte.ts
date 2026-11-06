@@ -4,6 +4,7 @@ import type {
   ProjectRecapSummary,
   RecapPeriod,
 } from "@revv/shared";
+import { recapSummaryOf } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
@@ -351,19 +352,7 @@ export function onRecapAdded(data: { recap: ProjectRecap }): void {
   // yet, skip — `fetchRecapsForRepo` will pick the row up on next load.
   const list = recapsByRepo.get(recap.repositoryId);
   if (!list) return;
-  const summary: ProjectRecapSummary = {
-    id: recap.id,
-    repositoryId: recap.repositoryId,
-    period: recap.period,
-    periodStart: recap.periodStart,
-    periodEnd: recap.periodEnd,
-    status: recap.status,
-    generatedAt: recap.generatedAt,
-    completedAt: recap.completedAt,
-    sourcePrCount: recap.sourcePrIds.length,
-    summaryStats: recap.summaryStats,
-    errorMessage: recap.errorMessage,
-  };
+  const summary = recapSummaryOf(recap);
   const idx = list.findIndex((r) => r.id === recap.id);
   if (idx >= 0) {
     recapsByRepo = updateEntry(recapsByRepo, recap.repositoryId, () => [
