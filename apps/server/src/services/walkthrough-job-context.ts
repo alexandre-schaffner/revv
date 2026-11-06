@@ -1,7 +1,5 @@
 import type {
   AcpAgentId,
-  GeneratedBy,
-  GenerationProviderConfig,
   StartJobTrigger,
   ThinkingEffort,
   ThinkingEffortSetting,
@@ -13,6 +11,7 @@ import type { Db } from "../db";
 import { account } from "../db/schema/auth";
 import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
+import type { GeneratedBy, GenerationProviderConfig } from "./walkthrough-cache-format";
 
 function buildWalkthroughProviderConfig(input: {
   readonly agent: AcpAgentId;

@@ -1,5 +1,10 @@
 <script lang="ts">
-import { isPublishableDraftComment } from "@revv/shared";
+import {
+  type IssueSeverity,
+  isIssueResolved,
+  isPublishableDraftComment,
+  isThreadResolved,
+} from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
@@ -16,11 +21,10 @@ import {
   jumpToWalkthroughBlock,
   loadSession,
 } from "$lib/stores/review.svelte";
-import { getSettings } from "$lib/stores/settings.svelte";
 import { setRightPanelOpen } from "$lib/stores/sidebar.svelte";
-import { getBlocks, getIssues, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
+import { getBlocks, getIssueSignal, markIssuesAsSubmitted } from "$lib/stores/walkthrough.svelte";
 import { buildAddressIssuesPrompt } from "$lib/utils/prompts";
-import { partitionBySignal, shouldHideLowSignal } from "$lib/utils/walkthrough-issues";
+import { outstandingItemsPhrase } from "$lib/utils/walkthrough-issues";
 import ApproveWithIssuesDialog from "./ApproveWithIssuesDialog.svelte";
 import CommentsPanel from "./comments-panel/CommentsPanel.svelte";
 import IssuesPanel from "./issues-panel/IssuesPanel.svelte";
@@ -34,20 +38,12 @@ type Action = "approve" | "request_changes" | "comment";
 
 // Filtered once here rather than at each of the four consumers below, so a
 // low-signal issue the reader never saw can't be posted via select-all.
-const issueSignal = $derived(
-  partitionBySignal(getIssues(), { hideLowSignal: shouldHideLowSignal(getSettings()) }),
-);
+const issueSignal = $derived(getIssueSignal());
 const issues = $derived(issueSignal.shown);
 const filteredIssues = $derived(issueSignal.filtered);
-const unresolvedIssues = $derived(
-  issues.filter(
-    (issue) => issue.resolutionStatus !== "addressed" && issue.resolutionStatus !== "wont_fix",
-  ),
-);
+const unresolvedIssues = $derived(issues.filter((issue) => !isIssueResolved(issue)));
 const threads = $derived(getThreads());
-const unresolvedThreads = $derived(
-  threads.filter((t) => t.status !== "resolved" && t.status !== "wont_fix"),
-);
+const unresolvedThreads = $derived(threads.filter((t) => !isThreadResolved(t.status)));
 const blocks = $derived(getBlocks());
 
 // File paths currently part of the PR diff (new path + old path for renames).
@@ -111,22 +107,11 @@ const pendingCommentCount = $derived(
 // A plain COMMENT review can go up with selected issues OR pending comments.
 const canComment = $derived(selectedCount > 0 || pendingCommentCount > 0);
 
-const approveBlockerSummary = $derived.by(() => {
-  const parts: string[] = [];
-  if (unresolvedIssues.length > 0) {
-    parts.push(
-      `${unresolvedIssues.length} walkthrough issue${unresolvedIssues.length === 1 ? "" : "s"}`,
-    );
-  }
-  if (unresolvedThreads.length > 0) {
-    parts.push(
-      `${unresolvedThreads.length} unresolved comment${unresolvedThreads.length === 1 ? "" : "s"}`,
-    );
-  }
-  return parts.join(" and ");
-});
+const approveBlockerSummary = $derived(
+  outstandingItemsPhrase(unresolvedIssues.length, unresolvedThreads.length),
+);
 
-function severityTag(s: "info" | "warning" | "critical"): string {
+function severityTag(s: IssueSeverity): string {
   // Plain-text tag used inside the markdown body posted to GitHub.
   // Keeps the comment icon-free per project UI conventions.
   return s === "critical" ? "`[CRITICAL]`" : s === "warning" ? "`[WARNING]`" : "`[INFO]`";
@@ -382,7 +367,6 @@ useShellChrome(() => ({
 	{getThreadMessages}
 	onfileclick={(path, line) => jumpToDiffLine(path, line)}
 	onconfirm={() => void submit('approve')}
-	oncancel={() => {}}
 />
 
 <style>

@@ -10,6 +10,7 @@ import type {
   WalkthroughPipelinePhase,
   WalkthroughState,
 } from "@revv/shared";
+import { STACK_CITATION_FORMAT } from "@revv/shared";
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
@@ -624,8 +625,7 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
           stack,
           lowerLayers,
           upperLayers,
-          instructions:
-            "Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as `#N (layer k)`. An upper layer with `files: null` hasn't been fetched by Revv yet.",
+          instructions: `Your diff is this layer alone. Before flagging an absence, check the upper layers: if one plausibly adds it (its description or file list says so), it is not an issue here — mention it in a sentence if it helps the reader. Lower layers are context, already reviewed on their own; don't re-review them. Cite layers as \`${STACK_CITATION_FORMAT}\`. An upper layer with \`files: null\` hasn't been fetched by Revv yet.`,
         }),
       },
     ],

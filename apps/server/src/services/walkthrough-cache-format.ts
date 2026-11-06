@@ -22,7 +22,7 @@ import type {
   Verdict,
   WalkthroughBlock,
   WalkthroughTokenUsage,
-} from "./walkthrough";
+} from "@revv/shared";
 
 /** Bump this when the snapshot shape changes. Importers reject mismatches. */
 export const CACHE_SCHEMA_VERSION = 2 as const;

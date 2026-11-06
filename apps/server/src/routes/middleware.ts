@@ -1,3 +1,5 @@
+import type { StreamErrorBody, StreamErrorCode } from "@revv/shared";
+import { SSE_DONE_FRAME, sseErrorFrame } from "@revv/shared";
 import { Cause, Effect, Option } from "effect";
 import { Elysia, status } from "elysia";
 import {
@@ -142,6 +144,14 @@ const BASE_CONFLICTS_REJECTION_STATUS = {
   unavailable: 503,
   failed: 500,
 } as const satisfies Record<BaseConflictsRejection, number>;
+
+const BASE_CONFLICTS_REJECTION_CODE = {
+  busy: "BUSY",
+  stale: "STALE",
+  invalid: "INVALID",
+  unavailable: "UNAVAILABLE",
+  failed: "FAILED",
+} as const satisfies Record<BaseConflictsRejection, StreamErrorCode>;
 
 /**
  * Maps tagged Effect domain errors to HTTP responses.
@@ -288,40 +298,33 @@ export function jsonResponse(body: Record<string, unknown>, statusCode: number):
  */
 export function mapErrorToSSEResponse(raw: unknown): Response {
   const e = unwrapEffectError(raw);
+  const fail = (code: StreamErrorCode, message: string, status: number): Response =>
+    jsonResponse({ code, message } satisfies StreamErrorBody, status);
 
   if (e instanceof AiNotConfiguredError) {
-    return jsonResponse(
-      {
-        code: "NOT_CONFIGURED",
-        message: "AI CLI agent not configured — install opencode or claude",
-      },
-      400,
-    );
+    return fail("NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude", 400);
   }
   if (e instanceof NotFoundError) {
-    return jsonResponse({ code: "NOT_FOUND", message: `${e.resource} not found` }, 404);
+    return fail("NOT_FOUND", `${e.resource} not found`, 404);
   }
   if (e instanceof GitHubAuthError) {
-    return jsonResponse(
-      { code: "GITHUB_AUTH_ERROR", message: "GitHub token expired or invalid" },
-      401,
-    );
+    return fail("GITHUB_AUTH_ERROR", "GitHub token expired or invalid", 401);
   }
   if (e instanceof GitHubRateLimitError) {
-    return jsonResponse({ code: "GITHUB_RATE_LIMITED", message: "GitHub API rate limited" }, 429);
+    return fail("GITHUB_RATE_LIMITED", "GitHub API rate limited", 429);
   }
   if (isReviewError(e)) {
-    return jsonResponse({ code: "REVIEW_ERROR", message: e.message }, 500);
+    return fail("REVIEW_ERROR", e.message, 500);
   }
   if (e instanceof BaseConflictsRejectedError) {
-    return jsonResponse(
-      { code: e.reason.toUpperCase(), message: e.message },
+    return fail(
+      BASE_CONFLICTS_REJECTION_CODE[e.reason],
+      e.message,
       BASE_CONFLICTS_REJECTION_STATUS[e.reason],
     );
   }
 
-  const message = e instanceof Error ? e.message : "Internal server error";
-  return jsonResponse({ code: "INTERNAL_ERROR", message }, 500);
+  return fail("INTERNAL_ERROR", e instanceof Error ? e.message : "Internal server error", 500);
 }
 
 const CHAT_SSE_HEARTBEAT_MS = 15_000;
@@ -357,14 +360,17 @@ export function chatStreamToSSE<T>(frameStream: ReadableStream<T>): ReadableStre
           if (done) break;
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.enqueue(encoder.encode(SSE_DONE_FRAME));
         controller.close();
       } catch (err) {
-        const errMsg = JSON.stringify({
-          code: "GENERATION_ERROR",
-          message: err instanceof Error ? err.message : "Unknown error",
-        });
-        controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+        controller.enqueue(
+          encoder.encode(
+            sseErrorFrame({
+              code: "GENERATION_ERROR",
+              message: err instanceof Error ? err.message : "Unknown error",
+            }),
+          ),
+        );
         controller.close();
       } finally {
         clearInterval(heartbeat);

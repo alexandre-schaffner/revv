@@ -22,7 +22,6 @@
 
 import type {
   Confidence,
-  GenerationProviderConfig,
   RatingAxis,
   RatingCitation,
   RiskLevel,
@@ -57,6 +56,7 @@ import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
+import type { GenerationProviderConfig } from "./walkthrough-cache-format";
 import { decodeWalkthroughIssue } from "./walkthrough-issue";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 

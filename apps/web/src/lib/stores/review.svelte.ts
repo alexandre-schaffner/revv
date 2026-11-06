@@ -594,17 +594,12 @@ export async function reopenThread(threadId: string): Promise<void> {
   }
 }
 
-export function onThreadUpdated({ threadId, status }: ThreadUpdatedEnvelope["data"]): void {
-  const isResolved = status === "resolved" || status === "wont_fix";
-  threads = threads.map((t) =>
-    t.id === threadId
-      ? {
-          ...t,
-          status,
-          resolvedAt: isResolved ? new Date().toISOString() : null,
-        }
-      : t,
-  );
+export function onThreadUpdated({
+  threadId,
+  status,
+  resolvedAt,
+}: ThreadUpdatedEnvelope["data"]): void {
+  threads = threads.map((t) => (t.id === threadId ? { ...t, status, resolvedAt } : t));
   threadsVersion++;
 }
 

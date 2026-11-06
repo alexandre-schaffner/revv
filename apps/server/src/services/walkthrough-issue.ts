@@ -1,4 +1,9 @@
-import { isExternalAgentProvider, isLowSignalScore, type WalkthroughIssue } from "@revv/shared";
+import {
+  isExternalAgentProvider,
+  isLowSignalScore,
+  isResolvedIssueStatus,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import type { walkthroughIssues } from "../db/schema/walkthrough-issues";
 
 export interface RegeneratedIssueIdentity {
@@ -56,7 +61,7 @@ export function decodeWalkthroughIssue(
     ...(row.advisoryScore !== null
       ? { advisoryScore: row.advisoryScore, lowSignal: isLowSignalScore(row.advisoryScore) }
       : {}),
-    ...(row.resolutionStatus === "addressed" || row.resolutionStatus === "wont_fix"
+    ...(isResolvedIssueStatus(row.resolutionStatus)
       ? { resolutionStatus: row.resolutionStatus }
       : {}),
     ...(row.resolutionExplanation !== null

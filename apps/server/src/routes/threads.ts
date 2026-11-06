@@ -28,7 +28,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
 
             yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
               type: "thread:updated",
-              data: { threadId: ctx.params.id, status: thread.status },
+              data: {
+                threadId: ctx.params.id,
+                status: thread.status,
+                resolvedAt: thread.resolvedAt,
+              },
             });
 
             // Push resolve/unresolve to GitHub if the thread has been synced.
@@ -220,7 +224,11 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             if (transitioned) {
               yield* broadcaster.broadcastToAccount(ctx.account.accountId, {
                 type: "thread:updated",
-                data: { threadId: ctx.params.id, status: transitioned.status },
+                data: {
+                  threadId: ctx.params.id,
+                  status: transitioned.status,
+                  resolvedAt: transitioned.resolvedAt,
+                },
               });
             }
 

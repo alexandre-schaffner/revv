@@ -1,6 +1,6 @@
 <script lang="ts">
 import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
-import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME } from "@revv/shared";
+import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME, splitHunks } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
@@ -18,15 +18,8 @@ let { block, hideAnnotation = false }: Props = $props();
 
 const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.annotation) : null);
 
-/**
- * First added-line number from the first hunk header, used as the jump target
- * when the user clicks the header to open this file in the Diff tab. Falls
- * back to line 1 if the patch has no parseable hunk header.
- */
-const targetLine = $derived.by(() => {
-  const match = block.patch.match(/^@@[^\n]*?\+(\d+)/m);
-  return match?.[1] ? parseInt(match[1], 10) : 1;
-});
+/** Where clicking the header lands in the Diff tab: the first hunk's new-side start. */
+const targetLine = $derived(splitHunks(block.patch)[0]?.newStart ?? 1);
 
 let instance: FileDiff<never> | null = null;
 

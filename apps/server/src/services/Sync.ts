@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ThreadSummary } from "@revv/shared";
+import { isThreadResolved } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { reviewSessions } from "../db/schema/review-sessions";
@@ -266,7 +267,7 @@ export const SyncServiceLive = Layer.effect(
         const sessionPrId = yield* resolvePrIdFromSession(thread.reviewSessionId);
         const { token, apiBase } = yield* resolvePrContext(sessionPrId);
 
-        const isResolved = thread.status === "resolved" || thread.status === "wont_fix";
+        const isResolved = isThreadResolved(thread.status);
         yield* isResolved
           ? github.reviews.resolveThread(thread.externalThreadId, token, apiBase)
           : github.reviews.unresolveThread(thread.externalThreadId, token, apiBase);
@@ -277,9 +278,7 @@ export const SyncServiceLive = Layer.effect(
         const session = yield* reviewService.getOrCreateIdentitySession(prId);
         const threads = yield* reviewService.getThreadsForSession(session.id);
 
-        const resolved = threads.filter(
-          (t) => t.status === "resolved" || t.status === "wont_fix",
-        ).length;
+        const resolved = threads.filter((t) => isThreadResolved(t.status)).length;
         return { total: threads.length, open: threads.length - resolved, resolved };
       }).pipe(Effect.mapError(toSyncError()));
 
@@ -486,19 +485,19 @@ export const SyncServiceLive = Layer.effect(
               });
             }
 
-            const localResolved = local.status === "resolved" || local.status === "wont_fix";
+            const localResolved = isThreadResolved(local.status);
             if (ght.isResolved && !localResolved) {
-              yield* reviewService.updateThreadStatus(local.id, "resolved");
+              const updated = yield* reviewService.updateThreadStatus(local.id, "resolved");
               yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
-                data: { threadId: local.id, status: "resolved" },
+                data: { threadId: local.id, status: "resolved", resolvedAt: updated.resolvedAt },
               });
               statusChanges++;
             } else if (!ght.isResolved && localResolved) {
               yield* reviewService.updateThreadStatus(local.id, "open");
               yield* broadcaster.broadcastToAccount(accountId, {
                 type: "thread:updated",
-                data: { threadId: local.id, status: "open" },
+                data: { threadId: local.id, status: "open", resolvedAt: null },
               });
               statusChanges++;
             }

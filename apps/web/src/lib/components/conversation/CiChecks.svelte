@@ -1,5 +1,11 @@
 <script lang="ts">
-import type { CheckDetails, CiCheck, CiCheckBucket, CiRollup } from "@revv/shared";
+import {
+  type CheckDetails,
+  type CiCheck,
+  type CiCheckBucket,
+  type CiRollup,
+  ciStanding,
+} from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
@@ -11,7 +17,7 @@ import { gsapSlide } from "$lib/motion";
 import { RequestState } from "$lib/stores/_types";
 import { openExternal } from "$lib/utils/open-external";
 import CheckDetailsPanel from "./CheckDetailsPanel.svelte";
-import CiGlyph, { bucketOfRollup } from "./CiGlyph.svelte";
+import CiGlyph from "./CiGlyph.svelte";
 
 interface Props {
   rollup: CiRollup | null;
@@ -88,14 +94,7 @@ const counts = $derived(
     .filter(Boolean)
     .join(" · "),
 );
-const aggregateBucket = $derived(bucketOfRollup(rollup?.state ?? null));
-const headBucket = $derived(
-  failing > 0 || aggregateBucket === "fail"
-    ? "fail"
-    : pending > 0 || aggregateBucket === "pending"
-      ? "pending"
-      : aggregateBucket,
-);
+const headBucket = $derived(ciStanding(rollup));
 
 /**
  * One sentence for where CI stands, the way GitHub's merge box says it. The

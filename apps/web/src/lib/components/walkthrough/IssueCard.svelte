@@ -1,18 +1,17 @@
 <script lang="ts">
-import { HUNK_SMELL_META, type HunkSmell, type WalkthroughIssue } from "@revv/shared";
+import {
+  HUNK_SMELL_META,
+  type HunkSmell,
+  ISSUE_SEVERITY_LABEL,
+  issueResolutionLabel,
+  type WalkthroughIssue,
+} from "@revv/shared";
 import Waveform from "phosphor-svelte/lib/Waveform";
-import { Checkbox } from "$lib/components/ui/checkbox";
-import FileBadge from "$lib/components/ui/FileBadge.svelte";
 
 interface Props {
   issue: WalkthroughIssue;
   clickable?: boolean;
   onclick?: () => void;
-  checkable?: boolean;
-  checked?: boolean;
-  disabled?: boolean;
-  oncheck?: (checked: boolean) => void;
-  submitted?: boolean;
   animationDelay?: string;
   /**
    * When true, suppress the entrance animation entirely. Used on tab
@@ -21,9 +20,7 @@ interface Props {
    * `display: none`.
    */
   noAnim?: boolean;
-  onfileclick?: (filePath: string, line: number) => void;
   stepTag?: string | null;
-  hideFileBadge?: boolean;
   /** Smells the first pass flagged on this issue's hunk, before the review ran. */
   firstPassSmells?: readonly HunkSmell[] | undefined;
 }
@@ -32,16 +29,9 @@ let {
   issue,
   clickable = false,
   onclick,
-  checkable = false,
-  checked = false,
-  disabled = false,
-  oncheck,
-  submitted = false,
   animationDelay = "0ms",
   noAnim = false,
-  onfileclick,
   stepTag = null,
-  hideFileBadge = false,
   firstPassSmells,
 }: Props = $props();
 
@@ -51,19 +41,7 @@ const firstPassLabel = $derived(
     : null,
 );
 
-const severityLabels: Record<string, string> = {
-  info: "Info",
-  warning: "Warning",
-  critical: "Critical",
-};
-
-const resolutionLabel = $derived(
-  issue.resolutionStatus === "addressed"
-    ? "Addressed"
-    : issue.resolutionStatus === "wont_fix"
-      ? "Won't fix"
-      : null,
-);
+const resolutionLabel = $derived(issueResolutionLabel(issue.resolutionStatus));
 const resolved = $derived(resolutionLabel !== null);
 
 // Once the entrance animation completes (or if the parent tells us to skip
@@ -87,7 +65,6 @@ function onAnimEnd(event: AnimationEvent): void {
 	<button
 		type="button"
 		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
 		class:issue-card--resolved={resolved}
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
@@ -96,36 +73,9 @@ function onAnimEnd(event: AnimationEvent): void {
 	>
 		{@render cardContent()}
 	</button>
-{:else if checkable}
-	<!-- The Checkbox inside is the real interactive control (keyboard-accessible);
-	     this label is just a wider click target. -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-	<label
-		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
-		class:issue-card--resolved={resolved}
-		class:issue-card--checked={checked}
-		class:issue-card--no-anim={animLocked}
-		style:--issue-delay={animationDelay}
-		onanimationend={onAnimEnd}
-		onclick={(e) => {
-			// The bits-ui Checkbox is a button, not an input, so the native
-			// label→input forward we used to rely on no longer fires. Forward
-			// here, but skip clicks that already hit the checkbox itself so
-			// we don't toggle twice.
-			if (submitted || resolved || disabled) return;
-			const target = e.target as HTMLElement | null;
-			if (target?.closest('[data-slot="checkbox"]')) return;
-			oncheck?.(!checked);
-		}}
-	>
-		{@render cardContent()}
-	</label>
 {:else}
 	<div
 		class="issue-card issue-card--{issue.severity}"
-		class:issue-card--submitted={submitted}
 		class:issue-card--resolved={resolved}
 		class:issue-card--no-anim={animLocked}
 		style:--issue-delay={animationDelay}
@@ -136,28 +86,15 @@ function onAnimEnd(event: AnimationEvent): void {
 {/if}
 
 {#snippet cardContent()}
-	{#if checkable && !resolved}
-		<Checkbox
-			class="issue-card-checkbox"
-			aria-label="Select issue"
-			{checked}
-			{disabled}
-			onCheckedChange={(v) => oncheck?.(v === true)}
-		/>
-	{/if}
 	<div class="issue-card-body">
-		<!-- Three grid slots: marks / title / step tag. The badges are wrapped in
-		     a single `.issue-card-marks` cell so the row stays exactly three
-		     columns whether or not the Posted badge is present — see the grid
-		     rules in the stylesheet for why that matters. -->
+		<!-- Three grid slots: marks / title / step tag. The badges share one
+		     `.issue-card-marks` cell so the row stays three columns whichever
+		     badges show; see the grid rules in the stylesheet. -->
 		<div class="issue-card-top" class:issue-card-top--tagged={!!stepTag}>
 			<span class="issue-card-marks">
 				<span class="issue-badge issue-badge--{issue.severity}">
-					{severityLabels[issue.severity] ?? issue.severity}
+					{ISSUE_SEVERITY_LABEL[issue.severity]}
 				</span>
-				{#if submitted}
-					<span class="issue-card-posted-badge">Posted</span>
-				{/if}
 				{#if resolutionLabel}
 					<span class="issue-card-resolution-badge">{resolutionLabel}</span>
 				{/if}
@@ -172,20 +109,6 @@ function onAnimEnd(event: AnimationEvent): void {
 				<span class="issue-step-tag">{stepTag}</span>
 			{/if}
 		</div>
-		{#if issue.filePath && !hideFileBadge}
-			<div
-				class="issue-card-location"
-				onclick={(e) => e.stopPropagation()}
-				role="presentation"
-			>
-				<FileBadge
-					filePath={issue.filePath}
-					startLine={issue.startLine}
-					endLine={issue.endLine}
-					onclick={onfileclick && issue.filePath ? () => onfileclick(issue.filePath as string, issue.startLine ?? 1) : undefined}
-				/>
-			</div>
-		{/if}
 		<p class="issue-card-description">{issue.description}</p>
 	</div>
 {/snippet}
@@ -273,55 +196,9 @@ function onAnimEnd(event: AnimationEvent): void {
 		outline-offset: 2px;
 	}
 
-	/* ── Checkable (label) variant ──────────────────────────────────── */
-	label.issue-card {
-		cursor: pointer;
-		transition:
-			border-color var(--duration-snap) var(--ease-soft),
-			background var(--duration-snap) var(--ease-soft);
-	}
-
-	.issue-card--checked {
-		border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-		background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg-secondary));
-	}
-
-	/* When severity AND checked, blend both bg tints */
-	.issue-card--info.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 8%,
-			color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-secondary))
-		);
-	}
-	.issue-card--warning.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 6%,
-			color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary))
-		);
-	}
-	.issue-card--critical.issue-card--checked {
-		background: color-mix(
-			in srgb,
-			var(--color-accent) 6%,
-			color-mix(in srgb, var(--color-danger) 4%, var(--color-bg-secondary))
-		);
-	}
-
-	/* ── Submitted state ─────────────────────────────────────────────── */
-	.issue-card--submitted {
-		opacity: 0.55;
-	}
-
 	.issue-card--resolved {
 		--severity-color: var(--color-success);
 		background: color-mix(in srgb, var(--color-success) 5%, var(--color-bg-secondary));
-	}
-
-	/* ── Checkbox ────────────────────────────────────────────────────── */
-	:global(.issue-card-checkbox) {
-		margin-top: 2px;
 	}
 
 	/* ── Body ────────────────────────────────────────────────────────── */
@@ -404,13 +281,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		overflow-wrap: anywhere;
 	}
 
-	.issue-card-location {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-		font-family: var(--font-mono, monospace);
-	}
-
 	/* ── Step tag ────────────────────────────────────────────────────── */
 	.issue-step-tag {
 		justify-self: end;
@@ -424,22 +294,6 @@ function onAnimEnd(event: AnimationEvent): void {
 		background: var(--color-bg-tertiary);
 		white-space: nowrap;
 		transition: color var(--duration-snap) var(--ease-soft);
-	}
-
-	/* ── Posted badge ─────────────────────────────────────────────────── */
-	.issue-card-posted-badge {
-		display: inline-flex;
-		align-items: center;
-		border-radius: 9999px;
-		padding: 1px 7px;
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		flex-shrink: 0;
-		background: color-mix(in srgb, var(--color-success) 15%, transparent);
-		color: var(--color-success);
-		border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
 	}
 
 	.issue-card-resolution-badge {
@@ -514,8 +368,7 @@ function onAnimEnd(event: AnimationEvent): void {
 			animation-duration: 0.01ms !important;
 			animation-delay: 0ms !important;
 		}
-		button.issue-card,
-		label.issue-card {
+		button.issue-card {
 			transition: none !important;
 		}
 		button.issue-card:hover {

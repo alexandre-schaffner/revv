@@ -54,6 +54,16 @@ export type ReviewerEntry =
       readonly asCodeOwner: boolean;
     };
 
+/**
+ * The verdict a reviewer stands on, or null while their review is awaited. A
+ * re-request after a plain comment waits for a real review; one after an
+ * approval or a change request keeps that verdict until they review again.
+ */
+export function reviewerVerdict(reviewer: ReviewerEntry): ReviewVerdict | null {
+  if (reviewer.kind === "team" || reviewer.verdict === null) return null;
+  return reviewer.requested && reviewer.verdict === "commented" ? null : reviewer.verdict;
+}
+
 export interface LinkedIssue {
   readonly number: number;
   readonly title: string;
@@ -192,6 +202,44 @@ export interface CiRollup {
   /** null when the head has no checks at all. */
   readonly state: CiRollupState | null;
   readonly checks: readonly CiCheck[];
+}
+
+/**
+ * A rollup state read as a check bucket. `expected` is a required check that
+ * hasn't reported yet, so it is pending; `error` fails like `failure`.
+ */
+export function rollupBucket(state: CiRollupState | null | undefined): CiCheckBucket | null {
+  switch (state) {
+    case "success":
+      return "pass";
+    case "failure":
+    case "error":
+      return "fail";
+    case "pending":
+    case "expected":
+      return "pending";
+    default:
+      return null;
+  }
+}
+
+/** Something is still running: the rollup, or any single check. */
+export function ciHasPending(rollup: CiRollup | null | undefined): boolean {
+  if (!rollup) return false;
+  return (
+    rollupBucket(rollup.state) === "pending" || rollup.checks.some((c) => c.bucket === "pending")
+  );
+}
+
+/** Where CI stands overall: a failing check outweighs a pending one, which outweighs the rollup. */
+export function ciStanding(rollup: CiRollup | null | undefined): CiCheckBucket | null {
+  if (!rollup) return null;
+  const aggregate = rollupBucket(rollup.state);
+  if (aggregate === "fail" || rollup.checks.some((c) => c.bucket === "fail")) return "fail";
+  if (aggregate === "pending" || rollup.checks.some((c) => c.bucket === "pending")) {
+    return "pending";
+  }
+  return aggregate;
 }
 
 export interface CheckAnnotation {

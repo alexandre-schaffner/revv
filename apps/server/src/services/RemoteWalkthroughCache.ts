@@ -17,13 +17,6 @@
 
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
-import type { WalkthroughSnapshotV2 } from "@revv/shared";
-import {
-  CACHE_METADATA_KEYS,
-  CACHE_SCHEMA_VERSION,
-  cacheObjectKey,
-  cacheSigningMessage,
-} from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import type { Db } from "../db/index";
@@ -37,6 +30,13 @@ import { CacheEligibility } from "./cache-eligibility";
 import { SshSigner } from "./cache-signing/index";
 import { DbService } from "./Db";
 import { SettingsService } from "./Settings";
+import {
+  CACHE_METADATA_KEYS,
+  CACHE_SCHEMA_VERSION,
+  cacheObjectKey,
+  cacheSigningMessage,
+  type WalkthroughSnapshotV2,
+} from "./walkthrough-cache-format";
 import { exportWalkthroughSnapshot, validateSnapshot } from "./walkthrough-snapshot";
 
 function resolveRepoFullName(db: Db, prId: string): string | null {

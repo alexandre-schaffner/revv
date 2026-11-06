@@ -5,6 +5,7 @@
 // thinking. A silent close (server crash, the OS reclaiming the WKWebView
 // socket) never resolves a pending read, so only a timer can notice it.
 
+import { SSE_DONE_DATA, SSE_ERROR_EVENT, type StreamErrorCode } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/session/token.svelte";
 
@@ -51,7 +52,7 @@ export class SseFrameError extends Error {
   override readonly name = "SseFrameError";
 
   constructor(
-    readonly code: string,
+    readonly code: StreamErrorCode,
     message: string,
   ) {
     super(message);
@@ -125,12 +126,12 @@ export async function streamSse<T>(opts: SseStreamOptions<T>): Promise<void> {
         if (frame.startsWith(":")) continue;
         const lines = frame.split("\n");
         const data = lines.filter((l) => l.startsWith("data: ")).map((l) => l.slice(6));
-        if (lines.includes("event: error")) {
+        if (lines.includes(`event: ${SSE_ERROR_EVENT}`)) {
           if (data[0] !== undefined) throw frameError(data[0]);
           continue;
         }
         for (const raw of data) {
-          if (raw === "[DONE]") return;
+          if (raw === SSE_DONE_DATA) return;
           const event = parseJson(raw);
           if (event === null) continue;
           const pending = opts.onEvent(event as T);
@@ -153,7 +154,7 @@ function frameError(raw: string): SseFrameError {
   const payload = parseJson(raw) as { code?: unknown; message?: unknown } | null;
   return typeof payload?.message === "string"
     ? new SseFrameError(
-        typeof payload.code === "string" ? payload.code : "UNKNOWN",
+        typeof payload.code === "string" ? (payload.code as StreamErrorCode) : "UNKNOWN",
         payload.message,
       )
     : new SseFrameError("PARSE_ERROR", "Failed to parse error");

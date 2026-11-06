@@ -1,19 +1,10 @@
-<script lang="ts" module>
-import type { ReviewVerdict } from "@revv/shared";
-
-export const VERDICT_LABEL: Record<ReviewVerdict, string> = {
-  approved: "Approved",
-  changes_requested: "Requested changes",
-  commented: "Commented",
-  dismissed: "Dismissed",
-};
-</script>
-
 <script lang="ts">
+import type { ReviewVerdict } from "@revv/shared";
 import ChatCircle from "phosphor-svelte/lib/ChatCircle";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import GitDiff from "phosphor-svelte/lib/GitDiff";
 import Prohibit from "phosphor-svelte/lib/Prohibit";
+import { VERDICT_LABEL } from "$lib/conversation/verdict";
 
 interface Props {
   verdict: ReviewVerdict;

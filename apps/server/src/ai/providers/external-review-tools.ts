@@ -6,6 +6,7 @@ import type {
   WalkthroughGenerationMode,
   WalkthroughStatus,
 } from "@revv/shared";
+import { isThreadResolved } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
@@ -265,7 +266,7 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
             createdAt,
           })
           .run();
-        if (located.thread.status !== "resolved" && located.thread.status !== "wont_fix") {
+        if (!isThreadResolved(located.thread.status)) {
           newStatus = "pending_reviewer";
           ctx.db
             .update(commentThreads)
@@ -301,7 +302,7 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
       if (newStatus) {
         ctx.broadcastThreadEvent({
           type: "thread:updated",
-          data: { threadId: parsed.thread_id, status: newStatus },
+          data: { threadId: parsed.thread_id, status: newStatus, resolvedAt: null },
         });
       }
     }
@@ -346,18 +347,15 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
 
     const changed = located.thread.status !== parsed.status;
     if (changed) {
-      const terminal = parsed.status === "resolved" || parsed.status === "wont_fix";
+      const resolvedAt = isThreadResolved(parsed.status) ? new Date().toISOString() : null;
       ctx.db
         .update(commentThreads)
-        .set({
-          status: parsed.status,
-          resolvedAt: terminal ? new Date().toISOString() : null,
-        })
+        .set({ status: parsed.status, resolvedAt })
         .where(eq(commentThreads.id, parsed.thread_id))
         .run();
       ctx.broadcastThreadEvent({
         type: "thread:updated",
-        data: { threadId: parsed.thread_id, status: parsed.status },
+        data: { threadId: parsed.thread_id, status: parsed.status, resolvedAt },
       });
     }
     if (parsed.publish_to_github) {

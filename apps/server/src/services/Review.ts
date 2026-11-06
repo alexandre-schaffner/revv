@@ -7,7 +7,7 @@ import type {
   ThreadMessage,
   ThreadStatus,
 } from "@revv/shared";
-import { canUserModifyComment } from "@revv/shared";
+import { canUserModifyComment, isThreadResolved } from "@revv/shared";
 import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -417,7 +417,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
       // AI messages never change status; resolved/wont_fix are terminal until an
       // explicit reopen — replies don't auto-reopen.
       if (authorRole === "ai_agent") return rowToThread(existing);
-      if (existing.status === "resolved" || existing.status === "wont_fix") {
+      if (isThreadResolved(existing.status)) {
         return rowToThread(existing);
       }
       const nextStatus: ThreadStatus =
@@ -507,7 +507,7 @@ export const ReviewServiceLive = Layer.succeed(ReviewService, {
         );
       }
 
-      const isResolving = status === "resolved" || status === "wont_fix";
+      const isResolving = isThreadResolved(status);
       const isReopening =
         status === "open" || status === "pending_coder" || status === "pending_reviewer";
 

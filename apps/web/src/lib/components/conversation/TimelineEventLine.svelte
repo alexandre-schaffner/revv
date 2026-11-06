@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { ConversationActor } from "@revv/shared";
+import { loginsMatch } from "@revv/shared";
 import ArrowsCounterClockwise from "phosphor-svelte/lib/ArrowsCounterClockwise";
 import Eye from "phosphor-svelte/lib/Eye";
 import FileDashed from "phosphor-svelte/lib/FileDashed";
@@ -97,9 +98,9 @@ const list = (names: readonly string[]) =>
 				<strong>{list(line.removed)}</strong>
 			{/if}
 		{:else if event?.kind === 'assigned'}
-			{#if event.assignee === actor.login}self-assigned this{:else}assigned <strong>{event.assignee}</strong>{/if}
+			{#if loginsMatch(event.assignee, actor.login)}self-assigned this{:else}assigned <strong>{event.assignee}</strong>{/if}
 		{:else if event?.kind === 'unassigned'}
-			{#if event.assignee === actor.login}removed their assignment{:else}unassigned <strong>{event.assignee}</strong>{/if}
+			{#if loginsMatch(event.assignee, actor.login)}removed their assignment{:else}unassigned <strong>{event.assignee}</strong>{/if}
 		{:else if event?.kind === 'review_dismissed'}
 			dismissed {event.reviewer ? `${event.reviewer}'s` : 'a'} review{#if event.message}: <span class="event-quote">{event.message}</span>{/if}
 		{:else if event?.kind === 'force_pushed'}

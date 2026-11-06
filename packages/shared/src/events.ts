@@ -7,18 +7,10 @@
 // REST endpoints instead of this stream.
 
 import type { HunkScanRow, HunkScanStatus } from "./hunk-scan";
+import type { CloneStatus, PullRequest, Repository, SyncChange } from "./pull-requests";
 import type { ProjectRecap, ProjectRecapStatus, RecapPeriod } from "./recap";
+import type { CommentThread, ThreadMessage, ThreadStatus, ThreadSummary } from "./review";
 import type { StackBriefStatus, StackMergeRun } from "./stacks";
-import type {
-  CloneStatus,
-  CommentThread,
-  PullRequest,
-  Repository,
-  SyncChange,
-  ThreadMessage,
-  ThreadStatus,
-  ThreadSummary,
-} from "./types";
 import type { WalkthroughStreamEvent } from "./walkthrough";
 
 /**
@@ -209,7 +201,8 @@ export interface ThreadCreatedEnvelope {
 
 export interface ThreadUpdatedEnvelope {
   type: "thread:updated";
-  data: { threadId: string; status: ThreadStatus };
+  /** Full state of the thread's status: `resolvedAt` is null unless the status resolves it. */
+  data: { threadId: string; status: ThreadStatus; resolvedAt: string | null };
 }
 
 export interface ThreadMessageEnvelope {

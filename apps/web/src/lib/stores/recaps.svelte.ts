@@ -214,8 +214,13 @@ export async function fetchRecapsForMonth(repoId: string, monthKey: string): Pro
   }
 }
 
-export async function loadRecap(recapId: string): Promise<void> {
-  if (loadingDetailById.get(recapId)) return;
+/**
+ * Fetch the recap row. `force` reads it even while another load is in
+ * flight: that one may have left before the state the caller is
+ * reconciling against was committed.
+ */
+export async function loadRecap(recapId: string, options?: { force?: boolean }): Promise<void> {
+  if (loadingDetailById.get(recapId) && !options?.force) return;
   loadingDetailById = setEntry(loadingDetailById, recapId, true);
   try {
     const { data } = await api.api.recaps({ id: recapId }).get();
@@ -277,10 +282,9 @@ export async function regenerateRecap(recapId: string): Promise<{ recapId: strin
 /**
  * Stop an in-flight recap generation. Aborts the client SSE immediately
  * (so the UI stops painting) and hits the server cancel endpoint so the
- * agent stops burning tokens. The server transitions the row to
- * `status='error'` with `errorMessage="Cancelled by user"`, broadcasts
- * the change via SSE, and the reducer here patches the cached detail/list
- * state on receipt. Returns true on success.
+ * agent stops burning tokens. The server moves the row to `stopped` and
+ * broadcasts it; the local patch below just doesn't wait for that.
+ * Returns true on success.
  */
 export async function stopRecap(recapId: string): Promise<boolean> {
   if (pendingActions.map.has(recapId)) return false;
@@ -295,8 +299,8 @@ export async function stopRecap(recapId: string): Promise<boolean> {
     if (existing) {
       const patched: ProjectRecap = {
         ...existing,
-        status: "error",
-        errorMessage: "Cancelled by user",
+        status: "stopped",
+        errorMessage: null,
         completedAt: null,
       };
       recapDetailById = setEntry(recapDetailById, recapId, patched);
@@ -309,8 +313,8 @@ export async function stopRecap(recapId: string): Promise<boolean> {
       if (!row) return list;
       const patched: ProjectRecapSummary = {
         ...row,
-        status: "error",
-        errorMessage: "Cancelled by user",
+        status: "stopped",
+        errorMessage: null,
         completedAt: null,
       };
       return [...list.slice(0, idx), patched, ...list.slice(idx + 1)];

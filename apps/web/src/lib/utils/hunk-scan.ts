@@ -172,18 +172,6 @@ export function rowMatchesHunk(
   return entry.newStart === hunk.newStart && entry.newLines === hunk.newLines;
 }
 
-const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
-
-/** New-side ranges of a unified patch's hunks, in `hunkIndex` order. */
-export function patchHunkRanges(patch: string): Array<Pick<HunkRange, "newStart" | "newLines">> {
-  const ranges: Array<Pick<HunkRange, "newStart" | "newLines">> = [];
-  for (const line of patch.split("\n")) {
-    const m = HUNK_HEADER.exec(line);
-    if (m) ranges.push({ newStart: Number(m[1]), newLines: m[2] === undefined ? 1 : Number(m[2]) });
-  }
-  return ranges;
-}
-
 /** `L42–68`, or `L42` for a one-line hunk. */
 export function hunkRangeLabel(entry: HunkScanRow): string {
   const last = hunkNewEnd(entry);

@@ -2,8 +2,9 @@
 import type { StackLayer } from "@revv/shared";
 import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import Warning from "phosphor-svelte/lib/Warning";
+import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { layerRole, REVIEW_VERDICT_LABEL } from "$lib/stacks/stack-layer-facts";
+import { layerRole } from "$lib/stacks/stack-layer-facts";
 import StackLayerGlyph from "../StackLayerGlyph.svelte";
 import { layerHint, plainTitle, richText, type StackPlace } from "./stack-margin";
 
@@ -33,7 +34,7 @@ const role = $derived(layerRole(layer, place.brief));
 const hint = $derived(layerHint(layer, place.here) || "Not reviewed");
 const verdict = $derived(
   layer.viewerReview && layer.viewerReview !== "dismissed"
-    ? REVIEW_VERDICT_LABEL[layer.viewerReview]
+    ? VIEWER_VERDICT_LABEL[layer.viewerReview]
     : null,
 );
 const openable = $derived(layer.number !== place.here.number);

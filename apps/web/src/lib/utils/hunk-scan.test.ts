@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { HunkScanRow, HunkSmell, WalkthroughIssue, WalkthroughLead } from "@revv/shared";
+import { splitHunks } from "@revv/shared";
 import {
   firstPassView,
   hunkRangeLabel,
   hunkTone,
   leadOutcome,
   overlappingIssueIds,
-  patchHunkRanges,
   rowMatchesHunk,
   scanProgress,
   scanTicks,
@@ -203,20 +203,13 @@ describe("overlappingIssueIds", () => {
   });
 });
 
-describe("patchHunkRanges / rowMatchesHunk", () => {
+describe("rowMatchesHunk", () => {
   const patch = ["@@ -1,3 +1,4 @@ fn a", " ctx", "+added", "@@ -40 +41 @@", "-old", "+new"].join(
     "\n",
   );
 
-  it("reads each header's new side, an omitted count meaning one line", () => {
-    expect(patchHunkRanges(patch)).toEqual([
-      { newStart: 1, newLines: 4 },
-      { newStart: 41, newLines: 1 },
-    ]);
-  });
-
   it("matches a row only to the hunk it was scanned from", () => {
-    const [first, second] = patchHunkRanges(patch);
+    const [first, second] = splitHunks(patch);
     if (!first || !second) throw new Error("expected two hunks");
     expect(rowMatchesHunk(row({ newStart: 1, newLines: 4 }), first)).toBe(true);
     expect(rowMatchesHunk(row({ newStart: 1, newLines: 4 }), second)).toBe(false);

@@ -4,8 +4,13 @@ import CalendarDots from "phosphor-svelte/lib/CalendarDots";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
-import { pickLatestByWindow } from "$lib/components/recaps/period-window";
+import {
+  formatRecapRange,
+  pickLatestByWindow,
+  recapSpan,
+} from "$lib/components/recaps/period-window";
 import RecapStats from "$lib/components/recaps/RecapStats.svelte";
+import { sanitizeLedeHtml } from "$lib/components/recaps/themes";
 import {
   fetchRecapsForRepo,
   getRecapDetail,
@@ -48,42 +53,11 @@ $effect(() => {
 const latestDetail = $derived<ProjectRecap | null>(latestId ? getRecapDetail(latestId) : null);
 const detailLoading = $derived(latestId ? getRecapDetailLoading(latestId) : false);
 
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
 function periodLabel(r: ProjectRecapSummary): string {
   return r.period === "daily" ? "Daily recap" : "Weekly recap";
 }
 
-function periodWindow(r: ProjectRecapSummary): string {
-  const start = new Date(r.periodStart);
-  if (r.period === "daily") {
-    return DAY_MONTH_YEAR.format(start);
-  }
-  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
-  return `${DAY_MONTH.format(start)} → ${DAY_MONTH.format(lastDay)}`;
-}
-
-// Allowlist sanitize the lede (matches RecapBody — only <strong>/<em>).
-let ledeHtml = $derived.by(() => {
-  const raw = latestDetail?.lede ?? "";
-  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return escaped
-    .replace(/&lt;strong&gt;/gi, "<strong>")
-    .replace(/&lt;\/strong&gt;/gi, "</strong>")
-    .replace(/&lt;em&gt;/gi, "<em>")
-    .replace(/&lt;\/em&gt;/gi, "</em>");
-});
+const ledeHtml = $derived(sanitizeLedeHtml(latestDetail?.lede ?? ""));
 </script>
 
 <section class="recap-card-section">
@@ -117,7 +91,7 @@ let ledeHtml = $derived.by(() => {
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
 				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<div class="recap-card-generating">
 				<Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
@@ -129,7 +103,7 @@ let ledeHtml = $derived.by(() => {
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
 				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 
 			<div class="recap-card-stats">
@@ -151,7 +125,7 @@ let ledeHtml = $derived.by(() => {
 		<div class="recap-card-paper">
 			<header class="recap-card-paper-header">
 				<span class="recap-card-eyebrow">{periodLabel(latest)}</span>
-				<span class="recap-card-window">{periodWindow(latest)}</span>
+				<span class="recap-card-window">{formatRecapRange(recapSpan(latest))}</span>
 			</header>
 			<p class="recap-card-no-content">No overview content was written for this recap.</p>
 			<footer class="recap-card-paper-footer">

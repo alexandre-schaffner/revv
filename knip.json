@@ -44,7 +44,7 @@
       "ignoreDependencies": ["bun-types"]
     },
     "packages/shared": {
-      "entry": ["src/index.ts"]
+      "includeEntryExports": true
     }
   },
   "ignore": [".context/**", "apps/web/src/lib/components/ui/**/index.ts"],

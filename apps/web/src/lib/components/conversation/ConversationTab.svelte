@@ -1,4 +1,5 @@
 <script lang="ts">
+import { ciHasPending } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onMount, untrack } from "svelte";
@@ -12,7 +13,6 @@ import {
   editBody,
   editComment,
   getConversation,
-  hasPendingChecks,
   loadCheckDetails,
   loadConversation,
   postComment,
@@ -44,7 +44,7 @@ const canEdit = $derived(!!conversation?.viewerCanUpdate && !entry.denied.has("e
 const canComment = $derived(!entry.denied.has("edit"));
 const canRerun = $derived(!!conversation?.viewerCanPush && !entry.denied.has("rerun"));
 const shouldPollChecks = $derived(
-  isActive && (hasPendingChecks(conversation?.ci) || entry.awaitingRerun),
+  isActive && (ciHasPending(conversation?.ci) || entry.awaitingRerun),
 );
 
 let composer = $state<HTMLTextAreaElement | null>(null);

@@ -1,10 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  API_BASE_URL,
-  API_PORT,
-  COLLECTOR_PORT,
-  DEV_API_PORT,
-} from "../packages/shared/src/constants";
+import { API_PORT, COLLECTOR_PORT, DEV_API_PORT } from "../packages/shared/src/constants";
 import { APP_DATA_DIR_NAME, REPO_SLUG } from "../packages/shared/src/desktop-contract";
 
 // Default WebSocket port of tauri-plugin-mcp-bridge (the dev webview bridge).
@@ -245,7 +240,7 @@ const devConf = await Bun.file(DEV_CONF).json();
 
 const endpoints = prodConf?.plugins?.updater?.endpoints;
 const expectedEndpoints = [
-  `${API_BASE_URL}/api/update-manifest`,
+  `http://localhost:${API_PORT}/api/update-manifest`,
   `https://github.com/${REPO_SLUG}/releases/latest/download/latest.json`,
 ];
 if (!isDeepStrictEqual(endpoints, expectedEndpoints)) {

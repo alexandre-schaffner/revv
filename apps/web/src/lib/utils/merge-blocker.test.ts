@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { isMergeStateSettling, type MergeGate, mergeGate } from "./merge-blocker";
+import { isMergeStateSettling } from "@revv/shared";
+import { type MergeGate, mergeGate } from "./merge-blocker";
 
 const clear = { reviewDecision: null, ciState: null, canBypassProtections: false } as const;
 

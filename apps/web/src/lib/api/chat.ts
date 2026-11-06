@@ -17,6 +17,7 @@ import type {
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
+  StreamErrorBody,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { SseFrameError, SseHttpError, SseIdleError, streamSse } from "$lib/api/sse-stream";
@@ -41,7 +42,7 @@ export interface ChatCallbacks {
   onTaskList: (params: { turnId: string; tasks: ReadonlyArray<ChatTask> }) => void;
   onPlanPresented: (params: { planId: string; turnId: string; markdown: string }) => void;
   onDone: () => void;
-  onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
+  onError: (error: StreamErrorBody) => void;
 }
 
 /**
@@ -123,7 +124,7 @@ async function settleAgentStream(
   stream: Promise<void>,
   callbacks: {
     onDone: () => void;
-    onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
+    onError: (error: StreamErrorBody) => void;
   },
 ): Promise<void> {
   try {
@@ -136,12 +137,10 @@ async function settleAgentStream(
   callbacks.onDone();
 }
 
-function agentStreamError(
-  err: unknown,
-): { code: string; message: string; [k: string]: unknown } | null {
+function agentStreamError(err: unknown): StreamErrorBody | null {
   if (err instanceof SseHttpError) {
     return typeof err.body === "object" && err.body !== null
-      ? (err.body as { code: string; message: string })
+      ? (err.body as StreamErrorBody)
       : { code: "UNKNOWN", message: err.statusText };
   }
   if (err instanceof SseFrameError) return { code: err.code, message: err.message };
@@ -510,7 +509,7 @@ export interface ResolvePushCallbacks {
     payload?: unknown;
   }) => void;
   onResult: (result: Extract<ResolvePushFrame, { kind: "result" }>) => void;
-  onError: (error: { code: string; message: string }) => void;
+  onError: (error: StreamErrorBody) => void;
   onDone: () => void;
 }
 

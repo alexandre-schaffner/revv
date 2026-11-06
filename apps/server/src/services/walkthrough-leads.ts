@@ -12,6 +12,7 @@ import {
   type HunkSmell,
   hunkNewEnd,
   type LeadVerdict,
+  splitHunks,
   type WalkthroughLead,
 } from "@revv/shared";
 import { and, asc, eq } from "drizzle-orm";
@@ -22,7 +23,6 @@ import { walkthroughLeads } from "../db/schema/walkthrough-leads";
 import { walkthroughs } from "../db/schema/walkthroughs";
 import { DbError } from "../domain/errors";
 import { logError } from "../logger";
-import { splitHunks } from "./diff-anchors";
 import type { PromptFilesResult } from "./walkthrough-prompt-files";
 
 type Row = typeof walkthroughLeads.$inferSelect;

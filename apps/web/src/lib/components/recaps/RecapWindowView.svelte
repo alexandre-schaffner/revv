@@ -11,13 +11,12 @@ import { Button } from "$lib/components/ui/button";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/stores/recaps.svelte";
 import {
-  addUtcDays,
-  dayKeyToUtcDate,
+  formatRecapTitle,
   isCurrentPeriod,
-  mondayKeyOf,
   recapSlotKey,
   selectionBoundaries,
   slotKeyFor,
+  slotSpan,
 } from "./period-window";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
 
@@ -63,27 +62,9 @@ $effect(() => {
   void untrack(() => goto(`/repo/${repoId}/recaps/${r.id}`, { replaceState: true }));
 });
 
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
 // Same titles RecapHeroBig builds for a real recap, so arriving here and then
 // generating does not restyle the heading under the user.
-const title = $derived.by(() => {
-  if (period === "daily") return DAY_MONTH_YEAR.format(dayKeyToUtcDate(dayKey));
-  const monday = mondayKeyOf(dayKey);
-  const sunday = addUtcDays(monday, 6);
-  return `Week of ${DAY_MONTH.format(dayKeyToUtcDate(monday))} – ${DAY_MONTH.format(dayKeyToUtcDate(sunday))}`;
-});
+const title = $derived(formatRecapTitle(slotSpan(period, dayKey)));
 
 const unit = $derived(period === "daily" ? "day" : "week");
 

@@ -7,6 +7,7 @@ import WarningOctagon from "phosphor-svelte/lib/WarningOctagon";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { countBySeverity, outstandingItemsPhrase } from "$lib/utils/walkthrough-issues";
 
 interface Props {
   open: boolean;
@@ -15,7 +16,6 @@ interface Props {
   getThreadMessages?: (threadId: string) => { body: string }[];
   onfileclick?: (filePath: string, line: number) => void;
   onconfirm: () => void;
-  oncancel: () => void;
 }
 
 let {
@@ -25,25 +25,14 @@ let {
   getThreadMessages = () => [],
   onfileclick = undefined,
   onconfirm,
-  oncancel,
 }: Props = $props();
 
-const criticalCount = $derived(issues.filter((i) => i.severity === "critical").length);
-const warningCount = $derived(issues.filter((i) => i.severity === "warning").length);
-const infoCount = $derived(issues.filter((i) => i.severity === "info").length);
+const severityCounts = $derived(countBySeverity(issues));
 const threadCount = $derived(pendingThreads.length);
 
-const description = $derived.by(() => {
-  const parts: string[] = [];
-  if (issues.length > 0) {
-    parts.push(`${issues.length} walkthrough issue${issues.length === 1 ? "" : "s"}`);
-  }
-  if (threadCount > 0) {
-    parts.push(`${threadCount} unresolved comment${threadCount === 1 ? "" : "s"}`);
-  }
-  const joined = parts.length === 2 ? `${parts[0]} and ${parts[1]}` : (parts[0] ?? "");
-  return `${joined} still open on this pull request. Approving will submit your approval to GitHub without resolving them.`;
-});
+const description = $derived(
+  `${outstandingItemsPhrase(issues.length, threadCount)} still open on this pull request. Approving will submit your approval to GitHub without resolving them.`,
+);
 
 function handleFileClick(filePath: string, line: number): void {
   open = false;
@@ -56,7 +45,6 @@ function handleConfirm(): void {
 }
 
 function handleCancel(): void {
-  oncancel();
   open = false;
 }
 </script>
@@ -76,22 +64,22 @@ function handleCancel(): void {
 			</Dialog.Header>
 
 		<div class="issue-summary">
-			{#if criticalCount > 0}
+			{#if severityCounts.critical > 0}
 				<span class="count-pill count-critical">
 					<WarningOctagon size={12} weight="fill" />
-					{criticalCount} critical
+					{severityCounts.critical} critical
 				</span>
 			{/if}
-			{#if warningCount > 0}
+			{#if severityCounts.warning > 0}
 				<span class="count-pill count-warning">
 					<Warning size={12} weight="fill" />
-					{warningCount} warning{warningCount !== 1 ? 's' : ''}
+					{severityCounts.warning} warning{severityCounts.warning !== 1 ? 's' : ''}
 				</span>
 			{/if}
-			{#if infoCount > 0}
+			{#if severityCounts.info > 0}
 				<span class="count-pill count-info">
 					<Info size={12} />
-					{infoCount} info
+					{severityCounts.info} info
 				</span>
 			{/if}
 			{#if threadCount > 0}

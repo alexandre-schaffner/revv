@@ -5,6 +5,9 @@ import { oneOfCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/p
 const THEME_PREFERENCES = ["system", "light", "dark"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
+/** The theme actually painted: a `system` preference resolves to one of these. */
+export type ResolvedTheme = Exclude<ThemePreference, "system">;
+
 const DIFF_THEME_PREFERENCES = ["sync", "light", "dark"] as const;
 export type DiffThemePreference = (typeof DIFF_THEME_PREFERENCES)[number];
 
@@ -17,9 +20,9 @@ let preference = $state<ThemePreference>(readStored(STORAGE_KEYS.theme, themeCod
 let diffPreference = $state<DiffThemePreference>(
   readStored(STORAGE_KEYS.diffTheme, diffThemeCodec, "sync"),
 );
-let _resolved = $derived<"light" | "dark">(resolve(preference));
+let _resolved = $derived<ResolvedTheme>(resolve(preference));
 
-function resolve(pref: ThemePreference): "light" | "dark" {
+function resolve(pref: ThemePreference): ResolvedTheme {
   if (pref === "dark") return "dark";
   if (pref === "light") return "light";
   if (typeof window === "undefined") return "light";
@@ -134,7 +137,7 @@ export function getThemePreference(): ThemePreference {
   return preference;
 }
 
-export function getResolvedTheme(): "light" | "dark" {
+export function getResolvedTheme(): ResolvedTheme {
   return _resolved;
 }
 

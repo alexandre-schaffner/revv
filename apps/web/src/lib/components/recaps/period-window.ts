@@ -1,10 +1,10 @@
-import type { RecapPeriod } from "@revv/shared";
+import { fullWindow, type RecapPeriod, startOfUtcIsoWeek, windowIsCurrent } from "@revv/shared";
 
 /**
- * Pure UTC date arithmetic for the recap calendar and the "is this recap
- * stale?" checks. No imports beyond the shared `RecapPeriod` type on purpose —
- * this file is unit-tested in isolation and must stay free of Svelte, stores
- * and the network.
+ * Pure UTC date arithmetic and labels for the recap calendar and the "is this
+ * recap stale?" checks, over day keys. Which window is open and what a closed
+ * one spans come from `@revv/shared` (`recap-period.ts`), which the server
+ * uses too. Unit-tested in isolation: no Svelte, stores or network here.
  *
  * Two traps this module exists to contain:
  *
@@ -51,9 +51,7 @@ export function utcDateKey(d: Date): string {
 
 /** Day key of the Monday on-or-before the given Date (ISO weeks start Monday). */
 export function utcMondayKey(d: Date): string {
-  const daysFromMonday = (d.getUTCDay() + 6) % 7;
-  const mondayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
-  return new Date(mondayMs).toISOString().slice(0, 10);
+  return utcDateKey(startOfUtcIsoWeek(d));
 }
 
 /**
@@ -141,21 +139,13 @@ export function slotKeyFor(period: RecapPeriod, anchorDayKey: string): string {
   return period === "daily" ? `daily:${anchorDayKey}` : `weekly:${mondayKeyOf(anchorDayKey)}`;
 }
 
-/**
- * True when `dayKey` falls in the period that is still open right now — today
- * for daily, the current ISO week for weekly.
- *
- * Mirror of the server's `windowIsCurrent` (`RecapScheduler.ts`). Same
- * semantics on two sides of the wire; keep the two in step.
- */
+/** True when `dayKey` falls in the period that is still open right now — today, or this ISO week. */
 export function isCurrentPeriod(
   period: RecapPeriod,
   dayKey: string,
   now: Date = new Date(),
 ): boolean {
-  return period === "daily"
-    ? dayKey === utcDateKey(now)
-    : mondayKeyOf(dayKey) === utcMondayKey(now);
+  return windowIsCurrent(period, dayKeyToUtcDate(dayKey), now);
 }
 
 /**
@@ -169,9 +159,7 @@ export function isCurrentPeriod(
  * freeze the recap at its first generation and make regeneration a silent
  * no-op.
  *
- * Mirrors the server's `canonicalRecapBoundaries` (`RecapScheduler.ts`) for
- * the closed-window case — daily `[dayKey T00:00Z, +1d)`, weekly
- * `[mondayKeyOf(dayKey) T00:00Z, +7d)`. Keep the two textually parallel.
+ * A closed window is the whole day or week, as the server canonicalises it.
  */
 export function selectionBoundaries(
   period: RecapPeriod,
@@ -179,12 +167,7 @@ export function selectionBoundaries(
   now: Date = new Date(),
 ): { periodStart: string; periodEnd: string } | null {
   if (isCurrentPeriod(period, dayKey, now)) return null;
-  const startKey = period === "daily" ? dayKey : mondayKeyOf(dayKey);
-  const endKey = addUtcDays(startKey, period === "daily" ? 1 : 7);
-  return {
-    periodStart: dayKeyToUtcDate(startKey).toISOString(),
-    periodEnd: dayKeyToUtcDate(endKey).toISOString(),
-  };
+  return fullWindow(period, dayKeyToUtcDate(dayKey));
 }
 
 /** A recap whose window spans a whole closed day/week rather than "so far". */
@@ -247,16 +230,51 @@ const DAY_MONTH_FMT = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-/**
- * Human label for a recap's window: `"Fri 03 Jun 2026"` for daily,
- * `"01 Jun → 07 Jun UTC"` for weekly. Weekly shows the window's *last day*,
- * not its exclusive end.
- */
-export function formatPeriod(r: RecapWindow): string {
-  const start = new Date(r.periodStart);
-  if (r.period === "daily") return DAY_MONTH_YEAR_FMT.format(start);
-  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
-  return `${DAY_MONTH_FMT.format(start)} → ${DAY_MONTH_FMT.format(lastDay)} UTC`;
+/** The UTC days a recap label names: one day, or a week's first and last. */
+export interface RecapSpan {
+  readonly period: RecapPeriod;
+  readonly first: Date;
+  readonly last: Date;
+}
+
+/** A recap's window. Its last day is the one before the exclusive end. */
+export function recapSpan(r: RecapWindow): RecapSpan {
+  return {
+    period: r.period,
+    first: new Date(r.periodStart),
+    last: new Date(new Date(r.periodEnd).getTime() - 1),
+  };
+}
+
+/** A calendar slot: the day, or its Monday-to-Sunday week. */
+export function slotSpan(period: RecapPeriod, dayKey: string): RecapSpan {
+  if (period === "daily") {
+    const day = dayKeyToUtcDate(dayKey);
+    return { period, first: day, last: day };
+  }
+  const monday = mondayKeyOf(dayKey);
+  return {
+    period,
+    first: dayKeyToUtcDate(monday),
+    last: dayKeyToUtcDate(addUtcDays(monday, 6)),
+  };
+}
+
+/** The open window so far: today, or this week up to today. */
+export function openSpan(period: RecapPeriod, now: Date = new Date()): RecapSpan {
+  return { period, first: period === "daily" ? now : startOfUtcIsoWeek(now), last: now };
+}
+
+/** Heading for a recap: `"Wed, 03 Jun 2026"`, or `"Week of 01 Jun – 07 Jun"`. */
+export function formatRecapTitle(span: RecapSpan): string {
+  if (span.period === "daily") return DAY_MONTH_YEAR_FMT.format(span.first);
+  return `Week of ${DAY_MONTH_FMT.format(span.first)} – ${DAY_MONTH_FMT.format(span.last)}`;
+}
+
+/** Compact label for a recap: `"Wed, 03 Jun 2026"`, or `"01 Jun → 07 Jun"`. */
+export function formatRecapRange(span: RecapSpan): string {
+  if (span.period === "daily") return DAY_MONTH_YEAR_FMT.format(span.first);
+  return `${DAY_MONTH_FMT.format(span.first)} → ${DAY_MONTH_FMT.format(span.last)}`;
 }
 
 /**
@@ -268,12 +286,4 @@ export function formatPeriod(r: RecapWindow): string {
 export function windowPath(repoId: string, period: RecapPeriod, dayKey: string): string {
   const anchor = period === "daily" ? dayKey : mondayKeyOf(dayKey);
   return `/repo/${repoId}/recaps/${period}/${anchor}`;
-}
-
-/** Human label for a calendar slot that has no recap yet. */
-export function formatSlot(period: RecapPeriod, dayKey: string): string {
-  if (period === "daily") return DAY_MONTH_YEAR_FMT.format(dayKeyToUtcDate(dayKey));
-  const monday = mondayKeyOf(dayKey);
-  const sunday = addUtcDays(monday, 6);
-  return `${DAY_MONTH_FMT.format(dayKeyToUtcDate(monday))} → ${DAY_MONTH_FMT.format(dayKeyToUtcDate(sunday))} UTC`;
 }

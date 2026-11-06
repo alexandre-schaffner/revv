@@ -262,7 +262,7 @@ export class ProjectRecapService extends Context.Service<
      * lifecycle fields back to a fresh `'generating'` state (lede → "",
      * entries → deleted, theme summaries → deleted, status → 'generating',
      * completedAt → null, errorMessage → null, resumeAttempts → 0,
-     * generatedAt → now). Used by the orchestrator's `regenerateForPeriod`
+     * generatedAt → now). Used by `ProjectRecapJobs.requestRecap`
      * to update a recap in place (per the recap "max 1 per period" rule).
      */
     readonly resetForRerun: (

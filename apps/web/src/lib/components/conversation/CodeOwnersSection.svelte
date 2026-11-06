@@ -1,13 +1,21 @@
 <script lang="ts">
-import { type CodeownersFile, codeownersFor, type ReviewerEntry } from "@revv/shared";
+import {
+  type CodeownersFile,
+  codeownersFor,
+  loginsMatch,
+  type ReviewerEntry,
+  type ReviewVerdict,
+  reviewerVerdict,
+} from "@revv/shared";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
 import { getReviewFiles, openFileInDiff } from "$lib/stores/review.svelte";
-import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
+import VerdictGlyph from "./VerdictGlyph.svelte";
 
 // Who CODEOWNERS makes responsible for this PR's files, read from the base
 // branch's CODEOWNERS and matched against the changed files. Each owner
@@ -33,6 +41,7 @@ interface OwnerRow {
   readonly name: string;
   readonly files: readonly string[];
   readonly reviewer: ReviewerEntry | null;
+  readonly verdict: ReviewVerdict | null;
   readonly avatarContent: string | null;
 }
 
@@ -52,7 +61,7 @@ const rows = $derived.by((): OwnerRow[] => {
         reviewers.find((r) =>
           r.kind === "team"
             ? team && r.combinedSlug.toLowerCase() === handle.toLowerCase()
-            : !team && r.actor.login.toLowerCase() === handle.toLowerCase(),
+            : !team && loginsMatch(r.actor.login, handle),
         ) ?? null;
       return {
         owner,
@@ -60,6 +69,7 @@ const rows = $derived.by((): OwnerRow[] => {
         name: reviewer?.kind === "team" ? reviewer.name : handle,
         files: owned.sort(),
         reviewer,
+        verdict: reviewer ? reviewerVerdict(reviewer) : null,
         avatarContent:
           (reviewer?.kind === "user" ? reviewer.actor.avatarContent : null) ??
           avatarsByHandle.get(handle.toLowerCase()) ??
@@ -78,10 +88,8 @@ function toggle(owner: string): void {
 }
 
 function stateLabel(row: OwnerRow): string {
-  const r = row.reviewer;
-  if (!r) return "Not requested";
-  if (r.kind === "user" && r.verdict) return VERDICT_LABEL[r.verdict];
-  return "Awaiting review";
+  if (!row.reviewer) return "Not requested";
+  return row.verdict ? VERDICT_LABEL[row.verdict] : "Awaiting review";
 }
 </script>
 
@@ -113,8 +121,8 @@ function stateLabel(row: OwnerRow): string {
 						<span class="co-name">{row.name}</span>
 						<span class="co-count">{row.files.length} {row.files.length === 1 ? 'file' : 'files'}</span>
 						<span class="co-state" title={stateLabel(row)}>
-							{#if row.reviewer?.kind === 'user' && row.reviewer.verdict}
-								<VerdictGlyph verdict={row.reviewer.verdict} size={13} />
+							{#if row.verdict}
+								<VerdictGlyph verdict={row.verdict} size={13} />
 							{:else if row.reviewer}
 								<CircleDashed size={13} weight="bold" class="co-awaiting" />
 							{/if}

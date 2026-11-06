@@ -1,6 +1,7 @@
 import {
   classifyLayerMergeState,
   type MergeMethod,
+  rollupBucket,
   type StackMergeMode,
   type StackMergePlanLayer,
   type StackMergeReadiness,
@@ -43,8 +44,9 @@ function ownBlockers(layer: GitHubStackLayer): { hard: string[]; checksRunning: 
   const hard: string[] = [];
   if (layer.reviewDecision === "changes_requested") hard.push("Changes requested");
   if (layer.reviewDecision === "review_required") hard.push("Review required");
-  if (layer.checks === "failure" || layer.checks === "error") hard.push("Checks failing");
-  const checksRunning = layer.checks === "pending" || layer.checks === "expected";
+  const checks = rollupBucket(layer.checks);
+  if (checks === "fail") hard.push("Checks failing");
+  const checksRunning = checks === "pending";
   return { hard, checksRunning };
 }
 

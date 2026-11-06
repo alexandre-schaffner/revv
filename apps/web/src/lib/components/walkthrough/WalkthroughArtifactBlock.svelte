@@ -5,13 +5,12 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { onDestroy, untrack } from "svelte";
 import { browser } from "$app/environment";
 import { gsap, tokens as motionTokens, prefersReducedMotion } from "$lib/motion";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
+import { getResolvedTheme, type ResolvedTheme } from "$lib/stores/theme.svelte";
 
 interface Props {
   block: ArtifactBlock;
 }
 
-type ArtifactTheme = "light" | "dark";
 type ArtifactTokens = Record<string, string>;
 
 type HostMessage =
@@ -116,7 +115,7 @@ function postMount(html: string): void {
   );
 }
 
-function postTheme(theme: ArtifactTheme): void {
+function postTheme(theme: ResolvedTheme): void {
   const target = iframeEl?.contentWindow;
   if (!target) return;
   target.postMessage({ kind: "theme", theme, tokens: collectThemeTokens() }, "*");

@@ -24,7 +24,7 @@ import type {
   PrLabel,
   ReviewerOptions,
 } from "@revv/shared";
-import { hydrateConversationAvatars } from "@revv/shared";
+import { ciHasPending, hydrateConversationAvatars } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
@@ -297,14 +297,6 @@ const RERUN_GRACE_POLLS = 3;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollPrId: string | null = null;
 
-export function hasPendingChecks(rollup: CiRollup | null | undefined): boolean {
-  return (
-    rollup?.state === "pending" ||
-    rollup?.state === "expected" ||
-    (rollup?.checks.some((c) => c.bucket === "pending") ?? false)
-  );
-}
-
 /**
  * Poll the PR's CI, backing off from 20s to 60s, pausing while the window is
  * hidden, and stopping once nothing is pending (or a re-run's grace polls
@@ -337,7 +329,7 @@ export function watchChecks(prId: string): () => void {
       return;
     }
     const awaiting = getConversation(prId).awaitingRerun;
-    if (hasPendingChecks(answer.rollup)) {
+    if (ciHasPending(answer.rollup)) {
       if (awaiting) updateEntry(prId, (entry) => ({ ...entry, awaitingRerun: false }));
       schedule();
       return;

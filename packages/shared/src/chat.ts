@@ -28,19 +28,6 @@ export interface ChatTask {
   readonly priority: "low" | "medium" | "high" | null;
 }
 
-/**
- * A plan emitted by the agent in plan mode. Status reflects user decision
- * — plans never auto-transition.
- */
-export interface ChatPlan {
-  readonly id: string;
-  readonly turnId: string;
-  readonly planMarkdown: string;
-  readonly status: "pending" | "approved" | "rejected" | "superseded";
-  readonly createdAt: string;
-  readonly decidedAt: string | null;
-}
-
 /** Role of a message in the right-pane chat. */
 export type MessageRole = "user" | "assistant" | "system";
 

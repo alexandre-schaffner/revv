@@ -1,21 +1,10 @@
-import type { UserSettings, WalkthroughIssue } from "@revv/shared";
-
-export type IssueSeverity = WalkthroughIssue["severity"];
-
-/**
- * Canonical render order for severity buckets — most severe first so the
- * reviewer's eye lands on blockers before nice-to-knows. The walkthrough
- * stream emits issues in the order the model surfaces them; we re-bucket
- * for display but preserve original order *within* each bucket so the
- * step linkage (`→ Step N`) still reads in increasing step numbers.
- */
-export const SEVERITY_ORDER: readonly IssueSeverity[] = ["critical", "warning", "info"] as const;
-
-export const SEVERITY_LABELS: Record<IssueSeverity, string> = {
-  critical: "Critical",
-  warning: "Warning",
-  info: "Info",
-};
+import {
+  ISSUE_SEVERITIES,
+  ISSUE_SEVERITY_LABEL,
+  type IssueSeverity,
+  type UserSettings,
+  type WalkthroughIssue,
+} from "@revv/shared";
 
 export interface IssueGroup {
   severity: IssueSeverity;
@@ -43,20 +32,11 @@ export interface IssueGroupView extends Omit<IssueGroup, "issues"> {
  * dropped. Within each bucket original arrival order is preserved.
  */
 export function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[] {
-  const buckets: Record<IssueSeverity, WalkthroughIssue[]> = {
-    critical: [],
-    warning: [],
-    info: [],
-  };
-  for (const issue of issues) {
-    const bucket = buckets[issue.severity];
-    if (bucket) bucket.push(issue);
-  }
   const groups: IssueGroup[] = [];
-  for (const severity of SEVERITY_ORDER) {
-    const bucketIssues = buckets[severity];
-    if (bucketIssues.length === 0) continue;
-    groups.push({ severity, label: SEVERITY_LABELS[severity], issues: bucketIssues });
+  for (const severity of ISSUE_SEVERITIES) {
+    const bucket = issues.filter((issue) => issue.severity === severity);
+    if (bucket.length > 0)
+      groups.push({ severity, label: ISSUE_SEVERITY_LABEL[severity], issues: bucket });
   }
   return groups;
 }
@@ -76,6 +56,11 @@ export function groupIssuesBySeverityWithIndex(
     label: group.label,
     issues: group.issues.map((issue) => ({ issue, globalIndex: globalIndex++ })),
   }));
+}
+
+/** Issues in group order: most severe first, arrival order within a severity. */
+export function sortBySeverity(issues: readonly WalkthroughIssue[]): WalkthroughIssue[] {
+  return groupIssuesBySeverity(issues).flatMap((group) => group.issues);
 }
 
 export interface SignalPartition {
@@ -109,4 +94,22 @@ export function partitionBySignal(
 /** Low-signal issues collapse only while TypeSafe is on, so turning it off restores the full list. */
 export function shouldHideLowSignal(settings: UserSettings | null | undefined): boolean {
   return settings?.jev.enabled ?? false;
+}
+
+export function countBySeverity(
+  issues: readonly WalkthroughIssue[],
+): Record<IssueSeverity, number> {
+  const counts: Record<IssueSeverity, number> = { critical: 0, warning: 0, info: 0 };
+  for (const issue of issues) counts[issue.severity]++;
+  return counts;
+}
+
+/** "2 walkthrough issues and 1 unresolved comment": what still stands in the way of an approve. */
+export function outstandingItemsPhrase(issueCount: number, threadCount: number): string {
+  const parts: string[] = [];
+  if (issueCount > 0) parts.push(`${issueCount} walkthrough issue${issueCount === 1 ? "" : "s"}`);
+  if (threadCount > 0) {
+    parts.push(`${threadCount} unresolved comment${threadCount === 1 ? "" : "s"}`);
+  }
+  return parts.join(" and ");
 }
