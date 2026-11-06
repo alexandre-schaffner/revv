@@ -47,7 +47,7 @@ import {
   updateSentimentSchema,
 } from "./spec";
 
-export type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
+export type { ChatWalkthroughEditContext } from "./spec";
 
 // ── Canonical spec list ─────────────────────────────────────────────────────
 

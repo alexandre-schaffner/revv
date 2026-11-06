@@ -35,28 +35,15 @@ import {
 // ── Handler execution context ─────────────────────────────────────────────────
 
 export interface WalkthroughToolContext {
-  /** Direct DB handle (Bun sqlite + drizzle). */
   readonly db: Db;
-  /** The walkthrough this tool call is scoped to — deterministic identity. */
   readonly walkthroughId: string;
-  /**
-   * Event sink. The handler calls this AFTER the DB commit so subscribers
-   * never see an event that doesn't have a corresponding durable row. Per
-   * doctrine invariant #8: "Commit first, broadcast second."
-   */
+  /** Called after the commit, so no subscriber sees an event without its row (invariant 8). */
   readonly emit: (event: WalkthroughStreamEvent) => void;
-  /**
-   * General thread-event broadcast hook. Used by handlers that mutate non-walkthrough tables —
-   * specifically `add_issue_comment`, which writes to `comment_threads` /
-   * `thread_messages` and must notify any open `DiffViewerInner` so the
-   * agent's comment shows up inline in the diff. Like `emit`, it is called
-   * AFTER the DB commit so subscribers never see an event without a row.
-   */
+  /** After the commit, for `add_issue_comment`'s thread, which the diff view shows inline. */
   readonly broadcastThreadEvent: (msg: ThreadEventMessage) => void;
   /**
-   * Jev-backed judgments the Phase-B tools defer to, injected as closures
-   * (same reason `emit` is a callback) so handlers stay Effect-free. Each
-   * degrades to "no opinion" when unavailable, matching prior behavior.
+   * The Jev judgments the Phase-B tools defer to. Each degrades to "no
+   * opinion" when Jev is unavailable.
    */
   readonly jev: WalkthroughToolJudgments;
 }
@@ -88,12 +75,7 @@ export interface WalkthroughToolJudgments {
   readonly takeProseAdvice: () => string | null;
 }
 
-export interface WalkthroughToolResult extends McpToolResult {
-  // MCP SDK's tool() signature uses an open-ended response type with a
-  // string index signature. This extra field lets our narrower type unify
-  // with that shape when the SDK wraps us; it's never populated.
-  [k: string]: unknown;
-}
+export type WalkthroughToolResult = McpToolResult;
 
 export type WalkthroughToolHandler<TInput> = (
   ctx: WalkthroughToolContext,
