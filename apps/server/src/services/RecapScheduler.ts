@@ -18,7 +18,7 @@
 // transitions go through ProjectRecapJobs (single-writer per invariant #11).
 
 import type { RecapPeriod } from "@revv/shared";
-import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
@@ -177,7 +177,6 @@ export function latestDayRecapPredatesClose(
 
 type RecapSchedulerService = {
   readonly start: () => Effect.Effect<void>;
-  readonly stop: () => Effect.Effect<void>;
   /**
    * Trigger a one-shot sweep across all repos for the given period
    * cadence. Used by the manual "generate now" route and on boot for
@@ -335,54 +334,38 @@ export const RecapSchedulerLive = Layer.effect(
         Effect.repeat(Schedule.spaced(Duration.minutes(RECAP_CHECK_INTERVAL_MINUTES))),
       );
 
+    const start = Effect.gen(function* () {
+      const { recap } = yield* settingsService.getSettings();
+      if (!recap.enabled) {
+        debug("recap-scheduler", "recap disabled — not starting fibers");
+        return;
+      }
+      if (recap.dailyEnabled) yield* dailyLoop.start(sweepLoop("daily"));
+      if (recap.weeklyEnabled) yield* weeklyLoop.start(sweepLoop("weekly"));
+    });
+
+    // Toggling a cadence applies live. An agent-only change doesn't restart:
+    // a restart sweeps immediately.
+    yield* Effect.forkScoped(
+      settingsService
+        .watch(({ recap }) => `${recap.enabled}:${recap.dailyEnabled}:${recap.weeklyEnabled}`)
+        .pipe(
+          Stream.runForEach(() =>
+            Effect.gen(function* () {
+              yield* dailyLoop.stop;
+              yield* weeklyLoop.stop;
+              yield* start;
+            }),
+          ),
+        ),
+    );
+
     return {
-      start: () =>
-        Effect.gen(function* () {
-          const settings = yield* provideDb(settingsService.getSettings()).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          const enabled = recapEnabled(settings);
-          if (!enabled.recap) {
-            debug("recap-scheduler", "recap disabled — not starting fibers");
-            return;
-          }
-          if (enabled.daily) yield* dailyLoop.start(sweepLoop("daily"));
-          if (enabled.weekly) yield* weeklyLoop.start(sweepLoop("weekly"));
-        }),
-
-      stop: () =>
-        Effect.gen(function* () {
-          yield* dailyLoop.stop;
-          yield* weeklyLoop.stop;
-        }),
-
+      start: () => start,
       checkNow: (period) => sweepPeriod(period),
     };
   }),
 );
-
-// ── Settings shape probe ─────────────────────────────────────────────────────
-
-function recapEnabled(settings: unknown): {
-  recap: boolean;
-  daily: boolean;
-  weekly: boolean;
-} {
-  // Defaults to all-on. The Settings service stamps these defaults on
-  // first read, but if we somehow get a malformed settings object we
-  // still want to run.
-  const r =
-    settings && typeof settings === "object" && "recap" in settings
-      ? ((settings as { recap?: unknown }).recap as
-          | { enabled?: unknown; dailyEnabled?: unknown; weeklyEnabled?: unknown }
-          | undefined)
-      : undefined;
-  return {
-    recap: r?.enabled !== false,
-    daily: r?.dailyEnabled !== false,
-    weekly: r?.weeklyEnabled !== false,
-  };
-}
 
 // ── Period helpers exported for the routes ───────────────────────────────────
 

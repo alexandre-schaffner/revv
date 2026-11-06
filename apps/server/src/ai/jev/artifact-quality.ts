@@ -56,8 +56,8 @@ export function judgeArtifact(
 ): Effect.Effect<ArtifactVerdict, never, JevService | SettingsService> {
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) {
+    const settings = yield* settingsSvc.getSettings();
+    if (!settings.jev.enabled) {
       return { failed: [], reject: false };
     }
 

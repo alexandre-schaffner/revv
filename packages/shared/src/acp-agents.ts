@@ -34,6 +34,11 @@ export interface AcpAgentCapabilities {
   /** Revv's default model for this agent when no user-specific model is saved. */
   readonly defaultModel: string;
   /**
+   * The cheapest reasonable model in the catalog, the default for one-shot
+   * right-panel suggestions so they don't burn the review model's tokens.
+   */
+  readonly suggestionsModel: string;
+  /**
    * Static model catalog (label + id), or the literal `"dynamic"` when the list
    * must be fetched live from the server (opencode's `GET /api/model`). The
    * other adapters publish no catalog over ACP, so theirs are curated here.
@@ -120,6 +125,7 @@ export const ACP_AGENTS = [
     sessionMode: "default",
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
+      suggestionsModel: "claude-haiku-4-5-20251001",
       // Verified against https://code.claude.com/docs/en/model-config (2026-10-13).
       // Keep Sonnet 5 and Haiku 4.5 selectable for existing installations.
       models: [
@@ -156,6 +162,7 @@ export const ACP_AGENTS = [
     args: ["acp"],
     capabilities: {
       defaultModel: "opencode/big-pickle",
+      suggestionsModel: "opencode/big-pickle",
       // opencode exposes 75+ models across providers; fetched live from its
       // server API rather than curated here, and applied per session through
       // the ACP `model` config option.
@@ -175,6 +182,7 @@ export const ACP_AGENTS = [
     args: ["-y", "@agentclientprotocol/codex-acp"],
     capabilities: {
       defaultModel: "gpt-6.1-sol",
+      suggestionsModel: "gpt-6-luna",
       // This maintained adapter embeds a current Codex App Server, so the
       // selector can expose the current GPT-6 family. GPT-6.1 Sol is Codex's
       // recommended default; GPT-6 Sol has left the docs but stays listed for
@@ -208,6 +216,7 @@ export const ACP_AGENTS = [
     args: ["-y", "cursor-agent-acp"],
     capabilities: {
       defaultModel: "auto",
+      suggestionsModel: "auto",
       // https://cursor.com/docs/models-and-pricing (2026-10-13). The
       // ACP adapter does not yet forward a selected model, so this remains a
       // stored preference until it gains a model passthrough.

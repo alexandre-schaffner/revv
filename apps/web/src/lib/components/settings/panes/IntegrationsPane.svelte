@@ -1,23 +1,45 @@
-<script lang="ts">
+<script module lang="ts">
 import {
   EXTERNAL_AGENT_PROVIDER_NAMES,
   EXTERNAL_AGENT_PROVIDERS,
   type ExternalAgentProvider,
 } from "@revv/shared";
+import PlugsConnected from "phosphor-svelte/lib/PlugsConnected";
+import {
+  fetchExternalIntegrationStatuses,
+  getExternalIntegrationStatuses,
+} from "$lib/stores/external-integrations.svelte";
+import { defineSettingsPane, rowsFor } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "integrations",
+  title: "Integrations",
+  description: "Let a coding agent read and act on the current pull request's review.",
+  icon: PlugsConnected,
+  rows: rowsFor(EXTERNAL_AGENT_PROVIDERS, (provider) => ({
+    label: EXTERNAL_AGENT_PROVIDER_NAMES[provider],
+    keywords: ["integration", "mcp", "connect", "plugin", "coding agent"],
+  })),
+  badge: () => {
+    const count = getExternalIntegrationStatuses().filter((s) => s.connected).length;
+    return count > 0 ? { kind: "count", count, noun: "connected" } : null;
+  },
+  onModalOpen: () => void fetchExternalIntegrationStatuses(),
+});
+</script>
+
+<script lang="ts">
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { Button } from "$lib/components/ui/button/index.js";
 import {
-  fetchExternalIntegrationStatuses,
   getExternalIntegrationAction,
   getExternalIntegrationError,
-  getExternalIntegrationStatuses,
   runExternalIntegrationAction,
 } from "$lib/stores/external-integrations.svelte";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const statuses = $derived(getExternalIntegrationStatuses());
 const action = $derived(getExternalIntegrationAction());
@@ -61,13 +83,13 @@ function metaLine(lastUsedAt: string | null, expiresAt: string | null): string |
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.integrations}>
+<SettingsPane {pane}>
 	<SettingsGroup description="Gives a coding agent the current pull request's walkthrough, issues, and comment threads. It can record verified fixes, update walkthrough content, and reply to or resolve comments. Revv must stay running while the agent is in use.">
 		{#each EXTERNAL_AGENT_PROVIDERS as provider (provider)}
 			{@const status = statusFor(provider)}
 			{@const busy = action?.provider === provider}
 			{@const meta = status?.connected ? metaLine(status.lastUsedAt, status.expiresAt) : null}
-			<SettingsRow id="integration-{provider}" label={EXTERNAL_AGENT_PROVIDER_NAMES[provider]}>
+			<SettingsRow row={pane.rows[provider]} label={EXTERNAL_AGENT_PROVIDER_NAMES[provider]}>
 				{#snippet hint()}
 					<span class="integration-status">
 						{#if status?.connected}

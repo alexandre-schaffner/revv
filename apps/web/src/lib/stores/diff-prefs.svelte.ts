@@ -1,22 +1,15 @@
 // Client-local diff rendering preferences. Like the diff theme, these are
-// per-machine display choices rather than account settings, so they live in
-// localStorage and never round-trip through the server.
+// per-machine display choices rather than account settings.
 
-const DIFF_WRAP_KEY = "revv-diff-wrap";
+import { flagCodec, persisted, STORAGE_KEYS } from "$lib/stores/persisted.svelte";
 
-function readWrap(): boolean {
-  if (typeof window === "undefined") return false;
-  return localStorage.getItem(DIFF_WRAP_KEY) === "1";
-}
-
-let diffWrap = $state(readWrap());
+const diffWrap = persisted(STORAGE_KEYS.diffWrap, flagCodec, false);
 
 /** Whether long diff lines soft-wrap instead of scrolling horizontally. */
 export function getDiffWrap(): boolean {
-  return diffWrap;
+  return diffWrap.current;
 }
 
 export function setDiffWrap(wrap: boolean): void {
-  diffWrap = wrap;
-  localStorage.setItem(DIFF_WRAP_KEY, wrap ? "1" : "0");
+  diffWrap.current = wrap;
 }

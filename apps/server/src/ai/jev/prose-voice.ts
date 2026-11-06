@@ -54,8 +54,8 @@ export function judgeProse(
 ): Effect.Effect<readonly string[] | null, never, JevService | SettingsService> {
   return Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) return null;
+    const settings = yield* settingsSvc.getSettings();
+    if (!settings.jev.enabled) return null;
     // Too short to have a voice — a one-line block is all point, by construction.
     if (markdown.trim().length < 200) return [];
 

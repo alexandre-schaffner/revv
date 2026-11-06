@@ -1,486 +1,225 @@
-import type {
-  AcpAgentId,
-  BaseConflictStrategy,
-  DiffViewMode,
-  RecapAgentChoice,
-  SettingsUpdate,
-  ThemePreference,
-  ThinkingEffortSetting,
-  UpdateChannel,
-  UserSettings,
-} from "@revv/shared";
 import {
-  AUTO_FETCH_DEFAULT_INTERVAL,
-  BASE_CONFLICT_STRATEGIES,
-  DEFAULT_BASE_CONFLICT_STRATEGY,
-  DEFAULT_JEV_SETTINGS,
-  DEFAULT_UPDATE_CHANNEL,
+  type AcpAgentId,
+  applySettingsUpdate,
+  DEFAULT_USER_SETTINGS,
   isAcpAgentId,
-  mergeSettingsUpdate,
-  UPDATE_CHANNELS,
+  normalizeSettings,
+  type SettingsUpdate,
+  type UserSettings,
 } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
-import { applyAcpAgentOverride } from "../ai/acp/presets";
 import { serverEnv } from "../config";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
-import { ValidationError } from "../domain/errors";
-import { logError } from "../logger";
+import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 
-// ── Storage ───────────────────────────────────────────────────────────────────
-// Settings live in the `user_settings` SQLite table (single row, id='default').
-// On first boot after this migration, existing `~/.revv/settings.json` is read
-// and upserted into the DB, then the JSON file is deleted.
+// One row, id = 'default'. Every field is normalized on the way in and out, so
+// a stale or hand-edited row still yields valid settings.
+const ROW_ID = "default";
 
-const DEFAULT_SETTINGS: UserSettings = {
-  id: "default",
-  aiProvider: "anthropic",
-  aiModel: "opencode/big-pickle",
-  aiThinkingEffort: "medium",
-  aiAgent: "opencode",
-  aiSuggestionsModel: "opencode/big-pickle",
-  aiMaxTurns: 60,
-  theme: "dark",
-  diffViewMode: "unified",
-  autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL,
-  githubHost: "github.com",
-  githubClientId: "",
-  recap: {
-    enabled: true,
-    dailyEnabled: true,
-    weeklyEnabled: true,
-    agent: "auto",
-  },
-  cache: {
-    enabled: false,
-    bucket: "",
-    uploadsEnabled: true,
-    downloadsEnabled: true,
-    signing: {
-      mode: "strict" as const,
-      keyPath: "",
-      trustedSignerHosts: [],
-    },
-  },
-  jev: DEFAULT_JEV_SETTINGS,
-  updateChannel: DEFAULT_UPDATE_CHANNEL,
-  baseConflictStrategy: DEFAULT_BASE_CONFLICT_STRATEGY,
-};
-
-const VALID_UPDATE_CHANNELS: ReadonlySet<UpdateChannel> = new Set(UPDATE_CHANNELS);
-function coerceUpdateChannel(value: unknown): UpdateChannel {
-  return typeof value === "string" && VALID_UPDATE_CHANNELS.has(value as UpdateChannel)
-    ? (value as UpdateChannel)
-    : DEFAULT_SETTINGS.updateChannel;
-}
-
-function coerceBaseConflictStrategy(value: unknown): BaseConflictStrategy {
-  return BASE_CONFLICT_STRATEGIES.find((s) => s === value) ?? DEFAULT_BASE_CONFLICT_STRATEGY;
-}
-
-function isRecapAgentChoice(value: unknown): value is RecapAgentChoice {
-  return value === "auto" || (typeof value === "string" && isAcpAgentId(value));
-}
-
-/**
- * Coerce an agent id out of a raw settings object onto the single ACP registry
- * id space. Handles the legacy `~/.revv/settings.json` shape: a separate
- * `chatAgent` (already a registry id) wins, then the legacy `aiAgent: 'claude'`
- * enum value maps onto `'claude-code'`; anything invalid falls back to default.
- */
-function coerceAgentId(raw: Record<string, unknown>): AcpAgentId {
-  const chat = raw.chatAgent;
-  if (typeof chat === "string" && isAcpAgentId(chat)) return chat;
-  const ai = raw.aiAgent;
-  if (ai === "claude") return "claude-code";
-  if (typeof ai === "string" && isAcpAgentId(ai)) return ai;
-  return DEFAULT_SETTINGS.aiAgent;
-}
-
-const MIN_MAX_TURNS = 10;
-const MAX_MAX_TURNS = 500;
-
-function coerceMaxTurns(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_SETTINGS.aiMaxTurns;
+function parseJsonList(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
   }
-  const int = Math.floor(value);
-  if (int < MIN_MAX_TURNS) return MIN_MAX_TURNS;
-  if (int > MAX_MAX_TURNS) return MAX_MAX_TURNS;
-  return int;
 }
 
-const VALID_THEMES: ReadonlySet<ThemePreference> = new Set(["system", "light", "dark"]);
-function coerceTheme(value: string): ThemePreference {
-  return VALID_THEMES.has(value as ThemePreference)
-    ? (value as ThemePreference)
-    : DEFAULT_SETTINGS.theme;
-}
-
-const VALID_DIFF_MODES: ReadonlySet<DiffViewMode> = new Set(["unified", "split"]);
-function coerceDiffViewMode(value: string): DiffViewMode {
-  return VALID_DIFF_MODES.has(value as DiffViewMode)
-    ? (value as DiffViewMode)
-    : DEFAULT_SETTINGS.diffViewMode;
-}
-
-/** Coerce an arbitrary JSON value into a fully-shaped `UserSettings`. */
-function normalize(raw: unknown): UserSettings {
-  if (typeof raw !== "object" || raw === null) return { ...DEFAULT_SETTINGS };
-  const r = raw as Record<string, unknown>;
-  return {
-    id: typeof r.id === "string" ? (r.id as string) : DEFAULT_SETTINGS.id,
-    aiProvider:
-      typeof r.aiProvider === "string" ? (r.aiProvider as string) : DEFAULT_SETTINGS.aiProvider,
-    aiModel: typeof r.aiModel === "string" ? (r.aiModel as string) : DEFAULT_SETTINGS.aiModel,
-    aiThinkingEffort:
-      typeof r.aiThinkingEffort === "string"
-        ? (r.aiThinkingEffort as ThinkingEffortSetting)
-        : DEFAULT_SETTINGS.aiThinkingEffort,
-    aiAgent: coerceAgentId(r),
-    aiSuggestionsModel:
-      typeof r.aiSuggestionsModel === "string"
-        ? (r.aiSuggestionsModel as string)
-        : DEFAULT_SETTINGS.aiSuggestionsModel,
-    aiMaxTurns: coerceMaxTurns(r.aiMaxTurns),
-    theme: typeof r.theme === "string" ? coerceTheme(r.theme) : DEFAULT_SETTINGS.theme,
-    diffViewMode:
-      typeof r.diffViewMode === "string"
-        ? coerceDiffViewMode(r.diffViewMode)
-        : DEFAULT_SETTINGS.diffViewMode,
-    autoFetchInterval:
-      typeof r.autoFetchInterval === "number"
-        ? (r.autoFetchInterval as number)
-        : DEFAULT_SETTINGS.autoFetchInterval,
-    githubHost:
-      typeof r.githubHost === "string" && (r.githubHost as string).length > 0
-        ? (r.githubHost as string)
-        : DEFAULT_SETTINGS.githubHost,
-    githubClientId:
-      typeof r.githubClientId === "string"
-        ? (r.githubClientId as string)
-        : DEFAULT_SETTINGS.githubClientId,
-    recap: coerceRecap(r.recap),
-    cache: coerceCache(r.cache),
-    jev: coerceJev(r.jev),
-    updateChannel: coerceUpdateChannel(r.updateChannel),
-    baseConflictStrategy: coerceBaseConflictStrategy(r.baseConflictStrategy),
-  };
-}
-
-const VALID_SIGNING_MODES = new Set(["off", "permissive", "strict"]);
-
-function coerceCacheSigning(value: unknown): UserSettings["cache"]["signing"] {
-  if (value === null || typeof value !== "object") {
-    return { ...DEFAULT_SETTINGS.cache.signing };
-  }
-  const r = value as Record<string, unknown>;
-  const mode =
-    typeof r.mode === "string" && VALID_SIGNING_MODES.has(r.mode)
-      ? (r.mode as "off" | "permissive" | "strict")
-      : DEFAULT_SETTINGS.cache.signing.mode;
-  const keyPath =
-    typeof r.keyPath === "string" ? r.keyPath : DEFAULT_SETTINGS.cache.signing.keyPath;
-  let trustedSignerHosts = DEFAULT_SETTINGS.cache.signing.trustedSignerHosts;
-  if (Array.isArray(r.trustedSignerHosts)) {
-    trustedSignerHosts = r.trustedSignerHosts.filter((h): h is string => typeof h === "string");
-  }
-  return { mode, keyPath, trustedSignerHosts };
-}
-
-function coerceCache(value: unknown): UserSettings["cache"] {
-  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.cache };
-  const r = value as Record<string, unknown>;
-  return {
-    enabled: r.enabled === true,
-    bucket: typeof r.bucket === "string" ? r.bucket : DEFAULT_SETTINGS.cache.bucket,
-    uploadsEnabled: r.uploadsEnabled === false ? false : DEFAULT_SETTINGS.cache.uploadsEnabled,
-    downloadsEnabled:
-      r.downloadsEnabled === false ? false : DEFAULT_SETTINGS.cache.downloadsEnabled,
-    signing: coerceCacheSigning(r.signing),
-  };
-}
-
-function coerceRecap(value: unknown): UserSettings["recap"] {
-  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.recap };
-  const r = value as Record<string, unknown>;
-  // Legacy `'claude'` enum value maps onto its registry id.
-  const rawAgent = r.agent === "claude" ? "claude-code" : r.agent;
-  const agent = isRecapAgentChoice(rawAgent) ? rawAgent : DEFAULT_SETTINGS.recap.agent;
-  return {
-    enabled: r.enabled === false ? false : DEFAULT_SETTINGS.recap.enabled,
-    dailyEnabled: r.dailyEnabled === false ? false : DEFAULT_SETTINGS.recap.dailyEnabled,
-    weeklyEnabled: r.weeklyEnabled === false ? false : DEFAULT_SETTINGS.recap.weeklyEnabled,
-    agent,
-  };
-}
-
-/** `hasApiKey` is always forced `false` here; it's derived from the keyring at the edge (`withJevKeyState`), never from client input. */
-function coerceJev(value: unknown): UserSettings["jev"] {
-  if (value === null || typeof value !== "object") return { ...DEFAULT_SETTINGS.jev };
-  const r = value as Record<string, unknown>;
-  return {
-    enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_SETTINGS.jev.enabled,
-    hasApiKey: false,
-  };
-}
-
-function resolveAgentFromSettings(settings: Pick<UserSettings, "aiAgent">): AcpAgentId {
-  const agent = settings.aiAgent ?? DEFAULT_SETTINGS.aiAgent;
-  if (isAcpAgentId(agent)) return applyAcpAgentOverride(agent);
-  throw new ValidationError({
-    message: `Unknown aiAgent '${agent}' — expected one of the ACP registry agent ids`,
-    field: "aiAgent",
-  });
-}
-
-function resolveRecapAgentFromSettings(
-  settings: Pick<UserSettings, "aiAgent" | "recap">,
-): AcpAgentId {
-  const choice = settings.recap?.agent ?? DEFAULT_SETTINGS.recap.agent;
-  if (choice === "auto") return resolveAgentFromSettings(settings);
-  if (isAcpAgentId(choice)) return applyAcpAgentOverride(choice);
-  throw new ValidationError({
-    message: `Unknown recap.agent '${choice}' — expected "auto" or an ACP registry agent id`,
-    field: "recap.agent",
-  });
-}
-
-// ── DB ↔ UserSettings mapping ────────────────────────────────────────────────
-
-function toSettings(row: typeof userSettings.$inferSelect): UserSettings {
-  return {
-    id: row.id,
-    aiProvider: row.aiProvider,
+function fromRow(row: typeof userSettings.$inferSelect): UserSettings {
+  return normalizeSettings({
+    aiAgent: row.aiAgent,
     aiModel: row.aiModel,
-    aiThinkingEffort: row.aiThinkingEffort as ThinkingEffortSetting,
-    aiAgent: row.aiAgent as AcpAgentId,
+    aiThinkingEffort: row.aiThinkingEffort,
     aiSuggestionsModel: row.aiSuggestionsModel,
     aiMaxTurns: row.aiMaxTurns,
-    theme: row.theme as ThemePreference,
-    diffViewMode: row.diffViewMode as DiffViewMode,
+    diffViewMode: row.diffViewMode,
     autoFetchInterval: row.autoFetchInterval,
-    githubHost: row.githubHost,
-    githubClientId: row.githubClientId,
     recap: {
       enabled: row.recapEnabled,
       dailyEnabled: row.recapDailyEnabled,
       weeklyEnabled: row.recapWeeklyEnabled,
-      agent: row.recapAgent as RecapAgentChoice,
+      agent: row.recapAgent,
     },
+    githubHost: row.githubHost,
+    githubClientId: row.githubClientId,
     cache: {
       enabled: row.cacheEnabled,
       bucket: row.cacheBucket,
       uploadsEnabled: row.cacheUploadsEnabled,
       downloadsEnabled: row.cacheDownloadsEnabled,
-      signing: coerceCacheSigning(
-        (() => {
-          try {
-            return {
-              mode: row.cacheSigningMode,
-              keyPath: row.cacheSigningKeyPath,
-              trustedSignerHosts: JSON.parse(row.cacheTrustedSignerHosts ?? "[]"),
-            };
-          } catch {
-            return null;
-          }
-        })(),
-      ),
+      signing: {
+        mode: row.cacheSigningMode,
+        keyPath: row.cacheSigningKeyPath,
+        trustedSignerHosts: parseJsonList(row.cacheTrustedSignerHosts),
+      },
     },
-    jev: {
-      enabled: row.jevEnabled,
-      // Derived from SecretStore, not this table.
-      hasApiKey: false,
-    },
-    updateChannel: coerceUpdateChannel(row.updateChannel),
-    baseConflictStrategy: coerceBaseConflictStrategy(row.baseConflictStrategy),
-  };
+    jev: { enabled: row.jevEnabled },
+    updateChannel: row.updateChannel,
+    baseConflictStrategy: row.baseConflictStrategy,
+  });
 }
 
-function toInsert(s: UserSettings): typeof userSettings.$inferInsert {
+function toRow(s: UserSettings): typeof userSettings.$inferInsert {
   return {
-    id: s.id,
-    aiProvider: s.aiProvider,
+    id: ROW_ID,
+    aiAgent: s.aiAgent,
     aiModel: s.aiModel,
     aiThinkingEffort: s.aiThinkingEffort,
-    aiAgent: s.aiAgent,
     aiSuggestionsModel: s.aiSuggestionsModel,
     aiMaxTurns: s.aiMaxTurns,
-    theme: s.theme,
     diffViewMode: s.diffViewMode,
     autoFetchInterval: s.autoFetchInterval,
-    githubHost: s.githubHost,
-    githubClientId: s.githubClientId,
     recapEnabled: s.recap.enabled,
     recapDailyEnabled: s.recap.dailyEnabled,
     recapWeeklyEnabled: s.recap.weeklyEnabled,
     recapAgent: s.recap.agent,
+    githubHost: s.githubHost,
+    githubClientId: s.githubClientId,
     cacheEnabled: s.cache.enabled,
     cacheBucket: s.cache.bucket,
-    cacheCredentialsJson: "",
-    cacheCredentialsPath: "",
     cacheUploadsEnabled: s.cache.uploadsEnabled,
     cacheDownloadsEnabled: s.cache.downloadsEnabled,
-    updateChannel: s.updateChannel,
-    baseConflictStrategy: s.baseConflictStrategy,
     cacheSigningMode: s.cache.signing.mode,
     cacheSigningKeyPath: s.cache.signing.keyPath,
     cacheTrustedSignerHosts: JSON.stringify(s.cache.signing.trustedSignerHosts),
     jevEnabled: s.jev.enabled,
+    updateChannel: s.updateChannel,
+    baseConflictStrategy: s.baseConflictStrategy,
     updatedAt: new Date(),
   };
 }
 
-/** Load the settings row, creating it (legacy-upgrade: settingsJson) from the pre-DB JSON file. */
-async function migrateJsonToDb(db: Db): Promise<UserSettings> {
-  const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
-  const settingsPath = serverEnv.legacySettingsPath;
+/** `hasApiKey` lives in the keyring, never in the row or this service's state. */
+function withoutDerived(s: UserSettings): UserSettings {
+  return s.jev.hasApiKey ? { ...s, jev: { ...s.jev, hasApiKey: false } } : s;
+}
 
-  const [row] = await db.select().from(userSettings).where(eq(userSettings.id, "default")).limit(1);
-
-  if (row) {
-    return toSettings(row);
-  }
-
-  // No DB row — try reading from JSON file for backward compat
-  let settings: UserSettings;
-  if (existsSync(settingsPath)) {
-    try {
-      const raw = readFileSync(settingsPath, "utf8");
-      settings = normalize(JSON.parse(raw));
-    } catch {
-      settings = { ...DEFAULT_SETTINGS };
-    }
-  } else {
-    settings = { ...DEFAULT_SETTINGS };
-  }
-
-  // Upsert into DB
+async function writeRow(db: Db, s: UserSettings): Promise<void> {
+  const row = toRow(s);
   await db
     .insert(userSettings)
-    .values(toInsert(settings))
-    .onConflictDoUpdate({
-      target: userSettings.id,
-      set: toInsert(settings),
-    });
+    .values(row)
+    .onConflictDoUpdate({ target: userSettings.id, set: row });
+}
 
-  // Delete JSON file after successful migration
+/**
+ * Load the row, or seed it on first boot. Installs from before the DB kept
+ * settings in `~/.revv/settings.json` (legacy-upgrade: settingsJson); that file
+ * is imported once, then removed.
+ */
+async function loadOrSeed(db: Db, settingsPath: string): Promise<UserSettings> {
+  const [row] = await db.select().from(userSettings).where(eq(userSettings.id, ROW_ID)).limit(1);
+  if (row) return fromRow(row);
+
+  const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
+
+  let settings = DEFAULT_USER_SETTINGS;
+  if (existsSync(settingsPath)) {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+      // The legacy file kept the chat agent in its own `chatAgent` field.
+      const legacy =
+        typeof raw === "object" && raw !== null && "chatAgent" in raw
+          ? { ...raw, aiAgent: raw.chatAgent }
+          : raw;
+      settings = withoutDerived(normalizeSettings(legacy));
+    } catch {
+      settings = DEFAULT_USER_SETTINGS;
+    }
+  }
+
+  await writeRow(db, settings);
   try {
     unlinkSync(settingsPath);
   } catch {
-    // Non-fatal — JSON file may already be gone
+    // Already gone.
   }
-
   return settings;
 }
 
-// ── Service definition ────────────────────────────────────────────────────────
+/** `REVV_ACP_AGENT`, a testing knob, overrides the persisted agent when it names a registry agent. */
+function withAgentOverride(agent: AcpAgentId): AcpAgentId {
+  const override = serverEnv.acpAgent.trim();
+  return override && isAcpAgentId(override) ? override : agent;
+}
 
 export class SettingsService extends Context.Service<
   SettingsService,
   {
-    getSettings: () => Effect.Effect<UserSettings, ValidationError>;
-    updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
+    /** The in-memory snapshot of the row; `jev.hasApiKey` is always `false` here. */
+    getSettings: () => Effect.Effect<UserSettings>;
+    /** Persists the normalized result of the patch (with the agent-switch cascade), then publishes it. */
+    updateSettings: (patch: SettingsUpdate) => Effect.Effect<UserSettings, DbError>;
+    /** Every committed change after subscription. React to settings here, not at the write site. */
     settingsChanges: () => Stream.Stream<UserSettings>;
     /** The GitHub host for flows with no repository in hand: the settings host, else `GITHUB_HOST`. */
     githubHost: () => Effect.Effect<string>;
-    resolveAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
-    resolveRecapAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
     /**
-     * The ACP registry agent id that drives chat — the persisted `aiAgent`
-     * (with the `REVV_ACP_AGENT` env override). Same as {@link resolveAgent}
-     * but never fails: falls back to the default agent. Used as the chat-session
-     * key so switching agents starts a fresh session instead of resuming a
-     * foreign one.
+     * The `select`ed value whenever a committed change alters it (compared with
+     * `Equal.equals`, so select a primitive or a key, not a fresh object).
      */
-    resolveChatAgentId: () => Effect.Effect<AcpAgentId>;
+    watch: <A>(select: (s: UserSettings) => A) => Stream.Stream<A>;
+    /** The agent that runs chat, walkthroughs and suggestions. */
+    resolveAgent: () => Effect.Effect<AcpAgentId>;
+    resolveRecapAgent: () => Effect.Effect<AcpAgentId>;
   }
 >()("SettingsService") {}
 
-export const SettingsServiceLive = Layer.effect(
-  SettingsService,
-  Effect.gen(function* () {
-    const { db } = yield* DbService;
+/** `legacySettingsPath` is the pre-DB JSON file to import on first boot (a test points it at a temp dir). */
+export const settingsServiceLayer = (legacySettingsPath: string) =>
+  Layer.effect(
+    SettingsService,
+    Effect.gen(function* () {
+      const { db } = yield* DbService;
 
-    // Load settings from DB (migrating from JSON if needed)
-    const initial = yield* Effect.tryPromise({
-      try: () => migrateJsonToDb(db),
-      catch: (e) =>
-        new ValidationError({
-          message: e instanceof Error ? e.message : String(e),
-        }),
-    });
-    const settingsRef = yield* SubscriptionRef.make(initial);
+      const initial = yield* Effect.tryPromise({
+        try: () => loadOrSeed(db, legacySettingsPath),
+        catch: (cause) => new DbError({ message: "Failed to load settings", cause }),
+      });
+      const settingsRef = yield* SubscriptionRef.make(initial);
 
-    return {
-      getSettings: () =>
-        SubscriptionRef.get(settingsRef).pipe(
-          Effect.mapError((e) => new ValidationError({ message: String(e) })),
-        ),
+      return {
+        getSettings: () => SubscriptionRef.get(settingsRef),
 
-      updateSettings: (partial) =>
-        Effect.gen(function* () {
-          const current = yield* SubscriptionRef.get(settingsRef);
-          const merged = mergeSettingsUpdate(current, partial);
-          const next: UserSettings = {
-            ...merged,
-            id: "default",
-            jev: { ...merged.jev, hasApiKey: false },
-            aiMaxTurns: coerceMaxTurns(merged.aiMaxTurns),
-            updateChannel: coerceUpdateChannel(merged.updateChannel),
-            baseConflictStrategy: coerceBaseConflictStrategy(merged.baseConflictStrategy),
-          };
+        updateSettings: (patch) =>
+          Effect.gen(function* () {
+            const current = yield* SubscriptionRef.get(settingsRef);
+            const next = withoutDerived(applySettingsUpdate(current, patch));
+            yield* Effect.tryPromise({
+              try: () => writeRow(db, next),
+              catch: (cause) => new DbError({ message: "Failed to save settings", cause }),
+            });
+            yield* SubscriptionRef.set(settingsRef, next);
+            return next;
+          }),
 
-          yield* Effect.tryPromise({
-            try: () =>
-              db
-                .insert(userSettings)
-                .values(toInsert(next))
-                .onConflictDoUpdate({
-                  target: userSettings.id,
-                  set: toInsert(next),
-                }),
-            catch: (e) =>
-              new ValidationError({
-                message: e instanceof Error ? e.message : String(e),
-              }),
-          });
+        settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
 
-          yield* SubscriptionRef.set(settingsRef, next);
-          return next;
-        }),
-
-      settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
-
-      githubHost: () =>
-        SubscriptionRef.get(settingsRef).pipe(
-          Effect.map((s) => s.githubHost.trim() || serverEnv.githubHost),
-        ),
-
-      resolveAgent: () =>
-        SubscriptionRef.get(settingsRef).pipe(
-          Effect.mapError((e) => new ValidationError({ message: String(e) })),
-          Effect.map(resolveAgentFromSettings),
-        ),
-
-      resolveChatAgentId: () =>
-        SubscriptionRef.get(settingsRef).pipe(
-          Effect.map(resolveAgentFromSettings),
-          Effect.tapError((e) =>
-            Effect.sync(() => {
-              logError("settings", "resolveChatAgentId failed, defaulting:", String(e));
-            }),
+        githubHost: () =>
+          Effect.map(
+            SubscriptionRef.get(settingsRef),
+            (s) => s.githubHost.trim() || serverEnv.githubHost,
           ),
-          Effect.orElseSucceed(() => applyAcpAgentOverride(DEFAULT_SETTINGS.aiAgent)),
-        ),
 
-      resolveRecapAgent: () =>
-        SubscriptionRef.get(settingsRef).pipe(
-          Effect.mapError((e) => new ValidationError({ message: String(e) })),
-          Effect.map(resolveRecapAgentFromSettings),
-        ),
-    };
-  }),
-);
+        // `changes` starts with the current value; it seeds the comparison, then is dropped.
+        watch: (select) =>
+          SubscriptionRef.changes(settingsRef).pipe(
+            Stream.map(select),
+            Stream.changes,
+            Stream.drop(1),
+          ),
+
+        resolveAgent: () =>
+          Effect.map(SubscriptionRef.get(settingsRef), (s) => withAgentOverride(s.aiAgent)),
+
+        resolveRecapAgent: () =>
+          Effect.map(SubscriptionRef.get(settingsRef), (s) =>
+            withAgentOverride(s.recap.agent === "auto" ? s.aiAgent : s.recap.agent),
+          ),
+      };
+    }),
+  );
+
+export const SettingsServiceLive = settingsServiceLayer(serverEnv.legacySettingsPath);

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { AUTO_SENTINEL, getAgentCapabilities } from "@revv/shared";
+import { AUTO_SENTINEL, getAcpAgentDefaultModel, getAgentCapabilities } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Sparkle from "phosphor-svelte/lib/Sparkle";
 import { SvelteMap } from "svelte/reactivity";
@@ -9,14 +9,13 @@ import {
   Root as PopoverRoot,
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
-import { getDefaultModel, type ModelOption } from "$lib/constants/models";
+import type { ModelOption } from "$lib/constants/models";
 import {
   areModelsLoaded,
   fetchModels,
   getReviewModelOptions,
   getSettings,
   isAutoModelOffered,
-  resolveChatAgentId,
   updateSettings,
 } from "$lib/stores/settings.svelte";
 import { getIsStreaming, getWalkthroughModelUsed } from "$lib/stores/walkthrough.svelte";
@@ -26,14 +25,14 @@ import SelectTrigger from "./SelectTrigger.svelte";
 let open = $state(false);
 
 // The model surface follows `aiAgent`; capabilities are the registry's single source of truth.
-let currentId = $derived(resolveChatAgentId(getSettings()));
+let currentId = $derived(getSettings().aiAgent);
 let caps = $derived(getAgentCapabilities(currentId));
 // opencode is the only agent whose catalog is fetched live; everything else
 // uses the curated static list baked into the registry.
 let isDynamic = $derived(caps.models === "dynamic");
 let fetchedModels = $derived<ModelOption[]>(getReviewModelOptions(currentId));
 let fetchDone = $derived(caps.models === "dynamic" ? areModelsLoaded("opencode") : true);
-let currentModel = $derived(getSettings()?.aiModel ?? "");
+let currentModel = $derived(getSettings().aiModel);
 let autoModelOffered = $derived(isAutoModelOffered(currentId));
 let isAuto = $derived(currentModel === AUTO_SENTINEL);
 
@@ -64,7 +63,7 @@ let autoResolvedLabel = $derived.by((): string | null => {
     if (running) return running;
   }
   if (sizing?.status !== "ready") return null;
-  return labelFor(sizing.model) ?? labelFor(getDefaultModel(currentId));
+  return labelFor(sizing.model) ?? labelFor(getAcpAgentDefaultModel(currentId));
 });
 
 /** Whether a sizing is actually outstanding; bare "Auto" when there's no PR to size. */

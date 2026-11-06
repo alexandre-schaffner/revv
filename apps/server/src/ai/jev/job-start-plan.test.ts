@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_JEV_SETTINGS } from "@revv/shared";
+import { DEFAULT_USER_SETTINGS } from "@revv/shared";
 import type { JobStartAnswers } from "./job-start";
 import { buildJobStartPlan, shouldResolveJobStart } from "./job-start-plan";
 
 const settings = {
   aiModel: "revv:auto",
   aiThinkingEffort: "revv:auto",
-  jev: { ...DEFAULT_JEV_SETTINGS, enabled: true },
+  jev: { ...DEFAULT_USER_SETTINGS.jev, enabled: true },
 } as const;
 
 const answers: JobStartAnswers = {
@@ -26,7 +26,7 @@ describe("job-start plan", () => {
   });
 
   it("skips when TypeSafe is off, on resume, or on a cache hit", () => {
-    const off = { ...settings, jev: DEFAULT_JEV_SETTINGS };
+    const off = { ...settings, jev: DEFAULT_USER_SETTINGS.jev };
     expect(shouldResolveJobStart({ settings: off, trigger: "user", cacheWillHit: false })).toBe(
       false,
     );

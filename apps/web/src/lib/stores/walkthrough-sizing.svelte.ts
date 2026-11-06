@@ -38,7 +38,7 @@ const sizings = createResource<{ prId: string }, WalkthroughSizing>({
 
 function cacheKey(prId: string, headSha: string): string {
   const s = getSettings();
-  return [prId, headSha, s?.aiAgent, s?.aiModel, s?.aiThinkingEffort, s?.jev.enabled].join("|");
+  return [prId, headSha, s.aiAgent, s.aiModel, s.aiThinkingEffort, s.jev.enabled].join("|");
 }
 
 export function getWalkthroughSizing(

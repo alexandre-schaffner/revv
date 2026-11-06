@@ -112,8 +112,8 @@ export function judgeIssue(
 > {
   return Effect.gen(function* () {
     const settingsService = yield* SettingsService;
-    const settings = yield* settingsService.getSettings().pipe(Effect.orElseSucceed(() => null));
-    if (settings?.jev.enabled !== true) return null;
+    const settings = yield* settingsService.getSettings();
+    if (!settings.jev.enabled) return null;
 
     const input = yield* Effect.sync(() => collectIssueGateInput(db, walkthroughId, candidate));
     if (input === null) return null;

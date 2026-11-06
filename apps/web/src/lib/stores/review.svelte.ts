@@ -20,8 +20,9 @@ import { apiErrorMessage } from "$lib/api/errors";
 import { reviewNewCommits } from "$lib/review/review-new-commits";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
+import { jsonCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 import { getPrById, getReviewModeForPr, getSelectedPrId } from "$lib/stores/prs.svelte";
-import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
+import { getSettings, isSettingsLoaded, updateSettings } from "$lib/stores/settings.svelte";
 import { refreshPrHead, requestThreadSync } from "$lib/stores/sync.svelte";
 import { invalidateForPull, regenerate } from "$lib/stores/walkthrough.svelte";
 import type { ReviewFile } from "$lib/types/review";
@@ -297,35 +298,22 @@ function emptyState(): PrViewState {
 // The tab each PR was last left on survives an app restart, so "first
 // visit" means first ever, not first since launch. Capped so the record of
 // long-closed PRs can't grow forever; oldest visits drop first.
-const LAST_TAB_KEY = "revv:pr-last-tab";
 const LAST_TAB_CAP = 300;
-
-function readLastTabs(): Record<string, ActiveTab> {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(LAST_TAB_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, ActiveTab>) : {};
-  } catch {
-    return {};
-  }
-}
+const lastTabCodec = jsonCodec((v) =>
+  v && typeof v === "object" ? (v as Record<string, string>) : undefined,
+);
 
 function rememberLastTab(prId: string, tab: ActiveTab): void {
-  if (typeof localStorage === "undefined") return;
-  const tabs = readLastTabs();
+  const tabs = { ...readStored(STORAGE_KEYS.prLastTab, lastTabCodec, {}) };
   delete tabs[prId];
   tabs[prId] = tab;
   const ids = Object.keys(tabs);
   for (const id of ids.slice(0, Math.max(0, ids.length - LAST_TAB_CAP))) delete tabs[id];
-  try {
-    localStorage.setItem(LAST_TAB_KEY, JSON.stringify(tabs));
-  } catch {
-    // Storage full or unavailable: the in-memory state still holds this session.
-  }
+  writeStored(STORAGE_KEYS.prLastTab, lastTabCodec, tabs);
 }
 
 function lastTabFor(prId: string): ActiveTab | null {
-  const tab = readLastTabs()[prId];
+  const tab = readStored(STORAGE_KEYS.prLastTab, lastTabCodec, {})[prId];
   return REVIEW_TABS.find((known) => known === tab) ?? null;
 }
 
@@ -673,11 +661,11 @@ type DiffMode = "unified" | "split";
 let diffModeOverride = $state<DiffMode | null>(null);
 
 export function getDiffMode(): DiffMode {
-  return diffModeOverride ?? getSettings()?.diffViewMode ?? "unified";
+  return diffModeOverride ?? getSettings().diffViewMode;
 }
 
 export function setDiffMode(mode: DiffMode): void {
-  diffModeOverride = getSettings() ? null : mode;
+  diffModeOverride = isSettingsLoaded() ? null : mode;
   void updateSettings({ diffViewMode: mode });
 }
 

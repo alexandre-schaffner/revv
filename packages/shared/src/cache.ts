@@ -176,15 +176,6 @@ export const CACHE_METADATA_KEYS = {
 } as const;
 
 /**
- * Signing mode for the team cache. Controls whether blobs must be signed
- * (`'strict'`), accepted with a warning when signature is missing/invalid
- * (`'permissive'`), or have signing bypassed entirely (`'off'`).
- *
- * Default is `'strict'` — new installs get protection out of the box.
- */
-export type CacheSigningMode = "off" | "permissive" | "strict";
-
-/**
  * Build the canonical signing message that is signed on push and
  * verified on fetch. Binds the signature to the object's identity
  * (repo + head SHA + content hash) without streaming MB through a child

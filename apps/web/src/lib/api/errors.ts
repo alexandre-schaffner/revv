@@ -5,7 +5,7 @@
  * hides "Merge commits are not allowed on this repository."
  */
 export function apiErrorMessage(
-  error: { status: number; value?: unknown },
+  error: { status: unknown; value?: unknown },
   fallback: string,
 ): string {
   const value = error.value as { error?: unknown; message?: unknown } | null | undefined;

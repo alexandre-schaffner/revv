@@ -155,11 +155,7 @@ export const JevServiceLive: Layer.Layer<JevService, never, SettingsService | Se
         return client;
       };
 
-      /** Settings read that can't fail the caller — a broken row means "off". */
-      const jevSettings = settingsSvc.getSettings().pipe(
-        Effect.map((s) => s.jev),
-        Effect.orElseSucceed(() => ({ enabled: false }) as const),
-      );
+      const jevSettings = settingsSvc.getSettings().pipe(Effect.map((s) => s.jev));
 
       const requireKey = Effect.gen(function* () {
         const apiKey = yield* resolveJevApiKey;

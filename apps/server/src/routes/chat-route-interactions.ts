@@ -33,7 +33,7 @@ export const chatInteractionRoutes = new Elysia()
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
             if (!pr.headSha) return;
             const row = yield* chatSessions.find(
               pr.id,
@@ -122,7 +122,7 @@ export const chatInteractionRoutes = new Elysia()
       const result = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const settingsService = yield* SettingsService;
-          const agent = yield* settingsService.resolveChatAgentId();
+          const agent = yield* settingsService.resolveAgent();
           return { agent, planAvailable: getAgentCapabilities(agent).planMode };
         }),
       );

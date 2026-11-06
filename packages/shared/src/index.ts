@@ -41,7 +41,6 @@ export type {
 } from "./base-conflicts";
 export { BASE_CONFLICT_STRATEGIES, DEFAULT_BASE_CONFLICT_STRATEGY } from "./base-conflicts";
 export type {
-  CacheSigningMode,
   GeneratedBy,
   GenerationProviderConfig,
   WalkthroughSnapshotBlock,
@@ -173,8 +172,6 @@ export {
   isHunkScanFinished,
 } from "./hunk-scan";
 export { guessImageContentType, isImagePath } from "./images";
-export type { JevSettings } from "./jev-settings";
-export { DEFAULT_JEV_SETTINGS } from "./jev-settings";
 export { isMaintainerLogin, MAINTAINER_LOGINS } from "./maintainers";
 export {
   detectMentionTrigger,
@@ -212,8 +209,7 @@ export type {
   RepoActivityWeek,
   RepoPrFlow,
 } from "./repo-activity";
-export type { SettingsUpdate } from "./settings-update";
-export { mergeSettingsUpdate } from "./settings-update";
+export * from "./settings";
 export type {
   GitHubStackLayerFields,
   LayerMergeState,
@@ -250,7 +246,6 @@ export type {
   AuthorRole,
   CloneStatus,
   CommentThread,
-  DiffViewMode,
   InstallEvent,
   LoginEvent,
   MergeEligibility,
@@ -260,7 +255,6 @@ export type {
   PrStackPlace,
   PullRequest,
   PullRequestStatus,
-  RecapAgentChoice,
   Repository,
   ReviewMode,
   ReviewSession,
@@ -269,14 +263,12 @@ export type {
   SyncChange,
   SyncChangeKind,
   Team,
-  ThemePreference,
   ThinkingEffort,
   ThreadMessage,
   ThreadStatus,
   ThreadSummary,
   UserIdentity,
   UserRole,
-  UserSettings,
 } from "./types";
 export { loginsMatch, REVIEW_MODE, REVIEW_MODES, reviewModeFor, sameStack } from "./types";
 export * from "./walkthrough";

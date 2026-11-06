@@ -1,25 +1,23 @@
-import type { ThemePreference } from "@revv/shared";
 import { tick, untrack } from "svelte";
 import { crossfadeDocument } from "$lib/motion";
+import { oneOfCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 
-export type { ThemePreference };
+const THEME_PREFERENCES = ["system", "light", "dark"] as const;
+export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-export type DiffThemePreference = "sync" | "light" | "dark";
+const DIFF_THEME_PREFERENCES = ["sync", "light", "dark"] as const;
+export type DiffThemePreference = (typeof DIFF_THEME_PREFERENCES)[number];
 
-const THEME_KEY = "revv-theme";
-const DIFF_THEME_KEY = "revv-diff-theme";
+const themeCodec = oneOfCodec(THEME_PREFERENCES);
+const diffThemeCodec = oneOfCodec(DIFF_THEME_PREFERENCES);
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-let preference = $state<ThemePreference>(readStored(THEME_KEY, "system"));
-let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, "sync"));
+let preference = $state<ThemePreference>(readStored(STORAGE_KEYS.theme, themeCodec, "system"));
+let diffPreference = $state<DiffThemePreference>(
+  readStored(STORAGE_KEYS.diffTheme, diffThemeCodec, "sync"),
+);
 let _resolved = $derived<"light" | "dark">(resolve(preference));
-
-function readStored<T extends string>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  const v = localStorage.getItem(key);
-  return v === "light" || v === "dark" ? (v as T) : fallback;
-}
 
 function resolve(pref: ThemePreference): "light" | "dark" {
   if (pref === "dark") return "dark";
@@ -142,7 +140,7 @@ export function getResolvedTheme(): "light" | "dark" {
 
 export function setThemePreference(pref: ThemePreference): void {
   preference = pref;
-  localStorage.setItem(THEME_KEY, pref);
+  writeStored(STORAGE_KEYS.theme, themeCodec, pref);
   applyAnimated(pref);
 }
 
@@ -152,6 +150,6 @@ export function getDiffThemePreference(): DiffThemePreference {
 
 export function setDiffThemePreference(pref: DiffThemePreference): void {
   diffPreference = pref;
-  localStorage.setItem(DIFF_THEME_KEY, pref);
+  writeStored(STORAGE_KEYS.diffTheme, diffThemeCodec, pref);
   applyDiffTheme(pref);
 }

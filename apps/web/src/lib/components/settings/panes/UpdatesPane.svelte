@@ -1,8 +1,25 @@
+<script module lang="ts">
+import Download from "phosphor-svelte/lib/Download";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "updates",
+  title: "Updates",
+  description: "Which releases Revv installs, and the build you're running.",
+  icon: Download,
+  rows: {
+    channel: { label: "Release channel", keywords: ["nightly", "stable", "beta"] },
+    check: { label: "Check for updates", keywords: ["upgrade", "version"] },
+    build: { label: "App build", keywords: ["commit", "version", "hash"] },
+    serviceBuild: { label: "Background service build", keywords: ["server", "commit", "version"] },
+  },
+});
+</script>
+
 <script lang="ts">
 import type { UpdateChannel } from "@revv/shared";
 import Check from "phosphor-svelte/lib/Check";
 import Copy from "phosphor-svelte/lib/Copy";
-import Download from "phosphor-svelte/lib/Download";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { fetchRuntimeHealth } from "$lib/api/runtime";
 import { compareServiceBuild } from "$lib/api/service-build";
@@ -15,7 +32,6 @@ import { runCheck as runUpdaterCheck } from "$lib/updater/service";
 import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
 const commitHash = getCommitHash();
 let serviceBuild = $state<{ label: string; mismatch: boolean } | null>(null);
@@ -42,7 +58,7 @@ $effect(() => {
   };
 });
 
-const channel = $derived<UpdateChannel>(getSettings()?.updateChannel ?? "stable");
+const channel = $derived<UpdateChannel>(getSettings().updateChannel);
 
 const channelOptions: SegmentedOption<UpdateChannel>[] = [
   { value: "stable", label: "Stable" },
@@ -86,9 +102,9 @@ async function copyHash(): Promise<void> {
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.updates}>
+<SettingsPane {pane}>
 	<SettingsGroup>
-		<SettingsRow id="update-channel" label="Release channel" hint={channelDescriptions[channel]}>
+		<SettingsRow row={pane.rows.channel} label="Release channel" hint={channelDescriptions[channel]}>
 			{#snippet control()}
 				<SegmentedControl
 					aria-label="Release channel"
@@ -98,7 +114,7 @@ async function copyHash(): Promise<void> {
 				/>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow id="update-check" label="Check for updates" hint="Revv also checks on its own every hour.">
+		<SettingsRow row={pane.rows.check} label="Check for updates" hint="Revv also checks on its own every hour.">
 			{#snippet control()}
 				<Button variant="outline" size="sm" onclick={handleCheckNow} disabled={checking}>
 					{#if checking}
@@ -111,7 +127,7 @@ async function copyHash(): Promise<void> {
 				</Button>
 			{/snippet}
 		</SettingsRow>
-		<SettingsRow id="update-build" label="App build" hint="The commit this app was built from.">
+		<SettingsRow row={pane.rows.build} label="App build" hint="The commit this app was built from.">
 			{#snippet control()}
 				<span class="build-hash">{commitHash}</span>
 				<Button
@@ -136,7 +152,7 @@ async function copyHash(): Promise<void> {
 			{/snippet}
 		</SettingsRow>
 		<SettingsRow
-			id="update-service-build"
+			row={pane.rows.serviceBuild}
 			label="Background service build"
 			hint={serviceBuild?.mismatch
 				? 'Does not match this app. Quit Revv from the menu bar icon and open it again.'

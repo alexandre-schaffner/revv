@@ -3,21 +3,21 @@ import { Dialog as DialogPrimitive } from "bits-ui";
 import X from "phosphor-svelte/lib/X";
 import type { Snippet } from "svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import type { SettingsPaneMeta } from "../settings-panes";
 
 interface Props {
-  title: string;
-  description: string;
+  pane: Pick<SettingsPaneMeta, "title" | "description">;
   children: Snippet;
 }
 
-let { title, description, children }: Props = $props();
+let { pane, children }: Props = $props();
 </script>
 
 <!-- Sticky inside the pane scroller, so the close button can never scroll away. -->
 <header class="pane-head">
 	<div class="pane-head-text">
-		<h2 class="pane-title">{title}</h2>
-		<p class="pane-description">{description}</p>
+		<h2 class="pane-title">{pane.title}</h2>
+		<p class="pane-description">{pane.description}</p>
 	</div>
 	<DialogPrimitive.Close>
 		{#snippet child({ props })}

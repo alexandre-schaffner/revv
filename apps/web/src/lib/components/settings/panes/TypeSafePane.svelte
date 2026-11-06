@@ -1,6 +1,25 @@
+<script module lang="ts">
+import Gauge from "phosphor-svelte/lib/Gauge";
+import { defineSettingsPane } from "../settings-panes";
+
+export const pane = defineSettingsPane({
+  id: "jev",
+  title: "TypeSafe",
+  description: "Calibrated yes-or-no judgments where a full agent turn is overkill.",
+  icon: Gauge,
+  rows: {
+    enabled: { label: "Use TypeSafe judgments", keywords: ["jev", "system one", "sizing", "risk"] },
+    apiKey: { label: "TypeSafe API key", keywords: ["jev", "key", "token"] },
+    test: { label: "Test TypeSafe connection", keywords: ["jev", "latency"] },
+  },
+});
+</script>
+
 <script lang="ts">
 import Spinner from "phosphor-svelte/lib/Spinner";
-import { API_BASE_URL } from "$lib/api/base-url";
+import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
+import { type EdenData, thrownMessage } from "$lib/api/wire";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input";
 import { Switch } from "$lib/components/ui/switch";
@@ -11,39 +30,33 @@ import SettingsGroup from "../primitives/SettingsGroup.svelte";
 import SettingsPane from "../primitives/SettingsPane.svelte";
 import SettingsRow from "../primitives/SettingsRow.svelte";
 import StatusDot from "../primitives/StatusDot.svelte";
-import { SETTINGS_PANES } from "../settings-index";
 
-const hasApiKey = $derived(getSettings()?.jev.hasApiKey ?? false);
+const hasApiKey = $derived(getSettings().jev.hasApiKey);
 
 let apiKeyDraft = $state("");
 let apiKeySaving = $state(false);
 
-type TestResult = { ok: true; model: string; latencyMs: number } | { ok: false; error: string };
+type TestResult = Extract<EdenData<typeof api.api.settings.jev.test.post>, { ok: boolean }>;
 let testState = $state<TestResult | null>(null);
 let testRunning = $state(false);
+
+/** A key change re-gates every sizing; `hasApiKey` is re-read from the server. */
+async function afterKeyChange(): Promise<void> {
+  apiKeyDraft = "";
+  resetWalkthroughSizings();
+  await fetchSettings();
+}
 
 async function saveApiKey(value: string): Promise<void> {
   if (apiKeySaving || !value) return;
   apiKeySaving = true;
   testState = null;
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/jev/api-key`, {
-      method: "PUT",
-      headers: { ...(await authHeaders()), "content-type": "application/json" },
-      body: JSON.stringify({ apiKey: value }),
-    });
-    if (res.ok) {
-      apiKeyDraft = "";
-      resetWalkthroughSizings();
-      await fetchSettings();
-    } else {
-      testState = { ok: false, error: `Could not save the key (HTTP ${res.status}).` };
-    }
-  } catch (error) {
-    testState = {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    const { error } = await api.api.settings.jev["api-key"].put({ apiKey: value });
+    if (error) testState = { ok: false, error: apiErrorMessage(error, "Could not save the key") };
+    else await afterKeyChange();
+  } catch (e) {
+    testState = { ok: false, error: thrownMessage(e) };
   } finally {
     apiKeySaving = false;
   }
@@ -54,13 +67,8 @@ async function clearApiKey(): Promise<void> {
   apiKeySaving = true;
   testState = null;
   try {
-    await fetch(`${API_BASE_URL}/api/settings/jev/api-key`, {
-      method: "DELETE",
-      headers: await authHeaders(),
-    });
-    apiKeyDraft = "";
-    resetWalkthroughSizings();
-    await fetchSettings();
+    await api.api.settings.jev["api-key"].delete();
+    await afterKeyChange();
   } catch {
     // Best-effort: the next settings fetch reconciles the real state.
   } finally {
@@ -72,36 +80,29 @@ async function testConnection(): Promise<void> {
   if (testRunning) return;
   testRunning = true;
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings/jev/test`, {
-      method: "POST",
-      headers: await authHeaders(),
-    });
-    if (!res.ok) {
-      testState = { ok: false, error: `HTTP ${res.status}` };
-      return;
-    }
-    testState = (await res.json()) as TestResult;
-  } catch (error) {
-    testState = {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    const { data, error } = await api.api.settings.jev.test.post();
+    testState =
+      data && "ok" in data
+        ? data
+        : { ok: false, error: error ? apiErrorMessage(error, "Test failed") : "No answer" };
+  } catch (e) {
+    testState = { ok: false, error: thrownMessage(e) };
   } finally {
     testRunning = false;
   }
 }
 </script>
 
-<SettingsPane {...SETTINGS_PANES.jev}>
+<SettingsPane {pane}>
 	<SettingsGroup description="TypeSafe's System One model answers closed-set questions without generating text. Everything falls back to the agent's own judgment when TypeSafe is off or unreachable.">
 		<SettingsRow
-			id="jev-enabled"
+			row={pane.rows.enabled}
 			label="Use TypeSafe judgments"
 			hint="Sizes each review, sets its risk tier, ranks the changed files, runs a hunk-by-hunk first pass, checks and calibrates flagged issues, holds artifacts and prose to the bar, and stops doomed retries. When off, no requests are made."
 		>
 			{#snippet control()}
 				<Switch
-					checked={getSettings()?.jev.enabled ?? false}
+					checked={getSettings().jev.enabled}
 					onCheckedChange={(value) => void updateSettings({ jev: { enabled: value } })}
 					aria-label="Use TypeSafe judgments"
 				/>
@@ -111,7 +112,7 @@ async function testConnection(): Promise<void> {
 
 	<SettingsGroup heading="Connection">
 		<SettingsRow
-			id="jev-api-key"
+			row={pane.rows.apiKey}
 			label="API key"
 			labelFor="jev-api-key-input"
 			layout="stacked"
@@ -130,7 +131,7 @@ async function testConnection(): Promise<void> {
 			{/snippet}
 		</SettingsRow>
 		<SettingsRow
-			id="jev-test"
+			row={pane.rows.test}
 			label="Test connection"
 			hint="Sends one judgment to TypeSafe and reports how long it took."
 		>

@@ -122,13 +122,7 @@ export const GcsBlobStoreLive = Layer.effect(
 
     const resolveClient = (): Effect.Effect<ResolvedClient, BlobStoreUnavailable> =>
       Effect.gen(function* () {
-        const live = yield* settings
-          .getSettings()
-          .pipe(
-            Effect.mapError(
-              (e) => new BlobStoreUnavailable({ message: `settings unavailable: ${e.message}` }),
-            ),
-          );
+        const live = yield* settings.getSettings();
         if (!live.cache.enabled) {
           return yield* Effect.fail(
             new BlobStoreUnavailable({ message: "team cache is disabled" }),

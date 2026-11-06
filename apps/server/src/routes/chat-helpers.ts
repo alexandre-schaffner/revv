@@ -12,7 +12,7 @@ import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
-import { applyAcpAgentOverride, resolveGenerationModel } from "../ai/acp/presets";
+import { resolveGenerationModel } from "../ai/acp/presets";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
@@ -80,7 +80,7 @@ export const resolveChatReadContext = (
     }
 
     const settings = yield* settingsService.getSettings();
-    const agent = yield* settingsService.resolveChatAgentId();
+    const agent = yield* settingsService.resolveAgent();
     const model = chatSessionModel(agent, settings.aiModel);
 
     // No head SHA → no session can match (rows are keyed on it), so skip the
@@ -174,8 +174,7 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
     // early-return tiers below (no head SHA, no worktree yet) can still serve a
     // populated menu instead of degrading to empty — this is what makes the
     // first `/` instant before any agent for this PR is warm.
-    const acpAgent = applyAcpAgentOverride(agent);
-    const commandCacheKey = `${acpAgent}::${read.repo.id}`;
+    const commandCacheKey = `${agent}::${read.repo.id}`;
     const cachedCommands = slashCommandCache.get(commandCacheKey) ?? EMPTY_SESSION_CONTEXT.commands;
 
     // No head SHA → nothing to read (worktree + session rows are keyed on it).
@@ -204,13 +203,13 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
 
     // Capabilities + slash commands from the agent connection.
     const config = {
-      model: resolveGenerationModel(acpAgent, settings.aiModel),
+      model: resolveGenerationModel(agent, settings.aiModel),
       thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
     };
     const handle = yield* Effect.promise(() =>
       warm
-        ? getAcpConnection(worktreePath, acpAgent, config)
-        : peekAcpConnection(worktreePath, acpAgent, config),
+        ? getAcpConnection(worktreePath, agent, config)
+        : peekAcpConnection(worktreePath, agent, config),
     );
     // No live agent (the non-warm peek before any agent for this repo is warm):
     // serve commands harvested by a prior warm so the slash menu is ready before

@@ -64,12 +64,10 @@ export const diagnoseRepoNotFound = (
 ): Effect.Effect<RepoNotAccessibleError, never, GitHubGateway | SettingsService> =>
   Effect.gen(function* () {
     const github = yield* GitHubGateway;
-    const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-      Effect.orElseSucceed(() => null),
-    );
+    const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings());
     // The settings row's client ID belongs to the settings host only — the
     // same pairing `TokenProvider` uses to refresh this token.
-    const customClientId = settings?.githubHost === host ? settings.githubClientId : null;
+    const customClientId = settings.githubHost === host ? settings.githubClientId : null;
     const signsInWithApp = yield* Effect.try(() =>
       clientIdIsGitHubApp(clientIdForHost(host, customClientId)),
     ).pipe(Effect.orElseSucceed(() => false));

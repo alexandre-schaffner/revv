@@ -1,11 +1,17 @@
 import { RAIL_WIDTH } from "$lib/constants";
+import {
+  clampedIntCodec,
+  flagCodec,
+  jsonCodec,
+  readStored,
+  STORAGE_KEYS,
+  writeStored,
+} from "$lib/stores/persisted.svelte";
 
-const SIDEBAR_WIDTH_KEY = "revv:sidebar-width";
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 180;
 const SIDEBAR_WIDTH_MAX = 480;
 
-const RIGHT_PANEL_WIDTH_KEY = "revv:right-panel-width";
 const RIGHT_PANEL_WIDTH_DEFAULT = 340;
 const RIGHT_PANEL_WIDTH_MIN = 280;
 const RIGHT_PANEL_WIDTH_MAX = 720;
@@ -16,8 +22,6 @@ const RIGHT_PANEL_WIDTH_MAX = 720;
     button in its header) — the same trade Slack makes with thread view. */
 const MAIN_MIN_WIDTH = 520;
 
-const RAIL_COLLAPSED_OWNERS_KEY = "revv:rail-collapsed-owners";
-
 function clampWidth(w: number): number {
   return Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, w));
 }
@@ -26,42 +30,21 @@ function clampRightPanelWidth(w: number): number {
   return Math.max(RIGHT_PANEL_WIDTH_MIN, Math.min(RIGHT_PANEL_WIDTH_MAX, w));
 }
 
-function loadPersistedWidth(): number {
-  if (typeof localStorage === "undefined") return SIDEBAR_WIDTH_DEFAULT;
-  const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-  if (raw === null) return SIDEBAR_WIDTH_DEFAULT;
-  const parsed = parseInt(raw, 10);
-  if (Number.isNaN(parsed)) return SIDEBAR_WIDTH_DEFAULT;
-  return clampWidth(parsed);
-}
-
-function loadPersistedRightPanelWidth(): number {
-  if (typeof localStorage === "undefined") return RIGHT_PANEL_WIDTH_DEFAULT;
-  const raw = localStorage.getItem(RIGHT_PANEL_WIDTH_KEY);
-  if (raw === null) return RIGHT_PANEL_WIDTH_DEFAULT;
-  const parsed = parseInt(raw, 10);
-  if (Number.isNaN(parsed)) return RIGHT_PANEL_WIDTH_DEFAULT;
-  return clampRightPanelWidth(parsed);
-}
-
-function loadCollapsedOwners(): Set<string> {
-  if (typeof localStorage === "undefined") return new Set();
-  const raw = localStorage.getItem(RAIL_COLLAPSED_OWNERS_KEY);
-  if (raw === null) return new Set();
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((x): x is string => typeof x === "string"));
-  } catch {
-    return new Set();
-  }
-}
+const sidebarWidthCodec = clampedIntCodec(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
+const rightPanelWidthCodec = clampedIntCodec(RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX);
+const collapsedOwnersCodec = jsonCodec<string[]>((v) =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined,
+);
 
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
-let sidebarWidth = $state(loadPersistedWidth());
-let rightPanelWidth = $state(loadPersistedRightPanelWidth());
+let sidebarWidth = $state(
+  readStored(STORAGE_KEYS.sidebarWidth, sidebarWidthCodec, SIDEBAR_WIDTH_DEFAULT),
+);
+let rightPanelWidth = $state(
+  readStored(STORAGE_KEYS.rightPanelWidth, rightPanelWidthCodec, RIGHT_PANEL_WIDTH_DEFAULT),
+);
 
 // Live viewport width — the input to the side-by-side ⇄ stacked decision for
 // the chat panel. Kept here (not in a component) so the layout math reads
@@ -73,7 +56,9 @@ let viewportWidth = $state(window.innerWidth);
 // lowercase. Default: every owner is expanded — owners only land here
 // after the user explicitly collapses their folder. Persisted so the
 // expand/collapse pattern survives reloads.
-let collapsedOwners = $state<Set<string>>(loadCollapsedOwners());
+let collapsedOwners = $state<Set<string>>(
+  new Set(readStored(STORAGE_KEYS.railCollapsedOwners, collapsedOwnersCodec, [])),
+);
 
 // Two-view drawer: 'prs' (the PR list) ⇄ 'files' (full repo tree at the
 // selected PR's head SHA). Transient — not persisted across reloads. Resets to
@@ -89,13 +74,13 @@ let fileSearchQuery = $state<string>("");
 
 $effect.root(() => {
   $effect(() => {
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+    writeStored(STORAGE_KEYS.sidebarWidth, sidebarWidthCodec, sidebarWidth);
   });
   $effect(() => {
-    localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(rightPanelWidth));
+    writeStored(STORAGE_KEYS.rightPanelWidth, rightPanelWidthCodec, rightPanelWidth);
   });
   $effect(() => {
-    localStorage.setItem(RAIL_COLLAPSED_OWNERS_KEY, JSON.stringify([...collapsedOwners]));
+    writeStored(STORAGE_KEYS.railCollapsedOwners, collapsedOwnersCodec, [...collapsedOwners]);
   });
   $effect(() => {
     const onResize = (): void => {
@@ -258,20 +243,14 @@ export function toggleOwnerCollapsed(owner: string): void {
 
 // ── Closed-PR section, per repo ─────────────────────────
 
-const ARCHIVE_OPEN_PREFIX = "revv:archive-open:";
 let archiveOpen = $state(new Map<string, boolean>());
 
 export function isArchiveOpen(repoId: string): boolean {
-  const known = archiveOpen.get(repoId);
-  if (known !== undefined) return known;
-  if (typeof localStorage === "undefined") return false;
-  return localStorage.getItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`) === "1";
+  return archiveOpen.get(repoId) ?? readStored(STORAGE_KEYS.archiveOpen(repoId), flagCodec, false);
 }
 
 export function toggleArchiveOpen(repoId: string): void {
   const open = !isArchiveOpen(repoId);
   archiveOpen = new Map(archiveOpen).set(repoId, open);
-  if (typeof localStorage === "undefined") return;
-  if (open) localStorage.setItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`, "1");
-  else localStorage.removeItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`);
+  writeStored(STORAGE_KEYS.archiveOpen(repoId), flagCodec, open);
 }

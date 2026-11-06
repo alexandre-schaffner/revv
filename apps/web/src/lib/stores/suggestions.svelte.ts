@@ -41,7 +41,7 @@ const suggestions = createResource<string, string[]>({
 
 function cacheKey(prId: string): string {
   const s = getSettings();
-  return `${prId}|${s?.aiAgent}|${s?.aiSuggestionsModel}`;
+  return `${prId}|${s.aiAgent}|${s.aiSuggestionsModel}`;
 }
 
 export function getSuggestions(prId: string): string[] | null {

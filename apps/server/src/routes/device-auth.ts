@@ -77,9 +77,7 @@ async function resolveGithubUrls(
   emailsUrl: string;
 }> {
   const [settings, settingsHost] = await AppRuntime.runPromise(
-    Effect.flatMap(SettingsService, (s) =>
-      Effect.all([s.getSettings().pipe(Effect.orElseSucceed(() => null)), s.githubHost()]),
-    ),
+    Effect.flatMap(SettingsService, (s) => Effect.all([s.getSettings(), s.githubHost()])),
   );
   const host = hostOverride?.trim() || settingsHost;
   const githubBase = `https://${host}`;
@@ -89,7 +87,7 @@ async function resolveGithubUrls(
   // guard is needed here.
   const customClientId =
     clientIdOverride?.trim() ||
-    (settings?.githubHost?.trim() === host ? settings?.githubClientId : null);
+    (settings.githubHost.trim() === host ? settings.githubClientId : null);
   return {
     host,
     clientId: clientIdForHost(host, customClientId),

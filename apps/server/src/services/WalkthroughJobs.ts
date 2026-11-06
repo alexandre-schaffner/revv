@@ -1750,10 +1750,8 @@ export const WalkthroughJobsLive = Layer.effect(
     ): Effect.Effect<boolean> =>
       Effect.gen(function* () {
         if (mode !== "reviewer") return false;
-        const settings = yield* settingsService
-          .getSettings()
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!settings?.cache.enabled || !settings.cache.downloadsEnabled) return false;
+        const settings = yield* settingsService.getSettings();
+        if (!settings.cache.enabled || !settings.cache.downloadsEnabled) return false;
 
         const snapshotOpt = yield* remoteCache.fetch(repoFullName, headSha);
         if (Option.isNone(snapshotOpt)) return false;
