@@ -4,11 +4,9 @@
 // Provides both a custom ring-buffer exporter (always active) and an
 // optional ConsoleSpanExporter gated on REVV_DEBUG=1.
 //
-// Why not use Effect's built-in Tracer directly? We do — via
-// @effect/opentelemetry's NodeSdk.layer, which wires Effect's Tracer to
-// the OTel SDK. Our SpanExporter sits at the OTel SDK boundary and
-// receives every span that Effect.withSpan creates, plus any manual OTel
-// spans from non-Effect code (e.g. chat-opencode.ts).
+// One globally registered OTel provider serves both Effect's Tracer and
+// `trace.getTracer` (see `provider` below), so the exporter receives every
+// span `Effect.withSpan` creates plus the manual spans from non-Effect code.
 
 import * as OtelTracer from "@effect/opentelemetry/OtelTracer";
 import * as OtelResource from "@effect/opentelemetry/Resource";

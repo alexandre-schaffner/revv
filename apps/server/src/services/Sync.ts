@@ -3,15 +3,15 @@ import type { ThreadSummary } from "@revv/shared";
 import { isThreadResolved, loginsMatch } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { SyncError } from "../domain/errors";
-import { logError } from "../logger";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
+import { logError } from "../logger";
 import type { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
-import type { GitHubClient } from "./github/transport";
 import { GitHubGateway } from "./github/gateway";
 import type { GhReviewComment, GhReviewThread } from "./github/reviews";
+import type { GitHubClient } from "./github/transport";
 import { diffFileFor, toGitHubComment } from "./github-review-comment";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
@@ -357,7 +357,11 @@ export const SyncServiceLive = Layer.effect(
         if (commentMentions.length > 0) {
           yield* prService
             .appendMentionedUsers(pr.id, commentMentions)
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(
+              Effect.catch((e) =>
+                Effect.sync(() => logError("sync", `record mentions on ${pr.id}:`, e.message)),
+              ),
+            );
         }
 
         for (const ght of ghThreads) {

@@ -55,7 +55,6 @@ const RealtimeWithDeps = RealtimeLive.pipe(
 
 const ReviewServiceWithDeps = ReviewServiceLive.pipe(Layer.provide(RealtimeWithDeps));
 
-// SettingsService now reads/writes via DbService instead of JSON file
 const SettingsServiceWithDeps = SettingsServiceLive.pipe(Layer.provide(DbServiceLive));
 
 const GitHubAccountsWithDeps = GitHubAccountsLive.pipe(
@@ -71,9 +70,6 @@ const GitHubGatewayWithDeps = GitHubGatewayLive.pipe(
   Layer.provide(Layer.mergeAll(GitHubEtagCacheWithDeps, GitHubAccountsWithDeps)),
 );
 
-// ChatSessionService is a thin Drizzle wrapper for the right-pane chat —
-// uses Layer.effect to grab `db` at construction, so we satisfy DbService
-// at the same boundary other DB-dependent services do.
 const ChatSessionServiceWithDeps = ChatSessionServiceLive.pipe(Layer.provide(DbServiceLive));
 
 const ExternalIntegrationsWithDeps = ExternalIntegrationsLive.pipe(Layer.provide(DbServiceLive));
@@ -84,12 +80,11 @@ const DiffCacheServiceWithDeps = DiffCacheServiceLive.pipe(
   Layer.provide(Layer.mergeAll(DbServiceLive, GitHubGatewayWithDeps, RealtimeWithDeps)),
 );
 
-// JevService depends on SettingsService (toggles) and SecretStore (API key); both are leaves.
 const JevServiceWithDeps = JevServiceLive.pipe(
   Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, SecretStoreLive)),
 );
 
-// Base layer: all services that have no deps or only depend on DbService
+// Services every composed layer below may draw on.
 const BaseLayers = Layer.mergeAll(
   DbServiceLive,
   SecretStoreLive,
@@ -116,7 +111,6 @@ const BaseLayers = Layer.mergeAll(
   ExternalIntegrationsWithDeps,
 );
 
-// PrContext composes PR + Repo + Token + GitHub + DiffCache — built from BaseLayers
 const PrContextServiceWithDeps = PrContextServiceLive.pipe(Layer.provide(BaseLayers));
 
 // PrConversation serves the Conversation tab: PrContext for repo + token,
@@ -131,24 +125,17 @@ const StackServiceWithDeps = StackServiceLive.pipe(
 
 const StackHeadlineServiceWithDeps = StackHeadlineServiceLive.pipe(Layer.provide(BaseLayers));
 
-// SyncService depends on BaseLayers + PrContext (for resolving repo/token chains)
 const SyncServiceWithDeps = SyncServiceLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps)),
 );
 
-// AiService depends on DbService + SettingsService (both in BaseLayers)
 const AiServiceWithDeps = AiServiceLive.pipe(Layer.provide(BaseLayers));
 
-// RepoCloneService depends on DbService + Realtime (both in BaseLayers)
 const RepoCloneServiceWithDeps = RepoCloneServiceLive.pipe(Layer.provide(BaseLayers));
 
-// DbMaintenance only needs DbService (already in BaseLayers)
 const DbMaintenanceWithDeps = DbMaintenanceLive.pipe(Layer.provide(DbServiceLive));
 
 // Team remote walkthrough cache — opt-in GCS-backed snapshot store.
-// GcsBlobStore depends on SettingsService (to read bucket + credentials);
-// RemoteWalkthroughCache stacks on top of BlobStore + Settings + Db +
-// SshSigner + CacheEligibility. The importer is a thin Drizzle wrapper.
 const GcsBlobStoreWithDeps = GcsBlobStoreLive.pipe(Layer.provide(SettingsServiceWithDeps));
 const SshSignerWithDeps = SshSignerLive.pipe(
   Layer.provide(Layer.mergeAll(SettingsServiceWithDeps, GitHubAccountsWithDeps)),
@@ -161,18 +148,11 @@ const RemoteWalkthroughCacheWithDeps = RemoteWalkthroughCacheLive.pipe(
     Layer.mergeAll(BaseLayers, GcsBlobStoreWithDeps, SshSignerWithDeps, CacheEligibilityWithDeps),
   ),
 );
-const WalkthroughSnapshotImporterWithDeps = WalkthroughSnapshotImporterLive;
 
 // The first pass, per PR head. One instance: the review page and
 // WalkthroughJobs must share its in-flight map so a head is scanned once.
 const HunkScanServiceWithDeps = HunkScanServiceLive.pipe(Layer.provide(BaseLayers));
 
-// WalkthroughJobs is the central orchestrator for walkthrough generation —
-// it depends on PrContext (to resolve PR metadata), RepoClone (for scoped
-// worktrees), Ai (to run the actual generator), Review (for session ids),
-// plus everything in BaseLayers. Splitting this out as its own layer lets
-// consumers (SSE handler, regenerate handler, index.ts startup) tag it
-// directly without needing to know the full dependency graph.
 const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -181,7 +161,7 @@ const WalkthroughJobsWithDeps = WalkthroughJobsLive.pipe(
       AiServiceWithDeps,
       RepoCloneServiceWithDeps,
       RemoteWalkthroughCacheWithDeps,
-      WalkthroughSnapshotImporterWithDeps,
+      WalkthroughSnapshotImporterLive,
       HunkScanServiceWithDeps,
       StackServiceWithDeps,
     ),
@@ -213,15 +193,10 @@ const PollSchedulerWithDeps = PollSchedulerLive.pipe(
   ),
 );
 
-// ProjectRecapJobs is the recap orchestrator. Mirrors WalkthroughJobs but
-// simpler — no worktree / continuation. Depends on BaseLayers for repo,
-// PR, recap service, settings, and Realtime.
 const ProjectRecapJobsWithDeps = ProjectRecapJobsLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, PrMirrorWithDeps)),
 );
 
-// RecapScheduler depends on ProjectRecapJobs (to enqueue) plus BaseLayers
-// for repo/PR/recap reads.
 const RecapSchedulerWithDeps = RecapSchedulerLive.pipe(
   Layer.provide(Layer.mergeAll(BaseLayers, ProjectRecapJobsWithDeps)),
 );
@@ -319,7 +294,7 @@ export const AppLayer = Layer.mergeAll(
   // can resolve them directly.
   GcsBlobStoreWithDeps,
   RemoteWalkthroughCacheWithDeps,
-  WalkthroughSnapshotImporterWithDeps,
+  WalkthroughSnapshotImporterLive,
   SshSignerWithDeps,
   CacheEligibilityWithDeps,
 );

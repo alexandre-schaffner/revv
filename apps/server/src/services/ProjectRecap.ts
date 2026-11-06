@@ -159,10 +159,6 @@ export interface CreatePartialRecapParams {
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
-  /** Caller-provided id when the orchestrator wants to thread one (resume path). */
-  readonly id?: string;
-  /** Provided up-front by the scheduler so it's queryable before the agent runs. */
-  readonly modelUsed?: string;
 }
 
 export interface ListForRepoParams {
@@ -199,10 +195,9 @@ export class ProjectRecapService extends Context.Service<
     /**
      * Insert a recap row at `status='generating'`. Returns the row.
      *
-     * Note on uniqueness: there's no DB-level unique on (repo, period,
-     * periodStart) — regenerates need to coexist with the old superseded row
-     * until the new one finishes. The orchestrator's `startJob` mutex
-     * enforces application-level uniqueness instead.
+     * There's no DB-level unique on (repo, period, periodStart): older
+     * installs hold superseded rows beside the current one. The
+     * orchestrator's `startJob` mutex keeps one live row per period.
      */
     readonly createPartial: (
       params: CreatePartialRecapParams,
@@ -224,11 +219,7 @@ export class ProjectRecapService extends Context.Service<
       params: ListForRepoParams,
     ) => Effect.Effect<ListForRepoResult, DbError, DbService>;
 
-    /**
-     * Most-recent complete recaps for a repo. Used by the walkthrough agent's
-     * `get_repo_context` MCP read tool. Returns at most `limit` rows ordered
-     * by `completedAt DESC`. Filters by `period` if provided.
-     */
+    /** Most-recent complete recaps for a repo, newest first, at most `limit`. */
     readonly getLatestForRepo: (
       repoId: string,
       params: { period?: RecapPeriod; limit?: number },
@@ -307,7 +298,7 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
   createPartial: (params) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      const id = params.id ?? crypto.randomUUID();
+      const id = crypto.randomUUID();
       const generatedAt = new Date().toISOString();
 
       const inserted = yield* dbTry("createPartial", () => {
@@ -325,7 +316,6 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
           summaryStats: "{}",
           resumeAttempts: 0,
         };
-        if (params.modelUsed !== undefined) values.modelUsed = params.modelUsed;
         db.insert(projectRecaps).values(values).run();
         const row = db.select().from(projectRecaps).where(eq(projectRecaps.id, id)).get();
         if (!row) {

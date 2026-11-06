@@ -17,7 +17,7 @@ import type { BlobCorrupt, BlobStoreUnavailable } from "../../domain/errors";
  * Free-form key/value metadata attached to every blob. We use it for:
  *   • integrity tracking (`contentSha256`)
  *   • forward-compat versioning (`schemaVersion`)
- *   • advisory attribution (`uploadedByUserId`, `modelUsed`)
+ *   • advisory attribution (`modelUsed`)
  * — see `CACHE_METADATA_KEYS` in `../walkthrough-cache-format`.
  */
 export type BlobMetadata = Record<string, string>;
