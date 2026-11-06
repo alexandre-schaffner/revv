@@ -204,8 +204,14 @@ export function dayKey(iso: string): string {
  * report's title is what tells one from the next.
  */
 export function commentGist(body: string, max = 90): string {
-  const lines = body
-    .replace(/<!--[\s\S]*?-->/g, "")
+  let withoutComments = body;
+  let previous: string;
+  do {
+    previous = withoutComments;
+    withoutComments = withoutComments.replace(/<!--[\s\S]*?-->/g, "");
+  } while (withoutComments !== previous);
+
+  const lines = withoutComments
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
