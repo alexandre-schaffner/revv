@@ -4,13 +4,13 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { recapWindowIsStale, utcDayKey } from "$lib/components/recaps/period-window";
 import RecapArchivePopover from "$lib/components/recaps/RecapArchivePopover.svelte";
 import RecapDetail from "$lib/components/recaps/RecapDetail.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import {
   abortRecapStream,
   getRecapStreamEntry,

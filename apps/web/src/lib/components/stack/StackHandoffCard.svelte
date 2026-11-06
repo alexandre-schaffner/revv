@@ -3,8 +3,8 @@ import { isOpenLayer, loginsMatch } from "@revv/shared";
 import ArrowUp from "phosphor-svelte/lib/ArrowUp";
 import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFadeY } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import {

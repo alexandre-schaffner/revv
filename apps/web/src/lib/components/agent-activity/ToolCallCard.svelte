@@ -11,13 +11,12 @@ export interface ToolCallCardProps {
   output?: string | undefined;
   /** Whether the tool call ended in error. */
   isError?: boolean | undefined;
-  /** PR id, required to fetch a file-content peek. */
-  prId?: string | undefined;
   class?: string;
 }
 </script>
 
 <script lang="ts">
+import { decodeToolDiffOutput } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import FilePlus from "phosphor-svelte/lib/FilePlus";
 import FileText from "phosphor-svelte/lib/FileText";
@@ -36,6 +35,7 @@ import {
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
 import { cn } from "$lib/utils.js";
+import { fileIcon } from "$lib/utils/file-icon";
 import {
   activityCommand,
   activityDetailText,
@@ -43,9 +43,8 @@ import {
   activityHasPeek,
   activityLabel,
   activityReadWindow,
-} from "$lib/utils/activity-groups";
-import { diffLineStats, parseDiffOutput } from "$lib/utils/diff-output";
-import { fileIcon } from "$lib/utils/file-icon";
+} from "./activity-groups";
+import { diffLineStats } from "./diff-stats";
 import DiffPeek from "./DiffPeek.svelte";
 import FilePeek from "./FilePeek.svelte";
 import TerminalPeek from "./TerminalPeek.svelte";
@@ -58,7 +57,6 @@ let {
   payload,
   output,
   isError = false,
-  prId,
   class: className,
 }: ToolCallCardProps = $props();
 
@@ -105,7 +103,7 @@ const peekable = $derived(activityHasPeek({ activityKind, payload, output }));
 const fileGlyph = $derived(filePath ? fileIcon(filePath) : null);
 // Structured edit diff (old/new) captured in the output, when present — drives
 // the diff peek and the +/- LOC counts beside the pill.
-const diffOut = $derived(parseDiffOutput(output));
+const diffOut = $derived(decodeToolDiffOutput(output));
 const diffStats = $derived(diffOut ? diffLineStats(diffOut) : null);
 
 let open = $state(false);
@@ -157,9 +155,8 @@ let open = $state(false);
 						<TerminalPeek command={command} output={output} isError={isError} />
 					{:else if diffOut}
 						<DiffPeek path={diffOut.path || filePath || "file"} oldText={diffOut.oldText} newText={diffOut.newText} />
-					{:else if filePath && prId}
+					{:else if filePath}
 						<FilePeek
-							prId={prId}
 							path={filePath}
 							fallbackOutput={output}
 							offset={readWindow?.offset}

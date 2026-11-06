@@ -718,12 +718,13 @@
    Two-layer stacked grid: a base text layer and a shimmer layer with a
    moving gradient clipped to text glyphs. The 360% background-size gives
    enough overscan that the animation loop-reset is invisible.
-   Consumers: components/ai/shimmer/Shimmer.svelte */
+   Consumer: components/ui/shimmer/Shimmer.svelte, whose deactivation delay
+   reads the same --duration-smooth token. */
 
 [data-component="text-shimmer"] {
   --text-shimmer-step: 45ms;
   --text-shimmer-duration: 1800ms;
-  --text-shimmer-swap: 220ms;
+  --text-shimmer-swap: var(--duration-smooth);
   --text-shimmer-index: 0;
   --text-shimmer-angle: 90deg;
   --text-shimmer-spread: 5.2ch;

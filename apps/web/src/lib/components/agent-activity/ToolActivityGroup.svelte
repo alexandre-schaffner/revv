@@ -1,36 +1,34 @@
 <script lang="ts" module>
-import type { GroupableActivity } from "$lib/utils/activity-groups";
+import type { GroupableActivity } from "./activity-groups";
 
 export interface ToolActivityGroupProps {
   items: readonly GroupableActivity[];
   active?: boolean;
   defaultOpen?: boolean;
   forceOpenWhileActive?: boolean;
-  /** PR id, threaded to each item's card so file peeks can fetch content. */
-  prId?: string;
   class?: string;
 }
 </script>
 
 <script lang="ts">
 import CaretDown from "phosphor-svelte/lib/CaretDown";
-import { Shimmer } from "$lib/components/ai/shimmer";
-import ToolActivityCountSummary from "$lib/components/ai/tool/ToolActivityCountSummary.svelte";
-import ToolCallCard from "$lib/components/ai/tool/ToolCallCard.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
+import { gsapFadeY, tokens } from "$lib/motion";
 import { cn } from "$lib/utils.js";
-import { activityGroupSummary } from "$lib/utils/activity-groups";
+import { activityGroupSummary } from "./activity-groups";
+import ToolActivityCountSummary from "./ToolActivityCountSummary.svelte";
+import ToolCallCard from "./ToolCallCard.svelte";
 
 let {
   items,
   active = false,
   defaultOpen = false,
   forceOpenWhileActive = false,
-  prId,
   class: className,
 }: ToolActivityGroupProps = $props();
 
@@ -53,6 +51,7 @@ $effect(() => {
   class={cn("tool-activity-group", className)}
   data-component="tool-activity-group"
   data-state={open ? "open" : "closed"}
+  in:gsapFadeY|global={{ y: 4, duration: tokens.quick }}
 >
   <Collapsible bind:open>
     <CollapsibleTrigger class="tool-activity-trigger" aria-label={`${title}: ${summary}`}>
@@ -75,7 +74,6 @@ $effect(() => {
             payload={item.payload}
             output={item.output}
             isError={item.isError}
-            prId={prId}
           />
         {/each}
       </div>
@@ -89,7 +87,6 @@ $effect(() => {
     width: 100%;
     overflow: hidden;
     border-radius: 0.375rem;
-    animation: tool-activity-group-in var(--duration-quick) var(--ease-out-expo) both;
   }
 
   .tool-activity-group :global(.tool-activity-trigger) {
@@ -154,18 +151,5 @@ $effect(() => {
     flex-direction: column;
     gap: 0.125rem;
     padding: 0.375rem 0 0.125rem 0.5rem;
-  }
-
-  @keyframes tool-activity-group-in {
-    from {
-      opacity: 0;
-      filter: blur(2px);
-      transform: translateY(0.25rem);
-    }
-    to {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateY(0);
-    }
   }
 </style>

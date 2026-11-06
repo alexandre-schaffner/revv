@@ -21,10 +21,9 @@ export type ShimmerProps = HTMLAttributes<HTMLElement> & {
 		...restProps
 	}: ShimmerProps = $props();
 
+	// Keep sweeping until the layers' opacity swap (--text-shimmer-swap) ends.
 	const swap = tokens.smooth * 1000;
 
-	// Delayed deactivation: keep the shimmer running for one last sweep cycle
-	// before removing the animation, so deactivation feels smooth.
 	let run = $state(true);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -57,7 +56,7 @@ export type ShimmerProps = HTMLAttributes<HTMLElement> & {
 	data-component="text-shimmer"
 	data-active={active ? "true" : "false"}
 	class={cn(className)}
-	style="--text-shimmer-swap: {swap}ms; --text-shimmer-index: {offset};"
+	style="--text-shimmer-index: {offset};"
 	{...restProps}
 >
 	<span data-slot="text-shimmer-char">

@@ -6,7 +6,7 @@ import CircleNotch from "phosphor-svelte/lib/CircleNotch";
 import Clock from "phosphor-svelte/lib/Clock";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import XCircle from "phosphor-svelte/lib/XCircle";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, tokens } from "$lib/motion";
 import StackLayerGlyph from "./StackLayerGlyph.svelte";
 

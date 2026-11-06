@@ -19,38 +19,47 @@ function spin(from: number, to: number, direction: 1 | -1): number {
 
 <script lang="ts">
 import { untrack } from "svelte";
+import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 
 let { value, direction }: AnimatedDigitProps = $props();
 
-let step = $state(untrack(() => value) + 10);
+let strip: HTMLSpanElement;
+// Index of the shown cell in the 30-cell track; a spin moves it up to 9 cells
+// either way, then it settles back into the middle ten.
+const initialStep = untrack(() => value) + 10;
+let step = initialStep;
 let last = untrack(() => value);
-let ready = false;
+
+function show(next: number): void {
+  step = next;
+  gsap.set(strip, { "--animated-number-offset": step });
+}
 
 $effect(() => {
   const nextValue = value;
-  const nextDirection = direction;
-
-  if (!ready) {
-    ready = true;
+  const delta = spin(last, nextValue, direction);
+  last = nextValue;
+  if (delta === 0) return;
+  if (prefersReducedMotion()) {
+    show(nextValue + 10);
     return;
   }
-
-  const delta = spin(last, nextValue, nextDirection);
-  last = nextValue;
-  step = delta === 0 ? nextValue + 10 : step + delta;
+  step += delta;
+  gsap.to(strip, {
+    "--animated-number-offset": step,
+    duration: tokens.smooth,
+    ease: tokens.easeOutExpo,
+    overwrite: "auto",
+    onComplete: () => show(normalize(step) + 10),
+  });
 });
-
-function handleTransitionEnd(event: TransitionEvent): void {
-  if (event.propertyName !== "transform") return;
-  step = normalize(step) + 10;
-}
 </script>
 
 <span data-slot="animated-number-digit">
   <span
+    bind:this={strip}
     data-slot="animated-number-strip"
-    style:--animated-number-offset={step}
-    ontransitionend={handleTransitionEnd}
+    style:--animated-number-offset={initialStep}
   >
     {#each TRACK as trackValue, index (index)}
       <span data-slot="animated-number-cell">{trackValue}</span>
@@ -71,7 +80,6 @@ function handleTransitionEnd(event: TransitionEvent): void {
     display: flex;
     flex-direction: column;
     transform: translateY(calc(var(--animated-number-offset) * -1em));
-    transition: transform var(--duration-smooth) var(--ease-out-expo);
     will-change: transform;
   }
 

@@ -1,35 +1,11 @@
-import { getContext, setContext } from "svelte";
-
-const CONTEXT_KEY = Symbol("ai-context");
-
-export type ContextUsage = {
+export interface ContextUsageBreakdown {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
-};
-
-export type ContextState = {
-  usedTokens: number;
-  maxTokens: number;
-  usage?: ContextUsage | undefined;
-};
-
-export type ContextStateGetter = () => ContextState;
-
-export function setContextState(getter: ContextStateGetter) {
-  setContext(CONTEXT_KEY, getter);
 }
 
-export function getContextState(): ContextStateGetter {
-  const getter = getContext<ContextStateGetter | undefined>(CONTEXT_KEY);
-  if (!getter) {
-    throw new Error("Context components must be used within <Context>");
-  }
-  return getter;
-}
-
-/** Compact "1.2K" / "4.3M" formatter used in trigger + rows. */
+/** Compact "1.2K" / "4.3M". */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n < 1_000) return `${Math.round(n)}`;

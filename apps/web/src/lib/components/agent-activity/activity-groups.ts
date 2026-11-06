@@ -1,4 +1,5 @@
 import type { ActivityKind } from "@revv/shared";
+import { basename } from "$lib/utils/path";
 
 export interface GroupableActivity {
   readonly id: string;
@@ -28,8 +29,9 @@ export function isExplorationActivity(activity: Pick<GroupableActivity, "activit
   return EXPLORATION_KINDS.has(activity.activityKind);
 }
 
+/** "3 reads, 1 search": the count a group's header shows, as text. */
 export function activityGroupSummary(
-  items: readonly Pick<GroupableActivity, "activityKind">[],
+  items: readonly Pick<GroupableActivity, "activityKind" | "toolName">[],
 ): string {
   const { reads, searches, lists } = activityGroupCounts(items);
 
@@ -42,19 +44,11 @@ export function activityGroupSummary(
     .join(", ");
 }
 
+/**
+ * Reads, searches and lists in a group. A tool counts by its kind or, when an
+ * agent reports a builtin under another kind, by its name.
+ */
 export function activityGroupCounts(
-  items: readonly Pick<GroupableActivity, "activityKind">[],
-): ActivityGroupCounts {
-  return {
-    reads: items.filter((item) => item.activityKind === "tool.read").length,
-    searches: items.filter(
-      (item) => item.activityKind === "tool.grep" || item.activityKind === "tool.glob",
-    ).length,
-    lists: items.filter((item) => item.activityKind === "tool.ls").length,
-  };
-}
-
-export function robustActivityGroupCounts(
   items: readonly Pick<GroupableActivity, "activityKind" | "toolName">[],
 ): ActivityGroupCounts {
   let reads = 0;
@@ -77,9 +71,7 @@ export function robustActivityGroupCounts(
   return { reads, searches, lists };
 }
 
-export function activityToolLabel(
-  item: Pick<GroupableActivity, "activityKind" | "toolName">,
-): string {
+function activityToolLabel(item: Pick<GroupableActivity, "activityKind" | "toolName">): string {
   if (item.activityKind === "tool.read") return "Read";
   if (item.activityKind === "tool.grep") return "Grep";
   if (item.activityKind === "tool.glob") return "Glob";
@@ -91,10 +83,8 @@ export function activityToolLabel(
 }
 
 /**
- * The bold tool name shown in a card header. Same as {@link activityToolLabel}
- * except a Read with captured output surfaces the line count ("Read 40 lines"),
- * mirroring the reference UI. Owning the read special-case here keeps
- * `ToolCallCard` a dumb renderer rather than re-parsing output inline.
+ * The bold tool name shown in a card header; a Read with captured output
+ * carries its line count ("Read 40 lines").
  */
 export function activityLabel(item: {
   readonly activityKind: ActivityKind;
@@ -151,13 +141,6 @@ function payloadPath(payload: unknown): string {
     if (value) return value;
   }
   return "";
-}
-
-/** Last path segment, for compact headers (`…/PromptInputTextarea.svelte`). */
-export function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, "");
-  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 }
 
 /**

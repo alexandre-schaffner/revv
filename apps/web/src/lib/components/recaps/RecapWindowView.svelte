@@ -5,10 +5,10 @@ import PenNib from "phosphor-svelte/lib/PenNib";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { Button } from "$lib/components/ui/button";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/stores/recaps.svelte";
 import {
   addUtcDays,

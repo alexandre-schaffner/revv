@@ -7,8 +7,9 @@ export interface AnimatedNumberProps {
 
 <script lang="ts">
 import { untrack } from "svelte";
-import AnimatedDigit from "./AnimatedDigit.svelte";
+import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
 import { cn } from "$lib/utils.js";
+import AnimatedDigit from "./AnimatedDigit.svelte";
 
 let { value, class: className }: AnimatedNumberProps = $props();
 
@@ -29,11 +30,26 @@ const digits = $derived(
     return digit >= 0 && digit <= 9 ? digit : 0;
   }).reverse(),
 );
-const width = $derived(`${digits.length}ch`);
+const initialColumns = untrack(() => digits.length);
+
+// A new digit column (9 → 10) widens the number rather than jumping.
+let valueEl: HTMLSpanElement;
+$effect(() => {
+  const columns = { "--animated-number-columns": digits.length };
+  if (prefersReducedMotion()) gsap.set(valueEl, columns);
+  else {
+    gsap.to(valueEl, {
+      ...columns,
+      duration: tokens.smooth,
+      ease: tokens.easeOutExpo,
+      overwrite: "auto",
+    });
+  }
+});
 </script>
 
 <span data-component="animated-number" class={cn(className)} aria-label={label}>
-  <span data-slot="animated-number-value" style:--animated-number-width={width}>
+  <span bind:this={valueEl} data-slot="animated-number-value" style:--animated-number-columns={initialColumns}>
     {#each digits as digit, index (index)}
       <AnimatedDigit value={digit} {direction} />
     {/each}
@@ -51,14 +67,10 @@ const width = $derived(`${digits.length}ch`);
 
   [data-slot="animated-number-value"] {
     display: inline-flex;
-    width: var(--animated-number-width);
+    width: calc(var(--animated-number-columns) * 1ch);
     align-items: baseline;
     flex-direction: row-reverse;
     justify-content: flex-end;
     line-height: inherit;
-    /* Width transition is deliberate: digit-count changes (9 → 10) need to
-       allocate one more tabular-nums column. Width is the only honest target
-       for this since tabular-nums already gives constant per-digit width. */
-    transition: width var(--duration-smooth) var(--ease-out-expo);
   }
 </style>

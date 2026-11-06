@@ -1,5 +1,5 @@
 <script lang="ts" module>
-import type { GroupableActivity } from "$lib/utils/activity-groups";
+import type { GroupableActivity } from "./activity-groups";
 
 export interface ToolActivityCountSummaryProps {
   items: readonly GroupableActivity[];
@@ -10,11 +10,11 @@ export interface ToolActivityCountSummaryProps {
 <script lang="ts">
 import AnimatedNumber from "./AnimatedNumber.svelte";
 import { cn } from "$lib/utils.js";
-import { robustActivityGroupCounts } from "$lib/utils/activity-groups";
+import { activityGroupCounts } from "./activity-groups";
 
 let { items, class: className }: ToolActivityCountSummaryProps = $props();
 
-const counts = $derived(robustActivityGroupCounts(items));
+const counts = $derived(activityGroupCounts(items));
 const visibleItems = $derived(
   [
     { key: "reads", count: counts.reads, one: "read", other: "reads" },
@@ -79,9 +79,5 @@ function labelFor(item: { count: number; one: string; other: string }): string {
   .tool-count-stem {
     font: inherit;
     line-height: inherit;
-    transition:
-      opacity var(--duration-quick) var(--ease-out-expo),
-      transform var(--duration-quick) var(--ease-out-expo);
-    will-change: transform, opacity;
   }
 </style>

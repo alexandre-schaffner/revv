@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { AcpAgentId, LoginEvent } from "@revv/shared";
 import type { FitAddon } from "@xterm/addon-fit";
-import type { ITheme, Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import { onDestroy, onMount } from "svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
@@ -9,6 +9,7 @@ import { SseHttpError, streamSse } from "$lib/api/sse-stream";
 import { prefersReducedMotion } from "$lib/motion";
 import { authHeaders } from "$lib/session/token.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
+import { cssTokens, openXterm, xtermTheme } from "$lib/utils/xterm";
 // xterm ships its own canvas/DOM — acceptable for a literal terminal. The
 // stylesheet is required for layout; the JS is dynamically imported in onMount
 // so it never runs during SSR / prerender.
@@ -130,55 +131,20 @@ function onResize(): void {
   }
 }
 
-/**
- * xterm can't resolve CSS `var()` — it needs literal color/font strings to
- * measure glyph cells and paint. Read the resolved onboarding tokens off the
- * mounted element so the terminal tracks light/dark mode and the warm paper
- * palette instead of xterm's default white-on-black (invisible here) plus its
- * garish bright-ANSI colors.
- */
-function readTerminalStyle(el: HTMLElement): {
-  fontFamily: string;
-  theme: ITheme;
-} {
-  const cs = getComputedStyle(el);
-  const v = (name: string, fallback: string): string =>
-    cs.getPropertyValue(name).trim() || fallback;
-
-  const fg = v("--ob-text", "#2a2825");
-  const muted = v("--ob-text-muted", "#9a958c");
-  const dim = v("--ob-text-dimmed", "#c4bfb6");
-  const accent = v("--ob-text-italic", "#6b5d3e");
-  const heading = v("--ob-text-heading", "#1a1816");
-
-  return {
-    fontFamily: v("--font-mono", '"JetBrains Mono", "Fira Code", monospace'),
-    theme: {
-      background: "#00000000",
-      foreground: fg,
-      cursor: accent,
-      cursorAccent: v("--ob-bg", "#faf9f6"),
-      selectionBackground: v("--ob-row-highlight", "rgba(107, 93, 62, 0.18)"),
-      // Map the 16 ANSI slots onto the onboarding palette so CLI-colored
-      // output (cyan tips, dim hints, bold headings) reads on the paper bg.
-      black: dim,
-      red: v("--ob-error", "#b5494b"),
-      green: accent,
-      yellow: accent,
-      blue: muted,
-      magenta: accent,
-      cyan: muted,
-      white: fg,
-      brightBlack: muted,
-      brightRed: v("--ob-error", "#b5494b"),
-      brightGreen: accent,
-      brightYellow: accent,
-      brightBlue: muted,
-      brightMagenta: accent,
-      brightCyan: muted,
-      brightWhite: heading,
-    },
-  };
+function terminalTheme(el: HTMLElement) {
+  const token = cssTokens(el);
+  const danger = token("--ob-error", "#b5494b");
+  return xtermTheme({
+    foreground: token("--ob-text", "#2a2825"),
+    muted: token("--ob-text-muted", "#9a958c"),
+    dim: token("--ob-text-dimmed", "#c4bfb6"),
+    accent: token("--ob-text-italic", "#6b5d3e"),
+    danger,
+    heading: token("--ob-text-heading", "#1a1816"),
+    cursor: token("--ob-text-italic", "#6b5d3e"),
+    cursorAccent: token("--ob-bg", "#faf9f6"),
+    selection: token("--ob-row-highlight", "rgba(107, 93, 62, 0.18)"),
+  });
 }
 
 onMount(async () => {
@@ -201,23 +167,13 @@ onMount(async () => {
     return;
   }
 
-  // 2. Mount the terminal (client-only import).
-  const [{ Terminal }, { FitAddon }] = await Promise.all([
-    import("@xterm/xterm"),
-    import("@xterm/addon-fit"),
-  ]);
-  const { fontFamily, theme } = readTerminalStyle(container);
-  term = new Terminal({
+  // 2. Mount the terminal.
+  ({ term, fit } = await openXterm(container, {
     convertEol: false,
     cursorBlink: !prefersReducedMotion(),
     fontSize: 12,
-    fontFamily,
-    allowTransparency: true,
-    theme,
-  });
-  fit = new FitAddon();
-  term.loadAddon(fit);
-  term.open(container);
+    theme: terminalTheme(container),
+  }));
   onResize();
   term.onData((d) => void sendInput(d));
   window.addEventListener("resize", onResize);
@@ -241,7 +197,7 @@ $effect(() => {
   // The `.dark` class on <html> is toggled synchronously before this effect
   // runs, so the --ob-* tokens already resolve to the new theme.
   void resolved;
-  term.options.theme = readTerminalStyle(container).theme;
+  term.options.theme = terminalTheme(container);
 });
 
 onDestroy(() => {

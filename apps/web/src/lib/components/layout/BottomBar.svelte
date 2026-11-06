@@ -1,16 +1,6 @@
 <script lang="ts">
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
-import {
-  Context,
-  ContextCacheCreationUsage,
-  ContextCacheReadUsage,
-  ContextContent,
-  ContextContentBody,
-  ContextContentHeader,
-  ContextInputUsage,
-  ContextOutputUsage,
-  ContextTrigger,
-} from "$lib/components/ai/context";
+import ContextUsage from "$lib/components/agent-activity/ContextUsage.svelte";
 import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import {
@@ -66,18 +56,7 @@ function handleRetrySync() {
 	<!-- Right: usage indicator + sync + branch/sha -->
 	<div class="bottombar-right">
 		{#if showUsage}
-			<Context {usedTokens} maxTokens={maxContext} {usage}>
-				<ContextTrigger />
-				<ContextContent>
-					<ContextContentHeader />
-					<ContextContentBody>
-						<ContextInputUsage />
-						<ContextOutputUsage />
-						<ContextCacheReadUsage />
-						<ContextCacheCreationUsage />
-					</ContextContentBody>
-				</ContextContent>
-			</Context>
+			<ContextUsage {usedTokens} maxTokens={maxContext} {usage} />
 			<span class="h-3 w-px shrink-0 bg-border"></span>
 		{/if}
 		{#if selectedPrId}
