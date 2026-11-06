@@ -17,8 +17,9 @@ import {
   resolveBlockRefs,
 } from "../../../services/walkthrough/content";
 import type { ToolSpecBundle } from "../mcp-tool-gateway";
+import { fail, ok } from "../mcp-tool-gateway";
 import { withContentWriteMetrics } from "../walkthrough-metrics";
-import { errorResult, okResult, unwrapJsonWrappedString } from "./helpers";
+import { unwrapJsonWrappedString } from "./helpers";
 import { resolveLeadHandler } from "./lead-handler";
 import {
   addDiffStepHandler,
@@ -104,7 +105,7 @@ export const setOverviewHandler: WalkthroughToolHandler<SetOverviewInput> = asyn
     type: "phase:advanced",
     data: { lastCompletedPhase: "A" },
   });
-  return okResult(
+  return ok(
     "Overview set. Phase A complete — open the first chapter with add_semantic_step (title + optional summary), then walk through it via add_diff_step calls.",
   );
 };
@@ -138,7 +139,7 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
       .limit(1)
       .all();
     if (anyStep.length === 0) {
-      result = errorResult(
+      result = fail(
         "Error: set_sentiment requires at least one diff step. Call add_diff_step first.",
       );
       return;
@@ -160,7 +161,7 @@ export const setSentimentHandler: WalkthroughToolHandler<SetSentimentInput> = as
     type: "phase:advanced",
     data: { lastCompletedPhase: "C" },
   });
-  return okResult(
+  return ok(
     "Sentiment set. Phase C complete — now rate all 9 axes with rate_axis, as nine parallel calls in one turn.",
   );
 };
@@ -185,7 +186,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
     const { verdict, confidence } = input;
     if (verdict !== "pass" && input.citations.length === 0) {
-      result = errorResult(
+      result = fail(
         `Error: verdict='${verdict}' requires at least one citation. Add a citation pointing to the specific line range, or downgrade to 'pass' with an explanatory rationale.`,
       );
       return;
@@ -193,7 +194,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
 
     const refs = resolveBlockRefs(ctx.db, ctx.walkthroughId, input.block_refs);
     if ("unknown" in refs) {
-      result = errorResult(renderUnknownBlockRefs(refs.unknown));
+      result = fail(renderUnknownBlockRefs(refs.unknown));
       return;
     }
     const { blockIds } = refs;
@@ -271,7 +272,7 @@ export const rateAxisHandler: WalkthroughToolHandler<RateAxisInput> = async (ctx
       data: { lastCompletedPhase: "D" },
     });
   }
-  return okResult(
+  return ok(
     advanced
       ? "Final axis rated — all 9 axes complete. Call complete_walkthrough now."
       : `Axis '${input.axis}' rated. Continue rating the remaining axes.`,
@@ -293,8 +294,8 @@ export const completeWalkthroughHandler: WalkthroughToolHandler<CompleteWalkthro
   const open = openForWrite(ctx.db, ctx.walkthroughId, "complete_walkthrough");
   if ("refusal" in open) return open.refusal;
   const [blocker] = walkthroughCompletionBlockers(ctx.db, ctx.walkthroughId);
-  if (blocker) return errorResult(blocker.message);
-  return okResult(
+  if (blocker) return fail(blocker.message);
+  return ok(
     "Walkthrough complete. You may stop. The orchestrator marks it complete when your turn ends.",
   );
 };

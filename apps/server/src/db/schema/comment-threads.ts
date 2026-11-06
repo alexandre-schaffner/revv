@@ -17,6 +17,9 @@ export const commentThreads = sqliteTable("comment_threads", {
   externalThreadId: text("external_thread_id"),
   externalCommentId: text("external_comment_id"),
   lastSyncedAt: text("last_synced_at"),
+  // A status set in Revv that GitHub hasn't taken yet: a pull keeps it and
+  // pushes it again rather than reverting it to GitHub's.
+  statusPushPending: integer("status_push_pending", { mode: "boolean" }).notNull().default(false),
   // Optional back-reference to a walkthrough_issues row when this thread was
   // authored by the AI agent via the `add_issue_comment` MCP tool. Null for
   // every human-authored thread. Lets us trace AI comments to their source

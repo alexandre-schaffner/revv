@@ -228,29 +228,30 @@ export interface CommitSummary {
   readonly sha: string;
   readonly subject: string;
   readonly committedAt: string;
+  /** Paths the commit touched against its parent. */
+  readonly files: string[];
 }
 
 /** The proposed commits in `range`, newest first, as `git log` shows them. Throws when git can't list them. */
 export async function proposedCommitLog(cwd: string, range: string): Promise<CommitSummary[]> {
   const out = await runGit(
     cwd,
-    ["log", ...PROPOSED_COMMIT_RANGE_FLAGS, range, "--pretty=format:%H%x09%s%x09%aI"],
+    [
+      "log",
+      ...PROPOSED_COMMIT_RANGE_FLAGS,
+      "--name-only",
+      range,
+      "--pretty=format:%x1e%H%x09%s%x09%aI",
+    ],
     10_000,
   );
-  return lines(out).flatMap((line) => {
-    const [sha, subject, committedAt] = line.split("\t");
-    return sha && subject !== undefined && committedAt ? [{ sha, subject, committedAt }] : [];
+  return out.split("\x1e").flatMap((record) => {
+    const [header, ...files] = lines(record);
+    const [sha, subject, committedAt] = header?.split("\t") ?? [];
+    return sha && subject !== undefined && committedAt
+      ? [{ sha, subject, committedAt, files }]
+      : [];
   });
-}
-
-/** Paths a commit touched; empty when it can't be read. */
-export async function commitFileNames(cwd: string, sha: string): Promise<string[]> {
-  const r = await gitAttempt(
-    cwd,
-    ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-    10_000,
-  );
-  return r.ok ? lines(r.stdout) : [];
 }
 
 /** What a commit changed against its first parent, renames detected. Throws when git can't read it. */

@@ -2,11 +2,8 @@ import { describe, expect, it } from "bun:test";
 import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
-import {
-  type StackBriefToolContext,
-  setArcHandler,
-  setLayerRoleHandler,
-} from "../../ai/providers/stack-brief-tools";
+import type { StackBriefToolContext } from "../../ai/providers/stack-brief-tools";
+import { setArcHandler, setLayerRoleHandler } from "../../ai/providers/stack-brief-tools/handlers";
 import { createDb, type Db } from "../../db/index";
 import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import { DbService } from "../Db";

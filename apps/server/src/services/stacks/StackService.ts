@@ -5,12 +5,7 @@ import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
-import {
-  type DbError,
-  type GitHubError,
-  GitHubNetworkError,
-  GitHubRateLimitError,
-} from "../../domain/errors";
+import { type DbError, type GitHubError, isGitHubUnreachable } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
 import { logError } from "../../logger";
@@ -61,10 +56,6 @@ export class StackService extends Context.Service<
     readonly markStale: (repositoryId: string, stackNumber: number) => Effect.Effect<void, DbError>;
   }
 >()("StackService") {}
-
-function isUnreachable(e: unknown): boolean {
-  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
 
 export function toSnapshot(stack: GitHubStack, position: number): WalkthroughStackSnapshot {
   return {
@@ -365,7 +356,7 @@ export const StackServiceLive = Layer.effect(
             const { ifUnreachable } = source;
             return yield* fetchFresh(ctx).pipe(
               Effect.map((stack) => ({ stack, stale: false })),
-              Effect.catchIf(isUnreachable, (err) =>
+              Effect.catchIf(isGitHubUnreachable, (err) =>
                 ifUnreachable
                   ? Effect.succeed({ stack: ifUnreachable, stale: true })
                   : Effect.fail(err),

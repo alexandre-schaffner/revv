@@ -5,7 +5,8 @@
 import type { WalkthroughPipelinePhase } from "@revv/shared";
 import type { Db } from "../../../db";
 import type { WalkthroughRow } from "../../../services/walkthrough/content";
-import { errorResult, loadWalkthroughRow } from "./helpers";
+import { fail } from "../mcp-tool-gateway";
+import { loadWalkthroughRow } from "./helpers";
 import type { WalkthroughToolResult } from "./spec";
 
 interface PhaseWindow {
@@ -93,9 +94,9 @@ export function openForWrite(
   | { readonly row: WalkthroughRow; readonly phase: WalkthroughPipelinePhase }
   | { readonly refusal: WalkthroughToolResult } {
   const row = loadWalkthroughRow(db, walkthroughId);
-  if (!row) return { refusal: errorResult(`Walkthrough ${walkthroughId} not found.`) };
+  if (!row) return { refusal: fail(`Walkthrough ${walkthroughId} not found.`) };
   const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
   const window: PhaseWindow = TOOL_PHASES[tool];
-  if (!window.after.includes(phase)) return { refusal: errorResult(window.refusal(phase)) };
+  if (!window.after.includes(phase)) return { refusal: fail(window.refusal(phase)) };
   return { row, phase };
 }

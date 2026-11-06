@@ -2,7 +2,7 @@
 // user does with them: select, comment, discard, cherry-pick, push, resolve a
 // conflicting push, and recover when the PR head moved under them.
 
-import type { ActivityKind } from "@revv/shared";
+import type { ActivityKind, ProposedCommit } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
 import { createResource } from "$lib/stores/resource";
@@ -35,19 +35,11 @@ export interface ProposedComment {
   body: string;
 }
 
-export interface BlockedCommit {
-  sha: string;
-  shortSha: string;
-  subject: string;
-  committedAt: string;
-  files: string[];
-}
-
 /** The PR head moved while the worktree still held unpushed agent commits. */
 export interface WorktreeBlockedState {
   oldHeadSha: string;
   newHeadSha: string;
-  commits: BlockedCommit[];
+  commits: readonly ProposedCommit[];
 }
 
 type BranchOp = "push" | "resolve" | "rebase" | "batch";

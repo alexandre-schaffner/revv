@@ -106,8 +106,8 @@ export function resolveIncrementalPromptFiles(
             file.filename,
           );
           patch = capPatch(rawPatch);
-        } catch {
-          patch = null;
+        } catch (err) {
+          logError("walkthrough-jobs", `incremental patch for ${file.filename} failed:`, err);
         }
         const counts = resolveCounts(numstat, file.filename, patch);
         files.push({

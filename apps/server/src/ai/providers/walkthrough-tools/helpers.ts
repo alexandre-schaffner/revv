@@ -1,15 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import type { WalkthroughToolResult } from "./spec";
-
-export function errorResult(text: string): WalkthroughToolResult {
-  return { content: [{ type: "text" as const, text }], isError: true };
-}
-
-export function okResult(text: string): WalkthroughToolResult {
-  return { content: [{ type: "text" as const, text }] };
-}
 
 /**
  * Some agents send a single-field markdown payload JSON-wrapped —

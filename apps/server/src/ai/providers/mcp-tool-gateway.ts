@@ -6,10 +6,17 @@ export interface McpToolResult {
   [k: string]: unknown;
 }
 
+export function ok(text: string): McpToolResult {
+  return { content: [{ type: "text" as const, text }] };
+}
+
+export function fail(text: string): McpToolResult {
+  return { content: [{ type: "text" as const, text }], isError: true };
+}
+
 /**
- * One MCP tool declaration, shared by the in-process SDK adapter and the HTTP
- * transport. `inputSchema` parses raw wire data at the boundary; handlers only
- * receive parsed values.
+ * One MCP tool declaration. `inputSchema` parses raw wire data at the
+ * boundary; handlers only receive parsed values.
  */
 export interface ToolSpec<Ctx, Result extends McpToolResult = McpToolResult> {
   readonly name: string;

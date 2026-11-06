@@ -17,10 +17,10 @@ import {
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
-  type StreamErrorBody,
 } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { AttachmentRejectedError } from "../domain/errors";
 import { ChatSessionService } from "../services/ChatSession";
 import { ChatTurnService } from "../services/chat/ChatTurn";
 import { PrContextService } from "../services/PrContext";
@@ -77,43 +77,33 @@ function validateAttachmentKind(attachment: ChatAttachment): string | null {
   return null;
 }
 
-type AttachmentValidation =
-  | { ok: true; metadata: ChatAttachmentMetadata[] }
-  | {
-      ok: false;
-      status: 413 | 415;
-      code: "ATTACHMENT_TOO_LARGE" | "ATTACHMENT_INVALID";
-      message: string;
-    };
-
 function validateAttachments(
-  attachments: ReadonlyArray<ChatAttachment> | undefined,
-): AttachmentValidation {
-  if (!attachments || attachments.length === 0) return { ok: true, metadata: [] };
+  attachments: ReadonlyArray<ChatAttachment>,
+): Effect.Effect<ChatAttachmentMetadata[], AttachmentRejectedError> {
   let total = 0;
   const metadata: ChatAttachmentMetadata[] = [];
   for (const attachment of attachments) {
     const kindError = validateAttachmentKind(attachment);
     if (kindError) {
-      return { ok: false, status: 415, code: "ATTACHMENT_INVALID", message: kindError };
+      return Effect.fail(new AttachmentRejectedError({ reason: "invalid", message: kindError }));
     }
     const size = attachmentByteSize(attachment);
     if (size > MAX_CHAT_ATTACHMENT_BYTES) {
-      return {
-        ok: false,
-        status: 413,
-        code: "ATTACHMENT_TOO_LARGE",
-        message: attachmentTooLargeMessage(attachment.name),
-      };
+      return Effect.fail(
+        new AttachmentRejectedError({
+          reason: "too-large",
+          message: attachmentTooLargeMessage(attachment.name),
+        }),
+      );
     }
     total += size;
     if (total > MAX_CHAT_ATTACHMENTS_TOTAL_BYTES) {
-      return {
-        ok: false,
-        status: 413,
-        code: "ATTACHMENT_TOO_LARGE",
-        message: attachmentsTotalTooLargeMessage(),
-      };
+      return Effect.fail(
+        new AttachmentRejectedError({
+          reason: "too-large",
+          message: attachmentsTotalTooLargeMessage(),
+        }),
+      );
     }
     metadata.push({
       kind: attachment.kind,
@@ -122,7 +112,7 @@ function validateAttachments(
       size,
     });
   }
-  return { ok: true, metadata };
+  return Effect.succeed(metadata);
 }
 
 export const chatRoute = new Elysia()
@@ -134,48 +124,20 @@ export const chatRoute = new Elysia()
     "/api/chat",
     (ctx) => {
       const attachments = ctx.body.attachments ?? [];
-      const validation = validateAttachments(attachments);
-      if (!validation.ok) {
-        ctx.set.status = validation.status;
-        return { code: validation.code, message: validation.message };
-      }
-      const turn = Effect.flatMap(ChatTurnService, (turns) =>
-        turns.start({
-          prId: ctx.body.prId,
-          userId: ctx.session.user.id,
-          message: ctx.body.message,
-          attachments,
-          attachmentMetadata: validation.metadata,
-          ...(ctx.body.interactionMode ? { interactionMode: ctx.body.interactionMode } : {}),
-          ...(ctx.body.approvedPlanId ? { approvedPlanId: ctx.body.approvedPlanId } : {}),
-        }),
-      );
       return runStream(
-        turn.pipe(
-          Effect.map(pipeToSse),
-          Effect.catchTag("PlanGateError", (refused) =>
-            Effect.succeed(
-              refused.reason === "pending"
-                ? Response.json(
-                    {
-                      code: "PLAN_PENDING",
-                      planId: refused.planId,
-                      message:
-                        "A plan is awaiting your decision. Approve or reject it before sending a new message.",
-                    } satisfies StreamErrorBody,
-                    { status: 409 },
-                  )
-                : Response.json(
-                    {
-                      code: "PLAN_NOT_FOUND",
-                      planId: refused.planId,
-                      message: "Plan not found",
-                    } satisfies StreamErrorBody,
-                    { status: 404 },
-                  ),
-            ),
-          ),
-        ),
+        Effect.gen(function* () {
+          const attachmentMetadata = yield* validateAttachments(attachments);
+          const turns = yield* ChatTurnService;
+          return yield* turns.start({
+            prId: ctx.body.prId,
+            userId: ctx.session.user.id,
+            message: ctx.body.message,
+            attachments,
+            attachmentMetadata,
+            ...(ctx.body.interactionMode ? { interactionMode: ctx.body.interactionMode } : {}),
+            ...(ctx.body.approvedPlanId ? { approvedPlanId: ctx.body.approvedPlanId } : {}),
+          });
+        }).pipe(Effect.map(pipeToSse)),
       );
     },
     {
@@ -226,9 +188,9 @@ export const chatRoute = new Elysia()
     "/api/chat/:prId",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (workspace) =>
-          workspace.clear(ctx.params.prId, ctx.session.user.id),
-        ).pipe(Effect.as(new Response(null, { status: 204 }))),
+        Effect.flatMap(PrWorkspace, (workspace) => workspace.clear(ctx.params.prId)).pipe(
+          Effect.as(new Response(null, { status: 204 })),
+        ),
       ),
     {
       params: t.Object({ prId: t.String() }),

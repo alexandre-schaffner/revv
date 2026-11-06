@@ -21,7 +21,8 @@ import {
   upsertIssueComment,
 } from "../../../services/walkthrough/content";
 import { decodePlainText } from "../agent-text";
-import { type ChatEdit, fail, runChatEdit } from "./helpers";
+import { fail } from "../mcp-tool-gateway";
+import { type ChatEdit, runChatEdit } from "./helpers";
 import type {
   AddIssueCommentEditInput,
   AddIssueEditInput,

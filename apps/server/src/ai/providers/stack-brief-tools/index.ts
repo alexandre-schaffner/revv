@@ -18,15 +18,8 @@ import {
   setLayerRoleSchema,
 } from "./spec";
 
-export type { StackBriefToolContext, StackBriefToolResult } from "./spec";
-export {
-  completeStackBriefHandler,
-  getStackBriefStateHandler,
-  getStackLayersHandler,
-  setArcHandler,
-  setLayerRoleHandler,
-  stackBriefCompletionBlocker,
-};
+export type { StackBriefToolContext } from "./spec";
+export { stackBriefCompletionBlocker };
 
 const STACK_BRIEF_TOOL_SPECS: StackBriefToolSpecRecord[] = [
   {

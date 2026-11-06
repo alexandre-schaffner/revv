@@ -24,10 +24,11 @@ import type {
   WalkthroughRequestOutcome,
   WalkthroughRequestRefusal,
 } from "../../services/walkthrough-request";
-import { fail, ok, runChatEdit } from "./chat-edit-tools/helpers";
+import { runChatEdit } from "./chat-edit-tools/helpers";
 import type { ChatWalkthroughEditContext } from "./chat-edit-tools/spec";
 import { CHAT_TOOL_SPECS } from "./chat-mcp-tools";
 import type { McpToolResult, ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
+import { fail, ok } from "./mcp-tool-gateway";
 
 export interface ExternalReviewToolContext extends ChatWalkthroughEditContext {
   readonly integrationId: string;

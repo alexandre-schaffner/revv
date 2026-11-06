@@ -1,4 +1,4 @@
-import type { ApiErrorCode } from "@revv/shared";
+import type { ApiErrorCode, ProposedCommit } from "@revv/shared";
 import { Data } from "effect";
 
 export class ProfilingError extends Data.TaggedError("ProfilingError")<{
@@ -72,6 +72,11 @@ export type GitHubError =
   | GitHubNetworkError
   | GitHubApiError
   | GitHubNotFoundError;
+
+/** GitHub couldn't be reached or is rate-limiting: try later, or serve what's cached. */
+export function isGitHubUnreachable(e: unknown): e is GitHubNetworkError | GitHubRateLimitError {
+  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
+}
 
 // General errors
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
@@ -221,14 +226,16 @@ export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
   readonly prId: string;
 }> {}
 
-/**
- * A chat turn refused by its plan gate: a plan still awaits a decision, or the
- * plan the turn approves doesn't exist. Not in the HTTP table: the chat route
- * answers it with a stream refusal (`PLAN_PENDING` / `PLAN_NOT_FOUND`).
- */
+/** A plan still awaits a decision, or the plan a request names doesn't exist. */
 export class PlanGateError extends Data.TaggedError("PlanGateError")<{
   readonly reason: "pending" | "not-found";
   readonly planId: string;
+}> {}
+
+/** A chat message's attachment is over a size cap, or isn't what its kind says. */
+export class AttachmentRejectedError extends Data.TaggedError("AttachmentRejectedError")<{
+  readonly reason: "too-large" | "invalid";
+  readonly message: string;
 }> {}
 
 /** Rewriting the agent's commits hit a conflict; the branch was put back as it was. */
@@ -243,10 +250,6 @@ export class GitOperationError extends Data.TaggedError("GitOperationError")<{
 
 export class PushRejectedError extends Data.TaggedError("PushRejectedError")<{
   readonly message: string;
-}> {}
-
-export class RefAlreadyExistsError extends Data.TaggedError("RefAlreadyExistsError")<{
-  readonly ref: string;
 }> {}
 
 export class InvalidBranchNameError extends Data.TaggedError("InvalidBranchNameError")<{
@@ -292,13 +295,7 @@ export class WorktreeBlockedByUnpushedCommits extends Data.TaggedError(
   readonly branchName: string;
   readonly oldHeadSha: string;
   readonly newHeadSha: string;
-  readonly commits: ReadonlyArray<{
-    sha: string;
-    shortSha: string;
-    subject: string;
-    committedAt: string;
-    files: string[];
-  }>;
+  readonly commits: readonly ProposedCommit[];
 }> {}
 
 // ── Project Recap errors ───────────────────────────────────────────────────
@@ -411,7 +408,7 @@ export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
 // surfaces: a REST route, a stream refused before it starts, or the external
 // agent's MCP route. Adding an error class means adding its row here.
 
-export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
+export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 502 | 503;
 
 export interface HttpError {
   readonly status: HttpErrorStatus;
@@ -450,11 +447,12 @@ type AppError =
   | AgentBranchConflictError
   | GitOperationError
   | PushRejectedError
-  | RefAlreadyExistsError
   | InvalidBranchNameError
   | BaseConflictsRejectedError
   | HeadShaMismatchError
   | WorktreeBlockedByUnpushedCommits
+  | PlanGateError
+  | AttachmentRejectedError
   | RecapNotFoundError
   | DbError
   | BlobStoreUnavailable
@@ -540,7 +538,11 @@ const HTTP_ERRORS: {
     ),
   SyncError: (e) => http(502, "GITHUB_ERROR", e.message),
   AiNotConfiguredError: () =>
-    http(400, "NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude"),
+    http(
+      400,
+      "NOT_CONFIGURED",
+      "The selected AI agent can't be launched — install it or pick another in Settings",
+    ),
   AiGenerationError: (e) =>
     http(
       500,
@@ -583,6 +585,19 @@ const HTTP_ERRORS: {
       newHeadSha: e.newHeadSha,
       commits: e.commits,
     }),
+  PlanGateError: (e) =>
+    e.reason === "pending"
+      ? http(
+          409,
+          "PLAN_PENDING",
+          "A plan is awaiting your decision. Approve or reject it before sending a new message.",
+          { planId: e.planId },
+        )
+      : http(404, "PLAN_NOT_FOUND", "Plan not found", { planId: e.planId }),
+  AttachmentRejectedError: (e) =>
+    e.reason === "too-large"
+      ? http(413, "ATTACHMENT_TOO_LARGE", e.message)
+      : http(415, "ATTACHMENT_INVALID", e.message),
   ConcurrentPushError: (e) =>
     http(
       409,
@@ -605,7 +620,6 @@ const HTTP_ERRORS: {
     http(404, "NO_CHAT_SESSION", "No chat session for this PR — start a chat first"),
   AgentBranchConflictError: (e) => http(409, "REPLAY_CONFLICT", e.message),
   InvalidBranchNameError: (e) => http(400, "INVALID_BRANCH_NAME", e.message),
-  RefAlreadyExistsError: (e) => http(409, "REF_EXISTS", `branch ${e.ref} already exists`),
   PushRejectedError: (e) => http(502, "PUSH_REJECTED", e.message),
   GitOperationError: (e) => http(500, "FAILED", e.message),
   DbError: (e) => internal(e.message),

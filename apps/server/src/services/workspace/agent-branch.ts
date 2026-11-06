@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { ProposedCommit } from "@revv/shared";
 import { logError } from "../../logger";
 import {
   abortCherryPick,
@@ -19,7 +20,6 @@ import {
   cleanUntracked,
   commitChanges,
   commitExists,
-  commitFileNames,
   forceBranch,
   gitDirs,
   isAncestor,
@@ -74,30 +74,12 @@ export async function countProposed(branch: AgentBranch, baseSha: string): Promi
   return (await proposedCommitCount(branch.worktreePath, range(branch, baseSha))) ?? 0;
 }
 
-export interface ProposedCommit {
-  readonly sha: string;
-  readonly shortSha: string;
-  readonly subject: string;
-  readonly committedAt: string;
-  readonly files: string[];
-}
-
 export async function listProposedCommits(
   branch: AgentBranch,
   baseSha: string,
 ): Promise<ProposedCommit[]> {
   const log = await proposedCommitLog(branch.worktreePath, range(branch, baseSha));
-  const commits: ProposedCommit[] = [];
-  for (const { sha, subject, committedAt } of log) {
-    commits.push({
-      sha,
-      shortSha: sha.slice(0, 7),
-      subject,
-      committedAt,
-      files: await commitFileNames(branch.worktreePath, sha),
-    });
-  }
-  return commits;
+  return log.map((commit) => ({ ...commit, shortSha: commit.sha.slice(0, 7) }));
 }
 
 /**

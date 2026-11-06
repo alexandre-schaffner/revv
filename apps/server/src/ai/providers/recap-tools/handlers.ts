@@ -1,8 +1,6 @@
 // ─── recap-tools/handlers ────────────────────────────────────────────────────
 //
-// Shared handler implementations for the recap MCP tools. Used by:
-//   • In-process Claude SDK adapter (recap-tools/index.ts)
-//   • Future HTTP MCP route for opencode parity
+// The recap MCP tools, served at `/mcp/recap`.
 //
 // All writes hit `projectRecaps` directly via Drizzle so we don't need an
 // Effect runtime inside the agent's call path. Each handler is one atomic
@@ -20,6 +18,7 @@ import {
   recapThemeSummaries,
 } from "../../../db/schema/index";
 import { avatarOfRepoLogin } from "../../../db/schema/remote-users";
+import { fail, ok } from "../mcp-tool-gateway";
 import type {
   AddPrEntryInput,
   CompleteRecapInput,
@@ -46,14 +45,6 @@ function normalizeTheme(raw: string): string {
 const OPEN_PRS_DEFAULT_PAGE_SIZE = 5;
 /** Hard cap on a single `list_open_prs` page — matches the schema. */
 const OPEN_PRS_MAX_PAGE_SIZE = 20;
-
-function ok(text: string): RecapToolResult {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function err(text: string): RecapToolResult {
-  return { content: [{ type: "text" as const, text }], isError: true };
-}
 
 // ── Read tools ───────────────────────────────────────────────────────────────
 
@@ -247,7 +238,7 @@ function requireGenerating(ctx: RecapToolContext, action: string): RecapToolResu
     .where(eq(projectRecaps.id, ctx.recapId))
     .get();
   if (row?.status !== "generating") {
-    return err(
+    return fail(
       `Recap is no longer generating (status=${row?.status ?? "unknown"}). Aborting ${action}.`,
     );
   }
@@ -260,7 +251,7 @@ export const setLedeHandler: RecapToolHandler<SetLedeInput> = async (ctx, input)
 
   const lede = sanitizeLede(input.lede);
   if (lede.length === 0) {
-    return err(
+    return fail(
       "Error: lede was empty after sanitization. Submit 1–3 sentences of plain text; only <strong>/<em> are allowed as inline tags.",
     );
   }
@@ -290,7 +281,7 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   const archivedIds = new Set(ctx.sourceBundle.prs.map((p) => p.id));
   const openIds = new Set(ctx.sourceBundle.openPrs.map((p) => p.id));
   if (!archivedIds.has(input.pr_id) && !openIds.has(input.pr_id)) {
-    return err(
+    return fail(
       `Error: pr_id "${input.pr_id}" is not in this period's source bundle. Use only ids from get_recap_state.prs (archived) or list_open_prs (open).`,
     );
   }
@@ -415,14 +406,14 @@ export const setThemeSummaryHandler: RecapToolHandler<SetThemeSummaryInput> = as
 
   const theme = normalizeTheme(input.theme);
   if (theme.length === 0) {
-    return err(
+    return fail(
       "Error: theme was empty after normalization. Pass the same lowercase noun you used for add_pr_entry.",
     );
   }
 
   const summary = input.summary.trim().replace(/\s+/g, " ");
   if (summary.length === 0) {
-    return err(
+    return fail(
       "Error: summary was empty after trim. Submit 1–2 sentences of plain prose; backtick code spans are the only inline markup allowed.",
     );
   }
@@ -489,7 +480,7 @@ export function recapCompletionBlocker(db: Db, recapId: string): string | null {
 
 export const completeRecapHandler: RecapToolHandler<CompleteRecapInput> = async (ctx) => {
   const blocker = recapCompletionBlocker(ctx.db, ctx.recapId);
-  if (blocker) return err(blocker);
+  if (blocker) return fail(blocker);
 
   ctx.emit({ type: "phase", data: { phase: "finalizing", message: "Finalizing recap…" } });
 
@@ -506,7 +497,7 @@ export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, in
   const allPrs = [...ctx.sourceBundle.prs, ...ctx.sourceBundle.openPrs];
   const pr = allPrs.find((p) => p.id === input.pr_id);
   if (!pr) {
-    return err(
+    return fail(
       `PR id "${input.pr_id}" is not in this recap's source bundle. Use only ids from the \`prs\` array returned by get_recap_state.`,
     );
   }
@@ -526,13 +517,13 @@ export const getPrDiffHandler: RecapToolHandler<GetPrDiffInput> = async (ctx, in
   try {
     diff = await Effect.runPromise(ctx.getPrDiff(input.pr_id));
   } catch (e) {
-    return err(
+    return fail(
       `Diff fetch failed for ${input.pr_id}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 
   if (diff === null) {
-    return err(
+    return fail(
       `Diff unavailable for PR "${input.pr_id}". Fall back to describing it from title, body, and +/- counts.`,
     );
   }

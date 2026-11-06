@@ -166,8 +166,6 @@ export const CACHE_METADATA_KEYS = {
   schemaVersion: "schemaVersion",
   /** The exact model id that produced the snapshot. */
   modelUsed: "modelUsed",
-  /** Local user id of the uploader. Advisory only — IAM is the auth. */
-  uploadedByUserId: "uploadedByUserId",
   /** Hex SHA-256 of the gzipped body. Crosschecked on download. */
   contentSha256: "contentSha256",
   /** SSHSIG armored block produced by the uploader's private key. */

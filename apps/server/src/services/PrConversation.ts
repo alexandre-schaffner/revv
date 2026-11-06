@@ -26,9 +26,8 @@ import { Context, Effect, Layer } from "effect";
 import {
   type DbError,
   type GitHubError,
-  GitHubNetworkError,
   GitHubNotFoundError,
-  GitHubRateLimitError,
+  isGitHubUnreachable,
 } from "../domain/errors";
 import { logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
@@ -140,11 +139,6 @@ function loginsOf(conversation: PrConversation): Set<string> {
   return logins;
 }
 
-/** GitHub couldn't be reached; the cached snapshot is the honest answer. */
-function isUnreachable(e: ConversationError): boolean {
-  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
-
 export const PrConversationServiceLive = Layer.effect(
   PrConversationService,
   Effect.gen(function* () {
@@ -221,7 +215,7 @@ export const PrConversationServiceLive = Layer.effect(
         const ctx = yield* prContext.forPr(prId, accountId);
         return yield* fetchFresh(ctx, prId).pipe(
           Effect.map((conversation): PrConversationResponse => ({ conversation, stale: false })),
-          Effect.catchIf(isUnreachable, (err) =>
+          Effect.catchIf(isGitHubUnreachable, (err) =>
             Effect.flatMap(readCached(prId, ctx.repo.githubHost), (snapshot) =>
               snapshot
                 ? Effect.succeed<PrConversationResponse>({ conversation: snapshot, stale: true })

@@ -25,13 +25,13 @@ import {
 } from "../../../services/walkthrough/content";
 import { renderArtifactRejection } from "../../jev/artifact-quality";
 import { decodePlainText } from "../agent-text";
+import { fail, ok } from "../mcp-tool-gateway";
 import {
   blockContentError,
   blockVariantCount,
   withArtifactWarnings,
   writeBlock,
 } from "../walkthrough-blocks";
-import { errorResult, okResult } from "./helpers";
 import { openForWrite } from "./phases";
 import type {
   AddDiffStepInput,
@@ -54,18 +54,18 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 ) => {
   const trimmedTitle = decodePlainText(input.title);
   if (trimmedTitle.length === 0) {
-    return errorResult(
+    return fail(
       "Error: add_semantic_step requires a non-empty title — chapters are named, not anonymous.",
     );
   }
 
   if (blockVariantCount(input.initial_block) !== 1) {
-    return errorResult(
+    return fail(
       "Error: add_semantic_step.initial_block requires exactly one of { markdown, code, diff, artifact } — not zero, not two. A chapter cannot be opened without its first block.",
     );
   }
   const initialBlockErr = blockContentError(input.initial_block);
-  if (initialBlockErr) return errorResult(initialBlockErr);
+  if (initialBlockErr) return fail(initialBlockErr);
 
   // Same craft bar as add_diff_step; rejecting here also rejects the
   // chapter, since a chapter can't exist without its first block.
@@ -74,7 +74,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       chapterTitle: trimmedTitle,
       annotation: input.initial_block.artifact.annotation,
     });
-    if (verdict.reject) return errorResult(renderArtifactRejection(verdict));
+    if (verdict.reject) return fail(renderArtifactRejection(verdict));
   }
 
   let result: WalkthroughToolResult | null = null;
@@ -121,7 +121,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
         )
         .get();
       if (!prevChapter) {
-        result = errorResult(
+        result = fail(
           `Error: semantic_step_index must be sequential and start at 0. Index ${prevIdx} does not exist yet — open chapter ${prevIdx} first with add_semantic_step({ semantic_step_index: ${prevIdx}, ... }), then open ${input.semantic_step_index}.`,
         );
         return;
@@ -169,7 +169,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   });
   if (result) return result;
   if (!block) {
-    return errorResult(
+    return fail(
       "Internal error: add_semantic_step reached emit without a persisted initial block.",
     );
   }
@@ -185,7 +185,7 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
   if (input.initial_block.markdown) {
     ctx.jev.scheduleProseCheck(input.initial_block.markdown.content, trimmedTitle);
   }
-  return okResult(
+  return ok(
     withArtifactWarnings(
       `Chapter ${input.semantic_step_index} ('${trimmedTitle}') opened with its first block at step_index=0. Add 1–4 more atomic blocks for this chapter via add_diff_step({ semantic_step_index: ${input.semantic_step_index}, step_index: 1, ... }) — step_index 2, 3, 4 for the rest. When this chapter is full, open the next chapter via another add_semantic_step call. Do not call set_sentiment until every planned chapter is filled.`,
       input.initial_block,
@@ -198,12 +198,12 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
   // Exactly one of {markdown, code, diff, artifact} must be provided.
   if (blockVariantCount(input) !== 1) {
-    return errorResult(
+    return fail(
       "Error: add_diff_step requires exactly one of { markdown, code, diff, artifact } — not zero, not two. Pick the shape that matches the step's intent.",
     );
   }
   const contentErr = blockContentError(input);
-  if (contentErr) return errorResult(contentErr);
+  if (contentErr) return fail(contentErr);
   const variant = {
     markdown: input.markdown,
     code: input.code,
@@ -219,7 +219,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
       chapterTitle,
       annotation: input.artifact.annotation,
     });
-    if (verdict.reject) return errorResult(renderArtifactRejection(verdict));
+    if (verdict.reject) return fail(renderArtifactRejection(verdict));
   }
 
   let result: WalkthroughToolResult | null = null;
@@ -242,7 +242,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
       )
       .get();
     if (!parent) {
-      result = errorResult(
+      result = fail(
         `Error: no semantic_step exists at semantic_step_index=${input.semantic_step_index}. Call add_semantic_step first with that index, then retry this add_diff_step.`,
       );
       return;
@@ -258,7 +258,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   });
   if (result) return result;
   if (!block) {
-    return errorResult("Internal error: add_diff_step reached emit without a block variant.");
+    return fail("Internal error: add_diff_step reached emit without a block variant.");
   }
 
   ctx.emit({ type: "block", data: block });
@@ -268,7 +268,7 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   // Voice advice from an earlier block, if it landed by now; rides out on
   // this call rather than blocking the block it's about. See ai/jev/prose-voice.ts.
   const advice = ctx.jev.takeProseAdvice() ?? "";
-  return okResult(
+  return ok(
     withArtifactWarnings(
       `Atomic block persisted at chapter ${input.semantic_step_index}, step ${input.step_index}. Continue with more blocks in this chapter, open the next chapter with add_semantic_step, or call set_sentiment when Phase B is done.${advice}`,
       variant,
@@ -312,7 +312,7 @@ function checkFlagIssuePreconditions(
   if ("unknown" in refs) {
     return {
       ok: false,
-      error: errorResult(
+      error: fail(
         `${renderUnknownBlockRefs(refs.unknown)} Call add_diff_step for each before flag_issue.`,
       ),
     };
@@ -448,7 +448,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   const nextStepHint = hasLineAnchor
     ? `\n\nNEXT STEP — REQUIRED: call add_issue_comment with issue_id="${issueId}", file_path="${input.file_path}", start_line=${input.start_line}, end_line=${input.end_line ?? input.start_line}, and a body that explains the concern to the coder (2–6 sentences, markdown, second-person voice). Without that follow-up call this issue has no inline comment in the diff. If the concern affects multiple call-sites, call add_issue_comment once per line range with the same issue_id.`
     : `\n\n(PR-wide concern with no line anchor — no inline comment needed. Continue with the next concern or diff step.)`;
-  return okResult(`Issue flagged: ${title} (id: ${issueId}).${nextStepHint}`);
+  return ok(`Issue flagged: ${title} (id: ${issueId}).${nextStepHint}`);
 };
 
 // ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────
@@ -462,7 +462,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
   input,
 ) => {
   if (input.end_line < input.start_line) {
-    return errorResult(
+    return fail(
       `Error: end_line (${input.end_line}) is before start_line (${input.start_line}). Use end_line === start_line for a single-line comment.`,
     );
   }
@@ -493,13 +493,13 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
         // agent's mistake. isError here would send it hunting a bug that isn't there.
         if (ctx.jev.issueRetracted(input.issue_id)) {
           return {
-            result: okResult(
+            result: ok(
               `That concern was withdrawn after you flagged it — the relevance check judged it below the bar for this pull request, so there is nothing left to comment on. This is not an error and not something to retry. Move on to the next concern or diff step.`,
             ),
           };
         }
         return {
-          result: errorResult(
+          result: fail(
             `Error: issue_id '${input.issue_id}' does not match any flagged issue for this walkthrough. Call flag_issue first; the result text contains the issue id you must pass back here.`,
           ),
         };
@@ -529,7 +529,7 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
     data: { prId, thread, message },
   });
 
-  return okResult(
+  return ok(
     `Comment posted on ${input.file_path}:${input.start_line}${
       input.end_line !== input.start_line ? `-${input.end_line}` : ""
     } (${input.diff_side} side) for issue ${input.issue_id}. Thread id: ${thread.id}.`,

@@ -1,8 +1,7 @@
-import type { Org, UserIdentity, UserRole } from "@revv/shared";
+import type { UserIdentity, UserRole } from "@revv/shared";
 import { isMaintainerLogin, loginsMatch } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { CacheService } from "../services/Cache";
 import { GitHubAccounts } from "../services/github/accounts";
 import { AvatarCache } from "../services/github/avatars";
 import { GitHubGateway } from "../services/github/gateway";
@@ -97,35 +96,6 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         prId: t.Optional(t.String()),
       }),
     },
-  )
-  .get("/orgs", (ctx) =>
-    runRoute(
-      Effect.gen(function* () {
-        const userId = ctx.session.user.id;
-        const active = yield* activeAccount(userId);
-        if (!active) return { orgs: [] as Org[] };
-        const github = yield* GitHubGateway;
-        const cache = yield* CacheService;
-        const orgs = yield* cache
-          .getOrFetch(
-            "github-orgs",
-            `${userId}:${active.host}`,
-            () => github.repos.orgsForUser(active.client),
-            { ttlMs: 10 * 60 * 1000 },
-          )
-          .pipe(
-            Effect.catchTags({
-              GitHubAuthError: () => Effect.succeed([] as Org[]),
-              GitHubRateLimitError: () => Effect.succeed([] as Org[]),
-              GitHubNetworkError: () => Effect.succeed([] as Org[]),
-              GitHubApiError: () => Effect.succeed([] as Org[]),
-              GitHubAccessDeniedError: () => Effect.succeed([] as Org[]),
-              GitHubNotFoundError: () => Effect.succeed([] as Org[]),
-            }),
-          );
-        return { orgs };
-      }),
-    ),
   )
   .delete("/account", (ctx) =>
     runRoute(

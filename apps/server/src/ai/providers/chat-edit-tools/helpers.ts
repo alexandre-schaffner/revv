@@ -16,15 +16,8 @@ import {
   latestCompleteWalkthrough,
   type WalkthroughRow,
 } from "../../../services/walkthrough/content";
+import { fail, ok } from "../mcp-tool-gateway";
 import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
-
-export function ok(text: string): ChatEditToolResult {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-export function fail(text: string): ChatEditToolResult {
-  return { content: [{ type: "text" as const, text }], isError: true };
-}
 
 export const NO_COMPLETE_WALKTHROUGH =
   "No complete walkthrough exists for this PR yet. Ask the user to generate one first.";

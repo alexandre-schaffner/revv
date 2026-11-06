@@ -124,6 +124,7 @@ export interface ChatSessionContext {
 // ── SSE wire frame ────────────────────────────────────────────────────────
 
 import type { Activity } from "./activity";
+import type { AgentProgressFrame } from "./base-conflicts";
 
 /**
  * The SSE frame discriminated union streamed from the server to the web
@@ -176,3 +177,29 @@ export type ChatStreamFrame =
       readonly markdown: string;
       readonly status: "pending";
     };
+
+// ── Proposed changes ────────────────────────────────────────────────────────
+
+/** A commit the chat agent made on its working branch that isn't on the PR yet. */
+export interface ProposedCommit {
+  readonly sha: string;
+  readonly shortSha: string;
+  readonly subject: string;
+  readonly committedAt: string;
+  readonly files: readonly string[];
+}
+
+/** Frames streamed by `POST /api/chat/:prId/proposed-changes/resolve-and-push`; ends with one `result`. */
+export type ResolvePushFrame =
+  | { readonly kind: "status"; readonly message: string }
+  | { readonly kind: "conflict-files"; readonly files: readonly string[] }
+  | AgentProgressFrame
+  | {
+      readonly kind: "result";
+      readonly status: "pushed";
+      readonly newSha: string;
+      readonly pushedCommits: number;
+      readonly branch: string;
+    }
+  | { readonly kind: "result"; readonly status: "remote-changed"; readonly branch: string }
+  | { readonly kind: "result"; readonly status: "failed"; readonly message: string };

@@ -16,6 +16,7 @@ import type {
   ChatStreamFrame,
   ChatTask,
   InteractionMode,
+  ResolvePushFrame,
   StreamErrorBody,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
@@ -254,22 +255,6 @@ export interface MergePushError {
   message: string;
 }
 
-const MERGE_PUSH_OUTCOMES: ReadonlySet<unknown> = new Set<MergePushResult["status"]>([
-  "pushed",
-  "conflict",
-  "remote-changed",
-  "ref-exists",
-]);
-
-function isMergePushResult(value: unknown): value is MergePushResult {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "status" in value &&
-    MERGE_PUSH_OUTCOMES.has(value.status)
-  );
-}
-
 export interface PushProposedOptions {
   /** Push the agent's commits to a brand-new branch instead of merging into the PR's source branch. */
   newBranchName?: string;
@@ -296,42 +281,28 @@ export async function pushProposedChanges(
     ...(options?.newBranchName !== undefined ? { newBranchName: options.newBranchName } : {}),
     ...(options?.force !== undefined ? { force: options.force } : {}),
   });
-  if (data) return data;
-  // A conflict, a moved remote and an existing ref answer 409 with the result.
-  if (error?.status === 409 && isMergePushResult(error.value)) return error.value;
+  if (!error) return data;
   const refusal: MergePushError = {
-    code: (error && apiErrorCode(error)) ?? "GENERIC_ERROR",
-    message: error ? apiErrorMessage(error, "Push failed") : "Push failed",
+    code: apiErrorCode(error) ?? "GENERIC_ERROR",
+    message: apiErrorMessage(error, "Push failed"),
   };
   throw refusal;
 }
 
-// ── Resolve & push (SSE) ──────────────────────────────────────────────────
+/** A cherry-pick push that didn't land, as the error its caller toasts. */
+function notPushed(result: Exclude<MergePushResult, { status: "pushed" }>): Error {
+  return new Error(
+    result.status === "remote-changed"
+      ? `The PR branch (${result.branch}) was updated remotely. Sync the latest changes and try again.`
+      : `Nothing was pushed to ${result.branch}.`,
+  );
+}
 
-export type ResolvePushFrame =
-  | { kind: "status"; message: string }
-  | { kind: "conflict-files"; files: string[] }
-  | { kind: "agent-text"; data: string }
-  | {
-      kind: "agent-activity";
-      activityKind: string;
-      toolName: string | null;
-      summary: string;
-      payload?: unknown;
-    }
-  | {
-      kind: "result";
-      status: "pushed";
-      newSha: string;
-      pushedCommits: number;
-      branch: string;
-    }
-  | { kind: "result"; status: "remote-changed"; branch: string }
-  | { kind: "result"; status: "failed"; message: string };
+// ── Resolve & push (SSE) ──────────────────────────────────────────────────
 
 export interface ResolvePushCallbacks {
   onStatus?: (message: string) => void;
-  onConflictFiles?: (files: string[]) => void;
+  onConflictFiles?: (files: readonly string[]) => void;
   onAgentText?: (chunk: string) => void;
   onAgentActivity?: (activity: {
     activityKind: string;
@@ -373,8 +344,9 @@ export async function advanceWorktree(prId: string, newHeadSha: string): Promise
 
 /** Cherry-pick a single proposed commit onto the PR source branch and push. */
 export async function cherryPickProposedCommit(prId: string, sha: string): Promise<void> {
-  const { error } = await chat(prId)["proposed-changes"]["cherry-pick"].post({ sha });
+  const { data, error } = await chat(prId)["proposed-changes"]["cherry-pick"].post({ sha });
   if (error) throw new Error(apiErrorMessage(error, "Failed"));
+  if (data.status !== "pushed") throw notPushed(data);
 }
 
 /** Cherry-pick N proposed commits onto the PR source branch and push once. */
@@ -386,10 +358,8 @@ export async function batchCherryPickProposedCommits(
     shas: [...shas],
   });
   if (error) throw new Error(apiErrorMessage(error, "Failed"));
-  return {
-    pushedCommits: data.status === "pushed" ? data.pushedCommits : shas.length,
-    branch: data.branch,
-  };
+  if (data.status !== "pushed") throw notPushed(data);
+  return { pushedCommits: data.pushedCommits, branch: data.branch };
 }
 
 /** Discard N proposed commits from the worktree atomically. */
