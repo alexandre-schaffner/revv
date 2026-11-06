@@ -69,7 +69,6 @@ import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../
 import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
-import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
 import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
@@ -108,6 +107,7 @@ import { makeSessionTokenStore } from "./session-token-store";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";
+import { findIssuesMissingInlineComment } from "./walkthrough/content";
 import {
   tryCarryRestackedWalkthrough,
   tryImportCachedWalkthrough,

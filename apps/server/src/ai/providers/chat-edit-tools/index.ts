@@ -1,8 +1,8 @@
 // ── chat-edit-tools ─────────────────────────────────────────────────────────
 //
-// Barrel that re-exports chat-edit helpers/handlers and assembles the
-// canonical EDIT_TOOL_SPECS array consumed by chat-context.ts,
-// chat-claude.ts, and chat-mcp-tools.ts.
+// The chat-edit tool surface (CLAUDE.md invariant 7), served to the in-app
+// chat through `chat-mcp-tools.ts` and to external agents through
+// `external-review-tools.ts`.
 
 import { SENTIMENT_CONTRACT_SHORT } from "../../prompts/review-copy-contract";
 import {
@@ -124,7 +124,7 @@ export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
   {
     name: "delete_rating",
     description:
-      "Remove the rating row for an axis. Does NOT regress lastCompletedPhase — the walkthrough's status stays 'complete'. `validation.passesCompletenessGate` will surface false on the next get_walkthrough_for_edit call until a future tool re-adds an axis (not yet supported in v1).",
+      "Remove the rating row for an axis. Does NOT regress lastCompletedPhase — the walkthrough's status stays 'complete'. `validation.passesCompletenessGate` reads false on the next get_walkthrough_for_edit call; chat edits cannot re-add the axis.",
     inputSchema: deleteRatingSchema,
     handler: deleteRatingHandler,
   },
@@ -171,9 +171,3 @@ export const EDIT_TOOL_SPECS: ChatEditToolSpecRecord[] = [
     handler: deleteIssueCommentHandler,
   },
 ];
-
-// The SDK adapter lives in chat-mcp-tools.ts (`createChatMcpServer`), which
-// iterates the unified CHAT_TOOL_SPECS array (read + edit) and wraps each
-// spec via the Claude SDK's `tool()` helper. The HTTP route in
-// chat-context.ts dispatches off the same CHAT_TOOL_SPECS list. Both
-// transports share one source of truth.

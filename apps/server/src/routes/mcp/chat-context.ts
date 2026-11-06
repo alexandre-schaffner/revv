@@ -4,24 +4,23 @@
 // plan-mode filtering, and edit broadcasts are chat-specific; JSON-RPC
 // dispatch is shared by the MCP tool gateway binder.
 
-import type { ThreadEventMessage, WalkthroughStreamEvent } from "@revv/shared";
 import { Effect } from "effect";
-import { EDIT_TOOL_SPECS } from "../../ai/providers/chat-edit-tools";
-import { CHAT_TOOL_BUNDLE, type ChatToolContext } from "../../ai/providers/chat-mcp-tools";
-import { logError } from "../../logger";
+import {
+  type ChatWalkthroughEditContext,
+  EDIT_TOOL_SPECS,
+} from "../../ai/providers/chat-edit-tools";
+import { CHAT_TOOL_BUNDLE } from "../../ai/providers/chat-mcp-tools";
 import { AppRuntime } from "../../runtime";
 import { ChatMcpTokens, type ChatTokenResolved } from "../../services/ChatMcpTokens";
 import { DbService } from "../../services/Db";
-import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
+import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const EDIT_TOOL_NAMES = new Set(EDIT_TOOL_SPECS.map((s) => s.name));
 
 async function resolveContext(
   req: Request,
-): Promise<ContextResolution<ChatToolContext, ChatTokenResolved>> {
+): Promise<ContextResolution<ChatWalkthroughEditContext, ChatTokenResolved>> {
   const token = extractBearer(req);
   if (!token) {
     return { ok: false, status: 401, message: "Missing bearer token" };
@@ -38,41 +37,6 @@ async function resolveContext(
     };
   }
 
-  const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
-    void AppRuntime.runPromise(
-      Effect.flatMap(WalkthroughJobs, (jobs) =>
-        Effect.gen(function* () {
-          yield* jobs.emitEvent(walkthroughId, {
-            type: "lifecycle:edited",
-            data: { walkthroughId, editedAt: new Date().toISOString() },
-          });
-          yield* jobs.emitEvent(walkthroughId, event);
-        }),
-      ),
-    ).catch((err) => {
-      logError(
-        "mcp-chat-context",
-        "walkthrough:event emit failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    });
-    void AppRuntime.runPromise(
-      Effect.flatMap(RemoteWalkthroughCache, (cache) =>
-        cache.push(walkthroughId).pipe(Effect.catch(() => Effect.void)),
-      ),
-    ).catch((err) => {
-      logError(
-        "mcp-chat-context",
-        "remote cache push after edit failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    });
-  };
-
-  const broadcastThreadEvent = (msg: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast(resolved.prId, msg);
-  };
-
   return {
     ok: true,
     ctx: {
@@ -80,8 +44,8 @@ async function resolveContext(
       prId: resolved.prId,
       userId: resolved.userId,
       actor: "chat:acp",
-      emit,
-      broadcastThreadEvent,
+      publishEdit: fireAndForgetWalkthroughEdit,
+      broadcastThreadEvent: (msg) => fireAndForgetThreadEventBroadcast(resolved.prId, msg),
     },
     meta: resolved,
   };

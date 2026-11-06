@@ -4,72 +4,7 @@ import { Cause, type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { reviewRounds, walkthroughs } from "../db/schema";
 import { DbService } from "./Db";
-import type { PrCommit } from "./GitHub";
-import { __walkthroughTest, WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
-
-function commit(sha: string, message: string): PrCommit {
-  return {
-    sha,
-    message,
-    authorLogin: null,
-    authorAvatarUrl: null,
-    date: null,
-  };
-}
-
-describe("commitsInRoundRange", () => {
-  const commits = [
-    commit("a", "feat: initial"),
-    commit("b", "fix: reviewed base"),
-    commit("c", "feat: add indexes"),
-    commit("d", "test: coverage"),
-    commit("e", "fix: tune range query"),
-  ];
-
-  it("returns commits after fromSha through toSha for a normal forward range", () => {
-    expect(__walkthroughTest.commitsInRoundRange(commits, "b", "d").map((c) => c.sha)).toEqual([
-      "c",
-      "d",
-    ]);
-  });
-
-  it("returns an empty range when fromSha equals toSha", () => {
-    expect(__walkthroughTest.commitsInRoundRange(commits, "c", "c")).toEqual([]);
-  });
-
-  it("returns commits after fromSha when toSha is missing from the snapshot", () => {
-    expect(
-      __walkthroughTest.commitsInRoundRange(commits, "b", "missing").map((c) => c.sha),
-    ).toEqual(["c", "d", "e"]);
-  });
-
-  it("returns all commits when neither boundary is available", () => {
-    expect(
-      __walkthroughTest
-        .commitsInRoundRange(commits, "missing-base", "missing-head")
-        .map((c) => c.sha),
-    ).toEqual(["a", "b", "c", "d", "e"]);
-  });
-});
-
-describe("deriveRoundFocusTitle", () => {
-  it("returns null when persisted commits are unavailable", () => {
-    expect(__walkthroughTest.deriveRoundFocusTitle(null, "b", "d")).toBeNull();
-  });
-
-  it("uses the newest non-low-signal commit in the selected round", () => {
-    const commits = [
-      commit("a", "feat: base"),
-      commit("b", "fix: previous review"),
-      commit("c", "feat(db): add range indexes"),
-      commit("d", "test: add query coverage"),
-    ];
-
-    expect(__walkthroughTest.deriveRoundFocusTitle(JSON.stringify(commits), "b", "d")).toBe(
-      "add range indexes",
-    );
-  });
-});
+import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 
 /**
  * Insert walkthrough rows for PR `pr-1` without seeding the PR / session rows

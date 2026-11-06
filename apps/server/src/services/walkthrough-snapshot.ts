@@ -1,46 +1,29 @@
 // ─── Walkthrough snapshot exporter ──────────────────────────────────────────
 //
-// Pure (DB-only) translation between an on-disk `walkthroughs`-row family
-// and a `WalkthroughSnapshotV2`. Used by:
-//
-//   • RemoteWalkthroughCache.push — exports the row before gzip+upload.
-//   • Tests — round-trips a generated walkthrough through
-//     export → JSON → import to assert byte-for-byte equality.
-//
-// Excluded from the snapshot (local-only):
-//   • walkthroughs.id, reviewSessionId, pullRequestId
-//   • opencodeSessionId, resumeAttempts, lastEditedAt, lastEditedBy
-//   • per-row ids on blocks/issues/ratings (regenerated on import)
-//   • walkthrough_issues.submittedAt != null  (per-account GitHub state)
-//
-// Block linkage: `issue.blockIds` and `rating.blockIds` reference local
-// block ids that don't survive a transport. The exporter converts each
-// reference to an ordinal index into the exported `blocks[]` array.
+// Translates a walkthrough row family into a `WalkthroughSnapshotV2`, for the
+// team-cache push and the restack carry. Local-only state stays behind (see
+// `walkthrough-cache-format.ts`); block links travel as ordinal indexes into
+// the exported `blocks[]`, since block ids are per-walkthrough.
 
-import type {
-  Confidence,
-  RatingAxis,
-  RatingCitation,
-  RiskLevel,
-  Verdict,
-  WalkthroughBlock,
-  WalkthroughTokenUsage,
-} from "@revv/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import type { RiskLevel } from "@revv/shared";
+import { RATING_AXES } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
-import { walkthroughIssues } from "../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../db/schema/walkthroughs";
+import {
+  decodeBlock,
+  decodeCitations,
+  decodeProviderConfig,
+  decodeStringArray,
+  decodeTokenUsage,
+  loadContentRows,
+} from "./walkthrough/content";
 import {
   CACHE_SCHEMA_VERSION,
   type GeneratedBy,
-  type GenerationProviderConfig,
   type WalkthroughSnapshotBlock,
   type WalkthroughSnapshotIssue,
   type WalkthroughSnapshotRating,
-  type WalkthroughSnapshotSemanticStep,
   type WalkthroughSnapshotV2,
 } from "./walkthrough-cache-format";
 
@@ -55,111 +38,6 @@ export class ExportError extends Error {
 interface ExportParams {
   walkthroughId: string;
   repoFullName: string;
-}
-
-function parseJsonArray<T>(s: string | null | undefined, guard: (v: unknown) => v is T): T[] {
-  if (!s) return [];
-  try {
-    const parsed: unknown = JSON.parse(s);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(guard);
-  } catch {
-    return [];
-  }
-}
-
-const isString = (v: unknown): v is string => typeof v === "string";
-const isCitation = (v: unknown): v is RatingCitation =>
-  typeof v === "object" &&
-  v !== null &&
-  typeof (v as { filePath?: unknown }).filePath === "string" &&
-  typeof (v as { startLine?: unknown }).startLine === "number" &&
-  typeof (v as { endLine?: unknown }).endLine === "number";
-
-const ZERO_USAGE: WalkthroughTokenUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadInputTokens: 0,
-  cacheCreationInputTokens: 0,
-  contextTokens: 0,
-};
-
-function parseTokenUsage(raw: string | null): WalkthroughTokenUsage {
-  if (!raw) return ZERO_USAGE;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return ZERO_USAGE;
-    const u = parsed as Record<string, unknown>;
-    const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-    const inputTokens = num(u.inputTokens);
-    const outputTokens = num(u.outputTokens);
-    const cacheReadInputTokens = num(u.cacheReadInputTokens);
-    const cacheCreationInputTokens = num(u.cacheCreationInputTokens);
-    const contextWindowTokens = num(u.contextWindowTokens);
-    // Snapshots predating context-occupancy tracking carry no `contextTokens`.
-    // Fall back to the throughput sum (the gauge's legacy formula) so an
-    // imported historical walkthrough doesn't render an empty gauge.
-    const contextTokens =
-      typeof u.contextTokens === "number" && Number.isFinite(u.contextTokens)
-        ? u.contextTokens
-        : inputTokens + outputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-    return {
-      inputTokens,
-      outputTokens,
-      cacheReadInputTokens,
-      cacheCreationInputTokens,
-      contextTokens,
-      ...(contextWindowTokens > 0 ? { contextWindowTokens } : {}),
-    };
-  } catch {
-    return ZERO_USAGE;
-  }
-}
-
-function parseProviderConfig(raw: string | null, modelUsed: string): GenerationProviderConfig {
-  if (!raw) {
-    return {
-      provider: "claude-agent-sdk",
-      model: modelUsed,
-      thinkingEffort: null,
-      contextWindow: null,
-      maxTurns: 60,
-    };
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) {
-      return {
-        provider: "claude-agent-sdk",
-        model: modelUsed,
-        thinkingEffort: null,
-        contextWindow: null,
-        maxTurns: 60,
-      };
-    }
-    const c = parsed as Record<string, unknown>;
-    const provider: GenerationProviderConfig["provider"] =
-      c.provider === "opencode"
-        ? "opencode"
-        : c.provider === "codex"
-          ? "codex"
-          : "claude-agent-sdk";
-    return {
-      provider,
-      model: typeof c.model === "string" ? c.model : modelUsed,
-      thinkingEffort: typeof c.thinkingEffort === "string" ? c.thinkingEffort : null,
-      contextWindow: typeof c.contextWindow === "string" ? c.contextWindow : null,
-      maxTurns: typeof c.maxTurns === "number" ? c.maxTurns : 60,
-    };
-  } catch {
-    return {
-      provider: "claude-agent-sdk",
-      model: modelUsed,
-      thinkingEffort: null,
-      contextWindow: null,
-      maxTurns: 60,
-    };
-  }
 }
 
 /**
@@ -181,116 +59,57 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
   if (!row) {
     throw new ExportError(`walkthrough ${params.walkthroughId} not found`);
   }
+  const content = loadContentRows(db, params.walkthroughId);
 
-  const semanticRows = db
-    .select()
-    .from(walkthroughSemanticSteps)
-    .where(eq(walkthroughSemanticSteps.walkthroughId, params.walkthroughId))
-    .all();
-
-  const blockRows = db
-    .select()
-    .from(walkthroughBlocks)
-    .where(eq(walkthroughBlocks.walkthroughId, params.walkthroughId))
-    .all();
-
-  // Drop issues already pushed to GitHub — submission state is per-account
-  // and must not leak across the cache.
-  const issueRows = db
-    .select()
-    .from(walkthroughIssues)
-    .where(
-      and(
-        eq(walkthroughIssues.walkthroughId, params.walkthroughId),
-        isNull(walkthroughIssues.submittedAt),
-      ),
-    )
-    .all();
-
-  const ratingRows = db
-    .select()
-    .from(walkthroughRatings)
-    .where(eq(walkthroughRatings.walkthroughId, params.walkthroughId))
-    .all();
-
-  // Sort blocks deterministically by (semanticStepIndex, stepIndex). The
-  // resulting ordinal index is what `issue.blockIndexes` / `rating.blockIndexes`
-  // point at on the importer side.
-  const sortedBlocks = [...blockRows].sort(
-    (a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex,
-  );
-
-  // Map source block id → snapshot ordinal index.
-  const blockIdToIndex = new Map<string, number>();
-  sortedBlocks.forEach((b, idx) => {
-    blockIdToIndex.set(b.id, idx);
-  });
-
-  const blocks: WalkthroughSnapshotBlock[] = sortedBlocks.map((b) => {
-    const data = JSON.parse(b.data) as WalkthroughBlock;
-    const phase: "diff_analysis" = "diff_analysis";
-    const type = b.type as WalkthroughSnapshotBlock["type"];
-    return {
-      phase,
+  const blocks: WalkthroughSnapshotBlock[] = [];
+  const blockIndex = new Map<string, number>();
+  for (const b of content.blocks) {
+    const data = decodeBlock(b);
+    if (!data) continue;
+    blockIndex.set(b.id, blocks.length);
+    blocks.push({
+      phase: "diff_analysis",
       semanticStepIndex: b.semanticStepIndex,
       stepIndex: b.stepIndex,
-      type,
+      type: b.type as WalkthroughSnapshotBlock["type"],
       data,
-    };
-  });
+    });
+  }
+  const blockIndexes = (raw: string): number[] =>
+    decodeStringArray(raw).flatMap((id) => {
+      const index = blockIndex.get(id);
+      return index === undefined ? [] : [index];
+    });
 
-  const semanticSteps: WalkthroughSnapshotSemanticStep[] = [...semanticRows]
-    .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex)
-    .map((s) => ({
-      index: s.semanticStepIndex,
-      title: s.title,
-      summary: s.summary ?? null,
+  // Submission to GitHub is per-account state and must not leak across the cache.
+  const issues: WalkthroughSnapshotIssue[] = content.issues
+    .filter((i) => i.submittedAt === null)
+    .map((i) => ({
+      order: i.order,
+      severity: i.severity as WalkthroughSnapshotIssue["severity"],
+      title: i.title,
+      description: i.description,
+      filePath: i.filePath ?? null,
+      startLine: i.startLine ?? null,
+      endLine: i.endLine ?? null,
+      blockIndexes: blockIndexes(i.blockIds),
     }));
 
-  const issues: WalkthroughSnapshotIssue[] = [...issueRows]
-    .sort((a, b) => a.order - b.order)
-    .map((i) => {
-      const sourceIds = parseJsonArray(i.blockIds, isString);
-      const blockIndexes = sourceIds
-        .map((id) => blockIdToIndex.get(id))
-        .filter((idx): idx is number => typeof idx === "number");
-      return {
-        order: i.order,
-        severity: i.severity as WalkthroughSnapshotIssue["severity"],
-        title: i.title,
-        description: i.description,
-        filePath: i.filePath ?? null,
-        startLine: i.startLine ?? null,
-        endLine: i.endLine ?? null,
-        blockIndexes,
-      };
-    });
-
-  const ratings: WalkthroughSnapshotRating[] = [...ratingRows]
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((r) => {
-      const sourceIds = parseJsonArray(r.blockIds, isString);
-      const blockIndexes = sourceIds
-        .map((id) => blockIdToIndex.get(id))
-        .filter((idx): idx is number => typeof idx === "number");
-      return {
-        axis: r.axis as RatingAxis,
-        verdict: r.verdict as Verdict,
-        confidence: r.confidence as Confidence,
-        rationale: r.rationale,
-        details: r.details,
-        citations: parseJsonArray(r.citations, isCitation),
-        blockIndexes,
-      };
-    });
-
-  const providerConfig = parseProviderConfig(row.providerConfig, row.modelUsed);
+  const ratings: WalkthroughSnapshotRating[] = content.ratings.map((r) => ({
+    axis: r.axis as WalkthroughSnapshotRating["axis"],
+    verdict: r.verdict as WalkthroughSnapshotRating["verdict"],
+    confidence: r.confidence as WalkthroughSnapshotRating["confidence"],
+    rationale: r.rationale,
+    details: r.details,
+    citations: decodeCitations(r.citations),
+    blockIndexes: blockIndexes(r.blockIds),
+  }));
 
   const generatedBy: GeneratedBy = {
     githubUserId: row.generatedByGithubUserId ?? 0,
     githubLogin: row.generatedByGithubLogin ?? "",
     displayName: row.generatedByDisplayName ?? null,
-    avatarContent: row.generatedByAvatarUrl ?? null,
+    avatarContent: row.generatedByAvatarContent ?? null,
   };
 
   return {
@@ -298,13 +117,23 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
     repoFullName: params.repoFullName,
     prHeadSha: row.prHeadSha,
     generatedBy,
-    providerConfig,
+    providerConfig: decodeProviderConfig(row.providerConfig, row.modelUsed) ?? {
+      provider: "claude-code",
+      model: row.modelUsed,
+      thinkingEffort: null,
+      contextWindow: null,
+      maxTurns: 60,
+    },
     modelUsed: row.modelUsed,
-    tokenUsage: parseTokenUsage(row.tokenUsage),
+    tokenUsage: decodeTokenUsage(row.tokenUsage),
     summary: row.summary,
     riskLevel: row.riskLevel as RiskLevel,
     sentiment: row.sentiment ?? null,
-    semanticSteps,
+    semanticSteps: content.semanticSteps.map((s) => ({
+      index: s.semanticStepIndex,
+      title: s.title,
+      summary: s.summary ?? null,
+    })),
     blocks,
     issues,
     ratings,
@@ -329,22 +158,14 @@ export function validateSnapshot(
   if (!s.summary.trim()) return { ok: false, reason: "summary empty" };
   if (!s.sentiment?.trim()) return { ok: false, reason: "sentiment empty" };
   if (s.blocks.length === 0) return { ok: false, reason: "no diff blocks" };
-  if (s.ratings.length !== 9) {
-    return { ok: false, reason: `ratings.length=${s.ratings.length}, expected 9` };
+  if (s.ratings.length !== RATING_AXES.length) {
+    return {
+      ok: false,
+      reason: `ratings.length=${s.ratings.length}, expected ${RATING_AXES.length}`,
+    };
   }
   const axes = new Set(s.ratings.map((r) => r.axis));
-  const required: RatingAxis[] = [
-    "correctness",
-    "scope",
-    "tests",
-    "clarity",
-    "safety",
-    "consistency",
-    "api_changes",
-    "performance",
-    "description",
-  ];
-  for (const a of required) {
+  for (const a of RATING_AXES) {
     if (!axes.has(a)) return { ok: false, reason: `axis '${a}' missing` };
   }
   return { ok: true };

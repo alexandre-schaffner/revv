@@ -1,67 +1,34 @@
 // ── chat-mcp-tools ──────────────────────────────────────────────────────────
 //
-// MCP tools for the right-pane chat agent. Spans two functional surfaces:
-//   - READ: `get_review_context` (this file) — structured review context fetch.
-//   - WRITE: walkthrough-edit tools (see `chat-edit-tools.ts`) — the chat
-//     agent's authorized post-completion mutation path (CLAUDE.md invariant
-//     #7 carve-out).
-//
-// Per doctrine invariant #13 (agent-path parity), handler implementations
-// are shared across both transports (in-process Claude SDK + HTTP MCP for
-// opencode). The factory below produces a Claude-SDK-shaped server bound
-// to a single context; the HTTP route in `routes/mcp/chat-context.ts`
-// drives the same TOOL_SPECS with a per-request context.
+// The chat agent's MCP tools: `get_review_context` (here) and the chat-edit
+// tools (`chat-edit-tools/`), invariant 7's post-completion mutation path.
 
 import { chapterNumbersByIndex } from "@revv/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { repositories } from "../../db/schema/repositories";
 import { reviewSessions } from "../../db/schema/review-sessions";
 import { threadMessages } from "../../db/schema/thread-messages";
-import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
-import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../../db/schema/walkthrough-semantic-steps";
-import { walkthroughs } from "../../db/schema/walkthroughs";
-import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./chat-edit-tools";
+import type { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
+import {
+  blockOrder,
+  decodeIssue,
+  decodeRating,
+  decodeStringArray,
+  latestCompleteWalkthrough,
+  loadContentRows,
+  loadIssueThreads,
+} from "../../services/walkthrough/content";
 import { EDIT_TOOL_SPECS } from "./chat-edit-tools";
-import { decodeIssue, decodeRating } from "./chat-edit-tools/helpers";
-import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
-
-// ── Context ─────────────────────────────────────────────────────────────────
-
-/**
- * Unified chat-MCP execution context. Carries the read-only essentials
- * (`db`, `prId`) plus the edit-tool fields (`userId`, `actor`, `emit`,
- * `broadcastThreadEvent`). Read-only handlers ignore the extras. Both
- * transports inject this before dispatching:
- *
- *   - Claude SDK: bound at server-creation time via {@link createChatMcpServer}.
- *   - opencode HTTP: bound per-request after resolving the bearer token in
- *     `routes/mcp/chat-context.ts`.
- */
-export type ChatToolContext = ChatWalkthroughEditContext;
-
-export type ChatToolResult = ChatEditToolResult;
-
-export type ChatToolHandler<TInput> = (
-  ctx: ChatToolContext,
-  args: TInput,
-) => Promise<ChatToolResult>;
-
-export type ChatToolSpec = ToolSpec<ChatToolContext, ChatToolResult>;
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function ok(text: string): ChatToolResult {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function fail(text: string): ChatToolResult {
-  return { content: [{ type: "text" as const, text }], isError: true };
-}
+import { fail, ok } from "./chat-edit-tools/helpers";
+import type {
+  ChatEditToolHandler,
+  ChatEditToolSpecRecord,
+  ChatWalkthroughEditContext,
+} from "./chat-edit-tools/spec";
+import type { McpToolResult, ToolSpecBundle } from "./mcp-tool-gateway";
 
 interface ParsedBlock {
   readonly orderIndex: number;
@@ -112,11 +79,8 @@ function parseBlock(row: typeof walkthroughBlocks.$inferSelect): ParsedBlock {
     default:
       content = JSON.stringify(parsed);
   }
-  // Synthesize a stable monotonic order from the composite key
-  // (semanticStepIndex, stepIndex) — used by chat tool consumers that want
-  // to display blocks in walkthrough render order.
   return {
-    orderIndex: row.semanticStepIndex * 10000 + row.stepIndex,
+    orderIndex: blockOrder(row.semanticStepIndex, row.stepIndex),
     type: row.type,
     content,
     filePath: typeof parsed.filePath === "string" ? (parsed.filePath as string) : null,
@@ -131,7 +95,7 @@ const getReviewContextSchema = z.object({}).strict();
 
 type GetReviewContextInput = z.infer<typeof getReviewContextSchema>;
 
-const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (ctx) => {
+const getReviewContextHandler: ChatEditToolHandler<GetReviewContextInput> = async (ctx) => {
   const { db, prId } = ctx;
 
   const prRow = db.select().from(pullRequests).where(eq(pullRequests.id, prId)).get();
@@ -144,74 +108,19 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
     .where(eq(repositories.id, prRow.repositoryId))
     .get();
 
-  // Latest completed walkthrough for this PR (ordered by generatedAt desc).
-  const walkthroughRow = db
-    .select()
-    .from(walkthroughs)
-    .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.status, "complete")))
-    .orderBy(desc(walkthroughs.generatedAt))
-    .limit(1)
-    .get();
-
-  const issueRows = walkthroughRow
-    ? db
-        .select()
-        .from(walkthroughIssues)
-        .where(eq(walkthroughIssues.walkthroughId, walkthroughRow.id))
-        .orderBy(walkthroughIssues.order)
-        .all()
-    : [];
-
-  // Pre-load all blocks for the walkthrough — we'll fan out to per-issue
-  // blockIds without N+1 queries.
-  const blockRows = walkthroughRow
-    ? db
-        .select()
-        .from(walkthroughBlocks)
-        .where(eq(walkthroughBlocks.walkthroughId, walkthroughRow.id))
-        .orderBy(walkthroughBlocks.semanticStepIndex, walkthroughBlocks.stepIndex)
-        .all()
-    : [];
+  const walkthroughRow = latestCompleteWalkthrough(db, prId);
+  const content = walkthroughRow
+    ? loadContentRows(db, walkthroughRow.id)
+    : { semanticSteps: [], blocks: [], issues: [], ratings: [] };
+  const issueRows = content.issues;
+  const blockRows = content.blocks;
   const blocksById = new Map(blockRows.map((b) => [b.id, b]));
-  const semanticRows = walkthroughRow
-    ? db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(eq(walkthroughSemanticSteps.walkthroughId, walkthroughRow.id))
-        .orderBy(walkthroughSemanticSteps.semanticStepIndex)
-        .all()
-    : [];
-  const ratingRows = walkthroughRow
-    ? db
-        .select()
-        .from(walkthroughRatings)
-        .where(eq(walkthroughRatings.walkthroughId, walkthroughRow.id))
-        .all()
-    : [];
 
-  // Inline review comments authored by the agent via `add_issue_comment` are
-  // linked back to the issue via comment_threads.walkthroughIssueId. Fetch
-  // all of them in one go.
-  const issueIds = issueRows.map((i) => i.id);
-  const linkedThreads =
-    issueIds.length > 0
-      ? db
-          .select()
-          .from(commentThreads)
-          .where(inArray(commentThreads.walkthroughIssueId, issueIds))
-          .all()
-      : [];
-  const linkedThreadIds = linkedThreads.map((t) => t.id);
-  const linkedMessages =
-    linkedThreadIds.length > 0
-      ? db
-          .select()
-          .from(threadMessages)
-          .where(inArray(threadMessages.threadId, linkedThreadIds))
-          .orderBy(threadMessages.createdAt)
-          .all()
-      : [];
-  const linkedMsgsByThread = new Map<string, typeof linkedMessages>();
+  const { threads: linkedThreads, messages: linkedMessages } = loadIssueThreads(
+    db,
+    issueRows.map((i) => i.id),
+  );
+  const linkedMsgsByThread = new Map<string, (typeof linkedMessages)[number][]>();
   for (const m of linkedMessages) {
     const arr = linkedMsgsByThread.get(m.threadId) ?? [];
     arr.push(m);
@@ -253,7 +162,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
   }
 
   const chapterNumbers = chapterNumbersByIndex(
-    semanticRows.map((s) => s.semanticStepIndex),
+    content.semanticSteps.map((s) => s.semanticStepIndex),
     blockRows.map((b) => b.semanticStepIndex),
   );
 
@@ -281,7 +190,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
           sentiment: walkthroughRow.sentiment,
           status: walkthroughRow.status,
           generatedAt: walkthroughRow.generatedAt,
-          chapters: semanticRows.map((semantic) => ({
+          chapters: content.semanticSteps.map((semantic) => ({
             semanticStepIndex: semantic.semanticStepIndex,
             chapterNumber: chapterNumbers.get(semantic.semanticStepIndex) ?? null,
             title: semantic.title,
@@ -294,18 +203,11 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
                 ...parseBlock(block),
               })),
           })),
-          ratings: ratingRows.map(decodeRating),
+          ratings: content.ratings.map(decodeRating),
         }
       : null,
     flaggedIssues: issueRows.map((issue) => {
-      let blockIds: string[] = [];
-      try {
-        const v = JSON.parse(issue.blockIds) as unknown;
-        if (Array.isArray(v)) blockIds = v.filter((x): x is string => typeof x === "string");
-      } catch {
-        /* corrupt JSON */
-      }
-      const blocks = blockIds
+      const blocks = decodeStringArray(issue.blockIds)
         .map((id) => blocksById.get(id))
         .filter((b): b is NonNullable<typeof b> => b !== undefined)
         .map(parseBlock);
@@ -379,7 +281,7 @@ const getReviewContextHandler: ChatToolHandler<GetReviewContextInput> = async (c
 
 // ── Tool registry ───────────────────────────────────────────────────────────
 
-export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec> = [
+export const CHAT_TOOL_SPECS: ReadonlyArray<ChatEditToolSpecRecord> = [
   {
     name: "get_review_context",
     description:
@@ -387,14 +289,10 @@ export const CHAT_TOOL_SPECS: ReadonlyArray<ChatToolSpec> = [
     inputSchema: getReviewContextSchema,
     handler: getReviewContextHandler,
   },
-  // Walkthrough-edit tools (CLAUDE.md invariant #7 chat-edit carve-out).
-  // These mutate the latest completed walkthrough for the PR; they never
-  // touch status / lastCompletedPhase. See `chat-edit-tools.ts` for
-  // handler implementations.
   ...EDIT_TOOL_SPECS,
 ];
 
-export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatToolContext, ChatToolResult> = {
+export const CHAT_TOOL_BUNDLE: ToolSpecBundle<ChatWalkthroughEditContext, McpToolResult> = {
   name: "revv-chat-context",
   version: "1.0.0",
   specs: CHAT_TOOL_SPECS,

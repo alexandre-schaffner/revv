@@ -1,18 +1,22 @@
 // ── chat-edit-helpers ────────────────────────────────────────────────────────
 //
-// Shared helper functions and types used by chat-edit tool handlers.
+// `runChatEdit` is every chat edit's frame: resolve the target walkthrough,
+// re-check it inside the transaction, apply the edit, stamp it, and publish
+// what changed only after the commit (invariants 7 and 8). A handler supplies
+// only the edit.
 
-import type { RatingAxis, RatingCitation, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
-import { and, desc, eq } from "drizzle-orm";
+import type { ThreadEventMessage, WalkthroughIssue, WalkthroughStreamEvent } from "@revv/shared";
+import { eq } from "drizzle-orm";
 import type { Db } from "../../../db";
-import type { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
-import type { walkthroughRatings } from "../../../db/schema/walkthrough-ratings";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { decodeWalkthroughIssue } from "../../../services/walkthrough-issue";
-import type { ChatEditToolResult } from "./spec";
-
-// ── Result helpers ──────────────────────────────────────────────────────────
+import {
+  decodeIssue,
+  decodeStringArray,
+  latestCompleteWalkthrough,
+  type WalkthroughRow,
+} from "../../../services/walkthrough/content";
+import type { ChatEditToolResult, ChatWalkthroughEditContext } from "./spec";
 
 export function ok(text: string): ChatEditToolResult {
   return { content: [{ type: "text" as const, text }] };
@@ -22,162 +26,110 @@ export function fail(text: string): ChatEditToolResult {
   return { content: [{ type: "text" as const, text }], isError: true };
 }
 
-// ── Walkthrough resolution ──────────────────────────────────────────────────
+export const NO_COMPLETE_WALKTHROUGH =
+  "No complete walkthrough exists for this PR yet. Ask the user to generate one first.";
 
-export type WalkthroughRow = typeof walkthroughs.$inferSelect;
+/** What an edit did, or why it refused. A refusal must not have written anything. */
+export type ChatEdit =
+  | { readonly refused: string }
+  | {
+      readonly message: string;
+      /** Nothing was written: no stamp, nothing published. */
+      readonly unchanged?: boolean;
+      readonly events?: readonly WalkthroughStreamEvent[];
+      readonly threadEvents?: readonly ThreadEventMessage[];
+    };
 
-/**
- * Returns the latest `status='complete'` walkthrough row for the PR, or null
- * if none exists yet. Resolved freshly on every handler call so chat sessions
- * that outlive a regenerate naturally retarget the new walkthrough.
- */
-export function resolveActiveWalkthroughId(db: Db, prId: string): WalkthroughRow | null {
-  return (
-    db
-      .select()
-      .from(walkthroughs)
-      .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.status, "complete")))
-      .orderBy(desc(walkthroughs.generatedAt))
-      .limit(1)
-      .get() ?? null
-  );
+export function runChatEdit(
+  ctx: ChatWalkthroughEditContext,
+  edit: (walkthrough: WalkthroughRow) => ChatEdit,
+): ChatEditToolResult {
+  const target = latestCompleteWalkthrough(ctx.db, ctx.prId);
+  if (!target) return fail(NO_COMPLETE_WALKTHROUGH);
+
+  const outcome = ctx.db.transaction((): ChatEdit => {
+    // Another process may have superseded it since the lookup above.
+    const row = ctx.db.select().from(walkthroughs).where(eq(walkthroughs.id, target.id)).get();
+    if (!row) {
+      return {
+        refused: `Walkthrough ${target.id} no longer exists. It may have been superseded — call get_walkthrough_for_edit again to retarget.`,
+      };
+    }
+    if (row.status !== "complete") {
+      return {
+        refused: `Walkthrough ${target.id} has status='${row.status}' (expected 'complete'). Edits are only allowed on completed walkthroughs. Call get_walkthrough_for_edit again to retarget.`,
+      };
+    }
+    const result = edit(row);
+    if (!("refused" in result) && !result.unchanged) {
+      ctx.db
+        .update(walkthroughs)
+        .set({ lastEditedAt: new Date().toISOString(), lastEditedBy: ctx.actor })
+        .where(eq(walkthroughs.id, target.id))
+        .run();
+    }
+    return result;
+  });
+
+  if ("refused" in outcome) return fail(outcome.refused);
+  if (!outcome.unchanged) {
+    for (const msg of outcome.threadEvents ?? []) ctx.broadcastThreadEvent(msg);
+    if (outcome.events && outcome.events.length > 0) ctx.publishEdit(target.id, outcome.events);
+  }
+  return ok(outcome.message);
 }
 
 /**
- * Inside-transaction guard: re-read the row by id and assert it is still
- * `status='complete'`. Defends against the race where another process
- * supersedes the walkthrough between the outer resolve and our write.
+ * Drop `blockIds` from the issues that cite them, ahead of deleting those
+ * blocks. Refused when a cited issue was submitted to GitHub (immutable), or
+ * when a warning or critical issue would be left citing no block. Returns the
+ * issues as rewritten.
  */
-export function assertStillComplete(
+export function scrubBlockReferences(
   db: Db,
   walkthroughId: string,
-): { row: WalkthroughRow } | { error: string } {
-  const row = db.select().from(walkthroughs).where(eq(walkthroughs.id, walkthroughId)).get();
-  if (!row) {
-    return {
-      error: `Walkthrough ${walkthroughId} no longer exists. It may have been superseded — call get_walkthrough_for_edit again to retarget.`,
-    };
-  }
-  if (row.status !== "complete") {
-    return {
-      error: `Walkthrough ${walkthroughId} has status='${row.status}' (expected 'complete'). Edits are only allowed on completed walkthroughs. Call get_walkthrough_for_edit again to retarget.`,
-    };
-  }
-  return { row };
-}
-
-export function stampLastEdited(db: Db, walkthroughId: string, actor: string): void {
-  db.update(walkthroughs)
-    .set({ lastEditedAt: new Date().toISOString(), lastEditedBy: actor })
-    .where(eq(walkthroughs.id, walkthroughId))
-    .run();
-}
-
-// ── Block construction ──────────────────────────────────────────────────────
-//
-// The variant-count, content validation (empty payloads, artifact size, and
-// unrenderable `prlens` diagrams), and typed-block construction are shared
-// with the generation pipeline in `../walkthrough-blocks` so the two MCP write
-// paths can never drift (CLAUDE.md #2, #13). Handlers import
-// `blockVariantCount`, `blockContentError`, and `buildBlock` from there
-// directly.
-
-// ── Issue-blockIds JSON helpers ─────────────────────────────────────────────
-
-export function parseBlockIds(json: string): string[] {
-  try {
-    const v = JSON.parse(json) as unknown;
-    if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
-  } catch {
-    /* corrupt JSON */
-  }
-  return [];
-}
-
-/**
- * For each issue whose `blockIds` JSON contains any of `blockIds`, return the
- * issue row + the surviving blockIds array (after subtraction). Used by
- * delete_block / delete_semantic_step to detect orphans before commit.
- */
-export function findIssuesReferencingBlocks(
-  db: Db,
-  walkthroughId: string,
-  blockIds: string[],
-): Array<{
-  row: typeof walkthroughIssues.$inferSelect;
-  survivingBlockIds: string[];
-}> {
-  if (blockIds.length === 0) return [];
-  const allIssues = db
+  blockIds: readonly string[],
+  target: string,
+): { readonly refused: string } | { readonly issues: WalkthroughIssue[] } {
+  if (blockIds.length === 0) return { issues: [] };
+  const removed = new Set(blockIds);
+  const affected = db
     .select()
     .from(walkthroughIssues)
     .where(eq(walkthroughIssues.walkthroughId, walkthroughId))
-    .all();
-  const removeSet = new Set(blockIds);
-  const affected: Array<{
-    row: typeof walkthroughIssues.$inferSelect;
-    survivingBlockIds: string[];
-  }> = [];
-  for (const issue of allIssues) {
-    const ids = parseBlockIds(issue.blockIds);
-    if (!ids.some((id) => removeSet.has(id))) continue;
-    const survivors = ids.filter((id) => !removeSet.has(id));
-    affected.push({ row: issue, survivingBlockIds: survivors });
+    .all()
+    .flatMap((row) => {
+      const ids = decodeStringArray(row.blockIds);
+      if (!ids.some((id) => removed.has(id))) return [];
+      return [{ row, surviving: ids.filter((id) => !removed.has(id)) }];
+    });
+
+  const titles = (rows: readonly { readonly row: { readonly title: string } }[]) =>
+    rows.map((a) => `'${a.row.title}'`).join(", ");
+  const submitted = affected.filter((a) => a.row.submittedAt !== null);
+  if (submitted.length > 0) {
+    return {
+      refused: `Error: cannot delete ${target} — ${submitted.length} GitHub-submitted issue(s) reference it (${titles(submitted)}). Submitted issues are immutable.`,
+    };
   }
-  return affected;
-}
+  const orphaned = affected.filter(
+    (a) =>
+      a.surviving.length === 0 && (a.row.severity === "warning" || a.row.severity === "critical"),
+  );
+  if (orphaned.length > 0) {
+    return {
+      refused: `Error: cannot delete ${target} — ${orphaned.length} warning/critical issue(s) would be left citing no block (${titles(orphaned)}). Delete those issues first, or move their references to other blocks via update_issue.`,
+    };
+  }
 
-// ── Rating decode (matches walkthrough-tools.ts payload shape) ──────────────
-
-export function decodeRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRating {
-  const citations: RatingCitation[] = parseCitations(row.citations);
-  const blockIds = parseBlockIds(row.blockIds);
   return {
-    axis: row.axis as RatingAxis,
-    verdict: row.verdict as WalkthroughRating["verdict"],
-    confidence: row.confidence as WalkthroughRating["confidence"],
-    rationale: row.rationale,
-    details: row.details,
-    citations,
-    blockIds,
+    issues: affected.map(({ row, surviving }) => {
+      const blockIdsJson = JSON.stringify(surviving);
+      db.update(walkthroughIssues)
+        .set({ blockIds: blockIdsJson })
+        .where(eq(walkthroughIssues.id, row.id))
+        .run();
+      return decodeIssue({ ...row, blockIds: blockIdsJson });
+    }),
   };
 }
-
-export function parseCitations(json: string): RatingCitation[] {
-  try {
-    const v = JSON.parse(json) as unknown;
-    if (!Array.isArray(v)) return [];
-    const out: RatingCitation[] = [];
-    for (const c of v) {
-      if (c && typeof c === "object") {
-        const cc = c as Record<string, unknown>;
-        if (
-          typeof cc.filePath === "string" &&
-          typeof cc.startLine === "number" &&
-          typeof cc.endLine === "number"
-        ) {
-          out.push({
-            filePath: cc.filePath,
-            startLine: cc.startLine,
-            endLine: cc.endLine,
-            ...(typeof cc.note === "string" ? { note: cc.note } : {}),
-          });
-        }
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-export function decodeBlock(row: typeof walkthroughBlocks.$inferSelect): WalkthroughBlock | null {
-  try {
-    const v = JSON.parse(row.data) as WalkthroughBlock;
-    return v;
-  } catch {
-    return null;
-  }
-}
-
-export const decodeIssue = decodeWalkthroughIssue;

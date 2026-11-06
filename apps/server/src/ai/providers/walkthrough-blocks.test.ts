@@ -19,7 +19,6 @@ function artifact(html: string): BlockVariantInput {
     artifact: {
       html,
       annotation: null,
-      annotation_position: "right",
     },
   };
 }
@@ -213,7 +212,6 @@ describe("blockContentError", () => {
           language: "ts",
           content: "const a = 1;",
           annotation: DIAGRAM.replace("KIND", "migration"),
-          annotation_position: "right",
         },
       }),
     ).toContain("code block annotation");
@@ -266,7 +264,6 @@ describe("normalizeDiffPatch", () => {
         file_path: "a.ts",
         patch: ["@@", "-x", "+y"].join("\n"),
         annotation: null,
-        annotation_position: "left",
       },
     });
     expect(block?.type).toBe("diff");

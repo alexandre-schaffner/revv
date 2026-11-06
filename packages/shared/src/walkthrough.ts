@@ -32,8 +32,6 @@ export type WalkthroughSizing =
       readonly thinkingEffort: ThinkingEffort | null;
     };
 
-export type AnnotationPosition = "left" | "right";
-
 /** Which phase of the A→B→C→D pipeline a block belongs to. */
 export type WalkthroughBlockPhase = "overview" | "diff_analysis" | "sentiment";
 
@@ -80,7 +78,6 @@ export interface CodeBlock extends BlockPhaseFields {
   language: string;
   content: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
   /**
    * Server-rendered HTML produced by `@pierre/diffs/ssr` (`preloadFile`).
    * When present the client calls `instance.hydrate(...)` and skips the
@@ -97,7 +94,6 @@ export interface DiffBlock extends BlockPhaseFields {
   filePath: string;
   patch: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
   /** See {@link CodeBlock.prerenderedHtml}; produced via `preloadPatchDiff`. */
   prerenderedHtml?: string;
 }
@@ -109,7 +105,6 @@ export interface ArtifactBlock extends BlockPhaseFields {
   /** Complete self-contained HTML document rendered in a sandboxed iframe. */
   html: string;
   annotation: string | null;
-  annotationPosition: AnnotationPosition;
 }
 
 export type WalkthroughBlock = MarkdownBlock | CodeBlock | DiffBlock | ArtifactBlock;
@@ -264,23 +259,12 @@ export interface WalkthroughTokenUsage {
 
 // ── Per-axis scorecard ──────────────────────────────────────────────────────
 
-export type RatingAxis =
-  | "correctness"
-  | "scope"
-  | "tests"
-  | "clarity"
-  | "safety"
-  | "consistency"
-  | "api_changes"
-  | "performance"
-  | "description";
-
 /**
  * Canonical order for rendering the scorecard grid. The frontend renders cards
  * in this order regardless of arrival order so the 3×3 layout is stable and
  * reviewers' eyes always land on the same axis in the same spot.
  */
-export const RATING_AXES: readonly RatingAxis[] = [
+export const RATING_AXES = [
   "correctness",
   "scope",
   "tests",
@@ -291,6 +275,8 @@ export const RATING_AXES: readonly RatingAxis[] = [
   "performance",
   "description",
 ] as const;
+
+export type RatingAxis = (typeof RATING_AXES)[number];
 
 /**
  * Display label for each axis. Used in the scorecard UI; the prompt also

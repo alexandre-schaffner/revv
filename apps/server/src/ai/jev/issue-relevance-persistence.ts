@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import { commentThreads } from "../../db/schema/comment-threads";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
+import { decodeIssue } from "../../services/walkthrough/content";
 import type { IssueCandidate, IssueJudgment, JudgmentSink } from "./contracts";
 import { markRetracted } from "./pending";
 
@@ -42,18 +43,14 @@ export function applyJudgment(
       .set({ severity, advisoryScore: judgment.score, advisoryScoredAt: now })
       .where(eq(walkthroughIssues.id, issueId))
       .run();
-    updated = {
-      id: row.id,
+    // The whole issue, decoded from the committed row: the web replaces its
+    // copy with this, so a partial payload would drop the resolution fields.
+    updated = decodeIssue({
+      ...row,
       severity,
-      title: row.title,
-      description: row.description,
-      blockIds: parseBlockIds(row.blockIds),
       advisoryScore: judgment.score,
-      lowSignal: judgment.lowSignal,
-      ...(row.filePath !== null ? { filePath: row.filePath } : {}),
-      ...(row.startLine !== null ? { startLine: row.startLine } : {}),
-      ...(row.endLine !== null ? { endLine: row.endLine } : {}),
-    };
+      advisoryScoredAt: now,
+    });
   });
 
   if (retractedIssue) {
@@ -68,15 +65,4 @@ export function applyJudgment(
 function parseSeverity(value: string): IssueSeverity {
   if (value === "info" || value === "warning" || value === "critical") return value;
   return "warning";
-}
-
-function parseBlockIds(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === "string")
-      : [];
-  } catch {
-    return [];
-  }
 }

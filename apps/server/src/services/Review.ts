@@ -32,7 +32,7 @@ function rowToSession(row: typeof reviewSessions.$inferSelect): ReviewSession {
   };
 }
 
-function rowToThread(row: typeof commentThreads.$inferSelect): CommentThread {
+export function rowToThread(row: typeof commentThreads.$inferSelect): CommentThread {
   return {
     id: row.id,
     reviewSessionId: row.reviewSessionId,
@@ -49,7 +49,7 @@ function rowToThread(row: typeof commentThreads.$inferSelect): CommentThread {
   };
 }
 
-function rowToMessage(
+export function rowToMessage(
   row: typeof threadMessages.$inferSelect,
   avatarContent: string | null = null,
 ): ThreadMessage {

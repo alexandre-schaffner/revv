@@ -1,46 +1,22 @@
 // ─── WalkthroughService ──────────────────────────────────────────────────────
 //
-// Thin DB adapter for the walkthroughs tables. Scope is deliberately narrow
-// post-refactor:
-//
-//   • ORCHESTRATOR LIFECYCLE writes (per doctrine invariant #2 + #11):
-//     - createPartial    (inserts the row when a job begins)
-//     - setStatus        (generating → complete | error | superseded)
-//     - supersedeAllForPr (rows of a PR → superseded)
-//     - incrementResumeAttempts (resume counter)
-//     - markIssuesSubmitted (GitHub push bookkeeping)
-//
-//   • READ-SIDE:
-//     - getCached
-//     - getPartial
-//     - listGenerating
-//
-// Content writes (summary/risk, diff steps, issues, ratings, sentiment) are
-// NOT here — they live inside MCP tool handlers in walkthrough-tools.ts, per
-// doctrine invariant #2 ("agent content writes go through MCP, only"). Any
-// method that used to synthesize content on behalf of an agent is gone.
+// The walkthrough row's DB adapter: the orchestrator's lifecycle writes
+// (invariants 2 and 11) and the read side. Content is written only by the MCP
+// tool handlers; its codec lives in `walkthrough/content.ts`.
 
 import type {
-  Confidence,
-  RatingAxis,
-  RatingCitation,
   RiskLevel,
-  Verdict,
   Walkthrough,
-  WalkthroughBlock,
   WalkthroughGenerationMode,
-  WalkthroughLead,
   WalkthroughMode,
   WalkthroughPipelinePhase,
-  WalkthroughRating,
   WalkthroughReviewRound,
   WalkthroughReviewRoundsResponse,
-  WalkthroughSemanticStep,
   WalkthroughStackSnapshot,
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -48,111 +24,35 @@ import { pullRequests } from "../db/schema/pull-requests";
 import { remoteUsers } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { reviewRounds } from "../db/schema/review-rounds";
-import { walkthroughBlocks } from "../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
-import { walkthroughRatings } from "../db/schema/walkthrough-ratings";
-import { walkthroughSemanticSteps } from "../db/schema/walkthrough-semantic-steps";
 import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import type { DbError } from "../domain/errors";
 import { dbTry, tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
 import type { PrCommit } from "./GitHub";
+import {
+  decodeBlock,
+  decodeIssue,
+  decodeProviderConfig,
+  decodeRating,
+  decodeSemanticStep,
+  decodeTokenUsage,
+  finishedReview,
+  isRatedAxis,
+  loadContentRows,
+} from "./walkthrough/content";
+import { deriveRoundFocusTitle } from "./walkthrough/round-title";
 import type { GenerationProviderConfig } from "./walkthrough-cache-format";
-import { decodeWalkthroughIssue } from "./walkthrough-issue";
 import { loadWalkthroughLeads } from "./walkthrough-leads";
 
 // ── Row-to-domain converter ─────────────────────────────────────────────────
 
-function rowToRating(row: typeof walkthroughRatings.$inferSelect): WalkthroughRating {
-  let citations: RatingCitation[] = [];
-  try {
-    const parsed: unknown = JSON.parse(row.citations);
-    if (Array.isArray(parsed)) {
-      citations = parsed.filter(
-        (v): v is RatingCitation =>
-          typeof v === "object" &&
-          v !== null &&
-          typeof (v as { filePath?: unknown }).filePath === "string" &&
-          typeof (v as { startLine?: unknown }).startLine === "number" &&
-          typeof (v as { endLine?: unknown }).endLine === "number",
-      );
-    }
-  } catch {
-    // Corrupt JSON — fall back to no citations.
-  }
-
-  let blockIds: string[] = [];
-  try {
-    const parsed: unknown = JSON.parse(row.blockIds);
-    if (Array.isArray(parsed)) {
-      blockIds = parsed.filter((v): v is string => typeof v === "string");
-    }
-  } catch {
-    // Corrupt JSON — fall back to no block links.
-  }
-
-  return {
-    axis: row.axis as RatingAxis,
-    verdict: row.verdict as Verdict,
-    confidence: row.confidence as Confidence,
-    rationale: row.rationale,
-    details: row.details,
-    citations,
-    blockIds,
-  };
-}
-
-/** Rows seeded by the retired Jev verdict pass can still lack prose; exclude them so they don't render as a blank scorecard card. */
-function hasRationale(row: typeof walkthroughRatings.$inferSelect): boolean {
-  return row.rationale.trim().length > 0;
-}
-
 function rowToWalkthrough(
+  db: Db,
   row: typeof walkthroughs.$inferSelect,
-  semanticSteps: Array<typeof walkthroughSemanticSteps.$inferSelect>,
-  blocks: Array<typeof walkthroughBlocks.$inferSelect>,
-  issues: Array<typeof walkthroughIssues.$inferSelect>,
-  ratings: Array<typeof walkthroughRatings.$inferSelect>,
-  leads: WalkthroughLead[] | null,
-  avatarContent: string | null = null,
+  avatarContent: string | null,
 ): Walkthrough {
-  const sortedSemanticSteps: WalkthroughSemanticStep[] = [...semanticSteps]
-    .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex)
-    .map((s) => ({
-      semanticStepIndex: s.semanticStepIndex,
-      title: s.title,
-      summary: s.summary ?? null,
-    }));
-
-  const sortedBlocks = [...blocks]
-    .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
-    .map((b) => JSON.parse(b.data) as WalkthroughBlock);
-
-  const sortedIssues = [...issues].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
-
-  // Ratings are ordered by insertion (createdAt) so the grid receives them
-  // in arrival order. The UI re-orders by canonical RATING_AXES for display.
-  const sortedRatings = ratings
-    .filter(hasRationale)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map(rowToRating);
-
-  let providerConfig: Walkthrough["providerConfig"] = null;
-  if (row.providerConfig) {
-    try {
-      const parsed = JSON.parse(row.providerConfig) as Record<string, unknown>;
-      providerConfig = {
-        provider: typeof parsed.provider === "string" ? parsed.provider : row.modelUsed,
-        model: typeof parsed.model === "string" ? parsed.model : row.modelUsed,
-        thinkingEffort: typeof parsed.thinkingEffort === "string" ? parsed.thinkingEffort : null,
-        contextWindow: typeof parsed.contextWindow === "string" ? parsed.contextWindow : null,
-        maxTurns: typeof parsed.maxTurns === "number" ? parsed.maxTurns : 0,
-      };
-    } catch {
-      providerConfig = null;
-    }
-  }
-
+  const content = loadContentRows(db, row.id);
   const generatedBy: Walkthrough["generatedBy"] =
     row.generatedByGithubLogin || row.generatedByGithubUserId
       ? {
@@ -169,11 +69,11 @@ function rowToWalkthrough(
     pullRequestId: row.pullRequestId,
     summary: row.summary,
     sentiment: row.sentiment ?? null,
-    semanticSteps: sortedSemanticSteps,
-    blocks: sortedBlocks,
-    issues: sortedIssues,
-    ratings: sortedRatings,
-    leads,
+    semanticSteps: content.semanticSteps.map(decodeSemanticStep),
+    blocks: content.blocks.flatMap((b) => decodeBlock(b) ?? []),
+    issues: content.issues.map(decodeIssue),
+    ratings: content.ratings.filter(isRatedAxis).map(decodeRating),
+    leads: loadWalkthroughLeads(db, row.id, row.leadsSelectedAt),
     mode: (row.mode ?? "reviewer") as WalkthroughMode,
     lastCompletedPhase: row.lastCompletedPhase as WalkthroughPipelinePhase,
     errorMessage: row.errorMessage ?? null,
@@ -181,127 +81,40 @@ function rowToWalkthrough(
     riskConfidence: row.riskConfidence,
     generatedAt: row.generatedAt,
     modelUsed: row.modelUsed,
-    tokenUsage: JSON.parse(row.tokenUsage) as WalkthroughTokenUsage,
+    tokenUsage: decodeTokenUsage(row.tokenUsage),
     prHeadSha: row.prHeadSha,
     generationMode: row.generationMode as WalkthroughGenerationMode,
     parentWalkthroughId: row.parentWalkthroughId ?? null,
     baseHeadSha: row.baseHeadSha ?? null,
     generatedBy,
-    providerConfig,
+    providerConfig: decodeProviderConfig(row.providerConfig, row.modelUsed),
   };
 }
 
-/** A walkthrough row with its child tables loaded, as the DTO. */
-function hydrateWalkthrough(
+/** The newest walkthrough matching `where`, with its generator's avatar. */
+function readWalkthrough(
   db: Db,
-  row: typeof walkthroughs.$inferSelect,
-  avatarContent: string | null,
-): Walkthrough {
-  return rowToWalkthrough(
-    row,
-    db
-      .select()
-      .from(walkthroughSemanticSteps)
-      .where(eq(walkthroughSemanticSteps.walkthroughId, row.id))
-      .all(),
-    db.select().from(walkthroughBlocks).where(eq(walkthroughBlocks.walkthroughId, row.id)).all(),
-    db.select().from(walkthroughIssues).where(eq(walkthroughIssues.walkthroughId, row.id)).all(),
-    db.select().from(walkthroughRatings).where(eq(walkthroughRatings.walkthroughId, row.id)).all(),
-    loadWalkthroughLeads(db, row.id, row.leadsSelectedAt),
-    avatarContent,
-  );
-}
-
-function isPrCommit(v: unknown): v is PrCommit {
-  if (v === null || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.sha === "string" &&
-    typeof o.message === "string" &&
-    (o.authorLogin === null || typeof o.authorLogin === "string") &&
-    (o.authorAvatarUrl === null || typeof o.authorAvatarUrl === "string") &&
-    (o.date === null || typeof o.date === "string")
-  );
-}
-
-function parsePrCommits(raw: string | null): PrCommit[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isPrCommit) : [];
-  } catch {
-    return [];
-  }
-}
-
-function commitsInRoundRange(
-  commits: readonly PrCommit[],
-  fromSha: string | null,
-  toSha: string,
-): readonly PrCommit[] {
-  const toIndex = commits.findIndex((commit) => commit.sha === toSha);
-  const fromIndex = fromSha ? commits.findIndex((commit) => commit.sha === fromSha) : -1;
-  if (fromSha !== null && fromSha === toSha) return [];
-
-  if (toIndex !== -1 && fromIndex !== -1) {
-    if (fromIndex < toIndex) {
-      return commits.slice(fromIndex + 1, toIndex + 1);
-    }
-    return commits.slice(toIndex, fromIndex).reverse();
-  }
-
-  if (toIndex !== -1) {
-    const prefix = commits.slice(0, toIndex + 1);
-    return prefix.length > 1 && commits[0]?.sha === toSha ? prefix.reverse() : prefix;
-  }
-
-  if (fromIndex !== -1) {
-    return commits.slice(fromIndex + 1);
-  }
-
-  return commits;
-}
-
-function subjectFromCommitMessage(message: string): string {
-  return message.split("\n", 1)[0]?.trim() ?? "";
-}
-
-function cleanCommitSubject(subject: string): string {
-  return subject
-    .replace(/^revert\s+"?(.+?)"?$/i, "$1")
-    .replace(/^\w+(?:\([^)]+\))?!?:\s+/i, "")
-    .replace(/\b(?:[A-Z][A-Z0-9]+-\d+|#\d+)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isLowSignalSubject(subject: string): boolean {
-  return /^(?:merge|revert|chore|style|format|lint|test|tests|wip|fixup)\b/i.test(subject);
-}
-
-function toFiveWordTitle(text: string): string | null {
-  const words = text
-    .replace(/[`*_#()[\]{}]/g, "")
-    .split(/\s+/)
-    .map((word) => word.replace(/^[^\w]+|[^\w]+$/g, ""))
-    .filter((word) => word.length > 0);
-  if (words.length === 0) return null;
-  return words.slice(0, 5).join(" ");
-}
-
-function deriveRoundFocusTitle(
-  rawCommits: string | null,
-  fromSha: string | null,
-  toSha: string,
-): string | null {
-  const commits = commitsInRoundRange(parsePrCommits(rawCommits), fromSha, toSha);
-  const subjects = commits
-    .map((commit) => subjectFromCommitMessage(commit.message))
-    .filter((subject) => subject.length > 0);
-  if (subjects.length === 0) return null;
-
-  const preferred = [...subjects].reverse().find((subject) => !isLowSignalSubject(subject));
-  return toFiveWordTitle(cleanCommitSubject(preferred ?? subjects.at(-1) ?? ""));
+  where: SQL | undefined,
+): { readonly walkthrough: Walkthrough; readonly status: WalkthroughStatus } | null {
+  const found = db
+    .select({ row: walkthroughs, avatarContent: remoteUsers.avatarContent })
+    .from(walkthroughs)
+    .leftJoin(
+      remoteUsers,
+      and(
+        eq(remoteUsers.provider, "github"),
+        eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+      ),
+    )
+    .where(where)
+    .orderBy(desc(walkthroughs.generatedAt))
+    .get();
+  return found
+    ? {
+        walkthrough: rowToWalkthrough(db, found.row, found.avatarContent),
+        status: found.row.status,
+      }
+    : null;
 }
 
 export interface RestackSource {
@@ -741,7 +554,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               generatedByGithubUserId: params.generatedBy?.githubUserId ?? null,
               generatedByGithubLogin: params.generatedBy?.githubLogin ?? null,
               generatedByDisplayName: params.generatedBy?.displayName ?? null,
-              generatedByAvatarUrl: params.generatedBy?.avatarContent ?? null,
+              generatedByAvatarContent: params.generatedBy?.avatarContent ?? null,
               providerConfig: params.providerConfig ? JSON.stringify(params.providerConfig) : null,
             })
             .run();
@@ -859,69 +672,37 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
     }),
 
   getCached: (prId, headSha, mode = "reviewer") =>
-    tryDb("getCached", (db) => {
-      const result = db
-        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
-        .from(walkthroughs)
-        .leftJoin(
-          remoteUsers,
-          and(
-            eq(remoteUsers.provider, "github"),
-            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
-          ),
-        )
-        .where(
+    tryDb(
+      "getCached",
+      (db) =>
+        readWalkthrough(
+          db,
           and(
             eq(walkthroughs.pullRequestId, prId),
             eq(walkthroughs.prHeadSha, headSha),
             eq(walkthroughs.mode, mode),
             eq(walkthroughs.status, "complete"),
           ),
-        )
-        .get();
-
-      if (!result) return null;
-
-      const { wt: row, avatarContent } = result;
-
-      return hydrateWalkthrough(db, row, avatarContent);
-    }),
+        )?.walkthrough ?? null,
+    ),
 
   getPartial: (prId, headSha, mode = "reviewer", generationMode) =>
     tryDb("getPartial", (db) => {
-      // "Partial" = not yet 'complete' and not 'superseded'. Superseded
-      // rows are terminal from a resume perspective — their head_sha is
-      // stale and their supersededBy target is the active one.
-      const result = db
-        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
-        .from(walkthroughs)
-        .leftJoin(
-          remoteUsers,
-          and(
-            eq(remoteUsers.provider, "github"),
-            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
-          ),
-        )
-        .where(
-          and(
-            eq(walkthroughs.pullRequestId, prId),
-            eq(walkthroughs.prHeadSha, headSha),
-            eq(walkthroughs.mode, mode),
-            ...(generationMode ? [eq(walkthroughs.generationMode, generationMode)] : []),
-            ne(walkthroughs.status, "complete"),
-            ne(walkthroughs.status, "superseded"),
-          ),
-        )
-        .get();
-
-      if (!result) return null;
-
-      const { wt: row, avatarContent } = result;
-
-      return {
-        ...hydrateWalkthrough(db, row, avatarContent),
-        status: row.status as "generating" | "error",
-      };
+      // Superseded rows are terminal from a resume's perspective.
+      const found = readWalkthrough(
+        db,
+        and(
+          eq(walkthroughs.pullRequestId, prId),
+          eq(walkthroughs.prHeadSha, headSha),
+          eq(walkthroughs.mode, mode),
+          ...(generationMode ? [eq(walkthroughs.generationMode, generationMode)] : []),
+          ne(walkthroughs.status, "complete"),
+          ne(walkthroughs.status, "superseded"),
+        ),
+      );
+      return found
+        ? { ...found.walkthrough, status: found.status as "generating" | "error" }
+        : null;
     }),
 
   getStackInputs: (walkthroughId) =>
@@ -969,9 +750,7 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
               eq(walkthroughs.pullRequestId, prId),
               eq(walkthroughs.mode, mode),
               ne(walkthroughs.prHeadSha, headSha),
-              inArray(walkthroughs.status, ["complete", "superseded"]),
-              eq(walkthroughs.lastCompletedPhase, "D"),
-              isNotNull(walkthroughs.completedAt),
+              finishedReview(),
             ),
           )
           .orderBy(desc(walkthroughs.generatedAt))
@@ -1196,33 +975,18 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
     }),
 
   getLatestDisplayable: (prId, mode = "reviewer") =>
-    tryDb("getLatestDisplayable", (db) => {
-      const result = db
-        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
-        .from(walkthroughs)
-        .leftJoin(
-          remoteUsers,
-          and(
-            eq(remoteUsers.provider, "github"),
-            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
-          ),
-        )
-        .where(
+    tryDb(
+      "getLatestDisplayable",
+      (db) =>
+        readWalkthrough(
+          db,
           and(
             eq(walkthroughs.pullRequestId, prId),
             eq(walkthroughs.mode, mode),
             inArray(walkthroughs.status, ["complete", "superseded"]),
           ),
-        )
-        .orderBy(desc(walkthroughs.generatedAt))
-        .get();
-
-      if (!result) return null;
-
-      const { wt: row, avatarContent } = result;
-
-      return hydrateWalkthrough(db, row, avatarContent);
-    }),
+        )?.walkthrough ?? null,
+    ),
 
   getLatestMode: (prId) =>
     Effect.gen(function* () {
@@ -1239,29 +1003,12 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
     }),
 
   getReport: (prId, walkthroughId) =>
-    tryDb("getReport", (db) => {
-      const result = db
-        .select({ wt: walkthroughs, avatarContent: remoteUsers.avatarContent })
-        .from(walkthroughs)
-        .leftJoin(
-          remoteUsers,
-          and(
-            eq(remoteUsers.provider, "github"),
-            eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
-          ),
-        )
-        .where(and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)))
-        .get();
-
-      if (!result) return null;
-
-      const { wt: row, avatarContent } = result;
-
-      return {
-        walkthrough: hydrateWalkthrough(db, row, avatarContent),
-        status: row.status as WalkthroughStatus,
-      };
-    }),
+    tryDb("getReport", (db) =>
+      readWalkthrough(
+        db,
+        and(eq(walkthroughs.id, walkthroughId), eq(walkthroughs.pullRequestId, prId)),
+      ),
+    ),
 
   listReviewRounds: (prId, currentHeadSha) =>
     tryDb("listReviewRounds", (db) => {
@@ -1376,8 +1123,3 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       };
     }),
 });
-
-export const __walkthroughTest = {
-  commitsInRoundRange,
-  deriveRoundFocusTitle,
-};

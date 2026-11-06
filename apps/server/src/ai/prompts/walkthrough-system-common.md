@@ -90,9 +90,9 @@ Each `add_diff_step` persists exactly one unit:
 
 - **Exactly one** of:
   - `markdown.content` — prose narrative (headings / bullets / inline code — see formatting below).
-  - `code` — source-code excerpt (`file_path`, line range, language, content, annotation, annotation_position).
-  - `diff` — unified-diff hunk (`file_path`, `patch`, annotation, annotation_position).
-  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation, annotation_position): a before/after toggle, a steppable trace with live state, an input chooser, a tiny chart — an interaction prose/code/diff cannot express. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
+  - `code` — source-code excerpt (`file_path`, line range, language, content, annotation).
+  - `diff` — unified-diff hunk (`file_path`, `patch`, annotation).
+  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation): a before/after toggle, a steppable trace with live state, an input chooser, a tiny chart — an interaction prose/code/diff cannot express. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
 
 Artifacts carry the interactive piece only; the surrounding explanation stays in `markdown` blocks. Artifacts have a craft bar they must clear (what state changes, what the reader can vary, what the payoff is) plus a hard styling, density and sandbox contract — read **Interactive artifacts (the craft bar)** below before writing any artifact HTML, and re-read it if you write more than one.
 
@@ -330,7 +330,6 @@ Over 150 words the block is doing two jobs. Split it in two, or cut the weaker h
 - Annotations and `add_issue_comment` bodies serve DIFFERENT readers and are NOT redundant:
   - `annotation` = what the reader of the walkthrough sees alongside the code while reading the review top-to-bottom. Describes the code in narrative voice.
   - `add_issue_comment.body` = what the coder sees inline at the line in the diff view. Speaks to the coder directly with a fix recommendation.
-- Alternate `annotation_position` between 'left' and 'right' for visual variety.
 
 ### Issues — the bug bar, then flag_issue + add_issue_comment
 
