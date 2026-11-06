@@ -11,6 +11,7 @@ import {
   countProposed,
   dropProposedCommits,
   healAbandonedMerge,
+  listProposedCommits,
   replayAgentCommits,
   resetToBase,
   resolveBaseSha,
@@ -104,6 +105,29 @@ describe("resolveBaseSha", () => {
     git(worktree, ["checkout", "-q", "--detach", oldHead]);
     expect(await resolveBaseSha(branch, [oldHead, prHead])).toBe(prHead);
     expect(await countProposed(branch, prHead)).toBe(1);
+  });
+});
+
+describe("listProposedCommits", () => {
+  it("lists the agent's commits newest first, each with the paths it touched", async () => {
+    const one = commitFile(worktree, "c.ts", "c\n", "agent: add c");
+    writeFileSync(join(worktree, "d.ts"), "d\n");
+    writeFileSync(join(worktree, "c.ts"), "c2\n");
+    git(worktree, ["add", "c.ts", "d.ts"]);
+    git(worktree, ["commit", "-q", "-m", "agent: tab\tin subject? no, add d"]);
+    const two = git(worktree, ["rev-parse", "HEAD"]);
+
+    const listed = await listProposedCommits(branch, prHead);
+
+    expect(listed.map((c) => [c.sha, c.shortSha, c.files])).toEqual([
+      [two, two.slice(0, 7), ["c.ts", "d.ts"]],
+      [one, one.slice(0, 7), ["c.ts"]],
+    ]);
+    expect(listed[1]?.subject).toBe("agent: add c");
+  });
+
+  it("is empty when the agent hasn't committed", async () => {
+    expect(await listProposedCommits(branch, prHead)).toEqual([]);
   });
 });
 

@@ -330,11 +330,7 @@ export function makeAgentPush(deps: PushDeps) {
       return { status: "conflict" as const, files };
     });
 
-  const pushToNewBranch = (
-    prId: string,
-    newBranchName: string,
-    force: boolean,
-  ) =>
+  const pushToNewBranch = (prId: string, newBranchName: string, force: boolean) =>
     Effect.gen(function* () {
       const name = newBranchName.trim();
       if (name.length === 0 || /\s/.test(name) || name.includes("..") || name.startsWith("-")) {
@@ -414,7 +410,9 @@ export function makeAgentPush(deps: PushDeps) {
         ? { kind: "result", status: "remote-changed", branch: pushed.branch }
         : { kind: "result", status: "failed", message: "Unexpected push outcome." };
 
-  const resolveAndPush = (prId: string): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError, PushR> =>
+  const resolveAndPush = (
+    prId: string,
+  ): Effect.Effect<ReadableStream<ResolvePushFrame>, ChatPushError, PushR> =>
     Effect.gen(function* () {
       // The run outlives the request; the stream closes the scope.
       const scope = yield* Scope.make();

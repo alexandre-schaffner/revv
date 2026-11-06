@@ -20,7 +20,6 @@ import {
   cleanUntracked,
   commitChanges,
   commitExists,
-  commitFileNames,
   forceBranch,
   gitDirs,
   isAncestor,
@@ -80,17 +79,7 @@ export async function listProposedCommits(
   baseSha: string,
 ): Promise<ProposedCommit[]> {
   const log = await proposedCommitLog(branch.worktreePath, range(branch, baseSha));
-  const commits: ProposedCommit[] = [];
-  for (const { sha, subject, committedAt } of log) {
-    commits.push({
-      sha,
-      shortSha: sha.slice(0, 7),
-      subject,
-      committedAt,
-      files: await commitFileNames(branch.worktreePath, sha),
-    });
-  }
-  return commits;
+  return log.map((commit) => ({ ...commit, shortSha: commit.sha.slice(0, 7) }));
 }
 
 /**
