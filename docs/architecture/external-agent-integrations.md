@@ -22,7 +22,8 @@ mechanics differ, because each agent reads a different config file.
    may then record an issue resolution, update supported walkthrough content,
    reply to a review thread, or change a thread's status.
 5. After pushing, the agent may ask Revv to review the new head
-   (`request_walkthrough`) and poll it to completion (`wait_for_walkthrough`),
+   (`request_walkthrough`; with no earlier review this is the PR's first,
+   full review) and poll it to completion (`wait_for_walkthrough`),
    then read the new findings with `get_review_context`. Repeating 4–5 is the
    adversarial review loop: one agent fixes, Revv's own walkthrough agent
    reviews.
@@ -185,9 +186,12 @@ regardless of which provider issued it.
 - Existing chat-edit handlers remain the single implementation of walkthrough
   content edits. The external bundle selects safe specs from that registry,
   and every exposed spec carries its authorization scope on the spec itself.
-- External writes target the latest completed walkthrough and validate
-  `expected_head_sha` against its reviewed head, not the live PR head. An
-  agent can therefore push its fix before recording the resolution.
+  `check:external-agents` pins each exposed tool's name and scope to a
+  reviewed table, so widening the surface is always an explicit edit there.
+- External content edits and feedback writes target the latest completed
+  walkthrough and validate `expected_head_sha` against its reviewed head, not
+  the live PR head. An agent can therefore push its fix before recording the
+  resolution.
 - `request_walkthrough` names a commit, never a walkthrough row or a status.
   Generation goes through `WalkthroughJobs`, which alone owns lifecycle
   writes. The call is idempotent per head: a completed review of that head is

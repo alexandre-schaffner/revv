@@ -6,7 +6,7 @@ import {
   type WalkthroughStreamEvent,
 } from "@revv/shared";
 import { createDb, type Db } from "../../db";
-import type { WalkthroughRequestOutcome } from "../../services/walkthrough-request";
+import { toJsonSchema } from "../../routes/mcp/utils";
 import {
   EXTERNAL_REVIEW_TOOL_SPECS,
   type ExternalReviewToolContext,
@@ -84,7 +84,7 @@ function context(
   db: Db,
   provider: ExternalAgentProvider = "claude-code",
   prHeadSha: string = HEAD_SHA,
-  requestOutcome: () => Promise<WalkthroughRequestOutcome> = async () => ({
+  requestOutcome: ExternalReviewToolContext["requestWalkthrough"] = async () => ({
     kind: "started",
     walkthroughId: "walkthrough-2",
     headSha: HEAD_SHA,
@@ -126,8 +126,6 @@ function tool(name: string) {
 
 describe("external review tools", () => {
   it("declares exactly one authorization scope on every exposed tool", () => {
-    expect(EXTERNAL_REVIEW_TOOL_SPECS).toHaveLength(13);
-    expect(new Set(EXTERNAL_REVIEW_TOOL_SPECS.map((spec) => spec.name)).size).toBe(13);
     for (const spec of EXTERNAL_REVIEW_TOOL_SPECS) {
       expect(scopeForExternalTool(spec.name)).toBe(spec.scope);
     }
@@ -362,6 +360,37 @@ describe("external review tools", () => {
     expect(result.content[0]?.text).toBe(
       "Revv could not start the walkthrough: Revv is still cloning this repository. Retry in a minute.",
     );
+  });
+
+  it("defaults to an incremental request and passes an explicit mode through", async () => {
+    const db = seededDb();
+    const requested: Parameters<ExternalReviewToolContext["requestWalkthrough"]>[0][] = [];
+    const ctx = context(db, "claude-code", HEAD_SHA, async (input) => {
+      requested.push(input);
+      return {
+        kind: "started",
+        walkthroughId: "walkthrough-2",
+        headSha: input.headSha,
+        mode: "reviewer",
+      };
+    });
+
+    await tool("request_walkthrough").handler(ctx.value, { head_sha: HEAD_SHA });
+    await tool("request_walkthrough").handler(ctx.value, {
+      head_sha: HEAD_SHA,
+      generation_mode: "full",
+    });
+
+    expect(requested).toEqual([
+      { headSha: HEAD_SHA, generationMode: "incremental" },
+      { headSha: HEAD_SHA, generationMode: "full" },
+    ]);
+  });
+
+  it("advertises generation_mode as optional", () => {
+    expect(toJsonSchema(tool("request_walkthrough").inputSchema)).toMatchObject({
+      required: ["head_sha"],
+    });
   });
 
   it("accepts an uppercase head SHA and passes it on lowercased", async () => {
