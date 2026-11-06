@@ -11,7 +11,6 @@ import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
 import { apiErrorMessage } from "$lib/api/errors";
 import { reviewNewCommits } from "$lib/review/review-new-commits";
-import { RequestState, type RequestState as RequestStateType } from "$lib/stores/_types";
 import { invalidateChatHistory } from "$lib/stores/chat.svelte";
 import { enterSidebarMode } from "$lib/stores/focus-mode.svelte";
 import { getPrById, getReviewModeForPr } from "$lib/stores/prs.svelte";
@@ -56,36 +55,7 @@ export function clearReviewFiles(): void {
   // we deliberately don't null it here — `switchPrViewState` already loaded
   // the new PR's saved file path (or `null` for first visits) before this
   // runs. Wiping it would lose that restore.
-  clearRepoFile();
   clearSession();
-}
-
-// --- Unchanged-file content viewer ------------------------------------------
-//
-// When the user clicks a file in the sidebar repo tree that ISN'T part of the
-// PR's diff, we still want the main pane to show something useful: the file's
-// content at the PR's head SHA. The endpoint reads from the local clone via
-// `git cat-file`, so this is fast and rate-limit-free.
-
-type RepoFileData =
-  | { readonly status: "ready"; readonly content: string; readonly size: number }
-  | { readonly status: "binary"; readonly size: number }
-  | { readonly status: "too-large"; readonly size: number }
-  | { readonly status: "not-found"; readonly size: number };
-
-let repoFile = $state<RequestStateType<RepoFileData>>(RequestState.idle());
-let repoFilePath = $state<string | null>(null);
-
-export function getRepoFile(): RequestStateType<RepoFileData> {
-  return repoFile;
-}
-export function getRepoFilePath(): string | null {
-  return repoFilePath;
-}
-
-export function clearRepoFile(): void {
-  repoFile = RequestState.idle();
-  repoFilePath = null;
 }
 
 // --- New-commit-available detection ------------------------------------------

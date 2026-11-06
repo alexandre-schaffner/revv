@@ -1,7 +1,6 @@
 /**
- * Shared DOM/mount helpers for @pierre/diffs renderAnnotation callbacks.
- * Centralizes the host wrapper, the collapsed-state marker dot, and the
- * AnnotationThread prop bundle so DiffViewer and FileViewer stay in sync.
+ * DOM/mount helpers for @pierre/diffs renderAnnotation callbacks: the host
+ * wrapper, the collapsed-state marker dot, and the AnnotationThread mount.
  */
 import type { CommentThread, ThreadMessage } from "@revv/shared";
 import { mountInto } from "$lib/utils/annotation-mount";

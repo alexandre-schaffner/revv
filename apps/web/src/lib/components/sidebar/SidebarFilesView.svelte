@@ -3,7 +3,6 @@ import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
 import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
-  clearRepoFile,
   getActiveFilePath,
   getActiveTab,
   getIsLoadingFiles,
@@ -46,7 +45,6 @@ function handleSelect(path: string): void {
   requestDiffScrollReset();
   if (getActiveTab() !== "diff") setActiveTab("diff");
   enterScrollMode();
-  clearRepoFile();
 }
 </script>
 

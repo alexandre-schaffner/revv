@@ -20,8 +20,6 @@ import {
   getActiveFilePath,
   getDiffScrollResetSeq,
   getPrScrollPosition,
-  getRepoFile,
-  getRepoFilePath,
   setActiveFilePath,
   setDiffMode,
   setPrScrollPosition,
@@ -32,7 +30,6 @@ import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
 import FileFirstPass from "./FileFirstPass.svelte";
 import FileIssues from "./FileIssues.svelte";
-import FileViewer from "./FileViewer.svelte";
 import ImageDiffViewer from "./ImageDiffViewer.svelte";
 
 // ── Props ─────────────────────────────────────────────────────────────────
@@ -67,18 +64,6 @@ const activeFileName = $derived.by((): string => {
   if (activeFilePath) return activeFilePath.split("/").pop() ?? activeFilePath;
   return "";
 });
-
-// File-viewer surface — used when the user picks a file that *isn't* in
-// the PR diff, so DiffViewer has nothing to render. We mirror the path
-// the loader is fetching so the viewer doesn't flash stale content while
-// a new request is in flight.
-const repoFile = $derived(getRepoFile());
-const repoFilePath = $derived(getRepoFilePath());
-const showFileViewer = $derived(
-  activeFilePath !== null &&
-    activeFile === null &&
-    (repoFilePath === activeFilePath || repoFile.status === "loading"),
-);
 
 // ── Token hover state ────────────────────────────────────────────────────
 //
@@ -500,22 +485,6 @@ const panel = $derived(getActivePanel());
 						scrollRoot={diffScrollEl}
 					/>
 				{/if}
-			{:else if showFileViewer && activeFilePath}
-				<!-- Title rendered by the layout (same as the diff path) so the
-				     file viewer fills the pane edge-to-edge — no inner padding,
-				     full-width gutter, identical font / sizing to the diff. -->
-				<div class="file-title-section" bind:this={fileTitleSectionEl}>
-					<h1 class="file-title">{activeFileName}</h1>
-				</div>
-				<FileViewer
-					path={activeFilePath}
-					content={repoFile.status === "ok" && repoFile.data.status === "ready" ? repoFile.data.content : ""}
-					isBinary={repoFile.status === "ok" && repoFile.data.status === "binary"}
-					size={repoFile.status === "ok" ? ("size" in repoFile.data ? repoFile.data.size : 0) : 0}
-					status={repoFile.status === "ok" ? repoFile.data.status : repoFile.status}
-					errorMessage={repoFile.status === "error" ? repoFile.error : null}
-					scrollRoot={diffScrollEl}
-				/>
 			{:else}
 				<DiffViewer
 					{prId}
