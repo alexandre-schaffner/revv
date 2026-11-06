@@ -59,7 +59,7 @@ export function mergeRecapStream(
   };
 }
 
-export function freshEntry(): RecapStreamEntry {
+function freshEntry(): RecapStreamEntry {
   return {
     lede: "",
     entries: new Map(),

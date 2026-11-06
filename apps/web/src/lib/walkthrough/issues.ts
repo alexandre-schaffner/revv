@@ -31,7 +31,7 @@ export interface IssueGroupView extends Omit<IssueGroup, "issues"> {
  * Bucket issues by severity (Critical → Warning → Info). Empty buckets are
  * dropped. Within each bucket original arrival order is preserved.
  */
-export function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[] {
+function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[] {
   const groups: IssueGroup[] = [];
   for (const severity of ISSUE_SEVERITIES) {
     const bucket = issues.filter((issue) => issue.severity === severity);

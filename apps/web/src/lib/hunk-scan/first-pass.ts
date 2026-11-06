@@ -42,7 +42,7 @@ export type LeadOutcome =
   | { kind: "pending" };
 
 /** The recorded lead for a scan row, matched on file and hunk position. */
-export function leadForRow(
+function leadForRow(
   entry: HunkScanRow,
   leads: readonly WalkthroughLead[],
 ): WalkthroughLead | undefined {
@@ -129,7 +129,7 @@ export function leadOutcomeNote(outcome: LeadOutcome): string | null {
  * Skipped because of what the hunk is (generated, deletion-only, …) rather
  * than because the call failed. These never count toward the scan's total.
  */
-export function isContentSkip(entry: HunkScanRow): boolean {
+function isContentSkip(entry: HunkScanRow): boolean {
   return entry.skipReason !== null && entry.skipReason !== "unscanned";
 }
 

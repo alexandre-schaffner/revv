@@ -16,7 +16,7 @@ export function hashString(str: string): number {
   return Math.abs(h);
 }
 
-export function fallbackOwnerHue(repoFullName: string): number {
+function fallbackOwnerHue(repoFullName: string): number {
   const owner = (repoFullName.split("/")[0] ?? repoFullName).toLowerCase();
   return hashString(owner) % 360;
 }

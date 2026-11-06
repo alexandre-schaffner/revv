@@ -36,7 +36,7 @@ export interface RecapWindow {
 }
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-export const WEEK_MS = 7 * DAY_MS;
+const WEEK_MS = 7 * DAY_MS;
 
 /** UTC day key of an ISO string or Date, whichever the wire handed us. */
 export function utcDayKey(value: string | Date): string {
@@ -50,7 +50,7 @@ export function utcDateKey(d: Date): string {
 }
 
 /** Day key of the Monday on-or-before the given Date (ISO weeks start Monday). */
-export function utcMondayKey(d: Date): string {
+function utcMondayKey(d: Date): string {
   return utcDateKey(startOfUtcIsoWeek(d));
 }
 

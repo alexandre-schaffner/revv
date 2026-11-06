@@ -4,7 +4,7 @@ import type { ResolvedTheme } from "$lib/stores/theme.svelte";
 
 const PAPER = { light: [0.95, 0.028, 85], dark: [0.86, 0.03, 85] } as const;
 
-export function oklchToHex(l: number, c: number, h: number): string {
+function oklchToHex(l: number, c: number, h: number): string {
   const hr = (h * Math.PI) / 180;
   const a = c * Math.cos(hr);
   const b = c * Math.sin(hr);

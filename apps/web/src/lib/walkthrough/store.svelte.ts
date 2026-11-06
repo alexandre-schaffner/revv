@@ -125,7 +125,7 @@ export function getBlocks(prId: string): WalkthroughBlock[] {
   return entries.get(prId)?.blocks ?? [];
 }
 
-export function getIssues(prId: string): WalkthroughIssue[] {
+function getIssues(prId: string): WalkthroughIssue[] {
   return entries.get(prId)?.issues ?? [];
 }
 
