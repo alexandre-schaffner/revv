@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   RATING_AXES,
   type WalkthroughBlock,
+  type WalkthroughEndReason,
   type WalkthroughIssue,
   type WalkthroughRating,
   type WalkthroughStreamEvent,
@@ -116,50 +117,46 @@ describe("applyEvents", () => {
     ]);
   });
 
-  it("treats `done` and `lifecycle:complete` the same, closing Phase D only with all content", () => {
-    for (const type of ["done", "lifecycle:complete"] as const) {
-      const event = {
-        type,
-        data: { walkthroughId: "w1", tokenUsage: { inputTokens: 3 } },
-      } as WalkthroughStreamEvent;
-      const partial = applyEvents(startingEntry("reviewer", ""), [event]);
-      expect(partial.doneReceived).toBe(true);
-      expect(partial.isStreaming).toBe(false);
-      expect(partial.lastCompletedPhase).toBe("none");
-      expect(partial.tokenUsage.inputTokens).toBe(3);
-      expect(applyEvents(full(startingEntry("reviewer", "")), [event]).lastCompletedPhase).toBe(
-        "D",
-      );
-    }
+  it("closes Phase D on `lifecycle:complete` only with all content", () => {
+    const event: WalkthroughStreamEvent = {
+      type: "lifecycle:complete",
+      data: {
+        walkthroughId: "w1",
+        tokenUsage: {
+          inputTokens: 3,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          contextTokens: 0,
+        },
+      },
+    };
+    const partial = applyEvents(startingEntry("reviewer", ""), [event]);
+    expect(partial.doneReceived).toBe(true);
+    expect(partial.isStreaming).toBe(false);
+    expect(partial.lastCompletedPhase).toBe("none");
+    expect(partial.tokenUsage.inputTokens).toBe(3);
+    expect(applyEvents(full(startingEntry("reviewer", "")), [event]).lastCompletedPhase).toBe("D");
   });
 
-  describe("failures (`error` and `lifecycle:error` alike)", () => {
-    for (const type of ["error", "lifecycle:error"] as const) {
-      const fail = (data: { code: string; message: string; repoId?: string }) =>
-        applyEvents(startingEntry("reviewer", ""), [{ type, data } as WalkthroughStreamEvent]);
+  describe("`lifecycle:error`", () => {
+    const fail = (reason: WalkthroughEndReason, message: string) =>
+      applyEvents(startingEntry("reviewer", ""), [
+        { type: "lifecycle:error", data: { reason, message } },
+      ]);
 
-      it(`${type}: a clone in progress waits on the repo`, () => {
-        const entry = fail({ code: "CloneInProgress", message: "m", repoId: "r1" });
-        expect(entry.cloneInProgress).toBe(true);
-        expect(entry.cloneRepoId).toBe("r1");
-        expect(entry.streamError).toBeNull();
-        expect(entry.isStreaming).toBe(false);
-      });
+    it("a user stop is not an error", () => {
+      const entry = fail("cancelled", "Walkthrough cancelled");
+      expect(entry.streamError).toBeNull();
+      expect(entry.streamEndReason).toBeNull();
+      expect(entry.isStreaming).toBe(false);
+    });
 
-      it(`${type}: a clone without a repo id is an error to retry`, () => {
-        const entry = fail({ code: "CloneInProgress", message: "m" });
-        expect(entry.cloneInProgress).toBe(false);
-        expect(entry.streamError).toContain("did not report which one");
-      });
-
-      it(`${type}: a user stop is not an error`, () => {
-        expect(fail({ code: "Cancelled", message: "stopped" }).streamError).toBeNull();
-      });
-
-      it(`${type}: anything else is the message`, () => {
-        expect(fail({ code: "Boom", message: "it broke" }).streamError).toBe("it broke");
-      });
-    }
+    it("anything else is the message, with why it ended", () => {
+      const entry = fail("agent_auth", "Sign in again");
+      expect(entry.streamError).toBe("Sign in again");
+      expect(entry.streamEndReason).toBe("agent_auth");
+    });
   });
 
   it("drops the previous review when another walkthrough starts", () => {
@@ -185,15 +182,6 @@ describe("applyEvents", () => {
     const entry = applyEvents(seed, [started("w1")]);
     expect(entry.summary).toBe("early");
     expect(entry.walkthroughId).toBe("w1");
-  });
-
-  it("a run that has to wait on a clone isn't streaming", () => {
-    const entry = applyEvents(idleEntry("reviewer"), [
-      started("w1", { status: "cloning", repoId: "r1" }),
-    ]);
-    expect(entry.cloneInProgress).toBe(true);
-    expect(entry.cloneRepoId).toBe("r1");
-    expect(entry.isStreaming).toBe(false);
   });
 
   it("removes a chapter with its blocks", () => {
@@ -277,10 +265,29 @@ describe("mergeSnapshot", () => {
   it("an errored current row carries its message; a historical one doesn't", () => {
     const errored = snapshot({
       status: "error",
-      walkthrough: { ...snapshot().walkthrough, errorMessage: "usage limit" },
+      walkthrough: {
+        ...snapshot().walkthrough,
+        errorMessage: "usage limit",
+        endReason: "agent_auth",
+      },
     });
     expect(mergeSnapshot(undefined, errored).streamError).toBe("usage limit");
+    expect(mergeSnapshot(undefined, errored).streamEndReason).toBe("agent_auth");
     expect(mergeSnapshot(undefined, { ...errored, historical: true }).streamError).toBeNull();
+  });
+
+  it("a row the user stopped reads as resumable after a reload, as it does live", () => {
+    const stopped = snapshot({
+      status: "error",
+      walkthrough: {
+        ...snapshot().walkthrough,
+        errorMessage: "Walkthrough cancelled",
+        endReason: "cancelled",
+      },
+    });
+    const entry = mergeSnapshot(undefined, stopped);
+    expect(entry.streamError).toBeNull();
+    expect(walkthroughUiState(entry).kind).toBe("resumable");
   });
 });
 
@@ -300,14 +307,10 @@ describe("completion predicates", () => {
 });
 
 describe("walkthroughUiState", () => {
-  it("orders cloning, streaming, stale, error, complete, resumable, idle", () => {
+  it("orders streaming, stale, error, complete, resumable, idle", () => {
     const idle = idleEntry("reviewer");
     expect(walkthroughUiState(undefined).kind).toBe("absent");
     expect(walkthroughUiState(idle).kind).toBe("idle");
-    expect(
-      walkthroughUiState({ ...idle, cloneInProgress: true, cloneRepoId: "r", isStreaming: true })
-        .kind,
-    ).toBe("cloning");
     expect(walkthroughUiState({ ...idle, isStreaming: true, superseded: true }).kind).toBe(
       "streaming",
     );

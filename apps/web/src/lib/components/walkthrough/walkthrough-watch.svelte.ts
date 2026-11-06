@@ -1,12 +1,11 @@
 // What keeps a PR's walkthrough honest while its review page is open: the
 // first snapshot, a valid report on screen, a stalled stream reconciled
-// against the DB, a waiting run started once its repo is cloned, and one
-// toast per failure. Called by the review page during its init.
+// against the DB, and one toast per failure. Called by the review page during
+// its init.
 
 import type { WalkthroughReviewRound } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
-import { getRepoById } from "$lib/stores/repos.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import {
   getLastWalkthroughEventAt,
@@ -18,8 +17,7 @@ import {
   selectWalkthroughReport,
   watchWalkthrough,
 } from "$lib/stores/walkthrough.svelte";
-import { startWalkthrough, startWhenCloned, stopClonePoll } from "$lib/stores/walkthrough-actions";
-import { AGENT_AUTH_REQUIRED, agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
+import { agentAuthRecoveryDescription } from "$lib/utils/agent-auth-recovery";
 
 /**
  * The report a PR's page should show when the one on screen isn't a visible
@@ -64,8 +62,6 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
   const entry = $derived(getWalkthroughEntry(prId));
   const isStreaming = $derived(entry?.isStreaming ?? false);
   const streamError = $derived(entry?.streamError ?? null);
-  const cloneRepoId = $derived(entry?.cloneInProgress ? entry.cloneRepoId : null);
-  const cloneRepo = $derived(cloneRepoId ? getRepoById(cloneRepoId) : null);
 
   $effect(() => {
     const id = prId;
@@ -74,10 +70,7 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
       void loadReviewRounds(id);
       return watchWalkthrough(id);
     });
-    return () => {
-      unwatch();
-      stopClonePoll(id);
-    };
+    return unwatch;
   });
 
   let reportLoading = false;
@@ -106,7 +99,7 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
 
   let lastReconcileAt = 0;
   $effect(() => {
-    if (!isStreaming || cloneRepoId) return;
+    if (!isStreaming) return;
     const id = prId;
     const timer = setInterval(() => {
       const watchedEntry = getWalkthroughEntry(id);
@@ -125,19 +118,6 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
     return () => clearInterval(timer);
   });
 
-  $effect(() => {
-    const repoId = cloneRepoId;
-    if (!repoId) return;
-    const id = prId;
-    // The repo's SSE status is the fast path; the poll covers a missed one.
-    if (cloneRepo?.cloneStatus === "ready") {
-      void startWalkthrough(id);
-      return;
-    }
-    void startWhenCloned(id, repoId);
-    return () => stopClonePoll(id);
-  });
-
   let lastStreamErrorToast: string | null = null;
   $effect(() => {
     if (!streamError) {
@@ -148,31 +128,13 @@ export function useWalkthroughWatch(getPrId: () => string, getIsShown: () => boo
     const key = `${prId}:${streamError}`;
     if (lastStreamErrorToast === key) return;
     lastStreamErrorToast = key;
-    const authRecovery = entry?.streamErrorCode === AGENT_AUTH_REQUIRED;
+    const authRecovery = entry?.streamEndReason === "agent_auth";
     toast.error("Walkthrough failed", {
       id: `walkthrough-error-${prId}`,
       description: authRecovery ? agentAuthRecoveryDescription(streamError) : streamError,
       ...(authRecovery
         ? { action: { label: "Open Settings", onClick: () => openSettings("ai") } }
         : {}),
-      duration: 8000,
-    });
-  });
-
-  let lastCloneErrorToast: string | null = null;
-  $effect(() => {
-    const cloneError = cloneRepo?.cloneError || null;
-    if (!cloneError) {
-      lastCloneErrorToast = null;
-      return;
-    }
-    if (!getIsShown()) return;
-    const key = `${cloneRepoId ?? "unknown"}:${cloneError}`;
-    if (lastCloneErrorToast === key) return;
-    lastCloneErrorToast = key;
-    toast.error("Repository clone failed", {
-      id: `repo-clone-error-${cloneRepoId ?? prId}`,
-      description: cloneError,
       duration: 8000,
     });
   });

@@ -72,6 +72,9 @@ function dispatch(msg: ServerEventMessage): void {
       walkthrough.onWalkthroughEvent(msg.data);
       stacks.onWalkthroughEvent(msg.data);
       break;
+    case "walkthrough:live":
+      walkthrough.onWalkthroughLive(msg.data);
+      break;
     case "stack:updated":
       stacks.onStackUpdated(msg.data);
       stackHeadlines.onStackUpdated(msg.data);

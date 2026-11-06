@@ -2,9 +2,8 @@
 // entry so the button reacts at once; the run itself reports back through
 // `lifecycle:*` events on the global SSE bus.
 
-import type { CloneStatus, WalkthroughMode } from "@revv/shared";
+import type { WalkthroughMode } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { onReposCloneStatus, retryClone } from "$lib/stores/repos.svelte";
 import {
   clearPendingAction,
   deleteEntry,
@@ -42,7 +41,7 @@ function failStart(prId: string, message: string): void {
   updateEntry(prId, (e) => {
     e.isStreaming = false;
     e.streamError = message;
-    e.streamErrorCode = null;
+    e.streamEndReason = null;
   });
 }
 
@@ -72,14 +71,6 @@ async function requestStart(
   }
 }
 
-/** Start a run without touching the entry: the page is already showing its wait. */
-export async function startWalkthrough(
-  prId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): Promise<void> {
-  await requestStart(prId, mode, "full");
-}
-
 /**
  * The Generate button. Seeds a streaming entry right away so the bar flips to
  * Stop: the server can spend seconds resolving the diff and booting the agent
@@ -97,8 +88,8 @@ export function generateWalkthrough(
 }
 
 /**
- * Stop the run. The entry leaves its streaming state at once; the server's
- * interrupt then reports `lifecycle:error` with code `Cancelled`.
+ * Stop the run. The entry leaves its streaming state at once; the server then
+ * reports `lifecycle:error` with reason `cancelled`.
  */
 export function abort(prId: string): void {
   const mode = getSelectedMode(prId);
@@ -108,7 +99,6 @@ export function abort(prId: string): void {
   });
   // A hung start/regenerate request must not keep the buttons disabled.
   clearPendingAction(prId);
-  stopClonePoll(prId);
   // If this is lost the agent runs on in the background; the next
   // regenerate or pull supersedes it.
   void api.api
@@ -166,12 +156,10 @@ export function resume(prId: string, mode: WalkthroughMode = getSelectedMode(prI
       isStreaming: true,
       doneReceived: false,
       streamError: null,
-      streamErrorCode: null,
+      streamEndReason: null,
       superseded: false,
       historical: false,
       liveGeneration: true,
-      cloneInProgress: false,
-      cloneRepoId: null,
       phase: "connecting",
       phaseMessage: "Resuming walkthrough...",
       streamStartedAt: Date.now(),
@@ -181,8 +169,7 @@ export function resume(prId: string, mode: WalkthroughMode = getSelectedMode(prI
         e.isStreaming = false;
         e.liveGeneration = false;
         e.streamError = message;
-        e.streamErrorCode = null;
-        e.streamErrorCode = null;
+        e.streamEndReason = null;
       });
     try {
       const { data, error } = await api.api.reviews({ id: prId }).walkthrough.resume.post({ mode });
@@ -227,96 +214,4 @@ export async function invalidateForPull(prId: string): Promise<void> {
   } catch {
     // The next regenerate supersedes it anyway.
   }
-}
-
-// ── Waiting on a repository clone ───────────────────────────────────────────
-//
-// A walkthrough can't start until its repository is cloned. The SSE carries
-// the clone's progress, but a missed message or a server restart (which
-// resets clone state) would strand the page on "Cloning…"; the clone-status
-// endpoint is authoritative for every outcome, so it's polled.
-
-const clonePollers = new Map<string, { cancelled: boolean }>();
-const CLONE_POLL_INTERVAL_MS = 2000;
-const CLONE_POLL_MAX_MS = 10 * 60 * 1000;
-
-function stillCloning(prId: string, repoId: string): boolean {
-  const entry = getWalkthroughEntry(prId);
-  return entry?.cloneInProgress === true && entry.cloneRepoId === repoId;
-}
-
-function failClone(prId: string, message: string): void {
-  updateEntry(prId, (e) => {
-    e.cloneInProgress = false;
-    e.cloneRepoId = null;
-    e.isStreaming = false;
-    e.streamError = message;
-    e.streamErrorCode = null;
-  });
-}
-
-export function stopClonePoll(prId: string): void {
-  const poller = clonePollers.get(prId);
-  if (poller) poller.cancelled = true;
-  clonePollers.delete(prId);
-}
-
-/** Start the walkthrough once the repo is cloned, or record why it can't. */
-export async function startWhenCloned(
-  prId: string,
-  repoId: string,
-  mode: WalkthroughMode = getSelectedMode(prId),
-): Promise<void> {
-  if (clonePollers.has(prId)) return;
-  const token = { cancelled: false };
-  clonePollers.set(prId, token);
-  const startedAt = Date.now();
-  try {
-    while (!token.cancelled && stillCloning(prId, repoId)) {
-      let status: CloneStatus = "cloning";
-      let error: string | null = null;
-      try {
-        const { data } = await api.api.repos({ id: repoId })["clone-status"].get();
-        if (data && "status" in data) {
-          status = data.status;
-          error = data.error ?? null;
-        }
-      } catch {
-        // A network blip: ask again next tick.
-      }
-      if (token.cancelled || !stillCloning(prId, repoId)) return;
-
-      onReposCloneStatus({ repoId, status, ...(error ? { error } : {}) });
-      if (status === "ready") {
-        void startWalkthrough(prId, mode);
-        return;
-      }
-      if (status === "error") {
-        failClone(prId, `Repository clone failed${error ? `: ${error}` : ""}. Retry to try again.`);
-        return;
-      }
-      if (status === "pending") {
-        failClone(prId, "Repository clone was reset. Retry to try again.");
-        return;
-      }
-      if (Date.now() - startedAt > CLONE_POLL_MAX_MS) {
-        failClone(prId, "Repository clone is taking too long. Retry to try again.");
-        return;
-      }
-      await new Promise((r) => setTimeout(r, CLONE_POLL_INTERVAL_MS));
-    }
-  } finally {
-    if (clonePollers.get(prId) === token) clonePollers.delete(prId);
-  }
-}
-
-/** The page's escape hatch when a clone seems stuck: clone again, then keep waiting. */
-export async function retryWalkthroughClone(prId: string, repoId: string): Promise<void> {
-  try {
-    await retryClone(repoId);
-  } catch {
-    // `retryClone` already put the failure on the repo and in a toast.
-    return;
-  }
-  void startWhenCloned(prId, repoId);
 }

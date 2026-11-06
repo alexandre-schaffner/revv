@@ -35,7 +35,6 @@ import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
 /** Which state the tab is in, in the order the checks apply. */
 export type WalkthroughPage =
   | { kind: "error-empty"; explorations: readonly Activity[] }
-  | { kind: "cloning"; repoId: string | null }
   | { kind: "empty" }
   | { kind: "first-pass-only" }
   | { kind: "loading" }
@@ -431,9 +430,6 @@ export class WalkthroughView {
       const hasBody = Boolean(this.summary) || blocksAll.length > 0;
       if (this.streamError && !hasBody) {
         return { kind: "error-empty", explorations: explorationSteps.slice(-6) };
-      }
-      if (entry?.cloneInProgress && !hasBody) {
-        return { kind: "cloning", repoId: entry.cloneRepoId };
       }
       if (!this.isStreaming && !hasBody && !this.streamError && !hydrating) {
         return this.firstPass.rows.length > 0 ? { kind: "first-pass-only" } : { kind: "empty" };

@@ -16,12 +16,11 @@ import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.sve
 import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
 import { WalkthroughStack } from "$lib/components/stack/walkthrough/walkthrough-stack.svelte";
 import { Button } from "$lib/components/ui/button";
-import { Progress } from "$lib/components/ui/progress";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { enterOnce } from "$lib/motion";
 import { jumpToDiffLine, scrollToAnchor } from "$lib/stores/review-nav.svelte";
 import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { resume, retryWalkthroughClone } from "$lib/stores/walkthrough-actions";
+import { resume } from "$lib/stores/walkthrough-actions";
 import { initHighlighter } from "$lib/utils/code-highlight.svelte";
 import { renderMarkdown } from "$lib/utils/markdown";
 import { sortBySeverity } from "$lib/utils/walkthrough-issues";
@@ -114,17 +113,6 @@ function jumpToSection(elementId: string): void {
   scrollToAnchor("walkthrough", elementId);
 }
 
-let retryingClone = $state(false);
-async function handleRetryClone(repoId: string): Promise<void> {
-  if (retryingClone) return;
-  retryingClone = true;
-  try {
-    await retryWalkthroughClone(prId, repoId);
-  } finally {
-    retryingClone = false;
-  }
-}
-
 function handleResume(): void {
   void resume(prId);
 }
@@ -214,30 +202,6 @@ onMount(() => {
 				<ArrowsClockwise size={16} />
 				Retry
 			</Button>
-		</div>
-	{:else if view.page.kind === 'cloning'}
-		{@const repoId = view.page.repoId}
-		<div class="walkthrough-empty" class:walkthrough-empty--in-flow={stack.isStacked}>
-			{#if !repoId}
-				<Warning size={20} weight="fill" />
-				<p class="loading-text">Couldn't identify the repository that was cloning.</p>
-			{:else}
-				<div class="clone-progress-container">
-					<p class="loading-text">Cloning repository…</p>
-					<Progress indeterminate class="clone-progress-bar" />
-					<p class="loading-subtext">The walkthrough will start automatically when cloning completes.</p>
-					<Button
-						variant="outline"
-						size="lg"
-						style="cursor: pointer;"
-						disabled={retryingClone}
-						onclick={() => handleRetryClone(repoId)}
-					>
-						<ArrowsClockwise size={16} />
-						Retry clone
-					</Button>
-				</div>
-			{/if}
 		</div>
 	{:else if view.page.kind === 'first-pass-only'}
 		<div class="walkthrough-loading review-columns">
@@ -654,13 +618,6 @@ onMount(() => {
 		color: var(--color-text-muted);
 	}
 
-	.loading-subtext {
-		font-size: 11px;
-		color: var(--color-text-muted);
-		opacity: 0.6;
-		margin: 0;
-	}
-
 	.partial-error {
 		display: flex;
 		align-items: center;
@@ -687,19 +644,6 @@ onMount(() => {
 
 	.partial-error-copy span {
 		overflow-wrap: anywhere;
-	}
-
-	.clone-progress-container {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 10px;
-		width: 100%;
-		max-width: 320px;
-	}
-
-	:global(.clone-progress-bar) {
-		width: 100%;
 	}
 
 	.sentiment-card {

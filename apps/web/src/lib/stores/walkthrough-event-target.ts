@@ -25,7 +25,6 @@ import type { WalkthroughStreamEvent } from "@revv/shared";
  * `isStreaming`.
  */
 const TERMINAL_EVENT_TYPES: ReadonlySet<WalkthroughStreamEvent["type"]> = new Set([
-  "done",
   "lifecycle:complete",
   "lifecycle:error",
   "lifecycle:superseded",

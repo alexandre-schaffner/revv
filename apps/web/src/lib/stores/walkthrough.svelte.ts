@@ -15,6 +15,7 @@ import type {
   WalkthroughEventEnvelope,
   WalkthroughIssue,
   WalkthroughLead,
+  WalkthroughLiveEnvelope,
   WalkthroughMode,
   WalkthroughRating,
   WalkthroughReviewRoundsResponse,
@@ -458,6 +459,24 @@ export function onWalkthroughEvent({
     void loadReviewRounds(prId);
     toastReady(prId);
   }
+}
+
+/**
+ * A live-only event (reasoning, exploration, the gauge, the phase): applied to
+ * the run the entry follows, with no seq to check. A missed one is simply gone.
+ */
+export function onWalkthroughLive({
+  prId,
+  walkthroughId,
+  event,
+}: WalkthroughLiveEnvelope["data"]): void {
+  const entry = entries.get(prId);
+  const selectedReportId = selectedReportIds.get(prId) ?? null;
+  if (!entry || (selectedReportId !== null && selectedReportId !== walkthroughId)) return;
+  if (!addressesActiveWalkthrough(entry, walkthroughId, event.type)) return;
+  const next = applyEvents(entry, [event]);
+  if (!shallowEntryEqual(entry, next)) entries.set(prId, next);
+  lastEventAtByPr.set(prId, Date.now());
 }
 
 /**
