@@ -43,10 +43,10 @@ describe("acpErrorMessage", () => {
     ).toBe("Internal error: You've hit your limit");
   });
 
-  it("serializes structured data the SDK parsed out of a JSON error", () => {
-    expect(
-      acpErrorMessage("Internal error", { type: "error", error: { type: "overloaded_error" } }),
-    ).toBe('Internal error: {"type":"error","error":{"type":"overloaded_error"}}');
+  it("leaves other structured data, such as an adapter's errorKind, to the caller", () => {
+    expect(acpErrorMessage("Internal error", { errorKind: "billing_error" })).toBe(
+      "Internal error",
+    );
   });
 
   it("leaves the message alone when data is absent or empty", () => {

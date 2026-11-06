@@ -51,9 +51,10 @@ const STARTUP_EXIT_GRACE_MS = 1000;
 const STARTUP_STDERR_LINES = 6;
 
 /**
- * A JSON-RPC error's message with its `data` folded in. An agent that throws a
- * plain error is answered by the ACP SDK as `{ message: "Internal error", data:
- * { details } }`, so the message alone names nothing; the cause is in `data`.
+ * A JSON-RPC error's message with its `details` folded in. An agent that throws
+ * a plain error is answered by the ACP SDK as `{ message: "Internal error",
+ * data: { details } }`, so the message alone names nothing. Other structured
+ * data (an adapter's `errorKind`) is left for the caller to interpret.
  */
 export function acpErrorMessage(message: string, data: unknown): string {
   const detail =
@@ -61,9 +62,7 @@ export function acpErrorMessage(message: string, data: unknown): string {
       ? data
       : data !== null && typeof data === "object" && "details" in data
         ? String(data.details ?? "")
-        : data !== null && typeof data === "object" && Object.keys(data).length > 0
-          ? JSON.stringify(data)
-          : "";
+        : "";
   const trimmed = detail.trim();
   if (trimmed === "" || message.includes(trimmed)) return message;
   const clipped =
