@@ -1,41 +1,25 @@
 import { describe, expect, it } from "bun:test";
-import type { PullRequest, Repository } from "@revv/shared";
+import type { PullRequest } from "@revv/shared";
+import type { Context } from "effect";
 import { Effect } from "effect";
-import { createDb, type Db } from "../db/index";
-import { account, user } from "../db/schema/auth";
 import { GitHubRateLimitError } from "../domain/errors";
 import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
-import { DbService } from "./Db";
-import { GitHubEtagCache } from "./GitHubEtagCache";
-import type { OpenPrList, OpenPrListSignature } from "./github-graphql-prs";
-import { makeAccountPauses, openSyncCycle, type PollDeps } from "./poll-cycle";
+import { withDb } from "../effects/with-db";
+import type { GitHubGateway } from "./github/gateway";
+import type { OpenPrList, OpenPrListSignature } from "./github/pulls";
+import type { GitHubClient } from "./github/transport";
+import { openGate } from "./poll-gate";
 import {
-  archiveClosedPrs,
   decideListing,
-  type ListedSignature,
   movedRangePrIds,
   openListMoved,
   probeRepos,
   type RepoListingContext,
+  settleVanishedPrs,
   syncRepoOpenPrs,
 } from "./poll-open-prs";
-import { SettingsService } from "./Settings";
-
-const REPO: Repository = {
-  id: "repo-1",
-  provider: "github",
-  owner: "octo",
-  name: "repo",
-  fullName: "octo/repo",
-  defaultBranch: "main",
-  avatarUrl: null,
-  addedAt: "2026-01-01T00:00:00Z",
-  cloneStatus: "ready",
-  clonePath: null,
-  cloneError: null,
-  managed: false,
-  githubHost: "github.com",
-};
+import { type ListedSignature, makePollState, type PollState } from "./poll-state";
+import { ACCOUNT_ID, makeHarness, REPO, seedDb } from "./poll-test-support";
 
 function pr(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -69,75 +53,67 @@ function pr(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
   };
 }
 
-function seedAccount(db: Db): void {
-  const now = new Date();
-  db.insert(user)
-    .values({ id: "user-1", name: "U", email: "u@test", createdAt: now, updatedAt: now })
-    .run();
-  db.insert(account)
-    .values({
-      id: "acc-1",
-      accountId: "1",
-      providerId: "github",
-      userId: "user-1",
-      createdAt: now,
-      updatedAt: now,
-    })
-    .run();
-}
+const graphqlLimit = () =>
+  new GitHubRateLimitError({
+    resetAt: new Date(Date.now() + 60 * 60 * 1000),
+    kind: "primary",
+    resource: "graphql",
+  });
 
 interface Fakes {
-  readonly log: string[];
   listOpen: (updatedSince: string | null) => Effect.Effect<PullRequest[], GitHubRateLimitError>;
   listClosedSince: () => Effect.Effect<number[] | null>;
   listOpenRest: () => Effect.Effect<PullRequest[]>;
   probe: () => Effect.Effect<Map<string, OpenPrListSignature>>;
+  getMany: (
+    numbers: readonly number[],
+  ) => Effect.Effect<Map<number, ObservedPr>, GitHubRateLimitError>;
   stacks?: "listed" | "refused" | "unsupported";
-  readonly upserts: Array<{ rows: readonly ObservedPr[] }>;
 }
 
 const unseenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: STACK_UNSEEN });
 const seenStack = (pr: PullRequest): ObservedPr => ({ ...pr, stack: stackSeen(pr.stack) });
 
-function makeDeps(db: Db, fakes: Fakes): PollDeps {
-  const deps = {
-    db,
-    realtime: {
-      toAccount: () => Effect.void,
-      toRepo: () => Effect.void,
-      toPr: () => Effect.void,
-      toAll: () => Effect.void,
-    },
-    tokenProvider: {
-      getTokenByAccountId: () => Effect.succeed("token"),
-      refreshAccountToken: () => Effect.fail(new Error("no refresh")),
-      clearReauthRequired: () => Effect.void,
-      markReauthRequired: () => Effect.void,
-    },
-    remoteUserService: { upsert: () => Effect.void },
-    stackService: {
-      markStale: (repositoryId: string, stackNumber: number) =>
-        Effect.sync(() => {
-          fakes.log.push(`stack:${repositoryId}:${stackNumber}`);
-        }),
-    },
-    github: {
-      prs: {
-        listOpen: (
-          _repo: string,
-          _repoId: string,
-          _token: string,
-          _apiBase: string,
-          {
-            withStacks = true,
-            updatedSince = null,
-          }: { withStacks?: boolean; updatedSince?: string | null } = {},
-        ) => {
-          fakes.log.push(
-            (withStacks ? "list:graphql" : "list:graphql:no-stacks") +
-              (updatedSince ? `:since=${updatedSince}` : ""),
-          );
-          return fakes.listOpen(updatedSince).pipe(
+async function setup(overrides: Partial<Fakes> = {}) {
+  const db = seedDb();
+  const harness = await makeHarness(db);
+  const fakes: Fakes = {
+    listOpen: () => Effect.succeed([]),
+    listOpenRest: () => Effect.succeed([]),
+    listClosedSince: () => Effect.succeed([]),
+    probe: () => Effect.succeed(new Map()),
+    getMany: () => Effect.succeed(new Map()),
+    ...overrides,
+  };
+  const log: string[] = [];
+  const upserts: Array<{ rows: readonly ObservedPr[] }> = [];
+  // The transport reports each rate limit to GitHubAccounts as it happens.
+  const observed = <A, E>(client: GitHubClient, eff: Effect.Effect<A, E>) =>
+    eff.pipe(
+      Effect.tapError((err) =>
+        err instanceof GitHubRateLimitError
+          ? harness.accounts.observer.rateLimited(client, err)
+          : Effect.void,
+      ),
+    );
+  const github = {
+    prs: {
+      listOpen: (
+        client: GitHubClient,
+        _repo: string,
+        _repoId: string,
+        {
+          withStacks = true,
+          updatedSince = null,
+        }: { withStacks?: boolean; updatedSince?: string | null } = {},
+      ) => {
+        log.push(
+          (withStacks ? "list:graphql" : "list:graphql:no-stacks") +
+            (updatedSince ? `:since=${updatedSince}` : ""),
+        );
+        return observed(
+          client,
+          fakes.listOpen(updatedSince).pipe(
             Effect.map((prs): OpenPrList => {
               const stacks = withStacks ? (fakes.stacks ?? "listed") : "refused";
               return {
@@ -145,69 +121,58 @@ function makeDeps(db: Db, fakes: Fakes): PollDeps {
                 hostPredatesStacks: stacks === "unsupported",
               };
             }),
-          );
-        },
-        listOpenRest: () => {
-          fakes.log.push("list:rest");
-          return fakes.listOpenRest().pipe(Effect.map((prs) => prs.map(unseenStack)));
-        },
-        listClosedSince: () => {
-          fakes.log.push("closed-since");
-          return fakes.listClosedSince();
-        },
-        get: (_repo: string, n: number) => Effect.succeed(pr(n, { status: "merged" })),
-        probeOpenLists: () => {
-          fakes.log.push("probe");
-          return fakes.probe();
-        },
-        diffStats: (_repo: string, numbers: readonly number[]) => {
-          fakes.log.push("diffStats");
-          return Effect.succeed(
-            new Map(numbers.map((n) => [n, { additions: 1, deletions: 1, changedFiles: 1 }])),
-          );
-        },
+          ),
+        );
+      },
+      listOpenRest: () => {
+        log.push("list:rest");
+        return fakes.listOpenRest().pipe(Effect.map((prs) => prs.map(unseenStack)));
+      },
+      listClosedSince: () => {
+        log.push("closed-since");
+        return fakes.listClosedSince();
+      },
+      probeOpenLists: () => {
+        log.push("probe");
+        return fakes.probe();
+      },
+      diffStats: (_client: GitHubClient, _repo: string, numbers: readonly number[]) => {
+        log.push("diffStats");
+        return Effect.succeed(
+          new Map(numbers.map((n) => [n, { additions: 1, deletions: 1, changedFiles: 1 }])),
+        );
+      },
+      getMany: (
+        client: GitHubClient,
+        _repo: string,
+        _repoId: string,
+        numbers: readonly number[],
+      ) => {
+        log.push(`getMany:${numbers.join(",")}`);
+        return observed(client, fakes.getMany(numbers));
       },
     },
-    prService: {
-      upsertPrs: (rows: readonly ObservedPr[]) =>
-        Effect.sync(() => {
-          fakes.log.push(`upsert:${rows.map((r) => r.headSha).join(",")}`);
-          fakes.upserts.push({ rows });
-        }),
-      markPrsClosed: () => Effect.void,
+  } as unknown as Context.Service.Shape<typeof GitHubGateway>;
+  const mirror = {
+    ...harness.mirror,
+    apply: (rows: readonly ObservedPr[], options?: Parameters<typeof harness.mirror.apply>[1]) => {
+      log.push(`upsert:${rows.map((r) => r.headSha).join(",")}`);
+      upserts.push({ rows });
+      return harness.mirror.apply(rows, options);
     },
-    repoClone: { pruneWorktree: () => Effect.void },
   };
-  return deps as unknown as PollDeps;
+  const avatars = {
+    ensure: () => Effect.succeed({ id: null, changed: false }),
+    contents: () => Effect.succeed(new Map<string, string>()),
+  };
+  const state = makePollState();
+  const gate = (repoIds: readonly string[] = [REPO.id]) =>
+    openGate(harness.accounts, new Map(repoIds.map((id) => [id, ACCOUNT_ID])));
+  const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff);
+  return { db, harness, fakes, github, mirror, avatars, state, gate, log, upserts, run };
 }
 
-const provideInfra = <A>(
-  db: Db,
-  eff: Effect.Effect<A, never, DbService | GitHubEtagCache | SettingsService>,
-) =>
-  eff.pipe(
-    Effect.provideService(DbService, { db }),
-    Effect.provideService(GitHubEtagCache, {} as never),
-    Effect.provideService(SettingsService, {} as never),
-  );
-
-function setup(fakes: Partial<Omit<Fakes, "log" | "upserts">> = {}) {
-  const db = createDb(":memory:");
-  seedAccount(db);
-  const all: Fakes = {
-    log: [],
-    upserts: [],
-    listOpen: () => Effect.succeed([]),
-    listOpenRest: () => Effect.succeed([]),
-    listClosedSince: () => Effect.succeed([]),
-    probe: () => Effect.succeed(new Map()),
-    ...fakes,
-  };
-  const deps = makeDeps(db, all);
-  const pauses = makeAccountPauses();
-  const openCycle = () => openSyncCycle(deps, pauses, ["acc-1"], new Map([[REPO.id, "acc-1"]]));
-  return { db, deps, log: all.log, upserts: all.upserts, openCycle };
-}
+type Env = Awaited<ReturnType<typeof setup>>;
 
 function context(existing: PullRequest[], overrides: Partial<RepoListingContext> = {}) {
   return {
@@ -216,156 +181,112 @@ function context(existing: PullRequest[], overrides: Partial<RepoListingContext>
     diffStatsHeadByPrId: new Map<string, string | null>(),
     unchangedRepoIds: new Set<string>(),
     probedSignatures: new Map<string, OpenPrListSignature>(),
-    listedSignatures: new Map<string, ListedSignature>(),
-    stacklessUntil: new Map<string, number>(),
     ...overrides,
   } satisfies RepoListingContext;
 }
 
+const syncRepo = (env: Env, ctx: RepoListingContext, state: PollState = env.state) =>
+  env.run(
+    Effect.gen(function* () {
+      const gate = yield* env.gate();
+      return yield* syncRepoOpenPrs(
+        { github: env.github, mirror: env.mirror, avatars: env.avatars },
+        gate,
+        state,
+        ctx,
+        REPO,
+      );
+    }),
+  );
+
 describe("syncRepoOpenPrs", () => {
   it("falls back to the REST list when the GraphQL budget runs out", async () => {
-    const { db, deps, log, openCycle } = setup({
-      listOpen: () =>
-        Effect.fail(
-          new GitHubRateLimitError({
-            resetAt: new Date(Date.now() + 60 * 60 * 1000),
-            kind: "primary",
-            resource: "graphql",
-          }),
-        ),
+    const env = await setup({
+      listOpen: () => Effect.fail(graphqlLimit()),
       listOpenRest: () => Effect.succeed([pr(1)]),
     });
 
-    const { result, graphqlLive, restLive } = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openCycle();
-          const result = yield* syncRepoOpenPrs(deps, cycle, context([]), REPO);
-          return {
-            result,
-            graphqlLive: cycle.liveAccountForRepo(REPO.id, "graphql"),
-            restLive: cycle.liveAccountForRepo(REPO.id, "core"),
-          };
-        }),
-      ),
-    );
+    const result = await syncRepo(env, context([]));
 
     expect(result?.prs.map((p) => p.id)).toEqual(["repo-1:1"]);
     // No diff stats: they are GraphQL too.
-    expect(log).toEqual(["list:graphql", "list:rest", "upsert:head-1"]);
-    expect(graphqlLive).toBeNull();
-    expect(restLive).not.toBeNull();
+    expect(env.log).toEqual(["list:graphql", "list:rest", "upsert:head-1"]);
+    expect(await env.run(env.harness.accounts.backgroundClient(ACCOUNT_ID, "graphql"))).toBeNull();
+    expect(await env.run(env.harness.accounts.backgroundClient(ACCOUNT_ID, "core"))).not.toBeNull();
   });
 
   it("goes straight to REST while GraphQL is paused, and still pauses everything on a secondary limit", async () => {
-    const { db, deps, log, openCycle } = setup({
-      listOpen: () =>
-        Effect.fail(
-          new GitHubRateLimitError({
-            resetAt: new Date(Date.now() + 60 * 60 * 1000),
-            kind: "primary",
-            resource: "graphql",
-          }),
-        ),
-    });
+    const env = await setup({ listOpen: () => Effect.fail(graphqlLimit()) });
 
-    await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          yield* syncRepoOpenPrs(deps, yield* openCycle(), context([]), REPO);
-          // The pause outlives the cycle that hit it.
-          const next = yield* openCycle();
-          yield* syncRepoOpenPrs(deps, next, context([]), REPO);
-          const [acc] = next.accountRows;
-          if (!acc) throw new Error("account not hydrated");
-          yield* next.tryGuarded(
-            acc,
-            Effect.fail(
-              new GitHubRateLimitError({
-                resetAt: new Date(Date.now() + 60_000),
-                retryAfter: 60,
-                kind: "secondary",
-              }),
-            ),
-          );
-          expect(next.liveAccountForRepo(REPO.id, "core")).toBeNull();
-          expect(next.liveAccountForRepo(REPO.id)).toBeNull();
-        }),
-      ),
-    );
-
-    expect(log.filter((l) => l.startsWith("list:"))).toEqual([
+    await syncRepo(env, context([]));
+    // The pause outlives the cycle that hit it.
+    await syncRepo(env, context([]));
+    expect(env.log.filter((l) => l.startsWith("list:"))).toEqual([
       "list:graphql",
       "list:rest",
       "list:rest",
     ]);
+
+    const client = await env.run(env.harness.accounts.clientFor(ACCOUNT_ID));
+    await env.run(
+      env.harness.accounts.observer.rateLimited(
+        client,
+        new GitHubRateLimitError({
+          resetAt: new Date(Date.now() + 60_000),
+          retryAfter: 60,
+          kind: "secondary",
+        }),
+      ),
+    );
+    const gate = await env.run(env.gate());
+    expect(await env.run(gate.clientForRepo(REPO.id, "core"))).toBeNull();
+    expect(await env.run(gate.clientForRepo(REPO.id))).toBeNull();
   });
 
   it("reuses the DB rows of a repo the probe proved unchanged", async () => {
-    const { db, deps, log, openCycle } = setup();
+    const env = await setup();
     const existing = [pr(1), pr(2)];
 
-    const result = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openCycle();
-          return yield* syncRepoOpenPrs(
-            deps,
-            cycle,
-            context(existing, { unchangedRepoIds: new Set([REPO.id]) }),
-            REPO,
-          );
-        }),
-      ),
-    );
+    const result = await syncRepo(env, context(existing, { unchangedRepoIds: new Set([REPO.id]) }));
 
     expect(result).toEqual({ prs: existing, listed: false });
-    expect(log).toEqual([]);
+    expect(env.log).toEqual([]);
   });
 
   it("records the signature of a list that fully landed", async () => {
-    const listedSignatures = new Map<string, ListedSignature>();
-    const { db, deps, openCycle } = setup({
+    const env = await setup({
       listOpen: () => Effect.succeed([pr(1, { updatedAt: "2026-01-03T00:00:00Z" }), pr(2)]),
     });
 
-    await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          yield* syncRepoOpenPrs(deps, yield* openCycle(), context([], { listedSignatures }), REPO);
-        }),
-      ),
-    );
+    await syncRepo(env, context([]));
 
-    expect(listedSignatures.get(REPO.id)?.signature).toEqual({
+    expect(env.state.listed(REPO.id)?.signature).toEqual({
       count: 2,
       latestUpdatedAt: "2026-01-03T00:00:00Z",
     });
+  });
+
+  it("sizes new PRs in the same write that lands them", async () => {
+    const env = await setup({ listOpen: () => Effect.succeed([pr(1)]) });
+
+    await syncRepo(env, context([]));
+
+    expect(env.log).toEqual(["list:graphql", "diffStats", "upsert:head-1"]);
+    expect(env.upserts[0]?.rows[0]).toMatchObject({ changedFiles: 1, statsHeadSha: "head-1" });
+    const heads = await env.run(withDb(env.db, env.harness.prService.diffStatsHeads()));
+    expect(heads.get("repo-1:1")).toBe("head-1");
   });
 });
 
 describe("syncRepoOpenPrs stack membership", () => {
   const STACKED = { number: 4, position: 2 };
 
-  const sync = (env: ReturnType<typeof setup>, existing: PullRequest[], ctx = context(existing)) =>
-    Effect.runPromise(
-      provideInfra(
-        env.db,
-        Effect.gen(function* () {
-          const cycle = yield* env.openCycle();
-          return yield* syncRepoOpenPrs(env.deps, cycle, ctx, REPO);
-        }),
-      ),
-    );
-
   it("writes a listed stack as authoritative, joining or leaving", async () => {
-    const env = setup({ listOpen: () => Effect.succeed([pr(1, { stack: STACKED }), pr(2)]) });
+    const env = await setup({
+      listOpen: () => Effect.succeed([pr(1, { stack: STACKED }), pr(2)]),
+    });
 
-    await sync(env, [pr(1), pr(2, { stack: STACKED })]);
+    await syncRepo(env, context([pr(1), pr(2, { stack: STACKED })]));
 
     expect(env.upserts).toHaveLength(1);
     expect(env.upserts[0]?.rows.map((row) => row.stack)).toEqual([
@@ -375,21 +296,21 @@ describe("syncRepoOpenPrs stack membership", () => {
   });
 
   it("announces a stack a member joined, left, or moved in", async () => {
-    const env = setup({
+    const env = await setup({
       listOpen: () =>
         Effect.succeed([pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })]),
     });
 
-    await sync(env, [pr(1), pr(2, { stack: { number: 9, position: 1 } })]);
+    await syncRepo(env, context([pr(1), pr(2, { stack: { number: 9, position: 1 } })]));
 
-    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
+    expect(env.harness.recorded.staleStacks).toEqual([`${REPO.id}:4`]);
   });
 
   it("keeps the stored stack when GitHub refused the stack fields", async () => {
     const stored = pr(1, { stack: STACKED });
-    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "refused" });
+    const env = await setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "refused" });
 
-    const result = await sync(env, [stored]);
+    const result = await syncRepo(env, context([stored]));
 
     expect(env.upserts[0]?.rows[0]?.stack).toEqual(STACK_UNSEEN);
     expect(result?.prs[0]?.stack).toEqual(STACKED);
@@ -397,45 +318,40 @@ describe("syncRepoOpenPrs stack membership", () => {
 
   it("announces no stack when the list couldn't see them", async () => {
     const stored = [pr(1, { stack: STACKED }), pr(2, { stack: { number: 9, position: 1 } })];
-    const env = setup({ listOpen: () => Effect.succeed([pr(1), pr(2)]), stacks: "refused" });
+    const env = await setup({ listOpen: () => Effect.succeed([pr(1), pr(2)]), stacks: "refused" });
 
-    const result = await sync(env, stored);
+    const result = await syncRepo(env, context(stored));
 
-    expect(env.log.filter((l) => l.startsWith("stack:"))).toEqual([]);
+    expect(env.harness.recorded.staleStacks).toEqual([]);
     expect(result?.prs.map((p) => p.stack)).toEqual([STACKED, { number: 9, position: 1 }]);
   });
 
   it("keeps the stored stack across a REST fallback", async () => {
     const stored = pr(1, { stack: STACKED });
-    const env = setup({
-      listOpen: () =>
-        Effect.fail(
-          new GitHubRateLimitError({
-            resetAt: new Date(Date.now() + 60 * 60 * 1000),
-            kind: "primary",
-            resource: "graphql",
-          }),
-        ),
+    const env = await setup({
+      listOpen: () => Effect.fail(graphqlLimit()),
       listOpenRest: () => Effect.succeed([pr(1)]),
     });
 
-    const result = await sync(env, [stored]);
+    const result = await syncRepo(env, context([stored]));
 
     expect(env.upserts[0]?.rows[0]?.stack).toEqual(STACK_UNSEEN);
     expect(result?.prs[0]?.stack).toEqual(STACKED);
   });
 
   it("stops asking a host that predates stacks, for that account and a while only", async () => {
-    const env = setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unsupported" });
-    const ctx = context([]);
+    const env = await setup({ listOpen: () => Effect.succeed([pr(1)]), stacks: "unsupported" });
+    const realNow = Date.now;
 
-    await sync(env, [], ctx);
-    await sync(env, [], ctx);
-    const [key] = ctx.stacklessUntil.keys();
-    if (key === undefined) throw new Error("refusal not remembered");
-    expect(key.startsWith("acc-1")).toBe(true);
-    ctx.stacklessUntil.set(key, Date.now() - 1);
-    await sync(env, [], ctx);
+    await syncRepo(env, context([]));
+    await syncRepo(env, context([]));
+    try {
+      const later = realNow() + 31 * 60 * 1000;
+      Date.now = () => later;
+      await syncRepo(env, context([]));
+    } finally {
+      Date.now = realNow;
+    }
 
     expect(env.log.filter((l) => l.startsWith("list:"))).toEqual([
       "list:graphql",
@@ -445,12 +361,11 @@ describe("syncRepoOpenPrs stack membership", () => {
   });
 
   it("records whether the landed list held a stack", async () => {
-    const env = setup({ listOpen: () => Effect.succeed([pr(1, { stack: STACKED })]) });
-    const ctx = context([]);
+    const env = await setup({ listOpen: () => Effect.succeed([pr(1, { stack: STACKED })]) });
 
-    await sync(env, [], ctx);
+    await syncRepo(env, context([]));
 
-    expect(ctx.listedSignatures.get(REPO.id)?.hasStacks).toBe(true);
+    expect(env.state.listed(REPO.id)?.hasStacks).toBe(true);
   });
 });
 
@@ -466,33 +381,24 @@ describe("reading only what moved", () => {
     truncated: false,
   });
 
-  const run = (
-    env: ReturnType<typeof setup>,
+  const run = async (
+    env: Env,
     probed: OpenPrListSignature,
     existing: PullRequest[] = stored,
     truncated = false,
   ) => {
-    const ctx = context(existing, {
-      listedSignatures: new Map([[REPO.id, { ...listed(existing.length), truncated }]]),
-      probedSignatures: new Map([[REPO.id, probed]]),
-    });
-    return Effect.runPromise(
-      provideInfra(
-        env.db,
-        Effect.gen(function* () {
-          return yield* syncRepoOpenPrs(env.deps, yield* env.openCycle(), ctx, REPO);
-        }),
-      ),
-    ).then((result) => ({ result, ctx }));
+    env.state.recordListing(REPO.id, { ...listed(existing.length), truncated });
+    const ctx = context(existing, { probedSignatures: new Map([[REPO.id, probed]]) });
+    return syncRepo(env, ctx);
   };
 
   it("reads the PRs updated since the last list, and writes only those", async () => {
-    const env = setup({
+    const env = await setup({
       listOpen: (since) =>
         Effect.succeed(since ? [pr(2, { updatedAt: NEW, headSha: "moved" })] : stored),
     });
 
-    const { result, ctx } = await run(env, { count: 2, latestUpdatedAt: NEW });
+    const result = await run(env, { count: 2, latestUpdatedAt: NEW });
 
     expect(env.log).toContain(`list:graphql:since=${OLD}`);
     expect(env.log).toContain("closed-since");
@@ -501,28 +407,25 @@ describe("reading only what moved", () => {
       ["repo-1:1", "head-1"],
       ["repo-1:2", "moved"],
     ]);
-    expect(ctx.listedSignatures.get(REPO.id)?.signature).toEqual({
-      count: 2,
-      latestUpdatedAt: NEW,
-    });
+    expect(env.state.listed(REPO.id)?.signature).toEqual({ count: 2, latestUpdatedAt: NEW });
   });
 
   it("keeps the full-list clock running, so the safety net still comes round", async () => {
-    const env = setup({ listOpen: () => Effect.succeed([pr(2, { updatedAt: NEW })]) });
+    const env = await setup({ listOpen: () => Effect.succeed([pr(2, { updatedAt: NEW })]) });
     const before = listed(2).fullListedAt;
 
-    const { ctx } = await run(env, { count: 2, latestUpdatedAt: NEW });
+    await run(env, { count: 2, latestUpdatedAt: NEW });
 
-    expect(ctx.listedSignatures.get(REPO.id)?.fullListedAt).toBeLessThanOrEqual(before);
+    expect(env.state.listed(REPO.id)?.fullListedAt).toBeLessThanOrEqual(before);
   });
 
   it("drops a PR that closed since, so the cycle archives it", async () => {
-    const env = setup({
+    const env = await setup({
       listOpen: () => Effect.succeed([]),
       listClosedSince: () => Effect.succeed([2]),
     });
 
-    const { result } = await run(env, { count: 1, latestUpdatedAt: OLD });
+    const result = await run(env, { count: 1, latestUpdatedAt: OLD });
 
     expect(result?.prs.map((p) => p.id)).toEqual(["repo-1:1"]);
     expect(result?.listed).toBe(true);
@@ -530,22 +433,22 @@ describe("reading only what moved", () => {
   });
 
   it("lists in full when the result disagrees with the probe's count", async () => {
-    const env = setup({
+    const env = await setup({
       listOpen: (since) => Effect.succeed(since ? [] : [pr(1, { updatedAt: OLD })]),
     });
 
-    const { result } = await run(env, { count: 1, latestUpdatedAt: OLD });
+    const result = await run(env, { count: 1, latestUpdatedAt: OLD });
 
     expect(env.log).toContain("list:graphql");
     expect(result?.prs.map((p) => p.id)).toEqual(["repo-1:1"]);
   });
 
   it("trusts a list cut at the cap without counting it", async () => {
-    const env = setup({
+    const env = await setup({
       listOpen: (since) => Effect.succeed(since ? [pr(2, { updatedAt: NEW })] : stored),
     });
 
-    const { result } = await run(env, { count: 5801, latestUpdatedAt: NEW }, stored, true);
+    const result = await run(env, { count: 5801, latestUpdatedAt: NEW }, stored, true);
 
     expect(env.log.filter((l) => l.startsWith("list:graphql"))).toEqual([
       `list:graphql:since=${OLD}`,
@@ -554,7 +457,7 @@ describe("reading only what moved", () => {
   });
 
   it("lists in full when the closed PRs couldn't all be read", async () => {
-    const env = setup({ listClosedSince: () => Effect.succeed(null) });
+    const env = await setup({ listClosedSince: () => Effect.succeed(null) });
 
     await run(env, { count: 2, latestUpdatedAt: NEW });
 
@@ -575,9 +478,17 @@ describe("probeRepos", () => {
     truncated: false,
   });
 
+  const probe = (env: Env, repos = [REPO], reuse = true) =>
+    env.run(
+      Effect.gen(function* () {
+        const gate = yield* env.gate(repos.map((r) => r.id));
+        return yield* probeRepos(env.github, gate, env.state, repos, reuse);
+      }),
+    );
+
   it("skips only repos whose probed signature matches a recent list", async () => {
     const other = { ...REPO, id: "repo-2", fullName: "octo/other" };
-    const { db, deps, log } = setup({
+    const env = await setup({
       probe: () =>
         Effect.succeed(
           new Map([
@@ -586,155 +497,141 @@ describe("probeRepos", () => {
           ]),
         ),
     });
-    const pauses = makeAccountPauses();
+    env.state.recordListing("repo-1", listedAt(Date.now()));
+    env.state.recordListing("repo-2", listedAt(Date.now()));
 
-    const unchanged = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openSyncCycle(
-            deps,
-            pauses,
-            ["acc-1"],
-            new Map([
-              ["repo-1", "acc-1"],
-              ["repo-2", "acc-1"],
-            ]),
-          );
-          return (yield* probeRepos(
-            deps,
-            cycle,
-            [REPO, other],
-            new Map([
-              ["repo-1", listedAt(Date.now())],
-              ["repo-2", listedAt(Date.now())],
-            ]),
-            true,
-          )).unchanged;
-        }),
-      ),
-    );
+    const { unchanged } = await probe(env, [REPO, other]);
 
     expect([...unchanged]).toEqual(["repo-1"]);
-    expect(log).toEqual(["probe"]);
+    expect(env.log).toEqual(["probe"]);
   });
 
   it("a list cut at the cap is unchanged when its newest update is", async () => {
-    const { db, deps, openCycle } = setup({
+    const env = await setup({
       probe: () => Effect.succeed(new Map([["octo/repo", { ...signature, count: 5801 }]])),
     });
+    env.state.recordListing(REPO.id, { ...listedAt(Date.now()), truncated: true });
 
-    const probed = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          return yield* probeRepos(
-            deps,
-            yield* openCycle(),
-            [REPO],
-            new Map([[REPO.id, { ...listedAt(Date.now()), truncated: true }]]),
-            true,
-          );
-        }),
-      ),
-    );
+    const probed = await probe(env);
 
     expect([...probed.unchanged]).toEqual([REPO.id]);
   });
 
   it("a manual sync probes, but proves nothing unchanged", async () => {
     const big = { ...signature, count: 250 };
-    const { db, deps, openCycle } = setup({
-      probe: () => Effect.succeed(new Map([["octo/repo", big]])),
-    });
+    const env = await setup({ probe: () => Effect.succeed(new Map([["octo/repo", big]])) });
+    env.state.recordListing(REPO.id, { ...listedAt(Date.now()), signature: big });
 
-    const probed = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          return yield* probeRepos(
-            deps,
-            yield* openCycle(),
-            [REPO],
-            new Map([[REPO.id, { ...listedAt(Date.now()), signature: big }]]),
-            false,
-          );
-        }),
-      ),
-    );
+    const probed = await probe(env, [REPO], false);
 
     expect(probed.unchanged.size).toBe(0);
     expect(probed.signatures.get(REPO.id)).toEqual(big);
   });
 
   it("does not probe for repos without a recent list", async () => {
-    const { db, deps, log, openCycle } = setup();
+    const env = await setup();
+    env.state.recordListing(REPO.id, listedAt(Date.now() - 31 * 60 * 1000));
 
-    const unchanged = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          return (yield* probeRepos(
-            deps,
-            yield* openCycle(),
-            [REPO],
-            new Map([[REPO.id, listedAt(Date.now() - 31 * 60 * 1000)]]),
-            true,
-          )).unchanged;
-        }),
-      ),
-    );
+    const { unchanged } = await probe(env);
 
     expect(unchanged.size).toBe(0);
-    expect(log).toEqual([]);
+    expect(env.log).toEqual([]);
   });
 
   it("never skips a repo holding a stack", async () => {
-    const { db, deps, log, openCycle } = setup({
-      probe: () => Effect.succeed(new Map([["octo/repo", signature]])),
-    });
+    const env = await setup({ probe: () => Effect.succeed(new Map([["octo/repo", signature]])) });
+    env.state.recordListing(REPO.id, { ...listedAt(Date.now()), hasStacks: true });
 
-    const unchanged = await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          return (yield* probeRepos(
-            deps,
-            yield* openCycle(),
-            [REPO],
-            new Map([[REPO.id, { ...listedAt(Date.now()), hasStacks: true }]]),
-            true,
-          )).unchanged;
-        }),
-      ),
-    );
+    const { unchanged } = await probe(env);
 
     expect(unchanged.size).toBe(0);
-    expect(log).toEqual([]);
+    expect(env.log).toEqual([]);
   });
 });
 
-describe("archiveClosedPrs", () => {
-  it("announces a stack once, however many of its layers closed", async () => {
-    const { db, deps, log, openCycle } = setup();
-    const stacked = (n: number, position: number) => pr(n, { stack: { number: 4, position } });
+describe("settleVanishedPrs", () => {
+  const stacked = (n: number, position: number) => pr(n, { stack: { number: 4, position } });
 
-    await Effect.runPromise(
-      provideInfra(
-        db,
-        Effect.gen(function* () {
-          const cycle = yield* openCycle();
-          yield* archiveClosedPrs(
-            deps,
-            cycle,
-            [stacked(1, 1), stacked(2, 2), pr(3)],
-            new Map([[REPO.id, REPO]]),
-          );
-        }),
-      ),
+  const settle = async (env: Env, vanished: PullRequest[]) => {
+    // The vanished PRs are open in the mirror before the cycle notices.
+    await env.run(withDb(env.db, env.harness.prService.upsertPrs(vanished.map(unseenStack))));
+    const ids = await env.run(
+      Effect.gen(function* () {
+        const gate = yield* env.gate();
+        return yield* settleVanishedPrs(
+          { github: env.github, mirror: env.mirror },
+          gate,
+          vanished,
+          new Map([[REPO.id, REPO]]),
+          new Map(vanished.map((p) => [p.id, p])),
+        );
+      }),
     );
+    const rows = await env.run(
+      withDb(
+        env.db,
+        Effect.forEach(vanished, (p) => env.harness.prService.getPr(p.id)),
+      ).pipe(Effect.orDie),
+    );
+    return { ids, status: new Map(rows.map((r) => [r.id, r.status])) };
+  };
 
-    expect(log.filter((l) => l.startsWith("stack:"))).toEqual([`stack:${REPO.id}:4`]);
+  it("resolves every vanished PR of a repo in one batched read", async () => {
+    const env = await setup({
+      getMany: (numbers) =>
+        Effect.succeed(
+          new Map(
+            numbers
+              .filter((n) => n !== 3)
+              .map((n): [number, ObservedPr] => [
+                n,
+                {
+                  ...unseenStack(pr(n)),
+                  status: n === 1 ? "merged" : "closed",
+                  closedAt: "2026-01-05T00:00:00Z",
+                },
+              ]),
+          ),
+        ),
+    });
+
+    const { ids, status } = await settle(env, [pr(1), pr(2), pr(3)]);
+
+    expect(env.log.filter((l) => l.startsWith("getMany"))).toEqual(["getMany:1,2,3"]);
+    expect(ids.sort()).toEqual(["repo-1:1", "repo-1:2", "repo-1:3"]);
+    // A PR GitHub can no longer show is recorded closed.
+    expect([...status]).toEqual([
+      ["repo-1:1", "merged"],
+      ["repo-1:2", "closed"],
+      ["repo-1:3", "closed"],
+    ]);
+  });
+
+  it("leaves them open for the next cycle when the read fails", async () => {
+    const env = await setup({ getMany: () => Effect.fail(graphqlLimit()) });
+
+    const { ids, status } = await settle(env, [pr(1)]);
+
+    expect(ids).toEqual([]);
+    expect(status.get("repo-1:1")).toBe("open");
+  });
+
+  it("announces a stack once, however many of its layers closed", async () => {
+    const env = await setup({
+      getMany: (numbers) =>
+        Effect.succeed(
+          new Map(
+            numbers.map((n): [number, ObservedPr] => [
+              n,
+              { ...unseenStack(pr(n)), status: "merged", closedAt: "2026-01-05T00:00:00Z" },
+            ]),
+          ),
+        ),
+    });
+
+    await settle(env, [stacked(1, 1), stacked(2, 2), pr(3)]);
+
+    expect(env.harness.recorded.staleStacks).toEqual([`${REPO.id}:4`]);
   });
 });
 

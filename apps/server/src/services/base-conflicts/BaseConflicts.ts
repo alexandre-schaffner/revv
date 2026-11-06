@@ -29,13 +29,10 @@ import { pumpAgentFrames, queueToStream } from "../agent-frame-pump";
 import { ChatSessionService } from "../ChatSession";
 import { worktreeHolderPath } from "../clone-policy";
 import type { DbService } from "../Db";
-import type { GitHubEtagCache } from "../GitHubEtagCache";
 import { assertNotFlagLike, isAncestor, lsRemoteHead, proposedCommitCount } from "../GitOps";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
+import { PrMirror } from "../PrMirror";
 import { PrPushLockService } from "../PrPushLock";
-import { PullRequestService } from "../PullRequest";
-import { makePrHeadRefresh } from "../pr-head-refresh";
-import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
 import {
   checkTips,
@@ -81,7 +78,7 @@ export class BaseConflictsService extends Context.Service<
     }) => Effect.Effect<
       ReadableStream<BaseConflictFrame>,
       BaseConflictsError,
-      DbService | GitHubEtagCache | SettingsService
+      DbService | SettingsService
     >;
   }
 >()("BaseConflictsService") {}
@@ -112,11 +109,7 @@ export const BaseConflictsServiceLive = Layer.effect(
     const ai = yield* AiService;
     const pushLock = yield* PrPushLockService;
     const chatSessions = yield* ChatSessionService;
-    const headRefresh = makePrHeadRefresh({
-      prService: yield* PullRequestService,
-      prCtx,
-      realtime: yield* Realtime,
-    });
+    const mirror = yield* PrMirror;
 
     const checks = new Map<
       string,
@@ -125,7 +118,8 @@ export const BaseConflictsServiceLive = Layer.effect(
     const checkOnce = keyedSingleFlight<string, BaseConflictsCheck, DbError>();
 
     const syncRepoOf = (ctx: PrContextBasic): SyncRepo | null => {
-      const { pr, repo, token } = ctx;
+      const { pr, repo } = ctx;
+      const token = ctx.client.token;
       if (repo.cloneStatus !== "ready" || !repo.clonePath) return null;
       const host = repo.githubHost;
       return {
@@ -213,7 +207,7 @@ export const BaseConflictsServiceLive = Layer.effect(
 
     const check: Context.Service.Shape<typeof BaseConflictsService>["check"] = (params) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.resolveBasic(params.prId, params.userId, params.accountId);
+        const ctx = yield* prCtx.forPr(params.prId, params.accountId);
         const cached = checks.get(ctx.pr.id);
         const resolving = pushLock.holder(ctx.pr.id) === "base-sync";
         // A running sync owns the fetched refs; answer from memory meanwhile.
@@ -245,7 +239,7 @@ export const BaseConflictsServiceLive = Layer.effect(
       scratch: { path: string | null; repo: SyncRepo | null },
     ) =>
       Effect.gen(function* () {
-        const ctx = yield* prCtx.resolveBasic(params.prId, params.userId, params.accountId);
+        const ctx = yield* prCtx.forPr(params.prId, params.accountId);
         const { pr } = ctx;
         if (pr.status !== "open") {
           return yield* rejected("invalid", `#${pr.externalId} is ${pr.status}`);
@@ -412,16 +406,15 @@ export const BaseConflictsServiceLive = Layer.effect(
               break;
           }
 
-          yield* headRefresh
-            .recordPushedHead({
-              prId: pr.id,
-              repoFullName: ctx.repo.fullName,
-              prExternalId: pr.externalId,
-              token: ctx.token,
-              newTip: verified.head,
-            })
-            .pipe(Effect.catch(() => Effect.void));
-          yield* headRefresh.broadcastPrsUpdated(pr.id).pipe(Effect.catch(() => Effect.void));
+          yield* mirror
+            .recordPushedHead(ctx, verified.head)
+            .pipe(
+              Effect.catch((e) =>
+                Effect.sync(() =>
+                  logError("base-conflicts", `recording pushed head of ${pr.id}:`, e),
+                ),
+              ),
+            );
           yield* offer({
             kind: "result",
             status: "pushed",

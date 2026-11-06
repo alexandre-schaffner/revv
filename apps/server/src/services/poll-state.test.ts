@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { rankThreadSweep, type ThreadSweepMark } from "./PollScheduler";
+import { rankThreadSweep, type ThreadSweepMark } from "./poll-state";
 
 const NOW = Date.parse("2026-06-04T12:00:00.000Z");
 const MINUTE = 60 * 1000;

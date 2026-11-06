@@ -77,7 +77,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         }
 
         const sync = yield* SyncService;
-        yield* sync.pushThread(ctx.params.id, ctx.session.user.id);
+        yield* sync.pushThread(ctx.params.id);
       }).pipe(Effect.as({ success: true })),
     ),
   )

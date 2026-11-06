@@ -1,7 +1,7 @@
 import type { PullRequest, PullRequestLocator, Repository } from "@revv/shared";
 import { Effect, Option } from "effect";
 import type { DbError, GitHubError } from "../domain/errors";
-import { asStored, type ObservedPr } from "../domain/observed-pr";
+import { asStored, localPrId, type ObservedPr } from "../domain/observed-pr";
 
 interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite> {
   readonly findRepository: (
@@ -17,21 +17,6 @@ interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite
   readonly upsertPullRequest: (pullRequest: ObservedPr) => Effect.Effect<void, DbError, RWrite>;
 }
 
-export function localPullRequestId(repositoryId: string, number: number): string {
-  return `${repositoryId}:${number}`;
-}
-
-export function remapPullRequestToLocalRepository(
-  pullRequest: ObservedPr,
-  repositoryId: string,
-): ObservedPr {
-  return {
-    ...pullRequest,
-    id: localPullRequestId(repositoryId, pullRequest.externalId),
-    repositoryId,
-  };
-}
-
 /** Targeted, account-scoped resolution. Account/host matching happens before this workflow. */
 export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
   operations: ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite>,
@@ -44,18 +29,14 @@ export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
       return { status: "repository_not_tracked" } as const;
     }
 
-    const localId = localPullRequestId(repository.id, locator.number);
+    const localId = localPrId(repository.id, locator.number);
     const cached = yield* operations.findCachedPullRequest(localId);
     if (Option.isSome(cached)) {
       return { status: "resolved", pullRequest: cached.value } as const;
     }
 
     const remote = yield* operations.fetchPullRequest(repository, locator.number);
-    const local = remapPullRequestToLocalRepository(remote, repository.id);
-    yield* operations.upsertPullRequest(local);
-    return {
-      status: "resolved",
-      pullRequest: asStored(local, Option.getOrUndefined(cached)),
-    } as const;
+    yield* operations.upsertPullRequest(remote);
+    return { status: "resolved", pullRequest: asStored(remote, undefined) } as const;
   }).pipe(Effect.withSpan("resolvePullRequestLink"));
 }
