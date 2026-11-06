@@ -152,9 +152,9 @@ $effect(() => {
 						{#if block.type === 'markdown'}
 							<WalkthroughMarkdownBlock content={block.content} />
 						{:else if block.type === 'code'}
-							<WalkthroughCodeBlock {block} hideAnnotation />
+							<WalkthroughCodeBlock {block} />
 						{:else if block.type === 'diff'}
-							<WalkthroughDiffBlock {block} hideAnnotation />
+							<WalkthroughDiffBlock {block} />
 						{:else if block.type === 'artifact'}
 							<WalkthroughArtifactBlock {block} />
 						{/if}

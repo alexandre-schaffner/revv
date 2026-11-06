@@ -42,7 +42,7 @@ import * as Select from "$lib/components/ui/select";
 import { Switch } from "$lib/components/ui/switch";
 import { resetOnboarding } from "$lib/stores/auth.svelte";
 import { getDiffWrap, setDiffWrap } from "$lib/stores/diff-prefs.svelte";
-import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
+import { getDiffMode, setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import { getSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { closeSettings } from "$lib/stores/settingsModal.svelte";
 import {

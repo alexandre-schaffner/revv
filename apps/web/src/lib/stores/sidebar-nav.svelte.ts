@@ -13,13 +13,9 @@
 //   G                Jump to last row
 //   Escape           Drop the cursor
 
-import {
-  getArchivedByRepo,
-  getOpenPrsByRepoOrdered,
-  getSelectedPrId,
-  getSelectedRepo,
-  selectPr,
-} from "./prs.svelte";
+import { getOpenPrsByRepoOrdered } from "./pr-filters.svelte";
+import { getArchivedByRepo } from "./prs.svelte";
+import { getSelectedPrId, getSelectedRepo, selectPr } from "./route.svelte";
 import { isArchiveOpen, setSidebarView } from "./sidebar.svelte";
 
 let focusedId = $state<string | null>(null);

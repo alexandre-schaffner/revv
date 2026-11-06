@@ -5,13 +5,13 @@
 import { tick } from "svelte";
 import type { Action } from "svelte/action";
 import { pulseHighlight } from "$lib/motion";
+import { getReviewFiles } from "./diff-files.svelte";
 import {
   getPrScrollPosition,
-  getReviewFiles,
   setActiveFilePath,
   setActiveTab,
   setPrScrollPosition,
-} from "./review.svelte";
+} from "./pr-view-state.svelte";
 
 export type ReviewPane = "walkthrough" | "conversation" | "diff";
 

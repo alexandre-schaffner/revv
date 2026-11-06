@@ -19,6 +19,7 @@ import { setError } from "./errors.svelte";
 import * as hunkScan from "./hunk-scan.svelte";
 import * as prs from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
+import * as repos from "./repos.svelte";
 import * as review from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
 import * as stackHeadlines from "./stack-headlines.svelte";
@@ -33,6 +34,7 @@ const ON_OPEN: ReadonlyArray<() => void> = [walkthrough.onEventsOpened, sync.onE
 /** A reconnect: events sent while the stream was down reached no one. */
 const ON_RECONNECT: ReadonlyArray<() => void> = [
   prs.onEventsReconnected,
+  repos.onEventsReconnected,
   walkthrough.onEventsReconnected,
   hunkScan.onEventsReconnected,
   review.onEventsReconnected,
@@ -44,6 +46,7 @@ const ON_FOREGROUND: ReadonlyArray<(streamOpen: boolean) => void> = [
   conversation.onWindowForeground,
   review.onWindowForeground,
   prs.onWindowForeground,
+  repos.onWindowForeground,
 ];
 
 const DEAD_CONNECTION_THRESHOLD_MS = 60_000;
@@ -109,10 +112,10 @@ function dispatch(msg: ServerEventMessage): void {
       sync.onPrsSyncSummary(msg.data);
       break;
     case "repos:updated":
-      prs.onReposUpdated(msg.data);
+      repos.onReposUpdated(msg.data);
       break;
     case "repos:clone-status":
-      prs.onReposCloneStatus(msg.data);
+      repos.onReposCloneStatus(msg.data);
       break;
     case "user:updated":
       auth.onUserUpdated(msg.data);

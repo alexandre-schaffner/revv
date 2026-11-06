@@ -6,7 +6,7 @@
 import type { WalkthroughReviewRound } from "@revv/shared";
 import { untrack } from "svelte";
 import { toast } from "svelte-sonner";
-import { getRepoById } from "$lib/stores/prs.svelte";
+import { getRepoById } from "$lib/stores/repos.svelte";
 import { openSettings } from "$lib/stores/settingsModal.svelte";
 import {
   getLastWalkthroughEventAt,

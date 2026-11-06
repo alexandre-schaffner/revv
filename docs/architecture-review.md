@@ -69,8 +69,10 @@ One agent transport, surfaced through `AiService.streamWalkthrough()`: an ACP (A
 
 - `walkthrough.svelte.ts` — applies `walkthrough:event` envelopes from the global SSE bus, hydration from REST, all walkthrough display state (~1545 lines)
 - `events.svelte.ts` — global SSE (`EventSource`) connection to `GET /api/events` with exponential backoff reconnect; exhaustive switch on `ServerEventMessage.type`
-- `prs.svelte.ts` — PR list with fuzzy search, grouping, and derived views
-- `review.svelte.ts` — diff files, comment threads, per-PR scroll positions
+- `route.svelte.ts` — the selected PR and repository, derived from the URL
+- `prs.svelte.ts` — the open PR list, the archive, pins, owner-only PR mutations
+- `repos.svelte.ts` — tracked repositories; `pr-filters.svelte.ts` — sidebar search and creator filter
+- `diff-files.svelte.ts` — the open PR's changed files; `review.svelte.ts` — its review session and comment threads; `pr-view-state.svelte.ts` — per-PR tab, file and scroll
 
 **Motion:** Tailwind CSS v4 with custom timing utilities (`duration-snap`, `duration-quick`, `duration-smooth`, `ease-out-expo`). Global `@media (prefers-reduced-motion)` collapses all transitions to ~1ms; motion-essential elements opt back in via `.motion-essential-*`.
 

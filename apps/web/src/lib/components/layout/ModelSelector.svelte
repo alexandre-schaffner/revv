@@ -10,7 +10,7 @@ import {
   Trigger as PopoverTrigger,
 } from "$lib/components/ui/popover/index.js";
 import type { ModelOption } from "$lib/constants/models";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import {
   areModelsLoaded,
   fetchModels,

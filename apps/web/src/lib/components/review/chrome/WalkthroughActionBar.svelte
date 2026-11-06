@@ -6,7 +6,7 @@ import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
-import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
+import { getIsPullingCommit, reviewLatestCommit } from "$lib/review/pull-latest";
 import { getScrollRoot, scrollToAnchor } from "$lib/stores/review-nav.svelte";
 import {
   getHasUnreviewedCommits,

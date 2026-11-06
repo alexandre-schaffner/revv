@@ -11,7 +11,8 @@ import * as Collapsible from "$lib/components/ui/collapsible";
 import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import { bitsAnim, collapsibleClose, collapsibleOpen } from "$lib/motion";
 import { groupByOwner } from "$lib/repos/add-repo";
-import { getRepositories, getSelectedRepoId } from "$lib/stores/prs.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
+import { getSelectedRepoId } from "$lib/stores/route.svelte";
 import {
   isOwnerCollapsed,
   setAddRepoDialogOpen,

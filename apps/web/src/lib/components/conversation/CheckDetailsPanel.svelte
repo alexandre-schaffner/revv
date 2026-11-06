@@ -8,7 +8,7 @@ import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
-import { getReviewFiles } from "$lib/stores/review.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import MarkdownBody from "./MarkdownBody.svelte";

@@ -3,7 +3,7 @@ import { toast } from "svelte-sonner";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { needsReview } from "$lib/stacks/stack-layer-facts";
 import type { NavigationDirection } from "./navigation-intent.svelte";
-import { getSelectedPr } from "./prs.svelte";
+import { getSelectedPr } from "./route.svelte";
 import { openStackMergeSheet } from "./stack-merge.svelte";
 import { getLayer, getNeighbour, getStack, startStackReview } from "./stacks.svelte";
 

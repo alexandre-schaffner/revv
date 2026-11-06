@@ -4,7 +4,7 @@
 
 import type { CloneStatus, WalkthroughMode } from "@revv/shared";
 import { api } from "$lib/api/client";
-import { onReposCloneStatus, retryClone } from "$lib/stores/prs.svelte";
+import { onReposCloneStatus, retryClone } from "$lib/stores/repos.svelte";
 import {
   clearPendingAction,
   deleteEntry,

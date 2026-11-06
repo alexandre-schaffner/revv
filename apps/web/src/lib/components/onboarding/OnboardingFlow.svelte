@@ -3,7 +3,7 @@ import { onMount } from "svelte";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
 import { getIsAuthenticated, isOnboardingReplay, loadUser } from "$lib/stores/auth.svelte";
-import { fetchRepos } from "$lib/stores/prs.svelte";
+import { fetchRepos } from "$lib/stores/repos.svelte";
 import { fetchSettings, getGithubHost, isSettingsLoaded } from "$lib/stores/settings.svelte";
 import OnboardingShell from "./OnboardingShell.svelte";
 import StepAgent from "./StepAgent.svelte";

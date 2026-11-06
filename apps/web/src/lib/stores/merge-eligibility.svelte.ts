@@ -1,6 +1,6 @@
 import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
 import { isMergeStateSettling } from "@revv/shared";
-import { getMergeEligibility } from "./prs.svelte";
+import { api } from "$lib/api/client";
 import { createResource } from "./resource";
 
 /** Everything a mergeability answer depends on that Revv observes. Equal questions share one answer. */
@@ -20,8 +20,8 @@ const answers = createResource<void, MergeEligibility>({
   freshForMs: 15_000,
   retryDelaysMs: [3_000, 3_000, 3_000, 3_000],
   fetch: async (prId) => {
-    const eligibility = await getMergeEligibility(prId);
-    if (!eligibility)
+    const { data: eligibility, error } = await api.api.prs({ id: prId })["merge-eligibility"].get();
+    if (error || !eligibility || !("mergeStateStatus" in eligibility))
       return { status: "error", error: "Couldn't check whether this can be merged" };
     return isMergeStateSettling(eligibility.mergeStateStatus)
       ? { status: "pending", data: eligibility }

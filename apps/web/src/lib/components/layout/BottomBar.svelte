@@ -1,7 +1,7 @@
 <script lang="ts">
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import ContextUsage from "$lib/components/agent-activity/ContextUsage.svelte";
-import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import {
   getLastSyncAt,

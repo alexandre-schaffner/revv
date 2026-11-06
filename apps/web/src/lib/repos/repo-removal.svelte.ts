@@ -1,5 +1,5 @@
 import type { Repository } from "@revv/shared";
-import { deleteRepo } from "$lib/stores/prs.svelte";
+import { deleteRepo } from "$lib/stores/repos.svelte";
 
 /** Confirm-then-remove state for a list of tracked repositories, driving `RepoDeleteConfirm`. */
 export class RepoRemoval {

@@ -14,7 +14,7 @@ import { openChat } from "$lib/chat/turn.svelte";
 import { provideActivityPr } from "$lib/components/agent-activity/repo-file";
 import { gsapSlide, tokens } from "$lib/motion";
 import { useCommands } from "$lib/stores/commands.svelte";
-import { getSelectedPr, getSelectedPrId } from "$lib/stores/prs.svelte";
+import { getSelectedPr, getSelectedPrId } from "$lib/stores/route.svelte";
 import { getChatStacked, setRightPanelOpen, toggleRightPanel } from "$lib/stores/sidebar.svelte";
 import ChatTimeline from "./ChatTimeline.svelte";
 import ChatComposer from "./composer/ChatComposer.svelte";

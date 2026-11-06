@@ -1,7 +1,7 @@
 /**
- * Utility for mounting Svelte 5 components into HTMLElements that are returned
- * from @pierre/diffs renderAnnotation callbacks. Maintains a cleanup registry
- * so all mounted instances can be destroyed before instance.cleanUp() fires.
+ * Svelte components mounted into the hosts a Pierre `renderAnnotation`
+ * callback returns. Each viewer owns one registry, so tearing one viewer down
+ * never unmounts another's annotations.
  */
 
 import type { Component } from "svelte";
@@ -9,63 +9,44 @@ import { mount, unmount } from "svelte";
 
 type MountedInstance = ReturnType<typeof mount>;
 
-// Registry: target element → mounted Svelte component instance
-const registry = new Map<HTMLElement, MountedInstance>();
-
-/**
- * Mount a Svelte component into a target HTMLElement.
- * If the target already has a mounted component, it is unmounted first.
- */
-export function mountInto<Props extends Record<string, unknown>>(
-  target: HTMLElement,
-  Component: Component<Props>,
-  props: Props,
-): void {
-  const existing = registry.get(target);
-  if (existing) {
-    try {
-      unmount(existing);
-    } catch {
-      // ignore unmount errors
-    }
-    registry.delete(target);
-  }
-  const instance = mount(Component, { target, props });
-  registry.set(target, instance);
-}
-
-/**
- * Unmount any registered components whose target has been detached from the DOM.
- *
- * @pierre/diffs removes the previous annotation wrapper (via `element.remove()`)
- * on every re-render, but it has no knowledge of the Svelte components we mounted
- * inside those wrappers — so they stay registered here with their effects and
- * listeners still live. Call this after a re-render to unmount the orphans;
- * freshly-mounted hosts are still connected and are left untouched.
- */
-export function pruneDetachedMounts(): void {
-  for (const [target, instance] of registry) {
-    if (target.isConnected) continue;
-    try {
-      unmount(instance);
-    } catch {
-      // ignore unmount errors
-    }
-    registry.delete(target);
+function unmountLogged(instance: MountedInstance): void {
+  try {
+    void unmount(instance);
+  } catch (e) {
+    console.warn("[annotation-mount] unmount failed:", e);
   }
 }
 
-/**
- * Unmount ALL mounted Svelte components. Call this before instance.cleanUp()
- * to prevent orphaned Svelte state when the diff container is destroyed.
- */
-export function cleanupAllMounted(): void {
-  for (const [target, instance] of registry) {
-    try {
-      unmount(instance);
-    } catch {
-      // ignore unmount errors
+export class AnnotationMounts {
+  readonly #mounted = new Map<HTMLElement, MountedInstance>();
+
+  /** Mount `Component` into `target`, replacing whatever was mounted there. */
+  mount<Props extends Record<string, unknown>>(
+    target: HTMLElement,
+    Component: Component<Props>,
+    props: Props,
+  ): void {
+    const existing = this.#mounted.get(target);
+    if (existing) unmountLogged(existing);
+    this.#mounted.set(target, mount(Component, { target, props }));
+  }
+
+  /**
+   * Pierre drops the previous annotation hosts (`element.remove()`) on every
+   * re-render without knowing what we mounted in them; unmount those so their
+   * effects and listeners don't outlive them. Hosts still connected are kept.
+   */
+  pruneDetached(): void {
+    for (const [target, instance] of this.#mounted) {
+      if (target.isConnected) continue;
+      unmountLogged(instance);
+      this.#mounted.delete(target);
     }
-    registry.delete(target);
+  }
+
+  /** Unmount everything; call before the Pierre instance is cleaned up. */
+  clear(): void {
+    for (const instance of this.#mounted.values()) unmountLogged(instance);
+    this.#mounted.clear();
   }
 }

@@ -26,20 +26,11 @@ export type FocusPanel = "sidebar" | "diff-scroll" | "diff-line" | "diff-visual"
 let activePanel = $state<FocusPanel>("sidebar");
 
 // ── Cursor / selection state ────────────────────────────────
-// Used by diff-line and diff-visual modes.
-// cursorLineIndex is 1-based and maps to [data-line-index] rendered row indices
-// (not [data-line] which is the actual file line number — those are distinct library attributes).
+// Used by diff-line and diff-visual modes. The cursor counts the diff's rows
+// 1..N; `lib/pierre/diff-rows.ts` maps a row to its file line and side.
 
 /** The currently active/focused line. */
 let cursorLineIndex = $state<number>(1);
-
-/**
- * Which column the cursor is on. `null` in unified mode (no column
- * distinction) or when not yet set. Mirrors the library's optional
- * `side?` field in SelectedLineRange — never pass null directly to
- * the library; omit the property instead.
- */
-let cursorSide = $state<"additions" | "deletions" | null>(null);
 
 /** Visual-mode anchor line (start of selection). null outside visual mode. */
 let anchorLineIndex = $state<number | null>(null);
@@ -58,10 +49,6 @@ export function getActivePanel(): FocusPanel {
 
 export function getCursorLineIndex(): number {
   return cursorLineIndex;
-}
-
-export function getCursorSide(): "additions" | "deletions" | null {
-  return cursorSide;
 }
 
 export function getAnchorLineIndex(): number | null {
@@ -118,7 +105,6 @@ export function enterLineMode(totalLines: number): void {
   // Preserve cursor position if already in a diff mode, else reset to line 1
   if (!isInLineCursorMode()) {
     cursorLineIndex = 1;
-    cursorSide = null;
   }
   anchorLineIndex = null;
   activePanel = "diff-line";
@@ -191,6 +177,5 @@ export function jumpCursor(target: "top" | "bottom" | "half-up" | "half-down"): 
  */
 function resetCursorState(): void {
   cursorLineIndex = 1;
-  cursorSide = null;
   anchorLineIndex = null;
 }

@@ -1,13 +1,7 @@
 <script lang="ts">
-// ── DiffPeek ─────────────────────────────────────────────────────────────────
-//
-// Syntax-highlighted unified diff for a file-edit tool call. Renders straight
-// from the captured old/new text via Pierre's FileDiff (no patch string needed)
-// — the same renderer the walkthrough diff blocks use, minus the annotation
-// chrome. Mounted lazily by ToolCallCard on expand.
-import { FileDiff, type FileDiffOptions } from "@pierre/diffs";
-import { PIERRE_THEME } from "@revv/shared";
-import { workerManager } from "$lib/utils/worker-pool";
+// Syntax-highlighted unified diff for a file-edit tool call, from the captured
+// old/new text. Mounted lazily by ToolCallCard on expand.
+import { pierreDiff } from "$lib/pierre/mount";
 
 interface Props {
   /** File path — drives language detection and is not displayed. */
@@ -17,32 +11,15 @@ interface Props {
 }
 
 let { path, oldText, newText }: Props = $props();
-
-let instance: FileDiff<never> | null = null;
-
-function mountDiff(el: HTMLDivElement) {
-  const options: FileDiffOptions<never, undefined> = {
-    diffStyle: "unified",
-    theme: PIERRE_THEME,
-    overflow: "scroll",
-    disableFileHeader: true,
-  };
-  instance = new FileDiff<never>(options, workerManager);
-  instance.render({
-    containerWrapper: el,
-    oldFile: { name: path, contents: oldText },
-    newFile: { name: path, contents: newText },
-  });
-  return {
-    destroy() {
-      instance?.cleanUp();
-      instance = null;
-    },
-  };
-}
 </script>
 
-<div class="diff-peek" use:mountDiff></div>
+<div
+	class="diff-peek"
+	use:pierreDiff={{
+		oldFile: { name: path, contents: oldText },
+		newFile: { name: path, contents: newText },
+	}}
+></div>
 
 <style>
 	.diff-peek {

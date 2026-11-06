@@ -7,10 +7,8 @@ export { reviewTabs };
 </script>
 
 <script lang="ts">
-import type { ReviewMode } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { page } from "$app/state";
-import { api } from "$lib/api/client";
 import ConversationTab from "$lib/components/conversation/ConversationTab.svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import WalkthroughActionBar from "$lib/components/review/chrome/WalkthroughActionBar.svelte";
@@ -23,31 +21,26 @@ import { Badge } from "$lib/components/ui/badge";
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import GuidedWalkthrough from "$lib/components/walkthrough/GuidedWalkthrough.svelte";
 import { useWalkthroughWatch } from "$lib/components/walkthrough/walkthrough-watch.svelte";
+import { closeReview, openReview } from "$lib/review/open-review";
 import { getToken } from "$lib/session/token.svelte";
 import { useCommands } from "$lib/stores/commands.svelte";
 import { loadConversation } from "$lib/stores/conversation.svelte";
-import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
-import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
-import { getSelectedPr, isReviewModeResolved, setSelectedPrId } from "$lib/stores/prs.svelte";
 import {
-  clearReviewFiles,
-  getActiveFilePath,
-  getActiveTab,
+  awaitReviewFiles,
   getFilesError,
   getIsLoadingFiles,
   getLoadedHeadSha,
   getReviewFiles,
-  getReviewMode,
-  loadSession,
+} from "$lib/stores/diff-files.svelte";
+import { ensureHunkScan } from "$lib/stores/hunk-scan.svelte";
+import { markVisited as markPrVisited } from "$lib/stores/pr-visits.svelte";
+import {
+  getActiveTab,
   REVIEW_TABS,
-  setActiveFilePath,
-  setFilesError,
-  setIsLoadingFiles,
-  setLoadedHeadSha,
   setActiveTab,
-  setReviewFiles,
-  switchPrViewState,
-} from "$lib/stores/review.svelte";
+} from "$lib/stores/pr-view-state.svelte";
+import { getReviewModeForPr, isReviewModeResolved } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { ensureStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { ensureStack, warmNeighbours } from "$lib/stores/stacks.svelte";
@@ -72,20 +65,11 @@ $effect(() => {
   const id = threadSyncPrId;
   if (id) untrack(() => requestThreadSync(id));
 });
-// Review lens is derived from identity (author vs. signed-in user) — see
-// `getReviewModeForPr`. No manual override; the file fetch + session load
-// below resolve through it.
-const reviewMode = $derived(getReviewMode(page.params.prId ?? ""));
-// Read through a `$derived`, never inline in the diff-load effect below.
-// `isReviewModeResolved` walks `pullRequests` + `archivedPrs`, so calling it
-// from inside the effect subscribed that effect to both arrays — and every
-// `prs:updated` broadcast (5-min poll cycle) and every `fetchPrs()`
-// (SSE reconnect, window refocus) swaps those arrays wholesale. The effect
-// then re-ran for the *same* PR, and past its 60s reuse window it called
-// `clearReviewFiles()` + `setIsLoadingFiles(true)`, which flips the template
-// to the "Loading diff…" branch and destroys `.review-page` — unmounting a
-// mid-generation walkthrough and replaying every entrance animation. A
-// derived only propagates when the boolean itself changes.
+const reviewMode = $derived(getReviewModeForPr(page.params.prId ?? ""));
+// Read through a `$derived`, never inline in the diff-load effect below:
+// `isReviewModeResolved` walks both PR lists, which every `prs:updated` and
+// list re-read swaps wholesale, so the effect would re-open the same PR on
+// each one. A derived only propagates when the boolean itself changes.
 const reviewModeResolved = $derived(isReviewModeResolved(page.params.prId ?? ""));
 const files = $derived(getReviewFiles());
 const isLoading = $derived(getIsLoadingFiles());
@@ -203,28 +187,6 @@ $effect(() => {
   markPrVisited(current.id, current.headSha ?? null);
 });
 
-let currentRequestId = 0;
-
-// Phase 1 stopgap: avoid refetching diff files when the user bounces back to
-// the same PR within a minute. Replaced by queryStore in Phase 3.
-let lastLoadedPrId: string | null = null;
-let lastLoadedMode: ReviewMode | null = null;
-let lastLoadedAt = 0;
-const PR_REFETCH_WINDOW_MS = 60_000;
-
-function apiErrorMessage(
-  error: { status?: number; value?: unknown },
-  fallback = "Failed to fetch PR files",
-): string {
-  const value = error.value;
-  if (typeof value !== "object" || value === null) return fallback;
-  const body = value as Record<string, unknown>;
-  if (typeof body.error === "string" && body.error.length > 0) return body.error;
-  if (typeof body.message === "string" && body.message.length > 0) return body.message;
-  if (typeof error.status === "number") return `${fallback} (HTTP ${error.status})`;
-  return fallback;
-}
-
 $effect(() => {
   const prId = page.params.prId;
   const mode = reviewMode;
@@ -236,126 +198,16 @@ $effect(() => {
   // "reviewer" for everything — including PRs the user authored. Fetching on
   // that provisional value means the whole `/files` payload is downloaded
   // twice, which on a 3 000-file PR is two ~12 MB responses back to back.
-  // Keep the spinner up instead; this effect re-runs the moment mode resolves.
   if (!reviewModeResolved) {
-    setIsLoadingFiles(true);
+    untrack(awaitReviewFiles);
     return;
   }
 
-  // Everything below mutates store state. Calls like `clearReviewFiles()`
-  // invoke `clearSession()`, which does `threadsVersion++` — a read-then-
-  // write on $state. Inside an untracked block, that read doesn't subscribe
-  // the effect to threadsVersion, so the write can't re-trigger us.
-  untrack(() => {
-    // Bump request ID so any in-flight fetch for a previous PR is ignored
-    const requestId = ++currentRequestId;
-
-    setSelectedPrId(prId);
-    switchPrViewState(prId);
-
-    // Short-circuit: same PR, recent load, files still in memory —
-    // keep rendering what's there. An SSE `cache:invalidated` (Phase 3)
-    // or a hard refresh will bust this.
-    const now = Date.now();
-    const currentFiles = getReviewFiles();
-    const sameView = prId === lastLoadedPrId && mode === lastLoadedMode && currentFiles.length > 0;
-    if (sameView && now - lastLoadedAt < PR_REFETCH_WINDOW_MS) {
-      // Still kick off a session load so thread-counts refresh; cheap.
-      loadSession(prId, mode).catch((e) =>
-        console.error("[review] Session load failed (non-blocking):", e),
-      );
-      return;
-    }
-
-    // Refresh in place when the view isn't actually changing. `clearReviewFiles()`
-    // + `setIsLoadingFiles(true)` swap the template to the "Loading diff…" branch,
-    // which destroys `.review-page` — the walkthrough, the conversation tab and
-    // the review session go with it. That's the right trade when the user asked
-    // for a different PR or lens; it is never right for a background re-fetch of
-    // the view already on screen. New files replace the old ones when they land.
-    if (!sameView) {
-      clearReviewFiles();
-      setIsLoadingFiles(true);
-    }
-    const activeFileHint = getActiveFilePath();
-
-    (async () => {
-      try {
-        // Fetch the PR's "Files changed" diff directly from GitHub via the
-        // server. The diff is always baseSha...headSha (merge-base, 3-dot),
-        // matching GitHub's "Files changed" tab. There is no per-commit
-        // selection — the dropdown is read-only.
-        const [filesResult] = await Promise.all([
-          api.api.prs({ id: prId }).files.get({
-            query: activeFileHint === null ? { mode } : { active: activeFileHint, mode },
-          }),
-          loadSession(prId, mode).catch((e) =>
-            console.error("[review] Session load failed (non-blocking):", e),
-          ),
-        ]);
-
-        if (requestId !== currentRequestId) return;
-
-        const { data, error } = filesResult;
-        if (error) throw new Error(apiErrorMessage(error, "Failed to fetch PR files"));
-        if (Array.isArray(data)) {
-          const mapped = data.map((f) => ({
-            path: f.path,
-            patch: f.patch ?? null,
-            additions: f.additions,
-            deletions: f.deletions,
-            ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-            ...(f.isNew ? { isNew: true as const } : {}),
-            ...(f.isDeleted ? { isDeleted: true as const } : {}),
-            ...(f.prerenderedHtml ? { prerenderedHtml: f.prerenderedHtml } : {}),
-          }));
-          setReviewFiles(mapped);
-          if (mapped.length > 0) {
-            // Honor the restored per-PR active file when it still exists in
-            // the new diff. First-visits (path is null) and stale paths fall
-            // back to file[0].
-            const restored = getActiveFilePath();
-            const stillExists = restored !== null && mapped.some((f) => f.path === restored);
-            if (!stillExists) {
-              // biome-ignore lint/style/noNonNullAssertion: mapped is non-empty here
-              setActiveFilePath(mapped[0]!.path);
-            }
-          }
-          // Stamp the SHA the diff was loaded against so the FloatingTabs
-          // dot can detect when a later `prs:updated` swaps in a newer one.
-          // Reading from the store captures any `prs:updated` that merged
-          // mid-fetch — the server has already re-cached the diff against
-          // that same SHA, so they agree.
-          const currentPr = getSelectedPr();
-          if (currentPr?.id === prId && currentPr.headSha) {
-            setLoadedHeadSha(prId, currentPr.headSha);
-          }
-          lastLoadedPrId = prId;
-          lastLoadedMode = mode;
-          lastLoadedAt = Date.now();
-        }
-      } catch (e) {
-        if (requestId !== currentRequestId) return;
-        // A failed background refresh must not replace a diff the user is
-        // reading with a full-page error — the files already on screen are
-        // still the last good answer. Only a load the view is waiting on
-        // (PR switch, lens switch, first visit) surfaces as `loadError`.
-        if (sameView) {
-          console.error("[review] Background diff refresh failed:", e);
-          return;
-        }
-        setFilesError(e instanceof Error ? e.message : "Failed to load diff");
-      } finally {
-        if (requestId === currentRequestId) setIsLoadingFiles(false);
-      }
-    })();
-  });
+  untrack(() => openReview(prId, mode));
 });
 
 onDestroy(() => {
-  // Invalidate any in-flight request and clean up store state
-  currentRequestId++;
-  clearReviewFiles();
+  closeReview();
 });
 </script>
 

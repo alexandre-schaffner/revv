@@ -3,16 +3,15 @@ import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
-import { getSelectedPr } from "$lib/stores/prs.svelte";
+import { getIsPullingCommit, pullLatestCommit } from "$lib/review/pull-latest";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import {
   getActiveTab,
-  getIsPullingCommit,
-  getLoadedHeadSha,
-  pullLatestCommit,
   REVIEW_TABS,
   type ReviewTab,
   setActiveTab,
-} from "$lib/stores/review.svelte";
+} from "$lib/stores/pr-view-state.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 

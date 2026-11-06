@@ -17,7 +17,7 @@ import { getInteractionMode, isChatStreaming } from "$lib/chat/timeline.svelte";
 import { abortChatTurn, setInteractionMode, submitChatMessage } from "$lib/chat/turn.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { gsapFadeY, tokens } from "$lib/motion";
-import { getReviewFiles } from "$lib/stores/review.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { cn } from "$lib/utils.js";
 import AttachmentChip from "../AttachmentChip.svelte";
 import ComposerButton from "./ComposerButton.svelte";

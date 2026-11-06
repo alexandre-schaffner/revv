@@ -2,7 +2,6 @@
 import {
   DEFAULT_VIRTUAL_FILE_METRICS,
   type DiffLineAnnotation,
-  type DiffTokenEventBaseProps,
   FileDiff,
   type FileDiffMetadata,
   type FileDiffOptions,
@@ -11,32 +10,33 @@ import {
   VirtualizedFileDiff,
 } from "@pierre/diffs";
 import { buildGitPatchHeader, PIERRE_THEME, PR_DIFF_RENDER_OPTIONS } from "@revv/shared";
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
+import {
+  type DiffLineRange,
+  diffRowCount,
+  diffRowRange,
+  rowIndexAt,
+  rowIndexForNewLine,
+} from "$lib/pierre/diff-rows";
+import { createDiffsHost } from "$lib/pierre/mount";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
+import { setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import {
   getActivePanel,
   getAnchorLineIndex,
   getCursorLineIndex,
-  getCursorSide,
   isInLineCursorMode,
   setTotalLineCount,
 } from "$lib/stores/focus-mode.svelte";
 import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import { getLoadedHeadSha } from "$lib/stores/review.svelte";
 import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review-nav.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
-import { cleanupAllMounted, mountInto, pruneDetachedMounts } from "$lib/utils/annotation-mount";
-import { countPatchLines } from "$lib/utils/count-patch-lines";
+import { AnnotationMounts } from "$lib/utils/annotation-mount";
 import { phosphorMarkup } from "$lib/utils/phosphor-markup";
 import { workerManager } from "$lib/utils/worker-pool";
-import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
+import { renderThreadAnnotation } from "./annotation-renderers";
 import {
-  ANNOTATION_HOST_STYLE,
-  createMarkerDot,
-  mountAnnotationThread,
-} from "./annotation-renderers";
-import type { LineClickInfo } from "./DiffViewer.svelte";
-import {
-  createDiffsHost,
+  type CommentRowsTrigger,
   createHeaderBadge,
   createPierreVirtualizer,
   firstPassGutterCss,
@@ -46,17 +46,7 @@ import {
   ShadowSheet,
   type ThreadMeta,
 } from "./pierre-diff-adapter";
-
-// ── Token hover info ──────────────────────────────────────────────────────
-
-export interface TokenHoverInfo {
-  tokenText: string;
-  lineNumber: number;
-  side: string;
-  element: HTMLElement;
-}
-
-// ── Props ─────────────────────────────────────────────────────────────────
+import type { ThreadAnnotations } from "./thread-annotations.svelte";
 
 interface Props {
   /** The PR the diff belongs to, for its first pass. */
@@ -65,65 +55,16 @@ interface Props {
   mode: "unified" | "split";
   /** Soft-wrap long lines instead of scrolling. Read once at mount; the parent re-keys on change. */
   wrap: boolean;
-  annotations: DiffLineAnnotation<ThreadMeta>[];
-  /** Map from threadId → messages, for expanded thread rendering */
-  threadMessages: Record<string, ThreadMessage[]>;
-  /** Map from threadId → CommentThread, for expanded thread rendering */
-  threadById: Record<string, CommentThread>;
-  onLineClick?: ((info: LineClickInfo) => void) | undefined;
-  onModeChange?: ((mode: "unified" | "split") => void) | undefined;
-  onAnnotationToggle?: ((threadId: string) => void) | undefined;
-  onReplyToggle?: ((threadId: string) => void) | undefined;
-  onReplySubmit?: ((threadId: string, body: string) => void) | undefined;
-  onCommentSubmit?:
-    | ((filePath: string, lineNo: number, side: "deletions" | "additions", body: string) => void)
-    | undefined;
-  onCommentDismiss?: ((filePath: string, lineNo: number) => void) | undefined;
-  onCommentResolve?: ((threadId: string) => void) | undefined;
-  onCommentReopen?: ((threadId: string) => void) | undefined;
-  onCommentDiscard?: ((threadId: string) => void) | undefined;
-  onDiscardReply?: ((threadId: string, messageId: string) => void) | undefined;
-  onTokenHover?: ((info: TokenHoverInfo | null) => void) | undefined;
-  onApplySuggestion?: ((threadId: string, suggestion: string) => void) | undefined;
-  onEditMessage?: ((threadId: string, messageId: string, body: string) => void) | undefined;
-  onPushThread?: ((threadId: string) => void | Promise<void>) | undefined;
-  scrollRoot?: HTMLElement | null;
+  threads: ThreadAnnotations;
+  commentTrigger: CommentRowsTrigger | null;
+  scrollRoot: HTMLElement | null;
 }
 
-let {
-  prId,
-  file,
-  mode,
-  wrap,
-  annotations,
-  threadMessages,
-  threadById,
-  onLineClick,
-  onModeChange,
-  onAnnotationToggle,
-  onReplyToggle,
-  onReplySubmit,
-  onCommentSubmit,
-  onCommentDismiss,
-  onCommentResolve,
-  onCommentReopen,
-  onCommentDiscard,
-  onDiscardReply,
-  onTokenHover,
-  onApplySuggestion,
-  onEditMessage,
-  onPushThread,
-  scrollRoot = null,
-}: Props = $props();
+let { prId, file, mode, wrap, threads, commentTrigger, scrollRoot }: Props = $props();
 
-// ── Header DOM helpers ────────────────────────────────────────────────────
-// The library's callbacks must return light-DOM Elements.  These helpers keep
-// the option-object readable by separating construction from composition.
-
-function buildViewModePill(
-  currentMode: "unified" | "split",
-  onChange: ((mode: "unified" | "split") => void) | undefined,
-): HTMLElement {
+// Pierre's header callbacks must return light-DOM elements, so the unified /
+// split toggle is built by hand.
+function buildViewModePill(currentMode: "unified" | "split"): HTMLElement {
   // `fill` is the active half of the pair, matching the app-wide rule that
   // weight carries state (see the IconContext in routes/+layout.svelte).
   function makeBtn(icon: "Rows" | "Columns", label: string, active: boolean): HTMLElement {
@@ -145,11 +86,11 @@ function buildViewModePill(
 
   unifiedBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    onChange?.("unified");
+    setDiffMode("unified");
   });
   splitBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    onChange?.("split");
+    setDiffMode("split");
   });
 
   const sep = document.createElement("div");
@@ -161,40 +102,24 @@ function buildViewModePill(
   return pill;
 }
 
-// ── Local state ───────────────────────────────────────────────────────────
-
 let wrapperEl: HTMLDivElement | null = null;
+// Raw: a deep proxy over Pierre's instance would be both costly and wrong.
 let instance = $state.raw<FileDiff<ThreadMeta> | VirtualizedFileDiff<ThreadMeta> | null>(null);
 let error = $state<string | null>(null);
-/** Reference to the original options object for setOptions() merging. */
+/** The options the instance was built with, for `setOptions` merging. */
 let initialOptions: FileDiffOptions<ThreadMeta, undefined> | null = null;
 let virtualizer = $state.raw<ReturnType<typeof createPierreVirtualizer> | null>(null);
 let parsedFileDiff = $state.raw<FileDiffMetadata | null>(null);
+const mounts = new AnnotationMounts();
 /**
- * Last annotations reference that has been applied to the FileDiff instance
- * — either by the initial render()/hydrate() in onMount, or by the
- * annotations $effect below. Used as a guard so the $effect skips its
- * eager initial run (which would re-render with forceRender:true and wipe
- * the SSR-hydrated tokens, forcing a cold worker tokenization).
+ * The annotation set (and the thread data its hosts render) last handed to
+ * Pierre, by reference. The reconcile effect below skips its eager first run
+ * when mount already rendered these — a forced render would wipe the
+ * SSR-hydrated tokens and cost a cold worker tokenization.
  */
 let appliedAnnotations: DiffLineAnnotation<ThreadMeta>[] | null = null;
 let appliedThreadById: Record<string, CommentThread> | null = null;
 let appliedThreadMessages: Record<string, ThreadMessage[]> | null = null;
-
-/**
- * Mutable reference that renderAnnotation reads from. This avoids the
- * stale-closure problem: the callback is defined once in onMount but
- * needs to see the latest threadById / threadMessages when threads load
- * asynchronously after the initial render.
- */
-const threadDataRef = {
-  threadById: {} as Record<string, CommentThread>,
-  threadMessages: {} as Record<string, ThreadMessage[]>,
-};
-
-// Note: $effect blocks that guard on `!instance` or `!initialOptions` rely on
-// Svelte 5's ordering guarantee that onMount runs before $effects first execute.
-// This is intentional — do not make instance $state (it would deep-proxy a large object).
 
 function captureEl(el: HTMLDivElement) {
   wrapperEl = el;
@@ -310,49 +235,22 @@ function scrollLineIntoView(lineIndex: number, onRendered?: () => void): boolean
   return true;
 }
 
-/**
- * Given a patch string and a target new-file line number, return the
- * 0-based `data-line-index` of the closest non-deletion line in the patch.
- */
-function findPatchLineIndex(patch: string, targetLine: number): number | null {
-  const lines = patch.split("\n");
-  let patchLineIdx = 0;
-  let newLineNum = 0;
-  let bestIdx: number | null = null;
-
-  for (const raw of lines) {
-    if (raw.startsWith("@@")) {
-      // Parse hunk header: @@ -old,count +new,count @@
-      const m = /\+(\d+)/.exec(raw);
-      if (m?.[1]) {
-        newLineNum = parseInt(m[1], 10) - 1;
-      }
-      // hunk headers don't get a data-line-index slot
-      continue;
-    }
-    if (raw.startsWith("-")) {
-      // deletion — advances no new line number, but does occupy a patch line index
-      patchLineIdx++;
-      continue;
-    }
-    // context or addition
-    patchLineIdx++;
-    newLineNum++;
-    if (newLineNum >= targetLine) {
-      return patchLineIdx - 1;
-    }
-    bestIdx = patchLineIdx - 1;
-  }
-  return bestIdx;
+// The keyboard cursor counts rendered rows 1..N; Pierre indexes them with the
+// collapsed lines between hunks counted in.
+function cursorRowIndex(cursor: number): number | null {
+  return parsedFileDiff ? rowIndexAt(parsedFileDiff, cursor - 1) : null;
 }
 
-// ─ Reactive updates ──────────────────────────────────────────────────────
-// Re-render when thread data changes. The reference-equality guard skips
-// the eager initial $effect run — at that point onMount has already rendered
-// via render()/hydrate(). When threads load asynchronously, threadById,
-// threadMessages, and annotations all get new references, triggering this
-// effect. We update the mutable ref (so renderAnnotation sees fresh data),
-// clear stale caches, and re-render with the new annotations.
+function cursorRange(from: number, to: number): DiffLineRange | null {
+  const fromIndex = cursorRowIndex(from);
+  const toIndex = cursorRowIndex(to);
+  if (!parsedFileDiff || fromIndex === null || toIndex === null) return null;
+  return diffRowRange(parsedFileDiff, fromIndex, toIndex);
+}
+
+// ─ Annotation reconcile ──────────────────────────────────────────────────
+// Re-render when the thread data changes. The reference-equality guard skips
+// the eager first run, since onMount has already rendered via render()/hydrate().
 //
 // LOAD-BEARING: the hydrate path in onMount may deliberately leave
 // `appliedAnnotations` null (when prerendered slots don't cover every live
@@ -362,9 +260,9 @@ function findPatchLineIndex(patch: string, targetLine: number): number | null {
 // bug fixed in #114.
 $effect(() => {
   if (!instance) return;
-  const currentAnnotations = annotations;
-  const currentThreadById = threadById;
-  const currentThreadMessages = threadMessages;
+  const currentAnnotations = threads.annotations;
+  const currentThreadById = threads.threadById;
+  const currentThreadMessages = threads.threadMessages;
   if (
     currentAnnotations === appliedAnnotations &&
     currentThreadById === appliedThreadById &&
@@ -375,36 +273,20 @@ $effect(() => {
   appliedThreadById = currentThreadById;
   appliedThreadMessages = currentThreadMessages;
 
-  // Update mutable ref so renderAnnotation callback (defined once in
-  // onMount) reads fresh thread data.
-  threadDataRef.threadById = currentThreadById;
-  threadDataRef.threadMessages = currentThreadMessages;
+  // Pierre's renderAnnotations() removes a changed annotation's previous
+  // wrapper itself, and the metadata objects are fresh on every change, so
+  // every host is re-rendered. Do NOT clear its `annotationCache`: that empties
+  // the Map without removing the wrappers from the shadow DOM, and the next
+  // render appends fresh rows beside the orphans (duplicated comments).
 
-  // NOTE: do NOT clear `annotationCache` here. The library's
-  // renderAnnotations() is self-cleaning — it removes the previous wrapper
-  // before appending a new one whenever an annotation changed. Our store
-  // hands it a fresh `metadata` object every render and the library compares
-  // metadata by reference, so renderAnnotation always re-runs (picking up
-  // fresh thread data) AND the old row is removed. Calling `.clear()` empties
-  // the cache Map without removing the wrapper <div>s from the shadow DOM, so
-  // the next render appends fresh rows alongside the orphans → duplicate
-  // comments. That was the diff-tab comment-duplication bug.
-
-  // Clear header slots before re-render to prevent badge duplication.
-  // The library's applyHeaderToDOM reuses slot elements by reference; if
-  // the header HTML is regenerated (forceRender), old slot refs point to
-  // removed DOM nodes, causing new slots to be created alongside them.
+  // Pierre's applyHeaderToDOM reuses header slot elements by reference; a
+  // forced render regenerates the header, so stale slots would duplicate the
+  // badges unless cleared first.
   // @ts-expect-error clearHeaderSlots is protected
   instance.clearHeaderSlots?.();
 
-  // Re-render with new annotations. Must pass lineAnnotations so the
-  // library updates its internal state and creates annotation rows.
   instance.render({ lineAnnotations: currentAnnotations, forceRender: true });
-
-  // The library removes the previous annotation wrappers via element.remove(),
-  // but the Svelte components we mounted inside them stay registered and live.
-  // Unmount the now-detached ones so their effects/listeners don't leak.
-  pruneDetachedMounts();
+  mounts.pruneDetached();
 });
 
 // ── First-pass gutter bars ────────────────────────────────────────────────
@@ -423,8 +305,8 @@ $effect(() => {
 });
 
 /**
- * `setOptions` only stores the CSS; Pierre injects it on its next render. Inject
- * now so a highlight doesn't wait for a scroll to appear.
+ * Pierre's `setOptions` only stores `unsafeCSS`; it injects it on the next
+ * render. Inject now so a highlight doesn't wait for a scroll to appear.
  */
 function applyUnsafeCss(css: string): void {
   if (!instance || !initialOptions) return;
@@ -437,15 +319,14 @@ function applyUnsafeCss(css: string): void {
 $effect(() => {
   if (!instance || !initialOptions) return;
   const panel = getActivePanel();
-  const lineIdx = getCursorLineIndex();
+  const row = cursorRowIndex(getCursorLineIndex());
 
-  if (panel === "diff-line") {
+  if (panel === "diff-line" && row !== null) {
     applyUnsafeCss(
-      `${PIERRE_BASE_CSS} [data-line-index="${lineIdx}"] { background-color: var(--color-tree-active-bg) !important; outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); outline-offset: -1px; }`,
+      `${PIERRE_BASE_CSS} [data-line-index^="${row},"] { background-color: var(--color-tree-active-bg) !important; outline: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); outline-offset: -1px; }`,
     );
   } else if (panel !== "diff-visual") {
-    // Clear highlight when not in line/visual mode
-    // (visual mode uses setSelectedLines instead)
+    // Visual mode highlights through setSelectedLines instead.
     applyUnsafeCss(PIERRE_BASE_CSS);
   }
 });
@@ -453,26 +334,25 @@ $effect(() => {
 // ── Scroll active line into view ──────────────────────────────────────────
 $effect(() => {
   if (!isInLineCursorMode()) return;
-  const lineIdx = getCursorLineIndex();
+  const row = cursorRowIndex(getCursorLineIndex());
+  if (row === null) return;
 
   requestAnimationFrame(() => {
-    scrollLineIntoView(lineIdx);
+    scrollLineIntoView(row);
   });
 });
 
 // ── Walkthrough → diff jump ───────────────────────────────────────────────
 $effect(() => {
   const jump = getPendingDiffJump();
-  if (!jump || jump.filePath !== file.path || !file.patch) return;
+  if (!jump || jump.filePath !== file.path || !instance || !parsedFileDiff) return;
 
-  if (!instance) return;
-
-  const patchLineIdx = findPatchLineIndex(file.patch, jump.lineNumber);
-  if (patchLineIdx === null) return;
+  const row = rowIndexForNewLine(parsedFileDiff, jump.lineNumber);
+  if (row === null) return;
 
   setTimeout(() => {
     requestAnimationFrame(() => {
-      scrollLineIntoView(patchLineIdx, clearPendingDiffJump);
+      scrollLineIntoView(row, clearPendingDiffJump);
     });
   }, 50);
 });
@@ -480,27 +360,34 @@ $effect(() => {
 // ── Visual line selection (diff-visual mode) ──────────────────────────────
 $effect(() => {
   if (!instance) return;
-  const panel = getActivePanel();
 
-  if (panel === "diff-visual") {
-    const cursor = getCursorLineIndex();
+  if (getActivePanel() === "diff-visual") {
     const anchor = getAnchorLineIndex();
     if (anchor === null) return;
-
-    const start = Math.min(anchor, cursor);
-    const end = Math.max(anchor, cursor);
-    const side = getCursorSide();
-
-    // With exactOptionalPropertyTypes, omit side entirely when null
-    const range = side !== null ? { start, end, side, endSide: side } : { start, end };
-
-    instance.setSelectedLines(range);
-    // Clear unsafeCSS line highlight — selection replaces it
+    const range = cursorRange(anchor, getCursorLineIndex());
+    instance.setSelectedLines(
+      range && {
+        start: range.startLine,
+        end: range.endLine,
+        side: range.side,
+        endSide: range.side,
+      },
+    );
     applyUnsafeCss(PIERRE_BASE_CSS);
   } else {
-    // Clear selection when leaving visual mode
     instance.setSelectedLines(null);
   }
+});
+
+// ── Keyboard `c`: a comment over the cursor's rows ────────────────────────
+$effect(() => {
+  const trigger = commentTrigger;
+  if (!trigger || !parsedFileDiff) return;
+  untrack(() => {
+    if (!threads.claimTrigger(trigger.seq)) return;
+    const range = cursorRange(trigger.fromRow, trigger.toRow);
+    if (range) threads.openInput(range);
+  });
 });
 
 // ── Instance lifecycle ────────────────────────────────────────────────────
@@ -518,7 +405,6 @@ onMount(() => {
       enableLineSelection: true,
       unsafeCSS: PIERRE_BASE_CSS,
 
-      // ── Header: file status badge ──────────────────────────────────
       renderHeaderPrefix(fileDiff) {
         const wrap = document.createElement("span");
         wrap.style.cssText = "display:flex;align-items:center;gap:6px;";
@@ -543,87 +429,18 @@ onMount(() => {
         return wrap;
       },
 
-      // ── Header: unified/split icon pill toggle ──────────────────────
-      renderHeaderMetadata(_fileDiff) {
-        return buildViewModePill(mode, onModeChange);
+      renderHeaderMetadata() {
+        return buildViewModePill(mode);
       },
 
-      // ── Token hover ────────────────────────────────────────────────
-      onTokenEnter(props: DiffTokenEventBaseProps) {
-        onTokenHover?.({
-          tokenText: props.tokenText,
-          lineNumber: props.lineNumber,
-          side: props.side,
-          element: props.tokenElement,
-        });
-      },
-      onTokenLeave() {
-        onTokenHover?.(null);
-      },
-
-      // ── Line click → bubble up ─────────────────────────────────────
       onLineClick(props) {
-        if (!onLineClick) return;
-        const code = props.lineElement?.textContent ?? "";
-        const rect = props.lineElement?.getBoundingClientRect() ?? new DOMRect();
-        onLineClick({
-          filePath: file.path,
-          lineNumber: props.lineNumber,
-          side: props.annotationSide,
-          lineType: props.lineType,
-          code,
-          rect,
-        });
+        threads.toggleInputAt(props.annotationSide, props.lineNumber);
       },
 
-      // ── Annotation rendering ───────────────────────────────────────
       renderAnnotation(annotation) {
         const meta = annotation.metadata;
         if (!meta) return undefined;
-
-        const host = document.createElement("div");
-        host.style.cssText = ANNOTATION_HOST_STYLE;
-
-        if (meta.isInputActive) {
-          mountInto(host, AnnotationCommentInput, {
-            filePath: file.path,
-            lineNo: annotation.lineNumber,
-            onSubmit: (body: string) => {
-              onCommentSubmit?.(file.path, annotation.lineNumber, annotation.side, body);
-            },
-            onDismiss: () => {
-              onCommentDismiss?.(file.path, annotation.lineNumber);
-            },
-          });
-        } else if (meta.isExpanded) {
-          // Read from mutable ref so we always see latest thread data
-          // even though this callback was defined once in onMount.
-          const thread = threadDataRef.threadById[meta.threadId];
-          const messages = threadDataRef.threadMessages[meta.threadId] ?? [];
-          if (!thread) return host;
-
-          mountAnnotationThread(host, {
-            thread,
-            messages,
-            threadId: meta.threadId,
-            isReplying: meta.isReplying,
-            isPending: meta.isPending,
-            onReplyToggle,
-            onCommentResolve,
-            onCommentReopen,
-            onCommentDiscard,
-            onDiscardReply,
-            onAnnotationToggle,
-            onApplySuggestion,
-            onReplySubmit,
-            onEditMessage,
-            onPushThread,
-          });
-        } else {
-          host.appendChild(createMarkerDot(meta, () => onAnnotationToggle?.(meta.threadId)));
-        }
-
-        return host;
+        return renderThreadAnnotation(mounts, threads, meta);
       },
 
       onPostRender(node) {
@@ -635,21 +452,14 @@ onMount(() => {
       },
     };
 
-    // Store reference for setOptions() merging
     initialOptions = options;
+    const annotations = threads.annotations;
 
-    // Update threadDataRef BEFORE render/hydrate so renderAnnotation
-    // callback sees current thread data on the initial render.
-    threadDataRef.threadById = threadById;
-    threadDataRef.threadMessages = threadMessages;
-
-    // Parse the git patch string directly — this preserves the exact
-    // additions/deletions counts from GitHub's diff, so the library's
-    // header stats match the file tree without any overrides.
+    // Parsing GitHub's patch directly keeps its exact additions/deletions
+    // counts, so Pierre's header stats match the file tree.
     const patchHeader = buildGitPatchHeader(file);
     const fullPatch = file.patch ? `${patchHeader}\n${file.patch}` : patchHeader;
-    const patches = parsePatchFiles(fullPatch);
-    const parsed = patches[0]?.files[0];
+    const parsed = parsePatchFiles(fullPatch)[0]?.files[0];
     if (!parsed) {
       error = "Failed to parse patch";
       return;
@@ -663,20 +473,11 @@ onMount(() => {
     // interaction managers attach to the existing DOM.
     //
     // Pierre's `hydrate` doesn't invoke `renderHeaderPrefix` /
-    // `renderHeaderMetadata` (only `render` does). So we manually
-    // populate the header slots after hydrate using the exported slot
-    // IDs — Pierre's shadow DOM has `<slot name="...">` placeholders
-    // that project these light-DOM children.
+    // `renderHeaderMetadata` (only `render` does), so the header slots are
+    // filled by hand after hydrate.
     // The prerendered HTML is laid out for `overflow: scroll`, so wrap skips it too.
     if (file.prerenderedHtml !== undefined && mode === "unified" && !wrap) {
       instance = new FileDiff<ThreadMeta>(options, workerManager);
-      // Match the render() DOM structure: a <diffs-container> custom element
-      // as the shadow host inside wrapperEl. The tag name matters — app.css
-      // :900 overrides `diffs-container { color-scheme: inherit }` so Pierre's
-      // `light-dark()` token colors follow <html>'s theme instead of the OS.
-      // A plain <div> would skip that rule and produce mismatched colors
-      // (light tokens on a dark app background) for the entire SSR-visible
-      // window — until the worker re-render replaces them.
       const hostEl = createDiffsHost();
       wrapperEl.appendChild(hostEl);
       instance.hydrate({
@@ -713,21 +514,12 @@ onMount(() => {
         lineAnnotations: annotations,
         forceRender: true,
       });
-      // render() projected every annotation, so mark them applied to keep the
-      // post-mount $effect a no-op.
       appliedAnnotations = annotations;
     }
-    // Mark thread data as applied so the post-mount $effect (which would
-    // otherwise re-render with forceRender:true) is a no-op. appliedAnnotations
-    // is set per-branch above — the hydrate branch may leave it null on purpose
-    // to trigger one corrective render.
-    appliedThreadById = threadById;
-    appliedThreadMessages = threadMessages;
+    appliedThreadById = threads.threadById;
+    appliedThreadMessages = threads.threadMessages;
 
-    // Set total line count for keyboard cursor navigation
-    if (file.patch) {
-      setTotalLineCount(countPatchLines(file.patch));
-    }
+    setTotalLineCount(diffRowCount(parsed));
   } catch (e) {
     console.error("[DiffViewerInner] Render error:", e);
     error = e instanceof Error ? e.message : String(e);
@@ -735,12 +527,12 @@ onMount(() => {
 });
 
 onDestroy(() => {
-  cleanupAllMounted();
+  mounts.clear();
   try {
     instance?.cleanUp();
     virtualizer?.cleanUp();
-  } catch {
-    // ignore cleanup errors
+  } catch (e) {
+    console.warn("[DiffViewerInner] Pierre cleanup failed:", e);
   }
   instance = null;
   virtualizer = null;

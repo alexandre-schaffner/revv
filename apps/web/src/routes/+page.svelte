@@ -18,7 +18,7 @@
  */
 
 import RepoHomeSection from "$lib/components/repo/RepoHomeSection.svelte";
-import { getReposFetchAttempted, getRepositories } from "$lib/stores/prs.svelte";
+import { getReposFetchAttempted, getRepositories } from "$lib/stores/repos.svelte";
 
 const repos = $derived(getRepositories());
 const resolved = $derived(getReposFetchAttempted());

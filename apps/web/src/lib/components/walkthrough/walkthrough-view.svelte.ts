@@ -18,9 +18,9 @@ import {
   isExplorationActivity,
 } from "$lib/components/agent-activity/activity-groups";
 import type { DotmatrixVariant } from "$lib/components/ui/dotmatrix";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById } from "$lib/stores/prs.svelte";
-import { getLoadedHeadSha } from "$lib/stores/review.svelte";
 import {
   getIsHydrating,
   getIssueSignal,

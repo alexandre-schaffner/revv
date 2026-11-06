@@ -4,7 +4,7 @@
 // mentions render as file pills.
 import { fileReferences } from "$lib/actions/file-references.svelte";
 import { mentionReferences } from "$lib/actions/mention-references.svelte";
-import { getReviewFiles } from "$lib/stores/review.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { renderMarkdownBlocks } from "$lib/utils/markdown.js";
 import { cn } from "$lib/utils.js";
 

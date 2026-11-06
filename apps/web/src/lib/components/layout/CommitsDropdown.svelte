@@ -10,7 +10,7 @@ import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { untrack } from "svelte";
 import { page } from "$app/state";
 import { api } from "$lib/api/client";
-import { setActiveTab } from "$lib/stores/review.svelte";
+import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { refreshPrHead } from "$lib/stores/sync.svelte";
 import {
   getDisplayedWalkthroughId,

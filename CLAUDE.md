@@ -78,7 +78,7 @@ The project uses **Drizzle's code-first migration workflow**.
 ### Web (`apps/web`)
 
 - **Svelte 5 runes** (`$state`, `$derived`, `$effect`) — not Svelte 4 stores/writables.
-- **Stores** (in `src/lib/stores/`): `auth.svelte.ts`, `prs.svelte.ts`, `events.svelte.ts`, `settings.svelte.ts`. These expose getter/setter functions, not subscribables.
+- **Stores** (in `src/lib/stores/`): `auth.svelte.ts`, `prs.svelte.ts`, `events.svelte.ts`, `settings.svelte.ts`. These expose getter/setter functions, not subscribables. The selected PR and repo come from the URL (`route.svelte.ts`), never a mirrored store field. Workflows that span stores (opening a PR, pulling a moved head, submitting a review) live above them in `src/lib/review/`.
 - **Session** (in `src/lib/session/`): `token.svelte.ts` is the leaf bearer token every transport reads; `lifecycle.svelte.ts` starts, switches and ends the signed-in session (SSE connect, first reads, every store's `reset()`). The client never polls GitHub on a timer: the server's PollScheduler is the only sync cadence.
 - **Chat**: state lives in `src/lib/chat/` (`timeline`, `proposed`, `session`, `queue`, and `turn`, which sends turns and owns the PR-level actions), its UI in `components/chat/`. Tool-call cards, peeks and token gauges shared by chat, walkthrough and recaps are in `components/agent-activity/`.
 - **API client**: Eden (Elysia type-safe client) — import from `@revv/server` types.

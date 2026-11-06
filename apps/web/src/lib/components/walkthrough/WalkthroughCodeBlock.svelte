@@ -1,96 +1,40 @@
 <script lang="ts">
-import { DIFFS_TAG_NAME, type FileOptions, File as PierreFile } from "@pierre/diffs";
-import { type CodeBlock, PIERRE_THEME } from "@revv/shared";
+import type { CodeBlock } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
-import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import { pierreFile } from "$lib/pierre/mount";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { workerManager } from "$lib/utils/worker-pool";
 
 interface Props {
   block: CodeBlock;
-  hideAnnotation?: boolean;
 }
 
-let { block, hideAnnotation = false }: Props = $props();
+let { block }: Props = $props();
 
-const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.annotation) : null);
-
-let instance: PierreFile<never> | null = null;
+const startLine = $derived(
+  Number.isInteger(block.startLine) && block.startLine > 1 ? block.startLine : 1,
+);
+// Pierre sizes the gutter for 1..N; widen it for the shifted numbers.
+const gutterWidth = $derived(
+  startLine > 1
+    ? `${String(startLine + block.content.split("\n").length - 1).length}ch`
+    : undefined,
+);
 
 /**
  * Pierre's `File` numbers the gutter from 1 and has no offset option, so an
  * excerpt starting at line 240 read 1..N. Shift every number by the block's
  * start line after each render (the worker's highlight pass re-renders).
  */
-function offsetLineNumbers(node: HTMLElement, startLine: number): void {
+function offsetLineNumbers(node: HTMLElement): void {
   for (const cell of node.shadowRoot?.querySelectorAll<HTMLElement>("[data-column-number]") ?? []) {
     const label = cell.querySelector("[data-line-number-content]");
     const n = Number(cell.dataset.columnNumber);
     if (label && Number.isInteger(n)) label.textContent = String(startLine + n - 1);
   }
 }
-
-function mountCodeBlock(el: HTMLDivElement) {
-  const startLine = Number.isInteger(block.startLine) && block.startLine > 1 ? block.startLine : 1;
-  if (startLine > 1) {
-    // Pierre sizes the gutter for 1..N; widen it for the shifted numbers.
-    const lastLine = startLine + block.content.split("\n").length - 1;
-    el.style.setProperty("--diffs-min-number-column-width", `${String(lastLine).length}ch`);
-  }
-
-  const options: FileOptions<never, undefined> = {
-    theme: PIERRE_THEME,
-    overflow: "scroll",
-    // Suppress Pierre's built-in file header — we render our own clickable
-    // header above so the user can jump to this file in the Diff tab.
-    disableFileHeader: true,
-    ...(startLine > 1
-      ? { onPostRender: (node: HTMLElement) => offsetLineNumbers(node, startLine) }
-      : {}),
-  };
-
-  const file = {
-    name: block.filePath,
-    contents: block.content,
-    lang: block.language,
-  };
-
-  instance = new PierreFile<never>(options, workerManager);
-  if (block.prerenderedHtml !== undefined) {
-    // Use a <diffs-container> child to match render()'s DOM structure
-    // so app.css's `diffs-container { color-scheme: inherit }` applies
-    // and Pierre's `light-dark()` token colors follow <html>'s theme.
-    const hostEl = document.createElement(DIFFS_TAG_NAME);
-    el.appendChild(hostEl);
-    instance.hydrate({
-      fileContainer: hostEl,
-      prerenderedHTML: block.prerenderedHtml,
-      file,
-    });
-  } else {
-    instance.render({ containerWrapper: el, file });
-  }
-
-  return {
-    destroy() {
-      instance?.cleanUp();
-      instance = null;
-    },
-  };
-}
 </script>
 
-<div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
-	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
-		<div class="annotation annotation--left">
-			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
-				{@html renderedAnnotation}
-			</div>
-		</div>
-	{/if}
-
+<div class="annotated-block">
 	<div class="code-panel">
 		<button class="code-header" onclick={() => jumpToDiffLine(block.filePath, block.startLine)}>
 			<span class="code-file-path">{block.filePath}</span>
@@ -99,68 +43,27 @@ function mountCodeBlock(el: HTMLDivElement) {
 				<span class="code-jump-icon"><ArrowUpRight size={11} /></span>
 			</span>
 		</button>
-		<div class="code-body" use:mountCodeBlock></div>
+		<div
+			class="code-body"
+			style:--diffs-min-number-column-width={gutterWidth}
+			use:pierreFile={{
+				file: { name: block.filePath, contents: block.content, lang: block.language },
+				prerenderedHtml: block.prerenderedHtml,
+				onPostRender: startLine > 1 ? offsetLineNumbers : undefined,
+			}}
+		></div>
 	</div>
-
-	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
-		<div class="annotation annotation--right">
-			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
-				{@html renderedAnnotation}
-			</div>
-		</div>
-	{/if}
 </div>
 
 <style>
 	.annotated-block {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		grid-template-columns: 1fr;
 		border: 1px solid var(--revv-border);
 		border-radius: 10px;
-		/* overflow: clip clips like `hidden` but does NOT create a scroll container,
-		   so descendant `position: sticky` inside .annotation-content keeps tracking
-		   page scroll. */
 		overflow: clip;
 		container-type: inline-size;
 	}
-
-	.annotated-block--no-annotation {
-		grid-template-columns: 1fr;
-	}
-
-	.annotation {
-		display: flex;
-		align-items: flex-start;
-		padding: 16px 20px;
-		background: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-		font-size: 14px;
-		line-height: 1.6;
-		color: var(--revv-text-secondary);
-	}
-
-	.annotation--left {
-		border-right: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
-	}
-
-	.annotation--right {
-		border-left: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
-	}
-
-	.annotation-content {
-		width: 100%;
-		/* Sticky pins the annotation text to the top of the viewport as the card
-		   scrolls past, while the surrounding .annotation cell background still
-		   fills the full grid row for the card look. `overflow: clip` on the
-		   .annotated-block ancestor ensures sticky works across the card. */
-		position: sticky;
-		top: 16px;
-		align-self: flex-start;
-		max-height: calc(100vh - 32px);
-		overflow-y: auto;
-	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.annotation-content` only owns layout. */
 
 	.code-panel {
 		display: flex;
@@ -224,37 +127,13 @@ function mountCodeBlock(el: HTMLDivElement) {
 	}
 
 	.code-body {
-		/* Cap the code panel so the card stays dense even when the model emits a
-		   50-line snippet beside a 3-line annotation. 640px ≈ 32 lines at the
-		   current font size; 70vh keeps it sane on short screens. Pierre's own
-		   overflow option handles horizontal scroll for long lines. */
+		/* Keeps the card dense under a 50-line snippet: 640px ≈ 32 lines at the
+		   current font size; 70vh keeps it sane on short screens. */
 		max-height: min(70vh, 640px);
 		overflow: auto;
 	}
 
-	/* Narrow: stack vertically */
 	@container (max-width: 600px) {
-		.annotated-block {
-			grid-template-columns: 1fr;
-		}
-
-		.annotation--left {
-			border-right: none;
-			border-bottom: 2px solid var(--revv-accent);
-		}
-
-		.annotation--right {
-			border-left: none;
-			border-top: 2px solid var(--revv-accent);
-		}
-
-		/* Sticky is noisy when stacked — annotation would detach from its code. */
-		.annotation-content {
-			position: static;
-			max-height: none;
-			overflow: visible;
-		}
-
 		.code-body {
 			max-height: min(80vh, 720px);
 		}

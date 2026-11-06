@@ -1,13 +1,14 @@
 import type { Repository } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { api } from "$lib/api/client";
+import { apiErrorMessage } from "$lib/api/errors";
 import {
   fetchAvailableRepos,
   getAvailableRepos,
   getAvailableReposFetchFailed,
   getAvailableReposLoading,
-  getRepositories,
-} from "$lib/stores/prs.svelte";
+} from "$lib/repos/catalog.svelte";
+import { getRepositories } from "$lib/stores/repos.svelte";
 import { repoKey } from "./add-repo";
 
 const MAX_AUTO_RETRIES = 3;
@@ -129,10 +130,7 @@ export class LocalClone {
     this.inspecting = true;
     try {
       const { data, error } = await api.api.repos["inspect-local"].post({ path });
-      if (error) {
-        const value = error.value as { error?: string; message?: string } | undefined;
-        throw new Error(value?.error ?? value?.message ?? "Failed to inspect local repository");
-      }
+      if (error) throw new Error(apiErrorMessage(error, "Failed to inspect local repository"));
       if (!data || "error" in data) throw new Error("Failed to inspect local repository");
       this.#inspection = {
         path,

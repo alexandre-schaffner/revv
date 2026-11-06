@@ -11,7 +11,8 @@ import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
 import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
 import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
-import { addRepo, getAvailableRepos, getAvailableReposLoading } from "$lib/stores/prs.svelte";
+import { getAvailableRepos, getAvailableReposLoading } from "$lib/repos/catalog.svelte";
+import { addRepo } from "$lib/stores/repos.svelte";
 
 interface Props {
   onContinue: () => void;

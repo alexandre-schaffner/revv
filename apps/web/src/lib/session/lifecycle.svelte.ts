@@ -8,6 +8,8 @@
 
 import { goto } from "$app/navigation";
 import { reset as resetChat } from "$lib/chat/turn.svelte";
+import { reset as resetRepoCatalog } from "$lib/repos/catalog.svelte";
+import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
   clearIdentity,
   deleteAccount,
@@ -22,15 +24,21 @@ import {
 } from "$lib/stores/auth.svelte";
 import { reset as resetBaseConflicts } from "$lib/stores/base-conflicts.svelte";
 import { reset as resetConversation } from "$lib/stores/conversation.svelte";
+import { reset as resetDiffFiles } from "$lib/stores/diff-files.svelte";
 import { connect, disconnect } from "$lib/stores/events.svelte";
 import { reset as resetHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { reset as resetMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
-import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
+import { reset as resetOrgTeams } from "$lib/stores/org-teams.svelte";
+import { reset as resetPrFilters } from "$lib/stores/pr-filters.svelte";
+import { reset as resetPrViewState } from "$lib/stores/pr-view-state.svelte";
+import { fetchPinnedPrs, fetchPrs, reset as resetPrs } from "$lib/stores/prs.svelte";
 import { reset as resetRecapStream } from "$lib/stores/recap-stream.svelte";
 import { reset as resetRecaps } from "$lib/stores/recaps.svelte";
 import { reset as resetRepoActivity } from "$lib/stores/repo-activity.svelte";
+import { fetchRepos, reset as resetRepos } from "$lib/stores/repos.svelte";
 import { reset as resetReview } from "$lib/stores/review.svelte";
 import { reset as resetReviewNav } from "$lib/stores/review-nav.svelte";
+import { isOnAccountPage } from "$lib/stores/route.svelte";
 import { fetchSettings, updateSettings } from "$lib/stores/settings.svelte";
 import { reset as resetStackHeadlines } from "$lib/stores/stack-headlines.svelte";
 import { reset as resetStackMerge } from "$lib/stores/stack-merge.svelte";
@@ -56,8 +64,15 @@ let sessionHost: string | undefined;
  */
 function resetAccountStores(): void {
   resetPrs();
+  resetPrFilters();
+  resetRepos();
+  resetRepoCatalog();
+  resetOrgTeams();
   resetReview();
   resetReviewNav();
+  resetDiffFiles();
+  resetPrViewState();
+  resetPulls();
   resetSync();
   resetWalkthrough();
   resetWalkthroughSizings();
@@ -128,7 +143,7 @@ export function switchSession(userId: string, host?: string): Promise<boolean> {
     sessionHost = host;
     // Not awaited: `goto` waits on SvelteKit's load/render cycle, and the
     // session below starts the same way whichever route ends up showing.
-    if (/^\/(repo|review)(\/|$)/.test(window.location.pathname)) {
+    if (isOnAccountPage()) {
       void goto("/", { replaceState: true });
     }
     // The switch blocks only on the identity round-trip (and the host write

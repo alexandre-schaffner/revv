@@ -15,12 +15,7 @@ import { initGsap } from "$lib/motion";
 import { detachSession, restoreSession, startSession } from "$lib/session/lifecycle.svelte";
 import { getUser } from "$lib/stores/auth.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
-import {
-  getSelectedPr,
-  getSelectedPrId,
-  setSelectedPrId,
-  setSelectedRepoId,
-} from "$lib/stores/prs.svelte";
+import { getSelectedPrId } from "$lib/stores/route.svelte";
 import { fetchAllModels, fetchSettings } from "$lib/stores/settings.svelte";
 import { initShortcuts } from "$lib/stores/shortcuts.svelte";
 import { setSidebarView } from "$lib/stores/sidebar.svelte";
@@ -29,45 +24,6 @@ import { startUpdater, stopUpdater } from "$lib/updater/service";
 import { warnIfServiceOutOfDate } from "$lib/updater/service-build-warning";
 
 let { children } = $props();
-
-// Keep `selectedPrId` in sync with the URL.
-//
-// Previously the store was only written to when a PR page mounted, and
-// never cleared when navigating away. That stale value drove
-// `PrItem`'s `isSelected` prop, so after leaving a PR (e.g. Cmd+W
-// → homepage) the sidebar still thought that PR was selected — and
-// clicking it just toggled the file-tree expander instead of
-// navigating back. Deriving from the URL here makes the URL the
-// single source of truth for every entry/exit path (Cmd+W, sidebar
-// settings link, logout, mouse back, deep link, SSE-driven nav, …).
-//
-// Read the decoded route param, not `page.url.pathname`: PR ids are
-// `<repoId>:<number>`, and a URL carrying the colon as `%3A` left the raw
-// pathname segment matching no PR — the review page loaded the diff (it
-// reads the decoded param) but sat on "Loading…" with no PR row.
-$effect(() => {
-  setSelectedPrId(page.route.id === "/review/[prId]" ? (page.params.prId ?? null) : null);
-});
-
-// URL → selectedRepoId. The rail's active highlight and the project
-// column's content both read from this store. Resolution order:
-//   1. /repo/{id}/... — repoId is explicit in the path.
-//   2. /review/{prId} — derive from the active PR's repositoryId.
-//   3. Everything else (/, …) — null.
-//
-// Same single-source-of-truth pattern as selectedPrId. Re-runs whenever
-// the URL changes or when the active PR resolves (the latter matters on
-// cold-load of /review/{prId} when prs haven't been hydrated yet).
-$effect(() => {
-  const path = page.url.pathname;
-  const repoMatch = path.match(/^\/repo\/([^/]+)/);
-  if (repoMatch?.[1]) {
-    setSelectedRepoId(repoMatch[1]);
-    return;
-  }
-  const selectedPr = getSelectedPr();
-  setSelectedRepoId(selectedPr?.repositoryId ?? null);
-});
 
 // Keep the sidebar view in lockstep with the URL in both directions.
 // Sidebar and palette clicks go through `openPr`, which pairs selectPr() with

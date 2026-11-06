@@ -8,6 +8,7 @@ import {
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { API_BASE_URL } from "$lib/api/base-url";
+import { fetchDefaultCloneBaseDir, getDefaultCloneBaseDir } from "$lib/repos/catalog.svelte";
 import { switchSession } from "$lib/session/lifecycle.svelte";
 import { authHeaders } from "$lib/session/token.svelte";
 import {
@@ -22,12 +23,8 @@ import {
   getUser,
   signIn,
 } from "$lib/stores/auth.svelte";
-import {
-  fetchDefaultCloneBaseDir,
-  fetchRepos,
-  getDefaultCloneBaseDir,
-  upsertPullRequest,
-} from "$lib/stores/prs.svelte";
+import { upsertPullRequest } from "$lib/stores/prs.svelte";
+import { fetchRepos } from "$lib/stores/repos.svelte";
 import {
   getGithubClientId,
   getGithubHost,
@@ -262,8 +259,6 @@ async function resolveActiveLocator(locator: PullRequestLocator): Promise<void> 
 
     upsertPullRequest(result.pullRequest);
     state = { kind: "idle" };
-    // Same URL shape as every other PR navigation (`selectPr`), so the
-    // same-PR checks that compare against `window.location.pathname` hold.
     await goto(`/review/${result.pullRequest.id}`);
   } catch (error) {
     if (controller.signal.aborted || version !== requestVersion) return;

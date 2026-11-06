@@ -7,16 +7,18 @@ import FilterSectionHeader from "$lib/components/shared/filter-popover/FilterSec
 import FilterStateRow from "$lib/components/shared/filter-popover/FilterStateRow.svelte";
 import * as Popover from "$lib/components/ui/popover";
 import {
-  clearAuthorFilters,
   fetchTeamsForOrg,
-  getAuthorFilterOptions,
-  getRepoOwner,
-  getSelectedAuthorLogins,
   getTeamsFetchStateForOrg,
   getTeamsForOrg,
+} from "$lib/stores/org-teams.svelte";
+import {
+  clearAuthorFilters,
+  getAuthorFilterOptions,
+  getSelectedAuthorLogins,
   setAuthorFilters,
   toggleAuthorFilter,
-} from "$lib/stores/prs.svelte";
+} from "$lib/stores/pr-filters.svelte";
+import { getRepoOwner } from "$lib/stores/repos.svelte";
 
 interface Props {
   repoId?: string;

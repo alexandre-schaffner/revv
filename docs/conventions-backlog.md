@@ -9,39 +9,15 @@ default sort.
 | Domain | Open | Severity mix |
 |---|---|---|
 | Server (Effect) | 0 | — |
-| Web stores | 1 | low |
+| Web stores | 0 | — |
 | UI / motion | 1 | low |
-| **Total** | **2** | |
+| **Total** | **1** | |
 
 ---
 
 ## Open
 
-<a id="s-005"></a>
-### S-005 — `deleteRepo` uses list-snapshot rollback instead of entity-scoped
-
-**Rule violated:** [§4.6 — Client-initiated mutations are optimistic with entity-scoped rollback](./conventions.md#stores-optimistic).
-
-**Where:** `apps/web/src/lib/stores/prs.svelte.ts:455-487` (`deleteRepo`), with helpers
-`snapshotRepoState` (`:188-196`) and `restoreRepoState` (`:198-205`).
-
-**Why it's a violation.** On error, `restoreRepoState` reassigns `repositories`,
-`pullRequests`, `archivedPrs`, `taggedPrsByRepo`, and `pinnedPrIds` to the pre-mutation
-snapshot. Any `prs:updated` / `repos:updated` / `pr:archived` broadcast that landed during
-the in-flight POST is silently dropped — including entirely unrelated entities the server
-added or removed for reasons that have nothing to do with this delete.
-
-**Fix shape.** Capture the *removed* state, not the *prior* state: which repo row was
-removed, which open PR ids and archived PR ids were removed, which pinned ids were removed.
-On rollback, re-insert each. Concurrent broadcasts that touched other entities survive
-untouched.
-
-**Severity:** Low — the failure mode is "concurrent unrelated broadcast lost during a
-rollback that itself is rare." Not actively biting in production. Tracked because
-`deleteRepo` is the canonical anti-pattern §4.6 was added to prevent and leaving it as-is
-implicitly endorses the shape.
-
-**Sizing:** ~30 lines. One PR. Worth pairing with any other touch to the repo-delete flow.
+None.
 
 <a id="m-030"></a>
 ### M-030 — `weight="bold"` on an 18px dialog-title glyph
@@ -69,6 +45,7 @@ other dialog titles first.
 - S-001 — Migrated `review.svelte.ts` per-PR view state from plain `Map` + `$state` mirrors to single reactive `$state` store (`store = $state({ entries: Map, activePrId })`); derived `getActiveTab`/`getActiveFilePath` from the active entry; all mutations follow reactive-Map idiom
 - S-002 — Audited chat.svelte.ts: all 42 Map/Set mutation sites consistently follow the reactive-Map idiom (§4.3); unifying to a single mutation surface is future refactoring, not a convention violation
 - S-003 — Created `RequestState<T>` tagged union in `stores/_types.ts`; migrated `review.svelte.ts` repo file state from enum + error string to `RequestState<RepoFileData>`; updated `ReviewLayout.svelte` consumer
+- S-005 — `deleteRepo` (now in `repos.svelte.ts`) restores only the repo, PRs and pins it removed; the review store's thread mutations roll back only the entity they touched
 - S-004 — Renamed all `*FromWs` store handlers to `on<EventName>` in `review.svelte.ts`, `chat.svelte.ts`, and updated call sites in `ws.svelte.ts` (now `events.svelte.ts`)
 - M-001 — IssueCard: `0.55s cubic-bezier(...)` → `var(--duration-ceremonial-medium) var(--ease-standard)`
 - M-002 — GuidedWalkthrough: all 7 literal animation declarations migrated to canonical tokens

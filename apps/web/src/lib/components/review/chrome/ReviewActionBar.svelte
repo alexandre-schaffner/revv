@@ -24,13 +24,8 @@ import {
   type MergeQuestion,
   mergeQuestionFor,
 } from "$lib/stores/merge-eligibility.svelte";
-import {
-  closePr,
-  convertPrToDraft,
-  getSelectedPr,
-  markPrReadyForReview,
-  mergePr,
-} from "$lib/stores/prs.svelte";
+import { closePr, convertPrToDraft, markPrReadyForReview, mergePr } from "$lib/stores/prs.svelte";
+import { getSelectedPr } from "$lib/stores/route.svelte";
 import { openStackMergeSheet } from "$lib/stores/stack-merge.svelte";
 import { getLayer, getStack, getStackRequest } from "$lib/stores/stacks.svelte";
 import { type MergeGate, mergeGate } from "$lib/utils/merge-blocker";

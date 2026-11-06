@@ -1,6 +1,7 @@
 import { buildPullRequestDeepLink } from "@revv/shared";
 import { toast } from "svelte-sonner";
-import { getRepoById, getSelectedPr } from "./prs.svelte";
+import { getRepoById } from "./repos.svelte";
+import { getSelectedPr } from "./route.svelte";
 
 /**
  * Copying the selected PR's `revv://` deep link is reachable from two places —

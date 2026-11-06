@@ -6,7 +6,6 @@ import {
   type ThreadMessage,
 } from "@revv/shared";
 import ArrowElbowDownLeft from "phosphor-svelte/lib/ArrowElbowDownLeft";
-import CaretUp from "phosphor-svelte/lib/CaretUp";
 import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
@@ -25,7 +24,6 @@ interface Props {
   onReopen?: () => void;
   onDiscard?: () => void;
   onDiscardReply?: (messageId: string) => void;
-  onCollapse?: (() => void) | undefined;
   onApplySuggestion?: (suggestion: string) => void;
   onEditMessage?: (messageId: string, body: string) => void;
   onPush?: (() => void | Promise<void>) | undefined;
@@ -43,7 +41,6 @@ let {
   onReopen,
   onDiscard,
   onDiscardReply,
-  onCollapse,
   onApplySuggestion,
   onEditMessage,
   onPush,
@@ -206,8 +203,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 
 	{#if isReplying && !isResolved}
 		<AnnotationCommentInput
-			filePath=""
-			lineNo={0}
 			onSubmit={(body) => onReplySubmit?.(body)}
 			onDismiss={() => onReplyDismiss?.()}
 		/>
@@ -252,15 +247,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 				class:footer-link--muted={isResolved}
 				onclick={isResolved ? onReopen : onResolve}
 			>{isResolved ? 'Reopen' : 'Resolve'}</button>
-		{/if}
-		{#if onCollapse}
-			<button
-				class="footer-collapse"
-				onclick={onCollapse}
-				aria-label="Collapse thread"
-			>
-				<CaretUp size={13} />
-			</button>
 		{/if}
 	</div>
 </div>
@@ -416,27 +402,6 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 
 	.footer-link--active {
 		color: var(--color-text-muted);
-	}
-
-	.footer-collapse {
-		margin-left: auto;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		padding: 2px;
-		background: transparent;
-		border: none;
-		border-radius: 4px;
-		cursor: pointer;
-		color: var(--color-text-muted);
-		transition:
-			background-color var(--duration-snap) var(--ease-soft),
-			color var(--duration-snap) var(--ease-soft);
-	}
-
-	.footer-collapse:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-secondary);
 	}
 
 	.msg-pending-badge {

@@ -9,7 +9,7 @@ import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
 import { groupTimeline } from "$lib/conversation/timeline";
 import { VERDICT_VERB } from "$lib/conversation/verdict";
 import { deleteComment, editComment, getAbilities } from "$lib/stores/conversation.svelte";
-import { setActiveTab } from "$lib/stores/review.svelte";
+import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { openExternal } from "$lib/utils/open-external";
 import CommentCard from "./CommentCard.svelte";
 import MarkdownBody from "./MarkdownBody.svelte";
