@@ -3,20 +3,12 @@ import ArrowRight from "phosphor-svelte/lib/ArrowRight";
 import { onDestroy, onMount, untrack } from "svelte";
 
 interface Props {
-  filePath: string;
-  lineNo: number;
   onSubmit: (body: string) => void;
   onDismiss: () => void;
   initialBody?: string;
 }
 
-let {
-  filePath: _filePath,
-  lineNo: _lineNo,
-  onSubmit,
-  onDismiss,
-  initialBody = "",
-}: Props = $props();
+let { onSubmit, onDismiss, initialBody = "" }: Props = $props();
 
 // `initialBody` seeds the textarea on mount only — later prop changes are
 // intentionally ignored, so capture the current value with `untrack`.

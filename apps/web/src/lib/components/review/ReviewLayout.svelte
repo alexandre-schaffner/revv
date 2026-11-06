@@ -2,7 +2,6 @@
 import { isImagePath } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
-import { setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import {
   enterLineMode,
   enterScrollMode,
@@ -12,7 +11,6 @@ import {
   getActivePanel,
   getAnchorLineIndex,
   getCursorLineIndex,
-  getCursorSide,
   getTotalLineCount,
   isInDiffMode,
   jumpCursor,
@@ -32,6 +30,7 @@ import DiffViewer from "./DiffViewer.svelte";
 import FileFirstPass from "./FileFirstPass.svelte";
 import FileIssues from "./FileIssues.svelte";
 import ImageDiffViewer from "./ImageDiffViewer.svelte";
+import type { CommentRowsTrigger } from "./pierre-diff-adapter";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -68,19 +67,11 @@ let fileTitleSectionEl = $state<HTMLElement | null>(null);
 
 // ── Comment trigger ──────────────────────────────────────────────────────
 
-/**
- * Passed to DiffViewer to trigger opening a comment input.
- * Use `seq: Date.now()` to ensure reactivity even for repeated requests.
- */
-let pendingCommentTrigger = $state<{
-  startLine: number;
-  endLine: number;
-  side: "additions" | "deletions";
-  seq: number;
-} | null>(null);
+/** Rows are the cursor's; the diff viewer resolves them to file lines. */
+let pendingCommentTrigger = $state<CommentRowsTrigger | null>(null);
 
-function openComment(startLine: number, endLine: number, side: "additions" | "deletions") {
-  pendingCommentTrigger = { startLine, endLine, side, seq: Date.now() };
+function openComment(fromRow: number, toRow: number) {
+  pendingCommentTrigger = { fromRow, toRow, seq: Date.now() };
 }
 
 // ── Topbar subtitle (show full path when file title scrolls out) ─────────
@@ -273,9 +264,7 @@ const DIFF_VISUAL_KEYS: Record<string, KeyHandler> = {
   c: (e) => {
     e.preventDefault();
     const cursor = getCursorLineIndex();
-    const anchor = getAnchorLineIndex() ?? cursor;
-    const side = getCursorSide() ?? "additions";
-    openComment(Math.min(anchor, cursor), Math.max(anchor, cursor), side);
+    openComment(getAnchorLineIndex() ?? cursor, cursor);
     return true;
   },
 };
@@ -330,8 +319,7 @@ const DIFF_LINE_KEYS: Record<string, KeyHandler> = {
   c: (e) => {
     e.preventDefault();
     const lineIdx = getCursorLineIndex();
-    const side = getCursorSide() ?? "additions";
-    openComment(lineIdx, lineIdx, side);
+    openComment(lineIdx, lineIdx);
     return true;
   },
 };
@@ -455,19 +443,10 @@ const panel = $derived(getActivePanel());
 					<DiffViewer
 						{prId}
 						file={activeFile}
-						onModeChange={(m) => setDiffMode(m)}
 						commentTrigger={pendingCommentTrigger}
 						scrollRoot={diffScrollEl}
 					/>
 				{/if}
-			{:else}
-				<DiffViewer
-					{prId}
-					file={null}
-					onModeChange={(m) => setDiffMode(m)}
-					commentTrigger={pendingCommentTrigger}
-					scrollRoot={diffScrollEl}
-				/>
 			{/if}
 		{/if}
 	</div>

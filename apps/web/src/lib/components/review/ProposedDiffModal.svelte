@@ -17,7 +17,7 @@ import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import Trash from "phosphor-svelte/lib/Trash";
 import X from "phosphor-svelte/lib/X";
-import { type Component, mount, onDestroy, onMount, tick, unmount, untrack } from "svelte";
+import { onDestroy, onMount, tick, untrack } from "svelte";
 import { SvelteMap } from "svelte/reactivity";
 import type { ProposedDiffFile } from "$lib/api/chat";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
@@ -36,6 +36,7 @@ import {
   updateProposedComment,
 } from "$lib/stores/chat.svelte";
 import { getDiffMode, getDiffWrap, setDiffMode } from "$lib/stores/diff-prefs.svelte";
+import { AnnotationMounts } from "$lib/utils/annotation-mount";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import ProposedCommentChip from "./ProposedCommentChip.svelte";
@@ -126,41 +127,7 @@ $effect(() => {
   }
 });
 
-// Scoped Svelte mount tracker for annotation hosts. Kept local so the
-// modal can clean up its own mounts on destroy without disturbing any
-// concurrently-rendered DiffViewer (which uses the global registry in
-// `$lib/utils/annotation-mount`).
-type MountedInstance = ReturnType<typeof mount>;
-const annotationMounts = new Map<HTMLElement, MountedInstance>();
-
-function scopedMount<Props extends Record<string, unknown>>(
-  host: HTMLElement,
-  Component: Component<Props>,
-  props: Props,
-): void {
-  const existing = annotationMounts.get(host);
-  if (existing) {
-    try {
-      unmount(existing);
-    } catch {
-      // best-effort
-    }
-    annotationMounts.delete(host);
-  }
-  const instance = mount(Component, { target: host, props });
-  annotationMounts.set(host, instance);
-}
-
-function cleanupScopedMounts(): void {
-  for (const [host, instance] of annotationMounts) {
-    try {
-      unmount(instance);
-    } catch {
-      // best-effort
-    }
-    annotationMounts.delete(host);
-  }
-}
+const annotationMounts = new AnnotationMounts();
 
 // ── Reactive UI state ─────────────────────────────────────────────────────
 const mode = $derived(getDiffMode());
@@ -274,9 +241,7 @@ function buildOptions(
             c.lineNumber === annotation.lineNumber &&
             c.side === annotation.side,
         );
-        scopedMount(host, AnnotationCommentInput, {
-          filePath: file.name,
-          lineNo: annotation.lineNumber,
+        annotationMounts.mount(host, AnnotationCommentInput, {
           initialBody: existing?.body ?? "",
           onSubmit: (next: string) => {
             handleCommentSubmit(
@@ -294,7 +259,7 @@ function buildOptions(
       } else if (meta.kind === "chip" && meta.commentId) {
         const c = comments.find((x) => x.id === meta.commentId);
         if (!c) return host;
-        scopedMount(host, ProposedCommentChip, {
+        annotationMounts.mount(host, ProposedCommentChip, {
           body: c.body,
           onEdit: () => {
             openInput(c.filePath, c.lineNumber, c.side, c.id);
@@ -307,6 +272,14 @@ function buildOptions(
       return host;
     },
   };
+}
+
+function cleanUpDiff(instance: PierreFileDiff<CommentMeta>): void {
+  try {
+    instance.cleanUp();
+  } catch (e) {
+    console.warn("[ProposedDiffModal] Pierre cleanup failed:", e);
+  }
 }
 
 function mountFileDiff(idx: number, el: HTMLDivElement, diffStyle: "unified" | "split") {
@@ -341,11 +314,7 @@ function captureDiffEl(el: HTMLDivElement, index: number) {
       diffWrapperEls[index] = null;
       const instance = diffInstances[index];
       if (instance) {
-        try {
-          instance.cleanUp();
-        } catch {
-          // best-effort
-        }
+        cleanUpDiff(instance);
         diffInstances[index] = null;
       }
     },
@@ -369,12 +338,9 @@ $effect(() => {
     const file = files[i];
     if (!inst || !file) continue;
     try {
-      inst.render({
-        lineAnnotations: annotationsFor(file),
-        forceRender: true,
-      });
-    } catch {
-      // best-effort
+      inst.render({ lineAnnotations: annotationsFor(file), forceRender: true });
+    } catch (e) {
+      console.error("[ProposedDiffModal] Annotation render failed:", e);
     }
   }
 });
@@ -388,16 +354,12 @@ $effect(() => {
   // All annotation hosts live inside the FileDiff DOM that's about to be
   // destroyed — unmount them first to avoid stranded Svelte instances
   // pointing at detached nodes.
-  cleanupScopedMounts();
+  annotationMounts.clear();
   for (let i = 0; i < files.length; i++) {
     const el = diffWrapperEls[i];
     const old = diffInstances[i];
     if (old) {
-      try {
-        old.cleanUp();
-      } catch {
-        // best-effort
-      }
+      cleanUpDiff(old);
       diffInstances[i] = null;
     }
     if (el) mountFileDiff(i, el, next);
@@ -528,10 +490,8 @@ function initTree(treePaths = paths, treeGitStatus = gitStatus) {
 }
 
 onDestroy(() => {
-  // Per-file instances are torn down by their action's `destroy` hooks,
-  // so we only need to clean up the file tree + the Svelte mounts this
-  // modal owns.
-  cleanupScopedMounts();
+  // Per-file instances are torn down by their action's `destroy` hooks.
+  annotationMounts.clear();
   tree?.cleanUp();
   tree = null;
 });

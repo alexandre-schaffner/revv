@@ -1,85 +1,26 @@
 <script lang="ts">
-import { DIFFS_TAG_NAME, FileDiff, type FileDiffOptions, parsePatchFiles } from "@pierre/diffs";
-import { buildGitPatchHeader, type DiffBlock, PIERRE_THEME, splitHunks } from "@revv/shared";
+import { parsePatchFiles } from "@pierre/diffs";
+import { buildGitPatchHeader, type DiffBlock, splitHunks } from "@revv/shared";
 import ArrowUpRight from "phosphor-svelte/lib/ArrowUpRight";
-import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
+import { pierreDiff } from "$lib/pierre/mount";
 import { jumpToDiffLine } from "$lib/stores/review.svelte";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
-import { workerManager } from "$lib/utils/worker-pool";
 
 interface Props {
   block: DiffBlock;
-  hideAnnotation?: boolean;
 }
 
-let { block, hideAnnotation = false }: Props = $props();
-
-const renderedAnnotation = $derived(block.annotation ? renderMarkdown(block.annotation) : null);
+let { block }: Props = $props();
 
 /** Where clicking the header lands in the Diff tab: the first hunk's new-side start. */
 const targetLine = $derived(splitHunks(block.patch)[0]?.newStart ?? 1);
 
-let instance: FileDiff<never> | null = null;
-
-function mountDiffBlock(el: HTMLDivElement) {
-  const options: FileDiffOptions<never, undefined> = {
-    diffStyle: "unified",
-    theme: PIERRE_THEME,
-    overflow: "scroll",
-    // Suppress Pierre's built-in file header — we render our own clickable
-    // header above so the user can jump to this file in the Diff tab.
-    disableFileHeader: true,
-  };
-
-  instance = new FileDiff<never>(options, workerManager);
-
-  const patchHeader = buildGitPatchHeader({ path: block.filePath });
-  const fullPatch = `${patchHeader}\n${block.patch}`;
-  const parsed = parsePatchFiles(fullPatch)[0]?.files[0];
-
-  if (!parsed) {
-    el.textContent = "Failed to parse diff";
-    return { destroy() {} };
-  }
-
-  if (block.prerenderedHtml !== undefined) {
-    // Server SSR'd this block via @pierre/diffs/ssr; hydrate against the
-    // prerendered DOM instead of paying the worker tokenize round-trip.
-    // Use a <diffs-container> child to match render()'s DOM structure —
-    // app.css's `diffs-container { color-scheme: inherit }` keeps the
-    // token colors in sync with <html>'s theme. A plain <div> would
-    // miss that rule and produce wrong-mode token colors.
-    const hostEl = document.createElement(DIFFS_TAG_NAME);
-    el.appendChild(hostEl);
-    instance.hydrate({
-      fileContainer: hostEl,
-      prerenderedHTML: block.prerenderedHtml,
-      fileDiff: parsed,
-    });
-  } else {
-    instance.render({ containerWrapper: el, fileDiff: parsed });
-  }
-
-  return {
-    destroy() {
-      instance?.cleanUp();
-      instance = null;
-    },
-  };
-}
+const fileDiff = $derived(
+  parsePatchFiles(`${buildGitPatchHeader({ path: block.filePath })}\n${block.patch}`)[0]?.files[0],
+);
 </script>
 
-<div class="annotated-block" class:annotated-block--no-annotation={!block.annotation || hideAnnotation}>
-	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'left'}
-		<div class="annotation annotation--left">
-			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
-				{@html renderedAnnotation}
-			</div>
-		</div>
-	{/if}
-
+<div class="annotated-block">
 	<div class="diff-panel">
 		<button class="diff-header" onclick={() => jumpToDiffLine(block.filePath, targetLine)}>
 			<FileBadge filePath={block.filePath} />
@@ -87,68 +28,26 @@ function mountDiffBlock(el: HTMLDivElement) {
 				<span class="diff-jump-icon"><ArrowUpRight size={11} /></span>
 			</span>
 		</button>
-		<div class="diff-body" use:mountDiffBlock></div>
+		{#if fileDiff}
+			<div
+				class="diff-body"
+				use:pierreDiff={{ fileDiff, prerenderedHtml: block.prerenderedHtml }}
+			></div>
+		{:else}
+			<div class="diff-body">Failed to parse diff</div>
+		{/if}
 	</div>
-
-	{#if !hideAnnotation && block.annotation && block.annotationPosition === 'right'}
-		<div class="annotation annotation--right">
-			<div class="annotation-content prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
-				{@html renderedAnnotation}
-			</div>
-		</div>
-	{/if}
 </div>
 
 <style>
 	.annotated-block {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		grid-template-columns: 1fr;
 		border: 1px solid var(--revv-border);
 		border-radius: 10px;
-		/* overflow: clip clips like `hidden` but does NOT create a scroll container,
-		   so descendant `position: sticky` inside .annotation-content keeps tracking
-		   page scroll. */
 		overflow: clip;
 		container-type: inline-size;
 	}
-
-	.annotated-block--no-annotation {
-		grid-template-columns: 1fr;
-	}
-
-	.annotation {
-		display: flex;
-		align-items: flex-start;
-		padding: 16px 20px;
-		background: color-mix(in srgb, var(--revv-accent) 4%, var(--revv-bg-secondary));
-		font-size: 14px;
-		line-height: 1.6;
-		color: var(--revv-text-secondary);
-	}
-
-	.annotation--left {
-		border-right: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
-	}
-
-	.annotation--right {
-		border-left: 1px solid color-mix(in srgb, var(--revv-accent) 35%, var(--revv-border));
-	}
-
-	.annotation-content {
-		width: 100%;
-		/* Sticky pins the annotation text to the top of the viewport as the card
-		   scrolls past, while the surrounding .annotation cell background still
-		   fills the full grid row for the card look. `overflow: clip` on the
-		   .annotated-block ancestor ensures sticky works across the card. */
-		position: sticky;
-		top: 16px;
-		align-self: flex-start;
-		max-height: calc(100vh - 32px);
-		overflow-y: auto;
-	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.annotation-content` only owns layout. */
 
 	.diff-panel {
 		display: flex;
@@ -199,37 +98,13 @@ function mountDiffBlock(el: HTMLDivElement) {
 	}
 
 	.diff-body {
-		/* Cap the diff panel so the card stays dense even when the patch is long
-		   beside a short annotation. 640px ≈ 32 lines; 70vh keeps it sane on
-		   short screens. Pierre's own overflow option handles horizontal scroll
-		   for long lines. */
+		/* Keeps the card dense under a long patch: 640px ≈ 32 lines; 70vh keeps
+		   it sane on short screens. */
 		max-height: min(70vh, 640px);
 		overflow: auto;
 	}
 
-	/* Narrow: stack vertically */
 	@container (max-width: 600px) {
-		.annotated-block {
-			grid-template-columns: 1fr;
-		}
-
-		.annotation--left {
-			border-right: none;
-			border-bottom: 2px solid var(--revv-accent);
-		}
-
-		.annotation--right {
-			border-left: none;
-			border-top: 2px solid var(--revv-accent);
-		}
-
-		/* Sticky is noisy when stacked — annotation would detach from its diff. */
-		.annotation-content {
-			position: static;
-			max-height: none;
-			overflow: visible;
-		}
-
 		.diff-body {
 			max-height: min(80vh, 720px);
 		}
