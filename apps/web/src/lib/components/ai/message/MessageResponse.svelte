@@ -24,7 +24,7 @@ export type MessageResponseProps = HTMLAttributes<HTMLDivElement> & {
 	import { getContext } from "svelte";
 	import { fileReferences } from "$lib/actions/file-references.svelte";
 	import { mentionReferences } from "$lib/actions/mention-references.svelte";
-	import { getReviewFiles } from "$lib/stores/review.svelte";
+	import { getReviewFiles } from "$lib/stores/diff-files.svelte";
 	import { cn } from "$lib/utils.js";
 	import { renderMarkdownBlocks } from "$lib/utils/markdown.js";
 	import { MESSAGE_CTX_KEY, type MessageContext } from "./context.js";

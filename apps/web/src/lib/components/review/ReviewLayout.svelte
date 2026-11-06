@@ -2,6 +2,7 @@
 import { isImagePath } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
 import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import { setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import {
   enterLineMode,
   enterScrollMode,
@@ -19,12 +20,12 @@ import {
 } from "$lib/stores/focus-mode.svelte";
 import {
   getActiveFilePath,
+  getActiveTab,
   getDiffScrollResetSeq,
   getPrScrollPosition,
   setActiveFilePath,
-  setDiffMode,
   setPrScrollPosition,
-} from "$lib/stores/review.svelte";
+} from "$lib/stores/pr-view-state.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
@@ -138,6 +139,9 @@ const pendingG = new PendingGState();
 
 onDestroy(() => {
   pendingG.destroy();
+  // Leaving the Diff tab hands the keyboard back to the sidebar, so the next
+  // diff doesn't open in a stale line or visual mode.
+  if (getActiveTab() !== "diff") enterSidebarMode();
 });
 
 // ── Diff-pane scroll persistence ─────────────────────────────────────────

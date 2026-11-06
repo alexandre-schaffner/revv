@@ -11,10 +11,10 @@ import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import ReviewActionBar from "$lib/components/review/chrome/ReviewActionBar.svelte";
 import { sendChatMessage } from "$lib/stores/chat.svelte";
 import { acceptWriteResult } from "$lib/stores/conversation.svelte";
+import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getActiveTab } from "$lib/stores/pr-view-state.svelte";
 import {
   deleteThread,
-  getActiveTab,
-  getReviewFiles,
   getThreadMessages,
   getThreads,
   jumpToDiffLine,

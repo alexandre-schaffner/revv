@@ -12,6 +12,7 @@ import {
 } from "@pierre/diffs";
 import { buildGitPatchHeader, PIERRE_THEME, PR_DIFF_RENDER_OPTIONS } from "@revv/shared";
 import { onDestroy, onMount } from "svelte";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import {
   getActivePanel,
   getAnchorLineIndex,
@@ -21,11 +22,7 @@ import {
   setTotalLineCount,
 } from "$lib/stores/focus-mode.svelte";
 import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import {
-  clearPendingDiffJump,
-  getLoadedHeadSha,
-  getPendingDiffJump,
-} from "$lib/stores/review.svelte";
+import { clearPendingDiffJump, getPendingDiffJump } from "$lib/stores/review.svelte";
 import type { CommentThread, ReviewFile, ThreadMessage } from "$lib/types/review";
 import { cleanupAllMounted, mountInto, pruneDetachedMounts } from "$lib/utils/annotation-mount";
 import { countPatchLines } from "$lib/utils/count-patch-lines";

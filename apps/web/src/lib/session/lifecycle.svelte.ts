@@ -7,6 +7,7 @@
 // `autoFetchInterval` changes); the client never polls GitHub on a timer.
 
 import { goto } from "$app/navigation";
+import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
   clearIdentity,
   deleteAccount,
@@ -22,9 +23,11 @@ import {
 import { reset as resetBaseConflicts } from "$lib/stores/base-conflicts.svelte";
 import { reset as resetChat } from "$lib/stores/chat.svelte";
 import { reset as resetConversation } from "$lib/stores/conversation.svelte";
+import { reset as resetDiffFiles } from "$lib/stores/diff-files.svelte";
 import { connect, disconnect } from "$lib/stores/events.svelte";
 import { reset as resetHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { reset as resetMergeEligibility } from "$lib/stores/merge-eligibility.svelte";
+import { reset as resetPrViewState } from "$lib/stores/pr-view-state.svelte";
 import { fetchPinnedPrs, fetchPrs, fetchRepos, reset as resetPrs } from "$lib/stores/prs.svelte";
 import { reset as resetRecapStream } from "$lib/stores/recap-stream.svelte";
 import { reset as resetRecaps } from "$lib/stores/recaps.svelte";
@@ -57,6 +60,9 @@ let sessionHost: string | undefined;
 function resetAccountStores(): void {
   resetPrs();
   resetReview();
+  resetDiffFiles();
+  resetPrViewState();
+  resetPulls();
   resetSync();
   resetWalkthrough();
   resetWalkthroughSizings();

@@ -18,8 +18,8 @@ import type {
   HunkScanStatus,
 } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getSelectedPrId } from "$lib/stores/prs.svelte";
-import { getLoadedHeadSha } from "$lib/stores/review.svelte";
 import {
   type EventsSinceAsked,
   mergeHydratedHunkScan,

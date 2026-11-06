@@ -6,7 +6,7 @@ import ChatCircleDots from "phosphor-svelte/lib/ChatCircleDots";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { VERDICT_VERB } from "$lib/conversation/verdict";
-import { setActiveTab } from "$lib/stores/review.svelte";
+import { setActiveTab } from "$lib/stores/pr-view-state.svelte";
 import { groupTimeline } from "$lib/utils/conversation-timeline";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";

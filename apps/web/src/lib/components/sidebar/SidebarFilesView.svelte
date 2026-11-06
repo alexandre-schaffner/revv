@@ -1,16 +1,15 @@
 <script lang="ts">
 import { Dotmatrix } from "$lib/components/ui/dotmatrix";
+import { getIsLoadingFiles, getReviewFiles } from "$lib/stores/diff-files.svelte";
 import { enterScrollMode, getActivePanel } from "$lib/stores/focus-mode.svelte";
-import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import {
   getActiveFilePath,
   getActiveTab,
-  getIsLoadingFiles,
-  getReviewFiles,
   requestDiffScrollReset,
   setActiveFilePath,
   setActiveTab,
-} from "$lib/stores/review.svelte";
+} from "$lib/stores/pr-view-state.svelte";
+import { getSelectedPrId } from "$lib/stores/prs.svelte";
 import { getFileSearchQuery, getSidebarView, setFileSearchQuery } from "$lib/stores/sidebar.svelte";
 import PierreFileTree from "./PierreFileTree.svelte";
 import SidebarFilesSearch from "./SidebarFilesSearch.svelte";

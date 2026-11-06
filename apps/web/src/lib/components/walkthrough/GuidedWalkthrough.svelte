@@ -28,11 +28,11 @@ import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
 import { authHeaders } from "$lib/session/token.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
 import { getPrById, getRepositories } from "$lib/stores/prs.svelte";
 import {
   clearPendingWalkthroughBlockJump,
-  getLoadedHeadSha,
   getPendingWalkthroughBlockJump,
   jumpToDiffLine,
 } from "$lib/stores/review.svelte";

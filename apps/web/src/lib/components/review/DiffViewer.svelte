@@ -1,8 +1,7 @@
 <script lang="ts">
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import { SvelteMap } from "svelte/reactivity";
-import { getUser } from "$lib/stores/auth.svelte";
-import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
+import { getDiffMode, getDiffWrap } from "$lib/stores/diff-prefs.svelte";
 import {
   addThread,
   addThreadMessage,
@@ -10,7 +9,6 @@ import {
   deleteThread,
   deleteThreadMessage,
   editThreadMessage,
-  getDiffMode,
   getThreadMessages,
   getThreadsForFile,
   getThreadsVersion,
@@ -196,16 +194,7 @@ function handleReplyToggle(threadId: string) {
 
 async function handleReplySubmit(threadId: string, body: string) {
   replyingThreadId = null;
-  const u = getUser();
-  const authorName = u?.githubLogin ?? u?.name ?? "You";
-  const authorLogin = u?.githubLogin ?? null;
-  await addThreadMessage(threadId, {
-    authorRole: "reviewer",
-    authorName,
-    authorLogin,
-    body,
-    messageType: "reply",
-  });
+  await addThreadMessage(threadId, body);
 }
 
 async function handleCommentSubmit(
@@ -221,22 +210,12 @@ async function handleCommentSubmit(
   const endLine = pendingEndLines.get(key) ?? lineNo;
   pendingEndLines.delete(key);
 
-  const u = getUser();
-  const authorName = u?.githubLogin ?? u?.name ?? "You";
-  const authorLogin = u?.githubLogin ?? null;
-
   await addThread({
     filePath,
     startLine: lineNo,
     endLine,
     diffSide: side === "deletions" ? "old" : "new",
-    message: {
-      authorRole: "reviewer",
-      authorName,
-      authorLogin,
-      body,
-      messageType: "comment",
-    },
+    body,
   });
 }
 

@@ -1,8 +1,9 @@
 <script lang="ts">
 import { flaggedHunkSmells, splitHunks } from "@revv/shared";
 import HunkSmellChip from "$lib/components/walkthrough/first-pass/HunkSmellChip.svelte";
+import { getLoadedHeadSha } from "$lib/stores/diff-files.svelte";
 import { getHunkScanForFile } from "$lib/stores/hunk-scan.svelte";
-import { getLoadedHeadSha, jumpToDiffLine } from "$lib/stores/review.svelte";
+import { jumpToDiffLine } from "$lib/stores/review.svelte";
 import {
   getIsStreaming,
   getIssuesForFile,

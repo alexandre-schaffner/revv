@@ -5,8 +5,8 @@ import Star from "phosphor-svelte/lib/Star";
 import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
+import { getIsPullingCommit, reviewLatestCommit } from "$lib/review/pull-latest";
 import { isChatStreaming } from "$lib/stores/chat.svelte";
-import { getIsPullingCommit, reviewLatestCommit } from "$lib/stores/review.svelte";
 import {
   abort as abortWalkthrough,
   generateWalkthrough,

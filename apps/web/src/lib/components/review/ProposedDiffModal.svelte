@@ -35,8 +35,7 @@ import {
   sendProposedFeedback,
   updateProposedComment,
 } from "$lib/stores/chat.svelte";
-import { getDiffWrap } from "$lib/stores/diff-prefs.svelte";
-import { getDiffMode, setDiffMode } from "$lib/stores/review.svelte";
+import { getDiffMode, getDiffWrap, setDiffMode } from "$lib/stores/diff-prefs.svelte";
 import { workerManager } from "$lib/utils/worker-pool";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import ProposedCommentChip from "./ProposedCommentChip.svelte";
