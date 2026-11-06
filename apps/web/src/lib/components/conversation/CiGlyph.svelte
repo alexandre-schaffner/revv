@@ -1,24 +1,5 @@
-<script lang="ts" module>
-import type { CiCheckBucket, CiRollupState } from "@revv/shared";
-
-/** A rollup state, read as the bucket its glyph shares. */
-export function bucketOfRollup(state: CiRollupState | null): CiCheckBucket | null {
-  switch (state) {
-    case "success":
-      return "pass";
-    case "failure":
-    case "error":
-      return "fail";
-    case "pending":
-    case "expected":
-      return "pending";
-    default:
-      return null;
-  }
-}
-</script>
-
 <script lang="ts">
+import type { CiCheckBucket } from "@revv/shared";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import CircleDashed from "phosphor-svelte/lib/CircleDashed";
 import MinusCircle from "phosphor-svelte/lib/MinusCircle";

@@ -5,13 +5,13 @@ import Check from "phosphor-svelte/lib/Check";
 import GitMerge from "phosphor-svelte/lib/GitMerge";
 import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
+import { VIEWER_VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapFadeY } from "$lib/motion";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import {
   layerFacts,
   layerRole,
   needsReview,
-  REVIEW_VERDICT_LABEL,
   RISK_LABEL,
   readableBrief,
 } from "$lib/stacks/stack-layer-facts";
@@ -71,7 +71,7 @@ const anyOpen = $derived(stack?.layers.some(isOpenLayer) ?? false);
 									{#if fact.verdict === 'approved'}
 										<Check size={11} weight="bold" aria-hidden="true" />
 									{/if}
-									{REVIEW_VERDICT_LABEL[fact.verdict]}
+									{VIEWER_VERDICT_LABEL[fact.verdict]}
 								{:else}
 									{fact.label}
 								{/if}

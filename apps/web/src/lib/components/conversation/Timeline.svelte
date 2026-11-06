@@ -1,9 +1,11 @@
 <script lang="ts">
-import type { PrConversation, TimelineReview } from "@revv/shared";
+import type { PrConversation } from "@revv/shared";
+import { loginsMatch } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import ChatCircleDots from "phosphor-svelte/lib/ChatCircleDots";
 import { SvelteSet } from "svelte/reactivity";
 import Avatar from "$lib/components/shared/Avatar.svelte";
+import { VERDICT_VERB } from "$lib/conversation/verdict";
 import { setActiveTab } from "$lib/stores/review.svelte";
 import { groupTimeline } from "$lib/utils/conversation-timeline";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
@@ -28,13 +30,6 @@ const EVENT_FOLD = 4;
 
 const rows = $derived(groupTimeline(conversation.timeline));
 const unfolded = new SvelteSet<string>();
-
-const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
-  approved: "approved these changes",
-  changes_requested: "requested changes",
-  commented: "reviewed",
-  dismissed: "reviewed (dismissed)",
-};
 </script>
 
 <ol class="timeline" aria-label="Pull request timeline">
@@ -56,7 +51,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 					body={item.body}
 					url={item.url}
 					edited={item.edited}
-					isAuthor={item.author.login === conversation.author.login}
+					isAuthor={loginsMatch(item.author.login, conversation.author.login)}
 					onsave={canEdit && item.viewerCanUpdate
 						? (body) => onEditComment(item.databaseId, body)
 						: undefined}
@@ -75,7 +70,7 @@ const REVIEW_VERB: Record<TimelineReview["verdict"], string> = {
 					<p class="review-text">
 						<Avatar handle={review.author.login} avatarContent={review.author.avatarContent} size={16} />
 						<strong>{review.author.login}</strong>
-						{REVIEW_VERB[review.verdict]}
+						{VERDICT_VERB[review.verdict]}
 						<time datetime={review.createdAt} title={new Date(review.createdAt).toLocaleString()}>
 							{formatRelativeTime(review.createdAt)}
 						</time>

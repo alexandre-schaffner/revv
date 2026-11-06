@@ -1,5 +1,5 @@
 import type { CiRollupState, MergeEligibility, PrConversation, ReviewDecision } from "@revv/shared";
-import { isMergeStateSettling } from "$lib/utils/merge-blocker";
+import { isMergeStateSettling } from "@revv/shared";
 import { RequestState } from "./_types";
 import { getMergeEligibility } from "./prs.svelte";
 

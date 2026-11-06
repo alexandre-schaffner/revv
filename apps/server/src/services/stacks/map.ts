@@ -1,8 +1,8 @@
 import {
   type CiRollupState,
   type GitHubStackLayerFields,
+  isMergeableState,
   isOpenLayer,
-  MERGEABLE_STATES,
   type MergeMethod,
   type ReviewDecision,
   type ReviewVerdict,
@@ -23,7 +23,7 @@ export function stackStatus(pr: {
   if (pr.state === "MERGED") return "merged";
   if (pr.state === "CLOSED") return "closed";
   if (pr.isDraft) return "draft";
-  return MERGEABLE_STATES.has(pr.mergeStateStatus ?? "") ? "ready" : "not_ready";
+  return isMergeableState(pr.mergeStateStatus) ? "ready" : "not_ready";
 }
 
 export interface GitHubStackLayer extends GitHubStackLayerFields {

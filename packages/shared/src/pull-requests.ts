@@ -83,6 +83,29 @@ export function sameStack(a: PrStackPlace | null, b: PrStackPlace | null): boole
 
 export type MergeMethod = "merge" | "squash" | "rebase";
 
+/**
+ * GitHub's `mergeStateStatus`, upper-cased. GitHub computes it lazily, so an
+ * absent answer reads as `UNKNOWN`.
+ */
+export function mergeStateOf(raw: string | null | undefined): string {
+  return (raw ?? "UNKNOWN").toUpperCase();
+}
+
+const MERGEABLE_STATES: ReadonlySet<string> = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
+
+export function isMergeableState(raw: string | null | undefined): boolean {
+  return MERGEABLE_STATES.has(mergeStateOf(raw));
+}
+
+export function hasMergeConflicts(raw: string | null | undefined): boolean {
+  return mergeStateOf(raw) === "DIRTY";
+}
+
+/** GitHub hasn't finished computing mergeability; the first read is often this. */
+export function isMergeStateSettling(raw: string | null | undefined): boolean {
+  return mergeStateOf(raw) === "UNKNOWN";
+}
+
 export interface MergeEligibility {
   canMerge: boolean;
   /**

@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { PrConversation, PrLabel, ReviewerEntry } from "@revv/shared";
+import { reviewerVerdict } from "@revv/shared";
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import Circle from "phosphor-svelte/lib/Circle";
@@ -8,6 +9,7 @@ import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
 import UsersThree from "phosphor-svelte/lib/UsersThree";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import { REVIEW_DECISION_LABEL, VERDICT_LABEL } from "$lib/conversation/verdict";
 import {
   loadAssigneeOptions,
   loadLabelOptions,
@@ -20,7 +22,7 @@ import CodeOwnersSection from "./CodeOwnersSection.svelte";
 import LabelChip from "./LabelChip.svelte";
 import MetaPicker, { type PickerOption } from "./MetaPicker.svelte";
 import StackSection from "./StackSection.svelte";
-import VerdictGlyph, { VERDICT_LABEL } from "./VerdictGlyph.svelte";
+import VerdictGlyph from "./VerdictGlyph.svelte";
 
 interface Props {
   prId: string;
@@ -79,12 +81,6 @@ const requestedReviewers = $derived(
 );
 const assigneeLogins = $derived(new Map(conversation.assignees.map((a) => [a.login, a.login])));
 const appliedLabels = $derived(new Map(conversation.labels.map((l) => [l.name, l])));
-
-const DECISION: Record<NonNullable<PrConversation["reviewDecision"]>, string> = {
-  approved: "Approved",
-  changes_requested: "Changes requested",
-  review_required: "An approving review is required to merge",
-};
 
 async function reviewerOptions(q: string): Promise<PickerOption<ReviewerRef>[]> {
   const { users, teams } = await loadReviewerOptions(prId, q);
@@ -195,12 +191,10 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 									<ArrowsClockwise />
 								</Button>
 							{/if}
-							<span
-								class="side-state"
-								title={reviewer.verdict ? VERDICT_LABEL[reviewer.verdict] : 'Awaiting review'}
-							>
-								{#if reviewer.verdict && !(reviewer.requested && reviewer.verdict === 'commented')}
-									<VerdictGlyph verdict={reviewer.verdict} size={14} />
+							{@const verdict = reviewerVerdict(reviewer)}
+							<span class="side-state" title={verdict ? VERDICT_LABEL[verdict] : 'Awaiting review'}>
+								{#if verdict}
+									<VerdictGlyph {verdict} size={14} />
 								{:else}
 									<CircleDashed size={14} weight="bold" class="side-awaiting" />
 								{/if}
@@ -212,7 +206,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 		{/if}
 		{#if conversation.reviewDecision}
 			<p class="side-note side-note--{conversation.reviewDecision}">
-				{DECISION[conversation.reviewDecision]}
+				{REVIEW_DECISION_LABEL[conversation.reviewDecision]}
 			</p>
 		{/if}
 	</section>

@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { BaseConflictStrategy, PrConversation } from "@revv/shared";
+import { hasMergeConflicts } from "@revv/shared";
 import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
@@ -56,7 +57,7 @@ $effect(() => {
   const q = question;
   if (q) untrack(() => askMergeEligibility(q));
 });
-const githubDirty = $derived(getMergeAnswer(question)?.mergeStateStatus.toUpperCase() === "DIRTY");
+const githubDirty = $derived(hasMergeConflicts(getMergeAnswer(question)?.mergeStateStatus));
 
 const entry = $derived(getBaseConflicts(prId));
 const local = $derived(getBaseConflictsCheck(prId, headSha));

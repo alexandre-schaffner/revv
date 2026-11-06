@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { TimelineCommit } from "@revv/shared";
+import { rollupBucket } from "@revv/shared";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import GitCommit from "phosphor-svelte/lib/GitCommit";
 import SealCheck from "phosphor-svelte/lib/SealCheck";
@@ -8,7 +9,7 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import { gsapSlide } from "$lib/motion";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 import { openExternal } from "$lib/utils/open-external";
-import CiGlyph, { bucketOfRollup } from "./CiGlyph.svelte";
+import CiGlyph from "./CiGlyph.svelte";
 
 interface Props {
   commits: readonly TimelineCommit[];
@@ -47,7 +48,7 @@ function toggle(sha: string): void {
 
 	<ul class="commit-list">
 		{#each commits as commit (commit.id)}
-			{@const bucket = bucketOfRollup(commit.ci)}
+			{@const bucket = rollupBucket(commit.ci)}
 			{@const expandable = commit.messageBody.trim().length > 0}
 			<li class="commit">
 				<div class="commit-row">

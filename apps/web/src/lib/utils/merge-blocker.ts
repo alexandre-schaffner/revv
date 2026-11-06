@@ -1,9 +1,11 @@
-import { type CiRollupState, MERGEABLE_STATES, type ReviewDecision } from "@revv/shared";
-
-/** GitHub computes mergeability lazily; the first read is often this. */
-export function isMergeStateSettling(mergeStateStatus: string): boolean {
-  return mergeStateStatus.toUpperCase() === "UNKNOWN";
-}
+import {
+  type CiRollupState,
+  isMergeableState,
+  mergeStateOf,
+  type ReviewDecision,
+  rollupBucket,
+} from "@revv/shared";
+import { REVIEW_DECISION_LABEL } from "$lib/conversation/verdict";
 
 export type MergeGate =
   | { readonly kind: "open" }
@@ -20,8 +22,8 @@ export function mergeGate(input: {
   ciState: CiRollupState | null;
   canBypassProtections: boolean;
 }): MergeGate {
-  const state = input.mergeStateStatus.toUpperCase();
-  if (MERGEABLE_STATES.has(state)) return { kind: "open" };
+  const state = mergeStateOf(input.mergeStateStatus);
+  if (isMergeableState(state)) return { kind: "open" };
   switch (state) {
     case "DIRTY":
       return { kind: "blocked", reason: "This branch has conflicts that must be resolved" };
@@ -42,9 +44,11 @@ function protectionRule(
   reviewDecision: ReviewDecision | null,
   ciState: CiRollupState | null,
 ): string {
-  if (reviewDecision === "review_required") return "An approving review is required";
-  if (reviewDecision === "changes_requested") return "Changes were requested";
-  if (ciState === "failure" || ciState === "error") return "Required checks are failing";
-  if (ciState === "pending" || ciState === "expected") return "Required checks haven't finished";
+  if (reviewDecision === "review_required" || reviewDecision === "changes_requested") {
+    return REVIEW_DECISION_LABEL[reviewDecision];
+  }
+  const ci = rollupBucket(ciState);
+  if (ci === "fail") return "Required checks are failing";
+  if (ci === "pending") return "Required checks haven't finished";
   return "Merging is blocked by branch protection";
 }

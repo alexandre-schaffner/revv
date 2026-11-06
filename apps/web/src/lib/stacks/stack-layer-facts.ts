@@ -5,19 +5,13 @@ import {
   type StackBrief,
   type StackLayer,
 } from "@revv/shared";
+import { VERDICT_TONE } from "$lib/conversation/verdict";
 import { plural } from "$lib/utils/plural";
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   low: "Low risk",
   medium: "Medium risk",
   high: "High risk",
-};
-
-export const REVIEW_VERDICT_LABEL: Record<ReviewVerdict, string> = {
-  approved: "You approved",
-  changes_requested: "You requested changes",
-  commented: "You commented",
-  dismissed: "Your review was dismissed",
 };
 
 type Tone = "subtle" | "success" | "warning" | "danger" | "accent";
@@ -88,8 +82,7 @@ export function layerFacts(layer: StackLayer): LayerFact[] {
     facts.push({
       kind: "verdict",
       key: "verdict",
-      tone:
-        verdict === "approved" ? "success" : verdict === "changes_requested" ? "warning" : "subtle",
+      tone: VERDICT_TONE[verdict],
       verdict,
     });
   }

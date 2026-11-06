@@ -5,7 +5,7 @@ import type {
   ReviewVerdict,
   StackEntryStatus,
 } from "./conversation";
-import type { MergeMethod } from "./pull-requests";
+import { isMergeableState, type MergeMethod, mergeStateOf } from "./pull-requests";
 import type { RiskLevel } from "./walkthrough";
 
 export function stackKey(repositoryId: string, stackNumber: number): string {
@@ -15,8 +15,6 @@ export function stackKey(repositoryId: string, stackNumber: number): string {
 export function isOpenLayer(layer: { readonly status: string }): boolean {
   return layer.status !== "merged" && layer.status !== "closed";
 }
-
-export const MERGEABLE_STATES: ReadonlySet<string> = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
 
 export type StackLayerReview =
   | { readonly kind: "none" }
@@ -107,10 +105,10 @@ export type LayerMergeState =
 export function classifyLayerMergeState(
   layer: Pick<GitHubStackLayerFields, "mergeStateStatus" | "behindBy">,
 ): LayerMergeState {
-  const state = layer.mergeStateStatus ?? "UNKNOWN";
+  const state = mergeStateOf(layer.mergeStateStatus);
   if (state === "DIRTY") return "conflicts";
   if (state === "BEHIND" || (layer.behindBy ?? 0) > 0) return "behind";
-  if (MERGEABLE_STATES.has(state)) return "mergeable";
+  if (isMergeableState(state)) return "mergeable";
   if (state === "BLOCKED") return "blocked";
   return state === "UNKNOWN" ? "unknown" : "unmodeled";
 }

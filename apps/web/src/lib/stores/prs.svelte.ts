@@ -7,7 +7,7 @@ import type {
   Team,
   ThreadSummary,
 } from "@revv/shared";
-import { type ReviewMode, reviewModeFor } from "@revv/shared";
+import { loginsMatch, type ReviewMode, reviewModeFor } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
 import { api } from "$lib/api/client";
@@ -131,7 +131,7 @@ const needsYourReview = $derived(
   (() => {
     const login = getCurrentUserLogin();
     if (!login) return [] as PullRequest[];
-    return filteredPrs.filter((pr) => pr.requestedReviewers.includes(login));
+    return filteredPrs.filter((pr) => pr.requestedReviewers.some((r) => loginsMatch(r, login)));
   })(),
 );
 
