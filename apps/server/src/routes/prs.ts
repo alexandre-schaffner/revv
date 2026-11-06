@@ -17,14 +17,9 @@ import {
 import { pinnedPullRequests } from "../db/schema";
 import { tryDb } from "../effects/db-try";
 import { logError } from "../logger";
-import {
-  type CachedDiffFile,
-  DiffCacheService,
-  getOrFetchDiffFiles,
-  toCachedDiffFiles,
-} from "../services/DiffCache";
-import { GitHubGateway } from "../services/GitHub";
-import { apiBaseForHost } from "../services/github-rest";
+import { type CachedDiffFile, DiffCacheService, toCachedDiffFiles } from "../services/DiffCache";
+import { GitHubGateway } from "../services/github/gateway";
+import { checkMergeEligibility } from "../services/merge-eligibility";
 import { PollScheduler } from "../services/PollScheduler";
 import { PrContextService } from "../services/PrContext";
 import {
@@ -33,9 +28,9 @@ import {
   SSR_PATCH_LINE_LIMIT,
   type SsrDiffOptions,
 } from "../services/PrerenderCache";
+import { PrMirror } from "../services/PrMirror";
 import { PullRequestService } from "../services/PullRequest";
 import { resolvePullRequestLink } from "../services/pr-deep-link";
-import { Realtime } from "../services/Realtime";
 import { RepoCloneService } from "../services/RepoClone";
 import { RepositoryService } from "../services/Repository";
 import { ReviewService } from "../services/Review";
@@ -158,7 +153,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const repositoryService = yield* RepositoryService;
           const pullRequestService = yield* PullRequestService;
           const github = yield* GitHubGateway;
-          const { accountId, accessToken } = ctx.account;
+          const mirror = yield* PrMirror;
+          const { accountId, client } = ctx.account;
 
           return yield* resolvePullRequestLink(
             {
@@ -167,13 +163,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
               findCachedPullRequest: (id) =>
                 pullRequestService.getPr(id, accountId).pipe(Effect.option),
               fetchPullRequest: (repository, number) =>
-                github.prs.get(
-                  repository.fullName,
-                  number,
-                  accessToken,
-                  apiBaseForHost(repository.githubHost),
-                ),
-              upsertPullRequest: (pullRequest) => pullRequestService.upsertPrs([pullRequest]),
+                github.prs.get(client, repository.fullName, repository.id, number),
+              upsertPullRequest: (pullRequest) => mirror.apply([pullRequest]).pipe(Effect.asVoid),
             },
             ctx.body,
           );
@@ -254,7 +245,8 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const repoService = yield* RepositoryService;
           const reviewService = yield* ReviewService;
           const github = yield* GitHubGateway;
-          const { accountId, accessToken: token } = ctx.account;
+          const diffCache = yield* DiffCacheService;
+          const { accountId } = ctx.account;
 
           const pr = yield* prService.getPr(ctx.params.id, accountId);
           const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
@@ -270,15 +262,14 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const atSha = resolveScopedSha(ctx.query.at, pr.headSha);
           const files =
             atSha === null || pr.baseSha === null
-              ? yield* getOrFetchDiffFiles(
-                  pr.id,
-                  repo.fullName,
-                  pr.externalId,
-                  token,
-                  pr.changedFiles,
-                )
+              ? (yield* diffCache.getOrFetch(pr, repo.fullName, ctx.account.client)).files
               : toCachedDiffFiles(
-                  yield* github.prs.compareFiles(repo.fullName, pr.baseSha, atSha, token),
+                  yield* github.prs.compareFiles(
+                    ctx.account.client,
+                    repo.fullName,
+                    pr.baseSha,
+                    atSha,
+                  ),
                 );
           const threads = yield* reviewService.threadsForPr(pr.id);
 
@@ -394,7 +385,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
         Effect.gen(function* () {
           const prService = yield* PullRequestService;
           const repoService = yield* RepositoryService;
-          const { accountId, accessToken: token } = ctx.account;
+          const { accountId, client } = ctx.account;
           const github = yield* GitHubGateway;
 
           const pr = yield* prService.getPr(ctx.params.id, accountId);
@@ -406,7 +397,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
 
           const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-          const bytes = yield* github.files.rawBytes(repo.fullName, ctx.query.path, sha, token);
+          const bytes = yield* github.files.rawBytes(client, repo.fullName, ctx.query.path, sha);
 
           const contentType = guessImageContentType(ctx.query.path);
           // Bun typings on `bytes` are `Uint8Array<ArrayBufferLike>`,
@@ -491,13 +482,13 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
       Effect.gen(function* () {
         const prService = yield* PullRequestService;
         const repoService = yield* RepositoryService;
-        const { accountId, accessToken: token } = ctx.account;
+        const { accountId, client } = ctx.account;
         const githubService = yield* GitHubGateway;
 
         const pr = yield* prService.getPr(ctx.params.id, accountId);
         const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
 
-        return yield* githubService.prs.commits(repo.fullName, pr.externalId, token);
+        return yield* githubService.prs.commits(client, repo.fullName, pr.externalId);
       }),
     ),
   )
@@ -520,7 +511,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(
       Effect.gen(function* () {
         const { accountId } = ctx.account;
-        yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "convert-to-draft");
+        yield* mutatePr(ctx.params.id, accountId, "convert-to-draft");
       }).pipe(Effect.as({ success: true })),
     ),
   )
@@ -528,7 +519,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(
       Effect.gen(function* () {
         const { accountId } = ctx.account;
-        yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "ready-for-review");
+        yield* mutatePr(ctx.params.id, accountId, "ready-for-review");
       }).pipe(Effect.as({ success: true })),
     ),
   )
@@ -536,7 +527,7 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(
       Effect.gen(function* () {
         const { accountId } = ctx.account;
-        yield* mutatePr(ctx.params.id, ctx.session.user.id, accountId, "close");
+        yield* mutatePr(ctx.params.id, accountId, "close");
       }).pipe(Effect.as({ success: true })),
     ),
   )
@@ -545,12 +536,11 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(
       Effect.gen(function* () {
         const prContext = yield* PrContextService;
-        const github = yield* GitHubGateway;
-        const { pr, repo, token } = yield* prContext.resolveBasic(
-          ctx.params.id,
-          ctx.session.user.id,
+        const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, ctx.account.accountId);
+        return yield* checkMergeEligibility(
+          { prId: pr.id, repoFullName: repo.fullName, prNumber: pr.externalId },
+          client,
         );
-        return yield* github.prs.mergeEligibility(repo.fullName, pr.externalId, token);
       }),
     ),
   )
@@ -563,20 +553,14 @@ export const prRoutes = new Elysia({ prefix: "/api/prs" })
           const { accountId } = ctx.account;
           const prContext = yield* PrContextService;
           const github = yield* GitHubGateway;
-          const prService = yield* PullRequestService;
-          const realtime = yield* Realtime;
-          const { pr, repo, token } = yield* prContext.resolveBasic(
-            ctx.params.id,
-            ctx.session.user.id,
-          );
-          const mergeMethod = (ctx.body?.mergeMethod ??
-            "merge") as import("@revv/shared").MergeMethod;
-          yield* github.prs.merge(repo.fullName, pr.externalId, mergeMethod, token);
-          yield* prService.markPrsClosed([
-            { id: pr.id, status: "merged", closedAt: new Date().toISOString() },
-          ]);
-          const all = yield* prService.listPrs(accountId);
-          yield* realtime.toAccount(accountId, { type: "prs:updated", data: all });
+          const mirror = yield* PrMirror;
+          const { pr, repo, client } = yield* prContext.forPr(ctx.params.id, accountId);
+          yield* github.prs.merge(client, repo.fullName, pr.externalId, ctx.body.mergeMethod);
+          yield* mirror.recordMutation(pr.id, {
+            kind: "terminal",
+            status: "merged",
+            closedAt: new Date().toISOString(),
+          });
         }).pipe(Effect.as({ success: true })),
       ),
     {
@@ -753,35 +737,29 @@ function resolveSuggestionsForPr(prId: string, accountId: string) {
 
 type PrMutationAction = "convert-to-draft" | "ready-for-review" | "close";
 
-/**
- * Shared executor for the three owner-only PR mutations above. Each one is
- * a thin wrapper over a single GitHubGateway call, so the
- * resolve → mutate → record → broadcast scaffolding is identical and
- * lifted here.
- */
-function mutatePr(prId: string, userId: string, accountId: string, action: PrMutationAction) {
+/** Run a PR mutation on GitHub as the repo's account, and record its outcome. */
+function mutatePr(prId: string, accountId: string, action: PrMutationAction) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
-    const prService = yield* PullRequestService;
-    const realtime = yield* Realtime;
+    const mirror = yield* PrMirror;
+    const { pr, repo, client } = yield* prContext.forPr(prId, accountId);
 
-    const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-
-    if (action === "convert-to-draft") {
-      yield* github.prs.convertToDraft(repo.fullName, pr.externalId, token);
-      yield* prService.setPrDraft(pr.id, true);
-    } else if (action === "ready-for-review") {
-      yield* github.prs.markReadyForReview(repo.fullName, pr.externalId, token);
-      yield* prService.setPrDraft(pr.id, false);
-    } else {
-      yield* github.prs.close(repo.fullName, pr.externalId, token);
-      yield* prService.markPrsClosed([
-        { id: pr.id, status: "closed", closedAt: new Date().toISOString() },
-      ]);
+    if (action === "close") {
+      yield* github.prs.close(client, repo.fullName, pr.externalId);
+      yield* mirror.recordMutation(pr.id, {
+        kind: "terminal",
+        status: "closed",
+        closedAt: new Date().toISOString(),
+      });
+      return;
     }
-
-    const all = yield* prService.listPrs(accountId);
-    yield* realtime.toAccount(accountId, { type: "prs:updated", data: all });
+    const isDraft = action === "convert-to-draft";
+    yield* (isDraft ? github.prs.convertToDraft : github.prs.markReadyForReview)(
+      client,
+      repo.fullName,
+      pr.externalId,
+    );
+    yield* mirror.recordMutation(pr.id, { kind: "draft", isDraft });
   });
 }

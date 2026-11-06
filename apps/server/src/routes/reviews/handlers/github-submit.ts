@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
 import { logError } from "../../../logger";
 import { type CachedDiffFile, DiffCacheService } from "../../../services/DiffCache";
-import { GitHubGateway } from "../../../services/GitHub";
+import { GitHubGateway } from "../../../services/github/gateway";
 import {
   diffFileFor,
   type GitHubReviewComment,
@@ -12,7 +12,6 @@ import {
 import { PollScheduler } from "../../../services/PollScheduler";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
-import { RepositoryService } from "../../../services/Repository";
 import { type Conversation, ReviewService } from "../../../services/Review";
 import { SyncService } from "../../../services/Sync";
 import { WalkthroughService } from "../../../services/Walkthrough";
@@ -114,21 +113,19 @@ const logged =
  * pending replies on threads already on GitHub go up, and the PR's threads are
  * pulled back.
  */
-export function submitGithubReviewHandler(prId: string, userId: string, body: SubmitReviewInput) {
+export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
     const review = yield* ReviewService;
     const sync = yield* SyncService;
     const walkthroughService = yield* WalkthroughService;
-    const repoService = yield* RepositoryService;
     const diffCache = yield* DiffCacheService;
     const conversations = yield* PrConversationService;
     const pollScheduler = yield* PollScheduler;
 
-    const ctx = yield* prContext.resolveBasic(prId, userId);
-    const { pr, repo, token: ghToken } = ctx;
-    const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+    const ctx = yield* prContext.forPr(prId);
+    const { pr, repo, client, accountId } = ctx;
 
     const eventMap = {
       approve: "APPROVE",
@@ -166,16 +163,16 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     }
 
     const submitted = yield* github.reviews
-      .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+      .submit(client, repo.fullName, pr.externalId, reviewInput)
       .pipe(
         Effect.catchIf(isExistingPendingReviewError, () =>
           Effect.gen(function* () {
-            const reviewer = yield* github.users.authenticatedFresh(ghToken);
+            const reviewer = yield* github.users.viewer(client);
             const pending = yield* github.reviews.findPending(
+              client,
               repo.fullName,
               pr.externalId,
               reviewer.login,
-              ghToken,
             );
             if (!pending) {
               return yield* Effect.fail(
@@ -186,8 +183,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
               );
             }
 
-            yield* github.reviews.deletePending(repo.fullName, pr.externalId, pending.id, ghToken);
-            return yield* github.reviews.submit(repo.fullName, pr.externalId, reviewInput, ghToken);
+            yield* github.reviews.deletePending(client, repo.fullName, pr.externalId, pending.id);
+            return yield* github.reviews.submit(client, repo.fullName, pr.externalId, reviewInput);
           }),
         ),
       );
@@ -196,7 +193,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     // thread is matched back to one of the review's comments.
     if (posted.length > 0) {
       const ghComments = yield* github.reviews
-        .commentsForReview(repo.fullName, pr.externalId, submitted.id, ghToken)
+        .commentsForReview(client, repo.fullName, pr.externalId, submitted.id)
         .pipe(
           Effect.catch((e) => logged("list the review's comments")(e).pipe(Effect.as([] as const))),
         );

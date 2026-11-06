@@ -28,7 +28,7 @@ import { streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
 import { type AiError, AiNotConfiguredError } from "../domain/errors";
 import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
-import type { PrFileMeta } from "./GitHub";
+import type { PrFileMeta } from "./github/pulls";
 import { SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────

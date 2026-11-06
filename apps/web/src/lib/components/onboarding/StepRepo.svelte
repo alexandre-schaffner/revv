@@ -1,5 +1,4 @@
 <script lang="ts">
-import type { Repository } from "@revv/shared";
 import CaretLeft from "phosphor-svelte/lib/CaretLeft";
 import CheckCircle from "phosphor-svelte/lib/CheckCircle";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
@@ -11,7 +10,11 @@ import { Dotmatrix } from "$lib/components/ui/dotmatrix";
 import { gsapEnter, tokens } from "$lib/motion";
 import { filterRepos, isRepoSlug, majorityOwner } from "$lib/repos/add-repo";
 import { getTrackedRepo, LocalClone, useAvailableRepos } from "$lib/repos/add-repo.svelte";
-import { getAvailableRepos, getAvailableReposLoading } from "$lib/repos/catalog.svelte";
+import {
+  type AvailableRepo,
+  getAvailableRepos,
+  getAvailableReposLoading,
+} from "$lib/repos/catalog.svelte";
 import { addRepo } from "$lib/stores/repos.svelte";
 
 interface Props {
@@ -115,7 +118,7 @@ async function startAdding(
   }
 }
 
-function select(repo: Repository): void {
+function select(repo: AvailableRepo): void {
   if (isAdding) return;
   if (getTrackedRepo(repo.fullName)) {
     onSkip?.();

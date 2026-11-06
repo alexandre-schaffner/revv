@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Entry, type EntryOptions } from "@napi-rs/keyring";
 import { eq } from "drizzle-orm";
@@ -157,26 +157,61 @@ function deriveFallbackKey(): Buffer {
 
 /** Fallback map holds token pairs (keyed by account id) and generic secrets (keyed by `secret:<name>`), disjoint by prefix. */
 type FallbackEntry = TokenPair | string;
+type FallbackMap = Record<string, FallbackEntry>;
 
-function readFallbackMap(): Record<string, FallbackEntry> {
+/**
+ * The fallback file's contents. `unreadable` (it exists but won't decrypt or
+ * parse — e.g. `BETTER_AUTH_SECRET` changed) is not the same as absent: the
+ * file still holds every stored token, recoverable with the old secret.
+ */
+type FallbackRead =
+  | { readonly kind: "ok"; readonly map: FallbackMap }
+  | { readonly kind: "unreadable"; readonly cause: unknown };
+
+function readFallbackFile(path = fallbackDataPath()): FallbackRead {
+  if (!existsSync(path)) return { kind: "ok", map: {} };
   try {
-    if (!existsSync(fallbackDataPath())) return {};
-    const raw = readFileSync(fallbackDataPath());
+    const raw = readFileSync(path);
     // Layout: iv(12) | authTag(16) | ciphertext
+    if (raw.length < 28) throw new Error(`truncated (${raw.length} bytes)`);
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
     const ct = raw.subarray(28);
     const decipher = createDecipheriv("aes-256-gcm", deriveFallbackKey(), iv);
     decipher.setAuthTag(tag);
     const json = Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
-    return JSON.parse(json) as Record<string, FallbackEntry>;
-  } catch (e) {
-    logError("SecretStore", "fallback store read failed:", e);
-    return {};
+    return { kind: "ok", map: JSON.parse(json) as FallbackMap };
+  } catch (cause) {
+    return { kind: "unreadable", cause };
   }
 }
 
-function writeFallbackMap(map: Record<string, FallbackEntry>): void {
+/** For reads: an unreadable store answers nothing, loudly. */
+function readFallbackMap(): FallbackMap {
+  const read = readFallbackFile();
+  if (read.kind === "ok") return read.map;
+  logError("SecretStore", "fallback token store is unreadable; treating it as empty:", read.cause);
+  return {};
+}
+
+/**
+ * For writes. An unreadable store is moved aside, never overwritten: writing
+ * the one new entry over it would erase every other stored token.
+ */
+export function fallbackMapForWrite(path = fallbackDataPath()): FallbackMap {
+  const read = readFallbackFile(path);
+  if (read.kind === "ok") return read.map;
+  const aside = `${path}.unreadable-${Date.now()}`;
+  renameSync(path, aside);
+  logError(
+    "SecretStore",
+    `fallback token store is unreadable (was BETTER_AUTH_SECRET changed?); moved it to ${aside} and starting a new one:`,
+    read.cause,
+  );
+  return {};
+}
+
+function writeFallbackMap(map: FallbackMap): void {
   ensureAppDir();
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", deriveFallbackKey(), iv);
@@ -214,7 +249,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
             logError("SecretStore", `keyring set failed for ${accountId}; using fallback:`, e);
           }
         }
-        const map = readFallbackMap();
+        const map = fallbackMapForWrite();
         map[accountId] = deserialize(json);
         writeFallbackMap(map);
       }),
@@ -243,7 +278,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
             // No matching entry / backend hiccup — nothing to clean up.
           }
         }
-        const map = readFallbackMap();
+        const map = fallbackMapForWrite();
         if (accountId in map) {
           delete map[accountId];
           writeFallbackMap(map);
@@ -260,7 +295,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
             logError("SecretStore", `keyring set failed for secret ${key}; using fallback:`, e);
           }
         }
-        const map = readFallbackMap();
+        const map = fallbackMapForWrite();
         map[fallbackSecretKey(key)] = value;
         writeFallbackMap(map);
       }),
@@ -288,7 +323,7 @@ export const SecretStoreLive = Layer.sync(SecretStore, () => {
             // No matching entry / backend hiccup — nothing to clean up.
           }
         }
-        const map = readFallbackMap();
+        const map = fallbackMapForWrite();
         const mapKey = fallbackSecretKey(key);
         if (mapKey in map) {
           delete map[mapKey];

@@ -1,10 +1,11 @@
 import type { ApiErrorBody } from "@revv/shared";
 import { Cause, Effect, Exit } from "effect";
 import { Elysia, type ElysiaCustomStatusResponse, status } from "elysia";
+import { auth } from "../auth";
 import { GitHubAuthError, type HttpErrorStatus, httpErrorOf } from "../domain/errors";
 import { logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
-import { Identity } from "../services/Identity";
+import { GitHubAccounts } from "../services/github/accounts";
 import { SettingsService } from "../services/Settings";
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -12,13 +13,14 @@ import { SettingsService } from "../services/Settings";
 const unauthorized = () =>
   status(401, { error: "Unauthorized", code: "UNAUTHORIZED" } satisfies ApiErrorBody);
 
+/** The better-auth session a request's bearer token carries, or null. */
+export function sessionFromHeaders(headers: Headers) {
+  return auth.api.getSession({ headers });
+}
+
 /** Derives the signed-in `session`; answers 401 without one. */
 export const withAuth = new Elysia({ name: "with-auth" }).derive({ as: "scoped" }, async (ctx) => {
-  const session = await AppRuntime.runPromise(
-    Effect.flatMap(Identity, (identity) =>
-      Effect.promise(() => identity.sessionFromHeaders(ctx.request.headers)),
-    ),
-  );
+  const session = await sessionFromHeaders(ctx.request.headers);
   if (!session) return unauthorized();
   return { session };
 });
@@ -35,7 +37,9 @@ export const requestAccount = (userId: string, query: Record<string, unknown>) =
   Effect.gen(function* () {
     const host =
       queryHost(query) ?? (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
-    return yield* Effect.flatMap(Identity, (identity) => identity.resolveAccount(userId, host));
+    return yield* Effect.flatMap(GitHubAccounts, (accounts) =>
+      accounts.accountForUser(userId, host),
+    );
   });
 
 /**
@@ -48,21 +52,12 @@ export const requestAccount = (userId: string, query: Record<string, unknown>) =
 export const withAccount = new Elysia({ name: "with-account" }).derive(
   { as: "scoped" },
   async (ctx) => {
+    const session = await sessionFromHeaders(ctx.request.headers);
+    if (!session) return unauthorized();
     const exit = await AppRuntime.runPromiseExit(
-      Effect.gen(function* () {
-        const identity = yield* Identity;
-        const session = yield* Effect.promise(() =>
-          identity.sessionFromHeaders(ctx.request.headers),
-        );
-        if (!session) return null;
-        const account = yield* requestAccount(
-          session.user.id,
-          ctx.query as Record<string, unknown>,
-        );
-        return { session, account };
-      }),
+      requestAccount(session.user.id, ctx.query as Record<string, unknown>),
     );
-    if (Exit.isSuccess(exit)) return exit.value ?? unauthorized();
+    if (Exit.isSuccess(exit)) return { session, account: exit.value };
     const error = Cause.squash(exit.cause);
     if (error instanceof GitHubAuthError) return errorResponse(error);
     logError(

@@ -35,8 +35,8 @@ import {
   runGitCapture,
   runGitCloneWithTimeout,
 } from "./git-runner";
+import { GitHubAccounts } from "./github/accounts";
 import { Realtime } from "./Realtime";
-import { TokenProvider } from "./TokenProvider";
 
 /** Maximum time to wait for a git clone to complete. */
 const CLONE_TIMEOUT_MS = 600_000; // 10 minutes
@@ -497,7 +497,7 @@ export const RepoCloneServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const realtime = yield* Realtime;
-    const tokenProvider = yield* TokenProvider;
+    const accounts = yield* GitHubAccounts;
 
     // Install the signal handlers eagerly so even an early crash (before
     // the first clone is attempted) gets clean child-process teardown.
@@ -1400,9 +1400,10 @@ export const RepoCloneServiceLive = Layer.effect(
           debug("repo-clone", `resuming ${pendingRepos.length} pending/error clone(s)`);
 
           for (const repo of pendingRepos) {
-            const tokenOption = yield* tokenProvider
-              .getTokenByAccountId(repo.accountId)
-              .pipe(Effect.option);
+            const tokenOption = yield* accounts.clientFor(repo.accountId).pipe(
+              Effect.map((client) => client.token),
+              Effect.option,
+            );
 
             if (tokenOption._tag === "None") {
               debug("repo-clone", `skipping repo ${repo.fullName} — no token available`);

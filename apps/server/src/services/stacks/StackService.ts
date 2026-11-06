@@ -9,7 +9,6 @@ import {
   type DbError,
   type GitHubError,
   GitHubNetworkError,
-  GitHubNotFoundError,
   GitHubRateLimitError,
 } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
@@ -18,19 +17,16 @@ import { logError } from "../../logger";
 import { withGitHubOrigin } from "../../observability/github-ledger/origin";
 import { CacheService } from "../Cache";
 import { DbService } from "../Db";
-import { readCurrentHeadFiles } from "../DiffCache";
-import { githubGraphql, githubGraphqlPartial, withSchemaFallback } from "../github-rest";
+import { readCurrentHeadFiles, toGitHubFileShape } from "../DiffCache";
+import { GitHubGateway } from "../github/gateway";
 import { type PrContextBasic, type PrContextError, PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { fingerprintFiles, stackSignature } from "./fingerprint";
 import {
   type GitHubStack,
-  layersToCompare,
   type MirroredLayer,
-  mapGitHubStack,
   membershipSupersededByPoll,
   stackFromMirror,
-  withBehind,
 } from "./map";
 import {
   overlayStack,
@@ -38,13 +34,6 @@ import {
   type TrackedLayer,
   type WalkthroughFact,
 } from "./overlay";
-import {
-  layerCompareQuery,
-  PR_STACK_QUERY,
-  type RawLayerCompareAnswer,
-  type RawPrStackAnswer,
-  STACK_SCHEMA_TOKENS,
-} from "./queries";
 import { isCompleteReview, readBriefLayers } from "./reads";
 
 const CACHE_NS = "pr-stack";
@@ -65,7 +54,6 @@ export class StackService extends Context.Service<
      */
     readonly detail: (
       prId: string,
-      userId: string,
       accountId?: string,
     ) => Effect.Effect<PrStackDetail | null, StackError>;
     readonly fetchFresh: (ctx: PrContextBasic) => Effect.Effect<GitHubStack | null, StackError>;
@@ -74,59 +62,8 @@ export class StackService extends Context.Service<
   }
 >()("StackService") {}
 
-function repoRef(ctx: PrContextBasic) {
-  const [owner, repo, ...rest] = ctx.repo.fullName.split("/");
-  return owner && repo && rest.length === 0
-    ? Effect.succeed({ owner, repo })
-    : Effect.fail(new GitHubNotFoundError({ resource: "repo", id: ctx.repo.fullName }));
-}
-
 function isUnreachable(e: unknown): boolean {
   return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
-}
-
-function askStack(ctx: PrContextBasic) {
-  return Effect.gen(function* () {
-    const ref = yield* repoRef(ctx);
-    const { value, modern } = yield* withSchemaFallback(
-      (modern) =>
-        modern
-          ? githubGraphql<RawPrStackAnswer>(
-              PR_STACK_QUERY,
-              { ...ref, number: ctx.pr.externalId },
-              ctx.token,
-              ctx.apiBase,
-            )
-          : Effect.succeed<RawPrStackAnswer>({ repository: null }),
-      STACK_SCHEMA_TOKENS,
-    );
-    const stack = modern ? mapGitHubStack(value, new Date().toISOString()) : null;
-    return stack ? yield* withLayerBehind(ctx, ref, stack) : null;
-  });
-}
-
-function withLayerBehind(
-  ctx: PrContextBasic,
-  ref: { owner: string; repo: string },
-  stack: GitHubStack,
-) {
-  const layers = layersToCompare(stack);
-  if (layers.length === 0) return Effect.succeed(stack);
-  const { query, variables } = layerCompareQuery(layers);
-  return githubGraphqlPartial<RawLayerCompareAnswer>(
-    query,
-    { ...ref, ...variables },
-    ctx.token,
-    ctx.apiBase,
-  ).pipe(
-    Effect.map((answer) => withBehind(stack, answer)),
-    Effect.catch((err) =>
-      Effect.sync(() => {
-        logError("stacks", `comparing stack #${stack.number}'s layers failed`, err);
-        return stack;
-      }),
-    ),
-  );
 }
 
 export function toSnapshot(stack: GitHubStack, position: number): WalkthroughStackSnapshot {
@@ -241,11 +178,7 @@ export function readStackFacts(
         const files = filesByPr.get(pr.id);
         tracked.set(pr.externalId, {
           prId: pr.id,
-          currentFingerprint: files
-            ? fingerprintFiles(
-                files.map((f) => ({ filename: f.path, status: f.status, patch: f.patch })),
-              )
-            : null,
+          currentFingerprint: files ? fingerprintFiles(toGitHubFileShape(files)) : null,
           files: files ? files.map((f) => f.path) : null,
           current: current ? toFact(current) : null,
           latestComplete: latestComplete ? toFact(latestComplete) : null,
@@ -362,13 +295,14 @@ export const StackServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const prContext = yield* PrContextService;
+    const github = yield* GitHubGateway;
     const cache = yield* CacheService;
     const realtime = yield* Realtime;
     const revalidating = new Set<string>();
 
     const fetchFresh = (ctx: PrContextBasic) =>
       Effect.gen(function* () {
-        const stack = yield* askStack(ctx);
+        const stack = yield* github.stacks.ofPr(ctx.client, ctx.repo.fullName, ctx.pr.externalId);
         if (stack) {
           yield* withDb(
             db,
@@ -441,9 +375,9 @@ export const StackServiceLive = Layer.effect(
         }
       });
 
-    const detail = (prId: string, userId: string, accountId?: string) =>
+    const detail = (prId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const ctx = yield* withDb(db, prContext.resolveBasic(prId, userId, accountId));
+        const ctx = yield* withDb(db, prContext.forPr(prId, accountId));
         if (!ctx.pr.stack) return null;
         const { stack, stale } = yield* githubStack(ctx, ctx.pr.stack.number, accountId ?? null);
         if (!stack) return null;

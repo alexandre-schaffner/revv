@@ -1,237 +1,136 @@
 import type { Org, UserIdentity, UserRole } from "@revv/shared";
-import { isMaintainerLogin } from "@revv/shared";
-import { eq, inArray } from "drizzle-orm";
+import { isMaintainerLogin, loginsMatch } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { account, repositories, user } from "../db/schema";
-import { remoteUsers } from "../db/schema/remote-users";
-import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
-import { appDatabase } from "../services/Db";
-import { GitHubGateway } from "../services/GitHub";
-import { Identity } from "../services/Identity";
+import { GitHubAccounts } from "../services/github/accounts";
+import { AvatarCache } from "../services/github/avatars";
+import { GitHubGateway } from "../services/github/gateway";
 import { PullRequestService } from "../services/PullRequest";
-import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { runRoute, withAuth } from "./middleware";
 
-const db = appDatabase();
+/** The signed-in user's account on the active (settings) host, or null without one. */
+const activeAccount = (userId: string) =>
+  Effect.gen(function* () {
+    const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
+    const accounts = yield* GitHubAccounts;
+    return yield* accounts
+      .accountForUser(userId, host)
+      .pipe(Effect.catchTag("GitHubAuthError", () => Effect.succeed(null)));
+  });
 
-/**
- * Return the current user's GitHub identity and (optionally) their role for a PR.
- *
- * Role is `coder` when the user's GitHub login matches the PR author, otherwise
- * `reviewer`. Without a `prId` we return `unknown` — the frontend only needs role
- * info when rendering PR-scoped UI.
- *
- * If the stored `githubLogin` is missing (e.g. account predates the field), we
- * lazily backfill it from GitHub on first call.
- */
 export const userRoutes = new Elysia({ prefix: "/api/user" })
   .use(withAuth)
+  /**
+   * The signed-in user's GitHub identity, its re-auth state, and (with
+   * `prId`) their role on that PR: `coder` when they wrote it.
+   */
   .get(
     "/identity",
-    async (ctx) => {
-      return runRoute(async () => {
-        const userId = ctx.session.user.id;
+    (ctx) =>
+      runRoute(
+        Effect.gen(function* () {
+          const userId = ctx.session.user.id;
+          const accounts = yield* GitHubAccounts;
+          const profile = yield* accounts.userProfile(userId);
+          let login = profile?.githubLogin ?? null;
+          let avatarUrl = profile?.image ?? null;
+          const active = yield* activeAccount(userId);
 
-        // Read current stored login + image (server-refreshed avatar URL).
-        const rows = await db
-          .select({
-            githubLogin: user.githubLogin,
-            image: user.image,
-            identityId: user.identityId,
-            onboardedAt: user.onboardedAt,
-          })
-          .from(user)
-          .where(eq(user.id, userId));
-        let login: string | null = rows[0]?.githubLogin ?? null;
-        let avatarUrl: string | null = rows[0]?.image ?? null;
-        const identityId = rows[0]?.identityId ?? null;
-        const onboardedAt = rows[0]?.onboardedAt ?? null;
-
-        // Backfill if missing — best-effort, don't fail the endpoint.
-        // Also lazily refresh the avatar URL here so callers loading the
-        // app get a fresh signed URL even if the poll scheduler hasn't
-        // run yet this session.
-        if (!login || !avatarUrl) {
-          const backfilled = await AppRuntime.runPromise(
-            Effect.gen(function* () {
-              const identityService = yield* Identity;
-              const github = yield* GitHubGateway;
-              const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
-              const token = yield* identityService.tokenForUser(userId, host);
-              const gh = yield* github.users.authenticatedFresh(token);
-              return gh;
-            }).pipe(Effect.orElseSucceed(() => null)),
-          );
-          if (backfilled) {
-            const updates: { githubLogin?: string; image?: string | null; updatedAt: Date } = {
-              updatedAt: new Date(),
-            };
-            if (!login) updates.githubLogin = backfilled.login;
-            if (!avatarUrl) updates.image = backfilled.avatarUrl;
-            await db.update(user).set(updates).where(eq(user.id, userId));
-            login = login ?? backfilled.login;
-            avatarUrl = avatarUrl ?? backfilled.avatarUrl;
-          }
-        }
-
-        // Ensure the user has a remote_users row and link it.
-        // The upsert may trigger a live CDN fetch (when the 24-hour TTL has
-        // elapsed) — fork it into a background fiber so the /identity endpoint
-        // never blocks on a slow external request. The frontend will receive the
-        // freshly-fetched avatar on its next poll once the fiber completes.
-        let avatarContent: string | null = null;
-        if (login) {
-          const resolved = await AppRuntime.runPromise(
-            Effect.gen(function* () {
-              const remoteUserService = yield* RemoteUserService;
-              // Fire-and-forget: run in a daemon fiber so it outlives this
-              // request scope but doesn't block the response.
-              yield* Effect.forkDetach(
-                remoteUserService.upsert({
-                  provider: "github",
-                  providerUserId: "", // Numeric ID not available here; CASE guard in upsert keeps existing value
-                  login,
-                  avatarUrl,
-                }),
-              );
-              // Return whatever is already cached — callers get the refreshed
-              // avatar on the next /identity call after the daemon completes.
-              return yield* remoteUserService.getAvatarContent(login);
-            }).pipe(Effect.orElseSucceed(() => null)),
-          );
-          avatarContent = resolved;
-
-          // Link the user to their remote_users identity if not already linked.
-          if (!identityId && login) {
-            const remoteUser = await db
-              .select({ id: remoteUsers.id })
-              .from(remoteUsers)
-              .where(eq(remoteUsers.login, login))
-              .get();
-            if (remoteUser) {
-              await db.update(user).set({ identityId: remoteUser.id }).where(eq(user.id, userId));
+          // Accounts that predate the login column, or never got an avatar.
+          if (active && (!login || !avatarUrl)) {
+            const github = yield* GitHubGateway;
+            const viewer = yield* github.users
+              .viewer(active.client)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (viewer) {
+              yield* accounts.backfillUserProfile(userId, {
+                ...(login ? {} : { githubLogin: viewer.login }),
+                ...(avatarUrl ? {} : { image: viewer.avatarUrl }),
+              });
+              login = login ?? viewer.login;
+              avatarUrl = avatarUrl ?? viewer.avatarUrl;
             }
           }
-        }
 
-        // Compute role if a PR is supplied
-        let role: UserRole = "unknown";
-        const prId = ctx.query.prId;
-        if (prId && login) {
-          const pr = await AppRuntime.runPromise(
-            Effect.flatMap(PullRequestService, (prs) => prs.getPr(prId)).pipe(
-              Effect.orElseSucceed(() => null),
-            ),
-          );
-          if (pr) role = pr.authorLogin === login ? "coder" : "reviewer";
-        }
+          // The avatar is served from cached bytes. Refreshing them may fetch
+          // from GitHub, so it runs detached: the next read gets the new bytes.
+          let avatarContent: string | null = null;
+          if (login) {
+            const host =
+              active?.host ?? (yield* Effect.flatMap(SettingsService, (s) => s.githubHost()));
+            const avatars = yield* AvatarCache;
+            yield* Effect.forkDetach(avatars.ensure(host, login, avatarUrl));
+            avatarContent = (yield* avatars.contents(host, [login])).get(login) ?? null;
+          }
 
-        // Resolve the active account's re-auth state so the client can gate
-        // the app behind the re-sign-in modal on boot, reconciling any
-        // `auth:reauth-required` SSE signal missed while disconnected.
-        const reauth = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const identityService = yield* Identity;
-            const hostPref = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
-            const resolved = yield* identityService.resolveAccount(userId, hostPref);
-            const accountRow = db
-              .select({ reauthRequiredAt: account.reauthRequiredAt })
-              .from(account)
-              .where(eq(account.id, resolved.accountId))
-              .get();
-            const { host } = resolved;
-            if (accountRow?.reauthRequiredAt) {
-              const github = yield* GitHubGateway;
-              const tokenStillWorks = yield* github.users
-                .authenticatedFreshForHost(resolved.accessToken, host)
-                .pipe(
-                  Effect.as(true),
-                  Effect.orElseSucceed(() => false),
-                );
-              if (tokenStillWorks) {
-                yield* identityService
-                  .clearReauthRequired(resolved.accountId)
-                  .pipe(Effect.orElseSucceed(() => undefined));
-                return {
-                  reauthRequired: false,
-                  host,
-                };
-              }
-            }
-            return {
-              reauthRequired: accountRow?.reauthRequiredAt != null,
-              host,
-            };
-          }).pipe(
-            Effect.orElseSucceed(() => ({
-              reauthRequired: false,
-              host: null as string | null,
-            })),
-          ),
-        );
+          let role: UserRole = "unknown";
+          const prId = ctx.query.prId;
+          if (prId && login) {
+            const pr = yield* Effect.flatMap(PullRequestService, (prs) => prs.getPr(prId)).pipe(
+              Effect.catchTag("NotFoundError", () => Effect.succeed(null)),
+            );
+            if (pr) role = loginsMatch(pr.authorLogin, login) ? "coder" : "reviewer";
+          }
 
-        const identity: UserIdentity = {
-          login,
-          role,
-          avatarContent,
-          isMaintainer: isMaintainerLogin(login),
-          reauthRequired: reauth.reauthRequired,
-          host: reauth.host,
-        };
-        return {
-          ...identity,
-          onboardedAt: onboardedAt ? onboardedAt.toISOString() : null,
-        };
-      });
-    },
+          // Reconciles an `auth:reauth-required` push the client missed, and
+          // clears the flag when the token works after all.
+          const reauthRequired = active ? yield* accounts.probeFlagged(active.accountId) : false;
+
+          const identity: UserIdentity = {
+            login,
+            role,
+            avatarContent,
+            isMaintainer: isMaintainerLogin(login),
+            reauthRequired,
+            host: active?.host ?? null,
+          };
+          return {
+            ...identity,
+            onboardedAt: profile?.onboardedAt ? profile.onboardedAt.toISOString() : null,
+          };
+        }),
+      ),
     {
       query: t.Object({
         prId: t.Optional(t.String()),
       }),
     },
   )
-  .get("/orgs", async (ctx) => {
-    return runRoute(async () => {
-      const userId = ctx.session.user.id;
-      const orgs = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const identityService = yield* Identity;
-          const github = yield* GitHubGateway;
-          const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
-          const token = yield* identityService.tokenForUser(userId, host);
-          const cache = yield* CacheService;
-          return yield* cache.getOrFetch(
+  .get("/orgs", (ctx) =>
+    runRoute(
+      Effect.gen(function* () {
+        const userId = ctx.session.user.id;
+        const active = yield* activeAccount(userId);
+        if (!active) return { orgs: [] as Org[] };
+        const github = yield* GitHubGateway;
+        const cache = yield* CacheService;
+        const orgs = yield* cache
+          .getOrFetch(
             "github-orgs",
-            `${userId}:${host}`,
-            () => github.repos.orgsForUser(token),
+            `${userId}:${active.host}`,
+            () => github.repos.orgsForUser(active.client),
             { ttlMs: 10 * 60 * 1000 },
+          )
+          .pipe(
+            Effect.catchTags({
+              GitHubAuthError: () => Effect.succeed([] as Org[]),
+              GitHubRateLimitError: () => Effect.succeed([] as Org[]),
+              GitHubNetworkError: () => Effect.succeed([] as Org[]),
+              GitHubApiError: () => Effect.succeed([] as Org[]),
+              GitHubAccessDeniedError: () => Effect.succeed([] as Org[]),
+              GitHubNotFoundError: () => Effect.succeed([] as Org[]),
+            }),
           );
-        }).pipe(Effect.orElseSucceed(() => [] as Org[])),
-      );
-      return { orgs };
-    });
-  })
-  .delete("/account", async (ctx) => {
-    return runRoute(async () => {
-      const userId = ctx.session.user.id;
-      // Delete only the repositories linked to this user's accounts.
-      // pull_requests cascade from repositories, and review_sessions,
-      // walkthroughs, chat_sessions cascade from pull_requests.
-      const userAccounts = await db
-        .select({ id: account.id })
-        .from(account)
-        .where(eq(account.userId, userId));
-      const accountIds = userAccounts.map((a) => a.id);
-      if (accountIds.length > 0) {
-        await db.delete(repositories).where(inArray(repositories.accountId, accountIds));
-      }
-      // Deleting the user row cascades to session and account rows via FK onDelete: 'cascade'.
-      // Repositories also cascade from account via FK onDelete: 'cascade',
-      // so the explicit delete above is belt-and-suspenders.
-      await db.delete(user).where(eq(user.id, userId));
-      return { deleted: true };
-    });
-  });
+        return { orgs };
+      }),
+    ),
+  )
+  .delete("/account", (ctx) =>
+    runRoute(
+      Effect.flatMap(GitHubAccounts, (accounts) => accounts.removeUser(ctx.session.user.id)).pipe(
+        Effect.as({ deleted: true }),
+      ),
+    ),
+  );

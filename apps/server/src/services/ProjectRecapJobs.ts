@@ -50,11 +50,13 @@ import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { GitHubEtagCache } from "./GitHubEtagCache";
+import { GitHubGateway } from "./github/gateway";
+import type { GitHubClient } from "./github/transport";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
 import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
 import { PrContextService } from "./PrContext";
+import { PrMirror } from "./PrMirror";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
 import { Realtime } from "./Realtime";
@@ -191,7 +193,8 @@ export const ProjectRecapJobsLive = Layer.effect(
     const prCtx = yield* PrContextService;
     const settingsService = yield* SettingsService;
     const diffCache = yield* DiffCacheService;
-    const etagCache = yield* GitHubEtagCache;
+    const github = yield* GitHubGateway;
+    const mirror = yield* PrMirror;
 
     const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
     const semaphore = yield* Semaphore.make(MAX_CONCURRENT_RECAP_JOBS);
@@ -218,21 +221,6 @@ export const ProjectRecapJobsLive = Layer.effect(
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
-
-    /**
-     * Provide the trio of services {@link PrContextService}'s GitHub-read
-     * passthroughs need at execution time (etag cache, db handle, settings
-     * for API base). Use this when calling things like `prCtx.prFiles` from
-     * inside `Effect.gen` blocks that promise empty requirements.
-     */
-    const provideGithubDeps = <A, E>(
-      eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
-    ): Effect.Effect<A, E> =>
-      eff.pipe(
-        Effect.provideService(DbService, { db }),
-        Effect.provideService(GitHubEtagCache, etagCache),
-        Effect.provideService(SettingsService, settingsService),
-      );
 
     // ── Status chokepoint (CLAUDE.md invariant #11) ─────────────────────
     const setStatus = (
@@ -312,22 +300,15 @@ export const ProjectRecapJobsLive = Layer.effect(
     // on per-file patch size and per-PR file count so a single PR can't
     // blow up the agent's context window.
 
-    /**
-     * Resolve the GitHub token for a repo via its `accountId`. We can't go
-     * through `PrContextService.resolveBasic` because it requires a
-     * `userId`; recap jobs are background and aren't tied to a session.
-     * `getTokenByAccountId` is the same auth fallback `PrContextService`
-     * itself prefers, so the resulting token is whatever the OAuth flow
-     * minted for the owning account.
-     */
-    const resolveRepoToken = (repoId: string): Effect.Effect<string | null> =>
-      prCtx.resolveRepoToken(repoId).pipe(
-        Effect.provideService(DbService, { db }),
+    /** The repo owner's client, or null: the recap then reads diffs from the cache only. */
+    const resolveRepoClient = (repoId: string): Effect.Effect<GitHubClient | null> =>
+      prCtx.forRepo(repoId).pipe(
+        Effect.map((ctx): GitHubClient | null => ctx.client),
         Effect.catch((err) =>
           Effect.sync(() => {
             debug(
               "recap-jobs",
-              `token lookup failed for repo ${repoId} — recap will fall back to cache-only diffs:`,
+              `no GitHub client for repo ${repoId} — recap will fall back to cache-only diffs:`,
               err instanceof Error ? err.message : String(err),
             );
             return null;
@@ -336,132 +317,92 @@ export const ProjectRecapJobsLive = Layer.effect(
       );
 
     /**
-     * Materialize a {@link RecapSourcePrDiff} for a single PR. Tries the
-     * cache first, then GitHub on a cache miss. Any failure degrades to
-     * `null` (PR keeps metadata-only) rather than failing the recap.
+     * Materialize a {@link RecapSourcePrDiff} for a single PR, from the diff
+     * cache or GitHub (written through). Any failure degrades to a
+     * metadata-only PR rather than failing the recap.
      */
     const loadDiffForPr = (
       pr: ArchivedPrWithWalkthrough["pr"],
       repoFullName: string,
-      token: string | null,
+      client: GitHubClient | null,
     ): Effect.Effect<RecapSourcePrDiff | null> =>
       Effect.gen(function* () {
-        const cached = yield* provideDb(diffCache.getCachedFiles(pr.id));
+        const unavailable = (note: string): RecapSourcePrDiff => ({
+          files: [],
+          totalFiles: 0,
+          filesTruncated: false,
+          source: "unavailable",
+          note,
+        });
 
-        const buildFromFiles = (
-          files: ReadonlyArray<{
-            readonly path: string;
-            readonly oldPath: string | null;
-            readonly status: string;
-            readonly additions: number;
-            readonly deletions: number;
-            readonly patch: string | null;
-          }>,
-          source: "cache" | "github",
-        ): RecapSourcePrDiff => {
-          const totalFiles = files.length;
-          const trimmed = files.slice(0, RECAP_DIFF_MAX_FILES_PER_PR);
-          const filesTruncated = trimmed.length < totalFiles;
-          const recapFiles: RecapSourcePrDiffFile[] = trimmed.map((f) => {
-            const { patch, truncated } = truncatePatch(f.patch);
-            return {
-              path: f.path,
-              oldPath: f.oldPath,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-              patch,
-              patchTruncated: truncated,
-            };
-          });
-          const notes: string[] = [];
-          if (filesTruncated) {
-            notes.push(
-              `Showing ${trimmed.length} of ${totalFiles} files — only the first ${RECAP_DIFF_MAX_FILES_PER_PR} were included.`,
-            );
-          }
-          const truncatedPatchCount = recapFiles.filter((f) => f.patchTruncated).length;
-          if (truncatedPatchCount > 0) {
-            notes.push(
-              `${truncatedPatchCount} patch(es) clipped to ${RECAP_DIFF_MAX_PATCH_CHARS} chars.`,
-            );
-          }
-          return {
-            files: recapFiles,
-            totalFiles,
-            filesTruncated,
-            source,
-            note: notes.length > 0 ? notes.join(" ") : null,
-          };
-        };
-
-        if (cached !== null) {
-          return buildFromFiles(cached, "cache");
+        const loaded =
+          client === null
+            ? yield* diffCache
+                .getCachedFiles(pr.id)
+                .pipe(
+                  Effect.map((files) =>
+                    files === null ? null : { files, source: "cache" as const },
+                  ),
+                )
+            : yield* diffCache.getOrFetch(pr, repoFullName, client);
+        if (loaded === null) {
+          return unavailable(
+            "No diff cached locally and no GitHub token available — describe this PR from title/body/+/- counts only.",
+          );
         }
 
-        if (token === null) {
+        const totalFiles = loaded.files.length;
+        const trimmed = loaded.files.slice(0, RECAP_DIFF_MAX_FILES_PER_PR);
+        const filesTruncated = trimmed.length < totalFiles;
+        const recapFiles: RecapSourcePrDiffFile[] = trimmed.map((f) => {
+          const { patch, truncated } = truncatePatch(f.patch);
           return {
-            files: [],
-            totalFiles: 0,
-            filesTruncated: false,
-            source: "unavailable",
-            note: "No diff cached locally and no GitHub token available — describe this PR from title/body/+/- counts only.",
-          } satisfies RecapSourcePrDiff;
-        }
-
-        const fetched = yield* provideGithubDeps(
-          prCtx.prFiles(repoFullName, pr.externalId, token),
-        ).pipe(
-          Effect.catch((err) =>
-            Effect.sync(() => {
-              debug(
-                "recap-jobs",
-                `getPrFiles failed for pr ${pr.id} (#${pr.externalId}) — recap will skip diff:`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return null;
-            }),
-          ),
-        );
-        if (fetched === null) {
-          return {
-            files: [],
-            totalFiles: 0,
-            filesTruncated: false,
-            source: "unavailable",
-            note: "Diff fetch from GitHub failed — describe this PR from title/body/+/- counts only.",
-          } satisfies RecapSourcePrDiff;
-        }
-
-        // Best-effort cache write so a retry doesn't re-pay the GitHub
-        // round-trip. Failure is non-fatal — we still return the diff.
-        yield* provideDb(
-          diffCache.cacheFiles(
-            pr,
-            fetched.map((f) => ({
-              path: f.filename,
-              oldPath: f.previousFilename,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-              patch: f.patch,
-              fetchedAt: new Date().toISOString(),
-            })),
-          ),
-        ).pipe(Effect.catch(() => Effect.void));
-
-        return buildFromFiles(
-          fetched.map((f) => ({
-            path: f.filename,
-            oldPath: f.previousFilename,
+            path: f.path,
+            oldPath: f.oldPath,
             status: f.status,
             additions: f.additions,
             deletions: f.deletions,
-            patch: f.patch,
-          })),
-          "github",
-        );
-      });
+            patch,
+            patchTruncated: truncated,
+          };
+        });
+        const notes: string[] = [];
+        if (filesTruncated) {
+          notes.push(
+            `Showing ${trimmed.length} of ${totalFiles} files — only the first ${RECAP_DIFF_MAX_FILES_PER_PR} were included.`,
+          );
+        }
+        const truncatedPatchCount = recapFiles.filter((f) => f.patchTruncated).length;
+        if (truncatedPatchCount > 0) {
+          notes.push(
+            `${truncatedPatchCount} patch(es) clipped to ${RECAP_DIFF_MAX_PATCH_CHARS} chars.`,
+          );
+        }
+        return {
+          files: recapFiles,
+          totalFiles,
+          filesTruncated,
+          source: loaded.source,
+          note: notes.length > 0 ? notes.join(" ") : null,
+        } satisfies RecapSourcePrDiff;
+      }).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            debug(
+              "recap-jobs",
+              `diff load failed for pr ${pr.id} (#${pr.externalId}) — recap will skip diff:`,
+              err instanceof Error ? err.message : String(err),
+            );
+            return {
+              files: [],
+              totalFiles: 0,
+              filesTruncated: false,
+              source: "unavailable",
+              note: "Diff fetch from GitHub failed — describe this PR from title/body/+/- counts only.",
+            } satisfies RecapSourcePrDiff;
+          }),
+        ),
+      );
 
     // ── GitHub backfill for missing closed PRs ──────────────────────────
     //
@@ -489,30 +430,30 @@ export const ProjectRecapJobsLive = Layer.effect(
       windowed: ReadonlyArray<ArchivedPrWithWalkthrough>,
     ): Effect.Effect<{ readonly addedCount: number }> =>
       Effect.gen(function* () {
-        const token = yield* resolveRepoToken(repoId);
-        if (token === null) {
+        const client = yield* resolveRepoClient(repoId);
+        if (client === null) {
           debug("recap-jobs", `backfill skipped for repo ${repoId} — no GitHub token resolvable`);
           return { addedCount: 0 };
         }
 
-        const searched = yield* provideGithubDeps(
-          prCtx.searchClosedPrs(repoFullName, periodStart, periodEnd, token),
-        ).pipe(
-          Effect.catch((err) =>
-            Effect.sync(() => {
-              debug(
-                "recap-jobs",
-                `searchClosedPrsInWindow failed for ${repoFullName} — proceeding with local data only:`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return [] as ReadonlyArray<{
-                readonly number: number;
-                readonly closedAt: string;
-                readonly merged: boolean;
-              }>;
-            }),
-          ),
-        );
+        const searched = yield* github.prs
+          .searchClosedInWindow(client, repoFullName, periodStart, periodEnd)
+          .pipe(
+            Effect.catch((err) =>
+              Effect.sync(() => {
+                debug(
+                  "recap-jobs",
+                  `searchClosedPrsInWindow failed for ${repoFullName} — proceeding with local data only:`,
+                  err instanceof Error ? err.message : String(err),
+                );
+                return [] as ReadonlyArray<{
+                  readonly number: number;
+                  readonly closedAt: string;
+                  readonly merged: boolean;
+                }>;
+              }),
+            ),
+          );
 
         if (searched.length === 0) return { addedCount: 0 };
 
@@ -528,30 +469,30 @@ export const ProjectRecapJobsLive = Layer.effect(
           `backfilling ${missing.length} closed PR(s) for ${repoFullName} window ${periodStart}..${periodEnd}`,
         );
 
-        const fetched = yield* provideGithubDeps(
-          prCtx.fetchPrs(
+        const fetched = yield* github.prs
+          .getMany(
+            client,
             repoFullName,
             repoId,
             missing.map((m) => m.number),
-            token,
-          ),
-        ).pipe(
-          Effect.catch((err) =>
-            Effect.sync(() => {
-              debug(
-                "recap-jobs",
-                `PR read failed during backfill for ${repoFullName}:`,
-                err instanceof Error ? err.message : String(err),
-              );
-              return new Map<number, ObservedPr>();
-            }),
-          ),
-        );
+          )
+          .pipe(
+            Effect.catch((err) =>
+              Effect.sync(() => {
+                debug(
+                  "recap-jobs",
+                  `PR read failed during backfill for ${repoFullName}:`,
+                  err instanceof Error ? err.message : String(err),
+                );
+                return new Map<number, ObservedPr>();
+              }),
+            ),
+          );
         const upsertable = [...fetched.values()];
 
         if (upsertable.length === 0) return { addedCount: 0 };
 
-        yield* provideDb(prService.upsertPrs(upsertable)).pipe(
+        yield* mirror.apply(upsertable).pipe(
           Effect.catch((err) =>
             Effect.sync(() => {
               logError(
@@ -702,14 +643,14 @@ export const ProjectRecapJobsLive = Layer.effect(
         // scale with many PRs without retaining every raw diff in context.
         // `getPrDiff` remains as a fallback tool for parity/old prompts, but
         // the normal path reads `diffDigest` from get_recap_state.
-        const repoToken = yield* Effect.cached(resolveRepoToken(job.repoId));
+        const repoClient = yield* Effect.cached(resolveRepoClient(job.repoId));
         const jobContext = yield* Effect.context<never>();
         const sourceRows = [...windowed, ...openPrs];
         const getPrDiff = (prId: string): Effect.Effect<RecapSourcePrDiff | null> => {
           const row = sourceRows.find((r) => r.pr.id === prId);
           if (!row) return Effect.succeed(null);
-          return repoToken.pipe(
-            Effect.flatMap((token) => loadDiffForPr(row.pr, repo.fullName, token)),
+          return repoClient.pipe(
+            Effect.flatMap((client) => loadDiffForPr(row.pr, repo.fullName, client)),
             Effect.provide(jobContext),
           );
         };
@@ -725,7 +666,7 @@ export const ProjectRecapJobsLive = Layer.effect(
           sourceRows.filter((row) => row.walkthrough === null),
           (row) =>
             Effect.gen(function* () {
-              const diff = yield* loadDiffForPr(row.pr, repo.fullName, yield* repoToken).pipe(
+              const diff = yield* loadDiffForPr(row.pr, repo.fullName, yield* repoClient).pipe(
                 Effect.catch(() => Effect.succeed(null)),
               );
               const digest = buildDigestForRecapPr(row.pr, diff);

@@ -13,16 +13,29 @@ export function stackSeen(place: PrStackPlace | null): StackSighting {
   return { kind: "seen", place };
 }
 
-/** A PR as one GitHub read saw it. `stack` is required: every producer states what it saw. */
-export type ObservedPr = Omit<PullRequest, "stack"> & { readonly stack: StackSighting };
+/** The local id of PR `number` in the tracked repository `repositoryId`. */
+export function localPrId(repositoryId: string, number: number): string {
+  return `${repositoryId}:${number}`;
+}
+
+/**
+ * A PR as one GitHub read saw it. `stack` is required: every producer states
+ * what it saw. `statsHeadSha` is the head its additions/deletions/changed
+ * files describe; absent when the read carried no diff size (the open lists).
+ */
+export type ObservedPr = Omit<PullRequest, "stack"> & {
+  readonly stack: StackSighting;
+  readonly statsHeadSha?: string;
+};
 
 /** The row `upsertPrs([observed])` leaves behind over `prior`. */
 export function asStored(
   observed: ObservedPr,
   prior: Pick<PullRequest, "stack"> | undefined,
 ): PullRequest {
+  const { statsHeadSha: _, ...pr } = observed;
   return {
-    ...observed,
+    ...pr,
     stack: observed.stack.kind === "seen" ? observed.stack.place : (prior?.stack ?? null),
   };
 }

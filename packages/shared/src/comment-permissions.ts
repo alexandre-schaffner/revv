@@ -1,3 +1,4 @@
+import { loginsMatch } from "./identity";
 import { isThreadResolved } from "./review";
 
 export interface CommentPermissionMessage {
@@ -8,10 +9,6 @@ export interface CommentPermissionMessage {
 
 export interface DraftReviewMessage extends CommentPermissionMessage {
   readonly body: string;
-}
-
-function normalizeLogin(login: string): string {
-  return login.trim().toLowerCase();
 }
 
 /**
@@ -25,8 +22,7 @@ export function canUserModifyComment(
 ): boolean {
   if (message.externalId !== null) return false;
   if (message.authorRole === "ai_agent") return true;
-  if (!message.authorLogin || !currentUserLogin) return false;
-  return normalizeLogin(message.authorLogin) === normalizeLogin(currentUserLogin);
+  return loginsMatch(message.authorLogin, currentUserLogin);
 }
 
 /** A local human or Revv-authored draft that can be included in a GitHub review. */

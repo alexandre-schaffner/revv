@@ -1,63 +1,44 @@
 import type { PullRequest, Repository } from "@revv/shared";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { repositories } from "../db/schema";
 import {
   type DbError,
-  GitHubAuthError,
+  type GitHubAuthError,
   type GitHubError,
+  GitHubNotFoundError,
   type NotFoundError,
 } from "../domain/errors";
-import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { DbService } from "./Db";
-import {
-  DiffCacheService,
-  type FetchedFor,
-  hasCompleteCachedFiles,
-  toCachedDiffFiles,
-} from "./DiffCache";
-import { GitHubGateway, type PrCommit, type PrFileMeta, type PrMeta } from "./GitHub";
-import type { GitHubEtagCache } from "./GitHubEtagCache";
-import { apiBaseForHost } from "./github-rest";
+import { DiffCacheService, toGitHubFileShape } from "./DiffCache";
+import { GitHubAccounts } from "./github/accounts";
+import { GitHubGateway } from "./github/gateway";
+import type { PrCommit, PrFileMeta } from "./github/pulls";
+import type { GitHubClient } from "./github/transport";
 import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
-import type { SettingsService } from "./Settings";
-import { TokenProvider } from "./TokenProvider";
 
 /**
- * Minimal PR context — the DB-backed values that almost every PR-scoped
- * feature needs to talk to GitHub.
- *
- * `apiBase` is derived from `repo.githubHost`, not from global settings. Pass
- * it to every `GitHubGateway` call made with this context: the settings row
- * holds a single host, so a github.com repo and a GitHub Enterprise repo on the
- * same machine would otherwise both be addressed at whichever host happens to
- * be configured, sending each token to the wrong API.
+ * A tracked repository and the client of the account that owns it. Every
+ * GitHub call about the repository or its PRs goes through `client`, so it
+ * reaches the repository's own host as its own account.
  */
-export interface PrContextBasic {
-  readonly pr: PullRequest;
+export interface RepoContext {
   readonly repo: Repository;
-  readonly token: string;
-  readonly apiBase: string;
+  readonly accountId: string;
+  readonly client: GitHubClient;
+}
+
+export interface PrContextBasic extends RepoContext {
+  readonly pr: PullRequest;
 }
 
 /**
- * Full PR context for AI / walkthrough flows — extends {@link PrContextBasic}
- * with freshly-resolved GitHub metadata, the cached diff file list, and the
- * PR commit list (used to seed the agent's required "How we got here"
- * journey chapter).
+ * {@link PrContextBasic} plus what an agent run needs: the PR's head and base
+ * as GitHub reports them now, its changed files and its commits.
  */
 export interface PrContextWithDiff extends PrContextBasic {
-  readonly meta: PrMeta;
-  readonly files: Array<{
-    readonly filename: string;
-    readonly previousFilename: string | null;
-    readonly status: string;
-    readonly additions: number;
-    readonly deletions: number;
-    readonly patch: string | null;
-  }>;
+  readonly meta: { readonly headSha: string; readonly baseSha: string };
+  readonly files: PrFileMeta[];
   readonly commits: readonly PrCommit[];
 }
 
@@ -66,253 +47,75 @@ export type PrContextError = NotFoundError | GitHubAuthError | GitHubError | DbE
 export class PrContextService extends Context.Service<
   PrContextService,
   {
+    /** A tracked repository, for work that may go on without GitHub. */
+    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError>;
+    /** A tracked repository and its owning account's client. */
+    readonly forRepo: (repoId: string) => Effect.Effect<RepoContext, PrContextError>;
     /**
-     * Resolve the PR + repo + GitHub token for a given PR id.
-     * `userId` is passed through to {@link TokenProvider}; use `'single-user'`
-     * when the caller is a background worker with no session context.
-     * API callers supply `accountId` to verify ownership before resolving a token.
+     * A PR, its repository and the owning account's client. With `accountId`,
+     * a PR outside that account's repositories is not found.
      */
-    readonly resolveBasic: (
+    readonly forPr: (
       prId: string,
-      userId: string,
       accountId?: string,
-    ) => Effect.Effect<PrContextBasic, PrContextError, DbService>;
-    /**
-     * Resolve the basic context, plus fresh PR metadata (head/base shas) and
-     * the cached diff file list. Used by walkthrough streaming + cache checks.
-     */
-    readonly resolveWithDiff: (
-      prId: string,
-      userId: string,
-    ) => Effect.Effect<
-      PrContextWithDiff,
-      PrContextError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
-    /**
-     * Fresh head/base SHAs for an arbitrary PR. Thin forward to the GitHub
-     * gateway — the caller supplies the resolved token and provides the
-     * gateway's execution-time deps (Db/Etag/Settings).
-     */
-    readonly prMeta: (
-      repoFullName: string,
-      externalId: number,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<PrMeta, GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    /**
-     * Raw changed-file list for an arbitrary PR. Thin forward to the GitHub
-     * gateway; unlike {@link resolveWithDiff} this does not touch the diff
-     * cache — the recap pipeline owns its own caching.
-     */
-    readonly prFiles: (
-      repoFullName: string,
-      externalId: number,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<PrFileMeta[], GitHubError, DbService | GitHubEtagCache | SettingsService>;
-    readonly fetchPrs: (
-      repoFullName: string,
-      repositoryId: string,
-      externalIds: readonly number[],
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<Map<number, ObservedPr>, GitHubError, SettingsService>;
-    /**
-     * Search for PRs closed (or merged) in a time window. Thin forward to the
-     * GitHub gateway's issue-search path — note the narrower requirement
-     * (SettingsService only, no Db/Etag).
-     */
-    readonly searchClosedPrs: (
-      repoFullName: string,
-      sinceIso: string,
-      untilIso: string,
-      token: string,
-      apiBase?: string,
-    ) => Effect.Effect<
-      ReadonlyArray<{
-        readonly number: number;
-        readonly closedAt: string;
-        readonly merged: boolean;
-      }>,
-      GitHubError,
-      SettingsService
-    >;
-    /**
-     * Resolve the GitHub token for a repo via its owning OAuth `accountId`.
-     * Returns `null` only when the repo row carries no `accountId`; a token
-     * lookup failure surfaces as {@link GitHubAuthError} so the caller can
-     * decide whether to degrade. Mirrors the account-lookup in
-     * `resolveBasic` for background workers that have no session `userId`.
-     */
-    readonly resolveRepoToken: (
-      repoId: string,
-    ) => Effect.Effect<string | null, GitHubAuthError, DbService>;
-    /** Look up a repo row by id. Thin forward to {@link RepositoryService}. */
-    readonly getRepo: (repoId: string) => Effect.Effect<Repository, NotFoundError, DbService>;
-    /** Resolve the owning OAuth account id for a repo row. */
-    readonly getAccountIdForRepo: (
-      repoId: string,
-    ) => Effect.Effect<string, NotFoundError, DbService>;
+    ) => Effect.Effect<PrContextBasic, PrContextError>;
+    /** {@link forPr} plus the PR's live head/base, its diff files and its commits. */
+    readonly withDiff: (prId: string) => Effect.Effect<PrContextWithDiff, PrContextError>;
   }
 >()("PrContextService") {}
 
 export const PrContextServiceLive = Layer.effect(
   PrContextService,
   Effect.gen(function* () {
+    const { db } = yield* DbService;
     const prService = yield* PullRequestService;
     const repoService = yield* RepositoryService;
-    const tokenProvider = yield* TokenProvider;
+    const accounts = yield* GitHubAccounts;
     const github = yield* GitHubGateway;
     const diffCache = yield* DiffCacheService;
 
-    const resolveBasic = (prId: string, userId: string, accountId?: string) =>
+    const forRepo = (repoId: string) =>
       Effect.gen(function* () {
-        const pr = yield* prService.getPr(prId, accountId);
-        const repo = yield* repoService.getRepoById(pr.repositoryId);
-        // Look up the repo's owning OAuth account directly. The legacy
-        // `getGitHubToken(userId, host)` path falls back to "first user, first
-        // matching providerId" which silently picks the wrong identity once
-        // multiple users or multiple accounts per host coexist on the machine.
-        const { db } = yield* DbService;
-        const repoRow = db
-          .select({ accountId: repositories.accountId })
-          .from(repositories)
-          .where(eq(repositories.id, repo.id))
-          .get();
-        const token = repoRow
-          ? yield* tokenProvider.getTokenByAccountId(repoRow.accountId)
-          : yield* tokenProvider.getGitHubToken(userId, repo.githubHost).pipe(
-              Effect.catch(() =>
-                Effect.fail(
-                  new GitHubAuthError({
-                    message: `No account_id on repo ${repo.id} and no fallback token available`,
-                  }),
-                ),
-              ),
-            );
-        return {
-          pr,
-          repo,
-          token,
-          apiBase: apiBaseForHost(repo.githubHost),
-        } satisfies PrContextBasic;
+        const repo = yield* withDb(db, repoService.getRepoById(repoId));
+        const accountId = yield* withDb(db, repoService.getAccountIdForRepo(repo.id));
+        const client = yield* accounts.clientFor(accountId);
+        return { repo, accountId, client } satisfies RepoContext;
       });
 
-    // Cache-or-fetch diff files. Inlined from DiffCache.getOrFetchDiffFiles so
-    // we can use the service values captured in this layer's closure without
-    // leaking GitHubGateway / DiffCacheService into the returned Effect's
-    // context requirements.
-    const cacheOrFetchFiles = (
-      pr: FetchedFor,
-      repoFullName: string,
-      prExternalId: number,
-      token: string,
-      expectedChangedFiles: number,
-      apiBase: string,
-    ) =>
+    const forPr = (prId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const { db } = yield* DbService;
-        const cached = yield* withDb(db, diffCache.getCachedFiles(pr.id));
-        if (cached !== null) {
-          const cachedCount = yield* withDb(db, diffCache.getCachedFileCount(pr.id));
-          if (hasCompleteCachedFiles(cached, expectedChangedFiles, cachedCount)) return cached;
+        const pr = yield* withDb(db, prService.getPr(prId, accountId));
+        return { ...(yield* forRepo(pr.repositoryId)), pr } satisfies PrContextBasic;
+      });
+
+    const withDiff = (prId: string) =>
+      Effect.gen(function* () {
+        const basic = yield* forPr(prId);
+        const { repo, pr, client } = basic;
+        const live = yield* github.prs.get(client, repo.fullName, repo.id, pr.externalId);
+        if (live.headSha === null || live.baseSha === null) {
+          return yield* Effect.fail(
+            new GitHubNotFoundError({
+              resource: "pull_request",
+              id: `${repo.fullName}#${pr.externalId}`,
+            }),
+          );
         }
-        const fileList = yield* github.prs.files(repoFullName, prExternalId, token, apiBase);
-        const fresh = toCachedDiffFiles(fileList);
-        yield* withDb(db, diffCache.cacheFiles(pr, fresh));
-        return fresh;
+        const { files } = yield* diffCache.getOrFetch(pr, repo.fullName, client);
+        const commits = yield* github.prs.commits(client, repo.fullName, pr.externalId);
+        return {
+          ...basic,
+          meta: { headSha: live.headSha, baseSha: live.baseSha },
+          files: toGitHubFileShape(files),
+          commits,
+        } satisfies PrContextWithDiff;
       });
-
-    const resolveWithDiff = (prId: string, userId: string) =>
-      Effect.gen(function* () {
-        const basic = yield* resolveBasic(prId, userId);
-        const meta = yield* github.prs.meta(
-          basic.repo.fullName,
-          basic.pr.externalId,
-          basic.token,
-          basic.apiBase,
-        );
-        const cachedFiles = yield* cacheOrFetchFiles(
-          basic.pr,
-          basic.repo.fullName,
-          basic.pr.externalId,
-          basic.token,
-          basic.pr.changedFiles,
-          basic.apiBase,
-        );
-        const files = cachedFiles.map((f) => ({
-          filename: f.path,
-          previousFilename: f.oldPath,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: f.patch,
-        }));
-        // Commit list seeds the agent's journey chapter. Best-effort: if
-        // GitHub fails on this endpoint we'd rather still ship the
-        // walkthrough than block on it, so a failure here would propagate;
-        // any callers that can't tolerate the failure should add their own
-        // fallback. Today the only caller is the walkthrough start path
-        // which already mapErrors GitHub failures, so propagation is safe.
-        const commits = yield* github.prs.commits(
-          basic.repo.fullName,
-          basic.pr.externalId,
-          basic.token,
-          basic.apiBase,
-        );
-        return { ...basic, meta, files, commits } satisfies PrContextWithDiff;
-      });
-
-    // ── Thin GitHub-read passthroughs ───────────────────────────────────
-    // These forward to the gateway verbatim and preserve its exact
-    // requirement channel; the deps are discharged by the caller, not here.
-    // They exist so feature modules reach GitHub through PrContext only
-    // (enforced by scripts/check-import-boundaries.ts).
-    const prMeta = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
-      github.prs.meta(repoFullName, externalId, token, apiBase);
-    const prFiles = (repoFullName: string, externalId: number, token: string, apiBase?: string) =>
-      github.prs.files(repoFullName, externalId, token, apiBase);
-    const fetchPrs = (
-      repoFullName: string,
-      repositoryId: string,
-      externalIds: readonly number[],
-      token: string,
-      apiBase?: string,
-    ) => github.prs.getMany(repoFullName, repositoryId, externalIds, token, apiBase);
-    const searchClosedPrs = (
-      repoFullName: string,
-      sinceIso: string,
-      untilIso: string,
-      token: string,
-      apiBase?: string,
-    ) => github.prs.searchClosedInWindow(repoFullName, sinceIso, untilIso, token, apiBase);
-
-    const resolveRepoToken = (repoId: string) =>
-      Effect.gen(function* () {
-        const { db } = yield* DbService;
-        const row = db
-          .select({ accountId: repositories.accountId })
-          .from(repositories)
-          .where(eq(repositories.id, repoId))
-          .get();
-        if (!row) return null;
-        return yield* tokenProvider.getTokenByAccountId(row.accountId);
-      });
-
-    const getRepo = (repoId: string) => repoService.getRepoById(repoId);
-    const getAccountIdForRepo = (repoId: string) => repoService.getAccountIdForRepo(repoId);
 
     return {
-      resolveBasic,
-      resolveWithDiff,
-      prMeta,
-      prFiles,
-      fetchPrs,
-      searchClosedPrs,
-      resolveRepoToken,
-      getRepo,
-      getAccountIdForRepo,
+      getRepo: (repoId: string) => withDb(db, repoService.getRepoById(repoId)),
+      forRepo,
+      forPr,
+      withDiff,
     };
   }),
 );

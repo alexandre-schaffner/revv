@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
 import { JOURNEY_CHAPTER_KEYWORDS } from "../../services/walkthrough/content";
 import { buildWalkthroughPrompt, buildWalkthroughSystemPrompt } from "./walkthrough";
 

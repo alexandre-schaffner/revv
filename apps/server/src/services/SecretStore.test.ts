@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
@@ -6,6 +9,7 @@ import { account, user } from "../db/schema";
 import { DbService } from "./Db";
 import {
   deserialize,
+  fallbackMapForWrite,
   migrateLegacyTokens,
   SecretStore,
   serialize,
@@ -112,5 +116,27 @@ describe("migrateLegacyTokens", () => {
     // Second boot: columns are already null, nothing left to migrate.
     const again = await Effect.runPromise(migrateLegacyTokens.pipe(Effect.provide(provided)));
     expect(again).toBe(0);
+  });
+});
+
+describe("encrypted-file fallback", () => {
+  it("moves an unreadable store aside instead of overwriting it on the next write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "revv-secret-store-"));
+    const path = join(dir, "secret-store.enc");
+    const unreadable = Buffer.from("not ciphertext");
+    writeFileSync(path, unreadable);
+
+    expect(fallbackMapForWrite(path)).toEqual({});
+
+    expect(existsSync(path)).toBe(false);
+    const aside = readdirSync(dir).filter((f) => f.startsWith("secret-store.enc.unreadable-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0] ?? ""))).toEqual(unreadable);
+  });
+
+  it("starts empty when there is no store yet", () => {
+    const dir = mkdtempSync(join(tmpdir(), "revv-secret-store-"));
+    expect(fallbackMapForWrite(join(dir, "secret-store.enc"))).toEqual({});
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

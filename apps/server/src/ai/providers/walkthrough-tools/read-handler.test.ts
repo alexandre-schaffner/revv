@@ -181,6 +181,7 @@ describe("get_stack_context", () => {
   it("reads a tracked upper layer whose diff Revv hasn't fetched as files: null", async () => {
     const db = seed(STACK);
     db.delete(prDiffFiles).run();
+    db.update(pullRequests).set({ diffFilesHeadSha: null, diffFilesBaseSha: null }).run();
     const [above] = (await read(db)).upperLayers;
     expect(above.tracked).toBe(true);
     expect(above.files).toBeNull();

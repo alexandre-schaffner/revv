@@ -16,7 +16,7 @@ import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db/index";
 import { commentThreads } from "../db/schema/comment-threads";
-import { remoteUsers } from "../db/schema/remote-users";
+import { avatarOfThreadLogin } from "../db/schema/remote-users";
 import { reviewSessions } from "../db/schema/review-sessions";
 import { threadMessages } from "../db/schema/thread-messages";
 import { type DbError, ForbiddenError, NotFoundError } from "../domain/errors";
@@ -215,12 +215,11 @@ export function toMessage(row: MessageRow, avatarContent: string | null): Thread
 /** Messages with their author's cached avatar, oldest first. */
 function readMessages(db: Db | Tx, where: SQL | undefined): ThreadMessage[] {
   return db
-    .select({ msg: threadMessages, avatarContent: remoteUsers.avatarContent })
+    .select({
+      msg: threadMessages,
+      avatarContent: avatarOfThreadLogin(threadMessages.authorLogin, threadMessages.threadId),
+    })
     .from(threadMessages)
-    .leftJoin(
-      remoteUsers,
-      and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, threadMessages.authorLogin)),
-    )
     .where(where)
     .orderBy(asc(threadMessages.createdAt))
     .all()

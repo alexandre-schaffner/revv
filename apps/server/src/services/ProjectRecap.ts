@@ -28,6 +28,7 @@ import {
   recapPrEntries,
   recapThemeSummaries,
   remoteUsers,
+  repositories,
 } from "../db/schema/index";
 import { type DbError, RecapNotFoundError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
@@ -347,7 +348,14 @@ export const ProjectRecapServiceLive = Layer.succeed(ProjectRecapService, {
         const rows = db
           .select({ login: remoteUsers.login, avatarContent: remoteUsers.avatarContent })
           .from(remoteUsers)
-          .where(and(eq(remoteUsers.provider, "github"), inArray(remoteUsers.login, logins)))
+          .innerJoin(repositories, eq(repositories.githubHost, remoteUsers.host))
+          .where(
+            and(
+              eq(repositories.id, row.repositoryId),
+              eq(remoteUsers.provider, "github"),
+              inArray(remoteUsers.login, logins),
+            ),
+          )
           .all();
         return new Map(rows.map((r) => [r.login, r.avatarContent ?? null]));
       });

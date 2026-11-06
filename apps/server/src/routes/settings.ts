@@ -21,7 +21,7 @@ import { hasJevApiKey } from "../ai/jev/api-key";
 import { BlobStore } from "../services/blob/BlobStore";
 import { SshSigner } from "../services/cache-signing/index";
 import { SettingsService } from "../services/Settings";
-import { runRoute } from "./middleware";
+import { runRoute, withAccount } from "./middleware";
 import { literalUnion } from "./schemas";
 import { settingsJevRoutes } from "./settings-jev";
 
@@ -94,6 +94,31 @@ function isAdcValid(gcloudPath: string | null, adcExists: boolean): boolean {
 
 const settingsPatchSchema = t.Unsafe<SettingsUpdate>(patchSchemaOf(SETTINGS_SPEC));
 
+/** Sign and verify a probe as the requesting account, to check commit signing works. */
+const signingTestRoute = new Elysia().use(withAccount).post("/cache/signing/test", (ctx) => {
+  const probe = "revv-signing-test";
+  return runRoute(
+    Effect.gen(function* () {
+      const signerSvc = yield* SshSigner;
+      const signed = yield* signerSvc.sign(probe, ctx.account.accountId);
+      yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
+      return {
+        ok: true as const,
+        signerLogin: signed.signerLogin,
+        signerHost: signed.signerHost,
+        signatureNamespace: signed.signatureNamespace,
+      };
+    }).pipe(
+      Effect.catch((e) =>
+        Effect.succeed({
+          ok: false as const,
+          error: (e as { message?: string }).message ?? String(e),
+        }),
+      ),
+    ),
+  );
+});
+
 export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
   .get("/", () =>
     runRoute(
@@ -122,29 +147,7 @@ export const settingsRoutes = new Elysia({ prefix: "/api/settings" })
       }),
     ),
   )
-  .post("/cache/signing/test", () => {
-    const probe = "revv-signing-test";
-    return runRoute(
-      Effect.gen(function* () {
-        const signerSvc = yield* SshSigner;
-        const signed = yield* signerSvc.sign(probe);
-        yield* signerSvc.verify(probe, signed.signature, signed.signerHost, signed.signerLogin);
-        return {
-          ok: true as const,
-          signerLogin: signed.signerLogin,
-          signerHost: signed.signerHost,
-          signatureNamespace: signed.signatureNamespace,
-        };
-      }).pipe(
-        Effect.catch((e) =>
-          Effect.succeed({
-            ok: false as const,
-            error: (e as { message?: string }).message ?? String(e),
-          }),
-        ),
-      ),
-    );
-  })
+  .use(signingTestRoute)
   .get("/cache/adc-status", () =>
     runRoute(
       Effect.sync(() => {

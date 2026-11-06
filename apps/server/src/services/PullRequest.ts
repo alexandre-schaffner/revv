@@ -1,10 +1,11 @@
 import type { PullRequest } from "@revv/shared";
 import { and, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { pullRequests, remoteUsers, repositories, walkthroughs } from "../db/schema/index";
+import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
+import { avatarOfRepoLogin } from "../db/schema/remote-users";
 import { type DbError, NotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
-import { dbTry } from "../effects/db-try";
+import { dbTry, tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 
@@ -165,6 +166,12 @@ export class PullRequestService extends Context.Service<
      * No hard cap on result-set size (replaces the legacy LIMIT 20).
      * Ordered by `closedAt DESC` so newest archives come first.
      */
+    /** The PR numbers mirrored for each repository, open or archived. */
+    readonly externalIdsByRepo: (
+      repoIds: readonly string[],
+    ) => Effect.Effect<Map<string, Set<number>>, DbError, DbService>;
+    /** `diff_stats_head_sha` of every PR: the head its stored diff size describes. */
+    readonly diffStatsHeads: () => Effect.Effect<Map<string, string | null>, DbError, DbService>;
     readonly listArchivedPrs: (
       accountId?: string,
       params?: ListArchivedPrsParams,
@@ -275,16 +282,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         return db
           .select({
             pr: pullRequests,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
           })
           .from(pullRequests)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, pullRequests.authorLogin),
-            ),
-          )
           .where(and(...conditions))
           .orderBy(desc(pullRequests.updatedAt))
           .all();
@@ -299,16 +299,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         db
           .select({
             pr: pullRequests,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
           })
           .from(pullRequests)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, pullRequests.authorLogin),
-            ),
-          )
           .where(eq(pullRequests.id, id))
           .get(),
       );
@@ -366,6 +359,7 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
           if (pr.headSha !== null) base.headSha = pr.headSha;
           if (pr.baseSha !== null) base.baseSha = pr.baseSha;
           if (pr.closedAt !== null) base.closedAt = pr.closedAt;
+          if (pr.statsHeadSha !== undefined) base.diffStatsHeadSha = pr.statsHeadSha;
           if (pr.stack.kind === "seen" && pr.stack.place) {
             base.stackNumber = pr.stack.place.number;
             base.stackPosition = pr.stack.place.position;
@@ -410,6 +404,8 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
                 additions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.additions ELSE pull_requests.additions END`,
                 deletions: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.deletions ELSE pull_requests.deletions END`,
                 changedFiles: sql`CASE WHEN excluded.changed_files > 0 THEN excluded.changed_files ELSE pull_requests.changed_files END`,
+                // The head the stats describe, written with them.
+                diffStatsHeadSha: sql`COALESCE(excluded.diff_stats_head_sha, pull_requests.diff_stats_head_sha)`,
                 headSha: sql`excluded.head_sha`,
                 baseSha: sql`excluded.base_sha`,
                 updatedAt: sql`excluded.updated_at`,
@@ -444,6 +440,38 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         }
       });
     }),
+
+  externalIdsByRepo: (repoIds) =>
+    repoIds.length === 0
+      ? Effect.succeed(new Map())
+      : tryDb("read mirrored PR numbers", (db) =>
+          db
+            .select({
+              repositoryId: pullRequests.repositoryId,
+              externalId: pullRequests.externalId,
+            })
+            .from(pullRequests)
+            .where(inArray(pullRequests.repositoryId, [...repoIds]))
+            .all(),
+        ).pipe(
+          Effect.map((rows) => {
+            const byRepo = new Map<string, Set<number>>();
+            for (const row of rows) {
+              const set = byRepo.get(row.repositoryId) ?? new Set<number>();
+              set.add(row.externalId);
+              byRepo.set(row.repositoryId, set);
+            }
+            return byRepo;
+          }),
+        ),
+
+  diffStatsHeads: () =>
+    tryDb("read PR diff-stat watermarks", (db) =>
+      db
+        .select({ id: pullRequests.id, headSha: pullRequests.diffStatsHeadSha })
+        .from(pullRequests)
+        .all(),
+    ).pipe(Effect.map((rows) => new Map(rows.map((row) => [row.id, row.headSha])))),
 
   listArchivedPrs: (accountId, params) =>
     Effect.gen(function* () {
@@ -502,16 +530,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         const rows = db
           .select({
             pr: pullRequests,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
           })
           .from(pullRequests)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, pullRequests.authorLogin),
-            ),
-          )
           .where(and(...conditions))
           .orderBy(desc(pullRequests.closedAt))
           .limit(limit + 1)
@@ -543,16 +564,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         const prRows = db
           .select({
             pr: pullRequests,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
           })
           .from(pullRequests)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, pullRequests.authorLogin),
-            ),
-          )
           .where(
             and(
               eq(pullRequests.repositoryId, repoId),
@@ -640,16 +654,9 @@ export const PullRequestServiceLive = Layer.succeed(PullRequestService, {
         const prRows = db
           .select({
             pr: pullRequests,
-            avatarContent: remoteUsers.avatarContent,
+            avatarContent: avatarOfRepoLogin(pullRequests.authorLogin, pullRequests.repositoryId),
           })
           .from(pullRequests)
-          .leftJoin(
-            remoteUsers,
-            and(
-              eq(remoteUsers.provider, "github"),
-              eq(remoteUsers.login, pullRequests.authorLogin),
-            ),
-          )
           .where(
             and(
               eq(pullRequests.repositoryId, repoId),

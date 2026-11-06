@@ -13,13 +13,10 @@ import { reset as resetPulls } from "$lib/review/pull-latest";
 import {
   clearIdentity,
   deleteAccount,
-  fetchLocalAccounts,
   getIsSwitching,
   getUser,
   loadUser,
-  markAccountRemoved,
   requestAccountSwitch,
-  revokeSession,
   runAccountSwitch,
 } from "$lib/stores/auth.svelte";
 import { reset as resetBaseConflicts } from "$lib/stores/base-conflicts.svelte";
@@ -90,9 +87,8 @@ function resetAccountStores(): void {
   resetBaseConflicts();
 }
 
-/** First step on launch: restore the stored session, and list the machine's accounts for the lock screen. */
+/** First step on launch: restore the stored session. */
 export function restoreSession(): void {
-  void fetchLocalAccounts();
   void loadUser();
 }
 
@@ -164,8 +160,11 @@ export function endSession(): void {
   clearIdentity();
 }
 
+/**
+ * Sign this window out. The server session stays: other signed-in users on the
+ * machine can still switch to this one.
+ */
 export async function signOut(): Promise<void> {
-  await revokeSession();
   endSession();
   await goto("/");
 }
@@ -174,7 +173,5 @@ export async function signOut(): Promise<void> {
 export async function removeAccount(): Promise<void> {
   await deleteAccount();
   endSession();
-  markAccountRemoved();
-  await fetchLocalAccounts();
   await goto("/");
 }

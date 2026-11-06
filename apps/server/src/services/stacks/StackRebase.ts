@@ -16,7 +16,7 @@ import { dbTry } from "../../effects/db-try";
 import { logError } from "../../logger";
 import { worktreeHolderPath } from "../clone-policy";
 import { DbService } from "../Db";
-import { GitHubGateway } from "../GitHub";
+import { GitHubGateway } from "../github/gateway";
 import { type PrContextBasic, PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import type { SettingsService } from "../Settings";
@@ -38,7 +38,6 @@ export class StackRebaseService extends Context.Service<
      */
     readonly rebase: (
       prId: string,
-      userId: string,
       accountId: string,
       expectedHeads: Readonly<Record<string, string>>,
     ) => Effect.Effect<StackRebaseResult, StackRebaseError>;
@@ -90,7 +89,7 @@ export const StackRebaseServiceLive = Layer.effect(
         return {
           clonePath: repo.clonePath,
           scratchPath: join(worktreeHolderPath(owner, name), `stack-${stack.number}-rebase`),
-          remoteUrl: `https://x-access-token:${ctx.token}@${host}/${repo.fullName}.git`,
+          remoteUrl: `https://x-access-token:${ctx.client.token}@${host}/${repo.fullName}.git`,
           baseRefName: stack.baseRefName,
           stackNumber: stack.number,
           steps,
@@ -189,11 +188,10 @@ export const StackRebaseServiceLive = Layer.effect(
             const done = yield* Effect.result(
               Effect.provide(
                 github.prs.updateBase(
+                  ctx.client,
                   ctx.repo.fullName,
                   plan.retarget,
                   stack.baseRefName,
-                  ctx.token,
-                  ctx.apiBase,
                 ),
                 context,
               ),
@@ -224,12 +222,11 @@ export const StackRebaseServiceLive = Layer.effect(
 
     const rebase = (
       prId: string,
-      userId: string,
       accountId: string,
       expectedHeads: Readonly<Record<string, string>>,
     ) =>
       Effect.gen(function* () {
-        const ctx = yield* prContext.resolveBasic(prId, userId, accountId);
+        const ctx = yield* prContext.forPr(prId, accountId);
         const stack = yield* stacks.fetchFresh(ctx);
         if (!stack) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
         if (!stack.viewerCanPush) {

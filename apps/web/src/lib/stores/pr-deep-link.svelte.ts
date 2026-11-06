@@ -4,6 +4,7 @@ import {
   type PullRequest,
   type PullRequestLocator,
   parsePullRequestDeepLink,
+  savedClientIdForHost,
 } from "@revv/shared";
 import { toast } from "svelte-sonner";
 import { goto } from "$app/navigation";
@@ -115,13 +116,19 @@ export function matchingAccountsFor(host: string): AccountChoice[] {
   );
 }
 
+function savedClientId(locator: PullRequestLocator): string | null {
+  return savedClientIdForHost(locator.githubHost, {
+    githubHost: getGithubHost() ?? "",
+    githubClientId: getGithubClientId(),
+  });
+}
+
 export function deepLinkNeedsClientId(locator: PullRequestLocator): boolean {
-  if (locator.githubHost === "github.com") return false;
-  return getGithubHost()?.toLowerCase() !== locator.githubHost || getGithubClientId().trim() === "";
+  return locator.githubHost !== "github.com" && savedClientId(locator) === null;
 }
 
 export function getDeepLinkClientId(locator: PullRequestLocator): string {
-  return getGithubHost()?.toLowerCase() === locator.githubHost ? getGithubClientId() : "";
+  return savedClientId(locator) ?? "";
 }
 
 function clearLoadingTimer(): void {

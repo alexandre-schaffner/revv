@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
-import { STACK_UNSEEN } from "../domain/observed-pr";
-import {
-  getPrsViaGraphql,
-  listClosedPrNumbersSince,
-  listOpenPrsViaGraphql,
-} from "./github-graphql-prs";
+import { STACK_UNSEEN } from "../../domain/observed-pr";
+import { pullsApi } from "./pulls";
+import { makeHttp } from "./transport";
+
+const pulls = pullsApi(makeHttp(null, null));
+const client = { host: "ghe.test", apiBase: "https://ghe.test/api", token: "t", accountId: null };
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -57,7 +57,7 @@ const openNode = (number: number, updatedAt: string) => ({
   reviewRequests: { nodes: [] },
 });
 
-describe("listOpenPrsViaGraphql with updatedSince", () => {
+describe("listOpen with updatedSince", () => {
   it("stops at the first page that reaches older PRs and keeps only the recent ones", async () => {
     const asked = stubPages([
       [openNode(3, "2026-01-05T00:00:00Z"), openNode(2, "2026-01-04T00:00:00Z")],
@@ -66,15 +66,10 @@ describe("listOpenPrsViaGraphql with updatedSince", () => {
     ]);
 
     const list = await Effect.runPromise(
-      listOpenPrsViaGraphql(
-        "o",
-        "r",
-        "repo",
-        "t",
-        "https://ghe.test/api",
-        false,
-        "2026-01-03T00:00:00Z",
-      ),
+      pulls.listOpen(client, "o/r", "repo", {
+        withStacks: false,
+        updatedSince: "2026-01-03T00:00:00Z",
+      }),
     );
 
     expect(asked).toEqual(["first", "1"]);
@@ -88,7 +83,7 @@ describe("listOpenPrsViaGraphql with updatedSince", () => {
     ]);
 
     const list = await Effect.runPromise(
-      listOpenPrsViaGraphql("o", "r", "repo", "t", "https://ghe.test/api", false),
+      pulls.listOpen(client, "o/r", "repo", { withStacks: false }),
     );
 
     expect(asked).toEqual(["first", "1"]);
@@ -96,7 +91,7 @@ describe("listOpenPrsViaGraphql with updatedSince", () => {
   });
 });
 
-describe("listClosedPrNumbersSince", () => {
+describe("listClosedSince", () => {
   it("answers the PRs closed at or after the time, reading no further than needed", async () => {
     const asked = stubPages([
       [
@@ -108,7 +103,7 @@ describe("listClosedPrNumbersSince", () => {
     ]);
 
     const closed = await Effect.runPromise(
-      listClosedPrNumbersSince("o", "r", "t", "https://ghe.test/api", "2026-01-03T00:00:00Z"),
+      pulls.listClosedSince(client, "o/r", "2026-01-03T00:00:00Z"),
     );
 
     expect(asked).toEqual(["first"]);
@@ -123,14 +118,14 @@ describe("listClosedPrNumbersSince", () => {
     stubPages([page, page, page, page, page, page]);
 
     const closed = await Effect.runPromise(
-      listClosedPrNumbersSince("o", "r", "t", "https://ghe.test/api", "2026-01-03T00:00:00Z"),
+      pulls.listClosedSince(client, "o/r", "2026-01-03T00:00:00Z"),
     );
 
     expect(closed).toBeNull();
   });
 });
 
-describe("getPrsViaGraphql", () => {
+describe("getMany", () => {
   it("maps each aliased PR like the REST detail, and skips the ones GitHub couldn't resolve", async () => {
     const bodies: string[] = [];
     globalThis.fetch = Object.assign(
@@ -159,9 +154,7 @@ describe("getPrsViaGraphql", () => {
       { preconnect: realFetch.preconnect },
     );
 
-    const prs = await Effect.runPromise(
-      getPrsViaGraphql("o", "r", "repo-1", [7, 8], "t", "https://ghe.test/api"),
-    );
+    const prs = await Effect.runPromise(pulls.getMany(client, "o/r", "repo-1", [7, 8]));
 
     expect(bodies).toHaveLength(1);
     expect([...prs.keys()]).toEqual([7]);

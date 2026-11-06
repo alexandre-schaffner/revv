@@ -55,17 +55,15 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .get(
     "/:id/walkthrough/current",
-    (ctx) => runRoute(currentWalkthrough(ctx.params.id, ctx.session.user.id, ctx.query.mode)),
+    (ctx) => runRoute(currentWalkthrough(ctx.params.id, ctx.query.mode)),
     { query: t.Object({ mode: t.Optional(perspective) }) },
   )
 
-  .get("/:id/walkthrough/sizing", (ctx) =>
-    runRoute(walkthroughSizing(ctx.params.id, ctx.session.user.id)),
-  )
+  .get("/:id/walkthrough/sizing", (ctx) => runRoute(walkthroughSizing(ctx.params.id)))
 
   // Owned by the PR head, not a walkthrough, so the Diff tab has it before
   // Generate.
-  .post("/:id/hunk-scan", (ctx) => runRoute(ensureHunkScan(ctx.params.id, ctx.session.user.id)))
+  .post("/:id/hunk-scan", (ctx) => runRoute(ensureHunkScan(ctx.params.id)))
 
   .get("/:id/walkthrough/rounds", (ctx) =>
     runRoute(
@@ -101,7 +99,7 @@ const prWalkthroughRoutes = new Elysia({ prefix: "/api/reviews" })
       Effect.gen(function* () {
         const prContext = yield* PrContextService;
         const walkthroughService = yield* WalkthroughService;
-        const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
+        const { pr } = yield* prContext.forPr(ctx.params.id);
         const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
         if (!report) return { status: "not_found" as const };
         const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);

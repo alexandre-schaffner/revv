@@ -20,7 +20,7 @@ export class GitHubAuthError extends Data.TaggedError("GitHubAuthError")<{
 /**
  * Transport-level failure: DNS, TLS, connection reset, request timeout, a
  * 5xx/408 from GitHub, or GraphQL's "Something went wrong while executing
- * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `github-rest.ts`
+ * your query" (GitHub's own failure, sent as a 200). **Retryable** — `retryTransient` in `services/github/transport.ts`
  * only retries this class, so nothing else may be mapped to it.
  */
 export class GitHubNetworkError extends Data.TaggedError("GitHubNetworkError")<{

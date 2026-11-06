@@ -70,7 +70,6 @@ import { pumpAgentFrames, queueToStream } from "./agent-frame-pump";
 import { type ChatSessionRow, ChatSessionService } from "./ChatSession";
 import { type ChatStreamLease, createChatStreamLeases } from "./chat-stream-leases";
 import type { DbService } from "./Db";
-import type { GitHubEtagCache } from "./GitHubEtagCache";
 import {
   abortCherryPick,
   abortMerge,
@@ -103,19 +102,13 @@ import {
   workingTreeIsClean,
 } from "./GitOps";
 import { PrContextService } from "./PrContext";
+import { PrMirror } from "./PrMirror";
 import { PrPushLockService } from "./PrPushLock";
-import { PullRequestService } from "./PullRequest";
-import { makePrHeadRefresh } from "./pr-head-refresh";
-import { Realtime } from "./Realtime";
 import { SettingsService } from "./Settings";
 
 // The lease a chat turn holds on its worktree, re-exported so the chat route
 // can type the handle this service hands it without reaching past the service.
 export type { ChatStreamLease } from "./chat-stream-leases";
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-const resolveGitHost = Effect.flatMap(SettingsService, (s) => s.githubHost());
 
 export type ChatPushError =
   | DirtyWorktreeError
@@ -190,11 +183,7 @@ export class ChatChangesPushService extends Context.Service<
       readonly userId: string;
       readonly newBranchName?: string;
       readonly force?: boolean;
-    }) => Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
+    }) => Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService>;
 
     readonly resolveConflictsAndPush: (params: {
       readonly prId: string;
@@ -202,28 +191,20 @@ export class ChatChangesPushService extends Context.Service<
     }) => Effect.Effect<
       ReadableStream<ResolvePushFrame>,
       ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
+      DbService | SettingsService
     >;
 
     readonly cherryPickAndPush: (params: {
       readonly prId: string;
       readonly userId: string;
       readonly sha: string;
-    }) => Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
+    }) => Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService>;
 
     readonly batchCherryPickAndPush: (params: {
       readonly prId: string;
       readonly userId: string;
       readonly shas: readonly string[];
-    }) => Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    >;
+    }) => Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService>;
 
     readonly isPushing: (prId: string) => boolean;
     /**
@@ -247,11 +228,9 @@ export const ChatChangesPushServiceLive = Layer.effect(
   Effect.gen(function* () {
     const prCtx = yield* PrContextService;
     const chatSessions = yield* ChatSessionService;
-    const realtime = yield* Realtime;
-    const prService = yield* PullRequestService;
     const ai = yield* AiService;
     const pushLock = yield* PrPushLockService;
-    const headRefresh = makePrHeadRefresh({ prService, prCtx, realtime });
+    const mirror = yield* PrMirror;
 
     // Worktree claims held by in-flight chat turns. The expiry is the agent's
     // own chat idle deadline, deliberately the same constant the chat stream
@@ -328,7 +307,8 @@ export const ChatChangesPushServiceLive = Layer.effect(
           return yield* Effect.fail(new ChatStreamingConflictError({ prId: params.prId }));
         }
 
-        const { pr, repo, token } = yield* prCtx.resolveBasic(params.prId, params.userId);
+        const { pr, repo, client } = yield* prCtx.forPr(params.prId);
+        const token = client.token;
 
         if (!pr.headSha) {
           return yield* Effect.fail(
@@ -609,18 +589,11 @@ export const ChatChangesPushServiceLive = Layer.effect(
       newTip: string;
     }) =>
       Effect.gen(function* () {
-        yield* headRefresh.recordPushedHead({
-          prId: params.pr.id,
-          repoFullName: params.repo.fullName,
-          prExternalId: params.prExternalId,
-          token: params.token,
-          newTip: params.newTip,
-        });
+        yield* mirror.recordPushedHead(yield* prCtx.forPr(params.pr.id), params.newTip);
         yield* chatSessions.updatePrHeadSha({
           chatSessionId: params.sessionId,
           prHeadSha: params.newTip,
         });
-        yield* headRefresh.broadcastPrsUpdated(params.pr.id);
       });
 
     const completePush = (params: {
@@ -891,7 +864,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
           );
         }
 
-        yield* headRefresh.broadcastPrsUpdated(params.ctx.pr.id);
+        yield* mirror.announce([(yield* prCtx.forPr(params.ctx.pr.id)).accountId]);
 
         return {
           status: "pushed" as const,
@@ -906,17 +879,12 @@ export const ChatChangesPushServiceLive = Layer.effect(
       readonly userId: string;
       readonly newBranchName?: string;
       readonly force?: boolean;
-    }): Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    > =>
+    }): Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService> =>
       Effect.gen(function* () {
         yield* beginPush(params.prId);
         return yield* Effect.gen(function* () {
           const ctx = yield* preflight(params);
-          const gitHost = yield* resolveGitHost;
-          const authedUrl = `https://x-access-token:${ctx.token}@${gitHost}/${ctx.repo.fullName}.git`;
+          const authedUrl = `https://x-access-token:${ctx.token}@${ctx.repo.githubHost}/${ctx.repo.fullName}.git`;
 
           if (params.newBranchName !== undefined) {
             return yield* pushToNewBranchEffect({
@@ -994,7 +962,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
     }): Effect.Effect<
       ReadableStream<ResolvePushFrame>,
       ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
+      DbService | SettingsService
     > =>
       Effect.gen(function* () {
         yield* beginPush(params.prId);
@@ -1003,8 +971,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
         // the request synchronously rather than in the SSE stream.
         const ctx = yield* preflight(params).pipe(Effect.tapError(() => releasePush(params.prId)));
 
-        const gitHost = yield* resolveGitHost;
-        const authedUrl = `https://x-access-token:${ctx.token}@${gitHost}/${ctx.repo.fullName}.git`;
+        const authedUrl = `https://x-access-token:${ctx.token}@${ctx.repo.githubHost}/${ctx.repo.fullName}.git`;
 
         yield* fetchSourceBranch({
           worktreePath: ctx.session.worktreePath,
@@ -1231,17 +1198,12 @@ export const ChatChangesPushServiceLive = Layer.effect(
       readonly prId: string;
       readonly userId: string;
       readonly sha: string;
-    }): Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    > =>
+    }): Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService> =>
       Effect.gen(function* () {
         yield* beginPush(params.prId);
         return yield* Effect.gen(function* () {
           const ctx = yield* preflight(params);
-          const gitHost = yield* resolveGitHost;
-          const authedUrl = `https://x-access-token:${ctx.token}@${gitHost}/${ctx.repo.fullName}.git`;
+          const authedUrl = `https://x-access-token:${ctx.token}@${ctx.repo.githubHost}/${ctx.repo.fullName}.git`;
 
           // Validate SHA exists in worktree
           const fullShaOut = yield* Effect.tryPromise({
@@ -1402,11 +1364,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
       readonly prId: string;
       readonly userId: string;
       readonly shas: readonly string[];
-    }): Effect.Effect<
-      AttemptPushResult,
-      ChatPushError,
-      DbService | GitHubEtagCache | SettingsService
-    > =>
+    }): Effect.Effect<AttemptPushResult, ChatPushError, DbService | SettingsService> =>
       Effect.gen(function* () {
         if (params.shas.length === 0) {
           return yield* Effect.fail(new NoChangesError({ prId: params.prId }));
@@ -1420,8 +1378,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
         yield* beginPush(params.prId);
         return yield* Effect.gen(function* () {
           const ctx = yield* preflight(params);
-          const gitHost = yield* resolveGitHost;
-          const authedUrl = `https://x-access-token:${ctx.token}@${gitHost}/${ctx.repo.fullName}.git`;
+          const authedUrl = `https://x-access-token:${ctx.token}@${ctx.repo.githubHost}/${ctx.repo.fullName}.git`;
 
           // Resolve and order the SHAs chronologically (oldest first) so the
           // cherry-pick sequence matches the natural commit order on the

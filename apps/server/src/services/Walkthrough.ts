@@ -21,7 +21,7 @@ import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db";
 import { commentThreads } from "../db/schema/comment-threads";
 import { pullRequests } from "../db/schema/pull-requests";
-import { remoteUsers } from "../db/schema/remote-users";
+import { avatarOfPrLogin } from "../db/schema/remote-users";
 import { repositories } from "../db/schema/repositories";
 import { reviewRounds } from "../db/schema/review-rounds";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
@@ -29,7 +29,7 @@ import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import type { DbError } from "../domain/errors";
 import { dbTry, tryDb } from "../effects/db-try";
 import { DbService } from "./Db";
-import type { PrCommit } from "./GitHub";
+import type { PrCommit } from "./github/pulls";
 import {
   decodeBlock,
   decodeIssue,
@@ -97,15 +97,14 @@ function readWalkthrough(
   where: SQL | undefined,
 ): { readonly walkthrough: Walkthrough; readonly status: WalkthroughStatus } | null {
   const found = db
-    .select({ row: walkthroughs, avatarContent: remoteUsers.avatarContent })
-    .from(walkthroughs)
-    .leftJoin(
-      remoteUsers,
-      and(
-        eq(remoteUsers.provider, "github"),
-        eq(remoteUsers.login, walkthroughs.generatedByGithubLogin),
+    .select({
+      row: walkthroughs,
+      avatarContent: avatarOfPrLogin(
+        walkthroughs.generatedByGithubLogin,
+        walkthroughs.pullRequestId,
       ),
-    )
+    })
+    .from(walkthroughs)
     .where(where)
     .orderBy(desc(walkthroughs.generatedAt))
     .get();

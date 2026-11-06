@@ -59,8 +59,6 @@ export type LocalAccount = {
 };
 
 let localAccounts = $state<LocalAccount[]>([]);
-let localAccountsLoaded = $state(typeof localStorage === "undefined");
-let accountJustRemoved = $state(false);
 let loadUserRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let loadUserRetryAttempts = $state(0);
 let authRestoreError = $state<string | null>(null);
@@ -74,7 +72,6 @@ let authRestoreExhausted = $state(false);
  */
 let reauthRequired = $state<{ host: string | null; githubLogin: string | null } | null>(null);
 
-let forceOnboardingFlow = $state(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function getReauthRequired(): { host: string | null; githubLogin: string | null } | null {
@@ -91,26 +88,6 @@ export function onAuthReauthCleared(): void {
 
 export function getLocalAccounts(): LocalAccount[] {
   return localAccounts;
-}
-
-export function getLocalAccountsLoaded(): boolean {
-  return localAccountsLoaded;
-}
-
-export function getAccountJustRemoved(): boolean {
-  return accountJustRemoved;
-}
-
-export function getForceOnboardingFlow(): boolean {
-  return forceOnboardingFlow;
-}
-
-export function resetForceOnboardingFlow(): void {
-  forceOnboardingFlow = false;
-}
-
-export function setForceOnboardingFlow(): void {
-  forceOnboardingFlow = true;
 }
 
 const isAuthenticated = $derived((getToken() ?? "").length > 0);
@@ -173,6 +150,7 @@ export function clearIdentity(): void {
   resetLoadUserRetryState();
   clearToken();
   user = null;
+  localAccounts = [];
   identityAttempted = false;
   // The re-auth modal is gated solely on `reauthRequired`, so an invalidated /
   // signed-out session must clear it (and any stale sign-in error) — otherwise
@@ -441,7 +419,6 @@ export async function loadUser(): Promise<void> {
               next.image = data.avatarContent;
             }
             user = next;
-            accountJustRemoved = false;
           }
           reauthRequired = data.reauthRequired
             ? { host: data.host ?? null, githubLogin: data.login }
@@ -557,16 +534,19 @@ export async function resetOnboarding(): Promise<void> {
   }
 }
 
+/** The machine's signed-in users, for the account switcher. Needs a session. */
 export async function fetchLocalAccounts(): Promise<void> {
+  if (!getToken()) {
+    localAccounts = [];
+    return;
+  }
   try {
-    const res = await fetch(`${API_BASE_URL}/api/auth/local-accounts`);
+    const res = await fetch(`${API_BASE_URL}/api/auth/local-accounts`, { headers: bearer() });
     if (res.ok) {
       localAccounts = (await res.json()) as LocalAccount[];
     }
   } catch {
     // best-effort
-  } finally {
-    localAccountsLoaded = true;
   }
 }
 
@@ -611,23 +591,6 @@ export async function deleteAccount(): Promise<void> {
   });
   if (!res.ok) {
     throw new Error(`Failed to remove account: ${res.status}`);
-  }
-}
-
-/** The lock screen offers the onboarding flow rather than the removed account. */
-export function markAccountRemoved(): void {
-  accountJustRemoved = true;
-  forceOnboardingFlow = true;
-}
-
-export async function revokeSession(): Promise<void> {
-  try {
-    await fetch(`${API_BASE_URL}/api/auth/revoke-and-sign-out`, {
-      method: "POST",
-      headers: bearer(),
-    });
-  } catch {
-    // best-effort
   }
 }
 

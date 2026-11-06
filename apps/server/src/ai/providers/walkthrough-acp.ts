@@ -19,7 +19,7 @@ import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { graftedSpan } from "../../observability/span-graft";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
 import { AgentTurnError } from "../acp/agent-failure";
 import type { AgentLaunch } from "../acp/agent-launch";
 import { type ActivityBeacon, JOB_TURN, runAcpTurn } from "../acp/run-turn";

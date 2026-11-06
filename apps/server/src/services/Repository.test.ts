@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
-import { account, repositories, user } from "../db/schema";
+import { account, remoteUsers, repositories, user } from "../db/schema";
 import { DbService } from "./Db";
 import { RepositoryService, RepositoryServiceLive } from "./Repository";
 
@@ -105,17 +105,41 @@ describe("RepositoryService.addRepo", () => {
     expect(managed.cloneError).toBeNull();
   });
 
-  it("clears stale cached avatar content when the avatar URL changes", async () => {
+  it("serves the owner's cached avatar for its host, never another host's", async () => {
+    const db = createDb(":memory:");
+    seedAccount(db);
+    db.insert(remoteUsers)
+      .values([
+        {
+          id: "ru-ghe",
+          provider: "github",
+          providerUserId: "",
+          host: "ghe.example.com",
+          login: "acme",
+          avatarContent: "data:image/png;base64,ghe",
+        },
+        {
+          id: "ru-public",
+          provider: "github",
+          providerUserId: "",
+          host: "github.com",
+          login: "acme",
+          avatarContent: "data:image/png;base64,public",
+        },
+      ])
+      .run();
+
+    const repo = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
+
+    expect(repo.avatarUrl).toBe("data:image/png;base64,public");
+  });
+
+  it("falls back to the raw URL on github.com before the avatar is cached", async () => {
     const db = createDb(":memory:");
     seedAccount(db);
 
-    const first = await addRepo(db, { avatarUrl: "https://example.com/old.png" });
-    db.update(repositories).set({ avatarContent: "data:image/png;base64,old" }).run();
+    const repo = await addRepo(db, { avatarUrl: "https://example.com/raw.png" });
 
-    const updated = await addRepo(db, { avatarUrl: "https://example.com/new.png" });
-
-    expect(updated.id).toBe(first.id);
-    expect(updated.avatarUrl).toBe("https://example.com/new.png");
-    expect(db.select().from(repositories).get()?.avatarContent).toBeNull();
+    expect(repo.avatarUrl).toBe("https://example.com/raw.png");
   });
 });

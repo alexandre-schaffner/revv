@@ -61,7 +61,7 @@ and performs one atomic idempotent write.
 
 `PrContextService` is the PR-scoped context seam. Walkthrough, Chat, and Recap code should consume
 PR, repository, token, metadata, and diff context from this service instead of importing
-`GitHubService`, `RepositoryService`, or `TokenProvider` directly.
+`GitHubGateway`, `RepositoryService`, or `GitHubAccounts` directly.
 
 ### Settings
 
@@ -72,7 +72,8 @@ agent-choice fallback rules.
 ### Platform Modules
 
 Repos/GitHub hides API calls, retries, sync watermarks, and metadata persistence. Identity/Tokens
-hides OAuth account resolution and token refresh.
+(`GitHubAccounts`) hides OAuth account resolution, token refresh, and the re-auth flag
+(`account.reauth_required_at`, which it alone writes).
 
 #### Realtime / Events
 
@@ -110,16 +111,15 @@ API and never touches the local filesystem.
 
 Feature modules depend inward on platform seams:
 
-- Walkthrough and Chat use `PrContextService` for PR-scoped GitHub context. Recap still imports
-  `GitHubGateway`, `RepositoryService`, and `TokenProvider` directly — an explicit, allowlisted
-  exception in `check-import-boundaries.ts` scheduled for migration in a later wave.
-- Feature modules otherwise do not import `GitHubService`, `RepositoryService`, or `TokenProvider`
-  directly.
+- Walkthrough, Chat, and Recap use `PrContextService` for PR-scoped GitHub context; they do not
+  import `GitHubGateway`, `RepositoryService`, or `GitHubAccounts` directly.
+- Only `services/github/` sends requests to GitHub (`services/github/transport`); everything else
+  calls `GitHubGateway` with a client minted by `GitHubAccounts` or `PrContextService`.
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
-- Routes resolve account context through `Identity`, not `SecretStore` / `TokenProvider` directly.
+- Routes resolve account context through `GitHubAccounts`, not `SecretStore` directly.
 - Only the Local Git module (`RepoCloneService`, `GitOps`) spawns git via `git-runner`; everything
   else goes through those seams.
 
-`bun run check:import-boundaries` enforces the PR-context, Identity, and Local-Git import rules and
+`bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport, and Local-Git import rules and
 names the remaining legacy exceptions scheduled for later waves.

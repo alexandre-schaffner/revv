@@ -17,8 +17,10 @@ import * as auth from "./auth.svelte";
 import * as conversation from "./conversation.svelte";
 import { setError } from "./errors.svelte";
 import * as hunkScan from "./hunk-scan.svelte";
+import * as mergeEligibility from "./merge-eligibility.svelte";
 import * as prs from "./prs.svelte";
 import { onRecapAdded, onRecapStatusChanged } from "./recaps.svelte";
+import * as repoActivity from "./repo-activity.svelte";
 import * as repos from "./repos.svelte";
 import * as review from "./review.svelte";
 import { getGithubHost } from "./settings.svelte";
@@ -27,6 +29,7 @@ import { onStackMergeProgress } from "./stack-merge.svelte";
 import * as stacks from "./stacks.svelte";
 import * as sync from "./sync.svelte";
 import * as walkthrough from "./walkthrough.svelte";
+import * as walkthroughSizing from "./walkthrough-sizing.svelte";
 
 /** Every (re)connect, the first included. */
 const ON_OPEN: ReadonlyArray<() => void> = [walkthrough.onEventsOpened, sync.onEventsOpened];
@@ -37,6 +40,9 @@ const ON_RECONNECT: ReadonlyArray<() => void> = [
   repos.onEventsReconnected,
   walkthrough.onEventsReconnected,
   hunkScan.onEventsReconnected,
+  walkthroughSizing.onEventsReconnected,
+  repoActivity.onEventsReconnected,
+  mergeEligibility.onEventsReconnected,
   review.onEventsReconnected,
 ];
 
@@ -101,6 +107,16 @@ function dispatch(msg: ServerEventMessage): void {
       break;
     case "pr:conversation-updated":
       conversation.onPrConversationUpdated(msg.data);
+      break;
+    case "pr:merge-eligibility":
+      mergeEligibility.onPrMergeEligibility(msg.data);
+      break;
+    case "diff:cached":
+      walkthroughSizing.onDiffCached(msg.data);
+      hunkScan.onDiffCached(msg.data);
+      break;
+    case "repo-activity:settled":
+      repoActivity.onRepoActivitySettled(msg.data);
       break;
     case "prs:sync-started":
       sync.onPrsSyncStarted();

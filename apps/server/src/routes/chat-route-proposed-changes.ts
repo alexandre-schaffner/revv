@@ -37,7 +37,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
@@ -81,7 +81,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPr(pr.id, agent);
@@ -122,7 +122,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPr(pr.id, agent);
@@ -401,7 +401,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
@@ -484,7 +484,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
@@ -628,7 +628,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const prCtx = yield* PrContextService;
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
-            const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+            const { pr } = yield* prCtx.forPr(ctx.params.prId);
             const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
@@ -687,10 +687,8 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const repoClone = yield* RepoCloneService;
-            const { pr, repo, token } = yield* prCtx.resolveBasic(
-              ctx.params.prId,
-              ctx.session.user.id,
-            );
+            const { pr, repo, client } = yield* prCtx.forPr(ctx.params.prId);
+            const token = client.token;
             const agent = yield* settingsService.resolveAgent();
 
             const row = yield* chatSessions.findLatestForPr(pr.id, agent);

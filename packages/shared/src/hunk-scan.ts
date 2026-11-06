@@ -147,7 +147,7 @@ export interface HunkScanSnapshot {
 
 /**
  * `POST /api/reviews/:id/hunk-scan`. `off` when TypeSafe is off or has no key;
- * `pending` until the PR's diff is cached (the client retries); otherwise the
+ * `pending` until the PR's diff is cached (announced as `diff:cached`); otherwise the
  * scan for the PR's current head, started if it hadn't been.
  */
 export type HunkScanEnsureResult =

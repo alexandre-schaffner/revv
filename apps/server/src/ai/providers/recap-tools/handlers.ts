@@ -10,7 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ProjectRecap, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Db } from "../../../db";
 import {
@@ -18,8 +18,8 @@ import {
   pullRequests,
   recapPrEntries,
   recapThemeSummaries,
-  remoteUsers,
 } from "../../../db/schema/index";
+import { avatarOfRepoLogin } from "../../../db/schema/remote-users";
 import type {
   AddPrEntryInput,
   CompleteRecapInput,
@@ -354,11 +354,11 @@ export const addPrEntryHandler: RecapToolHandler<AddPrEntryInput> = async (ctx, 
   if (persisted) {
     const avatarRow = persisted.prAuthorLogin
       ? ctx.db
-          .select({ avatarContent: remoteUsers.avatarContent })
-          .from(remoteUsers)
-          .where(
-            and(eq(remoteUsers.provider, "github"), eq(remoteUsers.login, persisted.prAuthorLogin)),
-          )
+          .select({
+            avatarContent: avatarOfRepoLogin(persisted.prAuthorLogin, ctx.sourceBundle.repoId),
+          })
+          .from(recapPrEntries)
+          .where(eq(recapPrEntries.id, persisted.id))
           .get()
       : null;
     const entry: RecapPrEntry = {

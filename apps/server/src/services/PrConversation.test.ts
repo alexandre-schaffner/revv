@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Effect, Layer } from "effect";
+import { DEFAULT_USER_SETTINGS } from "@revv/shared";
+import { type Context, Effect, Layer, Stream } from "effect";
 import { createDb } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { NotFoundError } from "../domain/errors";
@@ -7,16 +8,17 @@ import { Broadcaster, BroadcasterLive } from "./Broadcaster";
 import { CacheServiceLive } from "./Cache";
 import { DbService } from "./Db";
 import { DiffCacheServiceLive } from "./DiffCache";
-import { GitHubGatewayLive } from "./GitHub";
 import { type GitHubEtagCache, GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { GitHubAccountsLive } from "./github/accounts";
+import { AvatarCacheLive } from "./github/avatars";
+import { GitHubGatewayLive } from "./github/gateway";
 import { PrContextService, PrContextServiceLive } from "./PrContext";
 import { PrConversationService, PrConversationServiceLive } from "./PrConversation";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RealtimeLive } from "./Realtime";
-import { RemoteUserServiceLive } from "./RemoteUser";
 import { RepositoryServiceLive } from "./Repository";
 import { SecretStore } from "./SecretStore";
-import { TokenProviderLive } from "./TokenProvider";
+import { SettingsService } from "./Settings";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -81,20 +83,31 @@ function fixture() {
     deleteSecret: () => Effect.void,
   });
   const dbLayer = Layer.succeed(DbService, { db });
+  const realtime = RealtimeLive.pipe(Layer.provideMerge(BroadcasterLive), Layer.provide(dbLayer));
+  const settings = Layer.succeed(SettingsService, {
+    getSettings: () => Effect.succeed(DEFAULT_USER_SETTINGS),
+    githubHost: () => Effect.succeed("github.com"),
+    watch: () => Stream.empty,
+  } as unknown as Context.Service.Shape<typeof SettingsService>);
+  const accounts = GitHubAccountsLive.pipe(
+    Layer.provide(Layer.mergeAll(dbLayer, secrets, realtime, settings)),
+  );
+  const gateway = GitHubGatewayLive.pipe(
+    Layer.provide(Layer.mergeAll(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer)), accounts)),
+  );
   const base = Layer.mergeAll(
     dbLayer,
     secrets,
-    RealtimeLive.pipe(Layer.provideMerge(BroadcasterLive), Layer.provide(dbLayer)),
+    realtime,
+    accounts,
+    gateway,
     CacheServiceLive,
-    GitHubGatewayLive,
     PullRequestServiceLive,
     RepositoryServiceLive,
-    DiffCacheServiceLive,
-    RemoteUserServiceLive.pipe(Layer.provide(dbLayer)),
+    DiffCacheServiceLive.pipe(Layer.provide(Layer.mergeAll(dbLayer, gateway, realtime))),
+    AvatarCacheLive.pipe(Layer.provide(dbLayer)),
   );
-  const context = PrContextServiceLive.pipe(
-    Layer.provide(Layer.merge(base, TokenProviderLive.pipe(Layer.provide(base)))),
-  );
+  const context = PrContextServiceLive.pipe(Layer.provide(base));
   const layer = PrConversationServiceLive.pipe(Layer.provideMerge(Layer.merge(base, context)));
   const run = <A, E>(
     effect: Effect.Effect<
@@ -107,7 +120,7 @@ function fixture() {
       effect.pipe(
         Effect.provide(layer),
         Effect.provide(dbLayer),
-        Effect.provide(GitHubEtagCacheLive),
+        Effect.provide(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer))),
       ),
     );
   return { db, tokenReads, run };
@@ -129,15 +142,15 @@ describe("conversation account isolation", () => {
         Effect.gen(function* () {
           const s = yield* PrConversationService;
           return yield* Effect.all([
-            s.cached("b-pr", "a", "a-account").pipe(Effect.result),
-            s.load("b-pr", "a", "a-account").pipe(Effect.result),
-            s.checks("b-pr", "a", "a-account").pipe(Effect.result),
-            s.checkDetails("b-pr", "a", "a-account", 123).pipe(Effect.result),
-            s.labelOptions("b-pr", "a", "a-account").pipe(Effect.result),
-            s.assigneeOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
-            s.reviewerOptions("b-pr", "a", "a-account", "").pipe(Effect.result),
+            s.cached("b-pr", "a-account").pipe(Effect.result),
+            s.load("b-pr", "a-account").pipe(Effect.result),
+            s.checks("b-pr", "a-account").pipe(Effect.result),
+            s.checkDetails("b-pr", "a-account", 123).pipe(Effect.result),
+            s.labelOptions("b-pr", "a-account").pipe(Effect.result),
+            s.assigneeOptions("b-pr", "a-account", "").pipe(Effect.result),
+            s.reviewerOptions("b-pr", "a-account", "").pipe(Effect.result),
             s
-              .write("b-pr", "a", "a-account", { kind: "post_comment", body: "unauthorized" })
+              .write("b-pr", "a-account", { kind: "post_comment", body: "unauthorized" })
               .pipe(Effect.result),
           ]);
         }),
@@ -158,7 +171,7 @@ describe("conversation account isolation", () => {
     const { db, tokenReads, run } = fixture();
     try {
       const snapshot = await run(
-        Effect.flatMap(PrConversationService, (s) => s.cached("b-pr", "b", "b-account")),
+        Effect.flatMap(PrConversationService, (s) => s.cached("b-pr", "b-account")),
       );
       expect(snapshot).toBeNull();
       expect(tokenReads).toEqual(["b-account"]);
@@ -187,13 +200,13 @@ describe("conversation account isolation", () => {
       await run(
         Effect.gen(function* () {
           const s = yield* PrConversationService;
-          const running = yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          const running = yield* s.checkDetails("b-pr", "b-account", 123);
           expect(running.completed).toBe(false);
           completed = true;
-          const final = yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          const final = yield* s.checkDetails("b-pr", "b-account", 123);
           expect(final.completed).toBe(true);
           expect(final.summary).toBe("Final output");
-          yield* s.checkDetails("b-pr", "b", "b-account", 123);
+          yield* s.checkDetails("b-pr", "b-account", 123);
           expect(checkReads).toBe(2);
         }),
       );
@@ -222,9 +235,7 @@ describe("conversation account isolation", () => {
           const broadcaster = yield* Broadcaster;
           yield* broadcaster.register("b-account", writer(owner));
           yield* broadcaster.register("a-account", writer(other));
-          const ctx = yield* Effect.flatMap(PrContextService, (c) =>
-            c.resolveBasic("b-pr", "b", "b-account"),
-          );
+          const ctx = yield* Effect.flatMap(PrContextService, (c) => c.forPr("b-pr", "b-account"));
           return yield* Effect.flatMap(PrConversationService, (s) =>
             s.afterWrite(ctx, "b-account"),
           );

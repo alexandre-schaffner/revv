@@ -289,7 +289,7 @@ export const StackBriefJobsLive = Layer.effect(
 
     const ensure = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
-        const ctx = yield* withDb(db, prCtx.resolveBasic(prId, userId, accountId));
+        const ctx = yield* withDb(db, prCtx.forPr(prId, accountId));
         const stack = yield* stacks.fetchFresh(ctx);
         if (!stack) return null;
         const open = stack.layers.filter(isOpenLayer);

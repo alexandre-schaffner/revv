@@ -26,6 +26,7 @@ import {
   reduceHunkScanEvent,
 } from "./hunk-scan-reducers";
 import { type Answer, createResource } from "./resource";
+import { DIFF_FILL_WAIT_MS } from "./walkthrough-sizing.svelte";
 
 /** What a settled ask learned: TypeSafe is off, or the scan came back. */
 type EnsureOutcome = Exclude<HunkScanEnsureResult["status"], "pending">;
@@ -90,11 +91,11 @@ export function getHunkScanForFile(
  * The server decides what an ask means — start the scan, retry a `partial` or
  * `failed` one, rebuild one seeded from an older diff, or just return it — so
  * the client always asks rather than skipping a scan it holds as ended.
- * `pending` (the diff isn't cached yet; the fill has no client-visible event)
- * is asked again on a timer. The answer's rows merge into `entries`.
+ * `pending` (the diff isn't cached yet) waits for the server's `diff:cached`.
+ * The answer's rows merge into `entries`.
  */
 const asks = createResource<{ prId: string }, EnsureOutcome>({
-  retryDelaysMs: [2_500, 2_500, 2_500, 2_500, 2_500],
+  waitForSignalMs: DIFF_FILL_WAIT_MS,
   gaveUpError: "The PR's diff never reached the cache.",
   fetch: async (key, { prId }): Promise<Answer<EnsureOutcome>> => {
     const since = markEvents(key);
@@ -119,11 +120,24 @@ export function ensureHunkScan(prId: string, headSha: string): Promise<void> {
   return asks.load(entryKey(prId, headSha), { prId }).then(() => undefined);
 }
 
-/** Rows that streamed during a dropped connection are gone; re-ask for the PR on screen. */
+/** The diff a `pending` ask was waiting for is cached: ask again. */
+export function onDiffCached(data: { prId: string; headSha: string }): void {
+  const key = entryKey(data.prId, data.headSha);
+  if (asks.isWaiting(key)) void asks.refresh(key, { prId: data.prId });
+}
+
+/**
+ * Rows that streamed during a dropped connection are gone, and so is any
+ * `diff:cached`: re-ask for the PR on screen and for every waiting ask.
+ */
 export function onEventsReconnected(): void {
   const prId = getSelectedPrId();
   const headSha = prId ? getLoadedHeadSha(prId) : null;
   if (prId && headSha) void ensureHunkScan(prId, headSha);
+  for (const key of asks.waitingKeys()) {
+    const waitingPrId = key.slice(0, key.lastIndexOf("@"));
+    if (waitingPrId !== prId) void asks.refresh(key, { prId: waitingPrId });
+  }
 }
 
 export function reset(): void {

@@ -4,7 +4,7 @@ import { JEV_API_KEY_SECRET, SecretStore } from "../../services/SecretStore";
 
 /**
  * TypeSafe System One API key storage. Route modules can't import `SecretStore`
- * directly (Identity boundary in `scripts/check-import-boundaries.ts`); these
+ * directly (secret-store boundary in `scripts/check-import-boundaries.ts`); these
  * helpers are the settings routes' way in, since the key shares the keyring.
  */
 

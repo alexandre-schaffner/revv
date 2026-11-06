@@ -1,19 +1,20 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db/index";
 import { account, pullRequests, repositories, user } from "../db/schema";
 import { type ObservedPr, STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
 import { DbService } from "./Db";
 import { DiffCacheService, DiffCacheServiceLive } from "./DiffCache";
-import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
-import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { GitHubGateway } from "./github/gateway";
+import { pullsApi } from "./github/pulls";
+import { githubClient, makeHttp } from "./github/transport";
 import {
   type ListArchivedPrsParams,
   PullRequestService,
   PullRequestServiceLive,
 } from "./PullRequest";
-import { SettingsServiceLive } from "./Settings";
+import { Realtime } from "./Realtime";
 
 const ACCOUNT_ID = "acc-1";
 const REPO_ID = "repo-1";
@@ -228,22 +229,41 @@ function seedDiffStats(
   prId: string,
   files: ReadonlyArray<{ path: string; additions: number; deletions: number }>,
 ): Promise<void> {
+  const github = {
+    prs: {
+      files: () =>
+        Effect.succeed(
+          files.map((f) => ({
+            filename: f.path,
+            previousFilename: null,
+            status: "modified",
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: null,
+          })),
+        ),
+    },
+  } as unknown as Context.Service.Shape<typeof GitHubGateway>;
+  const realtime = { toPr: () => Effect.void } as unknown as Context.Service.Shape<typeof Realtime>;
+  const pr = readRow(db, prId);
   return Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* DiffCacheService;
-      yield* svc.cacheFiles(
-        readRow(db, prId),
-        files.map((f) => ({
-          path: f.path,
-          oldPath: null,
-          status: "modified",
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: null,
-          fetchedAt: "2026-02-01T00:00:00Z",
-        })),
-      );
-    }).pipe(Effect.provide(DiffCacheServiceLive), Effect.provide(Layer.succeed(DbService, { db }))),
+      yield* svc.getOrFetch(pr, "o/r", githubClient("github.com", "token", ACCOUNT_ID));
+    }).pipe(
+      Effect.provide(
+        DiffCacheServiceLive.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(DbService, { db }),
+              Layer.succeed(GitHubGateway, github),
+              Layer.succeed(Realtime, realtime),
+            ),
+          ),
+        ),
+      ),
+      Effect.asVoid,
+    ),
   );
 }
 
@@ -585,27 +605,23 @@ describe("upsertPrs stack membership", () => {
           ),
         { preconnect: realFetch.preconnect },
       );
-      const dbLayer = Layer.succeed(DbService, { db });
-      const layer = Layer.mergeAll(GitHubGatewayLive, PullRequestServiceLive).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive).pipe(
-            Layer.provideMerge(dbLayer),
-          ),
-        ),
-      );
-      const apiBase = "https://api.github.test";
+      const prs = pullsApi(makeHttp(null, null));
+      const client = githubClient("github.test", "t", null);
 
       await Effect.runPromise(
         Effect.gen(function* () {
-          const github = yield* GitHubGateway;
           const svc = yield* PullRequestService;
-          const detail = yield* github.prs.get("acme/web", 1, "t", apiBase);
-          yield* svc.upsertPrs([{ ...detail, id: "pr-open-alice", repositoryId: REPO_ID }]);
+          const detail = yield* prs.get(client, "acme/web", REPO_ID, 1);
+          yield* svc.upsertPrs([{ ...detail, id: "pr-open-alice" }]);
           expect(storedStack(db)).toEqual({ number: 7, position: 3 });
 
-          const batch = yield* github.prs.getMany("acme/web", REPO_ID, [1], "t", apiBase);
+          const batch = yield* prs.getMany(client, "acme/web", REPO_ID, [1]);
           yield* svc.upsertPrs([...batch.values()].map((pr) => ({ ...pr, id: "pr-open-alice" })));
-        }).pipe(Effect.orDie, Effect.provide(layer)),
+        }).pipe(
+          Effect.orDie,
+          Effect.provide(PullRequestServiceLive),
+          Effect.provideService(DbService, { db }),
+        ),
       );
 
       expect(storedStack(db)).toEqual({ number: 7, position: 3 });

@@ -1,7 +1,7 @@
 // The previews the review page asks for before generation: the PR's sizing
 // and its first pass. Both read the cached diff only, never GitHub, so a
 // preview can't become a rate-limit risk, and answer `pending` until the diff
-// lands; the client asks again. Both share the cached job-start answer the
+// lands, which `DiffCacheService` announces as `diff:cached`. Both share the cached job-start answer the
 // walkthrough itself uses — one TypeSafe call, made by whoever asks first.
 
 import type { HunkScanEnsureResult, WalkthroughSizing } from "@revv/shared";
@@ -11,44 +11,35 @@ import {
   resolveJobStartAnswers,
   routeFromAnswers,
 } from "../../ai/jev/job-start";
-import type { FileLike } from "../../ai/jev/state";
 import type { AppServices } from "../../runtime";
-import { DiffCacheService } from "../../services/DiffCache";
+import { DiffCacheService, toGitHubFileShape } from "../../services/DiffCache";
 import { HunkScanService } from "../../services/HunkScan";
 import { JevService } from "../../services/Jev";
 import { PrContextService } from "../../services/PrContext";
 import { SettingsService } from "../../services/Settings";
 
 /** The PR, its head, and its cached diff, or null until the diff lands. */
-function loadCachedPrDiff(prId: string, userId: string) {
+function loadCachedPrDiff(prId: string) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
-    const { pr } = yield* prContext.resolveBasic(prId, userId);
+    const { pr } = yield* prContext.forPr(prId);
     if (!pr.headSha) return null;
     const diffCache = yield* DiffCacheService;
     const cached = yield* diffCache.getCachedFiles(pr.id);
-    if (cached === null || cached.length === 0) return null;
-    const files: FileLike[] = cached.map((f) => ({
-      filename: f.path,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      patch: f.patch,
-    }));
-    return { pr, headSha: pr.headSha, files };
+    if (cached === null) return null;
+    return { pr, headSha: pr.headSha, files: toGitHubFileShape(cached) };
   });
 }
 
 /** Risk tier for the review page, and what "Auto" would pick for the model. */
 export function walkthroughSizing(
   prId: string,
-  userId: string,
 ): Effect.Effect<WalkthroughSizing, unknown, AppServices> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     if (!(yield* jev.isAvailable())) return { status: "off" as const };
 
-    const diff = yield* loadCachedPrDiff(prId, userId);
+    const diff = yield* loadCachedPrDiff(prId);
     if (diff === null) return { status: "pending" as const };
 
     const answers = yield* resolveJobStartAnswers(diff.pr.id, diff.headSha, {
@@ -86,13 +77,12 @@ export function walkthroughSizing(
  */
 export function ensureHunkScan(
   prId: string,
-  userId: string,
 ): Effect.Effect<HunkScanEnsureResult, unknown, AppServices> {
   return Effect.gen(function* () {
     const jev = yield* JevService;
     if (!(yield* jev.isAvailable())) return { status: "off" as const };
 
-    const diff = yield* loadCachedPrDiff(prId, userId);
+    const diff = yield* loadCachedPrDiff(prId);
     if (diff === null) return { status: "pending" as const };
     const { pr, headSha, files } = diff;
 

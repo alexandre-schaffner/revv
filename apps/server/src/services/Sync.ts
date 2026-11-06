@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 import type { ThreadSummary } from "@revv/shared";
-import { isThreadResolved } from "@revv/shared";
+import { isThreadResolved, loginsMatch } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { SyncError } from "../domain/errors";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import type { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
-import { type GhReviewComment, type GhReviewThread, GitHubGateway } from "./GitHub";
-import type { GitHubEtagCache } from "./GitHubEtagCache";
+import { GitHubAccounts } from "./github/accounts";
+import { AvatarCache } from "./github/avatars";
+import { GitHubGateway } from "./github/gateway";
+import type { GhReviewComment, GhReviewThread } from "./github/reviews";
 import { diffFileFor, toGitHubComment } from "./github-review-comment";
 import { PrContextService } from "./PrContext";
 import { PullRequestService } from "./PullRequest";
 import { Realtime } from "./Realtime";
-import { RemoteUserService } from "./RemoteUser";
 import { ReviewService } from "./Review";
-import type { SettingsService } from "./Settings";
 import { extractGitHubMentions } from "./sync-engine/mentions";
 import { latestUpdatedAt } from "./sync-engine/watermark";
 
@@ -31,28 +31,14 @@ export interface PullResult {
   readonly changed: boolean;
 }
 
-export interface SyncResult {
-  readonly pulled: PullResult;
-  readonly summary: ThreadSummary;
-}
-
 export class SyncService extends Context.Service<
   SyncService,
   {
-    readonly pushThread: (
-      threadId: string,
-      userId?: string,
-    ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
-    readonly pushReply: (
-      messageId: string,
-    ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
-    readonly pushThreadStatus: (
-      threadId: string,
-    ) => Effect.Effect<void, SyncError, DbService | SettingsService>;
+    readonly pushThread: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
+    readonly pushReply: (messageId: string) => Effect.Effect<void, SyncError, DbService>;
+    readonly pushThreadStatus: (threadId: string) => Effect.Effect<void, SyncError, DbService>;
     /** One pull per PR at a time: a call while one is in flight for the same PR joins it. */
-    readonly pullComments: (
-      prId: string,
-    ) => Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
+    readonly pullComments: (prId: string) => Effect.Effect<PullResult, SyncError, DbService>;
     /**
      * Reconcile one PR's threads against GitHub.
      *
@@ -60,11 +46,14 @@ export class SyncService extends Context.Service<
      * envelope is what clears the client's per-PR spinner, so it must go out
      * even when nothing changed. The background sweep leaves it unset and stays
      * silent on no-op PRs.
+     *
+     * Like every background read, it skips an account that needs re-auth or
+     * is paused after a rate limit, failing with a `SyncError` that says so.
      */
     readonly syncThreads: (
       prId: string,
       opts?: { readonly force?: boolean },
-    ) => Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService>;
+    ) => Effect.Effect<PullResult, SyncError, DbService>;
     readonly getThreadSummary: (prId: string) => Effect.Effect<ThreadSummary, SyncError, DbService>;
   }
 >()("SyncService") {}
@@ -89,22 +78,17 @@ export const SyncServiceLive = Layer.effect(
     const prService = yield* PullRequestService;
     const prContext = yield* PrContextService;
     const reviewService = yield* ReviewService;
-    const remoteUserService = yield* RemoteUserService;
+    const avatars = yield* AvatarCache;
     const realtime = yield* Realtime;
     const diffCache = yield* DiffCacheService;
+    const accounts = yield* GitHubAccounts;
 
-    // Background-worker PR context — always uses the 'single-user' token.
-    const resolvePrContext = (prId: string) => prContext.resolveBasic(prId, "single-user");
-
-    const pushThread = (
-      threadId: string,
-      userId = "single-user",
-    ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
+    const pushThread = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
       Effect.gen(function* () {
         const { thread, prId } = yield* reviewService.getThread(threadId);
         if (thread.externalCommentId) return;
 
-        const { pr, repo, token, apiBase } = yield* prContext.resolveBasic(prId, userId);
+        const { pr, repo, client } = yield* prContext.forPr(prId);
 
         if (!pr.headSha) {
           return yield* Effect.fail(
@@ -139,11 +123,10 @@ export const SyncServiceLive = Layer.effect(
         const commentPayload = { ...fit.comment, commitSha: pr.headSha };
 
         const posted = yield* github.reviews.createComment(
+          client,
           repo.fullName,
           pr.externalId,
           commentPayload,
-          token,
-          apiBase,
         );
 
         const externalCommentId = String(posted.id);
@@ -154,10 +137,9 @@ export const SyncServiceLive = Layer.effect(
         yield* reviewService.linkMessage(first.id, externalCommentId);
 
         const threadsOnGithub = yield* github.reviews.listThreads(
+          client,
           repo.fullName,
           pr.externalId,
-          token,
-          apiBase,
         );
         const match = threadsOnGithub.find((t) => t.commentDatabaseIds.includes(posted.id));
         if (match) {
@@ -165,9 +147,7 @@ export const SyncServiceLive = Layer.effect(
         }
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
-    const pushReply = (
-      messageId: string,
-    ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
+    const pushReply = (messageId: string): Effect.Effect<void, SyncError, DbService> =>
       Effect.gen(function* () {
         const message = yield* reviewService.getMessage(messageId);
         if (message.externalId) return;
@@ -190,32 +170,28 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
-        const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
+        const { pr, repo, client } = yield* prContext.forPr(prId);
 
         const posted = yield* github.reviews.replyToComment(
+          client,
           repo.fullName,
           pr.externalId,
           parentCommentId,
           message.body,
-          token,
-          apiBase,
         );
         yield* reviewService.linkMessage(message.id, String(posted.id));
       }).pipe(Effect.mapError(toSyncError()));
 
-    const pushThreadStatus = (
-      threadId: string,
-    ): Effect.Effect<void, SyncError, DbService | SettingsService> =>
+    const pushThreadStatus = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
       Effect.gen(function* () {
         const { thread, prId } = yield* reviewService.getThread(threadId);
         if (!thread.externalThreadId) return;
 
-        const { token, apiBase } = yield* resolvePrContext(prId);
+        const { client } = yield* prContext.forPr(prId);
 
-        const isResolved = isThreadResolved(thread.status);
-        yield* isResolved
-          ? github.reviews.resolveThread(thread.externalThreadId, token, apiBase)
-          : github.reviews.unresolveThread(thread.externalThreadId, token, apiBase);
+        yield* isThreadResolved(thread.status)
+          ? github.reviews.resolveThread(client, thread.externalThreadId)
+          : github.reviews.unresolveThread(client, thread.externalThreadId);
       }).pipe(Effect.mapError(toSyncError(threadId)));
 
     const getThreadSummary = (prId: string): Effect.Effect<ThreadSummary, SyncError, DbService> =>
@@ -228,19 +204,26 @@ export const SyncServiceLive = Layer.effect(
 
     const pullCommentsFromGitHub = (
       prId: string,
-    ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+    ): Effect.Effect<PullResult, SyncError, DbService> =>
       Effect.gen(function* () {
-        const { pr, repo, token, apiBase } = yield* resolvePrContext(prId);
+        const { pr, repo, accountId } = yield* prContext.forPr(prId);
+        const client = yield* accounts.backgroundClient(accountId, "core");
+        if (client === null) {
+          return yield* Effect.fail(
+            new SyncError({
+              message: "GitHub sync is paused for this account (sign-in needed or rate limited)",
+            }),
+          );
+        }
 
         // Incremental poll: ask GitHub only for comments newer than our
         // last successful sync. Null on cold-start pulls everything.
         const since = yield* prService.getCommentsSyncedAt(pr.id);
         const comments = yield* github.reviews.listComments(
+          client,
           repo.fullName,
           pr.externalId,
           since,
-          token,
-          apiBase,
         );
 
         let newThreads = 0;
@@ -263,7 +246,7 @@ export const SyncServiceLive = Layer.effect(
         const hasIncomingReplies = comments.some((c) => c.inReplyToId !== null);
         const needsGhThreads = localThreadsBefore.length > 0 || hasIncomingReplies;
         const ghThreads = needsGhThreads
-          ? yield* github.reviews.listThreads(repo.fullName, pr.externalId, token, apiBase)
+          ? yield* github.reviews.listThreads(client, repo.fullName, pr.externalId)
           : [];
 
         // Every comment id GitHub lists in a thread maps to that thread's root
@@ -303,8 +286,12 @@ export const SyncServiceLive = Layer.effect(
             pendingAuthors.set(c.authorLogin, c.authorAvatarUrl);
           }
 
-          const authorRole: "reviewer" | "coder" | "ai_agent" =
-            c.authorLogin === pr.authorLogin ? "coder" : "reviewer";
+          const authorRole: "reviewer" | "coder" | "ai_agent" = loginsMatch(
+            c.authorLogin,
+            pr.authorLogin,
+          )
+            ? "coder"
+            : "reviewer";
 
           if (c.inReplyToId !== null) {
             const rootId = rootByCommentId.get(c.id) ?? findRootInBatch(c, byExternalId);
@@ -357,12 +344,7 @@ export const SyncServiceLive = Layer.effect(
         }
 
         for (const [login, avatarUrl] of pendingAuthors) {
-          yield* remoteUserService.upsert({
-            provider: "github",
-            providerUserId: "", // We don't have the numeric ID from GraphQL comments
-            login,
-            avatarUrl,
-          });
+          yield* avatars.ensure(repo.githubHost, login, avatarUrl);
         }
 
         // Extract @-mentions from newly-synced review comments and append
@@ -421,30 +403,25 @@ export const SyncServiceLive = Layer.effect(
       }).pipe(Effect.mapError(toSyncError()));
 
     const pullOnce = keyedSingleFlight<string, PullResult, SyncError>();
-    const pullComments = (
-      prId: string,
-    ): Effect.Effect<PullResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+    const pullComments = (prId: string): Effect.Effect<PullResult, SyncError, DbService> =>
       pullOnce(prId, pullCommentsFromGitHub(prId));
 
     const syncThreads = (
       prId: string,
       opts?: { readonly force?: boolean },
-    ): Effect.Effect<SyncResult, SyncError, DbService | GitHubEtagCache | SettingsService> =>
+    ): Effect.Effect<PullResult, SyncError, DbService> =>
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
-        const summary = yield* getThreadSummary(prId);
-        // The background sweep visits every open PR on every tick. Announcing
-        // an unchanged summary for each one costs an SSE message per PR and two
-        // Map clones in every connected client, for no new information — so stay
-        // quiet unless something moved. User-initiated syncs always announce:
-        // this envelope is what clears their per-PR spinner.
+        // The background sweep visits every open PR on every tick; announcing
+        // a no-op for each would be an SSE message per PR for nothing. A
+        // user-initiated sync always announces: it clears their spinner.
         if (pulled.changed || opts?.force === true) {
           yield* realtime.toPr(prId, {
             type: "threads:synced",
-            data: { prId, summary, timestamp: new Date().toISOString() },
+            data: { prId, timestamp: new Date().toISOString() },
           });
         }
-        return { pulled, summary };
+        return pulled;
       }).pipe(Effect.mapError(toSyncError()));
 
     return {

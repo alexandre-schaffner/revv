@@ -3,11 +3,19 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { ForbiddenError, NotFoundError } from "../domain/errors";
 import { logError } from "../logger";
+import { GitHubAccounts } from "../services/github/accounts";
 import { ReviewService } from "../services/Review";
 import { SyncService } from "../services/Sync";
 import { runRoute, withAccount } from "./middleware";
 import { ownedBy } from "./ownership";
 import { threadMessageBody } from "./thread-message";
+
+/**
+ * The signed-in user's GitHub login on the account the request runs as, the
+ * same identity the UI shows: who may edit, discard or publish a draft.
+ */
+const viewerLogin = (accountId: string) =>
+  Effect.flatMap(GitHubAccounts, (accounts) => accounts.viewerLogin(accountId));
 
 export const threadRoutes = new Elysia({ prefix: "/api/threads" })
   .use(withAccount)
@@ -57,7 +65,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
             new NotFoundError({ resource: "thread message", id: ctx.params.id }),
           );
         }
-        if (!canUserModifyComment(firstMessage, ctx.account.githubLogin)) {
+        if (!canUserModifyComment(firstMessage, yield* viewerLogin(ctx.account.accountId))) {
           return yield* Effect.fail(
             new ForbiddenError({
               message: "You can only publish your own comments or comments left by Revv",
@@ -66,16 +74,17 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
         }
 
         const sync = yield* SyncService;
-        yield* sync.pushThread(ctx.params.id, ctx.session.user.id);
+        yield* sync.pushThread(ctx.params.id);
       }).pipe(Effect.as({ success: true })),
     ),
   )
 
   .delete("/:id", (ctx) =>
     runRoute(
-      Effect.flatMap(ReviewService, (review) =>
-        review.discardThread(ctx.params.id, ctx.account.githubLogin),
-      ).pipe(Effect.as({ success: true })),
+      Effect.gen(function* () {
+        const review = yield* ReviewService;
+        yield* review.discardThread(ctx.params.id, yield* viewerLogin(ctx.account.accountId));
+      }).pipe(Effect.as({ success: true })),
     ),
   )
 
@@ -83,14 +92,15 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     "/:id/messages/:messageId",
     (ctx) =>
       runRoute(
-        Effect.flatMap(ReviewService, (review) =>
-          review.editDraft(
+        Effect.gen(function* () {
+          const review = yield* ReviewService;
+          return yield* review.editDraft(
             ctx.params.id,
             ctx.params.messageId,
             ctx.body.body,
-            ctx.account.githubLogin,
-          ),
-        ),
+            yield* viewerLogin(ctx.account.accountId),
+          );
+        }),
       ),
     { body: t.Object({ body: t.String() }) },
   )
@@ -105,9 +115,14 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
 
   .delete("/:id/messages/:messageId", (ctx) =>
     runRoute(
-      Effect.flatMap(ReviewService, (review) =>
-        review.discardReply(ctx.params.id, ctx.params.messageId, ctx.account.githubLogin),
-      ).pipe(Effect.as({ success: true })),
+      Effect.gen(function* () {
+        const review = yield* ReviewService;
+        yield* review.discardReply(
+          ctx.params.id,
+          ctx.params.messageId,
+          yield* viewerLogin(ctx.account.accountId),
+        );
+      }).pipe(Effect.as({ success: true })),
     ),
   )
 

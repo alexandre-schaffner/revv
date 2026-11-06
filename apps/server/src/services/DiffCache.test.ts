@@ -1,24 +1,25 @@
 import { describe, expect, it } from "bun:test";
+import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { type Context, Effect, Layer } from "effect";
 import { createDb, type Db } from "../db";
 import { prDiffFiles, pullRequests } from "../db/schema";
-import { GitHubAuthError, GitHubRateLimitError } from "../domain/errors";
+import { GitHubAuthError, type GitHubError, GitHubRateLimitError } from "../domain/errors";
 import { DbService } from "./Db";
 import {
   type CachedDiffFile,
   DiffCacheService,
   DiffCacheServiceLive,
   type FetchedFor,
-  getOrFetchDiffFiles,
   hasCompleteCachedFiles,
   readCurrentHeadFiles,
   readCurrentHeadPatch,
   shouldServeCachedFilesOnFetchError,
 } from "./DiffCache";
-import { GitHubGateway, PR_FILES_MAX_COUNT } from "./GitHub";
-import { GitHubEtagCache } from "./GitHubEtagCache";
-import { SettingsService } from "./Settings";
+import { GitHubGateway } from "./github/gateway";
+import { PR_FILES_MAX_COUNT, type PrFileMeta } from "./github/pulls";
+import { githubClient } from "./github/transport";
+import { Realtime } from "./Realtime";
 
 function cachedFile(path: string): CachedDiffFile {
   return {
@@ -32,7 +33,21 @@ function cachedFile(path: string): CachedDiffFile {
   };
 }
 
+function githubFile(path: string, overrides: Partial<PrFileMeta> = {}): PrFileMeta {
+  return {
+    filename: path,
+    previousFilename: null,
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    patch: null,
+    ...overrides,
+  };
+}
+
 const AT_A: FetchedFor = { id: "pr-1", headSha: "A", baseSha: "base" };
+const PR = { id: "pr-1", externalId: 1 };
+const CLIENT = githubClient("github.com", "token", "acc-1");
 
 function freshDb(): Db {
   const db = createDb(":memory:");
@@ -62,24 +77,47 @@ function seedPr(db: Db): void {
     .run();
 }
 
-function runDiffCache<A>(
+/** A diff cache over `db` whose GitHub answers `files()`; the pushes it sends land in `pushed`. */
+function diffCache(
   db: Db,
-  use: (s: Context.Service.Shape<typeof DiffCacheService>) => Effect.Effect<A, never, DbService>,
-): Promise<A> {
-  return Effect.runPromise(
-    Effect.flatMap(DiffCacheService, use).pipe(
-      Effect.provide(DiffCacheServiceLive),
-      Effect.provide(Layer.succeed(DbService, { db })),
+  files: () => Effect.Effect<PrFileMeta[], GitHubError>,
+): {
+  readonly run: <A, E>(
+    use: (s: Context.Service.Shape<typeof DiffCacheService>) => Effect.Effect<A, E>,
+  ) => Promise<A>;
+  readonly pushed: ServerEventMessage[];
+} {
+  const pushed: ServerEventMessage[] = [];
+  const layer = DiffCacheServiceLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(DbService, { db }),
+        Layer.succeed(GitHubGateway, {
+          prs: { files: () => files() },
+        } as unknown as Context.Service.Shape<typeof GitHubGateway>),
+        Layer.succeed(Realtime, {
+          toPr: (_prId: string, msg: ServerEventMessage) =>
+            Effect.sync(() => void pushed.push(msg)),
+        } as unknown as Context.Service.Shape<typeof Realtime>),
+      ),
     ),
   );
+  return {
+    run: (use) =>
+      Effect.runPromise(Effect.flatMap(DiffCacheService, use).pipe(Effect.provide(layer))),
+    pushed,
+  };
 }
 
-function cacheFiles(db: Db, fetchedFor: FetchedFor, files: CachedDiffFile[]): Promise<void> {
-  return runDiffCache(db, (s) => s.cacheFiles(fetchedFor, files));
+const fetchFiles = (cache: ReturnType<typeof diffCache>) =>
+  cache.run((s) => s.getOrFetch(PR, "o/r", CLIENT));
+
+async function cacheFiles(db: Db, files: PrFileMeta[]): Promise<void> {
+  await fetchFiles(diffCache(db, () => Effect.succeed(files)));
 }
 
 function cachedPrIds(db: Db): Promise<string[]> {
-  return runDiffCache(db, (s) => s.getPrIdsWithCachedDiffs());
+  return diffCache(db, () => Effect.succeed([])).run((s) => s.getPrIdsWithCachedDiffs());
 }
 
 describe("hasCompleteCachedFiles", () => {
@@ -144,45 +182,52 @@ describe("shouldServeCachedFilesOnFetchError", () => {
   });
 });
 
-describe("cacheFiles", () => {
-  it("is idempotent for duplicate rows with the same deterministic id", async () => {
+describe("getOrFetch writes", () => {
+  it("one row per path, the last entry winning", async () => {
     const db = freshDb();
+    seedPr(db);
 
-    const first = cachedFile("src/a.ts");
-    const second: CachedDiffFile = {
-      ...first,
-      oldPath: "src/old-a.ts",
-      additions: 3,
-      patch: "@@ second",
-      fetchedAt: "2026-01-01T00:01:00.000Z",
-    };
-
-    await cacheFiles(db, AT_A, [first, second]);
+    await cacheFiles(db, [
+      githubFile("src/a.ts"),
+      githubFile("src/a.ts", {
+        previousFilename: "src/old-a.ts",
+        additions: 3,
+        patch: "@@ second",
+      }),
+    ]);
 
     const rows = db.select().from(prDiffFiles).where(eq(prDiffFiles.prId, "pr-1")).all();
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.path).toBe("src/a.ts");
     expect(rows[0]?.oldPath).toBe("src/old-a.ts");
     expect(rows[0]?.additions).toBe(3);
     expect(rows[0]?.patch).toBe("@@ second");
   });
 
-  it("records the stored row count, not the length of a list with repeats", async () => {
+  it("record the stored row count, not the length of a list with repeats", async () => {
     const db = freshDb();
     seedPr(db);
 
     // GitHub reports a type-changed path twice: once removed, once added.
-    await cacheFiles(db, AT_A, [
-      cachedFile("src/a.ts"),
-      cachedFile("AGENTS.md"),
-      cachedFile("AGENTS.md"),
+    await cacheFiles(db, [
+      githubFile("src/a.ts"),
+      githubFile("AGENTS.md"),
+      githubFile("AGENTS.md"),
     ]);
 
     const pr = db.select().from(pullRequests).where(eq(pullRequests.id, "pr-1")).get();
     expect(pr?.diffFilesCachedCount).toBe(2);
     expect(pr?.changedFiles).toBe(2);
-    // Not 3 — the repeated path must not be counted twice in the diff stats.
     expect(pr?.additions).toBe(2);
+  });
+
+  it("announce the diff after it is stored", async () => {
+    const db = freshDb();
+    seedPr(db);
+    const cache = diffCache(db, () => Effect.succeed([githubFile("src/a.ts")]));
+
+    await fetchFiles(cache);
+
+    expect(cache.pushed).toEqual([{ type: "diff:cached", data: { prId: "pr-1", headSha: "A" } }]);
   });
 });
 
@@ -191,7 +236,7 @@ describe("files cached for a PR's current head and base", () => {
     for (const move of [{ headSha: "B" }, { baseSha: "base-2" }]) {
       const db = freshDb();
       seedPr(db);
-      await cacheFiles(db, AT_A, [{ ...cachedFile("src/a.ts"), patch: "@@ a" }]);
+      await cacheFiles(db, [githubFile("src/a.ts", { patch: "@@ a" })]);
       expect(
         readCurrentHeadFiles(db, ["pr-1"])
           .get("pr-1")
@@ -206,6 +251,40 @@ describe("files cached for a PR's current head and base", () => {
       expect(readCurrentHeadPatch(db, "pr-1", "src/a.ts")).toBeNull();
       expect(await cachedPrIds(db)).toEqual([]);
     }
+  });
+
+  it("include an empty diff, which is not fetched again", async () => {
+    const db = freshDb();
+    seedPr(db);
+    let fetches = 0;
+    const cache = diffCache(db, () =>
+      Effect.sync(() => {
+        fetches++;
+        return [];
+      }),
+    );
+
+    await fetchFiles(cache);
+    const second = await fetchFiles(cache);
+
+    expect(fetches).toBe(1);
+    expect(second).toEqual({ files: [], source: "cache" });
+    expect(readCurrentHeadFiles(db, ["pr-1"]).get("pr-1")).toEqual([]);
+  });
+
+  it("are served when GitHub rate-limits the refresh of an incomplete cache", async () => {
+    const db = freshDb();
+    seedPr(db);
+    await cacheFiles(db, [githubFile("src/a.ts"), githubFile("src/b.ts")]);
+    db.delete(prDiffFiles).where(eq(prDiffFiles.path, "src/b.ts")).run();
+    const limited = diffCache(db, () =>
+      Effect.fail(new GitHubRateLimitError({ resetAt: new Date(), kind: "primary" })),
+    );
+
+    const answer = await fetchFiles(limited);
+
+    expect(answer.source).toBe("cache");
+    expect(answer.files.map((f) => f.path)).toEqual(["src/a.ts"]);
   });
 
   it("never include rows cached before files carried a head stamp", async () => {
@@ -229,45 +308,20 @@ describe("files cached for a PR's current head and base", () => {
     const db = freshDb();
     seedPr(db);
     let fetches = 0;
-    const github = {
-      prs: {
-        files: () =>
-          Effect.sync(() => {
-            fetches++;
-            if (fetches === 1) {
-              db.update(pullRequests)
-                .set({ headSha: "B" })
-                .where(eq(pullRequests.id, "pr-1"))
-                .run();
-            }
-            return [
-              {
-                filename: `src/fetch-${fetches}.ts`,
-                previousFilename: null,
-                status: "modified",
-                additions: 1,
-                deletions: 0,
-                patch: null,
-              },
-            ];
-          }),
-      },
-    } as unknown as Context.Service.Shape<typeof GitHubGateway>;
-    const getOrFetch = () =>
-      Effect.runPromise(
-        getOrFetchDiffFiles("pr-1", "o/r", 1, "token").pipe(
-          Effect.provide(DiffCacheServiceLive),
-          Effect.provideService(GitHubGateway, github),
-          Effect.provideService(DbService, { db }),
-          Effect.provideService(GitHubEtagCache, {} as never),
-          Effect.provideService(SettingsService, {} as never),
-        ),
-      );
+    const cache = diffCache(db, () =>
+      Effect.sync(() => {
+        fetches++;
+        if (fetches === 1) {
+          db.update(pullRequests).set({ headSha: "B" }).where(eq(pullRequests.id, "pr-1")).run();
+        }
+        return [githubFile(`src/fetch-${fetches}.ts`)];
+      }),
+    );
 
-    await getOrFetch();
+    await fetchFiles(cache);
     expect(readCurrentHeadFiles(db, ["pr-1"]).has("pr-1")).toBe(false);
 
-    expect((await getOrFetch()).map((f) => f.path)).toEqual(["src/fetch-2.ts"]);
+    expect((await fetchFiles(cache)).files.map((f) => f.path)).toEqual(["src/fetch-2.ts"]);
     expect(fetches).toBe(2);
     expect(
       readCurrentHeadFiles(db, ["pr-1"])

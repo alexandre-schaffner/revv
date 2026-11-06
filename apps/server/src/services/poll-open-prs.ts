@@ -1,16 +1,15 @@
 /**
  * The open-PR list phases of `PollScheduler.syncAllRepos`: deciding which repos
- * need a re-list, listing and writing one repo, and settling the PRs that left
- * the open list.
+ * need a re-list, listing one repo and handing it to `PrMirror`, and settling
+ * the PRs that left the open list.
  */
 import { type PullRequest, type Repository, sameStack } from "@revv/shared";
-import { eq } from "drizzle-orm";
+import type { Context } from "effect";
 import { Effect } from "effect";
-import { pullRequests } from "../db/schema/pull-requests";
-import { asStored } from "../domain/observed-pr";
-import { dbTry } from "../effects/db-try";
-import { withDb } from "../effects/with-db";
+import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
+import type { AvatarCache } from "./github/avatars";
+import type { GitHubGateway } from "./github/gateway";
 import {
   OPEN_PRS_LIST_CAP,
   OPEN_PRS_PAGE_SIZE,
@@ -18,26 +17,15 @@ import {
   type OpenPrListSignature,
   sameSignature,
   signatureOfList,
-} from "./github-graphql-prs";
-import { apiBaseForHost } from "./github-rest";
-import {
-  type GitHubInfra,
-  type LiveAccount,
-  markStaleAndAnnounceStacks,
-  type PollDeps,
-  type SyncCycle,
-} from "./poll-cycle";
+} from "./github/pulls";
+import type { GitHubClient } from "./github/transport";
+import type { PrMirror } from "./PrMirror";
+import type { AccountGate } from "./poll-gate";
+import type { ListedSignature, PollState } from "./poll-state";
 import { needsDiffStats } from "./pr-diff-stats";
 import { preserveHeadOnStaleRead } from "./pr-head-move";
-import type { SettingsService } from "./Settings";
 
-/**
- * Per-cycle cap on how many just-closed PRs we individually re-fetch to learn
- * whether they were merged or plain-closed. Applied per item, not to the batch:
- * exceeding it degrades the tail of the list to `'closed'`, it does not
- * abandon status resolution for the whole batch.
- */
-const CLOSED_PR_STATUS_FETCH_LIMIT = 10;
+type Github = Context.Service.Shape<typeof GitHubGateway>;
 
 /**
  * How long a repo can go without a full re-list, on the strength of unchanged
@@ -93,8 +81,6 @@ export function decideListing(
   return deltaCheaperThanFull(probed) ? "delta" : "full";
 }
 
-const STACKLESS_RECHECK_MS = FULL_LIST_MAX_AGE_MS;
-
 /**
  * PRs whose diff range (head or base) moved since the pre-sync snapshot — the
  * ones whose cached diff is now wrong. A PR new to the mirror has none.
@@ -138,15 +124,6 @@ export function openListMoved(
   });
 }
 
-/** The last list of a repo that landed in SQLite, as its signature. */
-export interface ListedSignature {
-  readonly signature: OpenPrListSignature;
-  readonly listedAt: number;
-  readonly fullListedAt: number;
-  readonly hasStacks: boolean;
-  readonly truncated: boolean;
-}
-
 function listUnchanged(listed: ListedSignature, fresh: OpenPrListSignature): boolean {
   return listed.truncated
     ? fresh.latestUpdatedAt === listed.signature.latestUpdatedAt
@@ -160,20 +137,24 @@ export interface ProbedRepos {
   readonly signatures: Map<string, OpenPrListSignature>;
 }
 
+/**
+ * Probe the open-list signature of every repo with a recent list, one GraphQL
+ * request per account and host, to find the repos that need no re-list.
+ */
 export const probeRepos = (
-  deps: PollDeps,
-  cycle: SyncCycle,
+  github: Github,
+  gate: AccountGate,
+  state: PollState,
   repos: readonly Repository[],
-  listedSignatures: ReadonlyMap<string, ListedSignature>,
   reuse: boolean,
-): Effect.Effect<ProbedRepos, never, SettingsService> =>
+): Effect.Effect<ProbedRepos> =>
   Effect.gen(function* () {
     const now = Date.now();
     const candidatesByGroup = new Map<string, Repository[]>();
     for (const repo of repos) {
-      const listed = listedSignatures.get(repo.id);
+      const listed = state.listed(repo.id);
       if (!listed || signatureCoverage(listed, now) === "none") continue;
-      const accountId = cycle.repoToAccountId.get(repo.id);
+      const accountId = gate.repoToAccountId.get(repo.id);
       if (!accountId) continue;
       const key = accountHostKey(accountId, repo.githubHost);
       const group = candidatesByGroup.get(key);
@@ -191,21 +172,19 @@ export const probeRepos = (
           if (!first) return;
           // No GraphQL budget means no probe — and no GraphQL list either, so
           // the REST fallback's conditional requests decide instead.
-          const live = cycle.liveAccountForRepo(first.id, "graphql");
-          if (!live) return;
-          const probed = yield* cycle.tryGuarded(
-            live.acc,
-            deps.github.prs.probeOpenLists(
+          const client = yield* gate.clientForRepo(first.id, "graphql");
+          if (!client) return;
+          const probed = yield* gate.guarded(
+            github.prs.probeOpenLists(
+              client,
               group.map((r) => r.fullName),
-              live.token,
-              apiBaseForHost(first.githubHost),
             ),
-            { errorLabel: `open-PR list probe error for ${first.githubHost}` },
+            `open-PR list probe error for ${first.githubHost}`,
           );
           if (!probed) return;
           for (const repo of group) {
             const fresh = probed.get(repo.fullName);
-            const plan = decideListing(listedSignatures.get(repo.id), fresh, now, reuse);
+            const plan = decideListing(state.listed(repo.id), fresh, now, reuse);
             if (plan === "reuse") unchanged.add(repo.id);
             else if (plan === "delta" && fresh) signatures.set(repo.id, fresh);
           }
@@ -214,127 +193,6 @@ export const probeRepos = (
     );
     return { unchanged, signatures };
   });
-
-/**
- * One repo's open PRs over GraphQL, or over the REST list when the account's
- * GraphQL budget is spent — before the call or by it.
- */
-const listOpenPrs = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-  ctx: RepoListingContext,
-  repo: Repository,
-  live: LiveAccount,
-): Effect.Effect<OpenPrList | null, never, GitHubInfra> =>
-  Effect.gen(function* () {
-    const apiBase = apiBaseForHost(repo.githubHost);
-    if (cycle.liveAccount(live.acc, "graphql")) {
-      const listing = yield* listOpenPrsGraphql(deps, cycle, ctx, repo, live, null);
-      // Anything but a spent GraphQL budget is this repo's answer for the cycle.
-      if (listing !== null || cycle.liveAccount(live.acc, "graphql")) return listing;
-    }
-    if (!cycle.liveAccount(live.acc, "core")) return null;
-    const prs = yield* cycle.tryGuarded(
-      live.acc,
-      deps.github.prs.listOpenRest(repo.fullName, repo.id, live.token, apiBase),
-      { errorLabel: `listPrs (REST) error for ${repo.fullName}` },
-    );
-    return prs === null ? null : { prs, hostPredatesStacks: false };
-  });
-
-const listOpenPrsGraphql = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-  ctx: RepoListingContext,
-  repo: Repository,
-  live: LiveAccount,
-  updatedSince: string | null,
-): Effect.Effect<OpenPrList | null, never, GitHubInfra> =>
-  Effect.gen(function* () {
-    const stacklessKey = accountHostKey(live.acc.id, repo.githubHost);
-    const stacklessUntil = ctx.stacklessUntil.get(stacklessKey);
-    const withStacks = stacklessUntil === undefined || Date.now() >= stacklessUntil;
-    const listing = yield* cycle.tryGuarded(
-      live.acc,
-      deps.github.prs.listOpen(
-        repo.fullName,
-        repo.id,
-        live.token,
-        apiBaseForHost(repo.githubHost),
-        { withStacks, updatedSince },
-      ),
-      { errorLabel: `listPrs error for ${repo.fullName}` },
-    );
-    if (listing?.hostPredatesStacks) {
-      ctx.stacklessUntil.set(stacklessKey, Date.now() + STACKLESS_RECHECK_MS);
-    } else if (listing && withStacks) {
-      ctx.stacklessUntil.delete(stacklessKey);
-    }
-    return listing;
-  });
-
-interface DeltaListing extends OpenPrList {
-  readonly kept: readonly PullRequest[];
-}
-
-const listOpenPrsDelta = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-  ctx: RepoListingContext,
-  repo: Repository,
-  live: LiveAccount,
-): Effect.Effect<DeltaListing | null, never, GitHubInfra> =>
-  Effect.gen(function* () {
-    const listed = ctx.listedSignatures.get(repo.id);
-    const probed = ctx.probedSignatures.get(repo.id);
-    const since = listed?.signature.latestUpdatedAt ?? null;
-    if (!listed || !probed || since === null) return null;
-    if (!cycle.liveAccount(live.acc, "graphql")) return null;
-
-    const [open, closed] = yield* Effect.all(
-      [
-        listOpenPrsGraphql(deps, cycle, ctx, repo, live, since),
-        cycle.tryGuarded(
-          live.acc,
-          deps.github.prs.listClosedSince(
-            repo.fullName,
-            since,
-            live.token,
-            apiBaseForHost(repo.githubHost),
-          ),
-          { errorLabel: `closed-PR read error for ${repo.fullName}` },
-        ),
-      ],
-      { concurrency: 2 },
-    );
-    if (open === null || closed === null) return null;
-
-    const closedNumbers = new Set(closed);
-    const movedIds = new Set(open.prs.map((pr) => pr.id));
-    const kept = (ctx.existingByRepo.get(repo.id) ?? []).filter(
-      (pr) => !movedIds.has(pr.id) && !closedNumbers.has(pr.externalId),
-    );
-    if (!listed.truncated && kept.length + open.prs.length !== probed.count) return null;
-    return { ...open, kept };
-  });
-
-export function movedStackNumbers(
-  prs: readonly PullRequest[],
-  existingMap: ReadonlyMap<string, PullRequest>,
-): Set<number> {
-  const moved = new Set<number>();
-  for (const pr of prs) {
-    const existing = existingMap.get(pr.id);
-    const placeMoved = !sameStack(existing?.stack ?? null, pr.stack);
-    const rangeMoved =
-      existing !== undefined &&
-      (existing.headSha !== pr.headSha || existing.baseSha !== pr.baseSha);
-    if (!placeMoved && !rangeMoved) continue;
-    if (pr.stack) moved.add(pr.stack.number);
-    if (placeMoved && existing?.stack) moved.add(existing.stack.number);
-  }
-  return moved;
-}
 
 export interface RepoListing {
   /** The repo's open PRs as they now stand in SQLite. */
@@ -350,164 +208,195 @@ export interface RepoListingContext {
   /** Pre-sync open rows by id: the baseline every "did this move?" reads. */
   readonly existingMap: ReadonlyMap<string, PullRequest>;
   readonly existingByRepo: ReadonlyMap<string, readonly PullRequest[]>;
-  /** `pull_requests.diff_stats_head_sha` by PR id, advanced as stats land. */
-  readonly diffStatsHeadByPrId: Map<string, string | null>;
+  /** `pull_requests.diff_stats_head_sha` by PR id. */
+  readonly diffStatsHeadByPrId: ReadonlyMap<string, string | null>;
   readonly unchangedRepoIds: ReadonlySet<string>;
   readonly probedSignatures: ReadonlyMap<string, OpenPrListSignature>;
-  /** Written here whenever a full list lands in SQLite. */
-  readonly listedSignatures: Map<string, ListedSignature>;
-  readonly stacklessUntil: Map<string, number>;
 }
+
+export interface ListingServices {
+  readonly github: Github;
+  readonly mirror: Context.Service.Shape<typeof PrMirror>;
+  readonly avatars: Context.Service.Shape<typeof AvatarCache>;
+}
+
+/**
+ * One repo's open PRs over GraphQL, or over the REST list when the account's
+ * GraphQL budget is spent — before the call or by it.
+ */
+const listOpenPrs = (
+  github: Github,
+  gate: AccountGate,
+  state: PollState,
+  repo: Repository,
+  accountId: string,
+): Effect.Effect<OpenPrList | null> =>
+  Effect.gen(function* () {
+    const graphql = yield* gate.clientForAccount(accountId, "graphql");
+    if (graphql) {
+      const listing = yield* listOpenPrsGraphql(github, gate, state, repo, graphql, null);
+      // Anything but a spent GraphQL budget is this repo's answer for the cycle.
+      if (listing !== null || (yield* gate.clientForAccount(accountId, "graphql"))) return listing;
+    }
+    const rest = yield* gate.clientForAccount(accountId, "core");
+    if (!rest) return null;
+    const prs = yield* gate.guarded(
+      github.prs.listOpenRest(rest, repo.fullName, repo.id),
+      `listPrs (REST) error for ${repo.fullName}`,
+    );
+    return prs === null ? null : { prs, hostPredatesStacks: false };
+  });
+
+const listOpenPrsGraphql = (
+  github: Github,
+  gate: AccountGate,
+  state: PollState,
+  repo: Repository,
+  client: GitHubClient,
+  updatedSince: string | null,
+): Effect.Effect<OpenPrList | null> =>
+  Effect.gen(function* () {
+    const key = accountHostKey(client.accountId ?? "", repo.githubHost);
+    const withStacks = state.asksStacks(key, Date.now());
+    const listing = yield* gate.guarded(
+      github.prs.listOpen(client, repo.fullName, repo.id, { withStacks, updatedSince }),
+      `listPrs error for ${repo.fullName}`,
+    );
+    if (listing?.hostPredatesStacks) state.noteStacksRefused(key, Date.now());
+    else if (listing && withStacks) state.noteStacksAnswered(key);
+    return listing;
+  });
+
+interface DeltaListing extends OpenPrList {
+  readonly kept: readonly PullRequest[];
+}
+
+const listOpenPrsDelta = (
+  github: Github,
+  gate: AccountGate,
+  state: PollState,
+  ctx: RepoListingContext,
+  repo: Repository,
+  accountId: string,
+): Effect.Effect<DeltaListing | null> =>
+  Effect.gen(function* () {
+    const listed = state.listed(repo.id);
+    const probed = ctx.probedSignatures.get(repo.id);
+    const since = listed?.signature.latestUpdatedAt ?? null;
+    if (!listed || !probed || since === null) return null;
+    const client = yield* gate.clientForAccount(accountId, "graphql");
+    if (!client) return null;
+
+    const [open, closed] = yield* Effect.all(
+      [
+        listOpenPrsGraphql(github, gate, state, repo, client, since),
+        gate.guarded(
+          github.prs.listClosedSince(client, repo.fullName, since),
+          `closed-PR read error for ${repo.fullName}`,
+        ),
+      ],
+      { concurrency: 2 },
+    );
+    if (open === null || closed === null) return null;
+
+    const closedNumbers = new Set(closed);
+    const movedIds = new Set(open.prs.map((pr) => pr.id));
+    const kept = (ctx.existingByRepo.get(repo.id) ?? []).filter(
+      (pr) => !movedIds.has(pr.id) && !closedNumbers.has(pr.externalId),
+    );
+    if (!listed.truncated && kept.length + open.prs.length !== probed.count) return null;
+    return { ...open, kept };
+  });
 
 /**
  * Bring one repo's open PRs in SQLite up to date with GitHub. Null when the
  * repo couldn't be listed this cycle — its rows are then left untouched.
  */
 export const syncRepoOpenPrs = (
-  deps: PollDeps,
-  cycle: SyncCycle,
+  svc: ListingServices,
+  gate: AccountGate,
+  state: PollState,
   ctx: RepoListingContext,
   repo: Repository,
-): Effect.Effect<RepoListing | null, never, GitHubInfra> =>
+): Effect.Effect<RepoListing | null> =>
   Effect.gen(function* () {
-    const { db, github, prService, remoteUserService } = deps;
-    const live = cycle.liveAccountForRepo(repo.id);
-    if (!live) {
-      // Surface the rare data-consistency case ("repo row with no account
-      // row") — token-bad accounts already announced once upstream and stay
-      // silent here.
-      if (!cycle.repoToAccountId.get(repo.id)) {
-        logError(
-          "PollScheduler",
-          `GitHub auth unavailable; skipping PR sync for ${repo.fullName} (no account row)`,
-        );
-      }
+    const { github, mirror, avatars } = svc;
+    const accountId = gate.repoToAccountId.get(repo.id);
+    if (!accountId) {
+      logError("PollScheduler", `skipping PR sync for ${repo.fullName}: no owning account`);
       return null;
     }
+    if (!(yield* gate.clientForAccount(accountId))) return null;
 
     if (ctx.unchangedRepoIds.has(repo.id)) {
       return { prs: [...(ctx.existingByRepo.get(repo.id) ?? [])], listed: false };
     }
 
-    const delta = yield* listOpenPrsDelta(deps, cycle, ctx, repo, live);
-    const listing = delta ?? (yield* listOpenPrs(deps, cycle, ctx, repo, live));
-    // listPrs failed — leave existing DB rows untouched for this repo
+    const delta = yield* listOpenPrsDelta(github, gate, state, ctx, repo, accountId);
+    const listing = delta ?? (yield* listOpenPrs(github, gate, state, repo, accountId));
     if (listing === null) return null;
     const { prs } = listing;
     const kept = delta?.kept ?? [];
 
-    // Upsert PR authors into remote_users so their avatars are cached. Deduped
-    // by login: a prolific author appears on many of a repo's open PRs, and
-    // each upsert is a SELECT + UPSERT on the poll's critical path.
+    // Deduped by login: a prolific author appears on many of a repo's open PRs.
     const authorsByLogin = new Map<string, string | null>();
     for (const pr of prs) {
-      if (!authorsByLogin.has(pr.authorLogin)) {
+      if (!authorsByLogin.has(pr.authorLogin))
         authorsByLogin.set(pr.authorLogin, pr.authorAvatarUrl);
-      }
     }
     for (const [login, avatarUrl] of authorsByLogin) {
-      yield* remoteUserService.upsert({
-        provider: "github",
-        providerUserId: "", // Numeric ID not available from listPrs
-        login,
-        avatarUrl,
-      });
+      yield* avatars.ensure(repo.githubHost, login, avatarUrl);
     }
 
-    // The list carries no diff size (hence 0/0/0); one aliased GraphQL request
-    // fills it in — see `listPrDiffStatsViaGraphql` for why not one detail fetch per PR.
-    // Only requested for PRs never sized or whose head just moved, so steady
-    // state adds no extra request.
-    //
-    // Mask before sizing/writing: sizing a stale head would persist stats over
-    // a newer stored row, and the supersede gate reads the stored row, so a
-    // regressed `updated_at` would pass on the next cycle. See
-    // `preserveHeadOnStaleRead`.
+    // The list carries no diff size; one aliased GraphQL request sizes the PRs
+    // never sized or whose head just moved, so steady state adds no request.
+    // Decided on the masked head: sizing a stale head would persist stats over
+    // a newer stored row.
     const maskedPrs = prs.map((pr) => preserveHeadOnStaleRead(ctx.existingMap.get(pr.id), pr));
     const needsStats = maskedPrs.filter((pr) =>
       needsDiffStats(ctx.existingMap.get(pr.id), ctx.diffStatsHeadByPrId.get(pr.id), pr.headSha),
     );
-
-    // Best-effort, and skipped outright while the GraphQL budget is spent: on
-    // failure rows keep their zeros and `upsertPrs`' `changed_files > 0` guard
-    // leaves the DB's existing values intact.
-    const statsLive = needsStats.length === 0 ? null : cycle.liveAccount(live.acc, "graphql");
+    // Best-effort, and skipped while the GraphQL budget is spent: unsized rows
+    // keep the stored values (`upsertPrs`' `changed_files > 0` guard).
+    const statsClient =
+      needsStats.length === 0 ? null : yield* gate.clientForAccount(accountId, "graphql");
     const diffStats =
-      statsLive === null
+      statsClient === null
         ? null
-        : yield* cycle.tryGuarded(
-            live.acc,
+        : yield* gate.guarded(
             github.prs.diffStats(
+              statsClient,
               repo.fullName,
               needsStats.map((pr) => pr.externalId),
-              statsLive.token,
-              apiBaseForHost(repo.githubHost),
             ),
-            { errorLabel: `diffStats error for ${repo.fullName}` },
+            `diffStats error for ${repo.fullName}`,
           );
 
-    const rows = maskedPrs.map((pr) => {
-      const stats = diffStats?.get(pr.externalId);
-      return stats === undefined ? pr : { ...pr, ...stats };
+    const sized = new Set(needsStats.map((pr) => pr.id));
+    const rows = maskedPrs.map((pr): ObservedPr => {
+      const stats = sized.has(pr.id) ? diffStats?.get(pr.externalId) : undefined;
+      return stats === undefined || pr.headSha === null
+        ? pr
+        : { ...pr, ...stats, statsHeadSha: pr.headSha };
     });
 
-    const upserted = yield* withDb(db, prService.upsertPrs(rows)).pipe(
-      Effect.as(true),
-      Effect.tapError((err) =>
+    const outcome = yield* mirror.apply(rows, { announce: false, prior: ctx.existingMap }).pipe(
+      Effect.catch((err) =>
         Effect.sync(() => {
-          logError("PollScheduler", `upsertPrs error for ${repo.fullName}:`, err);
+          logError("PollScheduler", `PR write failed for ${repo.fullName}:`, err);
+          return null;
         }),
       ),
-      Effect.orElseSucceed(() => false),
     );
-
-    const landed = rows.map((pr) => asStored(pr, ctx.existingMap.get(pr.id)));
-
-    if (upserted) {
-      const accountId = cycle.repoToAccountId.get(repo.id);
-      const stacks = movedStackNumbers(landed, ctx.existingMap);
-      if (accountId && stacks.size > 0) {
-        yield* markStaleAndAnnounceStacks(deps, accountId, repo.id, stacks);
-      }
-    }
-
-    if (upserted && diffStats !== null) {
-      yield* dbTry("persist PR diff-stat watermarks", () =>
-        db.transaction(() => {
-          for (const pr of needsStats) {
-            const stats = diffStats.get(pr.externalId);
-            if (stats === undefined) continue;
-            db.update(pullRequests)
-              .set({
-                additions: stats.additions,
-                deletions: stats.deletions,
-                changedFiles: stats.changedFiles,
-                diffStatsHeadSha: pr.headSha,
-              })
-              .where(eq(pullRequests.id, pr.id))
-              .run();
-            ctx.diffStatsHeadByPrId.set(pr.id, pr.headSha);
-          }
-        }),
-      ).pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            logError("PollScheduler", "diff-stat watermark write failed:", error);
-          }),
-        ),
-        Effect.orElseSucceed(() => undefined),
-      );
-    }
-
-    const current = [...landed, ...kept];
+    const current = [...(outcome?.rows ?? []), ...kept];
 
     // Only a list that fully landed may stand in for the next ones: rows
     // still missing their diff stats must come back round to get them.
     const statsComplete = needsStats.every((pr) => diffStats?.has(pr.externalId) === true);
-    if (upserted && statsComplete) {
+    if (outcome !== null && statsComplete) {
       const now = Date.now();
-      const previous = ctx.listedSignatures.get(repo.id);
-      ctx.listedSignatures.set(repo.id, {
+      const previous = state.listed(repo.id);
+      state.recordListing(repo.id, {
         signature: signatureOfList(current),
         listedAt: now,
         fullListedAt: delta ? (previous?.fullListedAt ?? now) : now,
@@ -515,133 +404,75 @@ export const syncRepoOpenPrs = (
         truncated: delta ? (previous?.truncated ?? false) : prs.length >= OPEN_PRS_LIST_CAP,
       });
     } else {
-      ctx.listedSignatures.delete(repo.id);
+      state.forgetListing(repo.id);
     }
 
+    if (outcome === null) return null;
     yield* Effect.annotateCurrentSpan("prs_open", current.length);
     return { prs: current, listed: true };
   }).pipe(
     Effect.withSpan("PollScheduler.syncRepo", {
       attributes: { repo: repo.fullName, repoId: repo.id },
     }),
-    Effect.tapError((err) =>
-      Effect.sync(() => {
-        logError("PollScheduler", `outer per-repo sync error for ${repo.fullName}:`, err);
-      }),
-    ),
-    Effect.orElseSucceed(() => null),
   );
 
 /**
- * Settle PRs that were open before but are gone from GitHub's open list:
- * learn whether each merged or closed, archive it, reap its review worktree,
- * and tell its account's clients.
+ * Settle PRs that were open before but are gone from GitHub's open list: one
+ * batched read per repo learns whether each merged or closed (and its final
+ * diff size), and `PrMirror` archives it. A PR GitHub can no longer show is
+ * recorded closed. When the read can't be made this cycle — no budget, a
+ * failure — the PRs stay open and the next cycle asks again, so a merge is
+ * never recorded as a close for want of asking. Returns the PRs that went
+ * terminal.
  */
-export const archiveClosedPrs = (
-  deps: PollDeps,
-  cycle: SyncCycle,
-  closedPrs: readonly PullRequest[],
+export const settleVanishedPrs = (
+  svc: Pick<ListingServices, "github" | "mirror">,
+  gate: AccountGate,
+  vanished: readonly PullRequest[],
   repoById: ReadonlyMap<string, Repository>,
-): Effect.Effect<void, never, GitHubInfra> =>
+  prior: ReadonlyMap<string, PullRequest>,
+): Effect.Effect<string[]> =>
   Effect.gen(function* () {
-    const { db, github, prService, repoClone } = deps;
-    const updates: Array<{ id: string; status: "closed" | "merged"; closedAt: string }> =
-      yield* Effect.forEach(
-        closedPrs,
-        (pr, index) =>
-          Effect.gen(function* () {
-            // `'closed'` is the degraded answer: it records that the PR left
-            // the open list without claiming to know whether it merged.
-            // Nothing ever revisits it — the archive backfill only fetches PRs
-            // missing from the mirror — so a wrong answer here is permanent,
-            // and shows up later as a merged PR labelled "closed" with +0/-0
-            // stats in recaps.
-            const degraded = {
-              id: pr.id,
-              status: "closed" as const,
-              closedAt: new Date().toISOString(),
-            };
-
-            // Bound the GitHub cost per cycle. Applied to this item's
-            // position, so a burst of closures degrades only its tail; testing
-            // the batch size instead would degrade *every* PR the moment the
-            // batch crossed the limit.
-            if (index >= CLOSED_PR_STATUS_FETCH_LIMIT) return degraded;
-
-            const repo = repoById.get(pr.repositoryId);
-            const live = repo ? cycle.liveAccountForRepo(repo.id, "core") : null;
-            if (!repo || !live) return degraded;
-
-            const fetched = yield* cycle.tryGuarded(
-              live.acc,
-              github.prs.get(
-                repo.fullName,
-                pr.externalId,
-                live.token,
-                apiBaseForHost(repo.githubHost),
-              ),
-            );
-            if (!fetched) return degraded;
-            const resolvedStatus = fetched.status === "merged" ? "merged" : "closed";
-            const closedAt = fetched.closedAt ?? new Date().toISOString();
-            return { id: pr.id, status: resolvedStatus as "closed" | "merged", closedAt };
-          }),
-        { concurrency: 5 },
-      );
-
-    yield* withDb(db, prService.markPrsClosed(updates)).pipe(Effect.orElseSucceed(() => undefined));
-
-    // Reap the review worktree + `revv/pr-N` branch for each PR that just went
-    // terminal, so they stop accumulating in the user's clone (and cluttering
-    // VSCode). `pruneWorktree` self-guards against in-flight generations and
-    // un-pushed review commits, so this is safe to fire-and-forget; it must not
-    // block the sync loop.
-    yield* Effect.forkDetach(
-      Effect.forEach(
-        closedPrs,
-        (pr) =>
-          repoClone
-            .pruneWorktree({ repoId: pr.repositoryId, prNumber: pr.externalId })
-            .pipe(Effect.catch(() => Effect.void)),
-        { concurrency: 3, discard: true },
-      ),
+    const settled: string[] = [];
+    yield* Effect.forEach(
+      Map.groupBy(vanished, (pr) => pr.repositoryId),
+      ([repoId, prs]) =>
+        Effect.gen(function* () {
+          const repo = repoById.get(repoId);
+          const client = repo ? yield* gate.clientForRepo(repoId, "graphql") : null;
+          if (!repo || !client) return;
+          const fetched = yield* gate.guarded(
+            svc.github.prs.getMany(
+              client,
+              repo.fullName,
+              repo.id,
+              prs.map((pr) => pr.externalId),
+            ),
+            `closed-PR status read failed for ${repo.fullName}`,
+          );
+          if (!fetched) return;
+          const now = new Date().toISOString();
+          const observed = prs.map(
+            (pr): ObservedPr =>
+              fetched.get(pr.externalId) ?? {
+                ...pr,
+                stack: STACK_UNSEEN,
+                status: "closed",
+                closedAt: now,
+                fetchedAt: now,
+              },
+          );
+          const outcome = yield* svc.mirror.apply(observed, { announce: false, prior }).pipe(
+            Effect.catch((err) =>
+              Effect.sync(() => {
+                logError("PollScheduler", `archiving closed PRs of ${repo.fullName}:`, err);
+                return null;
+              }),
+            ),
+          );
+          for (const row of outcome?.rows ?? []) if (row.status !== "open") settled.push(row.id);
+        }),
+      { concurrency: 3, discard: true },
     );
-
-    const stacksByRepo = Map.groupBy(
-      closedPrs.flatMap((pr) => (pr.stack ? [{ repoId: pr.repositoryId, stack: pr.stack }] : [])),
-      (entry) => entry.repoId,
-    );
-    for (const [repoId, entries] of stacksByRepo) {
-      const accountId = cycle.repoToAccountId.get(repoId);
-      if (accountId) {
-        yield* markStaleAndAnnounceStacks(
-          deps,
-          accountId,
-          repoId,
-          entries.map((entry) => entry.stack.number),
-        );
-      }
-    }
-
-    // Targeted `pr:archived` envelopes for each transition. The full PR set
-    // still goes out via the cycle's `prs:updated` broadcast; this gives
-    // clients a low-latency signal they can patch in place without refetching
-    // the archive list. Best-effort — if a single emit fails, the bulk update
-    // still reconciles on the next `prs:updated` arrival.
-    const closedPrMap = new Map(closedPrs.map((pr) => [pr.id, pr]));
-    for (const upd of updates) {
-      const pr = closedPrMap.get(upd.id);
-      if (!pr) continue;
-      const accountId = cycle.repoToAccountId.get(pr.repositoryId);
-      if (!accountId) continue;
-      yield* deps.realtime.toAccount(accountId, {
-        type: "pr:archived",
-        data: {
-          prId: upd.id,
-          repoId: pr.repositoryId,
-          status: upd.status,
-          closedAt: upd.closedAt,
-        },
-      });
-    }
+    return settled;
   });

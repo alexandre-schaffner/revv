@@ -1,19 +1,15 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream } from "effect";
-import type { Db } from "../../db/index";
-import { account, user } from "../../db/schema";
 import {
   SshKeysFetchFailed,
   SshSignatureInvalid,
   SshSigningUnavailable,
 } from "../../domain/errors";
-import { hostFromProviderId } from "../../domain/provider-id";
 import { debug } from "../../logger";
 import { githubTryPromise } from "../../observability/github-ledger/origin";
-import { DbService } from "../Db";
+import { GitHubAccounts } from "../github/accounts";
 import { SettingsService } from "../Settings";
 import { PubkeyCache } from "./pubkey-cache";
 import { sshSign, sshVerify } from "./ssh-keygen";
@@ -32,11 +28,15 @@ export class SshSigner extends Context.Service<
   SshSigner,
   {
     /**
-     * Sign `message` with the local user's configured SSH key.
+     * Sign `message` as the GitHub account `accountId` (the one tracking the
+     * repository the message is about), with the configured SSH key.
      * Auto-detects the key path on first call when settings leave it empty.
      * Fails with `SshSigningUnavailable` if no usable key is found.
      */
-    readonly sign: (message: string) => Effect.Effect<SshSignResult, SshSigningUnavailable>;
+    readonly sign: (
+      message: string,
+      accountId: string,
+    ) => Effect.Effect<SshSignResult, SshSigningUnavailable>;
     /**
      * Verify that `signature` was produced by `signerLogin` on `signerHost`
      * for exactly `message`.
@@ -54,37 +54,6 @@ export class SshSigner extends Context.Service<
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const SSH_KEY_PATTERNS = /^id_(ed25519|ecdsa|rsa)$/;
-
-function findAccountWithLoginSync(
-  db: Db,
-): { host: string; login: string; githubUserId: string } | null {
-  const firstUser = db.select({ id: user.id }).from(user).limit(1).get();
-  if (!firstUser) return null;
-
-  const rows = db
-    .select({
-      providerId: account.providerId,
-      githubLogin: account.githubLogin,
-      accountId: account.accountId,
-    })
-    .from(account)
-    .where(eq(account.userId, firstUser.id))
-    .all();
-
-  // A linked account always carries `githubLogin` + `accountId`; the access
-  // token (now held in the OS secure store, not the DB) isn't needed here —
-  // SSH cache signing uses the local SSH key, not the GitHub token.
-  for (const row of rows) {
-    if (row.githubLogin && row.accountId) {
-      return {
-        host: hostFromProviderId(row.providerId),
-        login: row.githubLogin,
-        githubUserId: row.accountId,
-      };
-    }
-  }
-  return null;
-}
 
 async function autoDetectKeyPath(
   login: string,
@@ -131,7 +100,7 @@ export const SshSignerLive = Layer.effect(
   SshSigner,
   Effect.gen(function* () {
     const settingsSvc = yield* SettingsService;
-    const { db } = yield* DbService;
+    const accounts = yield* GitHubAccounts;
     const pubkeyCache = new PubkeyCache();
 
     // Invalidate pubkey cache whenever settings change (host set may change).
@@ -142,18 +111,22 @@ export const SshSignerLive = Layer.effect(
     );
 
     return SshSigner.of({
-      sign: (message) =>
+      sign: (message, accountId) =>
         Effect.gen(function* () {
           const settings = yield* settingsSvc.getSettings();
 
-          const acct = yield* Effect.try({
-            try: () => findAccountWithLoginSync(db),
-            catch: (e) =>
-              new SshSigningUnavailable({
-                message: `account lookup failed: ${e instanceof Error ? e.message : String(e)}`,
-                cause: e,
-              }),
-          });
+          const profile = yield* accounts.profile(accountId).pipe(
+            Effect.mapError(
+              (e) =>
+                new SshSigningUnavailable({
+                  message: `account lookup failed: ${e._tag === "DbError" ? e.message : `account ${accountId} not found`}`,
+                  cause: e,
+                }),
+            ),
+          );
+          const acct = profile.githubLogin
+            ? { host: profile.host, login: profile.githubLogin, githubUserId: profile.githubUserId }
+            : null;
 
           if (!acct) {
             return yield* Effect.fail(

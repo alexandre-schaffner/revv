@@ -49,7 +49,7 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 ### Server (`apps/server`)
 
 - **Effect system** throughout: services use `Effect.gen`, `Context.Service`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
-- **Services**: `GitHubService`, `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`, `TokenProvider`
+- **Services**: `GitHubGateway` (`services/github/`, every GitHub call, made with a host-bound `GitHubClient`), `GitHubAccounts` (account tokens, re-auth, identity), `PrMirror` (the one writer of GitHub's view of a PR), `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
 - **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
 - **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Server broadcasts `prs:updated`, `repos:updated`, etc. via `Broadcaster` (account-scoped fan-out). Inbound commands use REST endpoints.

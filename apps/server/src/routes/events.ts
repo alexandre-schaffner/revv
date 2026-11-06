@@ -19,8 +19,7 @@ import { Elysia } from "elysia";
 import { debug } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
-import { Identity } from "../services/Identity";
-import { requestAccount } from "./middleware";
+import { requestAccount, sessionFromHeaders } from "./middleware";
 import { openSse } from "./sse";
 
 export const eventsRoute = new Elysia().get("/api/events", async ({ query, request }) => {
@@ -30,12 +29,7 @@ export const eventsRoute = new Elysia().get("/api/events", async ({ query, reque
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const headers = new Headers({ Authorization: `Bearer ${token}` });
-  const session = await AppRuntime.runPromise(
-    Effect.flatMap(Identity, (identity) =>
-      Effect.promise(() => identity.sessionFromHeaders(headers)),
-    ),
-  );
+  const session = await sessionFromHeaders(new Headers({ Authorization: `Bearer ${token}` }));
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
   }

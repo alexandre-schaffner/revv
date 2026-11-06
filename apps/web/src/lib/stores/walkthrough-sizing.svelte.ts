@@ -14,18 +14,24 @@ import { getSettings } from "$lib/stores/settings.svelte";
 import { createResource } from "./resource";
 
 /**
+ * How long a preview waits for its PR's diff to reach the server's cache
+ * (`diff:cached`) before giving up. The review page's diff load fills it; a
+ * 3 000-file PR takes ~20 s of GitHub pages.
+ */
+export const DIFF_FILL_WAIT_MS = 60_000;
+
+/**
  * Keyed on everything the answer depends on: `(prId, headSha)`, since a pull
  * moves the head and the old answer stops matching, and the agent, model,
  * effort and TypeSafe switch it is routed against (the server has each one
  * cached, so a settings change re-routes rather than re-pays).
- * `pending` means the diff isn't cached yet (normal right after a pull); the
- * diff-cache fill has no client-visible event, so it is asked again on a timer.
- * An HTTP error (auth, unknown PR) is not pending: it is recorded, and callers
- * show nothing.
+ * `pending` means the diff isn't cached yet (normal right after a pull): the
+ * ask waits for `diff:cached`. An HTTP error (auth, unknown PR) is not
+ * pending: it is recorded, and callers show nothing.
  */
 const sizings = createResource<{ prId: string }, WalkthroughSizing>({
   freshForMs: Number.POSITIVE_INFINITY,
-  retryDelaysMs: [2_500, 2_500, 2_500, 2_500, 2_500],
+  waitForSignalMs: DIFF_FILL_WAIT_MS,
   fetch: async (_key, { prId }) => {
     const res = await fetch(
       `${API_BASE_URL}/api/reviews/${encodeURIComponent(prId)}/walkthrough/sizing`,
@@ -91,6 +97,21 @@ export function getSelectedPrSizing(active: boolean): {
     entry.request.status !== "error" &&
     (sizing === null || (sizing.status === "pending" && !entry.gaveUp));
   return { sizing, pending };
+}
+
+/** The diff a `pending` sizing was waiting for is cached: ask again. */
+export function onDiffCached(data: { prId: string; headSha: string }): void {
+  const prefix = `${data.prId}|${data.headSha}|`;
+  for (const key of sizings.waitingKeys()) {
+    if (key.startsWith(prefix)) void sizings.refresh(key, { prId: data.prId });
+  }
+}
+
+/** A `diff:cached` sent while the stream was down reached no one: ask again. */
+export function onEventsReconnected(): void {
+  for (const key of sizings.waitingKeys()) {
+    void sizings.refresh(key, { prId: key.slice(0, key.indexOf("|")) });
+  }
 }
 
 export function reset(): void {

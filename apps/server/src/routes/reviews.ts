@@ -39,7 +39,7 @@ export const reviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   .post(
     "/:id/github-submit",
-    (ctx) => runRoute(submitGithubReviewHandler(ctx.params.id, ctx.session.user.id, ctx.body)),
+    (ctx) => runRoute(submitGithubReviewHandler(ctx.params.id, ctx.body)),
     {
       body: t.Object({
         action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),

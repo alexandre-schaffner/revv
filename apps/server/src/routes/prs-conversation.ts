@@ -44,9 +44,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .onBeforeHandle(ownedBy({ id: "pull request" }))
   .get("/:id/conversation", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.load(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-      ),
+      Effect.flatMap(PrConversationService, (s) => s.load(ctx.params.id, ctx.account.accountId)),
     ),
   )
 
@@ -54,7 +52,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/conversation/cached", (ctx) =>
     runRoute(
       Effect.flatMap(PrConversationService, (s) =>
-        s.cached(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        s.cached(ctx.params.id, ctx.account.accountId),
       ).pipe(Effect.map((conversation) => ({ conversation }))),
     ),
   )
@@ -65,7 +63,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
       const body = ctx.body;
       return runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.write(ctx.params.id, ctx.session.user.id, ctx.account.accountId, body),
+          s.write(ctx.params.id, ctx.account.accountId, body),
         ),
       );
     },
@@ -74,9 +72,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
 
   .get("/:id/checks", (ctx) =>
     runRoute(
-      Effect.flatMap(PrConversationService, (s) =>
-        s.checks(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-      ),
+      Effect.flatMap(PrConversationService, (s) => s.checks(ctx.params.id, ctx.account.accountId)),
     ),
   )
 
@@ -85,12 +81,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.checkDetails(
-            ctx.params.id,
-            ctx.session.user.id,
-            ctx.account.accountId,
-            ctx.params.checkRunId,
-          ),
+          s.checkDetails(ctx.params.id, ctx.account.accountId, ctx.params.checkRunId),
         ),
       ),
     { params: t.Object({ id: t.String(), checkRunId: t.Numeric({ minimum: 1 }) }) },
@@ -99,7 +90,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
   .get("/:id/label-options", (ctx) =>
     runRoute(
       Effect.flatMap(PrConversationService, (s) =>
-        s.labelOptions(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
+        s.labelOptions(ctx.params.id, ctx.account.accountId),
       ),
     ),
   )
@@ -109,12 +100,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.assigneeOptions(
-            ctx.params.id,
-            ctx.session.user.id,
-            ctx.account.accountId,
-            ctx.query.q ?? "",
-          ),
+          s.assigneeOptions(ctx.params.id, ctx.account.accountId, ctx.query.q ?? ""),
         ),
       ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },
@@ -125,12 +111,7 @@ export const prConversationRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(PrConversationService, (s) =>
-          s.reviewerOptions(
-            ctx.params.id,
-            ctx.session.user.id,
-            ctx.account.accountId,
-            ctx.query.q ?? "",
-          ),
+          s.reviewerOptions(ctx.params.id, ctx.account.accountId, ctx.query.q ?? ""),
         ),
       ),
     { query: t.Object({ q: t.Optional(t.String({ maxLength: 100 })) }) },

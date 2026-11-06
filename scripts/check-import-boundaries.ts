@@ -15,10 +15,12 @@ const featureRoots = [
   /^apps\/server\/src\/ai\/providers\/stack-brief(?:-|\/)/,
 ];
 
+// Feature pipelines call GitHub only with the client `PrContext` hands them for
+// the repository's owning account: they may not mint one, nor read repositories
+// around it.
 const forbiddenImports = new Set([
-  "apps/server/src/services/GitHub",
+  "apps/server/src/services/github/accounts",
   "apps/server/src/services/Repository",
-  "apps/server/src/services/TokenProvider",
 ]);
 
 const identityBoundaryRoots = [
@@ -26,10 +28,14 @@ const identityBoundaryRoots = [
   /^apps\/server\/src\/routes\/.*\.ts$/,
 ];
 
-const identityForbiddenImports = new Set([
-  "apps/server/src/services/SecretStore",
-  "apps/server/src/services/TokenProvider",
-]);
+const identityForbiddenImports = new Set(["apps/server/src/services/SecretStore"]);
+
+// ── GitHub transport boundary ───────────────────────────────────────────────
+// Only the GitHub module itself sends requests; everything else calls
+// `GitHubGateway` with a client minted by `GitHubAccounts`/`PrContext`, and
+// may import the transport's types only.
+const githubTransportModule = "apps/server/src/services/github/transport";
+const githubModuleDir = "apps/server/src/services/github/";
 
 // ── Local Git boundary ──────────────────────────────────────────────────────
 // `git-runner` is the raw git-subprocess primitive — an internal of the Local
@@ -112,7 +118,7 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
       identityBoundaryRoots.some((pattern) => pattern.test(rel)) &&
       identityForbiddenImports.has(target)
     ) {
-      violations.push(`${rel} imports ${specifier}; use Identity instead`);
+      violations.push(`${rel} imports ${specifier}; go through GitHubAccounts`);
     }
 
     if (
@@ -129,6 +135,16 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
       !/\.test\.ts$/.test(rel)
     ) {
       violations.push(`${rel} imports ${specifier}; run agent turns through ai/acp/run-turn`);
+    }
+
+    const typeOnly = /^import\s+type\b/.test(match[0]);
+    if (
+      target === githubTransportModule &&
+      !typeOnly &&
+      !rel.startsWith(githubModuleDir) &&
+      !/\.test\.ts$/.test(rel)
+    ) {
+      violations.push(`${rel} imports ${specifier}; call GitHub through GitHubGateway`);
     }
 
     if (target === gitRunnerModule && !gitRunnerAllowedImporters.has(rel)) {

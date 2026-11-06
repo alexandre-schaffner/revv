@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { serverEnv } from "../config";
-import { hostFromProviderId, LEGACY_GITHUB_PROVIDER_ID, providerIdForHost } from "./provider-id";
+import { hostFromProviderId, LEGACY_GITHUB_PROVIDER_ID, providerIdForHost } from "./github-host";
 
 describe("providerId codec", () => {
   it("round-trips a host", () => {
