@@ -6,7 +6,7 @@ import {
   listOpencodeModels,
   parseOpencodeModelList,
   parseOpencodeVerboseModels,
-} from "./cli-models";
+} from "./opencode-models";
 
 describe("parseOpencodeModelList", () => {
   it("maps opencode 2's /api/model rows to provider/model options", () => {

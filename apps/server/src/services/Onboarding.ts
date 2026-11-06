@@ -1,13 +1,14 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AcpAgentId, AgentStatusReport, InstallEvent } from "@revv/shared";
-import { Context, Effect, Layer } from "effect";
 import {
-  ACP_CLI_NAME,
-  addInstalledBinDirs,
-  detectAgentStatus,
-  isCommandOnPath,
-} from "../ai/providers/cli-agent";
+  type AcpAgentId,
+  type AgentStatusReport,
+  getAcpAgent,
+  type InstallEvent,
+} from "@revv/shared";
+import { Context, Effect, Layer } from "effect";
+import { detectAgentStatus } from "../ai/acp/agents";
+import { addInstalledBinDirs, isCommandOnPath } from "../ai/acp/host";
 import { debug, logError } from "../logger";
 import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
 
@@ -15,11 +16,11 @@ import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJo
 //
 // One-shot installer plumbing the agent step of onboarding uses to:
 //   1. Detect which registry agents are set up — see `detectAgentStatus` in
-//      `cli-agent.ts`, the single detection surface (installed + authed).
+//      `ai/acp/agents`, the single detection surface (installed + authed).
 //   2. Run the official install script for whichever registry agent the user
 //      selects when it isn't already present.
 //
-// Each agent ships an official one-line installer (see `AGENT_INSTALL`). We
+// Each agent's official one-line installer is on its registry entry. We
 // spawn it once per agent per server lifetime via the shared
 // `EventJobRegistry` — a second `startInstall(agent)` call for an in-flight
 // agent rides the running job instead of double-spawning. Installs for
@@ -27,48 +28,13 @@ import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJo
 // lets a late SSE subscriber replay the full transcript and still react to
 // `done`; a kill -9 mid-install just re-shows the prompt on next boot.
 
-/**
- * Per-agent install registry: the official one-line installer argv plus the
- * home-relative bin dirs that installer writes to, which we prepend to `PATH`
- * so the freshly-installed binary is found without waiting for a shell
- * re-source or server restart.
- *
- * Mirrors the `Record<AcpAgentId, …>` shape used elsewhere in the registry so
- * adding an ACP agent surfaces a compile-time error here until its installer is
- * wired — a deliberate nudge. Commands track each vendor's published installer.
- */
-const AGENT_INSTALL: Record<
-  AcpAgentId,
-  {
-    unix: readonly string[];
-    binDirs: readonly string[];
-  }
-> = {
-  opencode: {
-    unix: ["bash", "-c", "curl -fsSL https://opencode.ai/install | bash"],
-    binDirs: [".opencode/bin", ".local/bin"],
-  },
-  "claude-code": {
-    unix: ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-    binDirs: [".local/bin"],
-  },
-  codex: {
-    unix: ["bash", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
-    binDirs: [".local/bin"],
-  },
-  cursor: {
-    unix: ["bash", "-c", "curl https://cursor.com/install -fsS | bash"],
-    binDirs: [".local/bin"],
-  },
-};
-
 export class OnboardingService extends Context.Service<
   OnboardingService,
   {
     /**
      * One-shot detection snapshot for the agent step — installed + authed +
      * login command per registry agent, plus whether this host supports the
-     * embedded PTY login. Cheap; cached per the cli-agent module's TTL.
+     * embedded PTY login. The PATH probe is cached; the auth probes run each time.
      */
     detectAgentStatus: () => Effect.Effect<AgentStatusReport>;
     /**
@@ -141,10 +107,8 @@ export const OnboardingServiceLive = Layer.effect(
       job: Job<InstallEvent, Record<string, never>>,
       broadcast: (event: InstallEvent) => void,
     ): void => {
-      const spec = AGENT_INSTALL[job.agentId];
-      // Pipe the agent's official installer into a shell — a
-      // `bash -c "curl … | sh"` line.
-      const argv = [...spec.unix];
+      const { cli } = getAcpAgent(job.agentId);
+      const argv = [...cli.install];
 
       debug("onboarding-install", `spawning installer (${job.agentId}): ${argv.join(" ")}`);
       broadcast({ type: "log", line: `> ${argv.join(" ")}` });
@@ -168,13 +132,12 @@ export const OnboardingServiceLive = Layer.effect(
           drainStream(broadcast, proc.stderr),
         ]);
         const code = await proc.exited;
-        addInstalledBinDirs(spec.binDirs.map((dir) => join(homedir(), dir)));
+        addInstalledBinDirs(cli.installBinDirs.map((dir) => join(homedir(), dir)));
         // Confirm the install with a strict PATH probe — NOT the auth-inclusive
         // availability check. An already-authed agent (e.g. Claude creds in the
         // Keychain) would make that check pass even if the installer exited 0
         // without placing the binary, falsely reporting success.
-        const cli = ACP_CLI_NAME[job.agentId];
-        const onPath = isCommandOnPath(cli);
+        const onPath = isCommandOnPath(cli.bin);
         const success = code === 0 && onPath;
         if (success) {
           broadcast({ type: "done", success: true });
@@ -182,7 +145,7 @@ export const OnboardingServiceLive = Layer.effect(
           const error =
             code !== 0
               ? `Installer exited with code ${code}`
-              : `Installer finished but ${cli} is still not on PATH`;
+              : `Installer finished but ${cli.bin} is still not on PATH`;
           broadcast({ type: "done", success: false, error });
         }
       })();

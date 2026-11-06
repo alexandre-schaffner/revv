@@ -11,27 +11,13 @@ import {
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serverEnv } from "../../config";
+import { serverEnv } from "../../../config";
 import { ensureClaudeConfigDir, resolveClaudeConfigDir } from "./claude-config";
 
-// ── resolveClaudeConfigDir ───────────────────────────────────────────────────
-//
-// The single resolution shared by the agent spawn (`acp-connection.ts`), the
-// subscription-auth probe (`cli-agent.ts`), and the login PTY
-// (`AgentLogin.ts`). A regression here (e.g. losing the `agent === "claude-code"`
-// guard, or drifting from `serverEnv`) breaks all three at once — exactly the
-// mismatch that caused isolation to break Keychain-backed auth.
-
 describe("resolveClaudeConfigDir", () => {
-  it("never resolves a dir for a non-claude-code agent, regardless of the isolation setting", () => {
-    for (const agent of ["codex", "opencode", "cursor"] as const) {
-      expect(resolveClaudeConfigDir(agent)).toBeUndefined();
-    }
-  });
-
-  it("resolves claude-code consistently with serverEnv.claudeConfigIsolation", () => {
+  it("follows serverEnv.claudeConfigIsolation", () => {
     const expected = serverEnv.claudeConfigIsolation ? serverEnv.claudeConfigDir : undefined;
-    expect(resolveClaudeConfigDir("claude-code")).toBe(expected);
+    expect(resolveClaudeConfigDir()).toBe(expected);
   });
 });
 

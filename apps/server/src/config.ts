@@ -80,7 +80,7 @@ const EnvConfig = Config.all({
   // asdf, mise, nix, etc.) and saved in desktop-server.json's environment.
   // Empty string = "not detected at install time" —
   // the server falls back to a runtime `which` lookup. See
-  // apps/server/src/ai/providers/cli-agent.ts for the resolution chain.
+  // apps/server/src/ai/acp/agents/ for the resolution chain.
   claudeBin: Config.String("REVV_CLAUDE_BIN").pipe(Config.withDefault("")),
   opencodeBin: Config.String("REVV_OPENCODE_BIN").pipe(Config.withDefault("")),
   codexBin: Config.String("REVV_CODEX_BIN").pipe(Config.withDefault("")),
@@ -104,7 +104,7 @@ const EnvConfig = Config.all({
   // ── ACP (Agent Client Protocol) chat transport ──────────────────────────
   // The right-pane chat (and merge-conflict resolution) run on a single ACP
   // client adapter — the agent runs as a subprocess spoken to over stdio
-  // JSON-RPC. Agent selection (see ai/acp/presets.ts): `acpAgent` picks any
+  // JSON-RPC. Agent selection (see ai/acp/launch.ts): `acpAgent` picks any
   // registry agent by id (e.g. `cursor`) regardless of the legacy `aiAgent`
   // setting; `acpCommand`/`acpArgs` pin a raw command for an agent not in the
   // registry.

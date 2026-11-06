@@ -1,14 +1,11 @@
-// ── Dynamic model listing ─────────────────────────────────────────────────────
-//
-// The model picker's catalog per ACP agent. Static catalogs come from the
-// shared registry; opencode's is read live from the installed CLI, whose
-// interface differs between opencode 1 and 2.
+// opencode's model catalog, read live from the installed CLI, whose interface
+// differs between opencode 1 and 2.
 
-import { type AcpAgentId, getAgentCapabilities } from "@revv/shared";
-import { debug, logError } from "../../logger";
-import { resolveCliBin, resolveUserPath } from "./cli-agent";
+import { debug, logError } from "../../../logger";
+import { resolveUserPath } from "../host";
+import type { AgentModelOption } from "./types";
 
-export type CliModelOption = { label: string; value: string };
+type CliModelOption = AgentModelOption;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -133,35 +130,5 @@ export async function listOpencodeModels(bin: string): Promise<CliModelOption[]>
       return [];
     }
     await Bun.sleep(OPENCODE_MODEL_LIST_RETRY_MS);
-  }
-}
-
-/**
- * List models available to the selected ACP agent. Agents with a static
- * catalog (claude-code, codex, cursor) return it straight from the shared
- * registry; opencode is the only dynamic catalog, read from its server API
- * (`opencode api GET /api/model`, opencode 2) or `opencode models --verbose`
- * (opencode 1).
- */
-export async function listCliModels(agent: AcpAgentId): Promise<CliModelOption[]> {
-  // Static catalogs come straight from the shared ACP registry — the single
-  // source of truth — so there's no second copy to keep in sync.
-  const caps = getAgentCapabilities(agent);
-  if (caps.models !== "dynamic") {
-    return caps.models.map((m) => ({ label: m.label, value: m.value }));
-  }
-
-  const opencodeBin = resolveCliBin("opencode");
-  debug("listCliModels", "opencode binary:", opencodeBin);
-  try {
-    return await listOpencodeModels(opencodeBin);
-  } catch (e) {
-    logError(
-      "listCliModels",
-      "failed to list opencode models",
-      e instanceof Error ? e.message : String(e),
-    );
-    // Fallback: empty list (frontend will show empty state)
-    return [];
   }
 }
