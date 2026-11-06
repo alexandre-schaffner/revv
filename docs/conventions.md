@@ -82,10 +82,10 @@ observer that yields back into the supervisor's fiber.
 
 **Allowed boundary.** Bridging Effect into a plain-JS callback contract (e.g. SDK options that
 take `(value: string) => void` rather than `(value: string) => Effect<...>`) is the one
-legitimate place `Effect.runPromise` belongs. See `apps/server/src/services/WalkthroughJobs.ts:490`
-where five `Effect.runPromise` calls live inside callback factories handed to `ai.streamWalkthrough`.
-These are NOT violations — they are the SDK-interop boundary and the only way out without
-rewriting the AI service's option surface. The rule is "no `runPromise` inside an Effect-returning
+legitimate place `Effect.runPromise` belongs. See `WalkthroughJobs.launchRun`, which hands
+the MCP tool handlers plain callbacks (`emit`, `broadcastThreadEvent`, `runJudgment`) built
+with `Effect.runSyncWith` / `Effect.runPromiseWith` over the run's captured context. These
+are NOT violations — they are the interop boundary with Promise-based handlers. The rule is "no `runPromise` inside an Effect-returning
 method" — wrapping a callback that the caller will invoke later is fine.
 
 **Backlog.** [`E-001`](./conventions-backlog.md#e-001), [`E-002`](./conventions-backlog.md#e-002).

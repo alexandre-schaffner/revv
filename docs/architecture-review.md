@@ -45,7 +45,7 @@ The server uses the [Effect](https://effect.website/) library pervasively. Every
 
 ### Agent Pipeline
 
-One agent transport, surfaced through `AiService.streamWalkthrough()`: an ACP (Agent Client Protocol) subprocess for the configured agent, driven over stdio by the turn runner (`ai/acp/run-turn.ts`) from a per-worktree connection pool (`ai/acp/acp-connection.ts`). The agent calls back into `/mcp/walkthrough` over HTTP with a per-job bearer token; the route runs the shared in-process tool handlers. Per-agent differences are confined to the registry entry and the agent's adapter (`ai/acp/agents/<id>.ts`), which is what keeps the agent-parity invariant cheap to hold.
+One agent transport, surfaced through `AiService.walkthroughTurn()`: an ACP (Agent Client Protocol) subprocess for the configured agent, driven over stdio by the turn runner (`ai/acp/run-turn.ts`) from a per-worktree connection pool (`ai/acp/acp-connection.ts`). The agent calls back into `/mcp/walkthrough` over HTTP with a per-job bearer token; the route runs the shared in-process tool handlers. Per-agent differences are confined to the registry entry and the agent's adapter (`ai/acp/agents/<id>.ts`), which is what keeps the agent-parity invariant cheap to hold.
 
 **MCP tool surface (write-only path for walkthrough content):**
 

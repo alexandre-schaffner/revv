@@ -276,8 +276,7 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `update_issue_comment`, `delete_issue_comment`) may mutate rows in place. Edits stamp
    `lastEditedAt` / `lastEditedBy` on the parent row, never change `status` or
    `lastCompletedPhase`, and broadcast `walkthrough:event` envelopes carrying a
-   `lifecycle:edited` event via `Broadcaster` on the global SSE stream (`GET /api/events`),
-   not the per-generation stream, which dies on `done`. GitHub-submitted issues
+   `lifecycle:edited` event on the global SSE stream (`GET /api/events`). GitHub-submitted issues
    (`submittedAt!=null`) are off-limits even to the chat-edit path. The generation
    pipeline still never mutates a completed row.
 
@@ -294,21 +293,28 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `docs/architecture/external-agent-integrations.md`.
 8. **Commit first, broadcast second.** DB upsert is the commit point. SSE
    broadcast is best-effort. Subscribers reconnecting after a miss MUST reconcile by
-   re-reading the DB.
-9. **Bounded retries with explicit budgets.** `WALKTHROUGH_MAX_RESUME_ATTEMPTS = 3`,
-   `MAX_AUTO_CONTINUATIONS = 2`, `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row
-   terminal (`error`) and stops.
+   re-reading the DB. Durable walkthrough events carry the row's seq
+   (`walkthrough:event`); live-only ones (reasoning, exploration, the gauge, the phase)
+   go out unsequenced on `walkthrough:live` and are never replayed.
+9. **Bounded retries with explicit budgets.** `MAX_RESUME_ATTEMPTS = 3` (every durable
+   job, `services/jobs/agent-jobs.ts`), `MAX_AUTO_CONTINUATIONS = 2`,
+   `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row terminal (`error`, end reason
+   `resume_budget` / `budget_exhausted`) and stops. A read path that finds a row whose run
+   died (the recap stream, a brief's `ensure`) resumes it through the same budget.
 10. **Per-job resource scoping.** Each job owns a dedicated git worktree at `head_sha`,
     registered as a scope finalizer so cleanup happens on every exit path.
 11. **Status transitions are orchestrator-only.** Agents never write `status` or
     `last_completed_phase` directly. MCP tool handlers update phase fields as a side-effect
     of their own writes; `status ∈ {generating, complete, error, superseded}` is only ever
-    set by `WalkthroughJobs`.
+    set by `WalkthroughJobs` (`services/walkthrough/lifecycle.ts`), which also records why
+    a run ended without completing (`walkthroughs.end_reason`, `WalkthroughEndReason`).
 12. **`complete_walkthrough` is a validation gate.** Asserts `last_completed_phase = 'D'`
-    AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step. Only then does
-    the orchestrator transition `status` to `complete`. It also refuses while a first-pass
-    lead has no verdict, but that check is the tool's alone: the orchestrator completes a run
-    with unresolved leads, so a skipped hint never costs the review.
+    AND all 9 axes rated AND summary/sentiment non-empty AND ≥1 diff step AND the chapter
+    rules AND every line-anchored concern commented. The gate and the orchestrator decide
+    on one journal check (`walkthroughCompletionBlockers`, `services/walkthrough/completion.ts`):
+    a run's turn reports only how it ended, and the run is `complete` exactly when the
+    journal passes. The check's lead blocker is the tool's alone: the orchestrator
+    completes a run with unresolved leads, so a skipped hint never costs the review.
 13. **Agent parity.** ACP is the only agent transport, and every ACP agent must exhibit
     identical externally-observable behavior during a review. Divergence in the model's
     reasoning style is allowed; divergence in events, lifecycle, phase transitions, retry, or
@@ -334,11 +340,21 @@ agent tomorrow). Any change that violates them is wrong by construction — push
     surviving: walkthrough, recap and stack-brief runs always open a fresh session and
     rebuild context from the DB (invariant 6); chat resumes via `session/load` where the
     agent supports it, and a session that can't be reloaded becomes a fresh one that gets
-    the system prompt and the conversation again. Every subprocess is stopped on process
-    exit. The pool and the per-run MCP bearer tokens (one TTL'd store,
-    `session-token-store.ts`) are ephemeral and never persisted (invariant 1).
+    the system prompt and the conversation again. Every subprocess is stopped when the
+    runtime is disposed (the boot layer's finalizer). The pool and the per-run MCP bearer
+    tokens (one TTL'd store, `session-token-store.ts`) are ephemeral and never persisted
+    (invariant 1).
 
 ### Stack briefs
+
+Walkthroughs, recaps and stack briefs all run on one durable agent-job kernel
+(`makeAgentJobs`, `services/jobs/agent-jobs.ts`): the registry, concurrency, launch,
+cancel, the MCP token (TTL derived from the turn ceiling), the run's verdict (a user Stop
+settles `stopped`, a supersede leaves the row to its superseder, an unasked-for
+interrupt leaves it `generating`, otherwise the journal check decides) and the one resume
+policy (a journal that already passes completes without a rerun; otherwise the attempt is
+counted first). Each pipeline supplies its journal reads and its `settle`. Boot work runs
+from one declared sequence (`src/boot.ts`) built with the runtime.
 
 The stack brief (the arc of a GitHub PR stack, each open layer's role, and a review
 order) is a third agent pipeline under the same invariants. `StackBriefJobs`
@@ -357,13 +373,15 @@ journal passes it completes even if the agent never called the gate. `status` is
 orchestrator-only and every transition is broadcast as `stack-brief:status-changed` after
 it commits. Review-the-stack (`services/stacks/StackReview.ts`) only queues walkthroughs
 through `WalkthroughJobs.startJob` (`trigger: 'stack_review'`) and asks for a brief once
-they settle; it owns no lifecycle.
+they settle; it owns no lifecycle. Its queue and progress are journaled (`stack_reviews`),
+so a restart picks a review up where it was.
 
 ### Implications for new agent features (e.g., PRD-05)
 
 New agent subsystems must mirror this architecture: durable `*_jobs` table with `status` +
 phase enum + `resumeAttempts`, MCP tool surface with phase preconditions, orchestrator
-owns lifecycle, resume-on-boot. If you find yourself adding in-memory state that couldn't
+owns lifecycle, resume-on-boot — by running on the agent-job kernel (`makeAgentJobs`) with
+one journal completion check shared by the gate and the orchestrator. If you find yourself adding in-memory state that couldn't
 survive a `kill -9`, stop — you're building on sand.
 
 ## Performance investigations
