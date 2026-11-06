@@ -1,6 +1,6 @@
 // After Revv pushes to a PR's source branch, the PR row has to learn the new
 // head before the next poll does, or the review page keeps showing the old
-// one. Shared by the chat push (`ChatChangesPush`) and the base sync
+// one. Shared by the chat push (`workspace/push.ts`) and the base sync
 // (`BaseConflicts`).
 
 import { type Context, Effect } from "effect";

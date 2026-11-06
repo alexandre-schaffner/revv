@@ -19,8 +19,7 @@ import { chatSessions } from "./chat-sessions";
  *                   On finalize: is_streaming=0, finalized_at set. On error:
  *                   `error` populated with the inline-error chip text.
  *                   A narrate→tool→narrate turn yields two assistant rows
- *                   split by the activity; see `sealAssistantMessage` in
- *                   routes/chat-helpers.ts.
+ *                   split by the activity; see `services/chat/turn-journal.ts`.
  *
  * Sequence is per-session monotonic, allocated against
  * `chat_sessions.next_sequence` so it shares one ordering space with

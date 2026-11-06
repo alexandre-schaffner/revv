@@ -274,8 +274,9 @@ export interface TurnWriter {
 /**
  * Writes one turn in the order the agent produced it: prose opens an assistant
  * bubble lazily, any other row closes it, so the next prose run opens a fresh
- * bubble below. `wrapStreamWithPersistence` on the server splits the persisted
- * rows on the same boundaries, so the live view and a reload agree.
+ * bubble below. The server's turn journal (`services/chat/turn-journal.ts`)
+ * splits the persisted rows on the same boundaries, so the live view and a
+ * reload agree.
  */
 export function writeTurn(prId: string, turnId: string): TurnWriter {
   let openId: string | null = null;

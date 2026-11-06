@@ -192,17 +192,22 @@ export class StackRejectedError extends Data.TaggedError("StackRejectedError")<{
   readonly rejection: StackRejection;
 }> {}
 
-/** Another push (a chat push or a base sync) already holds the PR's push lock. */
+/** Another flow is already pushing to `branch` (see `BranchPushLock`). */
 export class ConcurrentPushError extends Data.TaggedError("ConcurrentPushError")<{
+  readonly branch: string;
+  readonly heldBy: "chat-push" | "base-sync" | "stack-rebase";
+}> {}
+
+/** What holds a PR's agent workspace (see `PrWorkspace`). */
+export type WorkspaceHolder = "chat-turn" | "push" | "branch-edit";
+
+/** Someone else holds the PR's agent workspace. */
+export class WorkspaceBusyError extends Data.TaggedError("WorkspaceBusyError")<{
   readonly prId: string;
+  readonly heldBy: WorkspaceHolder;
 }> {}
 
 // Pushing the chat agent's commits
-
-/** A chat turn is still writing to the PR's worktree. */
-export class ChatStreamingConflictError extends Data.TaggedError("ChatStreamingConflictError")<{
-  readonly prId: string;
-}> {}
 
 export class DirtyWorktreeError extends Data.TaggedError("DirtyWorktreeError")<{
   readonly message: string;
@@ -214,6 +219,21 @@ export class NoChangesError extends Data.TaggedError("NoChangesError")<{
 
 export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
   readonly prId: string;
+}> {}
+
+/**
+ * A chat turn refused by its plan gate: a plan still awaits a decision, or the
+ * plan the turn approves doesn't exist. Not in the HTTP table: the chat route
+ * answers it with a stream refusal (`PLAN_PENDING` / `PLAN_NOT_FOUND`).
+ */
+export class PlanGateError extends Data.TaggedError("PlanGateError")<{
+  readonly reason: "pending" | "not-found";
+  readonly planId: string;
+}> {}
+
+/** Rewriting the agent's commits hit a conflict; the branch was put back as it was. */
+export class AgentBranchConflictError extends Data.TaggedError("AgentBranchConflictError")<{
+  readonly message: string;
 }> {}
 
 export class GitOperationError extends Data.TaggedError("GitOperationError")<{
@@ -423,10 +443,11 @@ type AppError =
   | CloneInProgressError
   | StackRejectedError
   | ConcurrentPushError
-  | ChatStreamingConflictError
+  | WorkspaceBusyError
   | DirtyWorktreeError
   | NoChangesError
   | NoChatSessionError
+  | AgentBranchConflictError
   | GitOperationError
   | PushRejectedError
   | RefAlreadyExistsError
@@ -562,14 +583,27 @@ const HTTP_ERRORS: {
       newHeadSha: e.newHeadSha,
       commits: e.commits,
     }),
-  ConcurrentPushError: () =>
-    http(409, "CONCURRENT_PUSH", "A push is already in progress for this PR"),
-  ChatStreamingConflictError: () =>
-    http(409, "CHAT_STREAMING", "Wait for the chat agent to finish before pushing"),
+  ConcurrentPushError: (e) =>
+    http(
+      409,
+      "CONCURRENT_PUSH",
+      e.heldBy === "chat-push"
+        ? `A push of the agent's commits to ${e.branch} is already running`
+        : e.heldBy === "base-sync"
+          ? `Revv is already bringing ${e.branch} up to date`
+          : `Revv is rebasing the stack ${e.branch} belongs to`,
+    ),
+  WorkspaceBusyError: (e) =>
+    e.heldBy === "chat-turn"
+      ? http(409, "CHAT_STREAMING", "Wait for the chat agent to finish")
+      : e.heldBy === "push"
+        ? http(409, "CONCURRENT_PUSH", "A push of the agent's commits is already running")
+        : http(409, "BUSY", "Revv is still rewriting the agent's commits"),
   DirtyWorktreeError: (e) => http(409, "DIRTY_WORKTREE", e.message),
   NoChangesError: () => http(422, "NO_CHANGES", "No agent commits to push"),
   NoChatSessionError: () =>
     http(404, "NO_CHAT_SESSION", "No chat session for this PR — start a chat first"),
+  AgentBranchConflictError: (e) => http(409, "REPLAY_CONFLICT", e.message),
   InvalidBranchNameError: (e) => http(400, "INVALID_BRANCH_NAME", e.message),
   RefAlreadyExistsError: (e) => http(409, "REF_EXISTS", `branch ${e.ref} already exists`),
   PushRejectedError: (e) => http(502, "PUSH_REJECTED", e.message),
@@ -587,7 +621,7 @@ const HTTP_ERRORS: {
   SshKeysFetchFailed: (e) => internal(`Couldn't fetch ${e.login}'s keys from ${e.host}`),
 };
 
-function isAppError(e: unknown): e is AppError {
+export function isAppError(e: unknown): e is AppError {
   return (
     typeof e === "object" &&
     e !== null &&

@@ -42,7 +42,7 @@ describe("listTimeline ordering", () => {
   // block with every tool call stacked above it. A turn's prose is written
   // as one assistant row per run — sealed whenever a tool call lands — so
   // the shared sequence interleaves them in the order the agent produced
-  // them. See `wrapStreamWithPersistence`.
+  // them. See `services/chat/turn-journal.ts`.
   it("interleaves a turn's assistant runs with the activities between them", async () => {
     const db = createDb(":memory:");
     seedChatSession(db);
