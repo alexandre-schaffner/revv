@@ -29,7 +29,6 @@ import {
 } from "$lib/stores/walkthrough.svelte";
 import { type WalkthroughEntry, walkthroughUiState } from "$lib/stores/walkthrough-reducer";
 import { type FirstPassView, firstPassView } from "$lib/utils/hunk-scan";
-import { renderMarkdown } from "$lib/utils/markdown";
 import { WALKTHROUGH_PERSPECTIVES } from "$lib/utils/walkthrough-perspective";
 
 /** Which state the tab is in, in the order the checks apply. */
@@ -44,8 +43,8 @@ export type WalkthroughPage =
 
 export interface ChapterEntry {
   block: WalkthroughBlock;
-  /** The rail annotation of a code/diff/artifact block, rendered once. */
-  renderedAnnotation: string | null;
+  /** The rail annotation of a code/diff/artifact block, as markdown. */
+  annotation: string | null;
 }
 
 export interface Chapter {
@@ -135,7 +134,7 @@ const TOOL_CALL_WINDOW = 2;
 function annotationOf(block: WalkthroughBlock): string | null {
   return (block.type === "code" || block.type === "diff" || block.type === "artifact") &&
     block.annotation
-    ? renderMarkdown(block.annotation)
+    ? block.annotation
     : null;
 }
 
@@ -175,7 +174,7 @@ export class WalkthroughView {
   readonly isStreaming: boolean;
   readonly streamError: string | null;
   readonly summary: string | null;
-  readonly sentimentHtml: string | null;
+  readonly sentiment: string | null;
   readonly ratings: WalkthroughEntry["ratings"];
   /** Session-unique: entrance motion keys are scoped to it. */
   readonly walkthroughId: string | null;
@@ -223,7 +222,7 @@ export class WalkthroughView {
     this.streamError = $derived(entry?.streamError ?? null);
     this.summary = $derived(entry?.summary ?? null);
     const sentiment = $derived(entry?.sentiment ?? null);
-    this.sentimentHtml = $derived(sentiment ? renderMarkdown(sentiment) : null);
+    this.sentiment = $derived(sentiment || null);
     this.ratings = $derived(entry?.ratings ?? []);
     this.walkthroughId = $derived(entry?.walkthroughId ?? null);
     const uiState = $derived(walkthroughUiState(entry));
@@ -243,7 +242,7 @@ export class WalkthroughView {
       for (const block of this.blocks) {
         if (block.semanticStepIndex === undefined) continue;
         const list = map.get(block.semanticStepIndex) ?? [];
-        list.push({ block, renderedAnnotation: annotationOf(block) });
+        list.push({ block, annotation: annotationOf(block) });
         map.set(block.semanticStepIndex, list);
       }
       return map;
@@ -285,7 +284,7 @@ export class WalkthroughView {
                   stepIndex: 0,
                   content: this.summary,
                 },
-                renderedAnnotation: null,
+                annotation: null,
               },
             ],
           },

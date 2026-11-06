@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { renderPrLens } from "./prlens.svelte";
+import { renderPrLens } from "./prlens";
 
 // ── Rendered-SVG guarantees ──────────────────────────────────────────────────
 //

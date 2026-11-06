@@ -110,7 +110,7 @@ Components (`components/walkthrough/`):
 
 - `GuidedWalkthrough.svelte` — top-level container; phase-aware rendering
 - `WalkthroughSection.svelte` — one semantic step (chapter)
-- `WalkthroughMarkdownBlock.svelte`, `WalkthroughCodeBlock.svelte`, `WalkthroughDiffBlock.svelte` — the three block kinds
+- `Markdown.svelte` (shared), `WalkthroughCodeBlock.svelte`, `WalkthroughDiffBlock.svelte` — the three block kinds
 - `IssueCard.svelte` — Phase B issue with severity badge and inline comment thread
 - `WalkthroughRatingsGrid.svelte`, `WalkthroughRatingsPanel.svelte`, `ratings-panel/` — Phase D scorecard
 - `components/review/issues-panel/`, `comments-panel/` — sibling summary panels

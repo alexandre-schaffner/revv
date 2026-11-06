@@ -1,16 +1,15 @@
 <script lang="ts">
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Warning from "phosphor-svelte/lib/Warning";
-import { onMount } from "svelte";
-import { prlensDiagrams } from "$lib/actions/prlens.svelte";
-import { stackCitations } from "$lib/actions/stack-citations.svelte";
 import { provideActivityPr } from "$lib/components/agent-activity/repo-file";
 import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
 import ToolActivityGroup from "$lib/components/agent-activity/ToolActivityGroup.svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import WalkthroughRatingsGrid from "$lib/components/review/spec-panel/RatingsGrid.svelte";
 import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
 import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
 import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
+import { stackCitations } from "$lib/components/stack/margin/stack-citations.svelte";
 import StackHandoffCard from "$lib/components/stack/StackHandoffCard.svelte";
 import IssueStackNote from "$lib/components/stack/walkthrough/IssueStackNote.svelte";
 import StackOverviewRow from "$lib/components/stack/walkthrough/StackOverviewRow.svelte";
@@ -20,10 +19,7 @@ import { Progress } from "$lib/components/ui/progress";
 import { Shimmer } from "$lib/components/ui/shimmer";
 import { enterOnce } from "$lib/motion";
 import { jumpToDiffLine, scrollToAnchor } from "$lib/stores/review-nav.svelte";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
 import { resume, retryWalkthroughClone } from "$lib/stores/walkthrough-actions";
-import { initHighlighter } from "$lib/utils/code-highlight.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 import { sortBySeverity } from "$lib/utils/walkthrough-issues";
 import ChapterStepper, { type StepperChapter } from "./ChapterStepper.svelte";
 import FirstPassLeads from "./first-pass/FirstPassLeads.svelte";
@@ -128,10 +124,6 @@ async function handleRetryClone(repoId: string): Promise<void> {
 function handleResume(): void {
   void resume(prId);
 }
-
-onMount(() => {
-  initHighlighter();
-});
 </script>
 
 {#snippet firstPassRibbon()}
@@ -375,9 +367,7 @@ onMount(() => {
 										{#each view.activity as entry, entryIdx (entry.id)}
 											{#if entry.kind === 'thought'}
 												<div class="walkthrough-activity-entry" data-kind="thought">
-													<div class="walkthrough-inline-thought prose prose-sm">
-														{@html renderMarkdown(entry.text)}
-													</div>
+													<Markdown class="walkthrough-inline-thought" source={entry.text} trust="agent" />
 												</div>
 											{:else}
 												<div class="walkthrough-activity-entry" data-kind="explorations">
@@ -402,14 +392,14 @@ onMount(() => {
 
 				<!-- While generating, the scorecard stays up with queued cells as
 				     the destination for Phase D. -->
-				{#if view.sentimentHtml !== null || view.ratings.length > 0 || view.isStreaming}
+				{#if view.sentiment !== null || view.ratings.length > 0 || view.isStreaming}
 					<div class="sentiment-stack" data-col="content">
-						{#if view.sentimentHtml !== null}
+						{#if view.sentiment !== null}
 							<div id="walkthrough-sentiment" class="sentiment-card" aria-label="Overall sentiment">
 								<div class="sentiment-card-header">
 									<h3 class="sentiment-card-title">Overall Sentiment</h3>
 								</div>
-								<div class="sentiment-card-body prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>{@html view.sentimentHtml}</div>
+								<Markdown class="sentiment-card-body" source={view.sentiment} trust="agent" />
 							</div>
 						{/if}
 						{#if view.ratings.length > 0 || view.isStreaming}
@@ -642,7 +632,7 @@ onMount(() => {
 		color: var(--color-text-muted);
 	}
 
-	.walkthrough-inline-thought {
+	.walkthrough-activity-entry :global(.walkthrough-inline-thought) {
 		font-size: 0.875rem;
 		line-height: 1.6;
 		color: var(--color-text-muted);
@@ -720,7 +710,7 @@ onMount(() => {
 		margin: 0;
 	}
 
-	.sentiment-card-body {
+	.sentiment-card :global(.sentiment-card-body) {
 		font-size: 14px;
 		line-height: 1.65;
 		color: var(--color-text-secondary);

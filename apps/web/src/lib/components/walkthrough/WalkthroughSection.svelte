@@ -2,14 +2,11 @@
 import { type IssueSeverity, severityRank, type WalkthroughSemanticStep } from "@revv/shared";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
-import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { type EnterCascade, enterOnce } from "$lib/motion";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 import WalkthroughArtifactBlock from "./WalkthroughArtifactBlock.svelte";
 import WalkthroughCodeBlock from "./WalkthroughCodeBlock.svelte";
 import WalkthroughDiffBlock from "./WalkthroughDiffBlock.svelte";
-import WalkthroughMarkdownBlock from "./WalkthroughMarkdownBlock.svelte";
 import type { ChapterEntry } from "./walkthrough-view.svelte";
 
 interface Props {
@@ -59,11 +56,9 @@ const rolledSeverity = $derived.by<IssueSeverity | null>(() => {
   return worst;
 });
 
-const renderedSummary = $derived(section.summary ? renderMarkdown(section.summary) : null);
-
 // The margin note takes the first block's row too when that block has no
 // annotation of its own in the rail.
-const marginRows = $derived(!collapsed && entries[0]?.renderedAnnotation === null ? 2 : 1);
+const marginRows = $derived(!collapsed && entries[0]?.annotation === null ? 2 : 1);
 
 function blockCascade(blockId: string): EnterCascade | undefined {
   return cascade ? { group: "walkthrough-blocks", step: 0.085, cap: 10, beat: blockId } : undefined;
@@ -109,8 +104,8 @@ $effect(() => {
 			{/if}
 			<h3 class="section-title">{section.title}</h3>
 		</div>
-		{#if renderedSummary}
-			<div class="section-summary prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html renderedSummary}</div>
+		{#if section.summary}
+			<Markdown class="section-summary" source={section.summary} trust="agent" density="dense" />
 		{/if}
 	</button>
 
@@ -127,7 +122,7 @@ $effect(() => {
 			role="region"
 			aria-label={section.title}
 		>
-			{#each entries as { block, renderedAnnotation } (block.id)}
+			{#each entries as { block, annotation } (block.id)}
 				{@const severity = blockSeverity.get(block.id) ?? null}
 				{@const selected = selectedIssueBlockId === block.id ? selectedIssueSeverity : null}
 				<div class="block-group">
@@ -146,11 +141,11 @@ $effect(() => {
 						class:block-wrapper--selected-warning={selected === 'warning'}
 						class:block-wrapper--selected-critical={selected === 'critical'}
 						data-col="content"
-						data-prlens-breakout={renderedAnnotation !== null ? "" : undefined}
+						data-prlens-breakout={annotation !== null ? "" : undefined}
 						use:enterOnce={{ key: `${enterScope}:block:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
 					>
 						{#if block.type === 'markdown'}
-							<WalkthroughMarkdownBlock content={block.content} />
+							<Markdown source={block.content} trust="agent" />
 						{:else if block.type === 'code'}
 							<WalkthroughCodeBlock {block} />
 						{:else if block.type === 'diff'}
@@ -160,7 +155,7 @@ $effect(() => {
 						{/if}
 					</div>
 
-					{#if renderedAnnotation !== null}
+					{#if annotation !== null}
 						<aside
 							class="block-annotation"
 							data-col="rail"
@@ -168,9 +163,7 @@ $effect(() => {
 							aria-label="Annotation"
 							use:enterOnce={{ key: `${enterScope}:note:${block.id}`, look: "rise", cascade: blockCascade(block.id) }}
 						>
-							<div class="block-annotation-inner prose prose-sm" use:prlensDiagrams={getResolvedTheme()}>
-								{@html renderedAnnotation}
-							</div>
+							<Markdown class="block-annotation-inner" source={annotation} trust="agent" />
 						</aside>
 					{/if}
 				</div>
@@ -301,7 +294,7 @@ $effect(() => {
 		min-width: 0;
 	}
 
-	.section-summary {
+	.walkthrough-section :global(.section-summary) {
 		max-width: 720px;
 	}
 
@@ -361,7 +354,7 @@ $effect(() => {
 		padding: 4px 0;
 	}
 
-	.block-annotation-inner {
+	.block-annotation :global(.block-annotation-inner) {
 		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border);
 		border-radius: 8px;

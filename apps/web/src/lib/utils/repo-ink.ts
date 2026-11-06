@@ -1,6 +1,6 @@
 import type { ResolvedTheme } from "$lib/stores/theme.svelte";
 import type { OwnerPalette } from "$lib/utils/avatarPalette";
-import type { EngravingInk } from "$lib/utils/engraving";
+import type { Inks } from "$lib/utils/engraving-props";
 
 const PAPER = { light: [0.95, 0.028, 85], dark: [0.86, 0.03, 85] } as const;
 
@@ -30,7 +30,7 @@ function hueOf(palette: OwnerPalette): { hue: number; chroma: number } {
   return palette.kind === "color" ? { hue: palette.hue, chroma: 1 } : { hue: 260, chroma: 0.15 };
 }
 
-export function repoInk(palette: OwnerPalette, theme: ResolvedTheme): EngravingInk {
+export function repoInk(palette: OwnerPalette, theme: ResolvedTheme): Inks {
   const { hue, chroma } = hueOf(palette);
   const [pl, pc, ph] = PAPER[theme];
   return {

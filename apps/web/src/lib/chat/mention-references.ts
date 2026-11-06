@@ -6,14 +6,9 @@
 // pill and the assistant-message file references. When the path resolves to a
 // changed file the pill is clickable (opens it in the diff tab); otherwise it's
 // a static label.
-//
-// Mirrors the `fileReferences` action's MutationObserver pattern (re-decorate on
-// streaming content changes, microtask-scheduled), pausing observation while we
-// mutate so our injected nodes don't re-trigger it.
 
 import { MENTION_PATH_PATTERN } from "@revv/shared";
-import type { Action } from "svelte/action";
-
+import { decorationAction } from "$lib/markdown/decorate";
 import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { appendPillContents } from "$lib/utils/file-glyph";
@@ -128,76 +123,41 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
 }
 
 /**
- * The bound value IS the review file set (or `null`/`false` to disable). It
- * gates decoration AND carries the data resolution uses — passing a fresh array
- * on each render is what re-runs `update` so pills track the live file set for
- * clickability. There is no hidden second signal.
+ * The bound value is the review's file set, or null to leave the mentions as
+ * text. A new file set re-resolves which pills are clickable.
  */
-export const mentionReferences: Action<
-  HTMLElement,
-  ReadonlyArray<ReviewFile> | null | false | undefined
-> = (node, value) => {
-  let destroyed = false;
-  let scheduled = false;
-  let files: ReadonlyArray<ReviewFile> | null = value || null;
+export const mentionReferences = decorationAction<ReadonlyArray<ReviewFile> | null>((node) => {
+  let files: ReadonlyArray<ReviewFile> | null = null;
 
-  const schedule = (): void => {
-    if (destroyed || scheduled) return;
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      if (destroyed) return;
-      observer.disconnect();
-      decorate(node, files);
-      if (!destroyed) observer.observe(node, { childList: true, subtree: true });
-    });
+  const target = (e: Event): HTMLElement | null => {
+    if (!files) return null;
+    const pill = (e.target as HTMLElement | null)?.closest<HTMLElement>(
+      `.${PILL_CLASS}[${PATH_ATTR}]`,
+    );
+    return pill && node.contains(pill) ? pill : null;
   };
-
-  const activate = (target: EventTarget | null): void => {
-    const pill = (target as HTMLElement | null)?.closest<HTMLElement>(`.${PILL_CLASS}`);
-    if (!pill || !node.contains(pill)) return;
-    const path = pill.getAttribute(PATH_ATTR);
-    if (!path) return;
+  const activate = (e: Event): void => {
+    const pill = target(e);
+    const path = pill?.getAttribute(PATH_ATTR);
+    if (!pill || !path) return;
+    e.preventDefault();
     const lineAttr = pill.getAttribute(LINE_ATTR);
     openFileInDiff(path, lineAttr ? Number(lineAttr) : undefined);
   };
-
-  const onClick = (e: MouseEvent): void => {
-    if (!files) return;
-    const pill = (e.target as HTMLElement | null)?.closest<HTMLElement>(
-      `.${PILL_CLASS}[${PATH_ATTR}]`,
-    );
-    if (!pill || !node.contains(pill)) return;
-    e.preventDefault();
-    activate(e.target);
-  };
-
   const onKeydown = (e: KeyboardEvent): void => {
-    if (!files || (e.key !== "Enter" && e.key !== " ")) return;
-    const pill = (e.target as HTMLElement | null)?.closest<HTMLElement>(
-      `.${PILL_CLASS}[${PATH_ATTR}]`,
-    );
-    if (!pill || !node.contains(pill)) return;
-    e.preventDefault();
-    activate(e.target);
+    if (e.key === "Enter" || e.key === " ") activate(e);
   };
-
-  const observer = new MutationObserver(schedule);
-  observer.observe(node, { childList: true, subtree: true });
-  node.addEventListener("click", onClick);
+  node.addEventListener("click", activate);
   node.addEventListener("keydown", onKeydown);
-  schedule();
 
   return {
-    update(next) {
-      files = next || null;
-      schedule();
+    apply(next) {
+      files = next;
+      decorate(node, files);
     },
     destroy() {
-      destroyed = true;
-      observer.disconnect();
-      node.removeEventListener("click", onClick);
+      node.removeEventListener("click", activate);
       node.removeEventListener("keydown", onKeydown);
     },
   };
-};
+});

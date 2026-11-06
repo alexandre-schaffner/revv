@@ -72,7 +72,14 @@ const acpConnectionAllowedImporters = new Set([
   "apps/server/src/index.ts",
 ]);
 
-function listTsFiles(dir: string): string[] {
+// ── GSAP boundary ───────────────────────────────────────────────────────────
+// Web motion goes through `$lib/motion`, which owns plugin registration, the
+// token eases and the reduced-motion contract. Only its GSAP module may import
+// the package.
+const gsapAllowedImporter = "apps/web/src/lib/motion/gsap.ts";
+const gsapImportPattern = /(?:from\s+|import\s*\(\s*|import\s+)["'](gsap(?:\/[^"']*)?)["']/g;
+
+function listTsFiles(dir: string, extensions = /\.(ts|tsx)$/): string[] {
   const entries = readdirSync(dir);
   const files: string[] = [];
   for (const entry of entries) {
@@ -82,8 +89,8 @@ function listTsFiles(dir: string): string[] {
     const path = join(dir, entry);
     const stat = statSync(path);
     if (stat.isDirectory()) {
-      files.push(...listTsFiles(path));
-    } else if (/\.(ts|tsx)$/.test(entry)) {
+      files.push(...listTsFiles(path, extensions));
+    } else if (extensions.test(entry)) {
       files.push(path);
     }
   }
@@ -152,6 +159,14 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
         `${rel} imports ${specifier}; spawn git through RepoCloneService or GitOps, not git-runner directly`,
       );
     }
+  }
+}
+
+for (const file of listTsFiles(join(repoRoot, "apps/web/src"), /\.(ts|svelte)$/)) {
+  const rel = relative(repoRoot, file);
+  if (rel === gsapAllowedImporter) continue;
+  for (const match of readFileSync(file, "utf8").matchAll(gsapImportPattern)) {
+    violations.push(`${rel} imports ${match[1]}; animate through $lib/motion`);
   }
 }
 

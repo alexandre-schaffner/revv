@@ -34,4 +34,3 @@ export const SETTINGS_PANE_CLUSTERS = [
 export const SETTINGS_PANES = SETTINGS_PANE_CLUSTERS.flat();
 
 export type SettingsPaneEntry = (typeof SETTINGS_PANES)[number];
-export type SettingsSectionId = SettingsPaneEntry["id"];

@@ -11,14 +11,8 @@
 // unambiguously matches a changed file. A bare basename that several changed
 // files share stays inert rather than guessing the wrong target. This keeps the
 // common "symbol in backticks" (`checkAccessBatch`) from masquerading as a file.
-//
-// Follows the `prlensDiagrams` action pattern: a MutationObserver re-decorates
-// on content changes (streaming), microtask-scheduled so it runs after Svelte
-// patches the DOM. Attribute writes aren't observed (childList only), so our own
-// decoration never re-triggers the observer.
 
-import type { Action } from "svelte/action";
-
+import { decorationAction } from "$lib/markdown/decorate";
 import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { createFileGlyph } from "$lib/utils/file-glyph";
@@ -147,66 +141,41 @@ function open(target: HTMLElement): void {
 }
 
 /**
- * The bound value IS the review file set (or `null`/`false` to leave the
- * markdown inert). It gates decoration AND carries the data resolution uses —
- * passing a fresh array on each render is what re-runs `update` so decoration
- * tracks the live file set. There is no hidden second signal.
+ * The bound value is the review's file set, or null to leave the markdown
+ * inert. A new file set re-decorates.
  */
-export const fileReferences: Action<
-  HTMLElement,
-  ReadonlyArray<ReviewFile> | null | false | undefined
-> = (node, value) => {
-  let destroyed = false;
-  let scheduled = false;
-  let files: ReadonlyArray<ReviewFile> | null = value || null;
+export const fileReferences = decorationAction<ReadonlyArray<ReviewFile> | null>((node) => {
+  let files: ReadonlyArray<ReviewFile> | null = null;
 
-  const schedule = (): void => {
-    if (destroyed || scheduled) return;
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      if (destroyed) return;
-      // Pause observation while we mutate (we inject icon <svg>s, a childList
-      // change that would otherwise re-trigger this observer).
-      observer.disconnect();
-      decorate(node, files);
-      if (!destroyed) observer.observe(node, { childList: true, subtree: true });
-    });
+  const target = (e: Event): HTMLElement | null => {
+    if (!files) return null;
+    const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
+    return ref && node.contains(ref) ? ref : null;
   };
-
   const onClick = (e: MouseEvent): void => {
-    if (!files) return;
-    const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
-    if (!ref || !node.contains(ref)) return;
+    const ref = target(e);
+    if (!ref) return;
     e.preventDefault();
     open(ref);
   };
-
   const onKeydown = (e: KeyboardEvent): void => {
-    if (!files || (e.key !== "Enter" && e.key !== " ")) return;
-    const ref = (e.target as HTMLElement | null)?.closest<HTMLElement>(`.${REF_CLASS}`);
-    if (!ref || !node.contains(ref)) return;
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const ref = target(e);
+    if (!ref) return;
     e.preventDefault();
     open(ref);
   };
-
-  const observer = new MutationObserver(schedule);
-  observer.observe(node, { childList: true, subtree: true });
   node.addEventListener("click", onClick);
   node.addEventListener("keydown", onKeydown);
-  schedule();
 
   return {
-    // Re-decorate when the bound value (the current file set) changes.
-    update(next) {
-      files = next || null;
-      schedule();
+    apply(next) {
+      files = next;
+      decorate(node, files);
     },
     destroy() {
-      destroyed = true;
-      observer.disconnect();
       node.removeEventListener("click", onClick);
       node.removeEventListener("keydown", onKeydown);
     },
   };
-};
+});

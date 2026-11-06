@@ -629,7 +629,8 @@
   --recap-gutter: 2.5rem; /* rail → column */
 
   /* Motion — durations
-       Mirrored verbatim in src/lib/motion/tokens.ts. Edit both. */
+       src/lib/motion/tokens.ts is generated from the --duration-*, --ease-*
+       and --stagger-* variables here: `bun run gen:motion-tokens`. */
   --duration-instant: 80ms; /* hover, focus rings, micro-state */
   --duration-snap: 120ms; /* small surfaces, chevrons, badges */
   --duration-quick: 160ms; /* default UI motion */
@@ -978,7 +979,7 @@ diffs-container {
      animate:  opacity 1, filter blur(0),   rotateX 0,     translateY 0
      stagger:  delay = index * 15ms (set inline per-span by the renderer)
 
-   The renderer in `lib/utils/markdown.ts` wraps only characters past the
+   The fade renderer in `lib/markdown/render.ts` wraps only characters past the
    previously-rendered plain-text length, so already-shown characters
    render as plain text and don't re-animate when `{@html}` replaces the
    block's inner HTML. The keyframe ends at the same visual state as

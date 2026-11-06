@@ -14,8 +14,8 @@ timelines (right-panel slide + vignette crossfade).
 
 | File | Role |
 | --- | --- |
-| `gsap.ts` | GSAP + `CustomEase` registration; `overwrite:auto` default. |
-| `tokens.ts` | Flat const mirror of the `@theme` motion variables in `app.css`. |
+| `gsap.ts` | GSAP + `CustomEase` registration; `overwrite:auto` default. The only module that imports `gsap` (`check:import-boundaries` enforces it). |
+| `tokens.ts` | Generated from the `@theme` motion variables in `app.css`. |
 | `reduced-motion.ts` | `prefersReducedMotion()` — the single arbiter; reactive inside effects. |
 | `presets.ts` | Timelines for bits-ui content (`dialogSpringIn`, `popoverPopIn`, `tooltipPopIn`, `collapsibleOpen`, …). |
 | `actions.ts` | `gsapPress` (button feedback), `gsapHover` (eases a 0–1 CSS variable on hover/focus) and `bitsAnim` (drives bits-ui content from `data-state`; `settleOnMount` skips the first state's animation). |
@@ -76,8 +76,9 @@ instead: it plays on mount with ad-hoc values.
 
 ## Tokens
 
-`tokens.ts` is a flat const object. **If you change a duration or ease, edit
-both `tokens.ts` and the `@theme` block in `app.css`.**
+`tokens.ts` is generated from the `--duration-*`, `--ease-*` and `--stagger-*`
+variables in the `@theme` block of `app.css`. Change them there and run
+`bun run gen:motion-tokens`; `bun run lint` fails while the two disagree.
 
 GSAP wants seconds; CSS uses ms. The eases are stored as bare cubic-bezier
 control points because `CustomEase` parses any string starting with a digit.

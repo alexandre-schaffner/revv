@@ -10,9 +10,9 @@ import CheckSquare from "phosphor-svelte/lib/CheckSquare";
 import Clock from "phosphor-svelte/lib/Clock";
 import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
 import type { Attachment } from "svelte/attachments";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
-import { renderMarkdown } from "$lib/utils/markdown";
 import AnnotationCommentInput from "./AnnotationCommentInput.svelte";
 import MessageAvatar from "./MessageAvatar.svelte";
 
@@ -171,17 +171,20 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 						</div>
 					</div>
 				{:else}
-					<div
-						class="msg-body msg-body--editable prose prose-sm prose-dense"
+					<Markdown
+						class="msg-body msg-body--editable"
+						source={msg.body}
+						trust="external"
+						density="dense"
 						role="button"
-						tabindex="0"
+						tabindex={0}
 						title="Click to edit"
 						onclick={() => startEdit(msg)}
 						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEdit(msg); }}
-					>{@html renderMarkdown(msg.body)}</div>
+					/>
 				{/if}
 			{:else}
-				<div class="msg-body prose prose-sm prose-dense">{@html renderMarkdown(msg.body)}</div>
+				<Markdown class="msg-body" source={msg.body} trust="external" density="dense" />
 			{/if}
 
 			{#if msg.codeSuggestion}				<div class="suggestion-block">
@@ -295,14 +298,9 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		margin-left: auto;
 	}
 
-	/* Density + body tone come from `prose prose-sm prose-dense`; this only
-	   keeps long unbroken tokens from overflowing the thread column. */
-	.msg-body {
+	.message :global(.msg-body) {
 		word-break: break-word;
 	}
-
-	/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-	   prose layer (see app.css); `.msg-body` only owns its base text density. */
 
 	.suggestion-block {
 		margin-top: 8px;
@@ -417,18 +415,18 @@ const autoSizeEditTextarea: Attachment<HTMLTextAreaElement> = (node) => {
 		opacity: 0.85;
 	}
 
-	.message--pending .msg-body {
+	.message--pending :global(.msg-body) {
 		opacity: 0.85;
 	}
 
-	.msg-body--editable {
+	.message :global(.msg-body--editable) {
 		cursor: text;
 		border-radius: 3px;
 		margin: -2px -4px;
 		padding: 2px 4px;
 		transition: background-color var(--duration-instant) var(--ease-soft);
 	}
-	.msg-body--editable:hover {
+	.message :global(.msg-body--editable:hover) {
 		background: color-mix(
 			in srgb,
 			var(--color-bg-tertiary) 55%,

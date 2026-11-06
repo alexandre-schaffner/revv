@@ -1,15 +1,18 @@
 <script lang="ts">
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import type { Snippet } from "svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "$lib/components/ui/collapsible";
+import { splitAgentMarkdown } from "$lib/markdown/render";
 
 interface Props {
   open: boolean;
-  blocks?: ReadonlyArray<{ id: string; html: string }>;
+  /** Streamed agent thoughts, shown when there are no `children`. */
+  thoughts?: string;
   children?: Snippet;
   triggerClass: string;
   ariaLabel: string;
@@ -19,13 +22,15 @@ interface Props {
 
 let {
   open = $bindable(),
-  blocks = [],
+  thoughts = "",
   children,
   triggerClass,
   ariaLabel,
   prefix,
   metaLabel = "Thoughts",
 }: Props = $props();
+
+const thoughtBlocks = $derived(children ? [] : splitAgentMarkdown(thoughts));
 </script>
 
 <Collapsible bind:open>
@@ -43,10 +48,13 @@ let {
       {@render children()}
     {:else}
       <div class="thought-stream">
-        {#each blocks as block (block.id)}
-          <div class="thought-markdown-block prose prose-sm">
-            {@html block.html}
-          </div>
+        {#each thoughtBlocks as source, i (i)}
+          <Markdown
+            class="thought-markdown-block"
+            {source}
+            trust="agent"
+            fade={i === thoughtBlocks.length - 1}
+          />
         {/each}
       </div>
     {/if}
@@ -82,14 +90,12 @@ let {
   margin: 0.375rem 0 0;
 }
 
-/* Markdown styling comes from the app-wide themed @tailwindcss/typography
-   prose layer (see app.css). Thoughts read quieter than ordinary body prose,
-   so the only override is to drop the body tone to muted. */
-.thought-markdown-block {
+/* Thoughts read quieter than ordinary body prose. */
+.thought-stream :global(.thought-markdown-block) {
   --tw-prose-body: var(--color-text-muted);
 }
 
-.thought-markdown-block + .thought-markdown-block {
+.thought-stream :global(.thought-markdown-block + .thought-markdown-block) {
   margin-top: 0.625rem;
 }
 </style>

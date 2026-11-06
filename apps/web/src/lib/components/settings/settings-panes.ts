@@ -4,6 +4,18 @@
 
 import type { Component } from "svelte";
 
+/** The settings sections, by the id each pane declares. */
+export type SettingsSectionId =
+  | "general"
+  | "account"
+  | "repositories"
+  | "ai"
+  | "recap"
+  | "jev"
+  | "integrations"
+  | "cache"
+  | "updates";
+
 export interface SettingsRowMeta {
   readonly label: string;
   readonly keywords: readonly string[];
@@ -34,7 +46,7 @@ export interface SettingsPaneMeta<Id extends string = string, RowKey extends str
   readonly onModalOpen?: () => void;
 }
 
-export function defineSettingsPane<const Id extends string, RowKey extends string>(
+export function defineSettingsPane<const Id extends SettingsSectionId, RowKey extends string>(
   meta: Omit<SettingsPaneMeta<Id, RowKey>, "rows"> & {
     readonly rows: Readonly<Record<RowKey, SettingsRowMeta>>;
   },

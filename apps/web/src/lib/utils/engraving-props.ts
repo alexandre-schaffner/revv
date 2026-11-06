@@ -5,6 +5,14 @@ export interface Inks {
   paper: string;
 }
 
+export interface EngravingOptions extends Inks {
+  seed: string;
+  width: number;
+  height: number;
+  textWidth: number;
+  time: "day" | "night";
+}
+
 export interface Ground {
   horizon: number;
   depth: number;

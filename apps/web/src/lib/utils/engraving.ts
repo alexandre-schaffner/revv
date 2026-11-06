@@ -20,22 +20,15 @@ import {
   pick,
   type Rng,
 } from "$lib/utils/engraving-marks";
-import { type Ground, makeGround, type Prop, paintProps } from "$lib/utils/engraving-props";
+import {
+  type EngravingOptions,
+  type Ground,
+  makeGround,
+  type Prop,
+  paintProps,
+} from "$lib/utils/engraving-props";
 import { drawDistantSail, drawHeadland, drawSailboat, drawSeaRock } from "$lib/utils/engraving-sea";
 import { drawDaySky, drawNightSky } from "$lib/utils/engraving-sky";
-
-export interface EngravingInk {
-  ink: string;
-  paper: string;
-}
-
-export interface EngravingOptions extends EngravingInk {
-  seed: string;
-  width: number;
-  height: number;
-  textWidth: number;
-  time: "day" | "night";
-}
 
 interface Ridge {
   at: (x: number) => number;

@@ -1,12 +1,10 @@
 <script lang="ts">
 import type { Confidence, WalkthroughBlock, WalkthroughRating } from "@revv/shared";
 import { RATING_AXIS_LABELS } from "@revv/shared";
-import { prlensDiagrams } from "$lib/actions/prlens.svelte";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
-import { renderMarkdown } from "$lib/utils/markdown";
 import SpecExpandedBody from "./SpecExpandedBody.svelte";
 import SpecReferences from "./SpecReferences.svelte";
 import SpecSection from "./SpecSection.svelte";
@@ -22,11 +20,7 @@ let { rating, blocks, onJump }: Props = $props();
 
 const stepLinks = $derived(resolveStepLinks(rating.blockIds, blocks));
 
-const rationaleHtml = $derived(renderMarkdown(rating.rationale));
-
-const detailsHtml = $derived(
-  rating.details && rating.details.trim().length > 0 ? renderMarkdown(rating.details) : null,
-);
+const details = $derived(rating.details?.trim() ? rating.details : null);
 
 // Opening the popover moves focus into this body; without the delay that
 // focus would pop the first citation's tooltip straight away.
@@ -68,15 +62,15 @@ const confidenceLabels: Record<Confidence, string> = {
         </div>
 
         <div class="rationale">
-            <div class="rationale-text prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html rationaleHtml}</div>
+            <Markdown class="rationale-text" source={rating.rationale} trust="agent" density="dense" />
         </div>
     </SpecSection>
 
-    {#if detailsHtml}
+    {#if details}
         <SpecSection label="details">
-            {#await detailsHtml then html}
-                <div class="rating-details prose prose-sm prose-dense" use:prlensDiagrams={getResolvedTheme()}>{@html html}</div>
-            {/await}
+            <div class="rating-details-host">
+                <Markdown class="rating-details" source={details} trust="agent" density="dense" />
+            </div>
         </SpecSection>
     {/if}
 
@@ -131,9 +125,8 @@ const confidenceLabels: Record<Confidence, string> = {
         position: relative;
     }
 
-    /* Density from `prose prose-sm prose-dense`; primary body tone via the
-       prose token so headings/bold track it too. */
-    .rationale-text {
+    /* Primary body tone via the prose token so headings/bold track it too. */
+    .rationale :global(.rationale-text) {
         font-family: var(--font-sans);
         --tw-prose-body: var(--color-text-primary);
         margin: 0;
@@ -214,7 +207,7 @@ const confidenceLabels: Record<Confidence, string> = {
 
     /* ── Details (rendered markdown) ─────────────────────────────── */
 
-    .rating-details {
+    .rating-details-host :global(.rating-details) {
         font-family: var(--font-sans);
         --tw-prose-body: var(--color-text-primary);
         max-height: 480px;
@@ -226,7 +219,7 @@ const confidenceLabels: Record<Confidence, string> = {
 
     /* `### headings` in rating details render as small uppercase section
        labels rather than prose headings. */
-    .rating-details :global(h3) {
+    .rating-details-host :global(.rating-details h3) {
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.04em;

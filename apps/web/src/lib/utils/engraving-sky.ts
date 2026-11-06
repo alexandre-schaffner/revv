@@ -1,5 +1,5 @@
-import type { EngravingOptions } from "$lib/utils/engraving";
 import { blade, makeNoise1d, makeNoise2d, type Rng } from "$lib/utils/engraving-marks";
+import type { EngravingOptions } from "$lib/utils/engraving-props";
 
 interface SkyBody {
   x: number;

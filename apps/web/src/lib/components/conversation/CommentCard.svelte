@@ -3,11 +3,11 @@ import type { ConversationActor } from "@revv/shared";
 import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
 import PencilSimple from "phosphor-svelte/lib/PencilSimple";
 import Trash from "phosphor-svelte/lib/Trash";
+import Markdown from "$lib/components/markdown/Markdown.svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import RelativeTime from "$lib/components/shared/RelativeTime.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { openExternal } from "$lib/utils/open-external";
-import MarkdownBody from "./MarkdownBody.svelte";
 import MarkdownEditor from "./MarkdownEditor.svelte";
 
 // A markdown post in the conversation: the PR description or a comment.
@@ -133,7 +133,7 @@ async function confirmDelete(): Promise<void> {
 			/>
 		</div>
 	{:else if body.trim()}
-		<div class="card-body"><MarkdownBody source={body} /></div>
+		<div class="card-body"><Markdown source={body} trust="external" density="dense" class="wrap-anywhere" /></div>
 	{:else if emptyText}
 		<p class="card-body card-empty">{emptyText}</p>
 	{/if}

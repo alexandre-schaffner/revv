@@ -19,13 +19,8 @@ import {
   clearSettingsTargetSection,
   getSettingsTargetSection,
 } from "$lib/stores/settingsModal.svelte";
-import {
-  SETTINGS_PANE_CLUSTERS,
-  SETTINGS_PANES,
-  type SettingsPaneEntry,
-  type SettingsSectionId,
-} from "./panes";
-import { type SettingsSearchHit, searchSettings } from "./settings-panes";
+import { SETTINGS_PANE_CLUSTERS, SETTINGS_PANES, type SettingsPaneEntry } from "./panes";
+import { type SettingsSearchHit, type SettingsSectionId, searchSettings } from "./settings-panes";
 
 interface Props {
   open: boolean;
