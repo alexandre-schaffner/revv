@@ -201,4 +201,50 @@ describe("ReviewService", () => {
       [message.id, "First.\n\nSecond.", "900"],
     ]);
   });
+
+  // A resolve GitHub refused used to be reverted by the next pull.
+  it("keeps a status set in Revv over GitHub's until it is pushed", async () => {
+    const { run, types } = harness();
+    const onGitHub = { ...anchor, externalCommentId: "42" };
+    const { thread } = await run((r) =>
+      r.startThread(PR_ID, onGitHub, { ...reviewer, body: "Rename this.", externalId: "42" }),
+    );
+    await run((r) => r.setStatus(thread.id, "resolved"));
+    const announced = types().length;
+
+    expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("pending");
+    expect((await run((r) => r.getThread(thread.id))).thread.status).toBe("resolved");
+    expect(types()).toHaveLength(announced);
+
+    // GitHub took an older status: the newer one stays pending.
+    await run((r) => r.statusPushed(thread.id, "open"));
+    expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("pending");
+
+    await run((r) => r.statusPushed(thread.id, "resolved"));
+    expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("changed");
+    expect((await run((r) => r.getThread(thread.id))).thread.status).toBe("open");
+    expect(types().at(-1)).toBe("thread:updated");
+  });
+
+  it("clears the pending status once GitHub agrees with it", async () => {
+    const { run } = harness();
+    const onGitHub = { ...anchor, externalCommentId: "42" };
+    const { thread } = await run((r) =>
+      r.startThread(PR_ID, onGitHub, { ...reviewer, body: "Rename this.", externalId: "42" }),
+    );
+    await run((r) => r.setStatus(thread.id, "wont_fix"));
+
+    expect(await run((r) => r.applyRemoteResolved(thread.id, true))).toBe("unchanged");
+    expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("changed");
+  });
+
+  it("lets GitHub's status win on a thread with nothing to push", async () => {
+    const { run } = harness();
+    const { thread } = await run((r) =>
+      r.startThread(PR_ID, anchor, { ...reviewer, body: "Local only." }),
+    );
+    await run((r) => r.setStatus(thread.id, "resolved"));
+
+    expect(await run((r) => r.applyRemoteResolved(thread.id, false))).toBe("changed");
+  });
 });

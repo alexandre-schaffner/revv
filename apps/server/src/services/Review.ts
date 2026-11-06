@@ -104,11 +104,28 @@ export class ReviewService extends Context.Service<
       NotFoundError | DbError,
       DbService
     >;
-    /** Announces `thread:updated`. */
+    /**
+     * A status set in Revv. On a thread that is on GitHub it stays pending
+     * until `statusPushed`. Announces `thread:updated`.
+     */
     readonly setStatus: (
       threadId: string,
       status: ThreadStatus,
     ) => Effect.Effect<CommentThread, NotFoundError | DbError, DbService>;
+    /** GitHub took `status`; a status set since stays pending. */
+    readonly statusPushed: (
+      threadId: string,
+      status: ThreadStatus,
+    ) => Effect.Effect<void, DbError, DbService>;
+    /**
+     * Bring a thread's status in line with GitHub's resolved flag, unless a
+     * status set in Revv is still waiting to be pushed (`pending`). Announces
+     * `thread:updated` when it changed.
+     */
+    readonly applyRemoteResolved: (
+      threadId: string,
+      resolved: boolean,
+    ) => Effect.Effect<"changed" | "unchanged" | "pending", NotFoundError | DbError, DbService>;
     /** A local draft on `threadId` edited in Revv. Announces `thread:message:edited`. */
     readonly editDraft: (
       threadId: string,
@@ -480,7 +497,11 @@ export const ReviewServiceLive = Layer.effect(
             const resolvedAt = isThreadResolved(status) ? new Date().toISOString() : null;
             const row = tx
               .update(commentThreads)
-              .set({ status, resolvedAt })
+              .set({
+                status,
+                resolvedAt,
+                statusPushPending: found.row.externalCommentId !== null,
+              })
               .where(eq(commentThreads.id, threadId))
               .returning()
               .get();
@@ -491,6 +512,55 @@ export const ReviewServiceLive = Layer.effect(
             data: { threadId, status: thread.status, resolvedAt: thread.resolvedAt },
           });
           return thread;
+        }),
+
+      statusPushed: (threadId, status) =>
+        tryDb("mark a thread status pushed", (db) => {
+          db.update(commentThreads)
+            .set({ statusPushPending: false })
+            .where(and(eq(commentThreads.id, threadId), eq(commentThreads.status, status)))
+            .run();
+        }),
+
+      applyRemoteResolved: (threadId, resolved) =>
+        Effect.gen(function* () {
+          const applied = yield* transact("apply GitHub's thread status", (tx) => {
+            const found = readThreadOnPr(tx, threadId);
+            if (!found) return threadNotFound(threadId);
+            const { row } = found;
+            const agrees = isThreadResolved(row.status) === resolved;
+            if (row.statusPushPending) {
+              if (agrees) {
+                tx.update(commentThreads)
+                  .set({ statusPushPending: false })
+                  .where(eq(commentThreads.id, threadId))
+                  .run();
+              }
+              return { outcome: agrees ? ("unchanged" as const) : ("pending" as const) };
+            }
+            if (agrees) return { outcome: "unchanged" as const };
+            const updated = tx
+              .update(commentThreads)
+              .set({
+                status: resolved ? "resolved" : "open",
+                resolvedAt: resolved ? new Date().toISOString() : null,
+              })
+              .where(eq(commentThreads.id, threadId))
+              .returning()
+              .get();
+            return { outcome: "changed" as const, prId: found.prId, thread: toThread(updated) };
+          });
+          if (applied.outcome === "changed") {
+            yield* announce(applied.prId, {
+              type: "thread:updated",
+              data: {
+                threadId,
+                status: applied.thread.status,
+                resolvedAt: applied.thread.resolvedAt,
+              },
+            });
+          }
+          return applied.outcome;
         }),
 
       editDraft: (threadId, messageId, body, actorLogin) =>

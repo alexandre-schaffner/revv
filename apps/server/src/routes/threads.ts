@@ -28,7 +28,7 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
           const review = yield* ReviewService;
           const sync = yield* SyncService;
           const thread = yield* review.setStatus(ctx.params.id, ctx.body.status);
-          // The local change stands when GitHub refuses it.
+          // The local change stands when GitHub refuses it; the next pull pushes it again.
           yield* sync
             .pushThreadStatus(ctx.params.id)
             .pipe(

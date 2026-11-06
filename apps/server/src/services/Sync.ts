@@ -3,11 +3,13 @@ import type { ThreadSummary } from "@revv/shared";
 import { isThreadResolved, loginsMatch } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
 import { SyncError } from "../domain/errors";
+import { logError } from "../logger";
 import { keyedSingleFlight } from "../effects/keyed-single-flight";
 import type { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubAccounts } from "./github/accounts";
 import { AvatarCache } from "./github/avatars";
+import type { GitHubClient } from "./github/transport";
 import { GitHubGateway } from "./github/gateway";
 import type { GhReviewComment, GhReviewThread } from "./github/reviews";
 import { diffFileFor, toGitHubComment } from "./github-review-comment";
@@ -182,17 +184,19 @@ export const SyncServiceLive = Layer.effect(
         yield* reviewService.linkMessage(message.id, String(posted.id));
       }).pipe(Effect.mapError(toSyncError()));
 
-    const pushThreadStatus = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
+    const pushStatus = (threadId: string, client?: GitHubClient) =>
       Effect.gen(function* () {
         const { thread, prId } = yield* reviewService.getThread(threadId);
         if (!thread.externalThreadId) return;
-
-        const { client } = yield* prContext.forPr(prId);
-
+        const via = client ?? (yield* prContext.forPr(prId)).client;
         yield* isThreadResolved(thread.status)
-          ? github.reviews.resolveThread(client, thread.externalThreadId)
-          : github.reviews.unresolveThread(client, thread.externalThreadId);
+          ? github.reviews.resolveThread(via, thread.externalThreadId)
+          : github.reviews.unresolveThread(via, thread.externalThreadId);
+        yield* reviewService.statusPushed(threadId, thread.status);
       }).pipe(Effect.mapError(toSyncError(threadId)));
+
+    const pushThreadStatus = (threadId: string): Effect.Effect<void, SyncError, DbService> =>
+      pushStatus(threadId);
 
     const getThreadSummary = (prId: string): Effect.Effect<ThreadSummary, SyncError, DbService> =>
       Effect.gen(function* () {
@@ -365,10 +369,16 @@ export const SyncServiceLive = Layer.effect(
               yield* reviewService.linkThread(local.id, { externalThreadId: ght.nodeId });
             }
 
-            const localResolved = isThreadResolved(local.status);
-            if (ght.isResolved !== localResolved) {
-              yield* reviewService.setStatus(local.id, ght.isResolved ? "resolved" : "open");
-              statusChanges++;
+            const applied = yield* reviewService.applyRemoteResolved(local.id, ght.isResolved);
+            if (applied === "changed") statusChanges++;
+            if (applied === "pending") {
+              yield* pushStatus(local.id, client).pipe(
+                Effect.catch((e) =>
+                  Effect.sync(() =>
+                    logError("sync", `push status of ${local.id} to GitHub:`, e.message),
+                  ),
+                ),
+              );
             }
             break;
           }
