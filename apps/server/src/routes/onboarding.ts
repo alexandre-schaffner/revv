@@ -1,7 +1,7 @@
-import { type InstallEvent, isAcpAgentId, type LoginEvent } from "@revv/shared";
+import { ACP_AGENT_IDS, type InstallEvent, type LoginEvent } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { invalidateAgentProbes } from "../ai/acp/agents";
 import { user } from "../db/schema";
 import { ValidationError } from "../domain/errors";
@@ -10,7 +10,11 @@ import { AppRuntime } from "../runtime";
 import { AgentLoginService } from "../services/AgentLogin";
 import { OnboardingService } from "../services/Onboarding";
 import { type ApiErrorResponse, errorResponse, runRoute, withAuth } from "./middleware";
+import { literalUnion } from "./schemas";
 import { openSse } from "./sse";
+
+const agentBody = t.Object({ agent: literalUnion(ACP_AGENT_IDS) });
+const jobIdField = t.String({ minLength: 1 });
 
 /**
  * Stream a job's events: the owning service replays what the job logged so
@@ -110,13 +114,11 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * Idempotent per agent — concurrent requests for the same agent get the
    * same `jobId`. Body: `{ agent: AcpAgentId }`.
    */
-  .post("/install", async (ctx) => {
-    const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
-    if (typeof agent !== "string" || !isAcpAgentId(agent)) {
-      return errorResponse(new ValidationError({ message: "Invalid or missing agent" }));
-    }
-    return runRoute(Effect.flatMap(OnboardingService, (s) => s.startInstall(agent)));
-  })
+  .post(
+    "/install",
+    (ctx) => runRoute(Effect.flatMap(OnboardingService, (s) => s.startInstall(ctx.body.agent))),
+    { body: agentBody },
+  )
   /**
    * SSE stream of `InstallEvent`s. Replays the log captured up to the
    * subscription point and then forwards live events until `done`. Closes
@@ -135,38 +137,33 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
    * official login command runs in a PTY whose output streams back over SSE.
    * Idempotent per agent. Body: `{ agent: AcpAgentId }`.
    */
-  .post("/login", async (ctx) => {
-    const agent = (ctx.body as { agent?: unknown } | undefined)?.agent;
-    if (typeof agent !== "string" || !isAcpAgentId(agent)) {
-      return errorResponse(new ValidationError({ message: "Invalid or missing agent" }));
-    }
-    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.startLogin(agent)));
-  })
+  .post(
+    "/login",
+    (ctx) => runRoute(Effect.flatMap(AgentLoginService, (s) => s.startLogin(ctx.body.agent))),
+    { body: agentBody },
+  )
   /**
    * Forward a chunk of user keystrokes to the login job's PTY (e.g. a pasted
    * auth code). Body: `{ jobId, data }`.
    */
-  .post("/login/input", async (ctx) => {
-    const body = ctx.body as { jobId?: unknown; data?: unknown } | undefined;
-    const jobId = body?.jobId;
-    const data = body?.data;
-    if (typeof jobId !== "string" || jobId.length === 0 || typeof data !== "string") {
-      return errorResponse(new ValidationError({ message: "Missing jobId or data" }));
-    }
-    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.writeInput(jobId, data)));
-  })
+  .post(
+    "/login/input",
+    (ctx) =>
+      runRoute(
+        Effect.flatMap(AgentLoginService, (s) => s.writeInput(ctx.body.jobId, ctx.body.data)),
+      ),
+    { body: t.Object({ jobId: jobIdField, data: t.String() }) },
+  )
   /**
    * Tear down a login job's PTY when the user abandons sign-in (skip / unmount /
    * navigate-away), so the spawned interactive CLI never orphans on the server.
    * Idempotent. Body: `{ jobId }`.
    */
-  .post("/login/cancel", async (ctx) => {
-    const jobId = (ctx.body as { jobId?: unknown } | undefined)?.jobId;
-    if (typeof jobId !== "string" || jobId.length === 0) {
-      return errorResponse(new ValidationError({ message: "Missing jobId" }));
-    }
-    return runRoute(Effect.flatMap(AgentLoginService, (s) => s.cancelLogin(jobId)));
-  })
+  .post(
+    "/login/cancel",
+    (ctx) => runRoute(Effect.flatMap(AgentLoginService, (s) => s.cancelLogin(ctx.body.jobId))),
+    { body: t.Object({ jobId: jobIdField }) },
+  )
   /**
    * SSE stream of `LoginEvent`s. Replays the terminal output captured up to the
    * subscription point and then forwards live events until `done`. Closes the

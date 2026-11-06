@@ -105,14 +105,6 @@ export const threadRoutes = new Elysia({ prefix: "/api/threads" })
     { body: t.Object({ body: t.String() }) },
   )
 
-  .post("/:id/messages/:messageId/push", (ctx) =>
-    runRoute(
-      Effect.flatMap(SyncService, (s) => s.pushReply(ctx.params.messageId)).pipe(
-        Effect.as({ success: true }),
-      ),
-    ),
-  )
-
   .delete("/:id/messages/:messageId", (ctx) =>
     runRoute(
       Effect.gen(function* () {
