@@ -6,10 +6,11 @@
 import { getAgentCapabilities, type StreamErrorBody } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, status, t } from "elysia";
+import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { ChatSessionService } from "../services/ChatSession";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
-import { chatSessionModel, resolveChatSessionContext } from "./chat-helpers";
+import { resolveChatSessionContext } from "./chat-helpers";
 import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 
@@ -38,18 +39,9 @@ export const chatInteractionRoutes = new Elysia()
         Effect.gen(function* () {
           const prCtx = yield* PrContextService;
           const chatSessions = yield* ChatSessionService;
-          const settingsService = yield* SettingsService;
           const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-          const settings = yield* settingsService.getSettings();
-          const agent = yield* settingsService.resolveAgent();
-          const row = pr.headSha
-            ? yield* chatSessions.find(
-                pr.id,
-                agent,
-                chatSessionModel(agent, settings.aiModel),
-                pr.headSha,
-              )
-            : null;
+          const { agent, model } = yield* resolveAgentLaunch("chat");
+          const row = pr.headSha ? yield* chatSessions.find(pr.id, agent, model, pr.headSha) : null;
           if (row) yield* chatSessions.setInteractionMode({ chatSessionId: row.id, mode });
           return { status: "ok" as const, mode };
         }),

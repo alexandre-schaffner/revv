@@ -31,6 +31,7 @@ import {
 } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
+import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import type { ChatHistoryEntry } from "../ai/prompts/chat";
 import type { ChatStreamFrame } from "../ai/providers/chat-types";
 import { logError } from "../logger";
@@ -42,7 +43,6 @@ import { DbService } from "../services/Db";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
 import {
-  chatSessionModel,
   discardAgentCommits,
   fetchWalkthroughContext,
   resolveChatTurnContext,
@@ -186,7 +186,7 @@ export const chatRoute = new Elysia()
         // worktree preserves a descendant HEAD (unpushed agent commits
         // from a prior turn) and only resets when its base diverges from
         // `prHeadSha` (PR head moved on the remote).
-        const { pr, headSha, agent, model, worktreePath, branchName, existingSessionRow } =
+        const { pr, headSha, launch, agent, model, worktreePath, branchName, existingSessionRow } =
           yield* resolveChatTurnContext(ctx.body.prId, ctx.session.user.id);
 
         // No row means this is a fresh start (e.g. the user just cleared
@@ -268,9 +268,9 @@ export const chatRoute = new Elysia()
         // (sessionId === null) means we're starting from scratch.
         const resumeSessionId = chatSessionRow.sessionId ?? null;
 
-        // On new session, fetch walkthrough context for the system prompt.
-        // On resume, the agent already has it baked into its persisted session.
-        const walkthrough = resumeSessionId ? null : fetchWalkthroughContext(db, pr.id);
+        // For the system prompt, which only a fresh agent session gets. A
+        // resume id the agent can no longer load also ends in a fresh one.
+        const walkthrough = fetchWalkthroughContext(db, pr.id);
 
         // Snapshot the prior transcript BEFORE appending the new
         // user message so the agent's history block doesn't end
@@ -335,6 +335,7 @@ export const chatRoute = new Elysia()
         };
 
         const frameStream = yield* ai.chat({
+          launch,
           pr: {
             title: pr.title,
             body: pr.body,
@@ -475,20 +476,11 @@ export const chatRoute = new Elysia()
         Effect.gen(function* () {
           const prCtx = yield* PrContextService;
           const chatSessions = yield* ChatSessionService;
-          const settingsService = yield* SettingsService;
           const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-          const settings = yield* settingsService.getSettings();
-          const agent = yield* settingsService.resolveAgent();
+          const { agent, model } = yield* resolveAgentLaunch("chat");
 
           // Only the current head's session: a new commit starts a new one.
-          const row = pr.headSha
-            ? yield* chatSessions.find(
-                pr.id,
-                agent,
-                chatSessionModel(agent, settings.aiModel),
-                pr.headSha,
-              )
-            : null;
+          const row = pr.headSha ? yield* chatSessions.find(pr.id, agent, model, pr.headSha) : null;
           if (!row) {
             return { chatSessionId: null, entries: [], interactionMode: "default" as const };
           }

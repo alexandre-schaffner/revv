@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { resolveThinkingEffort, type StackHeadline } from "@revv/shared";
+import type { StackHeadline } from "@revv/shared";
 import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { Context, Effect, Layer, Semaphore } from "effect";
+import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
 import { generateStackHeadline } from "../../ai/providers/stack-headline";
 import { pullRequests } from "../../db/schema/pull-requests";
 import { stackBriefs } from "../../db/schema/stack-briefs";
@@ -121,19 +122,12 @@ export const StackHeadlineServiceLive = Layer.effect(
 
     const name = (repositoryId: string, accountId: string, stack: StackMembers, key: string) =>
       Effect.gen(function* () {
-        const current = yield* settings.getSettings();
-        const model = current.aiSuggestionsModel;
-        if (!model) return;
-        const agent = yield* settings.resolveAgent();
+        const launch = yield* resolveAgentLaunch("suggestions").pipe(
+          Effect.provideService(SettingsService, settings),
+        );
+        if (!launch) return;
         const named = yield* Effect.promise(() =>
-          generateStackHeadline({
-            base: stack.base,
-            layersBaseFirst: stack.layers,
-            acpAgentId: agent,
-            cwd: process.cwd(),
-            model,
-            thinkingEffort: resolveThinkingEffort(current.aiThinkingEffort),
-          }),
+          generateStackHeadline({ base: stack.base, layersBaseFirst: stack.layers, launch }),
         );
         if (!named) {
           failedUntil.set(key, Date.now() + RETRY_AFTER_MS);

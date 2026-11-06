@@ -52,23 +52,19 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
-import {
-  type ActivityBeacon,
-  CLI_WALKTHROUGH_TIMEOUT_MS,
-  makeActivityBeacon,
-} from "../ai/agent-stream";
-import {
-  accumulateTokenUsage,
-  addThroughput,
-  mergeContextOccupancy,
-  ZERO_TOKEN_USAGE,
-} from "../ai/agent-stream/token-usage";
+import { type ActivityBeacon, JOB_TURN, makeActivityBeacon } from "../ai/acp/run-turn";
 import { adjudicateContinuation } from "../ai/jev/continuation";
 import { resolveJobStart } from "../ai/jev/job-start-resolution";
 import { awaitJudgments, forgetWalkthrough as forgetPendingJudgments } from "../ai/jev/pending";
 import { forgetProse } from "../ai/jev/prose-voice";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import { withWalkthroughMetrics } from "../ai/providers/walkthrough-metrics";
+import {
+  accumulateTokenUsage,
+  addThroughput,
+  mergeContextOccupancy,
+  ZERO_TOKEN_USAGE,
+} from "../ai/providers/walkthrough-token-usage";
 import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tools";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
@@ -143,11 +139,10 @@ const MAX_AUTO_CONTINUATIONS = 2;
 
 /**
  * Opaque session token TTL for the HTTP MCP route.
- * Derived from the CLI timeout budget so a token never expires mid-run:
- *   CLI_WALKTHROUGH_TIMEOUT_MS × (1 + MAX_AUTO_CONTINUATIONS) + 5 min margin.
- * This ensures the token outlives even the longest allowed generation session.
+ * Derived from the turn ceiling so a token never expires mid-run:
+ *   JOB_TURN.ceilingMs × (1 + MAX_AUTO_CONTINUATIONS) + 5 min margin.
  */
-const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
+const SESSION_TOKEN_TTL_MS = JOB_TURN.ceilingMs * (1 + MAX_AUTO_CONTINUATIONS) + 5 * 60_000;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -752,9 +747,11 @@ export const WalkthroughJobsLive = Layer.effect(
                 } as const;
               }
               yield* setStatus(job.walkthroughId, "error", { errorMessage: event.data.message });
+              // The driver's code, so the client can tell an agent sign-in
+              // failure (`AGENT_AUTH_REQUIRED`) from any other.
               yield* emitEvent(job.walkthroughId, {
                 type: "lifecycle:error",
-                data: { code: "AiGenerationError", message: event.data.message },
+                data: { code: event.data.code, message: event.data.message },
               }).pipe(Effect.catch(() => Effect.void));
               return {
                 _tag: "returnError",

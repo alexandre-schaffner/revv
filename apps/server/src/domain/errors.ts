@@ -97,9 +97,14 @@ export class ExternalIntegrationError extends Data.TaggedError("ExternalIntegrat
 }> {}
 
 // AI errors
+
+/** `auth`: the agent isn't signed in, or Revv can't read its login. */
+export type AgentFailureKind = "auth" | "other";
+
 export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
   readonly cause: unknown;
   readonly message?: string;
+  readonly kind?: AgentFailureKind;
 }> {}
 
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
@@ -516,7 +521,11 @@ const HTTP_ERRORS: {
   AiNotConfiguredError: () =>
     http(400, "NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude"),
   AiGenerationError: (e) =>
-    http(500, "GENERATION_ERROR", e.message ?? `Generation failed: ${String(e.cause)}`),
+    http(
+      500,
+      e.kind === "auth" ? "AGENT_AUTH_REQUIRED" : "GENERATION_ERROR",
+      e.message ?? `Generation failed: ${String(e.cause)}`,
+    ),
   JevUnavailable: (e) =>
     http(503, "UNAVAILABLE", e.message ?? `TypeSafe is unavailable (${e.reason})`),
   ExternalIntegrationError: (e) => {

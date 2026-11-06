@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { getAgentKeychainAuth } from "@revv/shared";
-import {
-  agentFailureGuidance,
-  looksLikeAuthFailure,
-  withAgentKeychainHint,
-} from "./agent-keychain";
+import { agentFailureGuidance, looksLikeAuthFailure, withAgentKeychainHint } from "./agent-failure";
 
 describe("registry keychainAuth", () => {
   it("declares claude-code as keychain-backed and the file-based agents as not", () => {

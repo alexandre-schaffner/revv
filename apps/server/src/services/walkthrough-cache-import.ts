@@ -1,6 +1,6 @@
 import type { WalkthroughStreamEvent } from "@revv/shared";
 import { Effect, Option } from "effect";
-import { ZERO_TOKEN_USAGE } from "../ai/agent-stream/token-usage";
+import { ZERO_TOKEN_USAGE } from "../ai/providers/walkthrough-token-usage";
 import type { Db } from "../db/index";
 import { type DbError, ImportError } from "../domain/errors";
 import { debug, logError } from "../logger";

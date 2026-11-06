@@ -56,6 +56,16 @@ const broadcasterAllowedImporters = new Set([
   "apps/server/src/routes/events.ts",
 ]);
 
+// ── Agent turn boundary ─────────────────────────────────────────────────────
+// Every agent turn runs through the turn runner, which owns connect, session,
+// deadlines and cancel. Nothing else may reach into the connection pool;
+// process shutdown may stop it.
+const acpConnectionModule = "apps/server/src/ai/acp/acp-connection";
+const acpConnectionAllowedImporters = new Set([
+  "apps/server/src/ai/acp/run-turn.ts",
+  "apps/server/src/index.ts",
+]);
+
 function listTsFiles(dir: string): string[] {
   const entries = readdirSync(dir);
   const files: string[] = [];
@@ -111,6 +121,14 @@ for (const file of listTsFiles(join(repoRoot, "apps/server/src"))) {
       !/\.test\.ts$/.test(rel)
     ) {
       violations.push(`${rel} imports ${specifier}; send pushes through Realtime`);
+    }
+
+    if (
+      target === acpConnectionModule &&
+      !acpConnectionAllowedImporters.has(rel) &&
+      !/\.test\.ts$/.test(rel)
+    ) {
+      violations.push(`${rel} imports ${specifier}; run agent turns through ai/acp/run-turn`);
     }
 
     if (target === gitRunnerModule && !gitRunnerAllowedImporters.has(rel)) {

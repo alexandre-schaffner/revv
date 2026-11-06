@@ -4,7 +4,7 @@ import {
   addThroughput,
   mergeContextOccupancy,
   ZERO_TOKEN_USAGE,
-} from "./token-usage";
+} from "./walkthrough-token-usage";
 
 describe("token-usage accumulation algebra", () => {
   it("sums throughput but takes the latest occupancy and max window", () => {

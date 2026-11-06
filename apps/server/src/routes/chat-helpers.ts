@@ -7,12 +7,11 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
-import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
+import type { ChatSessionContext } from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
-import { resolveGenerationModel } from "../ai/acp/presets";
+import { resolveAgentLaunch } from "../ai/acp/agent-launch";
+import { agentSessionContext } from "../ai/acp/run-turn";
 import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
@@ -24,21 +23,8 @@ import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession
 import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
-import { SettingsService } from "../services/Settings";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * The model half of a chat session's identity key `(prId, agent, model, headSha)`.
- *
- * Goes through {@link resolveGenerationModel}, never raw `settings.aiModel`:
- * that may hold {@link AUTO_SENTINEL}, which chat can't size (no PR sizing
- * pass), so it resolves to the agent's default instead. Every chat-session
- * lookup must use this or it misses its own session and starts a fresh one.
- */
-export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
-  return resolveGenerationModel(agent, aiModel) ?? getAcpAgentDefaultModel(agent);
-}
 
 /**
  * Cheap, read-only bootstrap prefix shared by `POST /api/chat` and the
@@ -61,7 +47,6 @@ export const resolveChatReadContext = (
   Effect.gen(function* () {
     const { fetchHeadShaFromGithub = true } = opts;
     const prCtx = yield* PrContextService;
-    const settingsService = yield* SettingsService;
     const chatSessions = yield* ChatSessionService;
 
     const { pr, repo, token } = yield* prCtx.resolveBasic(prId, userId);
@@ -78,9 +63,9 @@ export const resolveChatReadContext = (
       headSha = meta.headSha;
     }
 
-    const settings = yield* settingsService.getSettings();
-    const agent = yield* settingsService.resolveAgent();
-    const model = chatSessionModel(agent, settings.aiModel);
+    // The same launch keys the session row and the warm agent the turn runs on.
+    const launch = yield* resolveAgentLaunch("chat");
+    const { agent, model } = launch;
 
     // No head SHA → no session can match (rows are keyed on it), so skip the
     // lookup. Otherwise a null row means a fresh start (e.g. the user just
@@ -89,7 +74,7 @@ export const resolveChatReadContext = (
       ? yield* chatSessions.find(pr.id, agent, model, headSha)
       : null;
 
-    return { pr, repo, token, headSha, settings, agent, model, existingSessionRow };
+    return { pr, repo, token, headSha, launch, agent, model, existingSessionRow };
   });
 
 /**
@@ -166,7 +151,7 @@ const slashCommandCache = new Map<string, ReadonlyArray<ChatSessionContext["comm
 export const resolveChatSessionContext = (prId: string, userId: string, warm: boolean) =>
   Effect.gen(function* () {
     const read = yield* resolveChatReadContext(prId, userId, { fetchHeadShaFromGithub: warm });
-    const { settings, agent, existingSessionRow } = read;
+    const { agent, existingSessionRow } = read;
 
     // Slash commands are PR-independent (agent + repo project commands), so a
     // prior warm's harvest is valid here. Resolve the cache key up front so the
@@ -200,34 +185,21 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
     // Repo files come straight from git — no agent process needed.
     const repoFiles = yield* Effect.promise(() => listRepoFiles(worktreePath));
 
-    // Capabilities + slash commands from the agent connection.
-    const config = {
-      model: resolveGenerationModel(agent, settings.aiModel),
-      thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
-    };
-    const handle = yield* Effect.promise(() =>
-      warm
-        ? getAcpConnection(worktreePath, agent, config)
-        : peekAcpConnection(worktreePath, agent, config),
+    const live = yield* Effect.promise(() =>
+      agentSessionContext({
+        launch: read.launch,
+        cwd: worktreePath,
+        warm,
+        sessionId: existingSessionRow?.sessionId ?? null,
+      }),
     );
     // No live agent (the non-warm peek before any agent for this repo is warm):
     // serve commands harvested by a prior warm so the slash menu is ready before
     // the user types — without paying a cold spawn on mere PR browsing.
-    if (!handle) {
+    if (!live) {
       return { ...EMPTY_SESSION_CONTEXT, commands: cachedCommands, repoFiles };
     }
-
-    // Slash commands are cached against a live session id, populated as the
-    // agent streams `available_commands_update`; harvest fresh only when warming.
-    const sessionId = existingSessionRow?.sessionId ?? null;
-    let raw = sessionId ? handle.getAvailableCommands(sessionId) : [];
-    if (raw.length === 0 && warm) {
-      raw = yield* Effect.promise(() => handle.listAvailableCommands());
-    }
-    const harvested = raw.map((command) => ({
-      name: command.name,
-      description: command.description,
-    }));
+    const harvested = live.commands;
     // Persist a non-empty harvest so future PR-selection fetches for this
     // `(agent, repo)` get an instant menu; fall back to the cache when this run
     // couldn't harvest (e.g. a live connection with no session-scoped commands yet).
@@ -236,8 +208,8 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
 
     return {
       commands,
-      promptImage: handle.promptImage,
-      embeddedContext: handle.embeddedContext,
+      promptImage: live.promptImage,
+      embeddedContext: live.embeddedContext,
       repoFiles,
     } satisfies ChatSessionContext;
   });
