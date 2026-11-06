@@ -11,6 +11,7 @@ import {
   type GitHubError,
   GitHubNetworkError,
   GitHubRateLimitError,
+  isGitHubUnreachable,
 } from "../../domain/errors";
 import type { GitHubStack } from "./map";
 import {
@@ -58,9 +59,6 @@ export interface MergeDriverPort {
   readonly now: () => number;
   readonly sleep: (ms: number) => Effect.Effect<void>;
 }
-
-const isTransient = (e: GitHubError) =>
-  e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
 
 function describe(e: GitHubError): string {
   if (e instanceof GitHubApiError) return `GitHub answered ${e.status}`;
@@ -134,7 +132,7 @@ export function driveRun(
       const read = yield* Effect.result(port.read(run));
       if (read._tag === "Failure") {
         readFailures += 1;
-        if (!isTransient(read.failure) || readFailures >= MAX_READ_FAILURES) {
+        if (!isGitHubUnreachable(read.failure) || readFailures >= MAX_READ_FAILURES) {
           yield* stop(null, `${describe(read.failure)} — Continue to try again`);
           return run;
         }

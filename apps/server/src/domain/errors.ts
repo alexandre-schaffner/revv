@@ -73,6 +73,11 @@ export type GitHubError =
   | GitHubApiError
   | GitHubNotFoundError;
 
+/** GitHub couldn't be reached or is rate-limiting: try later, or serve what's cached. */
+export function isGitHubUnreachable(e: unknown): e is GitHubNetworkError | GitHubRateLimitError {
+  return e instanceof GitHubNetworkError || e instanceof GitHubRateLimitError;
+}
+
 // General errors
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{
   readonly resource: string;
@@ -529,7 +534,11 @@ const HTTP_ERRORS: {
     ),
   SyncError: (e) => http(502, "GITHUB_ERROR", e.message),
   AiNotConfiguredError: () =>
-    http(400, "NOT_CONFIGURED", "AI CLI agent not configured — install opencode or claude"),
+    http(
+      400,
+      "NOT_CONFIGURED",
+      "The selected AI agent can't be launched — install it or pick another in Settings",
+    ),
   AiGenerationError: (e) =>
     http(
       500,
