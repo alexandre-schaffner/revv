@@ -8,7 +8,7 @@
 
 import { SSE_DONE_FRAME, type StreamErrorBody, sseErrorFrame } from "@revv/shared";
 import { Cause, type Effect, Exit } from "effect";
-import { httpErrorOf } from "../domain/errors";
+import { httpErrorOf, isAppError } from "../domain/errors";
 import { debug, logError } from "../logger";
 import { AppRuntime, type AppServices } from "../runtime";
 
@@ -134,8 +134,8 @@ export function openSse<E = unknown>(
 
 /**
  * Stream `frames` as SSE, one `data:` frame each, then `[DONE]`. A stream
- * that errors ends with a `GENERATION_ERROR` frame; a client that leaves
- * cancels `frames`.
+ * that errors with a domain error ends with that error's code from the table,
+ * anything else with `GENERATION_ERROR`; a client that leaves cancels `frames`.
  */
 export function pipeToSse<T>(frames: ReadableStream<T>): Response {
   const { response, channel } = openSse<T>();
@@ -155,6 +155,11 @@ export function pipeToSse<T>(frames: ReadableStream<T>): Response {
       }
       channel.done();
     } catch (err) {
+      if (isAppError(err)) {
+        const { code, message, details } = httpErrorOf(err);
+        channel.fail({ ...details, code, message });
+        return;
+      }
       channel.fail({
         code: "GENERATION_ERROR",
         message: err instanceof Error ? err.message : "Unknown error",

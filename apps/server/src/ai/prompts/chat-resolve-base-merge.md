@@ -16,8 +16,10 @@ A merge is **already in progress**: the latest `{{BASE_BRANCH}}` (the PR's targe
 
 2. Once every conflicted file is resolved and staged, conclude the merge:
    ```
-   git -c core.hooksPath=/dev/null -c commit.gpgSign=false -c core.editor=true merge --continue
+   git -c core.hooksPath=/dev/null -c core.editor=true merge --continue
    ```
+
+   The commit is signed the way the user signs. If signing fails, stop and report the error; never turn signing off.
 
 3. When the merge is complete, briefly state which files you resolved and how.
 

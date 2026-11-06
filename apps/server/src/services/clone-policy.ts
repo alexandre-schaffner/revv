@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { serverEnv } from "../config";
 import { CloneError } from "../domain/errors";
-import { runGitBestEffort, runGitCapture } from "./git-runner";
+import { isGitRepo, listWorktrees, originUrl } from "./git/ops";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -150,21 +150,13 @@ export function decideCloneDestination(
 
 // ── Read-only git inspection ────────────────────────────────────────────────
 
-export async function isGitRepo(path: string): Promise<boolean> {
-  return runGitBestEffort(["rev-parse", "--git-dir"], path, 10_000);
-}
-
 export async function remoteMatches(
   path: string,
   gitHost: string,
   fullName: string,
 ): Promise<boolean> {
-  try {
-    const origin = (await runGitCapture(["remote", "get-url", "origin"], path, 10_000)).trim();
-    return remoteUrlMatches(origin, gitHost, fullName);
-  } catch {
-    return false;
-  }
+  const origin = await originUrl(path);
+  return origin !== null && remoteUrlMatches(origin, gitHost, fullName);
 }
 
 export async function readCloneDestinationState(
@@ -182,43 +174,13 @@ export async function readCloneDestinationState(
 }
 
 /**
- * Return every worktree path currently checked out on `refs/heads/<branch>`,
- * parsed from `git worktree list --porcelain`. Used to reclaim `pr-N` when
- * an orphan worktree (e.g. a pre-refactor `chat-{prId}-{sha12}` dir) is
- * squatting on it — leaving such a checkout in place would make any
- * external worktree creation for `refs/heads/revv/pr-N` fail. Returns
- * an empty array on parse / spawn failure (best-effort).
+ * Every worktree checked out on `refs/heads/<branch>`. Used to reclaim the
+ * agent branch from an orphaned Revv worktree squatting on it.
  */
 export async function findWorktreesOnBranch(
   clonePath: string,
   branchName: string,
 ): Promise<string[]> {
-  let out: string;
-  try {
-    out = await runGitCapture(["worktree", "list", "--porcelain"], clonePath, 15_000);
-  } catch {
-    return [];
-  }
   const ref = `refs/heads/${branchName}`;
-  const paths: string[] = [];
-  // Porcelain output is record-per-blank-line. Each record has lines like:
-  //   worktree <path>
-  //   HEAD <sha>
-  //   branch <ref>     (absent for detached HEADs)
-  // We only need (worktree, branch) pairs; everything else we ignore.
-  for (const block of out.split("\n\n")) {
-    let wtPath: string | null = null;
-    let wtBranch: string | null = null;
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        wtPath = line.slice("worktree ".length).trim();
-      } else if (line.startsWith("branch ")) {
-        wtBranch = line.slice("branch ".length).trim();
-      }
-    }
-    if (wtPath && wtBranch === ref) {
-      paths.push(wtPath);
-    }
-  }
-  return paths;
+  return (await listWorktrees(clonePath)).filter((w) => w.branch === ref).map((w) => w.path);
 }

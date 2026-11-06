@@ -64,9 +64,10 @@ export const BootLive = Layer.effectDiscard(
         ).pipe(Effect.andThen(step("poll-scheduler", pollScheduler.start()))),
 
         // Clones cut off by the last shutdown restart before walkthroughs
-        // resume (a resumed run waits on its clone), and the worktree sweep
-        // runs after resume, so a resumed run's worktree is protected by
-        // `pruneWorktree`'s `generating` guard.
+        // resume (a resumed run waits on its clone). The worktree sweep runs
+        // after resume: it reaps the agent worktrees of closed or untracked PRs
+        // and the review worktrees of walkthroughs no longer generating, so a
+        // resumed run's review worktree counts as generating.
         step("repo-clone", repoClone.resumePendingClones()).pipe(
           Effect.andThen(step("walkthrough-jobs", walkthroughJobs.resumePending())),
           Effect.andThen(step("repo-clone", repoClone.sweepStaleWorktrees())),

@@ -5,16 +5,17 @@ import { BroadcasterLive } from "./Broadcaster";
 import { BaseConflictsServiceLive } from "./base-conflicts/BaseConflicts";
 import { GcsBlobStoreLive } from "./blob/GcsBlobStore";
 import { CacheServiceLive } from "./Cache";
-import { ChatChangesPushServiceLive } from "./ChatChangesPush";
 import { ChatMcpTokensLive } from "./ChatMcpTokens";
 import { ChatSessionServiceLive } from "./ChatSession";
 import { CacheEligibilityLive } from "./cache-eligibility";
 import { SshSignerLive } from "./cache-signing/index";
+import { ChatTurnServiceLive } from "./chat/ChatTurn";
 import { DbServiceLive } from "./Db";
 import { DbMaintenanceLive } from "./DbMaintenance";
 import { DiffCacheServiceLive } from "./DiffCache";
 import { ExternalIntegrationsLive } from "./ExternalIntegrations";
 import { GitHubEtagCacheLive } from "./GitHubEtagCache";
+import { BranchPushLockLive } from "./git/branch-push-lock";
 import { GitHubAccountsLive } from "./github/accounts";
 import { AvatarCacheLive } from "./github/avatars";
 import { GitHubGatewayLive } from "./github/gateway";
@@ -27,7 +28,6 @@ import { PrConversationServiceLive } from "./PrConversation";
 import { PrMirrorLive } from "./PrMirror";
 import { ProjectRecapServiceLive } from "./ProjectRecap";
 import { ProjectRecapJobsLive } from "./ProjectRecapJobs";
-import { PrPushLockServiceLive } from "./PrPushLock";
 import { PullRequestServiceLive } from "./PullRequest";
 import { RealtimeLive } from "./Realtime";
 import { RecapSchedulerLive } from "./RecapScheduler";
@@ -47,6 +47,7 @@ import { StackServiceLive } from "./stacks/StackService";
 import { WalkthroughServiceLive } from "./Walkthrough";
 import { WalkthroughJobsLive } from "./WalkthroughJobs";
 import { WalkthroughSnapshotImporterLive } from "./WalkthroughSnapshotImporter";
+import { PrWorkspaceLive } from "./workspace/PrWorkspace";
 
 const RealtimeWithDeps = RealtimeLive.pipe(
   Layer.provide(Layer.mergeAll(BroadcasterLive, DbServiceLive)),
@@ -111,7 +112,7 @@ const BaseLayers = Layer.mergeAll(
   AgentLoginServiceLive,
   ChatSessionServiceWithDeps,
   ChatMcpTokensLive,
-  PrPushLockServiceLive,
+  BranchPushLockLive,
   ExternalIntegrationsWithDeps,
 );
 
@@ -254,20 +255,38 @@ const StackMergeServiceWithDeps = StackMergeServiceLive.pipe(
   ),
 );
 
-// ChatChangesPush depends on PrContext (for resolving repo+token), AiService
-// (for invoking the conflict-resolution agent), and BaseLayers (db, github,
-// chat sessions, realtime broadcaster, pr service, etag cache).
-const ChatChangesPushServiceWithDeps = ChatChangesPushServiceLive.pipe(
+// The PR's agent workspace: the chat turn, the push and the commit edits all
+// go through its one claim. RepoClone brings the worktree up; Ai runs the
+// conflict-resolve agent.
+const PrWorkspaceWithDeps = PrWorkspaceLive.pipe(
   Layer.provide(
-    Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps, PrMirrorWithDeps),
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      AiServiceWithDeps,
+      RepoCloneServiceWithDeps,
+      PrMirrorWithDeps,
+    ),
   ),
 );
 
-// BaseConflicts shares the per-PR push lock with ChatChangesPush through
-// BaseLayers, and runs the same one-shot conflict-resolve agent.
+const ChatTurnServiceWithDeps = ChatTurnServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps, PrWorkspaceWithDeps),
+  ),
+);
+
+// BaseConflicts shares the branch push lock (BaseLayers) and reads the agent's
+// unpushed commits from the workspace before a rebase would strand them.
 const BaseConflictsServiceWithDeps = BaseConflictsServiceLive.pipe(
   Layer.provide(
-    Layer.mergeAll(BaseLayers, PrContextServiceWithDeps, AiServiceWithDeps, PrMirrorWithDeps),
+    Layer.mergeAll(
+      BaseLayers,
+      PrContextServiceWithDeps,
+      AiServiceWithDeps,
+      PrWorkspaceWithDeps,
+      PrMirrorWithDeps,
+    ),
   ),
 );
 
@@ -292,7 +311,8 @@ export const AppLayer = Layer.mergeAll(
   StackMergeServiceWithDeps,
   StackRebaseServiceWithDeps,
   DbMaintenanceWithDeps,
-  ChatChangesPushServiceWithDeps,
+  PrWorkspaceWithDeps,
+  ChatTurnServiceWithDeps,
   BaseConflictsServiceWithDeps,
   // Surface the remote-cache + blob + signing primitives in the runtime so
   // HTTP routes (e.g. GET /api/settings/cache/status, POST /api/settings/cache/signing/test)

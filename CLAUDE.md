@@ -50,6 +50,7 @@ make reset-db            # Delete SQLite database (apps/server/revv.db)
 
 - **Effect system** throughout: services use `Effect.gen`, `Context.Service`, and `Layer` for DI and structured error handling. Don't bypass Effect when modifying services.
 - **Services**: `GitHubGateway` (`services/github/`, every GitHub call, made with a host-bound `GitHubClient`), `GitHubAccounts` (account tokens, re-auth, identity), `PrMirror` (the one writer of GitHub's view of a PR), `RepositoryService`, `PullRequestService`, `PollScheduler`, `Broadcaster`, `Settings`
+- **Git**: only `services/git/` runs git, through one runner that never runs the user's hooks (the clone is often the user's own repo); commits Revv writes for the user's branches are signed per the user's own config, non-interactively (a signer that would prompt fails with its error), and internal ones are unsigned. One push per remote branch (`BranchPushLock`); never `git worktree prune`, never move a branch the user owns. The chat agent's per-PR worktree belongs to `PrWorkspace` (`services/workspace/`); the chat turn is `ChatTurnService` (`services/chat/`).
 - **Auth**: `better-auth` with GitHub OAuth. Bearer token strategy. OAuth callback URL: `http://localhost:45678/api/auth/callback/github`
 - **Database**: Drizzle ORM on SQLite (`revv.db`). Schema in `src/db/schema.ts`. Migrations live in `src/db/migrations` and are auto-applied on startup via `drizzle-orm/bun-sqlite/migrator`. Generate new ones with `bunx drizzle-kit generate` (run from `apps/server`).
 - **Realtime (SSE)**: Clients open a single `GET /api/events?token=…` stream. Server broadcasts `prs:updated`, `repos:updated`, etc. via `Broadcaster` (account-scoped fan-out). Inbound commands use REST endpoints.
@@ -301,8 +302,14 @@ agent tomorrow). Any change that violates them is wrong by construction — push
    `MAX_CONCURRENT_JOBS = 5`. Exceeding marks the row terminal (`error`, end reason
    `resume_budget` / `budget_exhausted`) and stops. A read path that finds a row whose run
    died (the recap stream, a brief's `ensure`) resumes it through the same budget.
-10. **Per-job resource scoping.** Each job owns a dedicated git worktree at `head_sha`,
-    registered as a scope finalizer so cleanup happens on every exit path.
+10. **Per-job resource scoping.** Each walkthrough job owns a dedicated detached git
+    worktree at `head_sha` (`RepoClone.acquireReviewWorktree`, keyed on the walkthrough id),
+    removed by a scope finalizer on every exit path; a resumed job clears what its killed run
+    left, and the worktree sweep removes those of walkthroughs no longer generating. Generation
+    never reads the PR's agent worktree (`pr-N` on `revv/pr-N`), which belongs to the chat
+    agent: `PrWorkspace` holds one claim per PR for it, so a chat turn, a push of the agent's
+    commits and an edit of them never overlap, and the server refuses the second rather than
+    racing in the worktree.
 11. **Status transitions are orchestrator-only.** Agents never write `status` or
     `last_completed_phase` directly. MCP tool handlers update phase fields as a side-effect
     of their own writes; `status ∈ {generating, complete, error, superseded}` is only ever

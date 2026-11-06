@@ -5,13 +5,12 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BaseConflictStrategy } from "@revv/shared";
+import { clearScratch, prepareScratch } from "../git/scratch";
 import {
   checkTips,
-  clearScratch,
   deleteTipRefs,
   fetchTips,
   type OperationInput,
-  prepareScratch,
   pushResult,
   type SyncRepo,
   startOperation,

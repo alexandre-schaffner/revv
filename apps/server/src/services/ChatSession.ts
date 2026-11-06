@@ -26,12 +26,10 @@ import {
   chatPlans,
   chatSessions,
   chatTasks,
-  pullRequests,
 } from "../db/schema/index";
 import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
-import { resolveProposedBaseSha } from "./GitOps";
 
 export interface ChatSessionRow {
   readonly id: string;
@@ -46,19 +44,6 @@ export interface ChatSessionRow {
   readonly interactionMode: InteractionMode;
   readonly createdAt: string;
   readonly lastActivityAt: string;
-}
-
-/**
- * A chat session plus the commit its agent work is actually built on.
- *
- * `baseSha` is the tightest of the session's frozen `prHeadSha` and the PR's
- * current head — see `resolveProposedBaseSha`. It is NOT "the PR head": naming
- * it `prHeadSha` is what let a resolved baseline get written into an HTTP
- * response field that claims to carry the PR's head.
- */
-export interface ResolvedChatSession {
-  readonly row: ChatSessionRow;
-  readonly baseSha: string;
 }
 
 export interface FindOrCreateChatSessionParams {
@@ -150,32 +135,17 @@ export class ChatSessionService extends Context.Service<
       model: string,
       prHeadSha: string,
     ) => Effect.Effect<ChatSessionRow | null, DbError>;
-    /**
-     * Find the most recently active chat session for a PR+agent pair,
-     * regardless of prHeadSha. Used by commit-management endpoints where the
-     * worktree may be on an old SHA.
-     */
-    readonly findLatestForPr: (
+    /** The most recently active session of the PR for (agent, model), at any head. */
+    readonly findLatest: (
       prId: string,
       agent: string,
+      model: string,
     ) => Effect.Effect<ChatSessionRow | null, DbError>;
     /**
-     * {@link findLatestForPr}, with the proposed-commit baseline already
-     * resolved against the PR's current head.
-     *
-     * Every caller that enumerates, pushes, rebuilds or discards the agent's
-     * commits needs the same `<base>..<branch>` range, and the row's own
-     * `prHeadSha` is frozen at session creation — so each of them had to fetch
-     * `pull_requests.headSha` alongside the row and call
-     * `resolveProposedBaseSha` itself. Four copies of a four-field preamble is
-     * four chances for one of them to pass a different `tip` (which is exactly
-     * what happened: the display path asked about `HEAD`, the write paths
-     * about the branch). Resolving it here makes disagreement unrepresentable.
+     * The PR heads the PR's sessions were last pinned to, most recently active
+     * first: the candidate baselines of the agent branch (`PrWorkspace`).
      */
-    readonly findLatestForPrWithBase: (
-      prId: string,
-      agent: string,
-    ) => Effect.Effect<ResolvedChatSession | null, DbError>;
+    readonly baselinesForPr: (prId: string) => Effect.Effect<readonly string[], DbError>;
     /**
      * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
      * fresh one with `session_id = NULL`. Used by the chat route at the
@@ -207,7 +177,8 @@ export class ChatSessionService extends Context.Service<
       readonly chatSessionId: string;
       readonly prHeadSha: string;
     }) => Effect.Effect<void, DbError>;
-    readonly clearAllForPr: (prId: string, agent: string) => Effect.Effect<void, DbError>;
+    /** Delete every session of the PR, with its transcript. */
+    readonly clearForPr: (prId: string) => Effect.Effect<void, DbError>;
 
     /**
      * Insert a finalized user message. Returns the row's id + the
@@ -325,7 +296,9 @@ export class ChatSessionService extends Context.Service<
       readonly markdown: string;
     }) => Effect.Effect<ChatPlanRow, DbError>;
 
+    /** Decide a plan of one of `prId`'s sessions; null when it has no such plan. */
     readonly decidePlan: (params: {
+      readonly prId: string;
       readonly planId: string;
       readonly decision: "approved" | "rejected" | "superseded";
     }) => Effect.Effect<ChatPlanRow | null, DbError>;
@@ -456,60 +429,34 @@ export const ChatSessionServiceLive = Layer.effect(
           return row ? rowToSessionRow(row) : null;
         }),
 
-      findLatestForPr: (prId, agent) =>
-        dbTry("chat findLatestForPr", () => {
+      findLatest: (prId, agent, model) =>
+        dbTry("chat findLatest", () => {
           const row = db
             .select()
             .from(chatSessions)
-            .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
+            .where(
+              and(
+                eq(chatSessions.pullRequestId, prId),
+                eq(chatSessions.agent, agent),
+                eq(chatSessions.model, model),
+              ),
+            )
             .orderBy(desc(chatSessions.lastActivityAt))
             .limit(1)
             .get();
           return row ? rowToSessionRow(row) : null;
         }),
 
-      findLatestForPrWithBase: (prId, agent) =>
-        Effect.gen(function* () {
-          const row = yield* dbTry("chat findLatestForPrWithBase", () => {
-            const found = db
-              .select()
-              .from(chatSessions)
-              .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
-              .orderBy(desc(chatSessions.lastActivityAt))
-              .limit(1)
-              .get();
-            return found ? rowToSessionRow(found) : null;
-          });
-          if (!row) return null;
-          // A failed read answers `null`, which `resolveProposedBaseSha` reads
-          // as "no known PR head" and resolves to the session baseline — the
-          // historical answer. Letting it throw would take down the fiber for
-          // a lookup whose absence is already a handled case.
-          const prHeadSha = yield* dbTry(
-            "chat PR head lookup",
-            () =>
-              db
-                .select({ headSha: pullRequests.headSha })
-                .from(pullRequests)
-                .where(eq(pullRequests.id, prId))
-                .get()?.headSha ?? null,
-          ).pipe(Effect.orElseSucceed(() => null));
-          // Always `row.branchName`, never `"HEAD"`. The worktree's HEAD is
-          // detached onto the source-branch tip during a push and is restored
-          // only best-effort, so a run that died mid-push leaves HEAD and the
-          // agent branch pointing at different commits — and a baseline
-          // resolved against the wrong one makes the strip list commits the
-          // rebuild would not touch.
-          const baseSha = yield* Effect.promise(() =>
-            resolveProposedBaseSha({
-              worktreePath: row.worktreePath,
-              tip: row.branchName,
-              sessionPrHeadSha: row.prHeadSha,
-              prHeadSha,
-            }),
-          );
-          return { row, baseSha };
-        }),
+      baselinesForPr: (prId) =>
+        dbTry("chat baselinesForPr", () =>
+          db
+            .select({ prHeadSha: chatSessions.prHeadSha })
+            .from(chatSessions)
+            .where(eq(chatSessions.pullRequestId, prId))
+            .orderBy(desc(chatSessions.lastActivityAt))
+            .all()
+            .map((row) => row.prHeadSha),
+        ),
 
       findOrCreate: ({ prId, agent, model, prHeadSha, worktreePath, branchName }) =>
         dbTry("chat findOrCreate", () => {
@@ -593,11 +540,9 @@ export const ChatSessionServiceLive = Layer.effect(
             .run();
         }),
 
-      clearAllForPr: (prId, agent) =>
-        dbTry("chat clearAllForPr", () => {
-          db.delete(chatSessions)
-            .where(and(eq(chatSessions.pullRequestId, prId), eq(chatSessions.agent, agent)))
-            .run();
+      clearForPr: (prId) =>
+        dbTry("chat clearForPr", () => {
+          db.delete(chatSessions).where(eq(chatSessions.pullRequestId, prId)).run();
         }),
 
       appendUserMessage: ({ chatSessionId, turnId, content, attachments }) =>
@@ -1013,11 +958,17 @@ export const ChatSessionServiceLive = Layer.effect(
           return row;
         }),
 
-      decidePlan: ({ planId, decision }) =>
+      decidePlan: ({ prId, planId, decision }) =>
         dbTry("chat decidePlan", () => {
-          const now = nowIso();
+          const owned = db
+            .select({ id: chatPlans.id })
+            .from(chatPlans)
+            .innerJoin(chatSessions, eq(chatSessions.id, chatPlans.chatSessionId))
+            .where(and(eq(chatPlans.id, planId), eq(chatSessions.pullRequestId, prId)))
+            .get();
+          if (!owned) return null;
           db.update(chatPlans)
-            .set({ status: decision, decidedAt: now })
+            .set({ status: decision, decidedAt: nowIso() })
             .where(eq(chatPlans.id, planId))
             .run();
           const row = db.select().from(chatPlans).where(eq(chatPlans.id, planId)).get();

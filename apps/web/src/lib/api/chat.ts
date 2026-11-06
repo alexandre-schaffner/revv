@@ -237,8 +237,7 @@ export async function fetchProposedChanges(prId: string): Promise<ProposedChange
 export async function fetchProposedDiffFiles(prId: string, sha: string) {
   const { data, error } = await chat(prId)["proposed-changes"]({ sha }).files.get();
   if (error) throw new Error(apiErrorMessage(error, `Failed to fetch files for ${sha}`));
-  if (data.error !== undefined) throw new Error(data.error);
-  return data.files;
+  return [...data.files];
 }
 
 export type ProposedDiffFile = Awaited<ReturnType<typeof fetchProposedDiffFiles>>[number];
@@ -384,10 +383,13 @@ export async function batchCherryPickProposedCommits(
   shas: readonly string[],
 ): Promise<{ pushedCommits: number; branch: string }> {
   const { data, error } = await chat(prId)["proposed-changes"]["batch-cherry-pick"].post({
-    shas,
+    shas: [...shas],
   });
   if (error) throw new Error(apiErrorMessage(error, "Failed"));
-  return { pushedCommits: data.pushedCommits ?? shas.length, branch: data.branch ?? "" };
+  return {
+    pushedCommits: data.status === "pushed" ? data.pushedCommits : shas.length,
+    branch: data.branch,
+  };
 }
 
 /** Discard N proposed commits from the worktree atomically. */
@@ -395,7 +397,9 @@ export async function batchDiscardProposedCommits(
   prId: string,
   shas: readonly string[],
 ): Promise<{ discardedCount: number }> {
-  const { data, error } = await chat(prId)["proposed-changes"]["batch-discard"].post({ shas });
+  const { data, error } = await chat(prId)["proposed-changes"]["batch-discard"].post({
+    shas: [...shas],
+  });
   if (error) throw new Error(apiErrorMessage(error, "Failed"));
   return { discardedCount: data.discardedCount ?? shas.length };
 }

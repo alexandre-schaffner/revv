@@ -2,21 +2,9 @@ import type { WalkthroughGenerationMode, WalkthroughStackSnapshot } from "@revv/
 import { Effect } from "effect";
 import type { DiffFingerprint } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
-import {
-  commitExists,
-  diffNameStatusZ,
-  diffNumstat,
-  diffPatchForPath,
-  fetchCommit,
-  redactGitAuth,
-} from "./GitOps";
-import {
-  capPatch,
-  normalizeGitStatus,
-  parseNameStatusZ,
-  parseNumstat,
-  resolveCounts,
-} from "./incremental-diff";
+import { commitExists, diffNameStatus, diffNumstat, diffPatchForPath, fetch } from "./git/ops";
+import { authedRemoteUrl } from "./git/remote";
+import { capPatch, normalizeGitStatus, resolveCounts } from "./incremental-diff";
 import { changedFiles, fingerprintFiles } from "./stacks/fingerprint";
 
 export interface PromptFile {
@@ -75,10 +63,6 @@ export function stackLayerDeltaFiles(
   return [...files.filter((f) => changed.has(f.filename)), ...reverted];
 }
 
-function authedRepoUrl(ctx: PromptFilesContext): string {
-  return `https://x-access-token:${ctx.token}@${ctx.githubHost}/${ctx.repoFullName}.git`;
-}
-
 export function resolveIncrementalPromptFiles(
   ctx: PromptFilesContext,
   worktreePath: string,
@@ -97,18 +81,20 @@ export function resolveIncrementalPromptFiles(
   return Effect.tryPromise({
     try: async () => {
       if (!(await commitExists(worktreePath, baseHeadSha))) {
-        await fetchCommit(worktreePath, authedRepoUrl(ctx), baseHeadSha);
+        await fetch(
+          worktreePath,
+          authedRemoteUrl({ host: ctx.githubHost, fullName: ctx.repoFullName, token: ctx.token }),
+          [baseHeadSha],
+        );
       }
       if (!(await commitExists(worktreePath, baseHeadSha))) {
         throw new Error(`base commit ${baseHeadSha} is not available locally`);
       }
 
-      const nameStatus = parseNameStatusZ(
-        await diffNameStatusZ(worktreePath, baseHeadSha, ctx.prHeadSha),
-      );
+      const nameStatus = await diffNameStatus(worktreePath, baseHeadSha, ctx.prHeadSha);
       // `--numstat` in one call, not scanning each patch body: that would force a
       // synchronous multi-MB split on the event loop for large/generated files.
-      const numstat = parseNumstat(await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha));
+      const numstat = await diffNumstat(worktreePath, baseHeadSha, ctx.prHeadSha);
       const files: PromptFile[] = [];
       for (const file of nameStatus) {
         let patch: string | null = null;
@@ -140,9 +126,9 @@ export function resolveIncrementalPromptFiles(
     Effect.catch((cause) => {
       logError(
         "walkthrough-jobs",
-        `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${redactGitAuth(
-          cause instanceof Error ? cause.message : String(cause),
-        )}`,
+        `incremental diff build failed pr=${ctx.pr.id} base=${ctx.baseHeadSha} head=${ctx.prHeadSha}; falling back to full PR diff: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
       );
       return Effect.succeed({ files: ctx.files, diffSource: "full_pr_fallback" as const });
     }),

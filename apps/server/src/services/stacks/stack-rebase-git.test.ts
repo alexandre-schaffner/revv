@@ -221,7 +221,7 @@ describe("stack rebase in Revv's clone", () => {
     }
   });
 
-  it("runs none of the user's hooks and never signs", async () => {
+  it("runs none of the user's hooks", async () => {
     const hooks = join(root, "hooks");
     const ran = join(root, "hook-ran");
     mkdirSync(hooks);
@@ -230,8 +230,6 @@ describe("stack rebase in Revv's clone", () => {
       chmodSync(join(hooks, hook), 0o755);
     }
     git(revv, ["config", "core.hooksPath", hooks]);
-    git(revv, ["config", "commit.gpgsign", "true"]);
-    git(revv, ["config", "gpg.program", "/usr/bin/false"]);
     git(dev, ["checkout", "-q", "main"]);
     commit(dev, "trunk.txt", "trunk\n", "trunk moved");
     git(dev, ["push", "-q", "origin", "main"]);
@@ -240,6 +238,26 @@ describe("stack rebase in Revv's clone", () => {
     expect(replay.kind).toBe("replayed");
     expect(push).toEqual({ kind: "pushed" });
     expect(existsSync(ran)).toBe(false);
+  });
+
+  // The replayed commits land on the user's branches, so they are signed the
+  // way the user signs; a signer that refuses stops the rebase with its reason.
+  it("reports a signer that refuses, and pushes nothing", async () => {
+    const signer = join(root, "gpg-refuse");
+    writeFileSync(signer, '#!/bin/sh\necho "gpg: signing failed: No pinentry" >&2\nexit 2\n');
+    chmodSync(signer, 0o755);
+    git(revv, ["config", "commit.gpgsign", "true"]);
+    git(revv, ["config", "gpg.format", "openpgp"]);
+    git(revv, ["config", "gpg.program", signer]);
+    git(dev, ["checkout", "-q", "main"]);
+    commit(dev, "trunk.txt", "trunk\n", "trunk moved");
+    git(dev, ["push", "-q", "origin", "main"]);
+
+    const { replay, push } = await rebaseAndPush(stepsFor());
+    expect(replay.kind).toBe("failed");
+    expect(replay.kind === "failed" && replay.message).toMatch(/sign/i);
+    expect(push).toBeNull();
+    expect(git(origin, ["rev-parse", "feat-1"])).toBe(tips.a);
   });
 
   it("leaves the clone's other worktrees alone, even ones whose folder is gone", async () => {

@@ -100,12 +100,22 @@ SSE channel. Client-initiated sync requests are REST commands; server-to-client 
 
 #### Local Git
 
-`RepoCloneService` is the Local Git neck: it hides repo clone, per-PR worktree acquisition
-(`acquirePrWorktree`), and file reads at a SHA. `git-runner` (the raw git-subprocess primitive
-with its process registry and signal handling) and `GitOps` (git command primitives) are module
-internals — only the Local Git module spawns git directly. Worktree acquisition stays scoped to
-the acquiring job. This module is distinct from `GitHubGateway`, which only talks to the GitHub
-API and never touches the local filesystem.
+`services/git/` is the only code that runs git. Its runner (`runner.ts`, private to the
+directory) gives every command one policy: no prompts, none of the user's hooks, commit
+signing per `GitPolicy` (the user's own config for commits pushed to their branches, off
+otherwise), a timeout, the process registry the shutdown reaper kills, and token redaction. `ops.ts`
+is the command surface; `remote.ts` builds the authenticated remote URL; `push.ts` pushes and
+reads push failures; `scratch.ts` is the detached scratch worktree base sync and stack rebase run
+in; `pr-refs.ts` names every ref, branch and worktree Revv creates; `BranchPushLock` allows one
+push per remote branch. Revv never runs `git worktree prune` (the clone may be the user's
+repository) and never moves a user's branch by name.
+
+`RepoCloneService` owns clones, the per-PR agent worktree (`acquirePrWorktree`), the per-job
+review worktree (`acquireReviewWorktree`) and file reads at a SHA. `PrWorkspace`
+(`services/workspace/`) owns the agent worktree's use: one claim per PR shared by chat turns,
+pushes and commit edits, the PR's chat session, and every operation on the agent's commits.
+This module is distinct from `GitHubGateway`, which only talks to the GitHub API and never
+touches the local filesystem.
 
 ## Import Direction
 
@@ -118,8 +128,8 @@ Feature modules depend inward on platform seams:
 - Provider selection comes from `SettingsService`, not from AI-provider helpers.
 - Agent content writes go through MCP tool handlers; orchestrators own lifecycle/status writes.
 - Routes resolve account context through `GitHubAccounts`, not `SecretStore` directly.
-- Only the Local Git module (`RepoCloneService`, `GitOps`) spawns git via `git-runner`; everything
-  else goes through those seams.
+- Only `services/git/` spawns git, through its runner; everything else calls `services/git/ops`
+  (or `RepoCloneService` / `PrWorkspace` for worktrees).
 
 `bun run check:import-boundaries` enforces the PR-context, secret-store, GitHub-transport, and Local-Git import rules and
 names the remaining legacy exceptions scheduled for later waves.

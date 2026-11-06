@@ -159,214 +159,221 @@ export function runWalkthrough(
   run: AgentRun<WalkthroughRunContext>,
   inputs: WalkthroughRunInputs,
 ): Effect.Effect<RunEnd<WalkthroughFailure>, AiError | DbError> {
-  return Effect.gen(function* () {
-    const { db } = deps;
-    const ctx = run.context;
+  // The review worktree lives for the run: its finalizer removes it on every
+  // exit path (invariant 10).
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const { db } = deps;
+      const ctx = run.context;
 
-    // The first pass runs alongside the worktree checkout, which hides most of
-    // its latency. Usually the review page already started it for this head,
-    // and this joins that run (or reads its result) — for at most
-    // HUNK_SCAN_JOIN_BUDGET_MS, so a large or slow scan never holds Phase A.
-    // A resume is prompted with the leads its first run recorded, so it
-    // doesn't wait on the scan at all.
-    const resumedLeads = yield* dbTry("leadsRecorded", () => leadsRecorded(db, run.id)).pipe(
-      Effect.orElseSucceed(() => false),
-    );
-    const hunkScan = resumedLeads
-      ? Effect.succeed([])
-      : deps.hunkScan.run({
-          prId: inputs.pr.id,
+      // The first pass runs alongside the worktree checkout, which hides most of
+      // its latency. Usually the review page already started it for this head,
+      // and this joins that run (or reads its result) — for at most
+      // HUNK_SCAN_JOIN_BUDGET_MS, so a large or slow scan never holds Phase A.
+      // A resume is prompted with the leads its first run recorded, so it
+      // doesn't wait on the scan at all.
+      const resumedLeads = yield* dbTry("leadsRecorded", () => leadsRecorded(db, run.id)).pipe(
+        Effect.orElseSucceed(() => false),
+      );
+      const hunkScan = resumedLeads
+        ? Effect.succeed([])
+        : deps.hunkScan.run({
+            prId: inputs.pr.id,
+            headSha: ctx.prHeadSha,
+            files: inputs.files,
+            filePriorities: inputs.plan.filePriorities,
+          });
+      const worktree = deps.repoClone
+        .acquireReviewWorktree({
+          repoId: inputs.repoId,
+          prNumber: inputs.pr.externalId,
           headSha: ctx.prHeadSha,
+          githubToken: inputs.token,
+          walkthroughId: run.id,
+        })
+        .pipe(
+          Effect.mapError((e) => {
+            const message =
+              e._tag === "CloneNotReadyError"
+                ? "Repository clone is not ready — check Settings to ensure the repo is cloned"
+                : e._tag === "CloneError"
+                  ? `Repository clone error: ${e.message}`
+                  : String(e);
+            return new AiGenerationError({ cause: e, message });
+          }),
+        );
+      const [worktreePath, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
+        concurrency: 2,
+      });
+
+      const promptInput = yield* resolveIncrementalPromptFiles(
+        {
+          pr: inputs.pr,
+          token: inputs.token,
+          prHeadSha: ctx.prHeadSha,
+          repoFullName: inputs.repoFullName,
+          githubHost: inputs.githubHost,
           files: inputs.files,
-          filePriorities: inputs.plan.filePriorities,
-        });
-    const worktree = deps.repoClone
-      .acquirePrWorktree({
-        repoId: inputs.repoId,
-        prNumber: inputs.pr.externalId,
-        prHeadSha: ctx.prHeadSha,
-        githubToken: inputs.token,
-        exactHead: true,
-      })
-      .pipe(
-        Effect.mapError((e) => {
-          const message =
-            e._tag === "CloneNotReadyError"
-              ? "Repository clone is not ready — check Settings to ensure the repo is cloned"
-              : e._tag === "CloneError"
-                ? `Repository clone error: ${e.message}`
-                : String(e);
-          return new AiGenerationError({ cause: e, message });
-        }),
-      );
-    const [{ worktreePath }, hunkScanRows] = yield* Effect.all([worktree, hunkScan], {
-      concurrency: 2,
-    });
-
-    const promptInput = yield* resolveIncrementalPromptFiles(
-      {
-        pr: inputs.pr,
-        token: inputs.token,
-        prHeadSha: ctx.prHeadSha,
-        repoFullName: inputs.repoFullName,
-        githubHost: inputs.githubHost,
-        files: inputs.files,
-        generationMode: inputs.generationMode,
-        baseHeadSha: inputs.baseHeadSha,
-        stack: inputs.stack,
-        parentFingerprint: inputs.parentFingerprint,
-      },
-      worktreePath,
-    ).pipe(
-      Effect.tap((result) =>
-        Effect.annotateCurrentSpan({ diff_source: result.diffSource, files: result.files.length }),
-      ),
-      Effect.withSpan("Walkthrough.resolveDiff"),
-    );
-    const hunkLeads = yield* prepareFirstPassLeads(db, run.id, hunkScanRows, promptInput);
-    yield* deps.announceLeads(hunkLeads);
-
-    const onLive = (event: WalkthroughLiveEvent): void => {
-      if (event.type !== "usage") {
-        deps.publish(event);
-        return;
-      }
-      // Occupancy is a point-in-time gauge; throughput is only previewed
-      // until the turn's total lands.
-      ctx.tokenUsage = mergeContextOccupancy(ctx.tokenUsage, event.data.tokenUsage);
-      deps.publish({
-        type: "usage",
-        data: { tokenUsage: addThroughput(ctx.tokenUsage, event.data.tokenUsage) },
-      });
-    };
-    const turn = (resumed: boolean) =>
-      deps.ai.walkthroughTurn({
-        walkthroughId: run.id,
-        pr: inputs.pr,
-        files: promptInput.files,
-        mode: ctx.mode,
-        worktreePath,
-        reviewMode: {
-          mode: inputs.generationMode,
-          parentWalkthroughId: inputs.parentWalkthroughId,
+          generationMode: inputs.generationMode,
           baseHeadSha: inputs.baseHeadSha,
-          headSha: ctx.prHeadSha,
-          diffSource: promptInput.diffSource,
+          stack: inputs.stack,
+          parentFingerprint: inputs.parentFingerprint,
         },
-        resumed,
-        ...(inputs.assignedRisk ? { assignedRisk: inputs.assignedRisk } : {}),
-        ...(inputs.plan.filePriorities ? { filePriorities: inputs.plan.filePriorities } : {}),
-        ...(inputs.plan.splitRecommendation
-          ? { splitRecommendation: inputs.plan.splitRecommendation }
-          : {}),
-        ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
-        ...(inputs.stack ? { stack: inputs.stack } : {}),
-        mcpToken: run.token,
-        activity: run.activity,
-        abortController: run.abort,
-        launch: {
-          agent: inputs.plan.agent,
-          model: inputs.plan.model,
-          thinkingEffort: inputs.plan.thinkingEffort ?? undefined,
-        },
-        onLive,
-      });
-
-    const startedAt = Date.now();
-    let continuations = 0;
-    let previous: Progress | null = null;
-    let resumed = inputs.resumed;
-
-    while (true) {
-      const { end, tokenUsage } = yield* turn(resumed);
-      ctx.tokenUsage = accumulateTokenUsage(ctx.tokenUsage, tokenUsage);
-      deps.publish({ type: "usage", data: { tokenUsage: ctx.tokenUsage } });
-      // A Stop or a supersede: the kernel settles it.
-      if (run.stopReason() !== null) {
-        return { kind: "failed", failure: failureWithoutContent(end) };
-      }
-
-      // The orchestrator decides on a stable issue set.
-      yield* Effect.promise(() => ctx.judgments.drain());
-      const blocker = yield* dbTry("completion check", () =>
-        orchestratorCompletionBlocker(db, run.id),
+        worktreePath,
+      ).pipe(
+        Effect.tap((result) =>
+          Effect.annotateCurrentSpan({
+            diff_source: result.diffSource,
+            files: result.files.length,
+          }),
+        ),
+        Effect.withSpan("Walkthrough.resolveDiff"),
       );
-      if (blocker === null) return { kind: "complete" };
+      const hunkLeads = yield* prepareFirstPassLeads(db, run.id, hunkScanRows, promptInput);
+      yield* deps.announceLeads(hunkLeads);
 
-      if (end.kind === "stopped" && end.refused) {
-        return {
-          kind: "failed",
-          failure: { reason: "agent_error", message: "The agent declined to continue." },
-        };
-      }
-      // Another turn would fail the same way until the user signs the agent in.
-      if (end.kind === "failed" && end.auth) {
-        return { kind: "failed", failure: { reason: "agent_auth", message: end.message } };
-      }
-      const progress = yield* dbTry("read progress", () => readProgress(db, run.id));
-      if (end.kind === "cancelled" || !progress.hasSummary) {
-        return { kind: "failed", failure: failureWithoutContent(end) };
-      }
-
-      const adjudication = {
-        autoContinuations: continuations,
-        maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
-        lastCompletedPhase: progress.lastCompletedPhase,
-        phaseAtLastContinuation: previous?.lastCompletedPhase ?? null,
-        counts: progress.counts,
-        countsAtLastContinuation: previous?.counts ?? null,
-        terminalReason: end.kind,
-        elapsedMs: Date.now() - startedAt,
-        totalTokens: ctx.tokenUsage.inputTokens + ctx.tokenUsage.outputTokens,
+      const onLive = (event: WalkthroughLiveEvent): void => {
+        if (event.type !== "usage") {
+          deps.publish(event);
+          return;
+        }
+        // Occupancy is a point-in-time gauge; throughput is only previewed
+        // until the turn's total lands.
+        ctx.tokenUsage = mergeContextOccupancy(ctx.tokenUsage, event.data.tokenUsage);
+        deps.publish({
+          type: "usage",
+          data: { tokenUsage: addThroughput(ctx.tokenUsage, event.data.tokenUsage) },
+        });
       };
-      let stoppedEarlyBecause: string | null = null;
-      if (continuations >= MAX_AUTO_CONTINUATIONS) {
-        debug("walkthrough-run", `${run.id}: auto-continuations spent`);
-      } else if (continuations >= 1) {
-        // Not on the first: "progress since the last continuation" is
-        // undefined, and the first continuation most often succeeds anyway.
-        const verdict = yield* adjudicateContinuation({
-          enabled: inputs.plan.adjudicateContinuations,
-          ...adjudication,
-        }).pipe(Effect.provideService(JevService, deps.jev));
-        if (verdict.kind === "stop-doomed") stoppedEarlyBecause = verdict.reason;
-      }
-      if (continuations >= MAX_AUTO_CONTINUATIONS || stoppedEarlyBecause !== null) {
-        const base =
-          progress.lastCompletedPhase === "D"
-            ? (progress.counts.issues_needing_inline_comment ?? 0) > 0
-              ? "Generation finished but line-anchored concerns lack inline comments."
-              : "Generation finished but the walkthrough is incomplete."
-            : stoppedEarlyBecause !== null
-              ? `Generation stopped early: ${stoppedEarlyBecause}.`
-              : "Generation exhausted auto-continuation budget before reaching phase D.";
-        const hint = yield* classifyFailure({
-          enabled: inputs.plan.adjudicateContinuations,
-          state: adjudication,
-        }).pipe(Effect.provideService(JevService, deps.jev));
-        return {
-          kind: "failed",
-          failure: {
-            reason: "budget_exhausted",
-            message: hint === null ? base : `${base} ${hint}`,
+      const turn = (resumed: boolean) =>
+        deps.ai.walkthroughTurn({
+          walkthroughId: run.id,
+          pr: inputs.pr,
+          files: promptInput.files,
+          mode: ctx.mode,
+          worktreePath,
+          reviewMode: {
+            mode: inputs.generationMode,
+            parentWalkthroughId: inputs.parentWalkthroughId,
+            baseHeadSha: inputs.baseHeadSha,
+            headSha: ctx.prHeadSha,
+            diffSource: promptInput.diffSource,
           },
-        };
-      }
+          resumed,
+          ...(inputs.assignedRisk ? { assignedRisk: inputs.assignedRisk } : {}),
+          ...(inputs.plan.filePriorities ? { filePriorities: inputs.plan.filePriorities } : {}),
+          ...(inputs.plan.splitRecommendation
+            ? { splitRecommendation: inputs.plan.splitRecommendation }
+            : {}),
+          ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
+          ...(inputs.stack ? { stack: inputs.stack } : {}),
+          mcpToken: run.token,
+          activity: run.activity,
+          abortController: run.abort,
+          launch: {
+            agent: inputs.plan.agent,
+            model: inputs.plan.model,
+            thinkingEffort: inputs.plan.thinkingEffort ?? undefined,
+          },
+          onLive,
+        });
 
-      continuations += 1;
-      previous = progress;
-      resumed = true;
-      debug(
-        "walkthrough-run",
-        `${run.id}: auto-continuation ${continuations}/${MAX_AUTO_CONTINUATIONS} at phase ${progress.lastCompletedPhase}`,
-      );
-      deps.publish({
-        type: "phase",
-        data: {
-          phase: "rating",
-          message: `Finishing walkthrough (phase ${progress.lastCompletedPhase})...`,
-        },
-      });
-    }
-  });
+      const startedAt = Date.now();
+      let continuations = 0;
+      let previous: Progress | null = null;
+      let resumed = inputs.resumed;
+
+      while (true) {
+        const { end, tokenUsage } = yield* turn(resumed);
+        ctx.tokenUsage = accumulateTokenUsage(ctx.tokenUsage, tokenUsage);
+        deps.publish({ type: "usage", data: { tokenUsage: ctx.tokenUsage } });
+        // A Stop or a supersede: the kernel settles it.
+        if (run.stopReason() !== null) {
+          return { kind: "failed", failure: failureWithoutContent(end) };
+        }
+
+        // The orchestrator decides on a stable issue set.
+        yield* Effect.promise(() => ctx.judgments.drain());
+        const blocker = yield* dbTry("completion check", () =>
+          orchestratorCompletionBlocker(db, run.id),
+        );
+        if (blocker === null) return { kind: "complete" };
+
+        if (end.kind === "stopped" && end.refused) {
+          return {
+            kind: "failed",
+            failure: { reason: "agent_error", message: "The agent declined to continue." },
+          };
+        }
+        // Another turn would fail the same way until the user signs the agent in.
+        if (end.kind === "failed" && end.auth) {
+          return { kind: "failed", failure: { reason: "agent_auth", message: end.message } };
+        }
+        const progress = yield* dbTry("read progress", () => readProgress(db, run.id));
+        if (end.kind === "cancelled" || !progress.hasSummary) {
+          return { kind: "failed", failure: failureWithoutContent(end) };
+        }
+
+        const adjudication = {
+          autoContinuations: continuations,
+          maxAutoContinuations: MAX_AUTO_CONTINUATIONS,
+          lastCompletedPhase: progress.lastCompletedPhase,
+          phaseAtLastContinuation: previous?.lastCompletedPhase ?? null,
+          counts: progress.counts,
+          countsAtLastContinuation: previous?.counts ?? null,
+          terminalReason: end.kind,
+          elapsedMs: Date.now() - startedAt,
+          totalTokens: ctx.tokenUsage.inputTokens + ctx.tokenUsage.outputTokens,
+        };
+        let stoppedEarlyBecause: string | null = null;
+        if (continuations >= MAX_AUTO_CONTINUATIONS) {
+          debug("walkthrough-run", `${run.id}: auto-continuations spent`);
+        } else if (continuations >= 1) {
+          // Not on the first: "progress since the last continuation" is
+          // undefined, and the first continuation most often succeeds anyway.
+          const verdict = yield* adjudicateContinuation({
+            enabled: inputs.plan.adjudicateContinuations,
+            ...adjudication,
+          }).pipe(Effect.provideService(JevService, deps.jev));
+          if (verdict.kind === "stop-doomed") stoppedEarlyBecause = verdict.reason;
+        }
+        if (continuations >= MAX_AUTO_CONTINUATIONS || stoppedEarlyBecause !== null) {
+          const base =
+            progress.lastCompletedPhase === "D"
+              ? (progress.counts.issues_needing_inline_comment ?? 0) > 0
+                ? "Generation finished but line-anchored concerns lack inline comments."
+                : "Generation finished but the walkthrough is incomplete."
+              : stoppedEarlyBecause !== null
+                ? `Generation stopped early: ${stoppedEarlyBecause}.`
+                : "Generation exhausted auto-continuation budget before reaching phase D.";
+          const hint = yield* classifyFailure({
+            enabled: inputs.plan.adjudicateContinuations,
+            state: adjudication,
+          }).pipe(Effect.provideService(JevService, deps.jev));
+          return {
+            kind: "failed",
+            failure: {
+              reason: "budget_exhausted",
+              message: hint === null ? base : `${base} ${hint}`,
+            },
+          };
+        }
+
+        continuations += 1;
+        previous = progress;
+        resumed = true;
+        debug(
+          "walkthrough-run",
+          `${run.id}: auto-continuation ${continuations}/${MAX_AUTO_CONTINUATIONS} at phase ${progress.lastCompletedPhase}`,
+        );
+        deps.publish({
+          type: "phase",
+          data: {
+            phase: "rating",
+            message: `Finishing walkthrough (phase ${progress.lastCompletedPhase})...`,
+          },
+        });
+      }
+    }),
+  );
 }

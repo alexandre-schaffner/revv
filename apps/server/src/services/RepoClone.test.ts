@@ -83,24 +83,8 @@ describe("isWorktreeHealthy", () => {
   });
 
   /** Common healthy-baseline params — tests override just what they're probing. */
-  function healthyParams(): {
-    clonePath: string;
-    prDirName: string;
-    branchName: string;
-    worktreePath: string;
-    prHeadSha: string;
-    exactHead: true;
-    prNumber: number;
-  } {
-    return {
-      clonePath,
-      prDirName,
-      branchName,
-      worktreePath,
-      prHeadSha: headSha,
-      exactHead: true,
-      prNumber,
-    };
+  function healthyParams(): Parameters<typeof isWorktreeHealthy>[0] {
+    return { clonePath, branchName, worktreePath, prHeadSha: headSha, prNumber };
   }
 
   it("reports a healthy worktree without touching .git on disk", async () => {
@@ -128,6 +112,42 @@ describe("isWorktreeHealthy", () => {
     writeFileSync(join(clonePath, ".git", "worktrees", prDirName, "index.lock"), "");
 
     expect(await isWorktreeHealthy(healthyParams())).toBe(false);
+  });
+
+  it("accepts a worktree carrying the agent's commits on top of the PR head", async () => {
+    writeFileSync(join(worktreePath, "agent.txt"), "agent\n");
+    git(worktreePath, ["add", "agent.txt"]);
+    git(worktreePath, ["commit", "--quiet", "-m", "agent commit"]);
+
+    expect(await isWorktreeHealthy(healthyParams())).toBe(true);
+  });
+
+  // A linked repository can itself be a linked worktree of the user's own
+  // repository, so `<clone>/.git` is a file and the PR worktree's gitdir lives
+  // in the main repository. Probing `<clone>/.git/worktrees/...` on disk saw
+  // nothing there and called a worktree mid-merge healthy.
+  it("sees a merge in progress when the clone is itself a linked worktree", async () => {
+    const userClone = join(base, "user-linked");
+    const prWorktree = join(base, "worktrees", "pr-7");
+    git(clonePath, ["worktree", "add", "--quiet", "--detach", userClone, headSha]);
+    git(userClone, ["worktree", "add", "--quiet", "-B", "revv/pr-7", prWorktree, headSha]);
+    const params = {
+      clonePath: userClone,
+      branchName: "revv/pr-7",
+      worktreePath: prWorktree,
+      prHeadSha: headSha,
+      prNumber: 7,
+    };
+    expect(await isWorktreeHealthy(params)).toBe(true);
+
+    const mergeHead = git(prWorktree, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "MERGE_HEAD",
+    ]);
+    writeFileSync(mergeHead, `${headSha}\n`);
+    expect(await isWorktreeHealthy(params)).toBe(false);
   });
 
   describe("legacy refs/revv/pr-N ref", () => {

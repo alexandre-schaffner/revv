@@ -6,18 +6,18 @@
 import { getAgentCapabilities, type StreamErrorBody } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, status, t } from "elysia";
-import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { ChatSessionService } from "../services/ChatSession";
+import { resolveChatSessionContext } from "../services/chat/session-context";
 import { PrContextService } from "../services/PrContext";
 import { SettingsService } from "../services/Settings";
-import { resolveChatSessionContext } from "./chat-helpers";
+import { PrWorkspace } from "../services/workspace/PrWorkspace";
 import { runRoute, withAuth } from "./middleware";
 import { ownedBy } from "./ownership";
 
-const decidePlan = (planId: string, decision: "approved" | "rejected") =>
+const decidePlan = (prId: string, planId: string, decision: "approved" | "rejected") =>
   Effect.gen(function* () {
     const chatSessions = yield* ChatSessionService;
-    const plan = yield* chatSessions.decidePlan({ planId, decision });
+    const plan = yield* chatSessions.decidePlan({ prId, planId, decision });
     if (!plan) {
       return status(404, {
         code: "PLAN_NOT_FOUND",
@@ -38,10 +38,10 @@ export const chatInteractionRoutes = new Elysia()
       return runRoute(
         Effect.gen(function* () {
           const prCtx = yield* PrContextService;
+          const workspace = yield* PrWorkspace;
           const chatSessions = yield* ChatSessionService;
           const { pr } = yield* prCtx.forPr(ctx.params.prId);
-          const { agent, model } = yield* resolveAgentLaunch("chat");
-          const row = pr.headSha ? yield* chatSessions.find(pr.id, agent, model, pr.headSha) : null;
+          const row = yield* workspace.session(pr);
           if (row) yield* chatSessions.setInteractionMode({ chatSessionId: row.id, mode });
           return { status: "ok" as const, mode };
         }),
@@ -57,12 +57,12 @@ export const chatInteractionRoutes = new Elysia()
   // ── Plan approval ───────────────────────────────────────────────────────
   .post(
     "/api/chat/:prId/plan/:planId/approve",
-    (ctx) => runRoute(decidePlan(ctx.params.planId, "approved")),
+    (ctx) => runRoute(decidePlan(ctx.params.prId, ctx.params.planId, "approved")),
     { params: t.Object({ prId: t.String(), planId: t.String() }) },
   )
   .post(
     "/api/chat/:prId/plan/:planId/reject",
-    (ctx) => runRoute(decidePlan(ctx.params.planId, "rejected")),
+    (ctx) => runRoute(decidePlan(ctx.params.prId, ctx.params.planId, "rejected")),
     { params: t.Object({ prId: t.String(), planId: t.String() }) },
   )
   // ── Agent availability ─────────────────────────────────────────────────

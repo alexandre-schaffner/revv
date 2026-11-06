@@ -171,7 +171,7 @@ enterOrigin("boot", "boot");
 // SIGINT  arrives on Ctrl-C.
 //
 // Registered before the first `await`: the server already answers requests,
-// and building the runtime installs other SIGTERM listeners (git-runner) that
+// and building the runtime installs other SIGTERM listeners (the git runner) that
 // suppress Bun's default exit, so a signal landing earlier would be swallowed.
 //
 // Both previously only logged, leaving the process alive — that's why stale
