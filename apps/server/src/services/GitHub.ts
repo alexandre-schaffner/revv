@@ -1,6 +1,5 @@
 import type { MergeEligibility, MergeMethod, Org, Repository, Team } from "@revv/shared";
 import { Context, Effect, Layer, Result } from "effect";
-import { serverEnv } from "../config";
 import { type GitHubError, GitHubNotFoundError } from "../domain/errors";
 import { type ObservedPr, STACK_UNSEEN } from "../domain/observed-pr";
 import { logError } from "../logger";
@@ -52,10 +51,7 @@ import { SettingsService } from "./Settings";
  * `api.github.com` (or vice versa) the moment two hosts coexist on one machine.
  */
 const resolveApiBase: Effect.Effect<string, never, SettingsService> = Effect.gen(function* () {
-  const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-    Effect.orElseSucceed(() => null),
-  );
-  const host = settings?.githubHost?.trim() || serverEnv.githubHost;
+  const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
   return apiBaseForHost(host);
 });
 

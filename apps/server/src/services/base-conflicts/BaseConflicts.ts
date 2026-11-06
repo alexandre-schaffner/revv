@@ -21,7 +21,6 @@ import {
 } from "@revv/shared";
 import { Context, Effect, Layer, Queue } from "effect";
 import type { ResolveConflictsTask } from "../../ai/prompts/chat";
-import { serverEnv } from "../../config";
 import {
   AiNotConfiguredError,
   BaseConflictsRejectedError,
@@ -128,7 +127,7 @@ export const BaseConflictsServiceLive = Layer.effect(
     const syncRepoOf = (ctx: PrContextBasic): SyncRepo | null => {
       const { pr, repo, token } = ctx;
       if (repo.cloneStatus !== "ready" || !repo.clonePath) return null;
-      const host = repo.githubHost || serverEnv.githubHost;
+      const host = repo.githubHost;
       return {
         clonePath: repo.clonePath,
         remoteUrl: `https://x-access-token:${token}@${host}/${repo.fullName}.git`,

@@ -6,7 +6,6 @@
 import { join } from "node:path";
 import { isOpenLayer, type StackRebaseResult } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import { serverEnv } from "../../config";
 import {
   DbError,
   type GitHubError,
@@ -87,7 +86,7 @@ export const StackRebaseServiceLive = Layer.effect(
             `Revv's copy of ${repo.fullName} isn't ready yet`,
           );
         }
-        const host = repo.githubHost || serverEnv.githubHost;
+        const host = repo.githubHost;
         return {
           clonePath: repo.clonePath,
           scratchPath: join(worktreeHolderPath(owner, name), `stack-${stack.number}-rebase`),

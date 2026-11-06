@@ -47,7 +47,6 @@
 
 import { ACP_AGENT_IDS, type AgentProgressFrame } from "@revv/shared";
 import { Context, Data, Effect, Layer, Queue } from "effect";
-import { serverEnv } from "../config";
 import { CHAT_IDLE_TIMEOUT_MS } from "../constants";
 import {
   type AiError,
@@ -121,16 +120,7 @@ export {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Reads the configured GitHub host from Settings at call time, falling back
- * to the process-startup value. This avoids freezing the host at module load.
- */
-const resolveGitHost: Effect.Effect<string, never, SettingsService> = Effect.gen(function* () {
-  const settings = yield* Effect.flatMap(SettingsService, (s) => s.getSettings()).pipe(
-    Effect.orElseSucceed(() => null),
-  );
-  return settings?.githubHost?.trim() || serverEnv.githubHost;
-});
+const resolveGitHost = Effect.flatMap(SettingsService, (s) => s.githubHost());
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 

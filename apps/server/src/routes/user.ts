@@ -57,11 +57,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
             Effect.gen(function* () {
               const identityService = yield* Identity;
               const github = yield* GitHubGateway;
-              const settingsService = yield* SettingsService;
-              const settings = yield* settingsService
-                .getSettings()
-                .pipe(Effect.orElseSucceed(() => null));
-              const host = settings?.githubHost?.trim() || undefined;
+              const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
               const token = yield* identityService.tokenForUser(userId, host);
               const gh = yield* github.users.authenticatedFresh(token);
               return gh;
@@ -137,11 +133,7 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         const reauth = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const identityService = yield* Identity;
-            const settingsService = yield* SettingsService;
-            const settings = yield* settingsService
-              .getSettings()
-              .pipe(Effect.orElseSucceed(() => null));
-            const hostPref = settings?.githubHost?.trim() || undefined;
+            const hostPref = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
             const resolved = yield* identityService.resolveAccount(userId, hostPref);
             const accountRow = db
               .select({ reauthRequiredAt: account.reauthRequiredAt })
@@ -208,16 +200,12 @@ export const userRoutes = new Elysia({ prefix: "/api/user" })
         Effect.gen(function* () {
           const identityService = yield* Identity;
           const github = yield* GitHubGateway;
-          const settingsService = yield* SettingsService;
-          const settings = yield* settingsService
-            .getSettings()
-            .pipe(Effect.orElseSucceed(() => null));
-          const host = settings?.githubHost?.trim() || undefined;
+          const host = yield* Effect.flatMap(SettingsService, (s) => s.githubHost());
           const token = yield* identityService.tokenForUser(userId, host);
           const cache = yield* CacheService;
           return yield* cache.getOrFetch(
             "github-orgs",
-            `${userId}:${host ?? ""}`,
+            `${userId}:${host}`,
             () => github.repos.orgsForUser(token),
             { ttlMs: 10 * 60 * 1000 },
           );

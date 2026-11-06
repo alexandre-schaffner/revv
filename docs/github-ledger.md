@@ -18,8 +18,8 @@ bun run github:audit --json               # the raw report
 
 The file is `apps/server/github-ledger.dev.jsonl` (rotated at 50 MB to
 `.jsonl.1`). A running server hands out the calls still in its in-memory ring,
-unanalyzed, at `GET /api/_debug/github?since=2m&origin=api` (`REVV_DEBUG=1` or
-a dev build), and `POST /api/_debug/github/clear` empties that ring.
+unanalyzed, at `GET /api/_debug/github?since=2m&origin=api` (`REVV_DEBUG=1`, which
+`make dev` sets), and `POST /api/_debug/github/clear` empties that ring.
 
 To profile a single page load: `--since 30s --origin api --timeline` right
 after opening it shows each GitHub call as a bar on one time axis, labelled by

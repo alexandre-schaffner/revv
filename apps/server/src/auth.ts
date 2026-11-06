@@ -32,8 +32,7 @@ export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
  * signs session cookies and JWTs only.
  */
 function loadOrCreateAuthSecret(): string {
-  const envOverride = process.env.BETTER_AUTH_SECRET;
-  if (envOverride && envOverride.length > 0) return envOverride;
+  if (serverEnv.betterAuthSecret) return serverEnv.betterAuthSecret;
 
   const keyPath = authKeyPath();
   if (existsSync(keyPath)) {

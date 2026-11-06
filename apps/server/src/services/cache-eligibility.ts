@@ -175,10 +175,7 @@ export const CacheEligibilityLive = Layer.effect(
           const [owner, repo] = parts as [string, string];
 
           // Use settings host as the authority for "which account do I use?"
-          const settings = yield* settingsSvc
-            .getSettings()
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          const host = settings?.githubHost ?? "github.com";
+          const host = yield* settingsSvc.githubHost();
 
           const localAcct = yield* Effect.try({
             try: () => getLocalAccountForHost(host),

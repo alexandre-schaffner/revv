@@ -22,6 +22,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect";
 import { applyAcpAgentOverride } from "../ai/acp/presets";
+import { serverEnv } from "../config";
 import type { Db } from "../db/index";
 import { userSettings } from "../db/schema/user-settings";
 import { ValidationError } from "../domain/errors";
@@ -387,6 +388,8 @@ export class SettingsService extends Context.Service<
     getSettings: () => Effect.Effect<UserSettings, ValidationError>;
     updateSettings: (partial: SettingsUpdate) => Effect.Effect<UserSettings, ValidationError>;
     settingsChanges: () => Stream.Stream<UserSettings>;
+    /** The GitHub host for flows with no repository in hand: the settings host, else `GITHUB_HOST`. */
+    githubHost: () => Effect.Effect<string>;
     resolveAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
     resolveRecapAgent: () => Effect.Effect<AcpAgentId, ValidationError>;
     /**
@@ -454,6 +457,11 @@ export const SettingsServiceLive = Layer.effect(
         }),
 
       settingsChanges: () => SubscriptionRef.changes(settingsRef).pipe(Stream.drop(1)),
+
+      githubHost: () =>
+        SubscriptionRef.get(settingsRef).pipe(
+          Effect.map((s) => s.githubHost.trim() || serverEnv.githubHost),
+        ),
 
       resolveAgent: () =>
         SubscriptionRef.get(settingsRef).pipe(

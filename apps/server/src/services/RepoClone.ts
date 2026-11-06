@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import type { CloneStatus, Repository } from "@revv/shared";
 import { and, eq, or } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-import { serverEnv } from "../config";
 import { CLONE_TIMEOUT_MS } from "../constants";
 import { pullRequests, repositories, walkthroughs } from "../db/schema/index";
 import {
@@ -1001,7 +1000,7 @@ export const RepoCloneServiceLive = Layer.effect(
                     throw new CloneNotReadyError({ repoId });
                   }
 
-                  const gitHost = row.githubHost ?? serverEnv.githubHost;
+                  const gitHost = row.githubHost;
                   const clonePath = row.clonePath;
                   const prDirName = `pr-${prNumber}`;
                   const branchName = `revv/pr-${prNumber}`;

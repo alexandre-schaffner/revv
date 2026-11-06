@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Entry, type EntryOptions } from "@napi-rs/keyring";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
+import { serverEnv } from "../config";
 import { account } from "../db/schema";
 import { logError } from "../logger";
 import { appDataDir, keyringServiceName } from "../paths";
@@ -136,8 +137,7 @@ function loadFallbackSalt(): Buffer {
  * `0600` random key file, generated on first use.
  */
 function loadFallbackSecret(): string {
-  const envSecret = process.env.BETTER_AUTH_SECRET;
-  if (envSecret && envSecret.length > 0) return envSecret;
+  if (serverEnv.betterAuthSecret) return serverEnv.betterAuthSecret;
 
   const p = fallbackKeyPath();
   if (existsSync(p)) {

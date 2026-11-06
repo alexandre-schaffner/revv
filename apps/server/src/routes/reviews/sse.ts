@@ -94,7 +94,7 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
     } catch (err) {
       // Controller closed or client disconnected. Log so we can correlate
       // a "stream stopped updating" symptom with the moment the wire was
-      // torn down. logError (not debug) so it surfaces without REV_DEBUG.
+      // torn down. logError (not debug) so it surfaces without REVV_DEBUG.
       logError(
         "wt-trace",
         `sse-enqueue-failed bytes=${bytes.byteLength}:`,

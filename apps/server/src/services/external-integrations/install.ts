@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ExternalAgentProvider } from "@revv/shared";
+import { serverEnv } from "../../config";
 import { ExternalIntegrationError } from "../../domain/errors";
 
 const MANAGED_MARKER = ".revv-managed";
@@ -49,9 +50,8 @@ export function externalIntegrationError(
 
 /** Locate the repository's `integrations/` directory (dev and packaged). */
 export function findIntegrationsDirectory(): string {
-  const override = process.env.REVV_INTEGRATIONS_DIR?.trim();
   const candidates = [
-    override,
+    serverEnv.integrationsDir,
     // Embedded by the compiled desktop server (`scripts/build-binary.ts`).
     join(import.meta.dir, "integrations"),
     resolve(import.meta.dir, "../../../../../integrations"),

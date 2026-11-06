@@ -76,6 +76,20 @@ export function resolveDesktopCodexBin(
 
 let cachedPath: { value: string; expiresAt: number } | null = null;
 
+/** Directories an in-app agent install wrote to, searched before the user's PATH. */
+const installedBinDirs: string[] = [];
+
+/**
+ * Put the directories an agent's official installer writes to on the agent
+ * PATH, so the next probe finds the binary before the user's shell config is
+ * re-sourced. Drops the cached PATH.
+ */
+export function addInstalledBinDirs(dirs: readonly string[]): void {
+  const added = dirs.filter((dir) => existsSync(dir) && !installedBinDirs.includes(dir));
+  installedBinDirs.unshift(...added);
+  cachedPath = null;
+}
+
 /**
  * The directories the user's interactive login shell would search, merged onto
  * the process PATH. This is the PATH detection and ACP launches should use —
@@ -86,9 +100,11 @@ export function resolveUserPath(): string {
   if (cachedPath && Date.now() < cachedPath.expiresAt) return cachedPath.value;
   const base = process.env.PATH ?? "";
   const login = loginShellPath();
-  const value = login
-    ? Array.from(new Set([...base.split(":"), ...login.split(":")].filter(Boolean))).join(":")
-    : base;
+  const value = Array.from(
+    new Set(
+      [...installedBinDirs, ...base.split(":"), ...(login?.split(":") ?? [])].filter(Boolean),
+    ),
+  ).join(":");
   cachedPath = { value, expiresAt: Date.now() + CLI_CACHE_TTL_MS };
   return value;
 }
