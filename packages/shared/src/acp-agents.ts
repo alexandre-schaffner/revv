@@ -81,6 +81,12 @@ export interface AcpAgentDescriptor {
   /** Model / context-window / thinking-effort surface Revv exposes for this agent. */
   readonly capabilities: AcpAgentCapabilities;
   /**
+   * The mode Revv puts every session in when it opens or reloads it, so the
+   * agent asks Revv for permissions rather than deciding them itself. Absent
+   * when the agent's own starting mode already does that.
+   */
+  readonly sessionMode?: string;
+  /**
    * macOS keychain login details, when the agent stores its credential there and
    * the background server can be ACL-blocked from reading it. Absent for
    * file-based agents (codex/opencode/cursor), which the server reaches directly.
@@ -108,6 +114,10 @@ export const ACP_AGENTS = [
     icon: "anthropic",
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+    // Since 0.101.0 the adapter starts sessions in Auto mode, where Claude
+    // Code's classifier approves tools instead of Revv: a model call per tool,
+    // and the plan-mode guard in `acp-connection.ts` never runs.
+    sessionMode: "default",
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
       // Verified against https://code.claude.com/docs/en/model-config (2026-10-13).

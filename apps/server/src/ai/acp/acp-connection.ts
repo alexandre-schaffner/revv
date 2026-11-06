@@ -25,6 +25,7 @@ import {
   type McpServer,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionModeState,
@@ -45,8 +46,42 @@ import {
 
 const IDLE_STOP_MS = 5 * 60 * 1000;
 const STDERR_TAIL_CHARS = 2000;
+const ERROR_DATA_CHARS = 500;
 const STARTUP_EXIT_GRACE_MS = 1000;
 const STARTUP_STDERR_LINES = 6;
+
+/**
+ * A JSON-RPC error's message with its `data` folded in. An agent that throws a
+ * plain error is answered by the ACP SDK as `{ message: "Internal error", data:
+ * { details } }`, so the message alone names nothing; the cause is in `data`.
+ */
+export function acpErrorMessage(message: string, data: unknown): string {
+  const detail =
+    typeof data === "string"
+      ? data
+      : data !== null && typeof data === "object" && "details" in data
+        ? String(data.details ?? "")
+        : data !== null && typeof data === "object" && Object.keys(data).length > 0
+          ? JSON.stringify(data)
+          : "";
+  const trimmed = detail.trim();
+  if (trimmed === "" || message.includes(trimmed)) return message;
+  const clipped =
+    trimmed.length > ERROR_DATA_CHARS ? `${trimmed.slice(0, ERROR_DATA_CHARS)}…` : trimmed;
+  return `${message}: ${clipped}`;
+}
+
+/** Rethrow an agent's JSON-RPC error with its `data` in the message. */
+async function withErrorDetail<T>(request: Promise<T>): Promise<T> {
+  try {
+    return await request;
+  } catch (err) {
+    if (!(err instanceof RequestError)) throw err;
+    const message = acpErrorMessage(err.message, err.data);
+    if (message === err.message) throw err;
+    throw new RequestError(err.code, message, err.data);
+  }
+}
 
 /**
  * The error for an agent process that exited before the ACP handshake, carrying
@@ -493,22 +528,38 @@ export function createSessionSelections(
     }
   };
 
+  const setMode = async (sessionId: string, modeId: string): Promise<void> => {
+    const configId = modeConfigIds.get(sessionId);
+    if (configId) {
+      await connection.setSessionConfigOption({ sessionId, configId, value: modeId });
+    } else {
+      await connection.setSessionMode({ sessionId, modeId });
+    }
+  };
+
+  const { sessionMode } = getAcpAgent(agent);
+
   return {
     adopt: async (sessionId, res) => {
       const unavailableModel = await applyModel(sessionId, res.configOptions);
-      const { modes, modeConfigId } = resolveSessionModes(res);
+      const { modes: advertised, modeConfigId } = resolveSessionModes(res);
       if (modeConfigId) modeConfigIds.set(sessionId, modeConfigId);
       else modeConfigIds.delete(sessionId);
+      // A fresh session starts in the agent's default mode and a reloaded one in
+      // its last mode, plan included, so both are moved to Revv's.
+      let modes = advertised;
+      if (
+        sessionMode &&
+        modes &&
+        modes.currentModeId !== sessionMode &&
+        modes.availableModes.some((mode) => mode.id === sessionMode)
+      ) {
+        await setMode(sessionId, sessionMode);
+        modes = { ...modes, currentModeId: sessionMode };
+      }
       return { modes, ...(unavailableModel ? { unavailableModel } : {}) };
     },
-    setMode: async (sessionId, modeId) => {
-      const configId = modeConfigIds.get(sessionId);
-      if (configId) {
-        await connection.setSessionConfigOption({ sessionId, configId, value: modeId });
-      } else {
-        await connection.setSessionMode({ sessionId, modeId });
-      }
-    },
+    setMode,
     clear: () => modeConfigIds.clear(),
   };
 }
@@ -566,23 +617,24 @@ function makeHandle(entry: ConnectionEntry): AcpConnectionHandle {
       return entry.lastCommands ?? entry.availableCommands.get(sessionId) ?? [];
     },
     newSession: async (mcpServers) => {
-      const res = await connection.newSession({
-        cwd: entry.cwd,
-        mcpServers: sanitizeMcpServers(mcpServers),
-      });
+      const res = await withErrorDetail(
+        connection.newSession({ cwd: entry.cwd, mcpServers: sanitizeMcpServers(mcpServers) }),
+      );
       return { sessionId: res.sessionId, ...(await entry.selections.adopt(res.sessionId, res)) };
     },
     loadSession: async (sessionId, mcpServers) => {
-      const res = await connection.loadSession({
-        sessionId,
-        cwd: entry.cwd,
-        mcpServers: sanitizeMcpServers(mcpServers),
-      });
+      const res = await withErrorDetail(
+        connection.loadSession({
+          sessionId,
+          cwd: entry.cwd,
+          mcpServers: sanitizeMcpServers(mcpServers),
+        }),
+      );
       return entry.selections.adopt(sessionId, res);
     },
     setMode: (sessionId, modeId) => entry.selections.setMode(sessionId, modeId),
     prompt: async (sessionId, prompt) => {
-      const res = await connection.prompt({ sessionId, prompt });
+      const res = await withErrorDetail(connection.prompt({ sessionId, prompt }));
       return res.stopReason;
     },
     cancel: async (sessionId) => {
