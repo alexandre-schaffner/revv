@@ -53,6 +53,12 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         return;
       }
 
+      if (status === "stopped") {
+        writer.send({ type: "stopped", data: { recapId: row.id } });
+        writer.close();
+        return;
+      }
+
       // Terminal: error.
       if (status === "error") {
         writer.send({
@@ -88,7 +94,6 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
             period: row.period,
             periodStart: row.periodStart,
             periodEnd: row.periodEnd,
-            trigger: "manual",
           });
         }),
       ).catch(() => null);
@@ -107,7 +112,7 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         Effect.flatMap(ProjectRecapJobs, (jobs) =>
           jobs.subscribe(row.id, (event) => {
             writer.send(event);
-            if (event.type === "done" || event.type === "error") {
+            if (event.type === "done" || event.type === "stopped" || event.type === "error") {
               writer.close();
             }
           }),
@@ -123,6 +128,8 @@ export function recapStreamHandler(ctx: { params: { id: string } }): Response {
         if (finalRow.status === "complete") {
           emitSnapshot(writer, finalRow);
           writer.send({ type: "done", data: { recapId: finalRow.id } });
+        } else if (finalRow.status === "stopped") {
+          writer.send({ type: "stopped", data: { recapId: finalRow.id } });
         } else if (finalRow.status === "error") {
           writer.send({
             type: "error",

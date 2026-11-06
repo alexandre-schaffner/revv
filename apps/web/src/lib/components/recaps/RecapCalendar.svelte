@@ -12,14 +12,14 @@ import { fetchRecapsForMonth, getMonthRecapsLoading } from "$lib/stores/recaps.s
 import {
   addUtcDays,
   dayKeyToUtcDate,
-  formatSlot,
-  isCurrentPeriod,
+  formatRecapRange,
   mondayKeyOf,
   monthGrid,
   monthKeyOf,
   recapSlotKey,
   shiftMonth,
   slotKeyFor,
+  slotSpan,
   utcDateKey,
   utcDayKey,
   windowPath,
@@ -52,9 +52,6 @@ interface Props {
 }
 
 let { repoId, period, recaps, activeRecapId = null, initialDayKey, onLeave }: Props = $props();
-
-/** Pre-Step-2b rows carry this message for a window that simply held nothing. */
-const LEGACY_EMPTY_WINDOW_MESSAGE = "No archived or open PRs found for this window";
 
 // ── Clock ───────────────────────────────────────────────────────────────────
 
@@ -150,20 +147,12 @@ const slotIndex = $derived.by(() => {
   return map;
 });
 
-type SlotKind = "complete" | "generating" | "error" | "quiet" | "empty";
+type SlotKind = "complete" | "generating" | "error" | "empty";
 
-function recapKind(r: ProjectRecapSummary | undefined, dayKey: string): SlotKind {
+function recapKind(r: ProjectRecapSummary | undefined): SlotKind {
   if (!r) return "empty";
   if (r.status === "generating") return "generating";
-  if (r.status === "error") {
-    // Shim for rows written before quiet historical windows completed
-    // normally. They're failures on paper only; painting them destructive
-    // would light up every quiet weekend in the archive.
-    const quiet =
-      r.errorMessage === LEGACY_EMPTY_WINDOW_MESSAGE &&
-      !isCurrentPeriod(period, dayKey, dayKeyToUtcDate(nowKey));
-    return quiet ? "quiet" : "error";
-  }
+  if (r.status === "error" || r.status === "stopped") return "error";
   return "complete";
 }
 
@@ -201,7 +190,7 @@ const canGoNext = $derived(viewMonth < currentMonth);
 
 function cellLabel(dayKey: string): string {
   const r = recapAt(dayKey);
-  const kind = recapKind(r, dayKey);
+  const kind = recapKind(r);
   const state =
     kind === "complete"
       ? "complete"
@@ -209,12 +198,10 @@ function cellLabel(dayKey: string): string {
         ? "generating"
         : kind === "error"
           ? "failed"
-          : kind === "quiet"
-            ? "no activity"
-            : slotIsFuture(dayKey)
-              ? "in the future"
-              : "not generated";
-  return `${formatSlot(period, dayKey)} — ${period} recap, ${state}`;
+          : slotIsFuture(dayKey)
+            ? "in the future"
+            : "not generated";
+  return `${formatRecapRange(slotSpan(period, dayKey))} — ${period} recap, ${state}`;
 }
 
 // ── Month prefetch ──────────────────────────────────────────────────────────
@@ -384,7 +371,7 @@ $effect(() => {
 								<tr
 									class="week-row"
 									class:week-row--active={weekActive}
-									aria-label={period === "weekly" ? `Week of ${formatSlot("daily", mondayKey)}` : undefined}
+									aria-label={period === "weekly" ? `Week of ${formatRecapRange(slotSpan("daily", mondayKey))}` : undefined}
 									onpointerenter={() => {
 										if (period === "weekly" && !slotIsFuture(mondayKey)) hoverWeekKey = mondayKey;
 									}}
@@ -394,7 +381,7 @@ $effect(() => {
 								>
 									{#each week as dayKey (dayKey)}
 										{@const recap = recapAt(dayKey)}
-										{@const kind = recapKind(recap, dayKey)}
+										{@const kind = recapKind(recap)}
 										{@const future = slotIsFuture(dayKey)}
 										{@const isActive = recap !== undefined && recap.id === activeRecapId}
 										<td role="gridcell" class="cell-wrap" aria-current={isActive ? "page" : undefined}>
@@ -408,7 +395,6 @@ $effect(() => {
 												class:cell--complete={kind === "complete"}
 												class:cell--generating={kind === "generating"}
 												class:cell--error={kind === "error"}
-												class:cell--quiet={kind === "quiet"}
 												class:cell--active={isActive}
 												class:cell--week-start={period === "weekly" && dayKey === mondayKey}
 												class:cell--week-end={period === "weekly" && dayKey === addUtcDays(mondayKey, 6)}
@@ -416,7 +402,7 @@ $effect(() => {
 												aria-disabled={future}
 												aria-current={isToday(dayKey) ? "date" : undefined}
 												aria-label={cellLabel(dayKey)}
-												title={kind === "error" ? (recap?.errorMessage ?? undefined) : undefined}
+												title={recap?.status === "stopped" ? "Stopped" : kind === "error" ? (recap?.errorMessage ?? undefined) : undefined}
 												onclick={() => onCellClick(dayKey)}
 												use:gsapPress
 											>
@@ -426,8 +412,6 @@ $effect(() => {
 														<Spinner size={10} class="motion-essential-spin" aria-hidden="true" />
 													{:else if kind === "error"}
 														<WarningCircle size={10} aria-hidden="true" />
-													{:else if kind === "quiet"}
-														<span class="mark-dash"></span>
 													{:else if kind === "complete"}
 														<span class="mark-dot"></span>
 													{:else if monthPending}
@@ -699,12 +683,6 @@ $effect(() => {
 		height: 0.3125rem;
 		border-radius: 50%;
 		background: var(--color-accent);
-	}
-
-	.mark-dash {
-		width: 0.4375rem;
-		height: 1px;
-		background: var(--color-text-muted);
 	}
 
 	.mark-skeleton {

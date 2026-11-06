@@ -54,6 +54,7 @@ export const projectRecaps = sqliteTable(
      *   `generating` — job running or resumable
      *   `complete`   — `complete_recap` validation passed
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
+     *   `stopped`    — the user stopped generation
      *   `superseded` — a regenerate produced a newer row (see `supersededBy`)
      */
     status: text("status").notNull().default("generating"),

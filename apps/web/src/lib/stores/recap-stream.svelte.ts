@@ -1,4 +1,10 @@
-import type { Activity, RecapPrEntry, RecapStreamEvent, RecapThemeSummary } from "@revv/shared";
+import type {
+  Activity,
+  ProjectRecap,
+  RecapPrEntry,
+  RecapStreamEvent,
+  RecapThemeSummary,
+} from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { runRecapSse } from "$lib/services/recap-sse";
 
@@ -22,7 +28,35 @@ export interface RecapStreamEntry {
   activities: Array<Activity & { id: string }>;
   isStreaming: boolean;
   doneReceived: boolean;
+  /** The server reported the run stopped by the user. */
+  stopped: boolean;
   streamError: string | null;
+}
+
+/** The stream reached an end the server announced: done, stopped, or failed. */
+export function recapStreamEnded(entry: RecapStreamEntry | undefined): boolean {
+  return !!entry && (entry.doneReceived || entry.stopped || entry.streamError !== null);
+}
+
+/**
+ * The recap as the reader should see it mid-run: what the stream has written
+ * since the row was read wins, entries in `position` order.
+ */
+export function mergeRecapStream(
+  recap: ProjectRecap,
+  stream: RecapStreamEntry | undefined,
+): ProjectRecap {
+  if (!stream) return recap;
+  const entries = new Map(recap.entries.map((e) => [e.prId, e]));
+  for (const [prId, entry] of stream.entries) entries.set(prId, entry);
+  const summaries = new Map(recap.themeSummaries.map((s) => [s.theme, s]));
+  for (const [theme, summary] of stream.themeSummaries) summaries.set(theme, summary);
+  return {
+    ...recap,
+    lede: stream.lede || recap.lede,
+    entries: [...entries.values()].sort((a, b) => a.position - b.position),
+    themeSummaries: [...summaries.values()],
+  };
 }
 
 export function freshEntry(): RecapStreamEntry {
@@ -36,6 +70,7 @@ export function freshEntry(): RecapStreamEntry {
     activities: [],
     isStreaming: false,
     doneReceived: false,
+    stopped: false,
     streamError: null,
   };
 }
@@ -106,6 +141,10 @@ function applyEvents(recapId: string, evs: RecapStreamEvent[]): void {
         break;
       case "done":
         entry.doneReceived = true;
+        entry.isStreaming = false;
+        break;
+      case "stopped":
+        entry.stopped = true;
         entry.isStreaming = false;
         break;
       case "error":
@@ -196,8 +235,7 @@ export async function streamRecap(recapId: string): Promise<void> {
   // Reuse the existing entry only when it's in a clean "could resume"
   // state. The server's `lede` and `entry` snapshot events on connect
   // will overwrite stale data with the canonical DB state.
-  const base =
-    existing && !existing.doneReceived && !existing.streamError ? existing : freshEntry();
+  const base = existing && !recapStreamEnded(existing) ? existing : freshEntry();
   setEntry(recapId, { ...base, isStreaming: true });
 
   const abortCtrl = new AbortController();
@@ -221,7 +259,7 @@ export async function streamRecap(recapId: string): Promise<void> {
     }
   } finally {
     const current = entries.get(recapId);
-    if (current && !current.doneReceived && !current.streamError) {
+    if (current && !recapStreamEnded(current)) {
       setEntry(recapId, { ...current, isStreaming: false });
     }
     controllers.delete(recapId);

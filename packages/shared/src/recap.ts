@@ -2,7 +2,11 @@ import type { Activity } from "./activity";
 
 export type RecapPeriod = "daily" | "weekly";
 
-export type ProjectRecapStatus = "generating" | "complete" | "error" | "superseded";
+/**
+ * `stopped`: the user stopped generation. Unlike `error`, nothing went wrong,
+ * so the UI offers to resume rather than reporting a failure.
+ */
+export type ProjectRecapStatus = "generating" | "complete" | "error" | "stopped" | "superseded";
 
 /**
  * Pre-aggregated summary stats for the recap, computed alongside the
@@ -190,4 +194,5 @@ export type RecapStreamEvent =
   | { type: "entry"; data: { entry: RecapPrEntry } }
   | { type: "theme_summary"; data: { summary: RecapThemeSummary } }
   | { type: "done"; data: { recapId: string } }
+  | { type: "stopped"; data: { recapId: string } }
   | { type: "error"; data: { code: string; message: string } };

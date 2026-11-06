@@ -1,189 +1,41 @@
 // ─── RecapScheduler ──────────────────────────────────────────────────────────
 //
 // Periodic-job pattern modeled after PollScheduler. Two fibers (daily +
-// weekly) wake every 15 minutes, sweep every repository, and enqueue a
-// recap job for any (repo, period, periodStart) that lacks a non-superseded
-// row AND has at least one archived PR in its window.
+// weekly) wake every 15 minutes, sweep every repository, and ask
+// `ProjectRecapJobs.requestRecap` for each recently closed window. Whether a
+// window gets a recap, keeps the one it has, or has it rerun is that
+// method's call; this loop only enumerates windows.
 //
 // Cold-start backfill: on first tick after boot we look back up to N
 // periods so a multi-day outage self-heals instead of leaving permanent
 // gaps in the recap history.
 //
-// Empty windows skip: if `listArchivedPrsForWindow` returns 0 PRs for a
-// candidate period, no row is inserted. The recap list shows a gap rather
-// than a "nothing to report" placeholder (plan: cross-cutting decisions).
-//
 // Per CLAUDE.md invariant #14, the scheduler is ephemeral coordination —
 // no state lives in memory that we can't reconstruct from the DB. Status
 // transitions go through ProjectRecapJobs (single-writer per invariant #11).
 
-import type { RecapPeriod } from "@revv/shared";
+import { closedWindows, type RecapPeriod } from "@revv/shared";
 import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
 import { makeRestartableLoop } from "../effects/restartable-loop";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { DbService } from "./Db";
-import { ProjectRecapService } from "./ProjectRecap";
 import { ProjectRecapJobs } from "./ProjectRecapJobs";
-import { PullRequestService } from "./PullRequest";
 import { RepositoryService } from "./Repository";
 import { SettingsService } from "./Settings";
-
-// ── Constants ────────────────────────────────────────────────────────────────
 
 /** How often the fibers check for due recaps. 15 minutes is fine — recaps are slow-moving. */
 const RECAP_CHECK_INTERVAL_MINUTES = 15;
 
-/** Backfill window for daily recaps on boot. */
-const DAILY_BACKFILL_DAYS = 7;
-
-/** Backfill window for weekly recaps on boot. */
-const WEEKLY_BACKFILL_WEEKS = 4;
-
-export const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-export const ONE_WEEK_MS = 7 * ONE_DAY_MS;
-
-// ── Period boundary math (UTC) ───────────────────────────────────────────────
-
-/**
- * Start of the day in UTC for the given Date (midnight). Returned as a
- * fresh Date object so callers can compare or format without mutating the
- * input.
- */
-export function startOfUtcDay(d: Date): Date {
-  const out = new Date(d.getTime());
-  out.setUTCHours(0, 0, 0, 0);
-  return out;
-}
-
-/**
- * Start of the ISO week (Monday) in UTC for the given Date. ISO weeks
- * begin Monday — Sunday is treated as part of the previous week.
- */
-export function startOfUtcIsoWeek(d: Date): Date {
-  const day = startOfUtcDay(d);
-  const dow = day.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const daysFromMonday = (dow + 6) % 7; // Sun -> 6, Mon -> 0, ..., Sat -> 5
-  return new Date(day.getTime() - daysFromMonday * ONE_DAY_MS);
-}
-
-/**
- * True when `periodStart` names the window that is still open right now —
- * today for daily, the current ISO week for weekly. The one definition of
- * "current period" on the server; callers branch on it wherever a live
- * window and a closed one must behave differently (rolling end boundary,
- * empty-window handling).
- *
- * The web mirror is `isCurrentPeriod` in
- * `apps/web/src/lib/components/recaps/period-window.ts` — same semantics on
- * the other side of the wire. Keep the two in step.
- */
-export function windowIsCurrent(
-  period: RecapPeriod,
-  periodStart: string,
-  now: Date = new Date(),
-): boolean {
-  const start = new Date(periodStart);
-  if (period === "daily") {
-    return startOfUtcDay(start).getTime() === startOfUtcDay(now).getTime();
-  }
-  return startOfUtcIsoWeek(start).getTime() === startOfUtcIsoWeek(now).getTime();
-}
-
-/**
- * Compute the correct period boundaries when regenerating a recap.
- * If the recap's periodStart matches the current rolling window (today /
- * this week), return a rolling window ending at `now`. Otherwise return
- * the canonical full-period boundaries for the historical start.
- */
-export function canonicalRecapBoundaries(
-  period: RecapPeriod,
-  periodStart: string,
-  now: Date = new Date(),
-): { periodStart: string; periodEnd: string } {
-  const start = new Date(periodStart);
-  const canonicalStart = period === "daily" ? startOfUtcDay(start) : startOfUtcIsoWeek(start);
-  if (windowIsCurrent(period, periodStart, now)) {
-    return { periodStart: canonicalStart.toISOString(), periodEnd: now.toISOString() };
-  }
-  const span = period === "daily" ? ONE_DAY_MS : ONE_WEEK_MS;
-  const end = new Date(canonicalStart.getTime() + span);
-  return { periodStart: canonicalStart.toISOString(), periodEnd: end.toISOString() };
-}
-
-/**
- * Enumerate candidate periods, newest → oldest. For daily, returns the
- * `[N, N-1, N-2, ...]` days ending with the most-recently-closed window
- * (yesterday 00:00 → today 00:00 UTC). For weekly, the same shape but
- * ISO weeks.
- *
- * The "most-recently-closed" window for daily is `[yesterday, today)` —
- * we don't generate a recap for the current in-progress day.
- */
-function enumerateDailyPeriods(
-  now: Date,
-  count: number,
-): Array<{ periodStart: string; periodEnd: string }> {
-  const todayStart = startOfUtcDay(now);
-  const result: Array<{ periodStart: string; periodEnd: string }> = [];
-  for (let i = 1; i <= count; i++) {
-    const end = new Date(todayStart.getTime() - (i - 1) * ONE_DAY_MS);
-    const start = new Date(end.getTime() - ONE_DAY_MS);
-    result.push({
-      periodStart: start.toISOString(),
-      periodEnd: end.toISOString(),
-    });
-  }
-  return result;
-}
-
-function enumerateWeeklyPeriods(
-  now: Date,
-  count: number,
-): Array<{ periodStart: string; periodEnd: string }> {
-  const thisWeekStart = startOfUtcIsoWeek(now);
-  const result: Array<{ periodStart: string; periodEnd: string }> = [];
-  for (let i = 1; i <= count; i++) {
-    const end = new Date(thisWeekStart.getTime() - (i - 1) * ONE_WEEK_MS);
-    const start = new Date(end.getTime() - ONE_WEEK_MS);
-    result.push({
-      periodStart: start.toISOString(),
-      periodEnd: end.toISOString(),
-    });
-  }
-  return result;
-}
-
-type ClosedDay = { readonly periodEnd: string };
-
-function isLatestClosedDay(day: ClosedDay, now: Date): boolean {
-  return new Date(day.periodEnd).getTime() === startOfUtcDay(now).getTime();
-}
-
-function writtenBeforeDayClosed(day: ClosedDay, generatedAt: string): boolean {
-  return new Date(generatedAt).getTime() < new Date(day.periodEnd).getTime();
-}
-
-export function latestDayRecapPredatesClose(
-  day: ClosedDay,
-  generatedAt: string,
-  now: Date = new Date(),
-): boolean {
-  return isLatestClosedDay(day, now) && writtenBeforeDayClosed(day, generatedAt);
-}
+/** How many closed windows the first sweep after boot looks back over. */
+const BACKFILL: Record<RecapPeriod, number> = { daily: 7, weekly: 4 };
 
 // ── Service tag ──────────────────────────────────────────────────────────────
 
 type RecapSchedulerService = {
   readonly start: () => Effect.Effect<void>;
   readonly stop: () => Effect.Effect<void>;
-  /**
-   * Trigger a one-shot sweep across all repos for the given period
-   * cadence. Used by the manual "generate now" route and on boot for
-   * backfill. Idempotent against existing rows.
-   */
-  readonly checkNow: (period: RecapPeriod) => Effect.Effect<void>;
 };
 
 export class RecapScheduler extends Context.Service<RecapScheduler, RecapSchedulerService>()(
@@ -198,8 +50,6 @@ export const RecapSchedulerLive = Layer.effect(
     const { db } = yield* DbService;
     const settingsService = yield* SettingsService;
     const repoService = yield* RepositoryService;
-    const prService = yield* PullRequestService;
-    const recapService = yield* ProjectRecapService;
     const recapJobs = yield* ProjectRecapJobs;
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
@@ -208,12 +58,12 @@ export const RecapSchedulerLive = Layer.effect(
     const dailyLoop = yield* makeRestartableLoop;
     const weeklyLoop = yield* makeRestartableLoop;
 
-    // True until the first tick after boot completes. Cold-start backfills
-    // use the wider lookback; subsequent ticks only look at the current
-    // period (yesterday for daily, last week for weekly) because the
-    // scheduler ran successfully before the boundary closed.
-    const dailyBackfilledRef = yield* Ref.make(false);
-    const weeklyBackfilledRef = yield* Ref.make(false);
+    // True once a sweep has covered the backfill; later sweeps only need the
+    // window that closed last.
+    const backfilled: Record<RecapPeriod, Ref.Ref<boolean>> = {
+      daily: yield* Ref.make(false),
+      weekly: yield* Ref.make(false),
+    };
 
     const sweepPeriod = (period: RecapPeriod): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -222,96 +72,29 @@ export const RecapSchedulerLive = Layer.effect(
         );
         if (repos.length === 0) return;
 
-        const now = new Date();
-        const backfilledRef = period === "daily" ? dailyBackfilledRef : weeklyBackfilledRef;
-        const alreadyBackfilled = yield* Ref.get(backfilledRef);
-        const lookback = alreadyBackfilled
-          ? 1
-          : period === "daily"
-            ? DAILY_BACKFILL_DAYS
-            : WEEKLY_BACKFILL_WEEKS;
-
-        const candidates =
-          period === "daily"
-            ? enumerateDailyPeriods(now, lookback)
-            : enumerateWeeklyPeriods(now, lookback);
+        const lookback = (yield* Ref.get(backfilled[period])) ? 1 : BACKFILL[period];
+        const windows = closedWindows(period, new Date(), lookback);
 
         for (const repo of repos) {
-          for (const window of candidates) {
-            const existing = yield* provideDb(
-              recapService.findActiveForPeriod(repo.id, period, window.periodStart),
-            ).pipe(Effect.catch(() => Effect.succeed(null)));
-
-            // ── Daily stale-check ────────────────────────────────────────
-            if (existing && period === "daily") {
-              if (!latestDayRecapPredatesClose(window, existing.generatedAt, now)) {
-                debug(
-                  "recap-scheduler",
-                  `keep daily recap for ${repo.fullName} ${window.periodStart}`,
-                );
-                continue;
-              }
-              debug(
-                "recap-scheduler",
-                `regenerate stale daily recap for ${repo.fullName} ${window.periodStart}`,
-              );
-              yield* recapJobs
-                .regenerateForPeriod({
-                  repoId: repo.id,
-                  period,
-                  periodStart: window.periodStart,
-                  periodEnd: window.periodEnd,
-                })
-                .pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.sync(() => {
-                      logError(
-                        "recap-scheduler",
-                        `regenerateForPeriod failed for ${repo.fullName} ${period} ${window.periodStart}:`,
-                        Cause.pretty(cause),
-                      );
-                    }),
-                  ),
-                );
-              continue;
-            }
-
-            // Weekly: skip if a non-superseded row already exists.
-            if (existing) continue;
-
-            // Skip only when the window has zero archived PRs AND no open
-            // PRs. With open PRs alone we can still produce an "active
-            // work" recap; only a completely silent repo earns the gap.
-            const windowed = yield* provideDb(
-              prService.listArchivedPrsForWindow(repo.id, window.periodStart, window.periodEnd),
-            ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
-            if (windowed.length === 0) {
-              // Same window boundary the job will use, so this pre-check and
-              // `buildJobBody`'s empty-window guard agree on "non-empty".
-              const openPrs = yield* provideDb(
-                prService.listOpenPrsAsOfWindow(repo.id, window.periodEnd),
-              ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
-              if (openPrs.length === 0) continue;
-            }
-
-            debug(
-              "recap-scheduler",
-              `enqueue ${period} recap for ${repo.fullName} window ${window.periodStart}`,
-            );
+          for (const window of windows) {
             yield* recapJobs
-              .startJob({
-                repoId: repo.id,
-                period,
-                periodStart: window.periodStart,
-                periodEnd: window.periodEnd,
-                trigger: "scheduler",
-              })
+              .requestRecap({ repoId: repo.id, period, window, intent: "scheduled" })
               .pipe(
+                Effect.tap((started) =>
+                  Effect.sync(() => {
+                    if (started) {
+                      debug(
+                        "recap-scheduler",
+                        `${period} recap ${started.recapId} for ${repo.fullName} ${window.periodStart}`,
+                      );
+                    }
+                  }),
+                ),
                 Effect.catchCause((cause) =>
                   Effect.sync(() => {
                     logError(
                       "recap-scheduler",
-                      `startJob failed for ${repo.fullName} ${period} ${window.periodStart}:`,
+                      `requestRecap failed for ${repo.fullName} ${period} ${window.periodStart}:`,
                       Cause.pretty(cause),
                     );
                   }),
@@ -320,7 +103,7 @@ export const RecapSchedulerLive = Layer.effect(
           }
         }
 
-        yield* Ref.set(backfilledRef, true);
+        yield* Ref.set(backfilled[period], true);
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => {
@@ -341,13 +124,14 @@ export const RecapSchedulerLive = Layer.effect(
           const settings = yield* provideDb(settingsService.getSettings()).pipe(
             Effect.orElseSucceed(() => null),
           );
-          const enabled = recapEnabled(settings);
-          if (!enabled.recap) {
+          // Settings that can't be read leave recaps on, the default.
+          const recap = settings?.recap;
+          if (recap?.enabled === false) {
             debug("recap-scheduler", "recap disabled — not starting fibers");
             return;
           }
-          if (enabled.daily) yield* dailyLoop.start(sweepLoop("daily"));
-          if (enabled.weekly) yield* weeklyLoop.start(sweepLoop("weekly"));
+          if (recap?.dailyEnabled !== false) yield* dailyLoop.start(sweepLoop("daily"));
+          if (recap?.weeklyEnabled !== false) yield* weeklyLoop.start(sweepLoop("weekly"));
         }),
 
       stop: () =>
@@ -355,66 +139,6 @@ export const RecapSchedulerLive = Layer.effect(
           yield* dailyLoop.stop;
           yield* weeklyLoop.stop;
         }),
-
-      checkNow: (period) => sweepPeriod(period),
     };
   }),
 );
-
-// ── Settings shape probe ─────────────────────────────────────────────────────
-
-function recapEnabled(settings: unknown): {
-  recap: boolean;
-  daily: boolean;
-  weekly: boolean;
-} {
-  // Defaults to all-on. The Settings service stamps these defaults on
-  // first read, but if we somehow get a malformed settings object we
-  // still want to run.
-  const r =
-    settings && typeof settings === "object" && "recap" in settings
-      ? ((settings as { recap?: unknown }).recap as
-          | { enabled?: unknown; dailyEnabled?: unknown; weeklyEnabled?: unknown }
-          | undefined)
-      : undefined;
-  return {
-    recap: r?.enabled !== false,
-    daily: r?.dailyEnabled !== false,
-    weekly: r?.weeklyEnabled !== false,
-  };
-}
-
-// ── Period helpers exported for the routes ───────────────────────────────────
-
-/**
- * Rolling daily window for manual generation: `[today 00:00 UTC, now]`.
- * This captures "what happened today so far" rather than the fixed
- * yesterday→today window the scheduler uses.
- */
-export function manualDailyBoundaries(now: Date = new Date()): {
-  periodStart: string;
-  periodEnd: string;
-} {
-  const start = startOfUtcDay(now);
-  return {
-    periodStart: start.toISOString(),
-    periodEnd: now.toISOString(),
-  };
-}
-
-/**
- * Rolling weekly window for manual generation: `[start-of-current-ISO-week
- * 00:00 UTC, now]`. Captures "what's shipped this week so far" rather
- * than the fixed last-closed-week window the scheduler uses. ISO weeks
- * start on Monday.
- */
-export function manualWeeklyBoundaries(now: Date = new Date()): {
-  periodStart: string;
-  periodEnd: string;
-} {
-  const start = startOfUtcIsoWeek(now);
-  return {
-    periodStart: start.toISOString(),
-    periodEnd: now.toISOString(),
-  };
-}

@@ -9,16 +9,12 @@
 // so the existing tagged-error → HTTP mapping handles `RecapNotFoundError`
 // → 404, `ValidationError` → 400 etc.
 
+import { canonicalWindow } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { AppRuntime } from "../runtime";
 import { ProjectRecapService } from "../services/ProjectRecap";
 import { ProjectRecapJobs } from "../services/ProjectRecapJobs";
-import {
-  canonicalRecapBoundaries,
-  manualDailyBoundaries,
-  manualWeeklyBoundaries,
-} from "../services/RecapScheduler";
 import { handleAppError, withAuth } from "./middleware";
 import { recapStreamHandler } from "./recaps/stream";
 
@@ -91,10 +87,9 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
     }
   })
   // ─── POST /api/repos/:id/recaps/generate ───────────────────────────────
-  // Body: { period: "daily" | "weekly", periodStart?, periodEnd? }.
-  // Defaults to the most-recently-closed period for the cadence. Idempotent
-  // unless `?regenerate=true`, in which case the existing non-superseded
-  // row is superseded and a fresh job is queued.
+  // Body: { period: "daily" | "weekly", periodStart?, periodEnd? }. Without
+  // boundaries it asks for the open window so far (today / this week up to
+  // now); `?regenerate=true` reruns the window's recap rather than reusing it.
   .post(
     "/repos/:id/recaps/generate",
     async (ctx) => {
@@ -105,67 +100,20 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
           ctx.set.status = 400;
           return { error: "period must be 'daily' or 'weekly'" };
         }
-
-        // Manual daily/weekly default to a rolling "current period so far"
-        // window (today/this-week 00:00 UTC → now) rather than the fixed
-        // most-recently-closed window the scheduler uses. The caller can
-        // override by supplying an explicit periodStart/periodEnd.
-        const usingRollingWindow = body.periodStart === undefined;
-        const rolling = period === "daily" ? manualDailyBoundaries() : manualWeeklyBoundaries();
-        const periodStart = body.periodStart ?? rolling.periodStart;
-        const periodEnd = body.periodEnd ?? rolling.periodEnd;
-
-        const regenerate = ctx.query.regenerate === "true";
-
-        if (regenerate) {
-          return await AppRuntime.runPromise(
-            Effect.flatMap(ProjectRecapJobs, (jobs) =>
-              jobs.regenerateForPeriod({
-                repoId: ctx.params.id,
-                period,
-                periodStart,
-                periodEnd,
-              }),
-            ),
-          );
-        }
-
-        const existing = await AppRuntime.runPromise(
-          Effect.flatMap(ProjectRecapService, (s) =>
-            s.findActiveForPeriod(ctx.params.id, period, periodStart),
-          ),
-        );
-
-        // Rolling-window manual triggers are non-idempotent: if a recap
-        // for the current rolling window already exists, supersede it so
-        // the user always gets the freshest snapshot. Explicit-period
-        // requests stay idempotent — the caller pinned the boundaries
-        // and re-running would produce the same recap.
-        if (existing && usingRollingWindow) {
-          return await AppRuntime.runPromise(
-            Effect.flatMap(ProjectRecapJobs, (jobs) =>
-              jobs.regenerateForPeriod({
-                repoId: ctx.params.id,
-                period,
-                periodStart,
-                periodEnd,
-              }),
-            ),
-          );
-        }
-
-        if (existing) {
-          return { recapId: existing.id };
-        }
-
+        const pinned =
+          body.periodStart === undefined
+            ? undefined
+            : {
+                periodStart: body.periodStart,
+                periodEnd: body.periodEnd ?? new Date().toISOString(),
+              };
         return await AppRuntime.runPromise(
           Effect.flatMap(ProjectRecapJobs, (jobs) =>
-            jobs.startJob({
+            jobs.requestRecap({
               repoId: ctx.params.id,
               period,
-              periodStart,
-              periodEnd,
-              trigger: "manual",
+              ...(pinned ? { window: pinned } : {}),
+              intent: ctx.query.regenerate === "true" ? "regenerate" : "manual",
             }),
           ),
         );
@@ -185,37 +133,32 @@ export const recapRoutes = new Elysia({ prefix: "/api" })
     },
   )
   // ─── POST /api/recaps/:id/regenerate ───────────────────────────────────
-  // Regenerate the recap using the correct window for its period.
-  // If the recap belongs to the current rolling window (today / this week),
-  // the end boundary advances to `now` so new PRs are included. For
-  // historical recaps the canonical full-period boundaries are used.
+  // Rerun the recap over its window as it stands now: up to now while the
+  // window is open, the whole period once it has closed.
   .post("/recaps/:id/regenerate", async (ctx) => {
     try {
-      const existing = await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapService, (s) => s.getById(ctx.params.id)),
-      );
-      const boundaries = canonicalRecapBoundaries(existing.period, existing.periodStart);
       return await AppRuntime.runPromise(
-        Effect.flatMap(ProjectRecapJobs, (jobs) =>
-          jobs.regenerateForPeriod({
+        Effect.gen(function* () {
+          const existing = yield* Effect.flatMap(ProjectRecapService, (s) =>
+            s.getById(ctx.params.id),
+          );
+          const jobs = yield* ProjectRecapJobs;
+          return yield* jobs.requestRecap({
             repoId: existing.repositoryId,
             period: existing.period,
-            periodStart: boundaries.periodStart,
-            periodEnd: boundaries.periodEnd,
-          }),
-        ),
+            window: canonicalWindow(existing.period, existing.periodStart),
+            intent: "regenerate",
+          });
+        }),
       );
     } catch (e) {
       return handleAppError(e, ctx);
     }
   })
   // ─── POST /api/recaps/:id/stop ─────────────────────────────────────────
-  // Cancel an in-flight recap generation. Sets `cancelledByUser=true`,
-  // aborts the agent's AbortController, and interrupts the fiber. The
-  // `buildJobBody` cancellation branch then transitions status to
-  // 'error' with message "Cancelled by user", and broadcasts the change
-  // via SSE so other clients update. No-op if no live job is registered
-  // for this recapId (e.g. it already finished or was never started).
+  // Stop an in-flight recap generation: the row ends `stopped` and the
+  // change is broadcast so other clients update. No-op once the job has
+  // finished.
   .post("/recaps/:id/stop", async (ctx) => {
     try {
       await AppRuntime.runPromise(

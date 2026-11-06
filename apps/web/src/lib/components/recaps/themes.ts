@@ -1,33 +1,5 @@
 import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapSummaryStats } from "@revv/shared";
-
-const DAY_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
-  weekday: "short",
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "UTC",
-});
-const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-
-function dateTitle(r: ProjectRecap): string {
-  const start = new Date(r.periodStart);
-  if (r.period === "daily") return DAY_MONTH_YEAR.format(start);
-  const lastDay = new Date(new Date(r.periodEnd).getTime() - 1);
-  return `Week of ${DAY_MONTH.format(start)} – ${DAY_MONTH.format(lastDay)}`;
-}
-
-function fallbackDateTitle(p: RecapPeriod): string {
-  const now = new Date();
-  if (p === "daily") return DAY_MONTH_YEAR.format(now);
-  const dow = now.getUTCDay();
-  const daysFromMonday = (dow + 6) % 7;
-  const start = new Date(now.getTime() - daysFromMonday * 24 * 60 * 60 * 1000);
-  return `Week of ${DAY_MONTH.format(start)} – ${DAY_MONTH.format(now)}`;
-}
+import { formatRecapTitle, openSpan, recapSpan } from "./period-window";
 
 function relativeFromNow(iso: string): string {
   const t = new Date(iso).getTime();
@@ -40,6 +12,16 @@ function relativeFromNow(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
+}
+
+/** The recap lede allows `<strong>` and `<em>` only: everything else is escaped. */
+export function sanitizeLedeHtml(raw: string): string {
+  const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return escaped
+    .replace(/&lt;strong&gt;/gi, "<strong>")
+    .replace(/&lt;\/strong&gt;/gi, "</strong>")
+    .replace(/&lt;em&gt;/gi, "<em>")
+    .replace(/&lt;\/em&gt;/gi, "</em>");
 }
 
 export function formatLines(n: number): string {
@@ -123,7 +105,7 @@ export function buildRecapHeader(recap: ProjectRecap | null, period: RecapPeriod
   const themes = recap ? orderThemes(recap.entries) : [];
   return {
     eyebrow: period === "daily" ? "Daily recap" : "Weekly recap",
-    title: recap ? dateTitle(recap) : fallbackDateTitle(period),
+    title: formatRecapTitle(recap ? recapSpan(recap) : openSpan(period)),
     syncedRelative: recap ? relativeFromNow(recap.generatedAt) : null,
     stats: recap?.summaryStats ?? null,
     totalAdded: recap?.totalLinesAdded ?? 0,

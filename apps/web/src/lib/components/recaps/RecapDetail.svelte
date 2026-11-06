@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { ProjectRecap, RecapPeriod, RecapPrEntry, RecapThemeSummary } from "@revv/shared";
+import type { ProjectRecap, RecapPeriod } from "@revv/shared";
 import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
@@ -15,6 +15,7 @@ import RecapHeroBig from "./RecapHeroBig.svelte";
 import RecapSidebar from "./RecapSidebar.svelte";
 
 interface Props {
+  /** The row, with anything a running generation has streamed merged in. */
   recap: ProjectRecap | null;
   loading: boolean;
   period?: RecapPeriod | undefined;
@@ -38,54 +39,17 @@ const renderThoughtBlocks = createStreamingBlockRenderer();
 
 const effectivePeriod = $derived<RecapPeriod>(period ?? recap?.period ?? "daily");
 
-// Stream entries win on conflict so the latest add_pr_entry shows immediately.
-const mergedEntries = $derived.by<RecapPrEntry[]>(() => {
-  const map = new Map<string, RecapPrEntry>();
-  if (recap) {
-    for (const e of recap.entries) map.set(e.prId, e);
-  }
-  if (stream) {
-    for (const [prId, entry] of stream.entries) map.set(prId, entry);
-  }
-  return Array.from(map.values()).sort((a, b) => a.position - b.position);
-});
-
-// Same merge strategy for theme summaries — stream wins on conflict so a
-// fresh set_theme_summary appears immediately even before the DB roundtrip.
-const mergedThemeSummaries = $derived.by<RecapThemeSummary[]>(() => {
-  const map = new Map<string, RecapThemeSummary>();
-  if (recap) {
-    for (const s of recap.themeSummaries) map.set(s.theme, s);
-  }
-  if (stream) {
-    for (const [theme, summary] of stream.themeSummaries) map.set(theme, summary);
-  }
-  return Array.from(map.values());
-});
-
-const effectiveLede = $derived(stream?.lede || recap?.lede || "");
-
-const liveRecap = $derived<ProjectRecap | null>(
-  recap
-    ? {
-        ...recap,
-        lede: effectiveLede,
-        entries: mergedEntries,
-        themeSummaries: mergedThemeSummaries,
-      }
-    : null,
-);
+const entryCount = $derived(recap?.entries.length ?? 0);
 
 const isGenerating = $derived(recap?.status === "generating");
 const isComplete = $derived(recap?.status === "complete");
 const isError = $derived(recap?.status === "error");
+const isStopped = $derived(recap?.status === "stopped");
 const isSuperseded = $derived(recap?.status === "superseded");
 
-const hasAnyContent = $derived(effectiveLede.length > 0 || mergedEntries.length > 0);
+const hasAnyContent = $derived((recap?.lede.length ?? 0) > 0 || entryCount > 0);
 
-const isEmptyComplete = $derived(
-  !!recap && recap.status === "complete" && mergedEntries.length === 0,
-);
+const isEmptyComplete = $derived(!!recap && recap.status === "complete" && entryCount === 0);
 
 const phaseLabel = $derived(
   stream ? stream.phaseMessage || phaseMessage(stream.phase) : "Starting recap…",
@@ -153,14 +117,14 @@ function formatCompletedAt(iso: string): string {
 
     <div class="grid">
       <RecapSidebar
-        recap={liveRecap}
+        recap={recap}
         period={effectivePeriod}
         skeleton={isGenerating && !hasAnyContent}
       />
-      <RecapHeroBig recap={liveRecap} period={effectivePeriod} {archive} />
-      {#if isGenerating && hasAnyContent && liveRecap}
+      <RecapHeroBig recap={recap} period={effectivePeriod} {archive} />
+      {#if isGenerating && hasAnyContent}
         <div class="body-col">
-          <RecapBody recap={liveRecap} />
+          <RecapBody recap={recap} />
           <div class="generating-footer">
             {#if hasThoughtText}
               <ThoughtsReveal
@@ -180,24 +144,20 @@ function formatCompletedAt(iso: string): string {
         </div>
       {:else if !isGenerating}
         <div class="body-col">
-        {#if isError}
+        {#if isStopped}
           <div class="error-card">
             <WarningCircle size={16} weight="fill" aria-hidden="true" />
             <div>
-              <p class="error-title">
-                {recap.errorMessage === "Cancelled by user"
-                  ? "Generation stopped."
-                  : "Generation failed."}
-              </p>
-              <p class="error-hint">
-                {#if recap.errorMessage && recap.errorMessage !== "Cancelled by user"}
-                  {recap.errorMessage}
-                {:else if recap.errorMessage === "Cancelled by user"}
-                  Click "Resume" to keep going, or "Regenerate" to start fresh.
-                {:else}
-                  Click "Retry" to try again.
-                {/if}
-              </p>
+              <p class="error-title">Generation stopped.</p>
+              <p class="error-hint">Click "Resume" to keep going, or "Regenerate" to start fresh.</p>
+            </div>
+          </div>
+        {:else if isError}
+          <div class="error-card">
+            <WarningCircle size={16} weight="fill" aria-hidden="true" />
+            <div>
+              <p class="error-title">Generation failed.</p>
+              <p class="error-hint">{recap.errorMessage ?? 'Click "Retry" to try again.'}</p>
             </div>
           </div>
         {:else if isSuperseded}
@@ -208,8 +168,8 @@ function formatCompletedAt(iso: string): string {
           <div class="empty-card">
             <p class="empty-title">No PRs merged on this {effectivePeriod === "daily" ? "day" : "week"}.</p>
           </div>
-        {:else if isComplete && liveRecap}
-          <RecapBody recap={liveRecap} />
+        {:else if isComplete}
+          <RecapBody recap={recap} />
         {:else}
           <div class="body-callout">
             <Spinner size={16} class="motion-essential-spin" aria-hidden="true" />
@@ -222,7 +182,7 @@ function formatCompletedAt(iso: string): string {
             {#if recap.modelUsed}
               Generated by {recap.modelUsed} ·
             {/if}
-            {mergedEntries.length} entr{mergedEntries.length === 1 ? "y" : "ies"} ·
+            {entryCount} entr{entryCount === 1 ? "y" : "ies"} ·
             completed {formatCompletedAt(recap.completedAt)}
           </footer>
         {/if}

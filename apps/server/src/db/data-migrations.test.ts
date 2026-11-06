@@ -4,6 +4,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RECAP_EMPTY_WINDOW_LEDE } from "@revv/shared";
 import { EXTERNAL_AGENT_SCOPES } from "../services/ExternalIntegrations";
 import { createDb } from "./index";
 
@@ -47,6 +48,69 @@ describe("walkthrough:generate scope migration", () => {
       .query("SELECT scopes FROM external_integrations WHERE id = ?")
       .get("integration-1") as { scopes: string };
     expect(JSON.parse(row.scopes)).toEqual([...legacyScopes, "walkthrough:generate"]);
+    db.$client.close();
+  });
+});
+
+describe("recap stopped-status migration", () => {
+  const migration = readFileSync(
+    join(import.meta.dir, "migrations/0480_recap_stopped_status.sql"),
+    "utf8",
+  );
+  const EMPTY = "No archived or open PRs found for this window";
+
+  it("turns recorded stops into `stopped` and closed empty windows into quiet recaps", () => {
+    const db = createDb(":memory:");
+    const now = Date.now();
+    db.$client.run(
+      "INSERT INTO user (id, name, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["user-1", "Author", "author@example.com", 1, now, now],
+    );
+    db.$client.run(
+      "INSERT INTO account (id, account_id, provider_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["account-1", "github-user", "github:github.com", "user-1", now, now],
+    );
+    db.$client.run(
+      "INSERT INTO repositories (id, owner, name, full_name, added_at, account_id) VALUES (?, ?, ?, ?, ?, ?)",
+      ["repo-1", "acme", "web", "acme/web", new Date(now).toISOString(), "account-1"],
+    );
+    const today = new Date(now).toISOString();
+    const insert = (id: string, period: string, start: string, message: string | null) =>
+      db.$client.run(
+        `INSERT INTO project_recaps
+          (id, repository_id, period, period_start, period_end, status, generated_at, error_message)
+         VALUES (?, 'repo-1', ?, ?, ?, 'error', ?, ?)`,
+        [id, period, start, start, start, message],
+      );
+    insert("stopped", "daily", "2026-06-03T00:00:00.000Z", "Cancelled by user");
+    insert("quiet-day", "daily", "2026-06-03T00:00:00.000Z", EMPTY);
+    insert("quiet-week", "weekly", "2026-06-01T00:00:00.000Z", EMPTY);
+    insert("open-day", "daily", today, EMPTY);
+    insert("failed", "daily", "2026-06-03T00:00:00.000Z", "Agent crashed");
+
+    db.$client.run(migration);
+    db.$client.run(migration);
+
+    const rows = new Map(
+      (
+        db.$client.query("SELECT id, status, error_message, lede FROM project_recaps").all() as {
+          id: string;
+          status: string;
+          error_message: string | null;
+          lede: string;
+        }[]
+      ).map((r) => [r.id, r]),
+    );
+    expect(rows.get("stopped")).toMatchObject({ status: "stopped", error_message: null });
+    for (const id of ["quiet-day", "quiet-week"]) {
+      expect(rows.get(id)).toMatchObject({
+        status: "complete",
+        error_message: null,
+        lede: RECAP_EMPTY_WINDOW_LEDE,
+      });
+    }
+    expect(rows.get("open-day")).toMatchObject({ status: "error", error_message: EMPTY });
+    expect(rows.get("failed")).toMatchObject({ status: "error", error_message: "Agent crashed" });
     db.$client.close();
   });
 });

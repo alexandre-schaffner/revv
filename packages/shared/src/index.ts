@@ -24,6 +24,7 @@ export * from "./pr-deep-link";
 export * from "./prlens";
 export * from "./pull-requests";
 export * from "./recap";
+export * from "./recap-period";
 export * from "./repo-activity";
 export * from "./review";
 export * from "./settings-update";

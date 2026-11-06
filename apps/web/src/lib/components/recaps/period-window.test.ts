@@ -2,18 +2,22 @@ import { describe, expect, it } from "bun:test";
 import {
   addUtcDays,
   dayKeyToUtcDate,
-  formatPeriod,
+  formatRecapRange,
+  formatRecapTitle,
   isCurrentPeriod,
   mondayKeyOf,
   monthGrid,
   monthGridRange,
   monthKeyOf,
+  openSpan,
   pickLatestByWindow,
   recapSlotKey,
+  recapSpan,
   recapWindowIsStale,
   selectionBoundaries,
   shiftMonth,
   slotKeyFor,
+  slotSpan,
   utcDayKey,
 } from "./period-window";
 
@@ -320,24 +324,36 @@ describe("pickLatestByWindow", () => {
   });
 });
 
-describe("formatPeriod", () => {
-  it("labels a daily window with its single UTC day", () => {
-    expect(
-      formatPeriod({
-        period: "daily",
-        periodStart: "2026-06-03T00:00:00.000Z",
-        periodEnd: "2026-06-04T00:00:00.000Z",
-      }),
-    ).toBe("Wed, 03 Jun 2026");
+describe("recap labels", () => {
+  const day = {
+    period: "daily",
+    periodStart: "2026-06-03T00:00:00.000Z",
+    periodEnd: "2026-06-04T00:00:00.000Z",
+  } as const;
+  const week = {
+    period: "weekly",
+    periodStart: "2026-06-01T00:00:00.000Z",
+    periodEnd: "2026-06-08T00:00:00.000Z",
+  } as const;
+
+  it("names a daily window by its single UTC day", () => {
+    expect(formatRecapTitle(recapSpan(day))).toBe("Wed, 03 Jun 2026");
+    expect(formatRecapRange(recapSpan(day))).toBe("Wed, 03 Jun 2026");
   });
 
-  it("labels a weekly window with its last day, not its exclusive end", () => {
-    expect(
-      formatPeriod({
-        period: "weekly",
-        periodStart: "2026-06-01T00:00:00.000Z",
-        periodEnd: "2026-06-08T00:00:00.000Z",
-      }),
-    ).toBe("01 Jun → 07 Jun UTC");
+  it("names a weekly window by its last day, not its exclusive end", () => {
+    expect(formatRecapTitle(recapSpan(week))).toBe("Week of 01 Jun – 07 Jun");
+    expect(formatRecapRange(recapSpan(week))).toBe("01 Jun → 07 Jun");
+  });
+
+  it("labels an empty slot the way its recap will be labelled", () => {
+    expect(formatRecapTitle(slotSpan("weekly", "2026-06-04"))).toBe(
+      formatRecapTitle(recapSpan(week)),
+    );
+  });
+
+  it("names the open week up to today", () => {
+    const now = new Date("2026-06-04T09:30:00.000Z");
+    expect(formatRecapRange(openSpan("weekly", now))).toBe("01 Jun → 04 Jun");
   });
 });

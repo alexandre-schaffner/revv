@@ -5,8 +5,10 @@
 //   • Single-phase MCP-routed pipeline (one atomic write per recap).
 //   • No worktrees, no continuations, no SSE streaming. Status-only SSE
 //     broadcasts; the recap UI re-fetches the row when needed.
-//   • Per-(repoId, period, periodStart) mutex so concurrent claim paths
-//     can't fork duplicate fibers.
+//   • `requestRecap` owns the create / reuse / rerun decision for a window
+//     (one active recap per (repoId, period, periodStart)), serialized per
+//     window; `startJob` is serialized per recap so attach paths can't fork
+//     duplicate fibers.
 //   • Bounded retries via `resume_attempts`. Boot resume re-runs the agent
 //     from scratch — recap is single-phase so partial state is just the
 //     row at `status='generating'` with empty content, which is
@@ -16,8 +18,14 @@
 // service is the sole writer. Content writes go through the recap MCP tool
 // handlers in `ai/providers/recap-tools/`.
 
-import type { ProjectRecap, RecapPeriod, RecapStreamEvent } from "@revv/shared";
-import { resolveThinkingEffort } from "@revv/shared";
+import type {
+  ProjectRecap,
+  ProjectRecapStatus,
+  RecapPeriod,
+  RecapStreamEvent,
+  RecapWindowBounds,
+} from "@revv/shared";
+import { resolveThinkingEffort, rollingWindow, windowIsCurrent } from "@revv/shared";
 import { sql } from "drizzle-orm";
 import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
 import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
@@ -47,7 +55,7 @@ import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers
 import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
-import { windowIsCurrent } from "./RecapScheduler";
+import { planRecapRequest, type RecapIntent } from "./recap-request";
 import {
   attachRecapDigests,
   buildDigestForRecapPr,
@@ -95,16 +103,21 @@ interface ActiveRecapJob {
   nextSeq: number;
 }
 
-export type StartRecapJobTrigger = "scheduler" | "manual" | "resume";
-
+/** An existing row to run (or attach to, when its job is already running). */
 export interface StartRecapJobParams {
+  readonly recapId: string;
   readonly repoId: string;
   readonly period: RecapPeriod;
   readonly periodStart: string;
   readonly periodEnd: string;
-  readonly trigger: StartRecapJobTrigger;
-  /** Caller-provided id when resuming an existing row. */
-  readonly recapId?: string;
+}
+
+export interface RecapRequest {
+  readonly repoId: string;
+  readonly period: RecapPeriod;
+  /** Omitted: the open window, up to now. */
+  readonly window?: RecapWindowBounds;
+  readonly intent: RecapIntent;
 }
 
 export type StartRecapJobError = ValidationError | RecapError;
@@ -126,25 +139,19 @@ export type SubscribeResult =
 export class ProjectRecapJobs extends Context.Service<
   ProjectRecapJobs,
   {
-    /**
-     * Start (or attach to) a recap job for a given (repo, period, periodStart).
-     * Idempotent: per-(repo, period, periodStart) mutex prevents duplicate
-     * fibers. Resume callers pass `recapId` so the existing row is reused.
-     */
+    /** Run an existing row's job, or attach to it when it is already running. */
     readonly startJob: (
       params: StartRecapJobParams,
     ) => Effect.Effect<{ readonly recapId: string }, StartRecapJobError>;
 
     /**
-     * Regenerate the recap for a period: mark the existing non-superseded
-     * row 'superseded' and queue a fresh row. Returns the new id.
+     * Ask for the recap of a window: create it, reuse the one there, or rerun
+     * that one in place (see `planRecapRequest`). Null when a scheduled
+     * request finds a window with no pull-request activity, which gets no row.
      */
-    readonly regenerateForPeriod: (params: {
-      readonly repoId: string;
-      readonly period: RecapPeriod;
-      readonly periodStart: string;
-      readonly periodEnd: string;
-    }) => Effect.Effect<{ readonly recapId: string }, StartRecapJobError>;
+    readonly requestRecap: (
+      request: RecapRequest,
+    ) => Effect.Effect<{ readonly recapId: string } | null, StartRecapJobError>;
 
     readonly cancel: (recapId: string) => Effect.Effect<void>;
 
@@ -240,7 +247,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     // ── Status chokepoint (CLAUDE.md invariant #11) ─────────────────────
     const setStatus = (
       recap: { id: string; repositoryId: string; period: RecapPeriod },
-      status: "generating" | "complete" | "error" | "superseded",
+      status: ProjectRecapStatus,
       options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -859,17 +866,14 @@ export const ProjectRecapJobsLive = Layer.effect(
         if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
 
         if (job.cancelledByUser) {
-          const msg = "Cancelled by user";
-          debug("recap-jobs", "job cancelled by user — leaving row for cleanup");
-          emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
+          emit({ type: "stopped", data: { recapId: job.recapId } });
           yield* setStatus(
             {
               id: job.recapId,
               repositoryId: job.repoId,
               period: job.period,
             },
-            "error",
-            { errorMessage: msg },
+            "stopped",
           );
           return;
         }
@@ -935,31 +939,23 @@ export const ProjectRecapJobsLive = Layer.effect(
                   // row 'generating' so resume-on-boot can pick it up.
                   return;
                 }
-                // A real failure, or a user-driven Stop. Transition the row to
-                // 'error' so the UI doesn't get stuck on 'generating'. (A Stop
-                // may interrupt during DB read / bundle prep, before the
-                // agent's AbortController could catch — this catch-all still
-                // flips the row.)
-                const interruptedOnly = Cause.hasInterruptsOnly(cause);
-                const msg = interruptedOnly
-                  ? "Cancelled by user"
-                  : `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
-                if (!interruptedOnly) {
-                  logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
+                // A user-driven Stop, or a real failure. Either way the row
+                // leaves 'generating' so the UI doesn't get stuck on it. (A
+                // Stop may interrupt during DB read / bundle prep, before the
+                // agent's AbortController could catch it.)
+                const recap = { id: job.recapId, repositoryId: job.repoId, period: job.period };
+                if (Cause.hasInterruptsOnly(cause)) {
+                  fanOut(job, { type: "stopped", data: { recapId: job.recapId } });
+                  yield* setStatus(recap, "stopped");
+                  return;
                 }
+                logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
+                const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
                 fanOut(job, {
                   type: "error",
                   data: { code: "RecapGenerationError", message: msg },
                 });
-                yield* setStatus(
-                  {
-                    id: job.recapId,
-                    repositoryId: job.repoId,
-                    period: job.period,
-                  },
-                  "error",
-                  { errorMessage: msg },
-                );
+                yield* setStatus(recap, "error", { errorMessage: msg });
               }),
             ),
             Effect.ensuring(removeJob(job)),
@@ -1016,7 +1012,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         //       managed to setStatus before Fiber.interrupt resolved.
         //
         // Either way, read the row's current status and force the
-        // 'generating' → 'error' transition via the chokepoint here
+        // 'generating' → 'stopped' transition via the chokepoint here
         // (idempotent — UPDATE with the same status is harmless). This
         // is what guarantees the UI's SSE reducer flips the floating bar
         // out of the Stop state after the user clicks Stop.
@@ -1030,8 +1026,7 @@ export const ProjectRecapJobsLive = Layer.effect(
               repositoryId: row.repositoryId,
               period: row.period,
             },
-            "error",
-            { errorMessage: "Cancelled by user" },
+            "stopped",
           );
         }
       });
@@ -1040,32 +1035,10 @@ export const ProjectRecapJobsLive = Layer.effect(
       params: StartRecapJobParams,
     ): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
       Effect.gen(function* () {
-        const mutexKey = `${params.repoId}:${params.period}:${params.periodStart}`;
-        const mutex = yield* startJobMutex.acquire(mutexKey);
+        const { recapId } = params;
+        const mutex = yield* startJobMutex.acquire(`recap:${recapId}`);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
-            // Resume path: caller passed an existing row id. Re-run the
-            // agent against that row. No createPartial — the row already
-            // exists and we'll write into it.
-            let recapId = params.recapId;
-            if (!recapId) {
-              const created = yield* provideDb(
-                recapService.createPartial({
-                  repositoryId: params.repoId,
-                  period: params.period,
-                  periodStart: params.periodStart,
-                  periodEnd: params.periodEnd,
-                }),
-              );
-              recapId = created.id;
-              // Announce the new row immediately so the UI can show a
-              // "generating" placeholder.
-              yield* broadcastRecapToRepoAccount(params.repoId, {
-                type: "recap:added",
-                data: { recap: created },
-              });
-            }
-
             // Already running? Reuse, unless the old job was cancelled
             // or aborted and hasn't cleaned up from the registry yet.
             const existing = (yield* Ref.get(registry)).get(recapId);
@@ -1119,80 +1092,80 @@ export const ProjectRecapJobsLive = Layer.effect(
         return { kind: "delivered", seq };
       });
 
-    const regenerateForPeriod = (params: {
-      readonly repoId: string;
-      readonly period: RecapPeriod;
-      readonly periodStart: string;
-      readonly periodEnd: string;
-    }): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
+    /**
+     * The window has no pull request that closed in it or was open as it
+     * closed, as far as the local mirror knows. Same window boundary as
+     * `buildJobBody`'s empty-window guard, so the two agree.
+     */
+    const windowIsSilent = (repoId: string, window: RecapWindowBounds): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        // "Max 1 active recap per (repo, period, periodStart)" rule:
-        // if a row already exists for this window, reset it in place
-        // instead of creating a new one + superseding the old.
-        const existing = yield* provideDb(
-          recapService.findActiveForPeriod(params.repoId, params.period, params.periodStart),
-        ).pipe(Effect.catch(() => Effect.succeed(null)));
+        const archived = yield* provideDb(
+          prService.listArchivedPrsForWindow(repoId, window.periodStart, window.periodEnd),
+        ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
+        if (archived.length > 0) return false;
+        const open = yield* provideDb(
+          prService.listOpenPrsAsOfWindow(repoId, window.periodEnd),
+        ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
+        return open.length === 0;
+      });
 
-        if (existing) {
-          // Cancel any in-flight fiber for this recap before resetting
-          // the row — otherwise the running fiber would race the reset
-          // and clobber the cleared fields.
-          yield* cancel(existing.id);
-
-          yield* provideDb(
-            recapService.resetForRerun(existing.id, {
-              periodStart: params.periodStart,
-              periodEnd: params.periodEnd,
-            }),
-          );
-
-          // Re-broadcast the row so the UI swaps it back to the
-          // "generating" state. The reducer matches on id and replaces
-          // the existing entry in place — `completedAt`/`errorMessage`
-          // get cleared, `generatedAt` advances. We re-read the row so
-          // the payload reflects the post-reset state.
-          const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(
-            Effect.catch(() => Effect.succeed(null)),
-          );
-          if (refreshed) {
-            yield* broadcastRecapToRepoAccount(params.repoId, {
-              type: "recap:added",
-              data: { recap: refreshed },
+    const requestRecap = (
+      request: RecapRequest,
+    ): Effect.Effect<{ readonly recapId: string } | null, StartRecapJobError> =>
+      Effect.gen(function* () {
+        const now = new Date();
+        const window = request.window ?? rollingWindow(request.period, now);
+        const { repoId, period } = request;
+        const mutex = yield* startJobMutex.acquire(
+          `window:${repoId}:${period}:${window.periodStart}`,
+        );
+        return yield* mutex.withPermits(1)(
+          Effect.gen(function* () {
+            const existing = yield* provideDb(
+              recapService.findActiveForPeriod(repoId, period, window.periodStart),
+            ).pipe(Effect.catch(() => Effect.succeed(null)));
+            const plan = planRecapRequest({
+              intent: request.intent,
+              period,
+              window,
+              rolling: request.window === undefined,
+              existing,
+              now,
             });
-          }
 
-          return yield* startJob({
-            recapId: existing.id,
-            repoId: params.repoId,
-            period: params.period,
-            periodStart: params.periodStart,
-            periodEnd: params.periodEnd,
-            trigger: "manual",
-          });
-        }
+            if (existing && plan === "reuse") return { recapId: existing.id };
 
-        // No existing row — create a fresh one and start.
-        const newRow = yield* provideDb(
-          recapService.createPartial({
-            repositoryId: params.repoId,
-            period: params.period,
-            periodStart: params.periodStart,
-            periodEnd: params.periodEnd,
+            if (existing && plan === "rerun") {
+              // Stop any fiber still writing into the row before resetting it.
+              yield* cancel(existing.id);
+              yield* provideDb(recapService.resetForRerun(existing.id, window));
+              const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (refreshed) {
+                yield* broadcastRecapToRepoAccount(repoId, {
+                  type: "recap:added",
+                  data: { recap: refreshed },
+                });
+              }
+              return yield* startJob({ recapId: existing.id, repoId, period, ...window });
+            }
+
+            // A quiet window the user didn't ask for leaves a gap in the
+            // list rather than a "nothing to report" recap.
+            if (request.intent === "scheduled" && (yield* windowIsSilent(repoId, window))) {
+              return null;
+            }
+            const created = yield* provideDb(
+              recapService.createPartial({ repositoryId: repoId, period, ...window }),
+            );
+            yield* broadcastRecapToRepoAccount(repoId, {
+              type: "recap:added",
+              data: { recap: created },
+            });
+            return yield* startJob({ recapId: created.id, repoId, period, ...window });
           }),
         );
-        yield* broadcastRecapToRepoAccount(params.repoId, {
-          type: "recap:added",
-          data: { recap: newRow },
-        });
-
-        return yield* startJob({
-          recapId: newRow.id,
-          repoId: params.repoId,
-          period: params.period,
-          periodStart: params.periodStart,
-          periodEnd: params.periodEnd,
-          trigger: "manual",
-        });
       });
 
     const resumePending = (): Effect.Effect<void> =>
@@ -1223,7 +1196,6 @@ export const ProjectRecapJobsLive = Layer.effect(
               period: row.period,
               periodStart: row.periodStart,
               periodEnd: row.periodEnd,
-              trigger: "resume",
             }).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
@@ -1241,7 +1213,7 @@ export const ProjectRecapJobsLive = Layer.effect(
 
     return {
       startJob,
-      regenerateForPeriod,
+      requestRecap,
       cancel,
       resumePending,
       subscribe,
