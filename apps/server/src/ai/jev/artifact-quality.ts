@@ -10,7 +10,6 @@ import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import type { JevState } from "../../services/Jev";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
 
 /** Timeout budget; short because it sits on the write path and a slow answer accepts the block. */
@@ -53,14 +52,8 @@ const CLAUSE_LABELS: Record<keyof typeof CLAUSES, string> = {
 export function judgeArtifact(
   html: string,
   context: { readonly chapterTitle: string; readonly annotation: string | null },
-): Effect.Effect<ArtifactVerdict, never, JevService | SettingsService> {
+): Effect.Effect<ArtifactVerdict, never, JevService> {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings();
-    if (!settings.jev.enabled) {
-      return { failed: [], reject: false };
-    }
-
     const state: JevState = {
       chapter: context.chapterTitle,
       annotation: context.annotation,

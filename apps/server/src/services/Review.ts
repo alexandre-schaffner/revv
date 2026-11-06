@@ -178,7 +178,7 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type ThreadRow = typeof commentThreads.$inferSelect;
 type MessageRow = typeof threadMessages.$inferSelect;
 
-function toThread(row: ThreadRow): CommentThread {
+export function toThread(row: ThreadRow): CommentThread {
   return {
     id: row.id,
     reviewSessionId: row.reviewSessionId,
@@ -195,7 +195,7 @@ function toThread(row: ThreadRow): CommentThread {
   };
 }
 
-function toMessage(row: MessageRow, avatarContent: string | null): ThreadMessage {
+export function toMessage(row: MessageRow, avatarContent: string | null): ThreadMessage {
   return {
     id: row.id,
     threadId: row.threadId,

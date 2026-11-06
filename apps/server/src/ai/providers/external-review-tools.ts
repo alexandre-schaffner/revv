@@ -15,23 +15,21 @@ import { threadMessages } from "../../db/schema/thread-messages";
 import { walkthroughIssues } from "../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../db/schema/walkthroughs";
 import { type ExternalAgentScope, SHA_PATTERN } from "../../services/ExternalIntegrations";
+import {
+  decodeIssue,
+  decodeStringArray,
+  latestCompleteWalkthrough,
+} from "../../services/walkthrough/content";
 import type {
   WalkthroughRequestOutcome,
   WalkthroughRequestRefusal,
 } from "../../services/walkthrough-request";
-import {
-  assertStillComplete,
-  decodeIssue,
-  fail,
-  ok,
-  resolveActiveWalkthroughId,
-  stampLastEdited,
-} from "./chat-edit-tools/helpers";
-import type { ChatToolContext, ChatToolResult, ChatToolSpec } from "./chat-mcp-tools";
+import { fail, ok, runChatEdit } from "./chat-edit-tools/helpers";
+import type { ChatWalkthroughEditContext } from "./chat-edit-tools/spec";
 import { CHAT_TOOL_SPECS } from "./chat-mcp-tools";
-import type { ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
+import type { McpToolResult, ToolSpec, ToolSpecBundle } from "./mcp-tool-gateway";
 
-export interface ExternalReviewToolContext extends ChatToolContext {
+export interface ExternalReviewToolContext extends ChatWalkthroughEditContext {
   readonly integrationId: string;
   /** Which external agent is calling; stamped on every write it authors. */
   readonly provider: ExternalAgentProvider;
@@ -49,22 +47,14 @@ export interface ExternalReviewToolContext extends ChatToolContext {
   readonly walkthroughPollMs?: number;
 }
 
-export type ExternalReviewToolSpec = ToolSpec<ExternalReviewToolContext, ChatToolResult> & {
+export type ExternalReviewToolSpec = ToolSpec<ExternalReviewToolContext, McpToolResult> & {
   readonly scope: ExternalAgentScope;
 };
 
 function sharedExternalSpec(name: string, scope: ExternalAgentScope): ExternalReviewToolSpec {
-  const spec: ChatToolSpec | undefined = CHAT_TOOL_SPECS.find(
-    (candidate) => candidate.name === name,
-  );
+  const spec = CHAT_TOOL_SPECS.find((candidate) => candidate.name === name);
   if (!spec) throw new Error(`Missing shared chat tool '${name}'.`);
-  return {
-    name: spec.name,
-    description: spec.description,
-    inputSchema: spec.inputSchema,
-    handler: (ctx, input) => spec.handler(ctx, input),
-    scope,
-  };
+  return { ...spec, scope };
 }
 
 /** Normalized to lowercase so it compares equal to the SHAs Revv stores. */
@@ -100,24 +90,11 @@ const recordIssueResolutionSpec: ExternalReviewToolSpec = {
   scope: "issues:resolve",
   handler: async (ctx, input) => {
     const parsed = recordIssueResolutionSchema.parse(input);
-    const active = resolveActiveWalkthroughId(ctx.db, ctx.prId);
-    if (active?.prHeadSha === null || active?.prHeadSha === undefined) {
-      return fail("No completed walkthrough is available for this PR.");
-    }
-    if (parsed.expected_head_sha !== active.prHeadSha) {
-      return fail(
-        `Stale review context: expected reviewed head ${parsed.expected_head_sha}, current walkthrough head ${active.prHeadSha}. Call get_review_context again.`,
-      );
-    }
-
-    let result: ChatToolResult | null = null;
-    let eventIssue: ReturnType<typeof decodeIssue> | null = null;
-    let unchanged = false;
-    ctx.db.transaction(() => {
-      const guarded = assertStillComplete(ctx.db, active.id);
-      if ("error" in guarded) {
-        result = fail(guarded.error);
-        return;
+    return runChatEdit(ctx, (wt) => {
+      if (parsed.expected_head_sha !== wt.prHeadSha) {
+        return {
+          refused: `Stale review context: expected reviewed head ${parsed.expected_head_sha}, current walkthrough head ${wt.prHeadSha}. Call get_review_context again.`,
+        };
       }
       const issue = ctx.db
         .select()
@@ -125,80 +102,55 @@ const recordIssueResolutionSpec: ExternalReviewToolSpec = {
         .where(
           and(
             eq(walkthroughIssues.id, parsed.issue_id),
-            eq(walkthroughIssues.walkthroughId, active.id),
+            eq(walkthroughIssues.walkthroughId, wt.id),
           ),
         )
         .get();
       if (!issue) {
-        result = fail(`Issue '${parsed.issue_id}' does not exist in the active walkthrough.`);
-        return;
+        return { refused: `Issue '${parsed.issue_id}' does not exist in the active walkthrough.` };
       }
       if (issue.submittedAt !== null) {
-        result = fail(
-          `Issue '${issue.title}' was submitted to GitHub and is immutable. Address and resolve its linked comment thread instead.`,
-        );
-        return;
+        return {
+          refused: `Issue '${issue.title}' was submitted to GitHub and is immutable. Address and resolve its linked comment thread instead.`,
+        };
       }
 
       const evidence = parsed.status === "open" ? [] : canonicalEvidence(parsed.evidence);
       const explanation = parsed.status === "open" ? null : parsed.explanation;
       const resolvingCommitSha = parsed.status === "open" ? null : parsed.resolving_commit_sha;
-      let existingEvidence: string[] = [];
-      try {
-        const decoded: unknown = JSON.parse(issue.resolutionEvidence);
-        if (Array.isArray(decoded)) existingEvidence = canonicalEvidence(decoded.filter(isString));
-      } catch {
-        // A rewrite below repairs corrupt metadata.
-      }
-      unchanged =
+      if (
         issue.resolutionStatus === parsed.status &&
         issue.resolutionExplanation === explanation &&
-        JSON.stringify(existingEvidence) === JSON.stringify(evidence) &&
-        issue.resolvingCommitSha === resolvingCommitSha;
-      if (unchanged) {
-        eventIssue = decodeIssue(issue);
-        return;
+        JSON.stringify(canonicalEvidence(decodeStringArray(issue.resolutionEvidence))) ===
+          JSON.stringify(evidence) &&
+        issue.resolvingCommitSha === resolvingCommitSha
+      ) {
+        return {
+          unchanged: true,
+          message: `Issue ${parsed.issue_id} already has that resolution.`,
+        };
       }
 
-      const resolvedAt = parsed.status === "open" ? null : new Date().toISOString();
-      const resolvedBy = parsed.status === "open" ? null : ctx.provider;
-      ctx.db
-        .update(walkthroughIssues)
-        .set({
-          resolutionStatus: parsed.status,
-          resolutionExplanation: explanation,
-          resolutionEvidence: JSON.stringify(evidence),
-          resolvingCommitSha,
-          resolvedAt,
-          resolvedBy,
-        })
-        .where(eq(walkthroughIssues.id, issue.id))
-        .run();
-      stampLastEdited(ctx.db, active.id, ctx.actor);
-      eventIssue = decodeIssue({
-        ...issue,
+      const resolution = {
         resolutionStatus: parsed.status,
         resolutionExplanation: explanation,
         resolutionEvidence: JSON.stringify(evidence),
         resolvingCommitSha,
-        resolvedAt,
-        resolvedBy,
-      });
+        resolvedAt: parsed.status === "open" ? null : new Date().toISOString(),
+        resolvedBy: parsed.status === "open" ? null : ctx.provider,
+      };
+      ctx.db
+        .update(walkthroughIssues)
+        .set(resolution)
+        .where(eq(walkthroughIssues.id, issue.id))
+        .run();
+      return {
+        message: `Issue ${parsed.issue_id} is now ${parsed.status}.`,
+        events: [{ type: "issue", data: decodeIssue({ ...issue, ...resolution }) }],
+      };
     });
-    if (result) return result;
-    if (!eventIssue) return fail("Issue resolution was not persisted.");
-    if (!unchanged) ctx.emit(active.id, { type: "issue", data: eventIssue });
-    return ok(
-      unchanged
-        ? `Issue ${parsed.issue_id} already has that resolution.`
-        : `Issue ${parsed.issue_id} is now ${parsed.status}.`,
-    );
   },
 };
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
 
 function threadForPr(ctx: ExternalReviewToolContext, threadId: string) {
   return ctx.db
@@ -233,8 +185,7 @@ const replyToCommentSpec: ExternalReviewToolSpec = {
   scope: "comments:write",
   handler: async (ctx, input) => {
     const parsed = replyToCommentSchema.parse(input);
-    const reviewedHeadSha =
-      resolveActiveWalkthroughId(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
+    const reviewedHeadSha = latestCompleteWalkthrough(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
     if (reviewedHeadSha === null || parsed.expected_head_sha !== reviewedHeadSha) {
       return fail("The PR head changed. Refresh review context before replying.");
     }
@@ -337,8 +288,7 @@ const updateCommentStatusSpec: ExternalReviewToolSpec = {
   scope: "comments:write",
   handler: async (ctx, input) => {
     const parsed = updateCommentStatusSchema.parse(input);
-    const reviewedHeadSha =
-      resolveActiveWalkthroughId(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
+    const reviewedHeadSha = latestCompleteWalkthrough(ctx.db, ctx.prId)?.prHeadSha ?? ctx.prHeadSha;
     if (reviewedHeadSha === null || parsed.expected_head_sha !== reviewedHeadSha) {
       return fail("The PR head changed. Refresh review context before changing thread status.");
     }
@@ -544,14 +494,12 @@ export const EXTERNAL_REVIEW_TOOL_SPECS: ReadonlyArray<ExternalReviewToolSpec> =
   waitForWalkthroughSpec,
 ];
 
-export const EXTERNAL_REVIEW_TOOL_BUNDLE: ToolSpecBundle<
-  ExternalReviewToolContext,
-  ChatToolResult
-> = {
-  name: "revv-review",
-  version: "1.0.0",
-  specs: EXTERNAL_REVIEW_TOOL_SPECS,
-};
+export const EXTERNAL_REVIEW_TOOL_BUNDLE: ToolSpecBundle<ExternalReviewToolContext, McpToolResult> =
+  {
+    name: "revv-review",
+    version: "1.0.0",
+    specs: EXTERNAL_REVIEW_TOOL_SPECS,
+  };
 
 export function scopeForExternalTool(name: string): ExternalAgentScope | null {
   return EXTERNAL_REVIEW_TOOL_SPECS.find((spec) => spec.name === name)?.scope ?? null;

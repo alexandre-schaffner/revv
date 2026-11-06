@@ -105,7 +105,7 @@ function context(
     provider,
     providerName: EXTERNAL_AGENT_PROVIDER_NAMES[provider],
     integrationId: "integration-1",
-    emit: (_walkthroughId, event) => walkthroughEvents.push(event),
+    publishEdit: (_walkthroughId, events) => walkthroughEvents.push(...events),
     broadcastThreadEvent: (event) => threadEvents.push(event),
     pushReply: async (messageId) => {
       pushedReplies.push(messageId);

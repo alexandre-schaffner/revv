@@ -3,19 +3,16 @@
 // The agent's verdict on one first-pass lead. The lead row was recorded by
 // the orchestrator before the prompt went out; this writes only its verdict
 // columns, keyed on (walkthrough_id, lead_key), so a replay is a no-op.
-//
-// Phase precondition: the overview is set (last_completed_phase ≠ 'none').
-// Later phases are allowed on purpose — `complete_walkthrough` is where an
-// unresolved lead is first refused, and a rejection needs no Phase-B write.
 
-import type { WalkthroughLead, WalkthroughPipelinePhase } from "@revv/shared";
+import type { WalkthroughLead } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughLeads } from "../../../db/schema/walkthrough-leads";
 import { readWalkthroughLead, readWalkthroughLeads } from "../../../services/walkthrough-leads";
 import { decodePlainText } from "../agent-text";
-import { errorResult, loadWalkthroughRow, okResult } from "./helpers";
+import { errorResult, okResult } from "./helpers";
+import { openForWrite } from "./phases";
 import type { ResolveLeadInput, WalkthroughToolHandler, WalkthroughToolResult } from "./spec";
 
 /** Leads this walkthrough's agent was handed and hasn't resolved, in prompt order. */
@@ -40,16 +37,8 @@ export const resolveLeadHandler: WalkthroughToolHandler<ResolveLeadInput> = asyn
       result: WalkthroughToolResult;
       event?: WalkthroughLead;
     } => {
-      const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-      if (!row) return { result: errorResult(`Walkthrough ${ctx.walkthroughId} not found.`) };
-      const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-      if (phase === "none") {
-        return {
-          result: errorResult(
-            "Error: resolve_lead requires the overview (Phase A). Call set_overview first.",
-          ),
-        };
-      }
+      const open = openForWrite(ctx.db, ctx.walkthroughId, "resolve_lead");
+      if ("refusal" in open) return { result: open.refusal };
       const lead = readWalkthroughLead(ctx.db, ctx.walkthroughId, input.lead_id);
       if (!lead) {
         return {

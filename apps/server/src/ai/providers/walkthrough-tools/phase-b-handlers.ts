@@ -1,130 +1,52 @@
 // ─── walkthrough-phase-b-handlers ────────────────────────────────────────────
 //
-// Phase B MCP tool handlers: add_semantic_step, add_diff_step, flag_issue,
-// and add_issue_comment. These are the bulk of the walkthrough pipeline and
-// handle chapter declaration, block persistence, issue flagging, and inline
-// comment creation.
+// Phase B: chapters, blocks, issues and their inline comments.
 
 import type {
   CommentThread,
   ThreadMessage,
   WalkthroughBlock,
   WalkthroughIssue,
-  WalkthroughPipelinePhase,
   WalkthroughSemanticStep,
 } from "@revv/shared";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../../db";
-import { commentThreads } from "../../../db/schema/comment-threads";
-import { threadMessages } from "../../../db/schema/thread-messages";
-import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semantic-steps";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
-import { decodeWalkthroughIssue, isSameResolvedFinding } from "../../../services/walkthrough-issue";
+import {
+  decodeIssue,
+  issueId as deriveIssueId,
+  isSameResolvedFinding,
+  renderUnknownBlockRefs,
+  resolveBlockRefs,
+  semanticStepId,
+  upsertIssueComment,
+} from "../../../services/walkthrough/content";
 import { renderArtifactRejection } from "../../jev/artifact-quality";
 import { decodePlainText } from "../agent-text";
 import {
-  type BlockVariantInput,
   blockContentError,
-  blockRow,
   blockVariantCount,
-  buildBlock,
   withArtifactWarnings,
+  writeBlock,
 } from "../walkthrough-blocks";
-import {
-  blockIdFor,
-  errorResult,
-  loadWalkthroughRow,
-  okResult,
-  phaseAtLeast,
-  phaseAtMost,
-} from "./helpers";
-import {
-  type AddDiffStepInput,
-  type AddIssueCommentInput,
-  type AddSemanticStepInput,
-  computeAnchorThreadId,
-  computeIssueId,
-  type FlagIssueInput,
-  type WalkthroughToolHandler,
-  type WalkthroughToolResult,
+import { errorResult, okResult } from "./helpers";
+import { openForWrite } from "./phases";
+import type {
+  AddDiffStepInput,
+  AddIssueCommentInput,
+  AddSemanticStepInput,
+  FlagIssueInput,
+  WalkthroughToolHandler,
+  WalkthroughToolResult,
 } from "./spec";
-
-// ── Block persistence helper ─────────────────────────────────────────────────
-//
-// Shared by addSemanticStepHandler (step_index=0 initial block) and
-// addDiffStepHandler (subsequent blocks). The typed-block construction and
-// variant validation live in `../walkthrough-blocks` so the generation path
-// and the chat-edit path stay byte-for-byte identical (CLAUDE.md #2, #13).
-// This wrapper adds only the generation-path concern: the idempotent upsert
-// into `walkthrough_blocks` on the composite key.
-
-/**
- * Build a typed WalkthroughBlock from one of the four variant inputs (via the
- * shared {@link buildBlock}) and upsert it into walkthroughBlocks. Returns the
- * constructed block, or null if no variant was provided (caller must validate
- * beforehand with {@link blockVariantCount}).
- */
-function persistBlockVariant(
-  db: Db,
-  opts: {
-    readonly walkthroughId: string;
-    readonly blockId: string;
-    readonly semanticStepIndex: number;
-    readonly stepIndex: number;
-    readonly order: number;
-    readonly createdAt: string;
-  },
-  variant: BlockVariantInput,
-): WalkthroughBlock | null {
-  const { walkthroughId, blockId, semanticStepIndex, stepIndex, order, createdAt } = opts;
-
-  const block = buildBlock(blockId, semanticStepIndex, stepIndex, variant);
-  if (!block) return null;
-  const { type, data } = blockRow(block);
-
-  db.insert(walkthroughBlocks)
-    .values({
-      id: blockId,
-      walkthroughId,
-      phase: "diff_analysis",
-      order,
-      semanticStepIndex,
-      stepIndex,
-      type,
-      data,
-      createdAt,
-    })
-    .onConflictDoUpdate({
-      target: [
-        walkthroughBlocks.walkthroughId,
-        walkthroughBlocks.phase,
-        walkthroughBlocks.semanticStepIndex,
-        walkthroughBlocks.stepIndex,
-      ],
-      set: { type, data },
-    })
-    .run();
-
-  return block;
-}
 
 // ── Handler: add_semantic_step (Phase B chapter declaration) ─────────────────
 //
-// Phase precondition: last_completed_phase ∈ {'A', 'B'}.
-// Writes: one walkthrough_semantic_steps row (upsert on (walkthroughId,
-// semanticStepIndex)) AND one walkthrough_blocks row at step_index=0 (upsert
-// on (walkthroughId, phase, semanticStepIndex, stepIndex)) — both in a single
-// transaction. The atomic open+first-block design eliminates the "opened but
-// empty chapter" failure mode by construction: models that stopped between
-// the old `add_semantic_step` and the first `add_diff_step` call now write
-// both rows from a single tool invocation, so a chapter literally cannot
-// exist without content.
-//
-// Owns the Phase A → B transition: the first call advances
-// last_completed_phase to 'B' in the same transaction so subsequent
-// add_diff_step calls accept their writes.
+// Writes the chapter and its step_index=0 block in one transaction: models
+// that stopped between opening a chapter and filling it left empty chapters
+// the completion gate rejected. The first call owns the A → B transition.
 
 export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput> = async (
   ctx,
@@ -164,18 +86,12 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
     summary: input.summary ?? null,
   };
   ctx.db.transaction(() => {
-    const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-    if (!row) {
-      result = errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
+    const open = openForWrite(ctx.db, ctx.walkthroughId, "add_semantic_step");
+    if ("refusal" in open) {
+      result = open.refusal;
       return;
     }
-    const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-    if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
-      result = errorResult(
-        `Error: add_semantic_step requires Phase A complete and Phase C not yet entered. Current phase: '${phase}'. Call set_overview first, or stop adding chapters once sentiment has been set.`,
-      );
-      return;
-    }
+    const { phase } = open;
 
     // Sequencing: a NEW chapter (no existing row at this index) may only be
     // opened if the immediately previous chapter exists. Retries of an
@@ -212,17 +128,15 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       }
     }
 
-    const id = `semantic-${ctx.walkthroughId}-${input.semantic_step_index}`;
-    const now = new Date().toISOString();
     ctx.db
       .insert(walkthroughSemanticSteps)
       .values({
-        id,
+        id: semanticStepId(ctx.walkthroughId, input.semantic_step_index),
         walkthroughId: ctx.walkthroughId,
         semanticStepIndex: input.semantic_step_index,
         title: trimmedTitle,
         summary: input.summary ?? null,
-        createdAt: now,
+        createdAt: new Date().toISOString(),
       })
       .onConflictDoUpdate({
         target: [
@@ -236,20 +150,11 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
       })
       .run();
 
-    // Atomically write the chapter's step_index=0 block from the same
-    // transaction so the chapter is never persisted without content.
-    const blockId = blockIdFor(ctx.walkthroughId, input.semantic_step_index, 0);
-    const order = input.semantic_step_index * 10000;
-    block = persistBlockVariant(
+    block = writeBlock(
       ctx.db,
-      {
-        walkthroughId: ctx.walkthroughId,
-        blockId,
-        semanticStepIndex: input.semantic_step_index,
-        stepIndex: 0,
-        order,
-        createdAt: now,
-      },
+      ctx.walkthroughId,
+      input.semantic_step_index,
+      0,
       input.initial_block,
     );
 
@@ -289,11 +194,6 @@ export const addSemanticStepHandler: WalkthroughToolHandler<AddSemanticStepInput
 };
 
 // ── Handler: add_diff_step (Phase B) ─────────────────────────────────────────
-//
-// Phase precondition: last_completed_phase === 'B' (a parent semantic step
-// must already exist — `add_semantic_step` owns the A→B transition).
-// Writes: one walkthrough_blocks row (upsert on (walkthroughId, phase,
-// semanticStepIndex, stepIndex)).
 
 export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = async (ctx, input) => {
   // Exactly one of {markdown, code, diff, artifact} must be provided.
@@ -325,20 +225,12 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
   let result: WalkthroughToolResult | null = null;
   let block: WalkthroughBlock | null = null;
   ctx.db.transaction(() => {
-    const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-    if (!row) {
-      result = errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
-      return;
-    }
-    const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-    if (phase !== "B") {
-      result = errorResult(
-        `Error: add_diff_step requires Phase B (open via add_semantic_step) and Phase C not yet entered. Current phase: '${phase}'. ${phase === "A" ? "Call add_semantic_step first to open the first chapter — it advances the pipeline to Phase B and creates the parent row this block attaches to." : "Stop adding diff steps once sentiment has been set."}`,
-      );
+    const open = openForWrite(ctx.db, ctx.walkthroughId, "add_diff_step");
+    if ("refusal" in open) {
+      result = open.refusal;
       return;
     }
 
-    // Parent semantic step must exist for the composite key to be valid.
     const parent = ctx.db
       .select({ id: walkthroughSemanticSteps.id })
       .from(walkthroughSemanticSteps)
@@ -356,19 +248,11 @@ export const addDiffStepHandler: WalkthroughToolHandler<AddDiffStepInput> = asyn
       return;
     }
 
-    const blockId = blockIdFor(ctx.walkthroughId, input.semantic_step_index, input.step_index);
-    const now = new Date().toISOString();
-
-    block = persistBlockVariant(
+    block = writeBlock(
       ctx.db,
-      {
-        walkthroughId: ctx.walkthroughId,
-        blockId,
-        semanticStepIndex: input.semantic_step_index,
-        stepIndex: input.step_index,
-        order: input.semantic_step_index * 10000 + input.step_index,
-        createdAt: now,
-      },
+      ctx.walkthroughId,
+      input.semantic_step_index,
+      input.step_index,
       variant,
     );
   });
@@ -410,73 +294,30 @@ function chapterTitleFor(db: Db, walkthroughId: string, semanticStepIndex: numbe
 
 // ── Handler: flag_issue (during Phase B) ─────────────────────────────────────
 //
-// Phase precondition: last_completed_phase ∈ {'A', 'B'} (issues must link to
-// already-persisted diff steps).
-// Writes: one walkthrough_issues row (upsert on deterministic id).
-// Does not advance phase.
-//
-// The row writes unconditionally; a Jev judgment is scheduled behind it
-// (ai/jev/issue-relevance.ts) that may retract or relabel it later.
-// Scheduled, not awaited — blocking would cost each concern a round trip.
-// The completion gate and add_issue_comment get consistency from
-// ai/jev/pending.ts instead.
+// The row writes unconditionally; a Jev judgment scheduled behind it
+// (ai/jev/issue-relevance.ts) may retract or relabel it later. Scheduled, not
+// awaited — blocking would cost each concern a round trip. The completion
+// gate and add_issue_comment get consistency from ai/jev/pending.ts instead.
 
-/** Read-only preconditions for `flag_issue`, evaluated inside the write transaction. */
 function checkFlagIssuePreconditions(
   db: Db,
   walkthroughId: string,
   input: FlagIssueInput,
 ):
   | { readonly ok: true; readonly blockIds: string[]; readonly parentWalkthroughId: string | null }
-  | { readonly ok: false; readonly error: string } {
-  const row = loadWalkthroughRow(db, walkthroughId);
-  if (!row) return { ok: false, error: `Walkthrough ${walkthroughId} not found.` };
-
-  const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-  if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
+  | { readonly ok: false; readonly error: WalkthroughToolResult } {
+  const open = openForWrite(db, walkthroughId, "flag_issue");
+  if ("refusal" in open) return { ok: false, error: open.refusal };
+  const refs = resolveBlockRefs(db, walkthroughId, input.block_refs);
+  if ("unknown" in refs) {
     return {
       ok: false,
-      error: `Error: flag_issue is only valid during Phase A/B. Current phase: '${phase}'.`,
-    };
-  }
-
-  // Validate all referenced block_refs point at persisted diff blocks.
-  const stepRows = db
-    .select({
-      semanticStepIndex: walkthroughBlocks.semanticStepIndex,
-      stepIndex: walkthroughBlocks.stepIndex,
-    })
-    .from(walkthroughBlocks)
-    .where(
-      and(
-        eq(walkthroughBlocks.walkthroughId, walkthroughId),
-        eq(walkthroughBlocks.phase, "diff_analysis"),
+      error: errorResult(
+        `${renderUnknownBlockRefs(refs.unknown)} Call add_diff_step for each before flag_issue.`,
       ),
-    )
-    .all();
-  const knownBlocks = new Set(stepRows.map((r) => `${r.semanticStepIndex}:${r.stepIndex}`));
-  const unknown = input.block_refs.filter(
-    (r) => !knownBlocks.has(`${r.semantic_step_index}:${r.step_index}`),
-  );
-  if (unknown.length > 0) {
-    return {
-      ok: false,
-      error: `Error: block_refs [${unknown.map((r) => `{semantic_step_index: ${r.semantic_step_index}, step_index: ${r.step_index}}`).join(", ")}] reference diff blocks that don't exist yet. Call add_diff_step for each before flag_issue.`,
     };
   }
-
-  const seen = new Set<string>();
-  const uniqueRefs = input.block_refs.filter((r) => {
-    const k = `${r.semantic_step_index}:${r.step_index}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-  return {
-    ok: true,
-    blockIds: uniqueRefs.map((r) => blockIdFor(walkthroughId, r.semantic_step_index, r.step_index)),
-    parentWalkthroughId: row.parentWalkthroughId,
-  };
+  return { ok: true, blockIds: refs.blockIds, parentWalkthroughId: open.row.parentWalkthroughId };
 }
 
 export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (ctx, input) => {
@@ -484,7 +325,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   // afterwards would give the same concern two different ids across runs.
   const title = decodePlainText(input.title);
   const description = decodePlainText(input.description);
-  const issueId = await computeIssueId(
+  const issueId = deriveIssueId(
     ctx.walkthroughId,
     title,
     input.file_path ?? null,
@@ -496,7 +337,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
   ctx.db.transaction(() => {
     const guard = checkFlagIssuePreconditions(ctx.db, ctx.walkthroughId, input);
     if (!guard.ok) {
-      result = errorResult(guard.error);
+      result = guard.error;
       return;
     }
     const blockIds = guard.blockIds;
@@ -582,7 +423,7 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
       .from(walkthroughIssues)
       .where(eq(walkthroughIssues.id, issueId))
       .get();
-    if (persisted) issueEvent = decodeWalkthroughIssue(persisted);
+    if (persisted) issueEvent = decodeIssue(persisted);
   });
   if (result) return result;
   if (issueEvent) {
@@ -612,21 +453,9 @@ export const flagIssueHandler: WalkthroughToolHandler<FlagIssueInput> = async (c
 
 // ── Handler: add_issue_comment (Phase B) ─────────────────────────────────────
 //
-// Phase precondition: last_completed_phase ∈ {'A', 'B'} (same as flag_issue —
-// comments are line-level evidence for issues, both are Phase B artifacts).
-// Cross-reference precondition: input.issue_id must point at a walkthrough
-// issue belonging to ctx.walkthroughId.
-//
-// Writes (one transaction): one `comment_threads` row + one `thread_messages`
-// row, both keyed on deterministic ids so retries upsert in place. Does NOT
-// advance phase. After commit broadcasts a `thread:created` SSE event so any
-// open `DiffViewerInner` re-renders inline at the anchor.
-//
-// Idempotency:
-//   thread.id   = computeAnchorThreadId(walkthroughId, issueId, file, l1, l2, side)
-//   message.id  = `${thread.id}-msg-0`
-// A retry with the same anchor replaces the message body in place rather than
-// stacking duplicate threads.
+// One thread per anchor, keyed deterministically, so a retry replaces the body
+// instead of stacking threads. The thread joins the walkthrough's review
+// session, where the diff view picks it up.
 
 export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput> = async (
   ctx,
@@ -638,188 +467,71 @@ export const addIssueCommentHandler: WalkthroughToolHandler<AddIssueCommentInput
     );
   }
 
-  // Hashing happens before the transaction — sha256 is deterministic and the
-  // inputs are already validated, so doing it outside DB scope keeps the
-  // transaction tight.
-  const threadId = await computeAnchorThreadId(
-    ctx.walkthroughId,
-    input.issue_id,
-    input.file_path,
-    input.start_line,
-    input.end_line,
-    input.diff_side,
-  );
-  const messageId = `${threadId}-msg-0`;
+  const outcome = ctx.db.transaction(
+    ():
+      | { readonly result: WalkthroughToolResult }
+      | {
+          readonly prId: string;
+          readonly thread: CommentThread;
+          readonly message: ThreadMessage;
+        } => {
+      const open = openForWrite(ctx.db, ctx.walkthroughId, "add_issue_comment");
+      if ("refusal" in open) return { result: open.refusal };
 
-  let result: WalkthroughToolResult | null = null;
-  let createdThread: CommentThread | null = null;
-  let createdMessage: ThreadMessage | null = null;
-  let sessionId = "";
-  let prId = "";
-  ctx.db.transaction(() => {
-    const row = loadWalkthroughRow(ctx.db, ctx.walkthroughId);
-    if (!row) {
-      result = errorResult(`Walkthrough ${ctx.walkthroughId} not found.`);
-      return;
-    }
-    const phase = row.lastCompletedPhase as WalkthroughPipelinePhase;
-    if (!phaseAtLeast(phase, "A") || !phaseAtMost(phase, "B")) {
-      result = errorResult(
-        `Error: add_issue_comment is only valid during Phase A/B. Current phase: '${phase}'. Comments are line-level evidence for issues; they belong with the diff analysis, not after sentiment or rating.`,
-      );
-      return;
-    }
-
-    // Cross-reference: the issue must exist for this walkthrough.
-    const issueRow = ctx.db
-      .select({
-        id: walkthroughIssues.id,
-        title: walkthroughIssues.title,
-      })
-      .from(walkthroughIssues)
-      .where(
-        and(
-          eq(walkthroughIssues.id, input.issue_id),
-          eq(walkthroughIssues.walkthroughId, ctx.walkthroughId),
-        ),
-      )
-      .get();
-    if (!issueRow) {
-      // Retracted by the relevance judgment behind flag_issue — not the
-      // agent's mistake. isError here would send it hunting a bug that isn't there.
-      if (ctx.jev.issueRetracted(input.issue_id)) {
-        result = okResult(
-          `That concern was withdrawn after you flagged it — the relevance check judged it below the bar for this pull request, so there is nothing left to comment on. This is not an error and not something to retry. Move on to the next concern or diff step.`,
-        );
-        return;
+      const issueRow = ctx.db
+        .select({ id: walkthroughIssues.id })
+        .from(walkthroughIssues)
+        .where(
+          and(
+            eq(walkthroughIssues.id, input.issue_id),
+            eq(walkthroughIssues.walkthroughId, ctx.walkthroughId),
+          ),
+        )
+        .get();
+      if (!issueRow) {
+        // Retracted by the relevance judgment behind flag_issue — not the
+        // agent's mistake. isError here would send it hunting a bug that isn't there.
+        if (ctx.jev.issueRetracted(input.issue_id)) {
+          return {
+            result: okResult(
+              `That concern was withdrawn after you flagged it — the relevance check judged it below the bar for this pull request, so there is nothing left to comment on. This is not an error and not something to retry. Move on to the next concern or diff step.`,
+            ),
+          };
+        }
+        return {
+          result: errorResult(
+            `Error: issue_id '${input.issue_id}' does not match any flagged issue for this walkthrough. Call flag_issue first; the result text contains the issue id you must pass back here.`,
+          ),
+        };
       }
-      result = errorResult(
-        `Error: issue_id '${input.issue_id}' does not match any flagged issue for this walkthrough. Call flag_issue first; the result text contains the issue id you must pass back here.`,
-      );
-      return;
-    }
 
-    sessionId = row.reviewSessionId;
-    prId = row.pullRequestId;
-    const now = new Date().toISOString();
-
-    // Upsert comment_threads row keyed on deterministic threadId.
-    // A retry with the same anchor lands here as a no-op (we keep the row
-    // untouched — only the message body, below, ever changes on retry).
-    ctx.db
-      .insert(commentThreads)
-      .values({
-        id: threadId,
-        reviewSessionId: sessionId,
-        filePath: input.file_path,
-        startLine: input.start_line,
-        endLine: input.end_line,
-        diffSide: input.diff_side,
-        status: "open",
-        createdAt: now,
-        walkthroughIssueId: input.issue_id,
-      })
-      .onConflictDoNothing({ target: commentThreads.id })
-      .run();
-
-    // Upsert thread_messages row — one message per thread for AI authors.
-    // On retry we replace the body and stamp editedAt; the row id is
-    // deterministic so we never accumulate duplicates.
-    ctx.db
-      .insert(threadMessages)
-      .values({
-        id: messageId,
-        threadId,
-        authorRole: "ai_agent",
-        authorName: "Revv AI",
-        authorLogin: null,
-        body: input.body,
-        messageType: "comment",
-        codeSuggestion: null,
-        createdAt: now,
-        editedAt: null,
-        externalId: null,
-      })
-      .onConflictDoUpdate({
-        target: threadMessages.id,
-        set: {
+      return {
+        prId: open.row.pullRequestId,
+        ...upsertIssueComment(ctx.db, {
+          walkthroughId: ctx.walkthroughId,
+          reviewSessionId: open.row.reviewSessionId,
+          issueId: input.issue_id,
+          filePath: input.file_path,
+          startLine: input.start_line,
+          endLine: input.end_line,
+          diffSide: input.diff_side,
           body: input.body,
-          editedAt: now,
-        },
-      })
-      .run();
+        }),
+      };
+    },
+  );
+  if ("result" in outcome) return outcome.result;
+  const { prId, thread, message } = outcome;
 
-    // Read back the canonical rows so the broadcast payload reflects what's
-    // actually persisted (matches the shape POST /api/reviews/:id/threads
-    // emits today).
-    const persistedThread = ctx.db
-      .select()
-      .from(commentThreads)
-      .where(eq(commentThreads.id, threadId))
-      .get();
-    const persistedMessage = ctx.db
-      .select()
-      .from(threadMessages)
-      .where(eq(threadMessages.id, messageId))
-      .get();
-    if (!persistedThread || !persistedMessage) {
-      result = errorResult(
-        "Internal error: comment_threads / thread_messages upsert succeeded but read-back returned no row.",
-      );
-      return;
-    }
-
-    createdThread = {
-      id: persistedThread.id,
-      reviewSessionId: persistedThread.reviewSessionId,
-      filePath: persistedThread.filePath,
-      startLine: persistedThread.startLine,
-      endLine: persistedThread.endLine,
-      diffSide: persistedThread.diffSide as CommentThread["diffSide"],
-      status: persistedThread.status as CommentThread["status"],
-      createdAt: persistedThread.createdAt,
-      resolvedAt: persistedThread.resolvedAt ?? null,
-      externalThreadId: persistedThread.externalThreadId ?? null,
-      externalCommentId: persistedThread.externalCommentId ?? null,
-      lastSyncedAt: persistedThread.lastSyncedAt ?? null,
-    };
-    createdMessage = {
-      id: persistedMessage.id,
-      threadId: persistedMessage.threadId,
-      authorRole: persistedMessage.authorRole as ThreadMessage["authorRole"],
-      authorName: persistedMessage.authorName,
-      authorLogin: persistedMessage.authorLogin ?? null,
-      authorAvatarContent: null,
-      body: persistedMessage.body,
-      messageType: persistedMessage.messageType as ThreadMessage["messageType"],
-      codeSuggestion: persistedMessage.codeSuggestion ?? null,
-      createdAt: persistedMessage.createdAt,
-      editedAt: persistedMessage.editedAt ?? null,
-      externalId: persistedMessage.externalId ?? null,
-    };
-  });
-  if (result) return result;
-  if (!createdThread || !createdMessage) {
-    return errorResult(
-      "Internal error: add_issue_comment reached emit without a persisted thread + message.",
-    );
-  }
-
-  // Commit-first / broadcast-second (doctrine invariant #8). We always emit
-  // thread:created — `DiffViewerInner` dedupes by thread id, so retried
-  // upserts are harmless on the UI side.
+  // The diff view dedupes by thread id, so a replayed upsert is harmless.
   ctx.broadcastThreadEvent({
     type: "thread:created",
-    data: {
-      prId,
-      thread: createdThread,
-      message: createdMessage,
-    },
+    data: { prId, thread, message },
   });
 
   return okResult(
     `Comment posted on ${input.file_path}:${input.start_line}${
       input.end_line !== input.start_line ? `-${input.end_line}` : ""
-    } (${input.diff_side} side) for issue ${input.issue_id}. Thread id: ${threadId}.`,
+    } (${input.diff_side} side) for issue ${input.issue_id}. Thread id: ${thread.id}.`,
   );
 };

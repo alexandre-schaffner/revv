@@ -21,12 +21,7 @@ function buildWalkthroughProviderConfig(input: {
   readonly maxTurns: number;
 }): GenerationProviderConfig {
   return {
-    provider:
-      input.agent === "opencode"
-        ? "opencode"
-        : input.agent === "codex"
-          ? "codex"
-          : "claude-agent-sdk",
+    provider: input.agent,
     model: input.model,
     thinkingEffort: resolveThinkingEffort(input.configuredEffort, input.routedEffort) ?? null,
     contextWindow: "1m",

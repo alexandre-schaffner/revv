@@ -15,7 +15,6 @@
 import { noul } from "@typesafe-ai/sdk";
 import { Effect } from "effect";
 import { JevService } from "../../services/Jev";
-import { SettingsService } from "../../services/Settings";
 import { optionalJev } from "./optional";
 
 export const PROSE_VOICE_TIMEOUT_MS = 12_000;
@@ -51,11 +50,8 @@ const FAULT_ADVICE: Record<keyof typeof FAULTS, string> = {
 export function judgeProse(
   markdown: string,
   chapterTitle: string,
-): Effect.Effect<readonly string[] | null, never, JevService | SettingsService> {
+): Effect.Effect<readonly string[] | null, never, JevService> {
   return Effect.gen(function* () {
-    const settingsSvc = yield* SettingsService;
-    const settings = yield* settingsSvc.getSettings();
-    if (!settings.jev.enabled) return null;
     // Too short to have a voice — a one-line block is all point, by construction.
     if (markdown.trim().length < 200) return [];
 

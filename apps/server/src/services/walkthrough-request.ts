@@ -23,13 +23,13 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import type { DbError } from "../domain/errors";
 import { dbTry } from "../effects/db-try";
 import { DbService } from "./Db";
-import { resolveReviewModeForPr } from "./review-mode";
-import { WalkthroughService } from "./Walkthrough";
+import type { WalkthroughService } from "./Walkthrough";
 import {
   type StartJobError,
   WALKTHROUGH_CANCELLED_MESSAGE,
   WalkthroughJobs,
 } from "./WalkthroughJobs";
+import { walkthroughPerspective } from "./walkthrough/perspective";
 
 /** Runs (of any status) at one head before `request_walkthrough` stops starting more. */
 export const MAX_RUNS_PER_HEAD = 3;
@@ -77,15 +77,10 @@ export const requestWalkthroughAtHead = (params: {
   Effect.gen(function* () {
     const { db } = yield* DbService;
     const jobs = yield* WalkthroughJobs;
-    const walkthroughService = yield* WalkthroughService;
     const { headSha } = params;
-    // The perspective the PR's review page shows (`getCurrentWalkthroughHandler`):
-    // the newest walkthrough's — the user's last pick — else identity. Asking
-    // in the other perspective would retire the one the user chose. An
-    // unresolved identity is still the right answer to write under: the web
-    // falls back to the same `reviewer` while identity is unknown.
-    const lastMode = yield* walkthroughService.getLatestMode(params.prId);
-    const mode = lastMode ?? (yield* resolveReviewModeForPr(params.prId));
+    // An unresolved identity is still the right answer to write under: the
+    // web falls back to the same `reviewer` while identity is unknown.
+    const mode = yield* walkthroughPerspective(params.prId);
 
     const runsAtHead = yield* dbTry("requestWalkthroughAtHead: runs at head", () =>
       db

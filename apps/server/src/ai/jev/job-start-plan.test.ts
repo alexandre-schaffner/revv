@@ -1,13 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_USER_SETTINGS } from "@revv/shared";
 import type { JobStartAnswers } from "./job-start";
 import { buildJobStartPlan, shouldResolveJobStart } from "./job-start-plan";
 
-const settings = {
-  aiModel: "revv:auto",
-  aiThinkingEffort: "revv:auto",
-  jev: { ...DEFAULT_USER_SETTINGS.jev, enabled: true },
-} as const;
+const settings = { aiModel: "revv:auto", aiThinkingEffort: "revv:auto" } as const;
 
 const answers: JobStartAnswers = {
   riskLevel: "high",
@@ -21,17 +16,13 @@ const answers: JobStartAnswers = {
 };
 
 describe("job-start plan", () => {
-  it("runs on a user trigger when TypeSafe is on", () => {
-    expect(shouldResolveJobStart({ settings, trigger: "user", cacheWillHit: false })).toBe(true);
+  it("runs on a user trigger", () => {
+    expect(shouldResolveJobStart({ trigger: "user", cacheWillHit: false })).toBe(true);
   });
 
-  it("skips when TypeSafe is off, on resume, or on a cache hit", () => {
-    const off = { ...settings, jev: DEFAULT_USER_SETTINGS.jev };
-    expect(shouldResolveJobStart({ settings: off, trigger: "user", cacheWillHit: false })).toBe(
-      false,
-    );
-    expect(shouldResolveJobStart({ settings, trigger: "resume", cacheWillHit: false })).toBe(false);
-    expect(shouldResolveJobStart({ settings, trigger: "user", cacheWillHit: true })).toBe(false);
+  it("skips on resume, or on a cache hit", () => {
+    expect(shouldResolveJobStart({ trigger: "resume", cacheWillHit: false })).toBe(false);
+    expect(shouldResolveJobStart({ trigger: "user", cacheWillHit: true })).toBe(false);
   });
 
   it("projects one answer into risk, routing and file priority", () => {

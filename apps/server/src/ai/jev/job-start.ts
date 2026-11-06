@@ -10,10 +10,11 @@ import { createHash } from "node:crypto";
 import type { AcpAgentId, RiskLevel, ThinkingEffortSetting } from "@revv/shared";
 import { Effect } from "effect";
 import type { JevUnavailable } from "../../domain/errors";
-import { debug } from "../../logger";
-import { CacheService } from "../../services/Cache";
+import type { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
 import { JevService } from "../../services/Jev";
+import { riskCriteria } from "../prompts/risk-tiers";
+import { cachedJev } from "./optional";
 import { numericAnswerAt } from "./questions";
 import {
   type GenerationLaunchOverride,
@@ -35,25 +36,6 @@ export const JOB_START_TIMEOUT_MS = 8_000;
  * 32k-token state+question budget. Files past the cap fall back to path order.
  */
 export const FILE_PRIORITY_MAX_FILES = 50;
-
-// Mirrors "Risk tiers (drive review depth)" in
-// `ai/prompts/walkthrough-system-common.md` so orchestrator and agent can't drift.
-const RISK_CRITERIA = {
-  low: {
-    what: "A quick tour is enough. Small diffs (under roughly 150 changed lines), documentation, renames, whitespace, test-only additions, isolated dependency bumps with no behavior change.",
-    expect: "0-2 issues, 2-3 chapters, mostly passing verdicts.",
-  },
-  medium: {
-    what: "A standard review. Moderate diffs, new business logic, API additions, configuration changes, non-trivial refactors.",
-    expect: "1-5 issues, 4-6 chapters, a mix of pass and concern.",
-  },
-  high: {
-    what: "A deep audit. Security-sensitive code, concurrency, database migrations, breaking API changes, payments, cross-service contracts.",
-    not_for:
-      "Sheer line count alone. A 2000-line generated lockfile or a formatter-only reflow is not high risk.",
-    expect: "3-10+ issues, 7-11 chapters, multiple concerns and possibly a blocker.",
-  },
-} as const;
 
 const DEPTH_CRITERIA = {
   shallow:
@@ -173,7 +155,7 @@ export function askJobStart(
           type: "choice",
           instructions:
             "How much reviewer attention does this pull request need? Judge the substantive change, not the raw line count — generated output (lockfiles, snapshots, `.d.ts`, vendored bundles, formatter-only reflows) does not raise the tier.",
-          criteria: RISK_CRITERIA,
+          criteria: riskCriteria(),
         },
         review_depth: {
           type: "choice",
@@ -266,11 +248,8 @@ export function routeFromAnswers(
     readonly agent: AcpAgentId;
     readonly configuredModel: string | null | undefined;
     readonly configuredEffort: ThinkingEffortSetting | null | undefined;
-    /** TypeSafe switch. Off: answers never move the launch. */
-    readonly autoSizing: boolean;
   },
 ): GenerationLaunchOverride | null {
-  if (!opts.autoSizing) return null;
   return routeSizing({
     agent: opts.agent,
     depth: answers.depth,
@@ -283,34 +262,24 @@ export function routeFromAnswers(
 }
 
 /**
- * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe
- * can't answer. The cache lets one judgment serve both the preview and the
- * run — whichever asks first pays, keeping Jev off `startJobBody`'s critical
- * path in the common case. Immutable: head SHA in the key means a new commit
- * is a new entry.
+ * Cached job-start answers for a PR at a head SHA, or `null` when TypeSafe is
+ * off or can't answer. The cache lets one judgment serve both the preview and
+ * the run — whichever asks first pays, keeping Jev off `startJobBody`'s
+ * critical path in the common case. Immutable: head SHA in the key means a new
+ * commit is a new entry. Failures aren't cached, so the next caller retries.
  */
 export function resolveJobStartAnswers(
   prId: string,
   headSha: string,
   state: JobStartStateInput,
 ): Effect.Effect<JobStartAnswers | null, never, JevService | CacheService | DbService> {
-  return Effect.gen(function* () {
-    const cache = yield* CacheService;
-    return yield* cache
-      .getOrFetch<JobStartAnswers, JevUnavailable, JevService>(
-        JOB_START_CACHE_NS,
-        jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
-        () => askJobStart(state),
-        { immutable: true },
-      )
-      .pipe(
-        // Failures aren't cached; getOrFetch propagates so the next caller retries. Both preview and run degrade to null.
-        Effect.catch((e) =>
-          Effect.sync(() => {
-            debug("jev", `job-start unavailable for ${prId}@${headSha.slice(0, 7)}: ${String(e)}`);
-            return null;
-          }),
-        ),
-      );
-  });
+  return cachedJev(
+    `job-start for ${prId}@${headSha.slice(0, 7)}`,
+    {
+      ns: JOB_START_CACHE_NS,
+      key: jobStartCacheKey(prId, headSha, diffFingerprint(state.files)),
+      options: { immutable: true },
+    },
+    () => askJobStart(state),
+  );
 }

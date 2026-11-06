@@ -6,10 +6,12 @@
 //   • fetch — download + integrity-verify + parse.
 //   • push  — gzip + upload (fire-and-forget at the caller site).
 //
-// All ops are settings-gated:
+// The service is the only gate on sharing; callers don't re-check it:
 //   • cache.enabled         OFF → every op short-circuits (no-op / Option.none).
 //   • cache.downloadsEnabled OFF → fetch/probe short-circuit to miss.
 //   • cache.uploadsEnabled   OFF → push short-circuits to no-op.
+//   • Only the reviewer perspective is shared: an author self-review is
+//     never pushed, and never looked up. The key carries no perspective.
 //
 // On corrupt blob or schemaVersion mismatch the fetch path returns
 // `Option.none` and logs. From a behavior standpoint it's identical to a
@@ -17,6 +19,7 @@
 
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
+import type { WalkthroughMode } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import type { Db } from "../db/index";
@@ -58,23 +61,25 @@ export class RemoteWalkthroughCache extends Context.Service<
   RemoteWalkthroughCache,
   {
     /**
-     * Cheap existence check. Returns `false` when:
-     *   • feature disabled (cache.enabled || cache.downloadsEnabled false)
-     *   • blob is missing
-     *   • backend is unreachable
-     *
-     * Never raises — callers treat truthiness as "object might exist".
+     * Cheap existence check. False when sharing is off for `mode`, the blob
+     * is missing, or the backend is unreachable. Never raises — callers
+     * treat truthiness as "object might exist".
      */
-    readonly probe: (repoFullName: string, headSha: string) => Effect.Effect<boolean>;
+    readonly probe: (
+      repoFullName: string,
+      headSha: string,
+      mode: WalkthroughMode,
+    ) => Effect.Effect<boolean>;
 
     /**
-     * Download + verify + parse. Returns `Option.none` on miss, feature
-     * disabled, or any failure. Failures are logged but never escape —
-     * the orchestrator falls back to running the agent.
+     * Download + verify + parse. `Option.none` on a miss, when sharing is
+     * off for `mode`, or on any failure. Failures are logged but never
+     * escape — the orchestrator falls back to running the agent.
      */
     readonly fetch: (
       repoFullName: string,
       headSha: string,
+      mode: WalkthroughMode,
     ) => Effect.Effect<Option.Option<WalkthroughSnapshotV2>>;
 
     /**
@@ -84,7 +89,7 @@ export class RemoteWalkthroughCache extends Context.Service<
      * block the commit-first / broadcast-second contract (invariant #8).
      *
      * Preconditions enforced inside:
-     *   • walkthroughs.status === 'complete'
+     *   • walkthroughs.status === 'complete', in the reviewer perspective
      *   • exporter validation passes (validateSnapshot)
      */
     readonly push: (
@@ -102,16 +107,20 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const signer = yield* SshSigner;
     const eligibility = yield* CacheEligibility;
 
-    const isDownloadEnabled = (): Effect.Effect<boolean> =>
-      settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.downloadsEnabled));
+    const isDownloadEnabled = (mode: WalkthroughMode): Effect.Effect<boolean> =>
+      settings
+        .getSettings()
+        .pipe(
+          Effect.map((s) => mode === "reviewer" && s.cache.enabled && s.cache.downloadsEnabled),
+        );
 
     const isUploadEnabled = (): Effect.Effect<boolean> =>
       settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled));
 
     return RemoteWalkthroughCache.of({
-      probe: (repoFullName, headSha) =>
+      probe: (repoFullName, headSha, mode) =>
         Effect.gen(function* () {
-          const ok = yield* isDownloadEnabled();
+          const ok = yield* isDownloadEnabled(mode);
           if (!ok) return false;
           const key = cacheObjectKey(repoFullName, headSha);
           return yield* blob.exists(key).pipe(
@@ -122,9 +131,9 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           );
         }),
 
-      fetch: (repoFullName, headSha) =>
+      fetch: (repoFullName, headSha, mode) =>
         Effect.gen(function* () {
-          const ok = yield* isDownloadEnabled();
+          const ok = yield* isDownloadEnabled(mode);
           if (!ok) return Option.none<WalkthroughSnapshotV2>();
 
           const live = yield* settings.getSettings();
@@ -287,6 +296,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             .select({
               id: walkthroughsTable.id,
               status: walkthroughsTable.status,
+              mode: walkthroughsTable.mode,
               pullRequestId: walkthroughsTable.pullRequestId,
             })
             .from(walkthroughsTable)
@@ -297,8 +307,11 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
               new CacheUnavailable({ message: `walkthrough ${walkthroughId} not found` }),
             );
           }
-          if (wtRow.status !== "complete") {
-            debug("remote-cache", `push skipped wt=${walkthroughId} status=${wtRow.status}`);
+          if (wtRow.status !== "complete" || wtRow.mode !== "reviewer") {
+            debug(
+              "remote-cache",
+              `push skipped wt=${walkthroughId} status=${wtRow.status} mode=${wtRow.mode}`,
+            );
             return;
           }
 

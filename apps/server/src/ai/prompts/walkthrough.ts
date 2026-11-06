@@ -10,10 +10,12 @@ import {
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
 import type { PrFileMeta } from "../../services/GitHub";
+import { journeyKeywordList } from "../../services/walkthrough/content";
 import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,
 } from "../../services/walkthrough-prompt-files";
+import { renderRiskTiers } from "./risk-tiers";
 import WALKTHROUGH_ARTIFACTS_PROMPT from "./walkthrough-artifacts.md" with { type: "text" };
 import WALKTHROUGH_AUTHOR_PROMPT from "./walkthrough-author.md" with { type: "text" };
 import WALKTHROUGH_COMMON_PROMPT from "./walkthrough-common.md" with { type: "text" };
@@ -42,24 +44,30 @@ export interface WalkthroughReviewMode {
 
 // The common system prompt carries this marker where the perspective-specific
 // block belongs (right after the intro, before the pipeline rules) so the mode
-// prompt frames the whole document instead of trailing it. Validated at module
-// load so a future edit that drops the marker fails fast rather than silently
-// emitting a perspective-less system prompt.
+// prompt frames the whole document instead of trailing it.
 const REVIEW_PERSPECTIVE_MARKER = "{{REVIEW_PERSPECTIVE}}";
-if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(REVIEW_PERSPECTIVE_MARKER)) {
-  throw new Error(
-    `walkthrough-system-common.md is missing the ${REVIEW_PERSPECTIVE_MARKER} marker`,
-  );
-}
 
-// The artifact craft spec is single-sourced in `walkthrough-artifacts.md` because
-// two agents write artifact blocks: the walkthrough author (add_semantic_step /
-// add_diff_step) and the chat agent's edit tools (add_block / update_block).
-// Substituted into both system prompts so the two can't drift.
-export const ARTIFACT_SPEC_MARKER = "{{ARTIFACT_SPEC}}";
+// The artifact craft spec is single-sourced in `walkthrough-artifacts.md`
+// because the chat agent's edit tools write artifact blocks too.
 export const WALKTHROUGH_ARTIFACT_SPEC: string = WALKTHROUGH_ARTIFACTS_PROMPT.trim();
-if (!WALKTHROUGH_SYSTEM_COMMON_PROMPT.includes(ARTIFACT_SPEC_MARKER)) {
-  throw new Error(`walkthrough-system-common.md is missing the ${ARTIFACT_SPEC_MARKER} marker`);
+
+// Contract fragments substituted at their markers, generated from what the
+// code enforces so the prompt cannot drift from it.
+const CONTRACT_FRAGMENTS: ReadonlyArray<readonly [marker: string, value: string]> = [
+  ["{{ARTIFACT_SPEC}}", WALKTHROUGH_ARTIFACT_SPEC],
+  ["{{RISK_TIERS}}", renderRiskTiers()],
+  ["{{JOURNEY_KEYWORDS}}", journeyKeywordList("`")],
+];
+
+// Checked at module load, so a prompt edit that drops a marker fails fast
+// instead of silently shipping a prompt without its fragment.
+for (const [file, prompt, marker] of [
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, REVIEW_PERSPECTIVE_MARKER],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{ARTIFACT_SPEC}}"],
+  ["walkthrough-system-common.md", WALKTHROUGH_SYSTEM_COMMON_PROMPT, "{{RISK_TIERS}}"],
+  ["walkthrough-system-reviewer.md", WALKTHROUGH_SYSTEM_REVIEWER_PROMPT, "{{JOURNEY_KEYWORDS}}"],
+] as const) {
+  if (!prompt.includes(marker)) throw new Error(`${file} is missing the ${marker} marker`);
 }
 
 export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE.reviewer): string {
@@ -71,9 +79,10 @@ export function buildWalkthroughSystemPrompt(mode: WalkthroughMode = REVIEW_MODE
   // Replacer functions, not replacement strings: a `$&` or `$'` in a prompt
   // file is a substitution pattern and would splice the surrounding prompt
   // into itself.
-  return WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () =>
-    modePrompt.trim(),
-  ).replace(ARTIFACT_SPEC_MARKER, () => WALKTHROUGH_ARTIFACT_SPEC);
+  return CONTRACT_FRAGMENTS.reduce(
+    (prompt, [marker, value]) => prompt.replace(marker, () => value),
+    WALKTHROUGH_SYSTEM_COMMON_PROMPT.replace(REVIEW_PERSPECTIVE_MARKER, () => modePrompt.trim()),
+  );
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

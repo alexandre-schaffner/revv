@@ -1,17 +1,9 @@
 // ── walkthrough-blocks ───────────────────────────────────────────────────────
 //
-// Shared block-variant validation + construction for the two MCP tool surfaces
-// that write `walkthrough_blocks` rows: the generation pipeline
-// (`walkthrough-tools/phase-b-handlers.ts`) and the post-completion chat-edit
-// path (`chat-edit-tools/`). Both accept the same four-variant block-content
-// shape (markdown | code | diff | artifact) and MUST validate and build it
-// identically.
-//
-// Keeping that logic here is the concrete expression of CLAUDE.md invariant #2
-// ("tool handler implementations are always shared in-process code") and #13
-// ("agent-path parity"): the artifact size cap, the variant-exclusivity rule,
-// and the typed-block construction cannot drift between the generation path and
-// the chat-edit path because there is only one copy.
+// Block content for every tool that writes `walkthrough_blocks`: the
+// generation pipeline and the post-completion edit path accept the same four
+// variants (markdown | code | diff | artifact), validate them with the same
+// rules and write them through `writeBlock`.
 
 import type {
   ArtifactBlock,
@@ -21,6 +13,10 @@ import type {
   WalkthroughBlock,
 } from "@revv/shared";
 import { parseHunkHeader } from "@revv/shared";
+import { and, eq } from "drizzle-orm";
+import type { Db } from "../../db";
+import { walkthroughBlocks } from "../../db/schema/walkthrough-blocks";
+import { blockId, blockOrder } from "../../services/walkthrough/content";
 import { prLensDiagramError } from "./prlens-doc";
 
 /**
@@ -30,12 +26,7 @@ import { prLensDiagramError } from "./prlens-doc";
  */
 export const MAX_ARTIFACT_HTML_BYTES = 256 * 1024;
 
-/**
- * The four mutually-exclusive block-content variants. Structurally identical to
- * the chat-edit `blockContentSchema` inference and the generation pipeline's
- * `add_diff_step` / `add_semantic_step.initial_block` shapes — both decode
- * their input straight into this type.
- */
+/** The four mutually-exclusive block-content variants, as the tool schemas decode them. */
 export interface BlockVariantInput {
   readonly markdown?: { readonly content: string } | null | undefined;
   readonly code?:
@@ -46,7 +37,6 @@ export interface BlockVariantInput {
         readonly language: string;
         readonly content: string;
         readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
       }
     | null
     | undefined;
@@ -55,7 +45,6 @@ export interface BlockVariantInput {
         readonly file_path: string;
         readonly patch: string;
         readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
       }
     | null
     | undefined;
@@ -63,7 +52,6 @@ export interface BlockVariantInput {
     | {
         readonly html: string;
         readonly annotation: string | null;
-        readonly annotation_position: "left" | "right";
       }
     | null
     | undefined;
@@ -366,12 +354,9 @@ export function normalizeDiffPatch(patch: string): string {
 }
 
 /**
- * Construct a typed `WalkthroughBlock` from exactly one populated variant.
- * Returns null when no variant is present — callers validate variant count
- * with {@link blockVariantCount} and reject empty content with
- * {@link emptyBlockError} before calling. `order` is derived deterministically
- * from `(semanticStepIndex, stepIndex)` so the same block always sorts the same
- * way regardless of which tool wrote it.
+ * Construct a typed `WalkthroughBlock` from exactly one populated variant, or
+ * null when none is present. Callers check {@link blockVariantCount} and
+ * {@link blockContentError} first.
  */
 export function buildBlock(
   blockId: string,
@@ -379,7 +364,7 @@ export function buildBlock(
   stepIndex: number,
   input: BlockVariantInput,
 ): WalkthroughBlock | null {
-  const order = semanticStepIndex * 10000 + stepIndex;
+  const order = blockOrder(semanticStepIndex, stepIndex);
 
   if (input.markdown) {
     const md: MarkdownBlock = {
@@ -407,7 +392,6 @@ export function buildBlock(
       language: input.code.language,
       content: input.code.content,
       annotation: input.code.annotation,
-      annotationPosition: input.code.annotation_position,
     };
     return code;
   }
@@ -422,7 +406,6 @@ export function buildBlock(
       filePath: input.diff.file_path,
       patch: normalizeDiffPatch(input.diff.patch),
       annotation: input.diff.annotation,
-      annotationPosition: input.diff.annotation_position,
     };
     return diff;
   }
@@ -436,7 +419,6 @@ export function buildBlock(
       stepIndex,
       html: input.artifact.html,
       annotation: input.artifact.annotation,
-      annotationPosition: input.artifact.annotation_position,
     };
     return artifact;
   }
@@ -444,16 +426,58 @@ export function buildBlock(
 }
 
 /**
- * The two `walkthrough_blocks` columns derived from a built block: the variant
- * `type` discriminator and the JSON-serialized payload written to `data`.
- * Centralized here so no write path hand-writes `JSON.stringify(block)` — the
- * serialization that turns a typed block into a row is this module's
- * responsibility, the same way construction is, and must not drift between the
- * generation and chat-edit paths (CLAUDE.md #2, #13).
+ * Write the block at `(semanticStepIndex, stepIndex)` — the one block write
+ * every tool shares. A replay lands on the same row. An existing row keeps
+ * its id: reviews imported before ids were deterministic carry random ones,
+ * and their issues and ratings point at those.
  */
-export function blockRow(block: WalkthroughBlock): {
-  type: WalkthroughBlock["type"];
-  data: string;
-} {
-  return { type: block.type, data: JSON.stringify(block) };
+export function writeBlock(
+  db: Db,
+  walkthroughId: string,
+  semanticStepIndex: number,
+  stepIndex: number,
+  input: BlockVariantInput,
+): WalkthroughBlock | null {
+  const position = and(
+    eq(walkthroughBlocks.walkthroughId, walkthroughId),
+    eq(walkthroughBlocks.phase, "diff_analysis"),
+    eq(walkthroughBlocks.semanticStepIndex, semanticStepIndex),
+    eq(walkthroughBlocks.stepIndex, stepIndex),
+  );
+  const existing = db
+    .select({ id: walkthroughBlocks.id })
+    .from(walkthroughBlocks)
+    .where(position)
+    .get();
+  const block = buildBlock(
+    existing?.id ?? blockId(walkthroughId, semanticStepIndex, stepIndex),
+    semanticStepIndex,
+    stepIndex,
+    input,
+  );
+  if (!block) return null;
+  const data = JSON.stringify(block);
+  db.insert(walkthroughBlocks)
+    .values({
+      id: block.id,
+      walkthroughId,
+      phase: "diff_analysis",
+      order: block.order,
+      semanticStepIndex,
+      stepIndex,
+      type: block.type,
+      data,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: [
+        walkthroughBlocks.walkthroughId,
+        walkthroughBlocks.phase,
+        walkthroughBlocks.semanticStepIndex,
+        walkthroughBlocks.stepIndex,
+      ],
+      set: { type: block.type, data },
+    })
+    .run();
+  return block;
 }

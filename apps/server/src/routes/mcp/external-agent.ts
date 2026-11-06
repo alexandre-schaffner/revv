@@ -1,8 +1,4 @@
-import {
-  EXTERNAL_AGENT_PROVIDER_NAMES,
-  type ThreadEventMessage,
-  type WalkthroughStreamEvent,
-} from "@revv/shared";
+import { EXTERNAL_AGENT_PROVIDER_NAMES } from "@revv/shared";
 import { Effect } from "effect";
 import {
   EXTERNAL_REVIEW_TOOL_BUNDLE,
@@ -10,7 +6,6 @@ import {
   hasExternalToolScope,
 } from "../../ai/providers/external-review-tools";
 import { httpErrorOf } from "../../domain/errors";
-import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { DbService } from "../../services/Db";
 import {
@@ -18,14 +13,12 @@ import {
   ExternalIntegrations,
   type ExternalProjectIdentity,
 } from "../../services/ExternalIntegrations";
-import { RemoteWalkthroughCache } from "../../services/RemoteWalkthroughCache";
 import { SyncService } from "../../services/Sync";
-import { WalkthroughJobs } from "../../services/WalkthroughJobs";
 import {
   describeWalkthroughRequestError,
   requestWalkthroughAtHead,
 } from "../../services/walkthrough-request";
-import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
+import { fireAndForgetThreadEventBroadcast, fireAndForgetWalkthroughEdit } from "./publish";
 import { bindHttp, type ContextResolution, extractBearer } from "./utils";
 
 const LOG_SCOPE = "mcp-external";
@@ -70,41 +63,6 @@ async function resolveContext(
     Effect.flatMap(DbService, (service) => Effect.succeed(service.db)),
   );
 
-  const emit = (walkthroughId: string, event: WalkthroughStreamEvent): void => {
-    void AppRuntime.runPromise(
-      Effect.flatMap(WalkthroughJobs, (jobs) =>
-        Effect.gen(function* () {
-          yield* jobs.emitEvent(walkthroughId, {
-            type: "lifecycle:edited",
-            data: { walkthroughId, editedAt: new Date().toISOString() },
-          });
-          yield* jobs.emitEvent(walkthroughId, event);
-        }),
-      ),
-    ).catch((error) => {
-      logError(
-        LOG_SCOPE,
-        "walkthrough:event emit failed:",
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-    void AppRuntime.runPromise(
-      Effect.flatMap(RemoteWalkthroughCache, (cache) =>
-        cache.push(walkthroughId).pipe(Effect.catch(() => Effect.void)),
-      ),
-    ).catch((error) => {
-      logError(
-        LOG_SCOPE,
-        "remote cache push after edit failed:",
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-  };
-
-  const broadcastThreadEvent = (message: ThreadEventMessage): void => {
-    fireAndForgetThreadEventBroadcast(resolved.prId, message, resolved.accountId);
-  };
-
   return {
     ok: true,
     ctx: {
@@ -116,8 +74,9 @@ async function resolveContext(
       provider: resolved.provider,
       providerName: EXTERNAL_AGENT_PROVIDER_NAMES[resolved.provider],
       integrationId: resolved.integrationId,
-      emit,
-      broadcastThreadEvent,
+      publishEdit: fireAndForgetWalkthroughEdit,
+      broadcastThreadEvent: (message) =>
+        fireAndForgetThreadEventBroadcast(resolved.prId, message, resolved.accountId),
       pushReply: (messageId) =>
         AppRuntime.runPromise(Effect.flatMap(SyncService, (sync) => sync.pushReply(messageId))),
       pushThreadStatus: (threadId) =>

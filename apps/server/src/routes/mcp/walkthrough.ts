@@ -20,12 +20,12 @@ import type {
   WalkthroughToolContext,
   WalkthroughToolJudgments,
 } from "../../ai/providers/walkthrough-tools";
-import { WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
+import { TOOL_SPECS, WALKTHROUGH_TOOL_BUNDLE } from "../../ai/providers/walkthrough-tools";
 import type { Db } from "../../db";
 import { logError } from "../../logger";
 import { AppRuntime } from "../../runtime";
 import { WalkthroughJobs } from "../../services/WalkthroughJobs";
-import { fireAndForgetThreadEventBroadcast } from "./broadcast-thread-event";
+import { fireAndForgetThreadEventBroadcast } from "./publish";
 import { bindTokenMcpRoute } from "./utils";
 
 interface WalkthroughRouteMeta {
@@ -117,43 +117,7 @@ function toContext(
   };
 }
 
-// ── MCP phase-tool exploration event map ─────────────────────────────────────
-
-interface PhaseToolMeta {
-  readonly activityKind: "tool.mcp";
-  readonly summary: string;
-}
-
-const PHASE_TOOL_META: Record<string, PhaseToolMeta> = {
-  set_overview: {
-    activityKind: "tool.mcp",
-    summary: "Writing overview and risk assessment...",
-  },
-  add_diff_step: {
-    activityKind: "tool.mcp",
-    summary: "Writing walkthrough step...",
-  },
-  add_semantic_step: {
-    activityKind: "tool.mcp",
-    summary: "Writing walkthrough step...",
-  },
-  flag_issue: {
-    activityKind: "tool.mcp",
-    summary: "Flagging a concern...",
-  },
-  rate_axis: {
-    activityKind: "tool.mcp",
-    summary: "Scoring PR quality...",
-  },
-  complete_walkthrough: {
-    activityKind: "tool.mcp",
-    summary: "Finalizing walkthrough...",
-  },
-  get_walkthrough_state: {
-    activityKind: "tool.mcp",
-    summary: "Reading walkthrough state...",
-  },
-};
+const TOOL_ACTIVITY = new Map(TOOL_SPECS.map((spec) => [spec.name, spec.activity]));
 
 export const mcpWalkthroughRoute = bindTokenMcpRoute({
   path: "/walkthrough",
@@ -168,16 +132,9 @@ export const mcpWalkthroughRoute = bindTokenMcpRoute({
   // from its own subprocess, so without this every write is an orphan trace.
   traceAnchorKey: (meta) => meta.walkthroughId,
   beforeToolCall: ({ toolName, ctx }) => {
-    const phaseMeta = PHASE_TOOL_META[toolName];
-    if (!phaseMeta) return;
-    ctx.emit({
-      type: "exploration",
-      data: {
-        activityKind: phaseMeta.activityKind,
-        toolName,
-        summary: phaseMeta.summary,
-      },
-    });
+    const summary = TOOL_ACTIVITY.get(toolName);
+    if (summary === undefined) return;
+    ctx.emit({ type: "exploration", data: { activityKind: "tool.mcp", toolName, summary } });
   },
   servedMessage: (requests, _ctx, meta) =>
     `served ${requests.length} request(s), walkthroughId=${meta.walkthroughId}`,

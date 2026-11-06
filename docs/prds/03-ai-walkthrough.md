@@ -91,7 +91,7 @@ Supervision via `apps/server/src/services/OpencodeSupervisor.ts`: lazy-starts th
 
 On a new PR head SHA, the old walkthrough is marked `superseded` with a `superseded_by` back-reference and a fresh row begins generating — the 4-phase pipeline never mutates a row for the same head SHA.
 
-### Walkthrough endpoints (`apps/server/src/routes/reviews.ts`)
+### Walkthrough endpoints (`apps/server/src/routes/walkthrough/index.ts`)
 
 Generation and lifecycle events are not carried on a per-PR stream. The legacy `GET /api/reviews/:id/walkthrough` SSE endpoint was deleted when walkthrough events moved to the global `GET /api/events` SSE bus; the endpoints below are REST-only and progress arrives as `walkthrough:event` envelopes over that single global stream.
 

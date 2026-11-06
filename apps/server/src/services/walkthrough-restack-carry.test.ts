@@ -21,6 +21,7 @@ import {
   WalkthroughSnapshotImporter,
   WalkthroughSnapshotImporterLive,
 } from "./WalkthroughSnapshotImporter";
+import { blockId, issueId, semanticStepId } from "./walkthrough/content";
 import { tryCarryRestackedWalkthrough } from "./walkthrough-cache-import";
 import { planRestackCarry, resolveStackInputs } from "./walkthrough-stack-inputs";
 
@@ -94,6 +95,7 @@ function seedSource(db: Db): void {
         severity: "warning",
         title: id,
         description: "d",
+        blockIds: JSON.stringify(["b-0"]),
         submittedAt,
         createdAt: NOW,
       })
@@ -224,6 +226,30 @@ describe("tryCarryRestackedWalkthrough", () => {
       .where(eq(walkthroughIssues.walkthroughId, carried.walkthroughId))
       .all();
     expect(issues.map((i) => i.title)).toEqual(["i-open"]);
+
+    // The carried rows carry the ids the MCP tools derive, so a chat edit
+    // that names a block or an issue by position finds it.
+    const wt = carried.walkthroughId;
+    const block = db
+      .select({ id: walkthroughBlocks.id, data: walkthroughBlocks.data })
+      .from(walkthroughBlocks)
+      .where(eq(walkthroughBlocks.walkthroughId, wt))
+      .get();
+    expect(block?.id).toBe(blockId(wt, 0, 0));
+    expect(JSON.parse(block?.data ?? "{}").id).toBe(blockId(wt, 0, 0));
+    const chapter = db
+      .select({ id: walkthroughSemanticSteps.id })
+      .from(walkthroughSemanticSteps)
+      .where(eq(walkthroughSemanticSteps.walkthroughId, wt))
+      .get();
+    expect(chapter?.id).toBe(semanticStepId(wt, 0));
+    const issue = db
+      .select({ id: walkthroughIssues.id, blockIds: walkthroughIssues.blockIds })
+      .from(walkthroughIssues)
+      .where(eq(walkthroughIssues.walkthroughId, wt))
+      .get();
+    expect(issue?.id).toBe(issueId(wt, "i-open", null, null));
+    expect(JSON.parse(issue?.blockIds ?? "[]")).toEqual([blockId(wt, 0, 0)]);
 
     expect(events.map((e) => e.type)).toEqual(["lifecycle:cache-hit", "lifecycle:complete"]);
     expect(events[0]).toEqual({

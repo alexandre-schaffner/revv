@@ -11,7 +11,7 @@ import type {
   WalkthroughState,
 } from "@revv/shared";
 import { STACK_CITATION_FORMAT } from "@revv/shared";
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { projectRecaps } from "../../../db/schema/project-recaps";
 import { pullRequests } from "../../../db/schema/pull-requests";
 import { walkthroughBlocks } from "../../../db/schema/walkthrough-blocks";
@@ -21,8 +21,14 @@ import { walkthroughSemanticSteps } from "../../../db/schema/walkthrough-semanti
 import { walkthroughs as walkthroughsTable } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
 import { takeawayOf } from "../../../services/stacks/overlay";
+import {
+  decodePrCommits,
+  findIssuesMissingInlineComment,
+  finishedReview,
+  isRatedAxis,
+} from "../../../services/walkthrough/content";
 import { readWalkthroughLeads } from "../../../services/walkthrough-leads";
-import { errorResult, findIssuesMissingInlineComment, loadWalkthroughRow } from "./helpers";
+import { errorResult, loadWalkthroughRow } from "./helpers";
 import type {
   GetCommitHistoryInput,
   GetRepoContextInput,
@@ -132,11 +138,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
       endLine: r.endLine,
     }));
 
-  // Surface unfinished comment-pairing work so resumes (and any agent that
-  // is reasoning about whether it can call `complete_walkthrough` yet)
-  // don't have to deduce it from the issues list. This is the same query
-  // the orchestrator and `complete_walkthrough` use — single source of
-  // truth (see findIssuesMissingInlineComment).
+  // Surfaced so a resume doesn't have to deduce owed comments from the issues.
   const issuesNeedingInlineComment = findIssuesMissingInlineComment(ctx.db, ctx.walkthroughId);
   // Leads in prompt order with their verdicts, so a resume knows which ones
   // it has already judged. Same query as complete_walkthrough's gate.
@@ -245,11 +247,7 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
     sentiment: row.sentiment ?? null,
     semanticSteps,
     diffSteps,
-    // Only axes with agent-written prose count as rated — rows seeded by the
-    // retired Jev verdict pass are empty and would otherwise look rated.
-    ratedAxes: ratingRows
-      .filter((r) => r.rationale.trim().length > 0)
-      .map((r) => r.axis as RatingAxis),
+    ratedAxes: ratingRows.filter(isRatedAxis).map((r) => r.axis as RatingAxis),
     issues,
     issueCount: issues.length,
     issuesNeedingInlineComment,
@@ -297,26 +295,6 @@ export const getWalkthroughStateHandler: WalkthroughToolHandler<GetWalkthroughSt
 // surfaces as an empty array — the agent's single-commit edge-case path
 // then writes a one-paragraph journey chapter and moves on.
 
-interface PrCommitJson {
-  readonly sha: string;
-  readonly message: string;
-  readonly authorLogin: string | null;
-  readonly authorAvatarUrl: string | null;
-  readonly date: string | null;
-}
-
-function isPrCommitJson(v: unknown): v is PrCommitJson {
-  if (v === null || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.sha === "string" &&
-    typeof o.message === "string" &&
-    (o.authorLogin === null || typeof o.authorLogin === "string") &&
-    (o.authorAvatarUrl === null || typeof o.authorAvatarUrl === "string") &&
-    (o.date === null || typeof o.date === "string")
-  );
-}
-
 export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInput> = async (
   ctx,
 ) => {
@@ -327,18 +305,7 @@ export const getCommitHistoryHandler: WalkthroughToolHandler<GetCommitHistoryInp
     );
   }
 
-  let commits: PrCommitJson[] = [];
-  if (row.prCommits) {
-    try {
-      const parsed: unknown = JSON.parse(row.prCommits);
-      if (Array.isArray(parsed)) {
-        commits = parsed.filter(isPrCommitJson);
-      }
-    } catch {
-      // Corrupt JSON — surface as empty so the agent doesn't crash; the
-      // single-commit fallback path handles the rendering.
-    }
-  }
+  const commits = decodePrCommits(row.prCommits);
 
   // Return as a structured JSON payload. The agent reads commits in
   // oldest → newest order and writes the journey chapter from it; the
@@ -557,14 +524,7 @@ export const getStackContextHandler: WalkthroughToolHandler<GetStackContextInput
       const reviewed = ctx.db
         .select({ id: walkthroughsTable.id, summary: walkthroughsTable.summary })
         .from(walkthroughsTable)
-        .where(
-          and(
-            eq(walkthroughsTable.pullRequestId, pr.id),
-            inArray(walkthroughsTable.status, ["complete", "superseded"]),
-            eq(walkthroughsTable.lastCompletedPhase, "D"),
-            isNotNull(walkthroughsTable.completedAt),
-          ),
-        )
+        .where(and(eq(walkthroughsTable.pullRequestId, pr.id), finishedReview()))
         .orderBy(desc(walkthroughsTable.generatedAt))
         .get();
       if (!reviewed) return { ...base, title: pr.title, tracked: true, review: null };

@@ -15,6 +15,7 @@
 // `CacheCorrupt` and falls back to local generation.
 
 import type {
+  AcpAgentId,
   Confidence,
   RatingAxis,
   RatingCitation,
@@ -34,7 +35,14 @@ export const CACHE_SCHEMA_VERSION = 2 as const;
  * • 1m context" from the original run rather than the live settings.
  */
 export interface GenerationProviderConfig {
-  provider: "claude-agent-sdk" | "opencode" | "codex";
+  /**
+   * The agent that ran. Installs that predate the ACP-only transport wrote the
+   * driver instead (`claude-agent-sdk | opencode | codex`) and still send it;
+   * `decodeProviderConfig` maps those. No version of Revv branches on this
+   * field — older readers store and re-export it as an opaque string — so an
+   * agent id they don't know is safe to send them.
+   */
+  provider: AcpAgentId;
   model: string;
   /** A `ThinkingEffort` tier as a raw string, or null. */
   thinkingEffort: string | null;
@@ -56,10 +64,9 @@ export interface GeneratedBy {
 }
 
 /**
- * Snapshot block — strip transient ids, keep the typed payload. Local
- * `id` and `walkthroughId` are regenerated on import; the `blockIndex`
- * ordinal (set at export time) is the durable handle used by
- * `issue.blockIndexes` and `rating.blockIndexes`.
+ * Snapshot block — strip local ids, keep the typed payload. The importer
+ * derives the importing walkthrough's ids; the ordinal index into `blocks[]`
+ * is the durable handle used by `issue.blockIndexes` and `rating.blockIndexes`.
  */
 export interface WalkthroughSnapshotBlock {
   /** Always `"diff_analysis"` in v1 — Phase A/C blocks live on the row. */
@@ -110,10 +117,10 @@ export interface WalkthroughSnapshotSemanticStep {
  *
  * Excluded from the snapshot (local-only):
  *   • walkthrough id, review session id, pull request id
- *   • opencodeSessionId, resumeAttempts
+ *   • resumeAttempts
  *   • lastEditedAt, lastEditedBy
  *   • issues where `submittedAt != null` (per-account GitHub state)
- *   • per-row ids on blocks/issues/ratings (regenerated on import)
+ *   • per-row ids on blocks/issues/ratings (the importer derives its own)
  */
 export interface WalkthroughSnapshotV2 {
   schemaVersion: typeof CACHE_SCHEMA_VERSION;

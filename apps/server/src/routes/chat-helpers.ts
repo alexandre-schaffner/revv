@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatSessionContext } from "@revv/shared";
-import { and, desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { agentSessionContext } from "../ai/acp/run-turn";
@@ -16,13 +16,13 @@ import type { ChatWalkthroughContext } from "../ai/prompts/chat";
 import type { ChatStreamFrame, RawChatStreamFrame } from "../ai/providers/chat-types";
 import type { Db } from "../db/index";
 import { walkthroughIssues } from "../db/schema/walkthrough-issues";
-import { walkthroughs } from "../db/schema/walkthroughs";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
 import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
+import { latestCompleteWalkthrough } from "../services/walkthrough/content";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -222,13 +222,7 @@ export const resolveChatSessionContext = (prId: string, userId: string, warm: bo
  */
 export function fetchWalkthroughContext(db: Db, prId: string): ChatWalkthroughContext | null {
   try {
-    const wtRow = db
-      .select()
-      .from(walkthroughs)
-      .where(and(eq(walkthroughs.pullRequestId, prId), eq(walkthroughs.status, "complete")))
-      .orderBy(desc(walkthroughs.generatedAt))
-      .limit(1)
-      .get();
+    const wtRow = latestCompleteWalkthrough(db, prId);
     if (!wtRow) return null;
 
     const issues = db

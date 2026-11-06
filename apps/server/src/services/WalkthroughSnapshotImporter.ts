@@ -1,26 +1,11 @@
 // ─── WalkthroughSnapshotImporter ─────────────────────────────────────────────
 //
-// Bulk hydrate a `walkthroughs` row family from a remote-cache snapshot.
-// Mirrors the end-state contract of a compliant agent run on another
-// machine, but in a single transaction.
-//
-// Per CLAUDE.md "Agent Subsystem Invariants":
-//   • #2 — agent content writes go through MCP. An importer is not an
-//          agent; this is a deterministic bulk hydrate of content that
-//          was already produced by a validated agent run elsewhere.
-//   • #4 — strict 4-phase pipeline. We assert phase outputs before the
-//          txn and stamp `lastCompletedPhase='D'` inside it.
-//   • #7 — walkthroughs immutable per head SHA. We only ever import into
-//          a partial row at `(prId, headSha)`; status='complete' rows
-//          are detected by the caller and skipped.
-//   • #8 — commit first, broadcast second. The txn commits content +
-//          attribution columns; the caller subsequently calls
-//          `WalkthroughJobs.setStatus('complete')` which triggers the
-//          existing ws broadcast.
-//   • #11 — status transitions are orchestrator-only. The importer
-//           NEVER writes `walkthroughs.status` directly.
-//   • #12 — `complete_walkthrough` validation gate. We replicate the
-//           same checks as a pre-import assertion.
+// Hydrates a walkthrough's content from a snapshot — a team-cache hit or a
+// restack carry — in one transaction, as if a compliant agent run had written
+// it. Not an agent write (invariant 2): the content was produced and gated by
+// an agent run elsewhere. It never writes `status` (invariant 11); the caller
+// completes the row after the commit (invariant 8). Rows get the ids the MCP
+// tools derive, so chat edits address imported content like generated content.
 
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
@@ -33,6 +18,13 @@ import { walkthroughs } from "../db/schema/walkthroughs";
 import { ImportError } from "../domain/errors";
 import { debug } from "../logger";
 import { DbService } from "./Db";
+import {
+  blockId,
+  blockOrder,
+  issueId,
+  normalizeProviderConfig,
+  semanticStepId,
+} from "./walkthrough/content";
 import type { WalkthroughSnapshotV2 } from "./walkthrough-cache-format";
 import { validateSnapshot } from "./walkthrough-snapshot";
 
@@ -65,7 +57,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
-      // Pre-flight validation — same gate as `complete_walkthrough`.
       const v = validateSnapshot(snapshot);
       if (!v.ok) {
         return yield* Effect.fail(
@@ -79,11 +70,8 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
       yield* Effect.try({
         try: () =>
           db.transaction(() => {
-            // Confirm the target row exists and is in a state we can fill.
-            // We tolerate `generating` (the normal post-createPartial case)
-            // and abort on every other status — `complete` would violate
-            // invariant #7, `superseded` would be churn, `error` should
-            // get recycled by `createPartial` not "fixed" by an import.
+            // Only a `generating` row is filled: a complete one is immutable
+            // (invariant 7), and an errored one is `createPartial`'s to recycle.
             const row = db
               .select({ id: walkthroughs.id, status: walkthroughs.status })
               .from(walkthroughs)
@@ -119,10 +107,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
               .run();
 
             // ── Phase A + C: content lives on the row ────────────────────
-            // `summary` + `riskLevel` are Phase A outputs; `sentiment` is
-            // Phase C. We do NOT touch `status` (invariant #11). We DO
-            // stamp `lastCompletedPhase='D'` because the importer is
-            // equivalent to having finished all four phases.
             const nowIso = new Date().toISOString();
             db.update(walkthroughs)
               .set({
@@ -135,8 +119,10 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 generatedByGithubUserId: snapshot.generatedBy.githubUserId,
                 generatedByGithubLogin: snapshot.generatedBy.githubLogin,
                 generatedByDisplayName: snapshot.generatedBy.displayName,
-                generatedByAvatarUrl: snapshot.generatedBy.avatarContent,
-                providerConfig: JSON.stringify(snapshot.providerConfig),
+                generatedByAvatarContent: snapshot.generatedBy.avatarContent,
+                providerConfig: JSON.stringify(
+                  normalizeProviderConfig(snapshot.providerConfig, snapshot.modelUsed),
+                ),
                 leadsSelectedAt: null,
               })
               .where(eq(walkthroughs.id, walkthroughId))
@@ -148,7 +134,7 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
             for (const step of snapshot.semanticSteps) {
               db.insert(walkthroughSemanticSteps)
                 .values({
-                  id: crypto.randomUUID(),
+                  id: semanticStepId(walkthroughId, step.index),
                   walkthroughId,
                   semanticStepIndex: step.index,
                   title: step.title,
@@ -158,48 +144,43 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 .run();
             }
 
-            // Insert blocks in declaration order; capture new ids so
-            // issues + ratings can re-link via their `blockIndexes`.
-            const newBlockIds: string[] = [];
-            for (let i = 0; i < snapshot.blocks.length; i++) {
-              const b = snapshot.blocks[i];
-              if (!b) continue;
-              const id = crypto.randomUUID();
-              newBlockIds.push(id);
-
-              // The block payload (`data`) still carries the *source*
-              // machine's block id internally — but that id is purely a
-              // labelling artifact for the renderer; the durable
-              // linkage uses (semanticStepIndex, stepIndex). Rewrite
-              // it to the new local id so the renderer's id-anchors
-              // (e.g. issue-card links) line up.
-              const dataWithLocalId = { ...b.data, id };
-
+            // Issues and ratings re-link through `blockIndexes`; the payload
+            // carries the source walkthrough's id, rewritten so the renderer's
+            // anchors match the row.
+            const newBlockIds = snapshot.blocks.map((b) => {
+              const id = blockId(walkthroughId, b.semanticStepIndex, b.stepIndex);
+              const order = blockOrder(b.semanticStepIndex, b.stepIndex);
               db.insert(walkthroughBlocks)
                 .values({
                   id,
                   walkthroughId,
                   phase: b.phase,
                   semanticStepIndex: b.semanticStepIndex,
-                  order: b.semanticStepIndex * 10000 + b.stepIndex,
+                  order,
                   stepIndex: b.stepIndex,
                   type: b.type,
-                  data: JSON.stringify(dataWithLocalId),
+                  data: JSON.stringify({ ...b.data, id, order }),
                   createdAt: nowIso,
                 })
                 .run();
-            }
+              return id;
+            });
 
             // ── Issues ──────────────────────────────────────────────────
-            // Snapshots NEVER contain submittedAt-marked issues (exporter
-            // filters them out). Importer sets submittedAt=null verbatim.
-            for (const issue of snapshot.issues) {
+            // A chat edit can retitle an issue onto another's identity, so
+            // a snapshot may hold two issues that derive one id; the later
+            // one is told apart by its position.
+            const issueIds = new Set<string>();
+            for (const [position, issue] of snapshot.issues.entries()) {
               const blockIds = issue.blockIndexes
                 .map((idx) => newBlockIds[idx])
                 .filter((id): id is string => typeof id === "string");
+              const derived = issueId(walkthroughId, issue.title, issue.filePath, issue.startLine);
+              const id = issueIds.has(derived) ? `${derived}-${position}` : derived;
+              issueIds.add(id);
               db.insert(walkthroughIssues)
                 .values({
-                  id: crypto.randomUUID(),
+                  id,
                   walkthroughId,
                   order: issue.order,
                   severity: issue.severity,

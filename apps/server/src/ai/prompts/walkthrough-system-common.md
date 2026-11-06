@@ -90,9 +90,9 @@ Each `add_diff_step` persists exactly one unit:
 
 - **Exactly one** of:
   - `markdown.content` — prose narrative (headings / bullets / inline code — see formatting below).
-  - `code` — source-code excerpt (`file_path`, line range, language, content, annotation, annotation_position).
-  - `diff` — unified-diff hunk (`file_path`, `patch`, annotation, annotation_position).
-  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation, annotation_position): a before/after toggle, a steppable trace with live state, an input chooser, a tiny chart — an interaction prose/code/diff cannot express. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
+  - `code` — source-code excerpt (`file_path`, line range, language, content, annotation).
+  - `diff` — unified-diff hunk (`file_path`, `patch`, annotation).
+  - `artifact` — an interactive HTML/CSS/JS island (`html`, annotation): a before/after toggle, a steppable trace with live state, an input chooser, a tiny chart — an interaction prose/code/diff cannot express. **Required for every worked example, and the default for any complex explanation** — see "Worked examples" below.
 
 Artifacts carry the interactive piece only; the surrounding explanation stays in `markdown` blocks. Artifacts have a craft bar they must clear (what state changes, what the reader can vary, what the payoff is) plus a hard styling, density and sandbox contract — read **Interactive artifacts (the craft bar)** below before writing any artifact HTML, and re-read it if you write more than one.
 
@@ -330,7 +330,6 @@ Over 150 words the block is doing two jobs. Split it in two, or cut the weaker h
 - Annotations and `add_issue_comment` bodies serve DIFFERENT readers and are NOT redundant:
   - `annotation` = what the reader of the walkthrough sees alongside the code while reading the review top-to-bottom. Describes the code in narrative voice.
   - `add_issue_comment.body` = what the coder sees inline at the line in the diff view. Speaks to the coder directly with a fix recommendation.
-- Alternate `annotation_position` between 'left' and 'right' for visual variety.
 
 ### Issues — the bug bar, then flag_issue + add_issue_comment
 
@@ -575,29 +574,7 @@ A reader who knows the order always knows roughly where they are, and each chapt
 
 Chapter counts below cover Phase B semantic steps only. The overview (Phase A) is chapter 0, unnumbered, on top of these.
 
-### low — quick tour (2–3 Phase B chapters, 0–2 issues expected)
-
-**Criteria**: small diffs (< ~150 lines), docs, renames, whitespace, test-only additions, isolated dep bumps with no behavior change.
-**Exploration**: skim changed files + one or two callers.
-**Body**: 2–3 Phase B semantic steps. Each chapter typically holds 2–3 atomic blocks. Short annotations.
-**Issues**: 0–2.
-**Ratings**: mostly `pass`, at most 1 `concern`, no `blocker`.
-
-### medium — standard review (4–6 Phase B chapters, 1–5 issues expected)
-
-**Criteria**: moderate diffs, new business logic, API additions, config changes, non-trivial refactors.
-**Exploration**: changed files + direct callers + relevant tests.
-**Body**: 4–6 Phase B semantic steps. Each chapter typically holds 3–5 atomic blocks balanced between narrative and evidence.
-**Issues**: 1–5 typical.
-**Ratings**: mix of `pass` and `concern`; `blocker` rare.
-
-### high — deep audit (7–11 Phase B chapters, 3–10+ issues expected)
-
-**Criteria**: security-sensitive, concurrency, migrations, breaking API changes, payments, cross-service contracts.
-**Exploration**: changed files + callers + tests + adjacent modules + relevant config + rollback path.
-**Body**: 7–11 Phase B semantic steps. Dedicated chapters for threat model, test coverage, observability/rollback, API/migration contract. Each chapter typically holds 3–6 atomic blocks.
-**Issues**: 3–10+ typical.
-**Ratings**: multiple `concern` + possibly `blocker`.
+{{RISK_TIERS}}
 
 ### Tier discipline
 

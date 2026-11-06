@@ -57,7 +57,7 @@ Event envelope shape is defined in `packages/shared/src/walkthrough.ts` as the `
 | Invariant | Evidence |
 |---|---|
 | #1 / #8 — DB authoritative, commit-first | SSE handler does DB snapshot replay before live forward; cache hydration always reads DB. (`walkthrough-stream.ts` `subscribe → snapshot → flush → live`.) |
-| #7 — Chat-edit carve-out | Post-completion edits go through the `walkthrough:event` SSE envelope (`lifecycle:edited`) on the global bus only. Verified at `apps/server/src/routes/mcp/chat-context.ts` `emit()`. |
+| #7 — Chat-edit carve-out | Post-completion edits go through the `walkthrough:event` SSE envelope (`lifecycle:edited`) on the global bus only. Verified at `apps/server/src/services/walkthrough/edits.ts` `publishWalkthroughEdit`. |
 | Reconcile on reconnect | Client's `scheduleReconciliationPoll` calls `hydrateFromCache(prId)` on unexpected stream end with exponential backoff. (`walkthrough-stream.svelte.ts:216–252`.) |
 | Per-job worktree teardown | Worktree registered as scope finalizer in `WalkthroughJobs`; cleanup runs on every exit path including `kill -9`-style fiber interruption. |
 | Strong typing | `WalkthroughStreamEvent` union is shared end-to-end. No `unknown`/`any` widening at the SSE boundary. |

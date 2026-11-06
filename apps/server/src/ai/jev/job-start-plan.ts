@@ -17,14 +17,13 @@ export interface JobStartPlan {
   readonly launchOverride: GenerationLaunchOverride | null;
 }
 
-type JobStartSettings = Pick<UserSettings, "aiModel" | "aiThinkingEffort" | "jev">;
+type JobStartSettings = Pick<UserSettings, "aiModel" | "aiThinkingEffort">;
 
 export function shouldResolveJobStart(input: {
-  readonly settings: JobStartSettings;
   readonly trigger: StartJobTrigger;
   readonly cacheWillHit: boolean;
 }): boolean {
-  return input.settings.jev.enabled && input.trigger !== "resume" && !input.cacheWillHit;
+  return input.trigger !== "resume" && !input.cacheWillHit;
 }
 
 /** Pure projection from one cached answer into every job-start consumer. */
@@ -44,14 +43,13 @@ export function buildJobStartPlan(input: {
     };
   }
   return {
-    assignedRisk: settings.jev.enabled ? answers.riskLevel : null,
-    filePriorities: settings.jev.enabled ? filePriorityOrder(answers, input.files) : null,
+    assignedRisk: answers.riskLevel,
+    filePriorities: filePriorityOrder(answers, input.files),
     splitRecommendation: splitRecommendation(answers),
     launchOverride: routeFromAnswers(answers, {
       agent: input.agent,
       configuredModel: settings.aiModel,
       configuredEffort: settings.aiThinkingEffort,
-      autoSizing: settings.jev.enabled,
     }),
   };
 }
