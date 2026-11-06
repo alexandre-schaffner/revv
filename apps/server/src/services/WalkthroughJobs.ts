@@ -67,7 +67,7 @@ import { findIssuesMissingInlineComment } from "../ai/providers/walkthrough-tool
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { pullRequests } from "../db/schema/pull-requests";
 import { repositories } from "../db/schema/repositories";
-import { walkthroughs } from "../db/schema/walkthroughs";
+import { type DiffFingerprint, walkthroughs } from "../db/schema/walkthroughs";
 import {
   type AiError,
   AiGenerationError,
@@ -102,7 +102,6 @@ import { RepoCloneService } from "./RepoClone";
 import { ReviewService } from "./Review";
 import { SettingsService } from "./Settings";
 import { makeSessionTokenStore } from "./session-token-store";
-import type { DiffFingerprint } from "./stacks/fingerprint";
 import { StackService } from "./stacks/StackService";
 import { WalkthroughService } from "./Walkthrough";
 import { WalkthroughSnapshotImporter } from "./WalkthroughSnapshotImporter";

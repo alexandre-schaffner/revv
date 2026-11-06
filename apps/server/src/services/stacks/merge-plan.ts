@@ -11,7 +11,6 @@ import type { GitHubStack, GitHubStackLayer } from "./map";
 import {
   baseWasMoved,
   blockedOnlyByLayersBelow,
-  contradiction,
   type UnverifiedStackBehaviour,
 } from "./unverified-github";
 
@@ -268,7 +267,7 @@ export function nextStep(
   if (!layer) {
     const message = `#${number} is no longer in this stack`;
     return baseWasMoved(target)
-      ? contradiction("base-change-keeps-membership", number, message)
+      ? { kind: "fail", number, message, contradicts: "base-change-keeps-membership" }
       : { kind: "fail", number, message };
   }
 

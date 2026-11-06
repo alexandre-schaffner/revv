@@ -13,9 +13,11 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
-import type { DiffFingerprint } from "../../services/stacks/fingerprint";
 import { pullRequests } from "./pull-requests";
 import { reviewSessions } from "./review-sessions";
+
+/** Per-file hash of a PR diff, keyed by filename. */
+export type DiffFingerprint = Readonly<Record<string, string>>;
 
 /**
  * A generated AI walkthrough of a PR, pinned to a specific head SHA.

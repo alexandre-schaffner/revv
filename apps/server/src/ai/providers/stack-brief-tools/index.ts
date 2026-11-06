@@ -18,7 +18,7 @@ import {
   setLayerRoleSchema,
 } from "./spec";
 
-export type { StackBriefSnapshot, StackBriefToolContext, StackBriefToolResult } from "./spec";
+export type { StackBriefToolContext, StackBriefToolResult } from "./spec";
 export {
   completeStackBriefHandler,
   getStackBriefStateHandler,

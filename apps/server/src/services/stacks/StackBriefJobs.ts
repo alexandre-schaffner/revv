@@ -5,13 +5,12 @@ import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effec
 import { isAcpAgentAvailable } from "../../ai/acp/presets";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
-  type StackBriefSnapshot,
   type StackBriefToolContext,
   stackBriefCompletionBlocker,
 } from "../../ai/providers/stack-brief-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../../constants";
 import { pullRequests } from "../../db/schema/pull-requests";
-import { stackBriefs } from "../../db/schema/stack-briefs";
+import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import { DbError } from "../../domain/errors";
 import { withDb } from "../../effects/with-db";
 import { debug, logError } from "../../logger";

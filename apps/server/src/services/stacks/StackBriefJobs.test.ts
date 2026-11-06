@@ -3,13 +3,12 @@ import type { ServerEventMessage } from "@revv/shared";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import {
-  type StackBriefSnapshot,
   type StackBriefToolContext,
   setArcHandler,
   setLayerRoleHandler,
 } from "../../ai/providers/stack-brief-tools";
 import { createDb, type Db } from "../../db/index";
-import { stackBriefs } from "../../db/schema/stack-briefs";
+import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-briefs";
 import { Broadcaster } from "../Broadcaster";
 import { DbService } from "../Db";
 import { PrContextService } from "../PrContext";

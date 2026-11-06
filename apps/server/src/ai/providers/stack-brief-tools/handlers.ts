@@ -1,6 +1,10 @@
 import type { StackBriefStatus, StackLayerLink } from "@revv/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { stackBriefLayers, stackBriefs } from "../../../db/schema/stack-briefs";
+import {
+  type StackBriefSnapshot,
+  stackBriefLayers,
+  stackBriefs,
+} from "../../../db/schema/stack-briefs";
 import { walkthroughIssues } from "../../../db/schema/walkthrough-issues";
 import { walkthroughs } from "../../../db/schema/walkthroughs";
 import { readCurrentHeadFiles } from "../../../services/DiffCache";
@@ -16,7 +20,6 @@ import {
   LAYER_LINE_MAX_CHARS,
   type SetArcInput,
   type SetLayerRoleInput,
-  type StackBriefSnapshot,
   type StackBriefToolContext,
   type StackBriefToolHandler,
   type StackBriefToolResult,
