@@ -5,6 +5,7 @@ import { onMount, untrack } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { assertRuntimeChannel, fetchRuntimeHealth } from "$lib/api/runtime";
+import ChatPanel from "$lib/components/chat/ChatPanel.svelte";
 import PrDeepLinkCoordinator from "$lib/components/deep-link/PrDeepLinkCoordinator.svelte";
 import AppShell from "$lib/components/layout/AppShell.svelte";
 import OnboardingGate from "$lib/components/onboarding/OnboardingGate.svelte";
@@ -176,6 +177,9 @@ onMount(() => {
 	<OnboardingGate>
 		<AppShell>
 			{@render children()}
+			{#snippet rightPanel()}
+				<ChatPanel />
+			{/snippet}
 		</AppShell>
 	</OnboardingGate>
 	<PrDeepLinkCoordinator />

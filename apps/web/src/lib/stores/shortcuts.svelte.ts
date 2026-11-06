@@ -4,12 +4,7 @@ import { dispatchCommandKey, registerCommands } from "./commands.svelte";
 import { copySelectedPrLink } from "./pr-link.svelte";
 import { getSelectedPrId } from "./prs.svelte";
 import { openSettings, toggleSettings } from "./settingsModal.svelte";
-import {
-  openAddRepoDialog,
-  setRightPanelOpen,
-  toggleRightPanel,
-  toggleSidebar,
-} from "./sidebar.svelte";
+import { openAddRepoDialog, toggleRightPanel, toggleSidebar } from "./sidebar.svelte";
 import {
   getStackView,
   mergeOpenStack,
@@ -73,13 +68,6 @@ function closeView(): void {
   else void goto("/");
 }
 
-function focusChatComposer(): void {
-  setRightPanelOpen(true);
-  requestAnimationFrame(() => {
-    document.querySelector<HTMLTextAreaElement>('[data-slot="prompt-input-textarea"]')?.focus();
-  });
-}
-
 const APP_COMMANDS: readonly Command[] = [
   {
     id: "palette:search",
@@ -101,14 +89,6 @@ const APP_COMMANDS: readonly Command[] = [
     keys: { key: "w" },
     hidden: true,
     run: closeView,
-  },
-  {
-    id: "chat:focus",
-    label: "Focus Chat",
-    keys: { key: "l" },
-    when: onPr,
-    hidden: true,
-    run: focusChatComposer,
   },
   {
     id: "theme:light",
