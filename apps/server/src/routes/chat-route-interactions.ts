@@ -3,9 +3,10 @@
 // Elysia sub-router for plan/agent interaction endpoints.
 // Composed into the main chatRoute via `.use()`.
 
-import { getAgentCapabilities, type StreamErrorBody } from "@revv/shared";
+import { getAgentCapabilities } from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia, status, t } from "elysia";
+import { Elysia, t } from "elysia";
+import { PlanGateError } from "../domain/errors";
 import { ChatSessionService } from "../services/ChatSession";
 import { resolveChatSessionContext } from "../services/chat/session-context";
 import { PrContextService } from "../services/PrContext";
@@ -18,12 +19,7 @@ const decidePlan = (prId: string, planId: string, decision: "approved" | "reject
   Effect.gen(function* () {
     const chatSessions = yield* ChatSessionService;
     const plan = yield* chatSessions.decidePlan({ prId, planId, decision });
-    if (!plan) {
-      return status(404, {
-        code: "PLAN_NOT_FOUND",
-        message: "Plan not found",
-      } satisfies StreamErrorBody);
-    }
+    if (!plan) return yield* Effect.fail(new PlanGateError({ reason: "not-found", planId }));
     return { status: decision, plan };
   });
 

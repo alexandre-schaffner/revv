@@ -19,11 +19,9 @@ export function sseErrorFrame(body: StreamErrorBody): string {
 }
 
 export type StreamErrorCode =
-  // An API error (refused before the stream starts, or `GENERATION_ERROR`
-  // mid-stream), or a chat-turn gate.
+  // An API error: refused before the stream starts, or `GENERATION_ERROR`
+  // mid-stream.
   | ApiErrorCode
-  | "PLAN_PENDING"
-  | "PLAN_NOT_FOUND"
   // The client's own transport failures.
   | "NETWORK_ERROR"
   | "NO_BODY"

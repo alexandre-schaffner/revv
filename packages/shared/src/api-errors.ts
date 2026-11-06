@@ -28,6 +28,10 @@ export type ApiErrorCode =
   | "NO_CHAT_SESSION"
   | "INVALID_BRANCH_NAME"
   | "PUSH_REJECTED"
+  | "PLAN_PENDING"
+  | "PLAN_NOT_FOUND"
+  | "ATTACHMENT_TOO_LARGE"
+  | "ATTACHMENT_INVALID"
   | "GENERATION_ERROR"
   // The agent isn't signed in, or Revv can't read its login (Keychain). Also
   // the code of a walkthrough's `error` / `lifecycle:error` event for it.
@@ -41,7 +45,7 @@ export interface ApiErrorBody {
   /**
    * Code-specific details: `detail`/`action` for a repository GitHub won't
    * show, `files` for `REPLAY_CONFLICT`, the blocked commits for
-   * `WORKTREE_BLOCKED`.
+   * `WORKTREE_BLOCKED`, `planId` for `PLAN_PENDING` / `PLAN_NOT_FOUND`.
    */
   readonly [detail: string]: unknown;
 }

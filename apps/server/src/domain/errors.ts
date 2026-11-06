@@ -226,14 +226,16 @@ export class NoChatSessionError extends Data.TaggedError("NoChatSessionError")<{
   readonly prId: string;
 }> {}
 
-/**
- * A chat turn refused by its plan gate: a plan still awaits a decision, or the
- * plan the turn approves doesn't exist. Not in the HTTP table: the chat route
- * answers it with a stream refusal (`PLAN_PENDING` / `PLAN_NOT_FOUND`).
- */
+/** A plan still awaits a decision, or the plan a request names doesn't exist. */
 export class PlanGateError extends Data.TaggedError("PlanGateError")<{
   readonly reason: "pending" | "not-found";
   readonly planId: string;
+}> {}
+
+/** A chat message's attachment is over a size cap, or isn't what its kind says. */
+export class AttachmentRejectedError extends Data.TaggedError("AttachmentRejectedError")<{
+  readonly reason: "too-large" | "invalid";
+  readonly message: string;
 }> {}
 
 /** Rewriting the agent's commits hit a conflict; the branch was put back as it was. */
@@ -406,7 +408,7 @@ export class SshKeysFetchFailed extends Data.TaggedError("SshKeysFetchFailed")<{
 // surfaces: a REST route, a stream refused before it starts, or the external
 // agent's MCP route. Adding an error class means adding its row here.
 
-export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
+export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 502 | 503;
 
 export interface HttpError {
   readonly status: HttpErrorStatus;
@@ -449,6 +451,8 @@ type AppError =
   | BaseConflictsRejectedError
   | HeadShaMismatchError
   | WorktreeBlockedByUnpushedCommits
+  | PlanGateError
+  | AttachmentRejectedError
   | RecapNotFoundError
   | DbError
   | BlobStoreUnavailable
@@ -581,6 +585,19 @@ const HTTP_ERRORS: {
       newHeadSha: e.newHeadSha,
       commits: e.commits,
     }),
+  PlanGateError: (e) =>
+    e.reason === "pending"
+      ? http(
+          409,
+          "PLAN_PENDING",
+          "A plan is awaiting your decision. Approve or reject it before sending a new message.",
+          { planId: e.planId },
+        )
+      : http(404, "PLAN_NOT_FOUND", "Plan not found", { planId: e.planId }),
+  AttachmentRejectedError: (e) =>
+    e.reason === "too-large"
+      ? http(413, "ATTACHMENT_TOO_LARGE", e.message)
+      : http(415, "ATTACHMENT_INVALID", e.message),
   ConcurrentPushError: (e) =>
     http(
       409,
