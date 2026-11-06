@@ -1,9 +1,6 @@
-// ── Read queries ─────────────────────────────────────────────────────────────
-//
-// Every query is windowed on `start_ms >= sinceMs` and optionally filtered by
-// service. Time buckets are computed with integer arithmetic on the epoch-ms
-// column rather than DuckDB's `time_bucket` so results cross the JSON boundary
-// as plain numbers (no timestamp objects to normalize on the client).
+// Time buckets use integer arithmetic on epoch ms rather than DuckDB's
+// `time_bucket`, which returns timestamp objects the JSON clients would have to
+// normalize.
 
 import type { DuckDBConnection } from "@duckdb/node-api";
 import { SPAN, SPAN_ATTR } from "@revv/shared/telemetry";
@@ -21,13 +18,8 @@ import type {
 
 type Row = Record<string, unknown>;
 
-// ── Span triage (derived at query time, no schema coupling) ─────────────────
-//
-// Categorise spans into the buckets that matter for a code-review tool, and
-// flag low-insight bookkeeping spans as "noise" so the per-operation views can
-// surface real work by default. Kept as SQL so every query classifies
-// identically. Exact names come from the shared telemetry contract; the
-// prefixes are the server's span namespaces.
+// Exact names come from the shared telemetry contract; the LIKE prefixes are the
+// server's span namespaces and must follow renames there.
 const CATEGORY_SQL = `CASE
   WHEN service_name = 'revv-web' THEN 'rum'
   WHEN name LIKE 'GitHub.%' THEN 'github'
@@ -45,9 +37,9 @@ const CATEGORY_SQL = `CASE
   ELSE 'internal'
 END`;
 
-// Bookkeeping spans: correct to emit (the in-app debug ring buffer wants them)
-// but near-zero-duration / high-volume, so they bury real operations in the
-// summary table. Excluded by default; the dashboard can opt them back in.
+// Bookkeeping spans: the server's in-memory debug ring buffer wants them, but
+// they are near-zero-duration and high-volume, so the summary hides them unless
+// asked (`includeNoise`).
 const NOISE_SQL = `name IN (
   '${SPAN.walkthroughEmitEvent}', '${SPAN.walkthroughSetStatus}', '${SPAN.walkthroughJob}',
   'OpencodeSupervisor.jobStarted', 'OpencodeSupervisor.jobEnded', 'OpencodeSupervisor.stopNow'
@@ -72,14 +64,11 @@ const numOrNull = (v: unknown): number | null =>
   v === null || v === undefined ? null : typeof v === "number" && Number.isFinite(v) ? v : null;
 const s = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 
-/** Build the trailing `AND service_name = ?` clause and its param, if filtering. */
 function svcClause(service: string | undefined, params: (string | number)[]): string {
   if (!service) return "";
   params.push(service);
   return ` AND service_name = $${params.length}`;
 }
-
-// ── Span row projection (shared by slow / errors / trace) ────────────────────
 
 const SPAN_SELECT = `
   trace_id, span_id, parent_span_id, name, service_name, start_ms, duration_ms,
@@ -120,8 +109,6 @@ function toSpanRecord(r: Row): SpanRecord {
     httpStatus: numOrNull(r.http_status),
   };
 }
-
-// ── Public queries ───────────────────────────────────────────────────────────
 
 export async function operationSummary(
   conn: DuckDBConnection,
@@ -212,7 +199,6 @@ export async function serviceTimeseries(
   opts: { sinceMs: number; untilMs?: number | undefined; bucketMs: number },
 ): Promise<ServiceTimeseriesPoint[]> {
   const bucket = Math.max(1000, Math.round(opts.bucketMs));
-  // Deliberately unfiltered by service — this query *is* the per-service split.
   const sql = `
     SELECT (start_ms // ${bucket}) * ${bucket} AS bucket_ms,
            service_name,
@@ -312,8 +298,6 @@ export async function recentTraces(
   },
 ): Promise<TraceSummary[]> {
   const params: (string | number)[] = [opts.sinceMs, opts.untilMs ?? Date.now()];
-  // Per trace: span count, error count, window span, and the name of the span
-  // with the smallest start (the de-facto root for display).
   const sql = `
     WITH t AS (
       SELECT trace_id,
@@ -341,12 +325,9 @@ export async function recentTraces(
 }
 
 /**
- * Recent agent generation runs, newest first.
- *
- * `span_count` is the size of the whole trace, not of the generate subtree.
- * That is the more useful number here: it says how much of the run we managed
- * to instrument, and a run that shows 3 spans instead of 40 is itself the
- * finding (a blind spot, not a fast run).
+ * `span_count` is the size of the whole trace, not of the generate subtree: it
+ * says how much of the run was instrumented, and a run that shows 3 spans
+ * instead of 40 is a blind spot, not a fast run.
  */
 export async function generations(
   conn: DuckDBConnection,

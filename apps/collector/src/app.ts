@@ -15,8 +15,6 @@ const BROWSER_ORIGINS = [
 // host.docker.internal is used by Grafana's server-side data source proxy.
 const COLLECTOR_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal"]);
 
-// ── Windowed-query helpers ───────────────────────────────────────────────────
-
 interface Window {
   sinceMs: number;
   bucketMs: number;
@@ -36,7 +34,6 @@ function parseWindow(query: Record<string, string | undefined>): Window {
     untilMs - 30 * 24 * 60 * 60_000,
   );
   const windowMs = untilMs - sinceMs;
-  // Aim for ~60 buckets across the window, snapped to a sane floor/ceiling.
   const bucketMs = clamp(
     Number(query.bucketMs) || Math.round(windowMs / 60),
     5_000,
@@ -48,8 +45,6 @@ function parseWindow(query: Record<string, string | undefined>): Window {
 
 const limitOf = (query: Record<string, string | undefined>, fallback: number): number =>
   clamp(Number(query.limit) || fallback, 1, 500);
-
-// ── App ──────────────────────────────────────────────────────────────────────
 
 export function createCollectorApp(store: TelemetryStore, grafanaUrl: string) {
   return (
@@ -74,7 +69,7 @@ export function createCollectorApp(store: TelemetryStore, grafanaUrl: string) {
         }
       })
       .get("/api/health", () => ({ service: "revv-collector" }))
-      // OTLP/HTTP JSON ingest. Commit to DuckDB before acknowledging the batch.
+      // Commit before acknowledging: an OTLP exporter drops a batch once it is acked.
       .post("/v1/traces", async ({ body, set }) => {
         try {
           const { rejectedSpans } = await store.ingestOtlp(body);
@@ -97,7 +92,6 @@ export function createCollectorApp(store: TelemetryStore, grafanaUrl: string) {
           return { code: 14, message: "Telemetry storage unavailable" };
         }
       })
-      // ── Query API ──
       .get("/api/kpis", ({ query }) => {
         const w = parseWindow(query);
         return store.kpis({ sinceMs: w.sinceMs, untilMs: w.untilMs, service: w.service });

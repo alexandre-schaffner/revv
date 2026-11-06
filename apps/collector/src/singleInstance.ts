@@ -2,12 +2,11 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { dirname } from "node:path";
 
 /**
- * Acquire a PID-file lock for this collector instance. If a live instance
- * already holds the lock it is SIGTERM'd (then SIGKILL'd after a grace period)
- * before this one binds its port. Mirrors apps/server/src/singleInstance.ts;
- * kept local to respect the monorepo's import boundaries (no cross-app reach).
+ * A live instance holding the PID file is SIGTERM'd (then SIGKILL'd) before
+ * this one binds its port. Mirrors apps/server/src/singleInstance.ts; import
+ * boundaries forbid sharing it across apps.
  *
- * @returns a cleanup function that removes the PID file; call it on exit.
+ * @returns removes the PID file; call it on exit.
  */
 export function acquireSingleInstance(pidFile: string): () => void {
   const dir = dirname(pidFile);
