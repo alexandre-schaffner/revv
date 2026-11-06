@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AppChannel } from "@revv/shared";
+import { APP_DATA_DIR_NAME } from "@revv/shared/desktop-contract";
 import { serverEnv } from "./config";
 
 /**
@@ -15,7 +16,7 @@ import { serverEnv } from "./config";
  */
 export function appDataDir(channel: AppChannel = serverEnv.channel): string {
   const home = homedir();
-  const appDir = channel === "dev" ? "Revv Dev" : "Revv";
+  const appDir = channel === "dev" ? `${APP_DATA_DIR_NAME} Dev` : APP_DATA_DIR_NAME;
   return join(home, "Library", "Application Support", appDir);
 }
 
