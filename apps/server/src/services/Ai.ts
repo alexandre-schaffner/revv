@@ -6,11 +6,7 @@ import type {
 } from "@revv/shared";
 import { resolveThinkingEffort } from "@revv/shared";
 import { Context, Effect, Layer } from "effect";
-import {
-  applyAcpAgentOverride,
-  isAcpAgentAvailable,
-  resolveGenerationModel,
-} from "../ai/acp/presets";
+import { isAcpAgentAvailable, resolveGenerationModel } from "../ai/acp/presets";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
@@ -28,13 +24,7 @@ import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 // ── Prompt & provider imports (split out of this file) ──────────────────────
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
 import { type ContinuationContext, streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
-import {
-  type AiError,
-  AiGenerationError,
-  AiNotConfiguredError,
-  type ValidationError,
-} from "../domain/errors";
-import { withDb } from "../effects/with-db";
+import { type AiError, AiGenerationError, AiNotConfiguredError } from "../domain/errors";
 import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
@@ -217,28 +207,12 @@ export const AiServiceLive = Layer.effect(
     // or provider SDK left to manage.
     const chatMcpTokens = yield* ChatMcpTokens;
 
-    // Map ValidationError from getSettings() to AiGenerationError
-    const getSettings = () =>
-      withDb(db, settingsService.getSettings()).pipe(
-        Effect.mapError(
-          (e: ValidationError) =>
-            new AiGenerationError({ cause: e, message: e.message }) as AiError,
-        ),
-      );
-    const getAgent = () =>
-      withDb(db, settingsService.resolveAgent()).pipe(
-        Effect.mapError(
-          (e: ValidationError) =>
-            new AiGenerationError({ cause: e, message: e.message }) as AiError,
-        ),
-      );
-
     // Whether the resolved agent's ACP launch command is available.
     const checkConfigured = (): Effect.Effect<boolean> =>
       Effect.gen(function* () {
-        const agent = yield* getAgent();
+        const agent = yield* settingsService.resolveAgent();
         return isAcpAgentAvailable(agent);
-      }).pipe(Effect.catch(() => Effect.succeed(false)));
+      });
 
     return {
       streamWalkthrough: (params) =>
@@ -246,8 +220,8 @@ export const AiServiceLive = Layer.effect(
           attributes: { walkthroughId: params.walkthroughId },
         })(
           Effect.gen(function* () {
-            const settings = yield* getSettings();
-            const agent = yield* getAgent();
+            const settings = yield* settingsService.getSettings();
+            const agent = yield* settingsService.resolveAgent();
 
             // KPI telemetry: label the span with the resolved provider + model.
             yield* Effect.annotateCurrentSpan("provider", agent);
@@ -317,10 +291,8 @@ export const AiServiceLive = Layer.effect(
       chat: (params: ChatParams) =>
         Effect.withSpan("Ai.chat")(
           Effect.gen(function* () {
-            const settings = yield* getSettings();
-            // Chat runs exclusively on the ACP transport — the selected registry
-            // agent drives it.
-            const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
+            const settings = yield* settingsService.getSettings();
+            const acpAgentId = yield* settingsService.resolveAgent();
             yield* Effect.annotateCurrentSpan("prId", params.prId);
             yield* Effect.annotateCurrentSpan("provider", "acp");
             yield* Effect.annotateCurrentSpan("agent", acpAgentId);
@@ -375,8 +347,8 @@ export const AiServiceLive = Layer.effect(
 
       resolveMergeConflict: (params) =>
         Effect.gen(function* () {
-          const settings = yield* getSettings();
-          const acpAgentId = applyAcpAgentOverride(settings.aiAgent);
+          const settings = yield* settingsService.getSettings();
+          const acpAgentId = yield* settingsService.resolveAgent();
 
           if (!isAcpAgentAvailable(acpAgentId)) {
             return yield* Effect.fail(new AiNotConfiguredError());

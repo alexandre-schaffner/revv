@@ -13,12 +13,7 @@
 // next run clears before it starts.
 
 import { join } from "node:path";
-import {
-  ACP_AGENT_IDS,
-  type BaseConflictFrame,
-  type BaseConflictStrategy,
-  type BaseConflictsCheck,
-} from "@revv/shared";
+import { ACP_AGENT_IDS, type BaseConflictFrame, type BaseConflictsCheck } from "@revv/shared";
 import { Context, Effect, Layer, Queue } from "effect";
 import type { ResolveConflictsTask } from "../../ai/prompts/chat";
 import { serverEnv } from "../../config";
@@ -144,7 +139,7 @@ export const BaseConflictsServiceLive = Layer.effect(
      */
     const unpushedAgentCommits = (prId: string) =>
       Effect.gen(function* () {
-        const configured = yield* settings.resolveChatAgentId();
+        const configured = yield* settings.resolveAgent();
         for (const agent of [configured, ...ACP_AGENT_IDS.filter((id) => id !== configured)]) {
           const found = yield* chatSessions.findLatestForPrWithBase(prId, agent);
           if (!found) continue;
@@ -268,9 +263,7 @@ export const BaseConflictsServiceLive = Layer.effect(
           catch: () =>
             new BaseConflictsRejectedError({ reason: "invalid", message: "Unusable branch name" }),
         });
-        const strategy: BaseConflictStrategy =
-          (yield* settings.getSettings().pipe(Effect.orElseSucceed(() => null)))
-            ?.baseConflictStrategy ?? "merge";
+        const { baseConflictStrategy: strategy } = yield* settings.getSettings();
 
         const remoteHead = yield* gitStep("Couldn't read the PR's branch", () =>
           lsRemoteHead(repo.clonePath, repo.remoteUrl, pr.sourceBranch),

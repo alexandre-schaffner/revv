@@ -182,6 +182,20 @@ walkthroughs, chat, recaps, model listing, session lookup, and daemon lifecycle.
 **Backlog.** The daemon lifecycle still has provider-specific mechanics in feature code until the
 later AI-provider and job-helper waves.
 
+<a id="settings-shape"></a>
+### 2.5.3 One settings spec; reactions subscribe
+
+**Rule.** A user setting is declared once, in `SETTINGS_SPEC` (`packages/shared/src/settings.ts`),
+next to its `UserSettings` field: default, coercion, and what a patch may send. Defaults,
+`normalizeSettings`, the `PUT /api/settings` schema and the web's optimistic merge derive from it;
+the server adds only the column and its two mapping lines in `services/Settings.ts`. Code that
+reacts to a change subscribes to `SettingsService.watch(select)` (or `settingsChanges()`), never
+the route that wrote it. Web caches keyed on settings subscribe with `onSettingsUpdate`, and panes
+read `getSettings()`, which is never null, instead of re-typing defaults.
+
+**Why.** A field used to be hand-added in 5–7 files, and a write that bypassed the route skipped
+the scheduler restarts.
+
 ---
 
 <a id="event-envelopes"></a>

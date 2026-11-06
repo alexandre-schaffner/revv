@@ -1,6 +1,6 @@
 import type { PullRequest, Repository, ServerEventMessage } from "@revv/shared";
-import { AUTO_FETCH_DEFAULT_INTERVAL, THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
-import { Cause, Context, Duration, Effect, Layer, Ref, Schedule } from "effect";
+import { THREAD_SYNC_INTERVAL_SECONDS } from "@revv/shared";
+import { Cause, Context, Duration, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { repositories } from "../db/schema";
 import { pullRequests } from "../db/schema/pull-requests";
 import {
@@ -58,7 +58,6 @@ import { WalkthroughJobs } from "./WalkthroughJobs";
 type PollSchedulerService = {
   readonly start: () => Effect.Effect<void>;
   readonly stop: () => Effect.Effect<void>;
-  readonly restart: (intervalMinutes: number) => Effect.Effect<void>;
   /**
    * Full sync of every repo on every account. Coalesces onto an in-flight
    * cycle rather than starting a second one.
@@ -791,15 +790,27 @@ export const PollSchedulerLive = Layer.effect(
             ),
           );
 
+    // A new interval takes effect at once: the loop restarts, syncing now.
+    yield* Effect.forkScoped(
+      settingsService
+        .watch((s) => s.autoFetchInterval)
+        .pipe(
+          Stream.runForEach((minutes) =>
+            Effect.gen(function* () {
+              yield* syncLoop.stop;
+              yield* startWithInterval(minutes);
+            }),
+          ),
+        ),
+    );
+
     return {
       start: () =>
         Effect.gen(function* () {
           // Guard: don't start duplicate fibers if already running
           if (yield* threadLoop.isRunning) return;
 
-          const s = yield* withDb(settingsService.getSettings()).pipe(
-            Effect.orElseSucceed(() => ({ autoFetchInterval: AUTO_FETCH_DEFAULT_INTERVAL })),
-          );
+          const s = yield* settingsService.getSettings();
           yield* startWithInterval(s.autoFetchInterval);
           yield* threadLoop.start(threadSweepLoop);
         }),
@@ -808,12 +819,6 @@ export const PollSchedulerLive = Layer.effect(
         Effect.gen(function* () {
           yield* syncLoop.stop;
           yield* threadLoop.stop;
-        }),
-
-      restart: (minutes) =>
-        Effect.gen(function* () {
-          yield* syncLoop.stop;
-          yield* startWithInterval(minutes);
         }),
 
       syncNow: () => provideInfra(runSyncOnce("manual")),

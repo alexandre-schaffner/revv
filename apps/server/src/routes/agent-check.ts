@@ -6,6 +6,7 @@ import { checkAgent } from "../ai/providers/agent-check";
 import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
 import { handleAppError, withAuth } from "./middleware";
+import { literalUnion } from "./schemas";
 
 /**
  * Settings' "Test agent" button: one real turn with the configured review
@@ -30,5 +31,5 @@ export const agentCheckRoutes = new Elysia().use(withAuth).post(
       return handleAppError(e, ctx);
     }
   },
-  { body: t.Object({ agent: t.Union(ACP_AGENT_IDS.map((id) => t.Literal(id))) }) },
+  { body: t.Object({ agent: literalUnion(ACP_AGENT_IDS) }) },
 );

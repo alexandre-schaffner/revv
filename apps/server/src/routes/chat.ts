@@ -549,7 +549,7 @@ export const chatRoute = new Elysia()
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
             const settings = yield* settingsService.getSettings();
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             if (!pr.headSha) return null;
 
@@ -602,7 +602,7 @@ export const chatRoute = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             // Capture the active worktree and its resolved baseline before
             // dropping rows, so we can rewind it below — clearing the

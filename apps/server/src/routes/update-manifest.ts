@@ -32,12 +32,13 @@
 // truth — going through the server only matters for writes so the in-memory
 // SettingsService cache stays consistent with the persisted column).
 
+import { UPDATE_CHANNELS } from "@revv/shared";
 import { Effect } from "effect";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { serverEnv } from "../config";
 import { AppRuntime } from "../runtime";
 import { SettingsService } from "../services/Settings";
-import { updateChannelSchema } from "./schemas";
+import { literalUnion } from "./schemas";
 
 const GITHUB_REPO = "alexandre-schaffner/revv";
 const STABLE_MANIFEST_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
@@ -196,6 +197,6 @@ export const updateManifestRoute = new Elysia()
       return { channel: updated.updateChannel };
     },
     {
-      body: updateChannelSchema.put,
+      body: t.Object({ channel: literalUnion(UPDATE_CHANNELS) }),
     },
   );

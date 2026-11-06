@@ -103,16 +103,10 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
     const eligibility = yield* CacheEligibility;
 
     const isDownloadEnabled = (): Effect.Effect<boolean> =>
-      settings.getSettings().pipe(
-        Effect.map((s) => s.cache.enabled && s.cache.downloadsEnabled),
-        Effect.catch(() => Effect.succeed(false)),
-      );
+      settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.downloadsEnabled));
 
     const isUploadEnabled = (): Effect.Effect<boolean> =>
-      settings.getSettings().pipe(
-        Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled),
-        Effect.catch(() => Effect.succeed(false)),
-      );
+      settings.getSettings().pipe(Effect.map((s) => s.cache.enabled && s.cache.uploadsEnabled));
 
     return RemoteWalkthroughCache.of({
       probe: (repoFullName, headSha) =>
@@ -133,9 +127,9 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           const ok = yield* isDownloadEnabled();
           if (!ok) return Option.none<WalkthroughSnapshotV2>();
 
-          const live = yield* settings.getSettings().pipe(Effect.catch(() => Effect.succeed(null)));
-          const signingMode = live?.cache.signing.mode ?? "strict";
-          const trustedHosts = new Set(live?.cache.signing.trustedSignerHosts ?? []);
+          const live = yield* settings.getSettings();
+          const signingMode = live.cache.signing.mode;
+          const trustedHosts = new Set(live.cache.signing.trustedSignerHosts);
 
           const key = cacheObjectKey(repoFullName, headSha);
           const record = yield* blob.get(key).pipe(
@@ -351,9 +345,7 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
           const gz = gzipSync(Buffer.from(json, "utf8"));
           const contentSha256 = createHash("sha256").update(gz).digest("hex");
 
-          const live = yield* settings
-            .getSettings()
-            .pipe(Effect.mapError((e) => new CacheUnavailable({ message: e.message })));
+          const live = yield* settings.getSettings();
 
           // ── Signing (when mode != 'off') ─────────────────────────────────
           const signingMode = live.cache.signing.mode;
@@ -388,7 +380,6 @@ export const RemoteWalkthroughCacheLive = Layer.effect(
             .put(key, gz, {
               [CACHE_METADATA_KEYS.schemaVersion]: String(CACHE_SCHEMA_VERSION),
               [CACHE_METADATA_KEYS.modelUsed]: snapshot.modelUsed,
-              [CACHE_METADATA_KEYS.uploadedByUserId]: live.id,
               [CACHE_METADATA_KEYS.contentSha256]: contentSha256,
               ...signingMeta,
             })

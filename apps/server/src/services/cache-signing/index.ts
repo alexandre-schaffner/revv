@@ -144,13 +144,7 @@ export const SshSignerLive = Layer.effect(
     return SshSigner.of({
       sign: (message) =>
         Effect.gen(function* () {
-          const settings = yield* settingsSvc
-            .getSettings()
-            .pipe(
-              Effect.mapError(
-                (e) => new SshSigningUnavailable({ message: `settings error: ${e.message}` }),
-              ),
-            );
+          const settings = yield* settingsSvc.getSettings();
 
           const acct = yield* Effect.try({
             try: () => findAccountWithLoginSync(db),

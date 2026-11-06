@@ -182,13 +182,11 @@ export const StackBriefJobsLive = Layer.effect(
           return;
         }
 
-        const settings = yield* settingsService
-          .getSettings()
-          .pipe(Effect.orElseSucceed(() => null));
-        const agent = yield* settingsService.resolveAgent().pipe(Effect.orElseSucceed(() => null));
-        if (!settings || !agent || !isAcpAgentAvailable(agent)) {
+        const settings = yield* settingsService.getSettings();
+        const agent = yield* settingsService.resolveAgent();
+        if (!isAcpAgentAvailable(agent)) {
           yield* finish(job.briefId, "error", {
-            errorMessage: `The configured agent ('${agent ?? "unknown"}') is not available on this machine.`,
+            errorMessage: `The configured agent ('${agent}') is not available on this machine.`,
           });
           return;
         }

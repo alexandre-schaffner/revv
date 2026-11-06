@@ -3,8 +3,8 @@
 // The ACP agent registry itself (id, label, command, args, capabilities) is the
 // single source of truth in `@revv/shared` (`ACP_AGENTS`) so the web provider
 // list / selectors and the server launch stay in sync — adding an agent is one
-// entry there. This module holds the server-only concerns: the `REVV_ACP_AGENT`
-// / `REVV_ACP_COMMAND` overrides, availability checks, and per-adapter routing
+// entry there. This module holds the server-only concerns: the
+// `REVV_ACP_COMMAND` override, availability checks, and per-adapter routing
 // of the selected model / thinking-effort: at launch (env for Codex/Claude
 // Code), or per session over ACP (`AcpLaunch.sessionModel`, for opencode).
 
@@ -17,7 +17,6 @@ import {
   getAcpAgent,
   getAcpAgentDefaultModel,
   getAgentCapabilities,
-  isAcpAgentId,
   isAutoSentinel,
   type ThinkingEffort,
 } from "@revv/shared";
@@ -150,17 +149,6 @@ function resolvePackageRunner(
 
 function isPackageRunner({ command, args }: Pick<AcpLaunch, "command" | "args">): boolean {
   return command === "npx" || command === "bunx" || (command === "bun" && args[0] === "x");
-}
-
-/**
- * Apply the `REVV_ACP_AGENT` env override (a testing / power-user knob) over a
- * persisted agent id. Returns the override when it names a valid registry agent,
- * otherwise the persisted id unchanged.
- */
-export function applyAcpAgentOverride(agent: AcpAgentId): AcpAgentId {
-  const override = serverEnv.acpAgent.trim();
-  if (override && isAcpAgentId(override)) return override;
-  return agent;
 }
 
 /**

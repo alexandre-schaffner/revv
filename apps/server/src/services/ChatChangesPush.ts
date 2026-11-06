@@ -379,7 +379,7 @@ export const ChatChangesPushServiceLive = Layer.effect(
         // conversation was created). Scanning the full registry keeps this in
         // step with `ACP_AGENT_IDS` instead of a hand-maintained agent list.
         const settingsService = yield* SettingsService;
-        const configuredAgent = yield* settingsService.resolveChatAgentId();
+        const configuredAgent = yield* settingsService.resolveAgent();
         const agentOrder = [
           configuredAgent,
           ...ACP_AGENT_IDS.filter((id) => id !== configuredAgent),

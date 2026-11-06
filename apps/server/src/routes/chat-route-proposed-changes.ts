@@ -51,7 +51,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
@@ -100,7 +100,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
@@ -144,7 +144,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
@@ -533,7 +533,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -616,7 +616,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPrWithBase(pr.id, agent);
           }),
         );
@@ -761,7 +761,7 @@ export const chatProposedChangesRoutes = new Elysia()
             const chatSessions = yield* ChatSessionService;
             const settingsService = yield* SettingsService;
             const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
             return yield* chatSessions.findLatestForPr(pr.id, agent);
           }),
         );
@@ -826,7 +826,7 @@ export const chatProposedChangesRoutes = new Elysia()
               ctx.params.prId,
               ctx.session.user.id,
             );
-            const agent = yield* settingsService.resolveChatAgentId();
+            const agent = yield* settingsService.resolveAgent();
 
             const row = yield* chatSessions.findLatestForPr(pr.id, agent);
             if (!row) return;

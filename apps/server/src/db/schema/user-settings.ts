@@ -1,79 +1,53 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * User preferences — migrated from `~/.revv/settings.json`.
- * Single-user app, so exactly one row with `id = 'default'`.
+ * The single settings row (`id = 'default'`). The shape, defaults and value
+ * rules live in `@revv/shared` `settings.ts`; `services/Settings.ts` maps the
+ * columns onto it. `scripts/revv` reads `update_channel` directly with sqlite3.
  */
 export const userSettings = sqliteTable("user_settings", {
   id: text("id").primaryKey(),
-  aiProvider: text("ai_provider").notNull(),
+  /** Retired, never read. The shipped column is NOT NULL without a default. */
+  aiProvider: text("ai_provider")
+    .notNull()
+    .$defaultFn(() => ""),
   aiModel: text("ai_model").notNull(),
   aiThinkingEffort: text("ai_thinking_effort").notNull(),
   aiAgent: text("ai_agent").notNull(),
   aiSuggestionsModel: text("ai_suggestions_model").notNull(),
   aiMaxTurns: integer("ai_max_turns").notNull(),
-  theme: text("theme").notNull(),
+  /** Retired, never read: the theme is a per-machine preference kept in localStorage. */
+  theme: text("theme")
+    .notNull()
+    .$defaultFn(() => "dark"),
   diffViewMode: text("diff_view_mode").notNull(),
   autoFetchInterval: integer("auto_fetch_interval").notNull(),
   githubHost: text("github_host").notNull(),
-  /**
-   * GitHub OAuth/App client ID for a user-added GitHub Enterprise host. Empty
-   * for github.com, which resolves its client ID from server config. When a
-   * user points Revv at their own GHE instance they register a GitHub App
-   * there and paste its (public) client ID here — there is no bundled
-   * registration on a customer's host. An `Iv…`-prefixed value is a GitHub App
-   * (no device-flow scope); `Ov…` is a classic OAuth App.
-   */
   githubClientId: text("github_client_id").notNull().default(""),
-  // recap sub-object flattened to individual columns
   recapEnabled: integer("recap_enabled", { mode: "boolean" }).notNull(),
   recapDailyEnabled: integer("recap_daily_enabled", { mode: "boolean" }).notNull(),
   recapWeeklyEnabled: integer("recap_weekly_enabled", { mode: "boolean" }).notNull(),
   recapAgent: text("recap_agent").notNull(),
-  // ── Team walkthrough cache (GCS-backed) ──────────────────────────────
-  // Opt-in remote cache. When `cacheEnabled` is off the feature short-
-  // circuits everywhere — no probe, no upload, no download. The two
-  // direction toggles let a teammate participate read-only (e.g. on a
-  // flaky network, hydrate from the cache but don't push their own
-  // generations) or write-only.
   cacheEnabled: integer("cache_enabled", { mode: "boolean" }).notNull().default(false),
-  /** GCS bucket name. Empty string when the feature is off. */
   cacheBucket: text("cache_bucket").notNull().default(""),
-  /**
-   * Service-account JSON pasted directly into Settings. V1 stores this in
-   * plaintext (consistent with `BETTER_AUTH_SECRET`). A future migration
-   * will move it into the OS keychain via `tauri-plugin-stronghold`.
-   */
+  /** Retired, never read. */
   cacheCredentialsJson: text("cache_credentials_json").notNull().default(""),
-  /** Alternative: filesystem path to the SA JSON file. */
+  /** Retired, never read. */
   cacheCredentialsPath: text("cache_credentials_path").notNull().default(""),
-  /** Allow this machine to push completed walkthroughs to the bucket. */
   cacheUploadsEnabled: integer("cache_uploads_enabled", { mode: "boolean" })
     .notNull()
     .default(true),
-  /** Allow this machine to hydrate from the bucket on cache hit. */
   cacheDownloadsEnabled: integer("cache_downloads_enabled", { mode: "boolean" })
     .notNull()
     .default(true),
-  /**
-   * Release channel followed by the in-app updater and the `revv update` CLI.
-   * `'stable'` tracks the latest release-please `vX.Y.Z` tag; `'nightly'` tracks
-   * the moving `nightly` tag built on every push to `main`. Nightly users skip
-   * the 48-hour stable cooldown.
-   */
   updateChannel: text("update_channel").notNull().default("stable"),
-  /** `'merge' | 'rebase'` — how "Resolve with agent" brings a PR up to date with its base. */
   baseConflictStrategy: text("base_conflict_strategy").notNull().default("merge"),
-  // ── SSH cache signing ─────────────────────────────────────────────────────
-  /** `'off' | 'permissive' | 'strict'`. Default `'strict'` (on by default). */
   cacheSigningMode: text("cache_signing_mode").notNull().default("strict"),
-  /** Path to the SSH private key. Empty string = auto-detect. */
   cacheSigningKeyPath: text("cache_signing_key_path").notNull().default(""),
   /** JSON-encoded `string[]` of trusted GitHub hosts. */
   cacheTrustedSignerHosts: text("cache_trusted_signer_hosts").notNull().default("[]"),
-  // ── TypeSafe System One (Jev) ────────────────────────────────────────────
-  // One switch, default-off. API key lives in the keyring
-  // (`secret:jev-api-key`), not here — this row feeds the unauthenticated `GET /api/settings` DTO.
+  // The Jev API key lives in the keyring (`secret:jev-api-key`), never here:
+  // this row feeds the unauthenticated `GET /api/settings`.
   jevEnabled: integer("jev_enabled", { mode: "boolean" }).notNull().default(false),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

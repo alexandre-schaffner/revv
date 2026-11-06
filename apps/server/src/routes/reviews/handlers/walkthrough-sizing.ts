@@ -22,10 +22,10 @@ export function getWalkthroughSizingHandler(
   return AppRuntime.runPromise(
     Effect.gen(function* () {
       const settingsSvc = yield* SettingsService;
-      const settings = yield* settingsSvc.getSettings().pipe(Effect.orElseSucceed(() => null));
+      const settings = yield* settingsSvc.getSettings();
       // The risk tier is always wanted when TypeSafe is on, so it alone
       // justifies the call even when model and effort are both pinned.
-      if (settings === null || !settings.jev.enabled) {
+      if (!settings.jev.enabled) {
         return { status: "off" as const };
       }
 
@@ -41,8 +41,7 @@ export function getWalkthroughSizingHandler(
       });
       if (answers === null) return { status: "pending" as const };
 
-      const agent = yield* settingsSvc.resolveAgent().pipe(Effect.orElseSucceed(() => null));
-      if (agent === null) return { status: "pending" as const };
+      const agent = yield* settingsSvc.resolveAgent();
 
       const override = routeFromAnswers(answers, {
         agent,

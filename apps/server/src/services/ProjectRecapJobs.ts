@@ -775,26 +775,8 @@ export const ProjectRecapJobsLive = Layer.effect(
           recapService.getLatestForRepo(job.repoId, { limit: 5 }),
         ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
 
-        const settings = yield* provideDb(settingsService.getSettings()).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
-
-        // Resolve the effective agent. Per-feature `recap.agent` setting
-        // (CLAUDE.md note: this lets users run Claude for interactive work
-        // and opencode for background recaps, or vice versa). Defaults to
-        // `'auto'` which inherits the global `aiAgent`.
-        const effectiveAgent = yield* provideDb(settingsService.resolveRecapAgent()).pipe(
-          Effect.catch((e) =>
-            Effect.sync(() => {
-              logError(
-                "recap-jobs",
-                `resolveRecapAgent failed; falling back to 'claude-code':`,
-                e instanceof Error ? e.message : String(e),
-              );
-              return "claude-code" as const;
-            }),
-          ),
-        );
+        const settings = yield* settingsService.getSettings();
+        const effectiveAgent = yield* settingsService.resolveRecapAgent();
 
         // Recap generation runs exclusively on the ACP transport now. The shared
         // MCP tool handlers behind `/mcp/recap` are the same code every agent
@@ -813,7 +795,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         }
 
         const modelUsed =
-          resolveGenerationModel(effectiveAgent, settings?.aiModel) ?? "claude-opus-4-5";
+          resolveGenerationModel(effectiveAgent, settings.aiModel) ?? "claude-opus-4-5";
         let calledAnyTool = false;
         const ctx: RecapToolContext = {
           db,
@@ -846,7 +828,7 @@ export const ProjectRecapJobsLive = Layer.effect(
                 sessionToken,
                 acpAgentId,
                 modelUsed,
-                thinkingEffort: resolveThinkingEffort(settings?.aiThinkingEffort),
+                thinkingEffort: resolveThinkingEffort(settings.aiThinkingEffort),
                 workingDir: repo.clonePath ?? process.cwd(),
                 abortController: job.abortController,
                 calledAnyTool: () => calledAnyTool,
