@@ -1,9 +1,3 @@
-// ── /mcp/chat-context ──────────────────────────────────────────────────────
-//
-// HTTP transport for the right-pane chat agent's MCP tools. Token resolution,
-// plan-mode filtering, and edit broadcasts are chat-specific; JSON-RPC
-// dispatch is shared by the MCP tool gateway binder.
-
 import { Effect } from "effect";
 import {
   type ChatWalkthroughEditContext,

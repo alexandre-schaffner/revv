@@ -1,8 +1,3 @@
-// ── Interaction sub-router ─────────────────────────────────────────────────
-//
-// Elysia sub-router for plan/agent interaction endpoints.
-// Composed into the main chatRoute via `.use()`.
-
 import { getAgentCapabilities } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -26,7 +21,6 @@ const decidePlan = (prId: string, planId: string, decision: "approved" | "reject
 export const chatInteractionRoutes = new Elysia()
   .use(withAuth)
   .onBeforeHandle(ownedBy({ prId: "pull request" }))
-  // ── Interaction mode (plan toggle) ──────────────────────────────────────
   .patch(
     "/api/chat/:prId/interaction-mode",
     (ctx) => {
@@ -50,7 +44,6 @@ export const chatInteractionRoutes = new Elysia()
       }),
     },
   )
-  // ── Plan approval ───────────────────────────────────────────────────────
   .post(
     "/api/chat/:prId/plan/:planId/approve",
     (ctx) => runRoute(decidePlan(ctx.params.prId, ctx.params.planId, "approved")),
@@ -61,7 +54,6 @@ export const chatInteractionRoutes = new Elysia()
     (ctx) => runRoute(decidePlan(ctx.params.prId, ctx.params.planId, "rejected")),
     { params: t.Object({ prId: t.String(), planId: t.String() }) },
   )
-  // ── Agent availability ─────────────────────────────────────────────────
   // Whether the composer offers Plan mode: a static capability of the
   // configured agent in the shared `ACP_AGENTS` registry.
   .get("/api/chat/agents/available", () =>

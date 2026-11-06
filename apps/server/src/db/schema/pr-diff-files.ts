@@ -2,12 +2,9 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { pullRequests } from "./pull-requests";
 
 /**
- * Cache for PR file diffs fetched from GitHub.
- *
- * Each row represents one file in a PR diff.
- * The primary key encodes (prId, path) separated by a NUL byte.
- * A PR's rows are its diff only while the range stamped on the PR row
- * (`diffFilesHeadSha`, `diffFilesBaseSha`) is still its current one.
+ * One file of a PR's diff, cached from GitHub. A PR's rows are its diff only
+ * while the range stamped on the PR row (`diffFilesHeadSha`,
+ * `diffFilesBaseSha`) is still its current one.
  */
 export const prDiffFiles = sqliteTable(
   "pr_diff_files",

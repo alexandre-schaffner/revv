@@ -53,13 +53,11 @@ async function streamJobEvents<E extends { type: string }>(
 }
 
 /**
- * Onboarding routes.
- *
- * - `/complete` and `/reset` are the gate flips for the `onboardedAt`
- *   column the SvelteKit `OnboardingGate` reads.
- * - `/agent-status` / `/install` / `/login` are the agent-step plumbing: detect
- *   which CLI agents are set up, run the selected agent's official installer,
- *   and drive its interactive login — each streaming progress over SSE so the
+ * - `/complete` and `/reset` flip the `onboardedAt` column the SvelteKit
+ *   `OnboardingGate` reads.
+ * - `/agent-status` / `/install` / `/login` are the agent step: detect which
+ *   CLI agents are set up, run the selected agent's official installer, and
+ *   drive its interactive login — each streaming progress over SSE so the
  *   user never leaves the onboarding wizard.
  */
 export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
@@ -119,11 +117,6 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
     (ctx) => runRoute(Effect.flatMap(OnboardingService, (s) => s.startInstall(ctx.body.agent))),
     { body: agentBody },
   )
-  /**
-   * SSE stream of `InstallEvent`s. Replays the log captured up to the
-   * subscription point and then forwards live events until `done`. Closes
-   * the stream after `done` (success or failure).
-   */
   .get("/install/stream", (ctx) =>
     streamJobEvents<InstallEvent>(
       ctx,
@@ -164,11 +157,6 @@ export const onboardingRoutes = new Elysia({ prefix: "/api/onboarding" })
     (ctx) => runRoute(Effect.flatMap(AgentLoginService, (s) => s.cancelLogin(ctx.body.jobId))),
     { body: t.Object({ jobId: jobIdField }) },
   )
-  /**
-   * SSE stream of `LoginEvent`s. Replays the terminal output captured up to the
-   * subscription point and then forwards live events until `done`. Closes the
-   * stream after `done` (success or failure).
-   */
   .get("/login/stream", (ctx) =>
     streamJobEvents<LoginEvent>(
       ctx,

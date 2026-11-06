@@ -17,14 +17,12 @@ export function hostFromProviderId(providerId: string): string {
   return serverEnv.githubHost;
 }
 
-/** The provider ids an account on `host` may be stored under. */
 export function providerIdsForHost(host: string): string[] {
   return host === serverEnv.githubHost
     ? [providerIdForHost(host), LEGACY_GITHUB_PROVIDER_ID]
     : [providerIdForHost(host)];
 }
 
-/** `true` for public github.com, `false` for any GitHub Enterprise host. */
 export function isPublicGitHub(host: string): boolean {
   return host === "github.com";
 }

@@ -8,8 +8,6 @@ import { AppRuntime, type AppServices } from "../runtime";
 import { GitHubAccounts } from "../services/github/accounts";
 import { SettingsService } from "../services/Settings";
 
-// ── Auth ────────────────────────────────────────────────────────────────────
-
 const unauthorized = () =>
   status(401, { error: "Unauthorized", code: "UNAUTHORIZED" } satisfies ApiErrorBody);
 
@@ -68,8 +66,6 @@ export const withAccount = new Elysia({ name: "with-account" }).derive(
     return unauthorized();
   },
 );
-
-// ── Route runner ────────────────────────────────────────────────────────────
 
 /** A refused request, typed so Eden knows every error status and its body. */
 export type ApiErrorResponse = ElysiaCustomStatusResponse<

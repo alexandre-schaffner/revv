@@ -252,11 +252,8 @@ export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput)
 
     yield* pollScheduler.syncThreadsNow(pr.id);
 
-    // Persist which walkthrough issues the reviewer just sent so the
-    // "already posted" treatment (grayed-out, unselectable) survives
-    // reloads and PR-switches. Stamped regardless of action — an
-    // approve that happens to include walkthrough issues in the body
-    // also counts as "sent to GitHub."
+    // Stamped regardless of action: an approve whose body includes walkthrough
+    // issues also counts as "sent to GitHub".
     const issueIds = body.issueIds ?? [];
     const issuesSubmittedAt =
       issueIds.length > 0 ? yield* walkthroughService.markIssuesSubmitted(issueIds) : null;

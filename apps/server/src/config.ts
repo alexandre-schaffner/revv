@@ -15,14 +15,10 @@ const EnvConfig = Config.all({
   // disables the loopback request guard (an explicit opt-in to off-box exposure).
   host: Config.String("REVV_HOST").pipe(Config.withDefault("127.0.0.1")),
   channel: Config.String("REVV_CHANNEL").pipe(Config.withDefault(DEFAULT_APP_CHANNEL)),
-  // SQLite location. Empty (the default) means "auto-resolve to the per-user
-  // app-data dir" (`<appDataDir>/revv.db`) — the same durable tree as
-  // `auth.key` and the secret store, so the DB survives app updates. The old
-  // cwd-relative `./revv.db` default parked the file inside the launchd
-  // WorkingDirectory / git checkout and orphaned it on every update, forcing a
-  // full re-onboarding. `REVV_DB_PATH` overrides for dev/CI/self-hosting.
-  // Resolution lives in `db/index.ts` (`resolveDbPath`) to avoid a config↔paths
-  // import cycle.
+  // SQLite location. Empty (the default) resolves to `<appDataDir>/revv.db`
+  // (`resolveDbPath` in `db/index.ts`), beside `auth.key` and the secret store,
+  // so the DB survives app updates. `REVV_DB_PATH` overrides for
+  // dev/CI/self-hosting.
   dbPath: Config.String("REVV_DB_PATH").pipe(Config.withDefault("")),
   // Build edition. `oss` (default) authenticates via the classic OAuth App
   // with the coarse `repo` scope, bring-your-own-credentials, for self-hosting.
@@ -75,23 +71,22 @@ const EnvConfig = Config.all({
   // `/api/update-manifest` answers 204 so the desktop app never swaps a
   // bundle out from under the manager that pinned it.
   updatesManagedBy: Config.String("REVV_UPDATES_MANAGED_BY").pipe(Config.withDefault("")),
-  // Absolute paths to the `claude` / `opencode` CLIs, resolved once by the
-  // installer's shell (which has the user's full PATH including Homebrew,
+  // Absolute paths to the `claude` / `opencode` / `codex` CLIs, resolved once by
+  // the installer's shell (which has the user's full PATH including Homebrew,
   // asdf, mise, nix, etc.) and saved in desktop-server.json's environment.
-  // Empty string = "not detected at install time" —
-  // the server falls back to a runtime `which` lookup. See
-  // apps/server/src/ai/acp/agents/ for the resolution chain.
+  // Empty = "not detected at install time": the server falls back to a runtime
+  // lookup (each adapter in `ai/acp/agents/`).
   claudeBin: Config.String("REVV_CLAUDE_BIN").pipe(Config.withDefault("")),
   opencodeBin: Config.String("REVV_OPENCODE_BIN").pipe(Config.withDefault("")),
   codexBin: Config.String("REVV_CODEX_BIN").pipe(Config.withDefault("")),
   cloneDir: Config.String("REVV_CLONE_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "repos")),
   ),
-  // Isolated `CLAUDE_CONFIG_DIR` for claude-code ACP agents (see
-  // `ai/acp/claude-config.ts`, injected centrally in `ai/acp/acp-connection.ts`).
-  // Keeps Revv's sessions out of `~/.claude`, whose `projects` registry VS
-  // Code's Copilot Chat extension force-opens as git repos — polluting the
-  // Source Control view with every PR worktree Revv spawns an agent in.
+  // Isolated `CLAUDE_CONFIG_DIR` for claude-code ACP agents
+  // (`ai/acp/agents/claude-config.ts`). Keeps Revv's sessions out of
+  // `~/.claude`, whose `projects` registry VS Code's Copilot Chat extension
+  // force-opens as git repos — polluting the Source Control view with every PR
+  // worktree Revv spawns an agent in.
   claudeConfigDir: Config.String("REVV_CLAUDE_CONFIG_DIR").pipe(
     Config.withDefault(join(homedir(), ".revv", "claude")),
   ),
@@ -101,18 +96,13 @@ const EnvConfig = Config.all({
   claudeConfigIsolation: Config.Boolean("REVV_CLAUDE_CONFIG_ISOLATION").pipe(
     Config.withDefault(true),
   ),
-  // ── ACP (Agent Client Protocol) chat transport ──────────────────────────
-  // The right-pane chat (and merge-conflict resolution) run on a single ACP
-  // client adapter — the agent runs as a subprocess spoken to over stdio
-  // JSON-RPC. Agent selection (see ai/acp/launch.ts): `acpAgent` picks any
-  // registry agent by id (e.g. `cursor`) regardless of the legacy `aiAgent`
-  // setting; `acpCommand`/`acpArgs` pin a raw command for an agent not in the
-  // registry.
+  // ACP testing knobs: `acpAgent` overrides the persisted agent with any
+  // registry agent id (e.g. `cursor`); `acpCommand`/`acpArgs` pin a raw adapter
+  // command, for an agent not in the registry (see `ai/acp/launch.ts`).
   acpAgent: Config.String("REVV_ACP_AGENT").pipe(Config.withDefault("")),
   acpCommand: Config.String("REVV_ACP_COMMAND").pipe(Config.withDefault("")),
   acpArgs: Config.String("REVV_ACP_ARGS").pipe(Config.withDefault("")),
   otlpEndpoint: Config.String("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(Config.withDefault("")),
-  // ── TypeSafe System One (Jev) ───────────────────────────────────────────
   // Dev-only fallback; the OS keyring (`SecretStore`, `secret:jev-api-key`)
   // wins when both are set. Never returned by unauthenticated `GET /api/settings`.
   jevApiKey: Config.String("REVV_JEV_API_KEY").pipe(Config.withDefault("")),

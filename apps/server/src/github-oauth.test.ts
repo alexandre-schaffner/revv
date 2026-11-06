@@ -17,8 +17,8 @@ describe("GitHub client ID validation", () => {
 });
 
 describe("clientIdForHost host resolution", () => {
-  // Regression: a stale BYO GHE client_id left in settings after switching back
-  // to a github.com account must NOT be applied to github.com — it 404s on
+  // A stale BYO GHE client_id left in settings after switching back to a
+  // github.com account must NOT be applied to github.com — it 404s on
   // github.com's device-code endpoint. github.com always uses the bundled id.
   it("ignores a custom (GHE) client id on github.com and uses the bundled id", () => {
     const bundled = clientIdForHost("github.com", null);

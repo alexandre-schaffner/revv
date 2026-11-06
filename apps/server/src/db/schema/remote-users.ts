@@ -22,7 +22,6 @@ export const remoteUsers = sqliteTable(
     provider: text("provider").notNull(),
     /** Retired: users are identified by host + login. Kept for existing rows. */
     providerUserId: text("provider_user_id").notNull(),
-    /** Username on the provider (e.g. GitHub login). */
     login: text("login").notNull(),
     displayName: text("display_name"),
     /** Base64 data URL of the fetched avatar (e.g. "data:image/png;base64,..."). */
@@ -30,7 +29,6 @@ export const remoteUsers = sqliteTable(
     lastFetchedAt: integer("last_fetched_at", { mode: "timestamp" }),
     /** The avatar URL last fetched from — tells a new image from a re-signed one. */
     lastAvatarUrl: text("last_avatar_url"),
-    /** The GitHub host the login lives on. */
     host: text("host").notNull().default("github.com"),
   },
   (t) => ({

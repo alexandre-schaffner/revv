@@ -5,14 +5,9 @@ import { APP_DATA_DIR_NAME } from "@revv/shared/desktop-contract";
 import { serverEnv } from "./config";
 
 /**
- * Per-user application data directory for Revv (macOS-only):
- *
- *   ~/Library/Application Support/Revv
- *
- * Dev builds use a distinct directory (`Revv Dev`) so a developer machine
- * running both channels keeps secrets and keys separate. This is the shared
- * resolution used by `auth.ts` (signing key) and `SecretStore`
- * (encrypted-file fallback).
+ * `~/Library/Application Support/Revv` (macOS-only). Dev builds use
+ * `Revv Dev` so a machine running both channels keeps secrets and keys
+ * separate.
  */
 export function appDataDir(channel: AppChannel = serverEnv.channel): string {
   const home = homedir();

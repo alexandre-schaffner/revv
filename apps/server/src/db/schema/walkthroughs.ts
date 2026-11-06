@@ -76,9 +76,9 @@ export const walkthroughs = sqliteTable(
      */
     summary: text("summary").notNull().default(""),
     /**
-     * Generation contract for this row. `reviewer` is the existing behavior:
-     * a third-party PR review with commit journey and reviewer-facing scorecard.
-     * `author` is a self-review/preflight pass for the PR author.
+     * Generation contract for this row. `reviewer`: a third-party PR review with
+     * commit journey and reviewer-facing scorecard. `author`: a
+     * self-review/preflight pass for the PR author.
      */
     mode: text("mode").$type<WalkthroughMode>().notNull().default(REVIEW_MODE.reviewer),
     /**
@@ -96,8 +96,7 @@ export const walkthroughs = sqliteTable(
      */
     sentiment: text("sentiment"),
     /**
-     * Job lifecycle status — owned exclusively by `WalkthroughJobs.setStatus`.
-     * Agents never write this field directly.
+     * Orchestrator-only (`WalkthroughJobs`, invariant 11); agents never write it.
      *   `generating` — job running or resumable
      *   `complete`   — `complete_walkthrough` validation passed
      *   `error`      — terminal failure (exceeded retries / unrecoverable)
@@ -139,22 +138,17 @@ export const walkthroughs = sqliteTable(
      */
     baseHeadSha: text("base_head_sha"),
     /**
-     * `full` is the original from-scratch pipeline. `incremental` produces
-     * the same visible report shape, seeded by `parentWalkthroughId` and the
+     * `full` generates from scratch. `incremental` produces the same visible
+     * report shape, seeded by `parentWalkthroughId` and the
      * `baseHeadSha..prHeadSha` commit range.
      */
     generationMode: text("generation_mode").notNull().default("full"),
     generatedAt: text("generated_at").notNull(),
     /**
-     * ISO 8601 timestamp set when {@link WalkthroughJobs.setStatus} transitions
-     * this row to `status='complete'`. Distinct from `generatedAt` (which is
-     * the job-start timestamp): the recap pipeline windows on *finish* time so
-     * a walkthrough that started in period N but finished in period N+1 lands
-     * in N+1's recap, not N's. Nullable for rows that haven't completed yet.
-     *
-     * Backfill on migration 0220: existing `status='complete'` rows get
-     * `completedAt = generatedAt` so historical walkthroughs are visible to
-     * the first recap run.
+     * ISO 8601 timestamp set when the row reaches `status='complete'`. Distinct
+     * from `generatedAt` (the job-start timestamp): the recap pipeline windows on
+     * *finish* time so a walkthrough that started in period N but finished in
+     * period N+1 lands in N+1's recap, not N's.
      */
     completedAt: text("completed_at"),
     modelUsed: text("model_used").notNull(),
@@ -173,8 +167,9 @@ export const walkthroughs = sqliteTable(
      */
     lastEditedAt: text("last_edited_at"),
     /**
-     * Actor that performed the most recent post-completion edit — currently
-     * `'chat:acp'` or `'claude-code'`. Pairs with `lastEditedAt`.
+     * Actor that performed the most recent post-completion edit: `'chat:acp'`,
+     * or an external coding agent's provider id (`'claude-code'`, `'codex'`, …).
+     * Pairs with `lastEditedAt`.
      */
     lastEditedBy: text("last_edited_by"),
     /**
@@ -188,26 +183,17 @@ export const walkthroughs = sqliteTable(
      * PR commit list (JSON of `PrCommit[]`) captured from GitHub at job
      * start. Surfaced to the agent on demand via the `get_commit_history`
      * MCP read tool — never inlined in the prompt, since long PRs would
-     * otherwise pay ~4.5K tokens up front on every run + resume.
-     *
-     * Nullable: rows created before migration 0210 read as `null`, which
-     * the read tool surfaces as an empty array — the agent's single-commit
-     * edge-case path then renders a one-paragraph journey chapter and
-     * moves on.
+     * otherwise pay ~4.5K tokens up front on every run + resume. Null on old
+     * rows, which the read tool surfaces as an empty array.
      */
     prCommits: text("pr_commits"),
     /**
-     * Numeric GitHub user id of the account that triggered this generation
-     * job. Sourced from the better-auth `account.accountId` row that owns
-     * the repo being reviewed (resolved in {@link WalkthroughJobs.startJob}).
-     * Travels with the snapshot when the row is exported to the remote
-     * cache so teammates can attribute who originally generated it.
-     * Nullable for rows created before migration 0070.
+     * Numeric GitHub user id of the account that triggered this generation job.
+     * Travels with the snapshot to the remote cache so teammates can attribute
+     * who originally generated it. Null on old rows.
      */
     generatedByGithubUserId: integer("generated_by_github_user_id"),
-    /** GitHub login of the generating account, e.g. `"alice"`. */
     generatedByGithubLogin: text("generated_by_github_login"),
-    /** Optional GitHub display name. */
     generatedByDisplayName: text("generated_by_display_name"),
     /**
      * Avatar image bytes as a data URL, for the "Generated by …" badge. The
@@ -246,11 +232,9 @@ export const walkthroughs = sqliteTable(
   },
   (t) => ({
     /**
-     * Enforces the doctrine invariant "one walkthrough per (PR, head_sha, mode)" at the
-     * database level. Makes `WalkthroughJobs.startJob` naturally idempotent:
-     * concurrent starts upsert onto the same row instead of spawning duplicates.
-     * Superseded rows share the PR but differ on head_sha, so this uniqueness
-     * doesn't block new-commit flows.
+     * One live (non-superseded) walkthrough per (PR, head SHA, mode, generation
+     * mode). Makes `WalkthroughJobs.startJob` idempotent: concurrent starts
+     * upsert onto the same row instead of spawning duplicates.
      */
     activePrHeadShaUnique: uniqueIndex("walkthroughs_active_pr_head_sha_unique")
       .on(t.pullRequestId, t.prHeadSha, t.mode, t.generationMode)

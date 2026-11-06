@@ -83,7 +83,6 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
             accountId,
           );
 
-          // Trigger a sync in the background
           yield* Effect.forkDetach(scheduler.syncNow());
 
           if (isLink) {
@@ -91,7 +90,6 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
               .linkExisting(saved, body.clonePath, accountId)
               .pipe(Effect.catch(() => Effect.void));
           } else {
-            // Trigger shallow clone in background — fire and forget
             yield* Effect.forkDetach(
               cloneSvc
                 .cloneRepo(

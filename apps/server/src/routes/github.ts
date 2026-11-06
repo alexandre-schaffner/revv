@@ -4,8 +4,7 @@ import { CacheService } from "../services/Cache";
 import { GitHubGateway } from "../services/github/gateway";
 import { runRoute, withAccount } from "./middleware";
 
-/** TTL for the in-memory GitHub repo list cache. */
-const REPO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const REPO_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const TEAMS_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -17,7 +16,6 @@ export interface AvailableRepo {
   readonly avatarUrl: string | null;
 }
 
-/** The last list fetched, for the account that fetched it. */
 let repoCache: { data: AvailableRepo[]; fetchedAt: number; accountId: string } | null = null;
 
 export const githubRoutes = new Elysia({ prefix: "/api/github" })

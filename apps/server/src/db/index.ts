@@ -34,11 +34,6 @@ function hardenDbFile(dbPath: string): void {
   }
 }
 
-/**
- * Open the database and bring it to the current schema:
- * relocate → set aside a pre-squash DB → reconcile the journal → migrate →
- * restore pre-squash data → harden.
- */
 export function createDb(path?: string) {
   const dbPath = resolveDbPath(path);
   const onDisk = dbPath !== ":memory:";

@@ -37,11 +37,9 @@ export const pullRequests = sqliteTable(
      * paths whenever a file's type changed (GitHub reports one `removed` and
      * one `added` entry for the same path). `pr_diff_files` is keyed on
      * `(prId, path)`, so the cached row count for such a PR can never reach
-     * `changed_files` — and the completeness guard, comparing the two, made
-     * every single page view re-fetch all 30 pages from GitHub. This column is
-     * the honest signal: "the cache holds everything the last fetch returned."
-     * Null on rows written before this column existed, which fall back to the
-     * `changed_files` comparison and self-heal after one fetch.
+     * `changed_files`. Null on rows never fetched since this column was added,
+     * which fall back to the `changed_files` comparison and self-heal after one
+     * fetch.
      */
     diffFilesCachedCount: integer("diff_files_cached_count"),
     /**
@@ -68,10 +66,9 @@ export const pullRequests = sqliteTable(
      */
     commentsSyncedAt: text("comments_synced_at"),
     /**
-     * sha256(sorted(threadNodeId + lastCommentUpdatedAt)) — computed after each
-     * GraphQL thread pull. If unchanged on the next tick, skip all downstream
-     * DB writes and SSE events for this PR (Phase 3 optimization; stored now so
-     * migrations don't need to change again).
+     * Fingerprint of the PR's GitHub review threads as of the last GraphQL
+     * thread pull (`fingerprintThreads` in `services/Sync.ts`). A change marks
+     * the PR changed even when no row was written: a resolve, a thread vanishing.
      */
     threadsFingerprint: text("threads_fingerprint"),
     /**
@@ -91,10 +88,8 @@ export const pullRequests = sqliteTable(
   },
   (t) => ({
     /**
-     * Composite index for the windowed archive read path: "give me closed/merged
-     * PRs for repo R in [since, until]". Without this the recap pipeline's
-     * scheduler scans the entire pull_requests table on every period boundary
-     * check, and the sidebar's archive listing degrades as the table grows.
+     * The windowed archive read: closed/merged PRs of a repo in [since, until],
+     * for the recap pipeline and the sidebar's archive listing.
      */
     repoClosedAtIdx: index("pull_requests_repo_closed_at_idx").on(t.repositoryId, t.closedAt),
   }),

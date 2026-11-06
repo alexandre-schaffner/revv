@@ -44,10 +44,8 @@ import { AppRuntime } from "./runtime";
 import { appDatabase } from "./services/Db";
 import { acquireSingleInstance } from "./singleInstance";
 
-// ── Single-instance guard ────────────────────────────────────────────────────
-// Acquire a PID file keyed on the DB path so dev (revv-dev.db) and prod
-// (revv.db) environments stay independent.  If a stale instance is found it
-// is SIGTERM'd (then SIGKILL'd after 3 s) before we bind the port.
+// PID file keyed on the DB path so dev (revv-dev.db) and prod (revv.db)
+// instances stay independent.
 const port = serverEnv.port;
 const releasePidFile = acquireSingleInstance(`${resolveDbPath()}.${serverEnv.channel}.pid`);
 
@@ -92,7 +90,6 @@ const app = new Elysia()
     }
   })
   .onRequest((ctx) => {
-    // Stamp request start time for the post-hoc http.request span.
     (ctx.store as { _revvStartMs?: number })._revvStartMs = performance.now();
     const { pathname } = new URL(ctx.request.url);
     enterOrigin(`${ctx.request.method} ${roughRoute(pathname)}`, "request");
@@ -166,41 +163,30 @@ logError("server", `listening on http://${serverEnv.host}:${port}`);
 
 enterOrigin("boot", "boot");
 
-// ── Graceful shutdown ────────────────────────────────────────────────────────
-// SIGTERM arrives on bun --watch restarts and desktop shutdown.
-// SIGINT  arrives on Ctrl-C.
+// SIGTERM arrives on bun --watch restarts and desktop shutdown; SIGINT on
+// Ctrl-C.
 //
 // Registered before the first `await`: the server already answers requests,
 // and building the runtime installs other SIGTERM listeners (the git runner) that
 // suppress Bun's default exit, so a signal landing earlier would be swallowed.
-//
-// Both previously only logged, leaving the process alive — that's why stale
-// instances accumulated.  Now we: stop Elysia, dispose the Effect runtime
-// (drains PollScheduler / WalkthroughJobs fibers), remove the PID file,
-// then exit.  A hard-kill timer fires after 8 s so a stuck Effect fiber
-// can never hold the process open forever.
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal: string): Promise<void> {
   if (isShuttingDown) {
-    // Second signal while already shutting down → force exit immediately.
     process.exit(1);
   }
   isShuttingDown = true;
 
   logError("server", `${signal} received — shutting down…`);
 
-  // Hard-kill fallback: if shutdown takes more than 8 s, give up.
   const hardKill = setTimeout(() => {
     logError("server", "shutdown timed out after 8 s — force exit");
     process.exit(1);
   }, 8000);
-  // Don't let this timer keep the process alive past a normal exit.
   hardKill.unref();
 
-  // Stop accepting connections, then dispose the runtime: it interrupts the
-  // schedulers and job fibers (their rows stay `generating` for resume) and
-  // stops the agent connection pool.
+  // Disposing the runtime interrupts the job fibers; their rows stay
+  // `generating` for resume-on-boot.
   try {
     app.stop();
   } catch (err) {
@@ -210,7 +196,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
     logError("server", "disposing the runtime failed:", err);
   });
 
-  // Release the PID file so the next startup doesn't treat us as stale.
   releasePidFile();
 
   process.exit(0);

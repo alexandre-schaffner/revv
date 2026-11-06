@@ -1,10 +1,7 @@
-// ── Proposed-changes sub-router ────────────────────────────────────────────
-//
-// /api/chat/:prId/proposed-changes/*: the agent's commits on the PR's agent
-// branch, and what the user does with them. All of it is `PrWorkspace`; a
-// refusal answers through the error table. A push answers 200 with its
-// outcome: `conflict`, `remote-changed` and `ref-exists` are results the UI
-// acts on, not refusals.
+// The agent's commits on the PR's agent branch, and what the user does with
+// them. A refusal answers through the error table. A push answers 200 with
+// its outcome: `conflict`, `remote-changed` and `ref-exists` are results the
+// UI acts on, not refusals.
 
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";

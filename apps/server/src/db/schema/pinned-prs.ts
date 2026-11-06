@@ -2,11 +2,7 @@ import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core
 import { user } from "./auth";
 import { pullRequests } from "./pull-requests";
 
-/**
- * User-pinned pull requests. Each row is a (user, PR) pair with a creation
- * timestamp so pinned ordering is stable (oldest first). Deleting a row
- * unpins the PR.
- */
+/** A (user, PR) pair; `created_at` keeps pinned ordering stable (oldest first). */
 export const pinnedPullRequests = sqliteTable(
   "pinned_pull_requests",
   {

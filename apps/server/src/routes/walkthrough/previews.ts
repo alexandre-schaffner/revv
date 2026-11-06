@@ -1,8 +1,9 @@
 // The previews the review page asks for before generation: the PR's sizing
 // and its first pass. Both read the cached diff only, never GitHub, so a
 // preview can't become a rate-limit risk, and answer `pending` until the diff
-// lands, which `DiffCacheService` announces as `diff:cached`. Both share the cached job-start answer the
-// walkthrough itself uses — one TypeSafe call, made by whoever asks first.
+// lands, which `DiffCacheService` announces as `diff:cached`. Both share the
+// cached job-start answer the walkthrough itself uses — one TypeSafe call,
+// made by whoever asks first.
 
 import type { HunkScanEnsureResult, WalkthroughSizing } from "@revv/shared";
 import { Effect } from "effect";

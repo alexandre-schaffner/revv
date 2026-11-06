@@ -6,11 +6,6 @@ import { DbService } from "../services/Db";
 /**
  * Run a synchronous Drizzle call, failing with a tagged {@link DbError}
  * instead of throwing. For code that already holds its `db` handle.
- *
- * @example
- * ```ts
- * yield* dbTry("insert thread", () => db.insert(commentThreads).values(row).run());
- * ```
  */
 export const dbTry = <A>(label: string, run: () => A): Effect.Effect<A, DbError> =>
   Effect.try({

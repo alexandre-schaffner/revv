@@ -13,7 +13,6 @@ export function stackSeen(place: PrStackPlace | null): StackSighting {
   return { kind: "seen", place };
 }
 
-/** The local id of PR `number` in the tracked repository `repositoryId`. */
 export function localPrId(repositoryId: string, number: number): string {
   return `${repositoryId}:${number}`;
 }

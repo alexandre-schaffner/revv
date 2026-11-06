@@ -14,7 +14,6 @@ const managed = ManagedRuntime.make(
   ),
 );
 
-/** Every service an effect run on {@link AppRuntime} may require. */
 export type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof managed>;
 
 export const AppRuntime: Pick<
