@@ -60,13 +60,12 @@ function loadCollapsedOwners(): Set<string> {
 let sidebarCollapsed = $state(false);
 let rightPanelOpen = $state(false);
 let addRepoDialogOpen = $state(false);
-let _collapseAllSignal = $state(0);
 let sidebarWidth = $state(loadPersistedWidth());
 let rightPanelWidth = $state(loadPersistedRightPanelWidth());
 
 // Live viewport width — the input to the side-by-side ⇄ stacked decision for
-// the chat panel. Kept here (not in a component) so the layout math and the
-// floating-chrome bounds below read from one source. `ssr = false`, so
+// the chat panel. Kept here (not in a component) so the layout math reads
+// from one source. `ssr = false`, so
 // touching `window` at module scope is safe.
 let viewportWidth = $state(window.innerWidth);
 
@@ -215,10 +214,6 @@ export function openAddRepoDialog(): void {
   addRepoDialogOpen = true;
 }
 
-export function collapseAllRepoGroups(): void {
-  _collapseAllSignal++;
-}
-
 // ── Sidebar view (PR list ⇄ file tree) ──────────────────
 
 export function getSidebarView(): SidebarView {
@@ -261,27 +256,22 @@ export function toggleOwnerCollapsed(owner: string): void {
   collapsedOwners = next;
 }
 
-// ── Main-area bounds for fixed-position floating chrome ───
+// ── Closed-PR section, per repo ─────────────────────────
 
-/** Returns the left/right inset (in px) that fixed-position floating elements
-    (e.g. pill tabs) should use to stay aligned with the visible main area.
-    Mirrors the grid math in AppShell.svelte. */
-export function getMainAreaBounds(): { left: number; right: number } {
-  return {
-    left: chromeWidth(),
-    // A stacked chat covers the main pane rather than shrinking it, so the
-    // main area keeps its full width underneath.
-    right: rightPanelOpen && !getChatStacked() ? getRightPanelWidth() : 0,
-  };
+const ARCHIVE_OPEN_PREFIX = "revv:archive-open:";
+let archiveOpen = $state(new Map<string, boolean>());
+
+export function isArchiveOpen(repoId: string): boolean {
+  const known = archiveOpen.get(repoId);
+  if (known !== undefined) return known;
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`) === "1";
 }
 
-/** Inline `style=` string for a floating action bar pinned to the bottom of
-    the visible main area. Sits above the BottomBar with one island of breathing
-    room. Reads `getMainAreaBounds()` so it tracks sidebar/right-panel state. */
-export function getActionsFloatStyle(): string {
-  const bounds = getMainAreaBounds();
-  return (
-    `position: fixed; left: ${bounds.left}px; right: ${bounds.right}px; ` +
-    `bottom: calc(var(--bottombar-height) + 2 * var(--spacing-island));`
-  );
+export function toggleArchiveOpen(repoId: string): void {
+  const open = !isArchiveOpen(repoId);
+  archiveOpen = new Map(archiveOpen).set(repoId, open);
+  if (typeof localStorage === "undefined") return;
+  if (open) localStorage.setItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`, "1");
+  else localStorage.removeItem(`${ARCHIVE_OPEN_PREFIX}${repoId}`);
 }

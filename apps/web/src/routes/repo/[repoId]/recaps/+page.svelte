@@ -4,6 +4,7 @@ import { page } from "$app/state";
 import AuthGuard from "$lib/components/auth/AuthGuard.svelte";
 import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import RecapPeriodView from "$lib/components/recaps/RecapPeriodView.svelte";
+import { useCommands } from "$lib/stores/commands.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
 
 const repoId = $derived(page.params.repoId ?? "");
@@ -16,22 +17,17 @@ const tabs = [
   { id: "weekly" as RecapPeriod, label: "Weekly", shortcut: "2" },
 ];
 
-$effect(() => {
-  function handleKeydown(e: KeyboardEvent): void {
-    if (!e.metaKey) return;
-    if (e.key === "1") {
-      e.preventDefault();
-      e.stopPropagation();
-      activePeriod = "daily";
-    } else if (e.key === "2") {
-      e.preventDefault();
-      e.stopPropagation();
-      activePeriod = "weekly";
-    }
-  }
-  window.addEventListener("keydown", handleKeydown, { capture: true });
-  return () => window.removeEventListener("keydown", handleKeydown, { capture: true });
-});
+useCommands(
+  tabs.map((tab) => ({
+    id: `recaps:${tab.id}`,
+    label: `Show ${tab.label} recaps`,
+    keys: { key: tab.shortcut },
+    hidden: true,
+    run: () => {
+      activePeriod = tab.id;
+    },
+  })),
+);
 </script>
 
 <AuthGuard>
@@ -53,9 +49,6 @@ $effect(() => {
 </AuthGuard>
 
 <style>
-	/* Positioning context for RecapPeriodView's floating actions, outside
-	   the scroll container so `position: absolute; bottom: 0` pins to
-	   the viewport bottom of the island rather than the scroll content. */
 	.period-page {
 		position: relative;
 		height: 100%;

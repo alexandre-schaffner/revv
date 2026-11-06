@@ -27,11 +27,7 @@ import {
   setAddRepoDialogOpen,
   setSidebarView,
 } from "$lib/stores/sidebar.svelte";
-import {
-  clearFocus,
-  handleKey as handleNavKey,
-  setFocusedId,
-} from "$lib/stores/sidebar-nav.svelte";
+import { focusPr, handleKey as handleNavKey } from "$lib/stores/sidebar-nav.svelte";
 import { isTextEditingKeyTarget } from "$lib/utils";
 
 interface Props {
@@ -87,191 +83,50 @@ $effect(() => {
   prListEl.scrollTop = saved;
 });
 
-function handleSidebarClick(e: MouseEvent): void {
-  const navEl = (e.target as HTMLElement).closest<HTMLElement>("[data-sidebar-nav]");
-  if (navEl) {
-    const id = navEl.getAttribute("data-sidebar-nav");
-    if (id) setFocusedId(id);
-  }
-}
+let sidebarEl = $state<HTMLElement | null>(null);
+let prSearch = $state<ReturnType<typeof SearchFilter>>();
+let filesView = $state<ReturnType<typeof SidebarFilesView>>();
 
-// When a row inside @pierre/trees' shadow root has focus,
-// document.activeElement returns the shadow host — not the button.
-// Traverse shadow roots until we reach the real focused element.
-function getDeepActiveElement(): HTMLElement | null {
-  let el: Element | null = document.activeElement;
-  while (el?.shadowRoot?.activeElement) {
-    el = el.shadowRoot.activeElement;
-  }
-  return el instanceof HTMLElement ? el : null;
-}
-
-// Tree rows live inside a shadow root on a child of .pierre-tree-host.
-// document.querySelector cannot pierce shadow DOM, so walk the host's
-// children and query each child's shadow root directly.
-function findFirstFileTreeRow(): HTMLElement | null {
-  const treeHost = document.querySelector<HTMLElement>(".view-pane--files .pierre-tree-host");
-  if (!treeHost) return null;
-  for (const child of Array.from(treeHost.children)) {
-    const row = (child as HTMLElement).shadowRoot?.querySelector<HTMLElement>('[data-type="item"]');
-    if (row) return row;
-  }
-  return null;
-}
-
-function eventStartedInSidebar(e: KeyboardEvent): boolean {
-  return e
-    .composedPath()
-    .some((target) => target instanceof HTMLElement && target.classList.contains("sidebar"));
-}
-
-// Switch to the PR list and restore the keyboard cursor to the selected PR.
-// Both panes are always mounted (CSS translate, not unmount), so the PR nav
-// element is queryable even while off-screen. PR nav IDs are
-// `${prefix}:${pr.id}` where prefix is 'pr' or 'review' — query by suffix
-// to avoid hard-coding the section prefix.
 function returnToPrList(): void {
   setSidebarView("prs");
-  const prId = getSelectedPrId();
-  if (prId) {
-    const prNavEl = document.querySelector<HTMLElement>(`[data-sidebar-nav$=":${prId}"]`);
-    const navId = prNavEl?.getAttribute("data-sidebar-nav");
-    if (navId) {
-      setFocusedId(navId);
-      return;
-    }
-  }
-  clearFocus();
+  focusPr(getSelectedPrId());
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  // Don't handle when sidebar is collapsed, palette is open, or modifier keys held
   if (collapsed) return;
   if (getPaletteOpen()) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (isTextEditingKeyTarget(e)) return;
 
-  // '/' is the global "go to search" shortcut. Resolved against the
-  // visible pane — PR search in 'prs' view, file search in 'files'
-  // view — instead of the previous `.sidebar input` lookup, which
-  // always landed on the first DOM input (PR search) even while the
-  // files pane was the one on screen. Sits above the active-panel
-  // guard so it also works from diff-scroll / diff-line modes.
+  // '/' is the global "go to search" shortcut, resolved against the visible
+  // pane. Sits above the active-panel guard so it also works from the diff
+  // modes.
   if (e.key === "/") {
     e.preventDefault();
-    const selector = view === "files" ? ".view-pane--files input" : ".view-pane--prs input";
-    const input = document.querySelector<HTMLInputElement>(selector);
-    input?.focus();
-    input?.select();
+    if (view === "files") filesView?.focusSearch();
+    else prSearch?.focus();
     return;
   }
 
-  // Only process sidebar nav keys when the sidebar panel is active
   if (getActivePanel() !== "sidebar") return;
-  if (!eventStartedInSidebar(e)) return;
+  // Tree rows live in a shadow root, so the event's target is retargeted to
+  // its host — which is still inside the sidebar.
+  if (!(e.target instanceof Node) || !sidebarEl?.contains(e.target)) return;
 
-  // In files view we delegate movement to @pierre/trees' built-in
-  // keyboard handler, which lives on the row buttons inside the tree's
-  // shadow root. We:
-  //   - Escape always swipes back to the PR list
-  //   - h collapses an open directory (ArrowLeft), navigates to parent
-  //     for a nested item (ArrowLeft), and only swipes back to the PR
-  //     list when focus is on a root-level item that has nowhere to go
-  //   - l on a directory: ArrowRight (expand or step into first child)
-  //     l on a file: click() to select and open in the main pane
-  //       (ArrowRight on a leaf just calls focusNextItem in the library,
-  //        never triggering onSelectionChange)
-  //   - j / k: ArrowDown / ArrowUp dispatched on the focused row button
   if (view === "files") {
     if (e.key === "Escape") {
       e.preventDefault();
       returnToPrList();
       return;
     }
-
-    if (e.key === "h") {
-      e.preventDefault();
-      const target = getDeepActiveElement();
-      // Use data-item-parent-path (not a slash-check on data-item-path)
-      // to detect root-level items. Flattened directory rows can have
-      // paths like "src/components" even when they sit at the tree root,
-      // making a "/" test unreliable. data-item-parent-path is absent
-      // (null) on root-level items and set to the parent path otherwise.
-      const isOpenDir = target?.getAttribute("aria-expanded") === "true";
-      const hasParent = target?.getAttribute("data-item-parent-path") != null;
-      if (isOpenDir || hasParent) {
-        // Can still navigate in the tree: collapse open dir or go up.
-        const rowTarget =
-          target?.closest<HTMLElement>('[data-type="item"]') ?? findFirstFileTreeRow();
-        if (rowTarget) {
-          if (rowTarget !== target) rowTarget.focus();
-          rowTarget.dispatchEvent(
-            new KeyboardEvent("keydown", {
-              key: "ArrowLeft",
-              code: "ArrowLeft",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
-        }
-        return;
-      }
-      // Root-level closed item (or nothing focused) — go back to PRs.
-      returnToPrList();
-      return;
-    }
-
-    if (e.key === "l") {
-      e.preventDefault();
-      const target = getDeepActiveElement();
-      const rowTarget =
-        target?.closest<HTMLElement>('[data-type="item"]') ?? findFirstFileTreeRow();
-      if (!rowTarget) return;
-      if (rowTarget !== target) rowTarget.focus();
-      if (rowTarget.getAttribute("data-item-type") === "file") {
-        // File: click to select and open in the main pane.
-        rowTarget.click();
-      } else {
-        // Directory: ArrowRight expands a closed dir or steps into
-        // the first child of an open dir.
-        rowTarget.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "ArrowRight",
-            code: "ArrowRight",
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      }
-      return;
-    }
-
-    const arrowKey = e.key === "j" ? "ArrowDown" : e.key === "k" ? "ArrowUp" : null;
-    if (arrowKey === null) return;
-
+    const result = filesView?.navigate(e.key) ?? "ignored";
+    if (result === "ignored") return;
     e.preventDefault();
-    // document.activeElement returns the shadow host when focus is
-    // inside the tree's shadow root — traverse into the shadow chain
-    // to get the actual focused row button.
-    const target = getDeepActiveElement();
-    // If the focused element is already a tree row use it; otherwise
-    // fall back to the first visible row inside the shadow DOM.
-    const rowTarget = target?.closest<HTMLElement>('[data-type="item"]') ?? findFirstFileTreeRow();
-    if (!rowTarget) return;
-    if (rowTarget !== target) rowTarget.focus();
-    rowTarget.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: arrowKey,
-        code: arrowKey,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    if (result === "exit") returnToPrList();
     return;
   }
 
   // 'v' enters diff scroll mode (viewport scrolling with j/k/d/u/G/gg)
-  // Note: Space toggle is handled centrally in ReviewLayout to avoid double-fire.
   if (e.key === "v") {
     e.preventDefault();
     enterScrollMode();
@@ -291,11 +146,7 @@ function handleKeydown(e: KeyboardEvent) {
 	the column is 0 wide and hidden behind a CSS contraction. The rail sits to
 	the left and is always visible.
 -->
-<div
-	class="sidebar"
-	role="none"
-	onclick={handleSidebarClick}
->
+<div class="sidebar" bind:this={sidebarEl}>
 	<!-- Header — back-breadcrumb in files mode, ProjectHeader in PR-list
 	     mode. Drops to nothing when collapsed since the column is 0 wide.
 	     Branches crossfade in sync with the pane slide below. -->
@@ -356,7 +207,7 @@ function handleKeydown(e: KeyboardEvent) {
 			class="view-pane view-pane--prs"
 			aria-hidden={view === 'files'}
 		>
-			<SearchFilter>
+			<SearchFilter bind:this={prSearch}>
 				{#snippet trailing()}
 					{#if displayRepo}
 						<AuthorFilter repoId={displayRepo.id} />
@@ -391,7 +242,7 @@ function handleKeydown(e: KeyboardEvent) {
 			aria-hidden={view !== 'files'}
 		>
 			{#if selectedPrId}
-				<SidebarFilesView />
+				<SidebarFilesView bind:this={filesView} />
 			{/if}
 		</div>
 	</div>

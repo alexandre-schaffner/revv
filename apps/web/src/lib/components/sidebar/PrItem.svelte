@@ -1,36 +1,29 @@
 <script lang="ts">
 import type { PullRequest } from "@revv/shared";
 import PushPin from "phosphor-svelte/lib/PushPin";
-import User from "phosphor-svelte/lib/User";
-import { isPrPinned, pinPr, selectPr, unpinPr } from "$lib/stores/prs.svelte";
-import { setSidebarView } from "$lib/stores/sidebar.svelte";
-import { getFocusedId } from "$lib/stores/sidebar-nav.svelte";
+import Avatar from "$lib/components/shared/Avatar.svelte";
+import { isPrPinned, pinPr, unpinPr } from "$lib/stores/prs.svelte";
+import { getFocusedId, openPr, setFocusedId } from "$lib/stores/sidebar-nav.svelte";
 import { formatRelativeTime } from "$lib/utils/format-relative-time";
 
 interface Props {
   pr: PullRequest;
   isSelected?: boolean;
-  navPrefix?: string;
   variant?: "open" | "archived";
 }
 
-let { pr, isSelected = false, navPrefix = "pr", variant = "open" }: Props = $props();
+let { pr, isSelected = false, variant = "open" }: Props = $props();
 
-let avatarFailed = $state(false);
+const isFocused = $derived(getFocusedId() === pr.id);
+let rowEl = $state<HTMLButtonElement | null>(null);
 
 $effect(() => {
-  pr.authorAvatarContent;
-  avatarFailed = false;
+  if (isFocused) rowEl?.scrollIntoView({ block: "nearest" });
 });
 
-const navId = $derived(`${navPrefix}:${pr.id}`);
-const isFocused = $derived(getFocusedId() === navId);
-
 function handleClick() {
-  if (!isSelected) {
-    selectPr(pr.id);
-  }
-  setSidebarView("files");
+  setFocusedId(pr.id);
+  openPr(pr.id);
 }
 </script>
 
@@ -41,27 +34,16 @@ function handleClick() {
 			: ''} {isFocused ? 'sidebar-nav-focused' : ''} {variant === 'archived' ? 'opacity-70' : ''}"
 			onclick={handleClick}
 		aria-label="PR #{pr.externalId}: {pr.title}"
-		data-sidebar-nav={navId}
-		data-nav-type="pr"
-		data-nav-parent="repo:{pr.repositoryId}"
+		bind:this={rowEl}
 	>
-	{#if pr.authorAvatarContent && !avatarFailed}
-		<img
+		<Avatar
 			src={pr.authorAvatarContent}
-				alt={pr.authorLogin}
-				class="mt-0.5 h-4 w-4 shrink-0 rounded-full object-cover"
-				loading="lazy"
-				referrerpolicy="no-referrer"
-				onerror={() => (avatarFailed = true)}
-			/>
-		{:else}
-			<span
-				class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-bg-elevated text-text-muted"
-				title={pr.authorLogin}
-			>
-				<User size={10} aria-hidden="true" />
-			</span>
-		{/if}
+			name={pr.authorLogin}
+			size={16}
+			fallback="user"
+			glyphSize={10}
+			class="mt-0.5"
+		/>
 
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 			<span

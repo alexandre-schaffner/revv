@@ -1,214 +1,50 @@
+import { onDestroy } from "svelte";
+import { isTextEditingKeyTarget } from "$lib/utils";
 import { fuzzyScore } from "$lib/utils/fuzzy";
-import { copySelectedPrLink } from "./pr-link.svelte";
-import { openSettings } from "./settingsModal.svelte";
-import {
-  collapseAllRepoGroups,
-  openAddRepoDialog,
-  toggleRightPanel,
-  toggleSidebar,
-} from "./sidebar.svelte";
-import {
-  getStackView,
-  mergeOpenStack,
-  moveInStack,
-  openNextUnreviewedLayer,
-  reviewRemainingLayers,
-} from "./stack-nav.svelte";
-import { setDiffThemePreference, setThemePreference } from "./theme.svelte";
+import { type Command, findBoundCommand, isAvailable } from "./command-keys";
 
-// Re-export so existing consumers (CommandPalette) keep importing from here.
-export { fuzzyScore };
+// Later registrations shadow earlier ones on the same keys, so a page can
+// take over a binding for as long as it is mounted.
+let registered = $state.raw<readonly Command[]>([]);
 
-export interface Command {
-  id: string;
-  label: string;
-  category?: string;
-  shortcut?: string;
-  keywords?: string[];
-  available?: () => boolean;
-  action: () => void;
+export function registerCommands(commands: readonly Command[]): () => void {
+  registered = [...registered, ...commands];
+  return () => {
+    registered = registered.filter((cmd) => !commands.includes(cmd));
+  };
 }
 
-const inStack = (): boolean => getStackView() !== null;
+/** Register commands for as long as the calling component is mounted. */
+export function useCommands(commands: readonly Command[]): void {
+  onDestroy(registerCommands(commands));
+}
 
-const STACK_COMMANDS: Command[] = [
-  {
-    id: "stack:next",
-    label: "Stack: Next Layer",
-    category: "Stack",
-    shortcut: "\u2325\u2318\u2191",
-    keywords: ["up", "above", "layer", "stacked"],
-    available: inStack,
-    action: () => moveInStack("up"),
-  },
-  {
-    id: "stack:previous",
-    label: "Stack: Previous Layer",
-    category: "Stack",
-    shortcut: "\u2325\u2318\u2193",
-    keywords: ["down", "below", "layer", "stacked"],
-    available: inStack,
-    action: () => moveInStack("down"),
-  },
-  {
-    id: "stack:next-unreviewed",
-    label: "Stack: Next Unreviewed Layer",
-    category: "Stack",
-    keywords: ["review", "walkthrough", "remaining", "todo"],
-    available: inStack,
-    action: () => openNextUnreviewedLayer(),
-  },
-  {
-    id: "stack:review-all",
-    label: "Stack: Review Whole Stack",
-    category: "Stack",
-    keywords: ["walkthrough", "generate", "remaining", "queue"],
-    available: inStack,
-    action: () => void reviewRemainingLayers(),
-  },
-  {
-    id: "stack:merge",
-    label: "Stack: Merge Stack\u2026",
-    category: "Stack",
-    keywords: ["merge", "land", "ship"],
-    available: inStack,
-    action: () => mergeOpenStack(),
-  },
-];
+/** Runs the command bound to a ⌘ combo. Returns whether the event was taken. */
+export function dispatchCommandKey(e: KeyboardEvent): boolean {
+  const cmd = findBoundCommand(registered, e);
+  if (!cmd) return false;
+  if (cmd.notInTextFields && isTextEditingKeyTarget(e)) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!(cmd.ignoreRepeat && e.repeat)) cmd.run();
+  return true;
+}
 
-const commands = $state<Command[]>([
-  {
-    id: "theme:light",
-    label: "Theme: Light",
-    category: "Theme",
-    keywords: ["appearance", "light mode"],
-    action: () => setThemePreference("light"),
-  },
-  {
-    id: "theme:dark",
-    label: "Theme: Dark",
-    category: "Theme",
-    keywords: ["appearance", "dark mode"],
-    action: () => setThemePreference("dark"),
-  },
-  {
-    id: "theme:system",
-    label: "Theme: System",
-    category: "Theme",
-    keywords: ["appearance", "auto", "os"],
-    action: () => setThemePreference("system"),
-  },
-  {
-    id: "diff-theme:sync",
-    label: "Diff Theme: Sync with App",
-    category: "Diff Theme",
-    keywords: ["diff", "code", "syntax", "match", "follow"],
-    action: () => setDiffThemePreference("sync"),
-  },
-  {
-    id: "diff-theme:light",
-    label: "Diff Theme: Light",
-    category: "Diff Theme",
-    keywords: ["diff", "code", "syntax", "light mode"],
-    action: () => setDiffThemePreference("light"),
-  },
-  {
-    id: "diff-theme:dark",
-    label: "Diff Theme: Dark",
-    category: "Diff Theme",
-    keywords: ["diff", "code", "syntax", "dark mode"],
-    action: () => setDiffThemePreference("dark"),
-  },
-  {
-    id: "sidebar:collapse-all",
-    label: "Collapse All Repositories",
-    category: "Sidebar",
-    keywords: ["fold", "minimize", "repos"],
-    action: () => collapseAllRepoGroups(),
-  },
-  {
-    id: "sidebar:toggle",
-    label: "Toggle Sidebar",
-    category: "Sidebar",
-    shortcut: "\u2318B",
-    keywords: ["left", "panel", "hide", "show"],
-    action: () => toggleSidebar(),
-  },
-  {
-    id: "panel:toggle",
-    label: "Toggle Context Panel",
-    category: "Panel",
-    shortcut: "\u2318\u2325B",
-    keywords: ["right", "panel", "hide", "show", "context"],
-    action: () => toggleRightPanel(),
-  },
-  {
-    id: "pr:copy-link",
-    label: "Copy PR Link",
-    category: "Pull Request",
-    shortcut: "\u21e7\u2318C",
-    keywords: ["share", "deep link", "url", "clipboard"],
-    action: () => void copySelectedPrLink(),
-  },
-  {
-    id: "repo:add",
-    label: "Add Repository",
-    category: "Repository",
-    keywords: ["repo", "new", "track", "github", "import"],
-    action: () => openAddRepoDialog(),
-  },
-  {
-    id: "settings:open",
-    label: "Open Settings",
-    category: "Settings",
-    shortcut: "\u2318,",
-    keywords: ["preferences", "configure", "options"],
-    action: () => openSettings(),
-  },
-  {
-    id: "settings:ai",
-    label: "Settings: AI agent",
-    category: "Settings",
-    keywords: ["agent", "provider", "model", "claude", "codex", "opencode", "cursor"],
-    action: () => openSettings("ai"),
-  },
-  {
-    id: "settings:repositories",
-    label: "Settings: Repositories",
-    category: "Settings",
-    keywords: ["repos", "tracked", "remove"],
-    action: () => openSettings("repositories"),
-  },
-  ...STACK_COMMANDS,
-]);
+// ── Palette ──────────────────────────────────────────────
 
 let query = $state("");
 
-// ── Fuzzy matching ───────────────────────────────────────
-// `fuzzyScore` lives in `$lib/utils/fuzzy` and is re-exported above for
-// backwards compatibility with existing imports.
-
 function scoreCommand(cmd: Command, q: string): number {
   let best = fuzzyScore(q, cmd.label);
-
-  if (cmd.keywords) {
-    for (const kw of cmd.keywords) {
-      best = Math.max(best, fuzzyScore(q, kw));
-    }
-  }
-
-  if (cmd.category) {
-    best = Math.max(best, fuzzyScore(q, cmd.category));
-  }
-
+  for (const kw of cmd.keywords ?? []) best = Math.max(best, fuzzyScore(q, kw));
+  if (cmd.category) best = Math.max(best, fuzzyScore(q, cmd.category));
   return best;
 }
 
 const filteredCommands = $derived.by(() => {
-  const offered = commands.filter((cmd) => cmd.available?.() ?? true);
+  const offered = registered.filter((cmd) => !cmd.hidden && isAvailable(cmd));
   const q = query.trim();
   if (q.length === 0) return offered;
-
   return offered
     .map((cmd) => ({ cmd, score: scoreCommand(cmd, q) }))
     .filter((r) => r.score >= 0)
@@ -216,9 +52,7 @@ const filteredCommands = $derived.by(() => {
     .map((r) => r.cmd);
 });
 
-// ── Exports ──────────────────────────────────────────────
-
-export function getFilteredCommands(): Command[] {
+export function getFilteredCommands(): readonly Command[] {
   return filteredCommands;
 }
 

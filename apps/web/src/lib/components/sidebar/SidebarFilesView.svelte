@@ -40,6 +40,35 @@ $effect(() => {
 });
 const searchQuery = $derived(getFileSearchQuery());
 
+let search = $state<ReturnType<typeof SidebarFilesSearch>>();
+let tree = $state<ReturnType<typeof PierreFileTree>>();
+
+export function focusSearch(): void {
+  search?.focus();
+}
+
+/**
+ * The sidebar's vim keys while the file tree is showing. `exit` means "h" had
+ * nowhere left to go in the tree: back out to the PR list.
+ */
+export function navigate(key: string): "handled" | "exit" | "ignored" {
+  switch (key) {
+    case "j":
+      tree?.moveFocus(1);
+      return "handled";
+    case "k":
+      tree?.moveFocus(-1);
+      return "handled";
+    case "l":
+      tree?.openFocused();
+      return "handled";
+    case "h":
+      return tree?.collapseOrParent() ? "handled" : "exit";
+    default:
+      return "ignored";
+  }
+}
+
 function handleSelect(path: string): void {
   if (!filePaths.has(path)) return;
   setActiveFilePath(path);
@@ -51,7 +80,7 @@ function handleSelect(path: string): void {
 </script>
 
 <div class="files-view">
-	<SidebarFilesSearch />
+	<SidebarFilesSearch bind:this={search} onSubmit={(query) => tree?.focusFirstMatch(query)} />
 
 	{#if status === 'loading' && repoPaths.length === 0}
 		<div class="placeholder">
@@ -59,6 +88,7 @@ function handleSelect(path: string): void {
 		</div>
 	{:else}
 		<PierreFileTree
+			bind:this={tree}
 			paths={repoPaths}
 			statusByPath={new Map()}
 			{statsMap}

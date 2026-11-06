@@ -14,6 +14,7 @@ import { TooltipProvider } from "$lib/components/ui/tooltip";
 import { initGsap } from "$lib/motion";
 import { startPolling, stopPolling } from "$lib/services/sync";
 import { getToken, getUser, loadUser } from "$lib/stores/auth.svelte";
+import { useCommands } from "$lib/stores/commands.svelte";
 import { openPrDeepLink } from "$lib/stores/pr-deep-link.svelte";
 import {
   fetchPinnedPrs,
@@ -75,7 +76,7 @@ $effect(() => {
 });
 
 // Keep the sidebar view in lockstep with the URL in both directions.
-// PrItem.handleClick and CommandPalette already pair selectPr() with
+// Sidebar and palette clicks go through `openPr`, which pairs selectPr() with
 // setSidebarView('files') so the click-driven path is in sync. This
 // effect covers every URL-driven path that doesn't go through those
 // handlers — deep link, browser back/forward, refresh, SSE-driven nav,
@@ -94,17 +95,19 @@ $effect(() => {
   setSidebarView(id || onNewPr ? "files" : "prs");
 });
 
-$effect(() => {
-  function handleKeydown(e: KeyboardEvent): void {
-    if (import.meta.env.DEV && e.metaKey && e.shiftKey && e.key === "C") {
-      e.preventDefault();
+// Not ⇧⌘C: that is "Copy PR link".
+useCommands([
+  {
+    id: "dev:cache-inspector",
+    label: "Dev: Toggle Cache Inspector",
+    category: "Dev",
+    keys: { code: "KeyC", shift: true, alt: true },
+    when: () => import.meta.env.DEV,
+    run: () => {
       cacheInspectorOpen = !cacheInspectorOpen;
-    }
-  }
-  window.addEventListener("keydown", handleKeydown);
-  return () => window.removeEventListener("keydown", handleKeydown);
-});
-
+    },
+  },
+]);
 // When user becomes authenticated, hydrate app data.
 $effect(() => {
   const user = getUser();
