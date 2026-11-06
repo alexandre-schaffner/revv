@@ -42,7 +42,7 @@
     "check:ci": "python3 -m unittest discover -s scripts/ci -p \"test_*.py\""
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.14",
+    "@biomejs/biome": "2.6.4",
     "@effect/language-service": "^0.87.5",
     "@tauri-apps/cli": "^2.12.4",
     "bun-types": "1.4.4",
