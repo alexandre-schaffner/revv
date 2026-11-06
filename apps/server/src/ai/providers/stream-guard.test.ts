@@ -71,7 +71,6 @@ describe("guardWalkthroughStream", () => {
         firstEventTimeoutMs: 200,
         inactivityTimeoutMs: 200,
         label: "stream-guard-test",
-        synthesizePhases: false,
       },
     );
 
@@ -88,7 +87,6 @@ describe("guardWalkthroughStream", () => {
       firstEventTimeoutMs: 40,
       inactivityTimeoutMs: 200,
       label: "stream-guard-test",
-      synthesizePhases: false,
     });
 
     const events = await collectUntilTerminal(stream);
@@ -113,7 +111,6 @@ describe("guardWalkthroughStream", () => {
       firstEventTimeoutMs: 200,
       inactivityTimeoutMs: 50,
       label: "stream-guard-test",
-      synthesizePhases: false,
     });
 
     const events = await collectUntilTerminal(stream);
@@ -138,7 +135,6 @@ describe("guardWalkthroughStream", () => {
         firstEventTimeoutMs: 200,
         inactivityTimeoutMs: 200,
         label: "stream-guard-test",
-        synthesizePhases: false,
       },
     );
 
@@ -160,7 +156,6 @@ describe("guardWalkthroughStream", () => {
         firstEventTimeoutMs: 200,
         inactivityTimeoutMs: 200,
         label: "stream-guard-test",
-        synthesizePhases: false,
       },
     );
 
@@ -174,7 +169,6 @@ describe("guardWalkthroughStream", () => {
       firstEventTimeoutMs: 200,
       inactivityTimeoutMs: 200,
       label: "stream-guard-test",
-      synthesizePhases: false,
     });
 
     const events = await collectUntilTerminal(stream);

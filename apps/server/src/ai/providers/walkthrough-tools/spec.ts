@@ -43,8 +43,6 @@ import type { ToolSpec as GatewayToolSpec, McpToolResult } from "../mcp-tool-gat
 //     5. Advances `last_completed_phase` if appropriate (same transaction).
 //     6. Emits a WalkthroughStreamEvent via ctx.emit (outside DB commit).
 //     7. Returns { content, isError? } for the MCP transport layer.
-//   The transport layer (Claude Agent SDK wrapper OR HTTP MCP route) is
-//   indifferent — same handler runs inside the same Elysia process either way.
 
 // ── Handler execution context ─────────────────────────────────────────────────
 
@@ -57,13 +55,6 @@ export interface WalkthroughToolContext {
    * Event sink. The handler calls this AFTER the DB commit so subscribers
    * never see an event that doesn't have a corresponding durable row. Per
    * doctrine invariant #8: "Commit first, broadcast second."
-   *
-   * The emit implementation is provider-specific: the Claude SDK path passes
-   * a callback that routes through `WalkthroughJobs.emitEvent` (P1), while
-   * the opencode HTTP path wraps the same route via `runSync`. Both are
-   * synchronous from the handler's perspective — the handler simply calls
-   * `ctx.emit(event)` and returns the tool result; broadcast timing is
-   * handled by the provider's wrapper, not the handler.
    */
   readonly emit: (event: WalkthroughStreamEvent) => void;
   /**
@@ -548,8 +539,6 @@ export type SetSentimentInput = z.infer<typeof setSentimentSchema>;
 export type RateAxisInput = z.infer<typeof rateAxisSchema>;
 export type CompleteWalkthroughInput = z.infer<typeof completeWalkthroughSchema>;
 
-// Re-exported so both the Claude SDK wrapper and the HTTP MCP route can
-// construct the spec list without reimporting zod for every shape.
 export {
   addDiffStepSchema,
   addIssueCommentSchema,
@@ -565,13 +554,6 @@ export {
   setOverviewSchema,
   setSentimentSchema,
 };
-
-// ── Specs are declared where handlers are defined ─────────────────────────────
-//
-// See `walkthrough-tools.ts` for TOOL_SPECS (the array both transports
-// consume). Keeping the handler implementations there keeps the DB-imports
-// out of this spec file so tests can stub handlers without pulling in
-// SQLite.
 
 // ── Shared helpers reused by handlers ──────────────────────────────────────
 

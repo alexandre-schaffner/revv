@@ -6,26 +6,25 @@
 //     ephemeral coordination — the DB is the source of truth (invariant #1).
 //   • A shared Semaphore (capacity = MAX_CONCURRENT_JOBS) so a burst of
 //     "Regenerate" clicks can't spawn unlimited parallel agent turns.
-//   • Per-job AbortController, wired into the AI provider so cancellation
-//     propagates into the Claude SDK turn OR the opencode HTTP session.
+//   • Per-job AbortController, wired into the ACP driver so cancellation
+//     propagates into the agent's turn.
 //   • Per-job scope with a detached `git worktree` pinned at prHeadSha.
-//   • Per-job opaque session tokens — the HTTP MCP route authenticates
-//     opencode's tool calls against this map before dispatching to shared
-//     handlers (see apps/server/src/routes/mcp/walkthrough.ts).
+//   • Per-job opaque session token — the HTTP MCP route authenticates the
+//     agent's tool calls against it before dispatching to the shared handlers
+//     (see apps/server/src/routes/mcp/walkthrough.ts).
 //   • `setStatus` — the SOLE writer of the walkthroughs.status column.
 //     Every other module that needs to transition a walkthrough's lifecycle
 //     goes through this chokepoint (invariant #11).
-//   • `supersedeWalkthrough` — called by PollScheduler when a PR's head SHA
-//     changes. Marks the old row `'superseded'` with `supersededBy` pointing
-//     at the new row (invariant #7). Never mutates in place.
+//   • `supersedeForPr` — called by PollScheduler when a PR's head SHA
+//     changes. Marks the old rows `'superseded'` (invariant #7). Never
+//     mutates in place.
 //
 // Content writes are NOT here. The agent's MCP tool handlers in
-// walkthrough-tools.ts own all content persistence (blocks, issues, ratings,
-// summary, sentiment). This service observes events from the provider stream
-// ONLY to fan out to subscribers and to react at lifecycle boundaries —
-// `done` (generator end) triggers validation + setStatus; `error` triggers
-// setStatus('error'). No `addBlock` / `addIssue` / `addRating` calls exist
-// here anymore (doctrine invariant #2).
+// walkthrough-tools own all content persistence (blocks, issues, ratings,
+// summary, sentiment). This service observes the driver stream ONLY to
+// broadcast it and to react at lifecycle boundaries — `done` (generator end)
+// triggers validation + setStatus; `error` triggers setStatus('error')
+// (doctrine invariant #2).
 
 import {
   REVIEW_MODE,
@@ -52,6 +51,7 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
+import { type ActivityBeacon, makeActivityBeacon } from "../ai/agent-stream/agent-turn";
 import {
   accumulateTokenUsage,
   addThroughput,
@@ -86,7 +86,7 @@ import { debug, logError } from "../logger";
 import { withGitHubOrigin } from "../observability/github-ledger/origin";
 import { withTraceAnchor } from "../observability/span-graft";
 import { withWalkthroughMetrics } from "../observability/walkthrough-metrics";
-import { AiService, type ContinuationContext } from "./Ai";
+import { AiService } from "./Ai";
 import { Broadcaster } from "./Broadcaster";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
@@ -95,7 +95,6 @@ import { HunkScanService } from "./HunkScan";
 import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
-import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
 import { PrContextService } from "./PrContext";
 import { RemoteWalkthroughCache } from "./RemoteWalkthroughCache";
 import { RepoCloneService } from "./RepoClone";
@@ -149,8 +148,6 @@ const SESSION_TOKEN_TTL_MS = CLI_WALKTHROUGH_TIMEOUT_MS * (1 + MAX_AUTO_CONTINUA
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Subscriber = (event: WalkthroughStreamEvent) => void;
-
 /** Result of an emit attempt — used by callers to observe delivery fate. */
 export type EmitResult =
   | { readonly kind: "delivered"; readonly seq: number }
@@ -170,15 +167,12 @@ interface ActiveJob {
    */
   readonly accountId: string;
   readonly abortController: AbortController;
-  readonly subscribers: Set<SubscriberHandle<WalkthroughStreamEvent>>;
   /**
-   * Diagnostic-only monotonic counter assigned to every event flowing through
-   * the subscriber fan-out. Lets tracing correlate server log lines with
-   * client-side event arrival (see `wt-trace` on the web side). Not on the
-   * wire — purely for paired-log debugging of the stream-loss bug. Distinct
-   * from the durable wire cursor stamped by `walkthroughService.bumpSeq`.
+   * Rearms the driver's idle deadline. Noted on every MCP call authenticated
+   * against this job's token: proof the agent is alive that the ACP stream
+   * doesn't carry (MCP tool calls decode to nothing there).
    */
-  nextSeq: number;
+  readonly activity: ActivityBeacon;
   fiber: Fiber.Fiber<unknown, unknown> | null;
   cancelledByUser: boolean;
   /**
@@ -192,11 +186,6 @@ interface ActiveJob {
    * spurious failure in the UI on every head move.
    */
   cancelReason: "user" | "superseded" | null;
-  /**
-   * Number of block-prerender attempts that fell back (threw or returned null).
-   * Observability only — answers "is the SSR cache earning its keep?" (S10).
-   */
-  prerenderFailures: number;
 }
 
 /** `errorMessage` of a row whose run was cancelled (the user's Stop, or a supersede). */
@@ -264,7 +253,7 @@ export class WalkthroughJobs extends Context.Service<
      * Returns `true` when a walkthrough was hydrated, `false` on miss or
      * any failure (failures are logged; never propagated to the caller).
      *
-     * Meant for the `/cached` route handler so the first page-load
+     * Meant for the `/current` route handler so the first page-load
      * immediately hydrates from the team cache rather than showing the
      * Generate button.
      */
@@ -274,11 +263,6 @@ export class WalkthroughJobs extends Context.Service<
       repoFullName: string,
       mode?: WalkthroughMode,
     ) => Effect.Effect<boolean>;
-
-    readonly subscribe: (
-      walkthroughId: string,
-      onEvent: Subscriber,
-    ) => Effect.Effect<SubscribeResult>;
 
     readonly findActiveByPr: (
       prId: string,
@@ -307,14 +291,6 @@ export class WalkthroughJobs extends Context.Service<
     readonly resumePending: () => Effect.Effect<void>;
 
     /**
-     * Supersede one walkthrough with another (both for the same PR but
-     * different head SHAs). Called by PollScheduler when a new commit
-     * arrives. Per doctrine invariant #7, the old row is marked
-     * 'superseded' rather than mutated in place.
-     */
-    readonly supersedeWalkthrough: (oldId: string, newId: string) => Effect.Effect<void>;
-
-    /**
      * Cancel any in-flight job for a PR and mark all existing walkthroughs
      * 'superseded'. Used when PollScheduler detects a head-SHA change —
      * the old work is frozen in place (immutable per SHA, invariant #7)
@@ -336,10 +312,10 @@ export class WalkthroughJobs extends Context.Service<
     ) => Effect.Effect<void>;
 
     /**
-     * Fan an event out to a running job's subscribers. The primary caller
-     * is the HTTP MCP route — when opencode makes a tool call against
-     * `/mcp/walkthrough`, the handler commits to DB then invokes this to
-     * broadcast the resulting event. No-op if no active job.
+     * Stamp an event with the walkthrough's durable seq and broadcast it on
+     * the account's SSE bus. Callers commit to the DB first (invariant #8):
+     * the orchestrator for lifecycle events, the MCP tool handlers for
+     * content, chat-edit for post-completion edits.
      *
      * Returns `Effect<EmitResult>` so callers can observe whether the event
      * was delivered or silently dropped (S1). The `EmitResult` discriminant
@@ -353,40 +329,24 @@ export class WalkthroughJobs extends Context.Service<
 
     /**
      * Issue an opaque session token for the HTTP MCP route. Tokens resolve
-     * to a walkthroughId and are valid only while the job is running. The
-     * token is cleared automatically on scope close.
+     * to a walkthroughId and are valid only while the job is running; the
+     * job's scope clears them on exit.
      */
     readonly issueSessionToken: (walkthroughId: string) => Effect.Effect<string>;
 
     /**
      * Resolve a session token. Returns null if expired or unknown, or if
      * the job is no longer running. Used by the HTTP MCP route to
-     * authenticate incoming tool calls from the opencode daemon.
+     * authenticate the agent's tool calls; a resolved token counts as agent
+     * activity for the job's idle deadline.
      */
     readonly resolveSessionToken: (token: string) => Effect.Effect<{
       readonly walkthroughId: string;
       readonly prId: string;
       readonly accountId: string;
     } | null>;
-
-    /** Invalidate a session token early (e.g. on job cancel). */
-    readonly clearSessionToken: (token: string) => Effect.Effect<void>;
-
-    /**
-     * Increment the per-job prerender-failure counter (S10). Pure
-     * observability — no correctness impact.
-     */
-    readonly incrementPrerenderFailures: (walkthroughId: string) => Effect.Effect<void>;
   }
 >()("WalkthroughJobs") {}
-
-export type SubscribeResult =
-  | {
-      readonly found: true;
-      readonly unsubscribe: () => void;
-      readonly flush: () => void;
-    }
-  | { readonly found: false };
 
 // ── Live implementation ──────────────────────────────────────────────────────
 
@@ -427,16 +387,6 @@ export const WalkthroughJobsLive = Layer.effect(
     // for *different* PRs still run in parallel. Keyed by prId.
     const startJobMutex = yield* makeStartJobMutex();
 
-    // Per-job SSE subscriber fan-out (3-strike error budget, pre-flush
-    // buffering). Subscriber state lives on each `ActiveJob`; this owns only
-    // the shared algorithm.
-    const subscribers = makeSubscriberRegistry<WalkthroughStreamEvent>({
-      traceScope: "wt-trace",
-      errorScope: "walkthrough-jobs",
-      idLabel: "wt",
-      handleIdPrefix: "h",
-    });
-
     // Opaque-token → walkthroughId store. Ephemeral coordination (invariant #1):
     // tokens are never persisted; on restart they're regenerated by the resume
     // path. The HTTP MCP route resolves against this store. The injected
@@ -446,32 +396,6 @@ export const WalkthroughJobsLive = Layer.effect(
       SESSION_TOKEN_TTL_MS,
       (payload) => Effect.map(Ref.get(registry), (map) => map.has(payload.walkthroughId)),
     );
-
-    // Activity notifiers for the opencode provider path. Keyed by walkthroughId.
-    // The opencode provider registers a callback here; emitEvent fires it after
-    // each tool call so the stream guard's inactivity timer resets even when the
-    // opencode SSE subscription misses events.
-    const activityNotifiers = yield* Ref.make(
-      new Map<string, (event: WalkthroughStreamEvent) => void>(),
-    );
-
-    const registerActivityNotifier = (
-      walkthroughId: string,
-      callback: (event: WalkthroughStreamEvent) => void,
-    ) =>
-      Ref.update(activityNotifiers, (map) => {
-        const next = new Map(map);
-        next.set(walkthroughId, callback);
-        return next;
-      });
-
-    const unregisterActivityNotifier = (walkthroughId: string) =>
-      Ref.update(activityNotifiers, (map) => {
-        if (!map.has(walkthroughId)) return map;
-        const next = new Map(map);
-        next.delete(walkthroughId);
-        return next;
-      });
 
     const provideInfra = <A, E>(
       eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
@@ -505,13 +429,6 @@ export const WalkthroughJobsLive = Layer.effect(
         ),
       );
 
-    // Subscriber fan-out lives in `subscribers` (job-subscribers.ts).
-    // Commit-first / broadcast-second (invariant #8): by the time an event
-    // reaches `subscribers.fanOut`, the MCP tool handler (content events) or
-    // the orchestrator (lifecycle events) has already committed the DB write.
-    // Broadcast failures never roll back state — a reconnecting subscriber
-    // recovers the truth from DB.
-
     const removeJob = (walkthroughId: string) =>
       Effect.all(
         [
@@ -521,7 +438,6 @@ export const WalkthroughJobsLive = Layer.effect(
             next.delete(walkthroughId);
             return next;
           }),
-          unregisterActivityNotifier(walkthroughId),
           // Per-run ephemeral bookkeeping (see `ai/jev/pending.ts`); dropped here
           // so a long-lived server doesn't accumulate a set per walkthrough.
           Effect.sync(() => {
@@ -534,10 +450,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
     // ── Core job body ───────────────────────────────────────────────────
 
-    type PartialSnapshot = Walkthrough & {
-      readonly status: "generating" | "error";
-      readonly opencodeSessionId: string | null;
-    };
+    type PartialSnapshot = Walkthrough & { readonly status: "generating" | "error" };
 
     type ResolvedContext = {
       readonly pr: {
@@ -564,7 +477,7 @@ export const WalkthroughJobsLive = Layer.effect(
       readonly baseHeadSha: string | null;
       /**
        * Model/effort override from the TypeSafe depth answer, resolved once at
-       * job start (not per-stream: `buildStreamParams` is reused by
+       * job start (not per-stream: `streamParams` is reused by
        * `buildContinuationEffect`, and a per-stream derivation would hand a
        * continuation a different ACP pool key, orphaning the first connection).
        */
@@ -596,7 +509,6 @@ export const WalkthroughJobsLive = Layer.effect(
       accumulatedTokenUsage: WalkthroughTokenUsage;
       autoContinuations: number;
       currentGenerator: AsyncGenerator<WalkthroughStreamEvent>;
-      capturedOpencodeSessionId: string | undefined;
       /** Wall-clock start, for the adjudication state. */
       readonly startedAt: number;
       /** Phase/counts as of the previous auto-continuation; without them "progress since" is undefined, so the first continuation is never adjudicated. */
@@ -671,14 +583,6 @@ export const WalkthroughJobsLive = Layer.effect(
           concurrency: 2,
         });
 
-        // Generator construction — resume vs fresh. Note: content
-        // writes now happen INSIDE the MCP tool handlers, so the
-        // continuation context here is purely informational for the
-        // AI provider (which may still want to know e.g. the
-        // opencode session id for `--continue`).
-        const partial = ctx.partial;
-        let generator: AsyncGenerator<WalkthroughStreamEvent>;
-        let capturedOpencodeSessionId: string | undefined;
         const promptInput = yield* resolveIncrementalPromptFiles(ctx, worktreePath).pipe(
           Effect.tap((result) =>
             Effect.annotateCurrentSpan({
@@ -699,7 +603,10 @@ export const WalkthroughJobsLive = Layer.effect(
           data: { leads: hunkLeads },
         }).pipe(Effect.catch(() => Effect.void));
 
-        const buildStreamParams = (overrideContinuation?: ContinuationContext) => ({
+        // One token for the whole job, auto-continuations included; the scope
+        // finalizer in `launchJob` clears it.
+        const mcpToken = yield* issueSessionToken(job.walkthroughId);
+        const streamParams = (resumed: boolean) => ({
           pr: {
             title: ctx.pr.title,
             body: ctx.pr.body,
@@ -711,7 +618,6 @@ export const WalkthroughJobsLive = Layer.effect(
           mode: ctx.mode,
           worktreePath,
           walkthroughId: job.walkthroughId,
-          accountId: job.accountId,
           reviewMode: {
             mode: ctx.generationMode,
             parentWalkthroughId: ctx.parentWalkthroughId,
@@ -719,74 +625,26 @@ export const WalkthroughJobsLive = Layer.effect(
             headSha: ctx.prHeadSha,
             diffSource: promptInput.diffSource,
           },
-          ...(overrideContinuation ? { continuation: overrideContinuation } : {}),
+          resumed,
           ...(ctx.launchOverride ? { launchOverride: ctx.launchOverride } : {}),
           ...(ctx.assignedRisk ? { assignedRisk: ctx.assignedRisk } : {}),
           ...(ctx.filePriorities ? { filePriorities: ctx.filePriorities } : {}),
           ...(ctx.splitRecommendation ? { splitRecommendation: ctx.splitRecommendation } : {}),
           ...(hunkLeads.length > 0 ? { hunkLeads } : {}),
           ...(ctx.stack ? { stack: ctx.stack } : {}),
-          onSessionId: (id: string) => {
-            capturedOpencodeSessionId = id;
-          },
+          mcpToken,
+          activity: job.activity,
           abortController: job.abortController,
-          // Route MCP tool handler events through WalkthroughJobs.emitEvent
-          // so both Claude and opencode converge at a single emit site (P1).
-          // The callback is synchronous (runSync) to match the HTTP MCP route
-          // behavior - see apps/server/src/routes/mcp/walkthrough.ts:70-93.
-          emitEvent: (event: WalkthroughStreamEvent) => {
-            try {
-              Effect.runSync(emitEvent(job.walkthroughId, event));
-            } catch {
-              /* emitEvent logs its own failures */
-            }
-          },
-          // Supply opencode-path session-token callbacks. Ignored by
-          // the Claude SDK path. WalkthroughJobs owns the session-token
-          // store (`sessionStore`) — passing these through as callbacks
-          // avoids a layer-level cycle between AiService and WalkthroughJobs.
-          issueHttpMcpSessionToken: (walkthroughId: string) =>
-            Effect.runPromise(issueSessionToken(walkthroughId)),
-          clearHttpMcpSessionToken: (token: string) => Effect.runPromise(clearSessionToken(token)),
-          registerHttpMcpActivityNotifier: (
-            walkthroughId: string,
-            callback: (event: WalkthroughStreamEvent) => void,
-          ) => Effect.runPromise(registerActivityNotifier(walkthroughId, callback)),
-          unregisterHttpMcpActivityNotifier: (walkthroughId: string) =>
-            Effect.runPromise(unregisterActivityNotifier(walkthroughId)),
         });
 
-        if (partial) {
-          const continuation: ContinuationContext = {
-            walkthroughId: partial.id,
-            existingBlocks: partial.blocks,
-            existingIssueCount: partial.issues.length,
-            existingRatedAxes: partial.ratings.map((r) => r.axis),
-            // `opencode_session_id` is the provider-agnostic agent-session id
-            // captured via the `onSessionId` callback — it holds an opencode
-            // session id or a codex thread id depending on which agent ran.
-            // Populate both continuation fields; each provider reads its own.
-            ...(partial.opencodeSessionId
-              ? {
-                  opencodeSessionId: partial.opencodeSessionId,
-                  codexThreadId: partial.opencodeSessionId,
-                }
-              : {}),
-          };
-          generator = yield* ai.streamWalkthrough(buildStreamParams(continuation));
-        } else {
-          generator = yield* ai.streamWalkthrough(buildStreamParams());
-        }
+        const generator = yield* ai.streamWalkthrough(streamParams(ctx.partial !== null));
 
         // ── Event loop ──────────────────────────────────────────────
         //
-        // The old persist-then-fanout pattern is GONE. Content events
-        // (`summary`, `block`, `issue`, `rating`, `sentiment`) have
-        // already been persisted by the MCP tool handler that emitted
-        // them. This loop only:
-        //   - Fans out to subscribers (best effort, per invariant #8).
-        //   - Tracks orchestrator-level state (token usage, phase
-        //     progress) for auto-continuation + completion.
+        // Content never passes through here: the MCP tool handlers persist
+        // and broadcast it. This loop only:
+        //   - Broadcasts the driver's live events (best effort, invariant #8).
+        //   - Tracks token usage for auto-continuation + completion.
         //   - Reacts to the terminal `done` / `error` events.
 
         const closeGeneratorBestEffort = (
@@ -920,17 +778,6 @@ export const WalkthroughJobsLive = Layer.effect(
               return { _tag: "continue" } as const;
             }
 
-            // `thinking` events are the activity-notifier heartbeat — they enter
-            // the provider's events queue solely to reset the stream guard's
-            // inactivity timer when an MCP tool handler fires emitEvent.
-            // Re-emitting them through emitEvent would call notify(thinking)
-            // again, pushing another thinking event into the queue and producing
-            // an unbounded loop (one observed run hit 200k+ seqs/sec). Drop on
-            // the consumer side — clients no-op on this type anyway.
-            if (event.type === "thinking") {
-              return { _tag: "continue" } as const;
-            }
-
             yield* emitEvent(job.walkthroughId, event).pipe(Effect.catch(() => Effect.void));
             return { _tag: "continue" } as const;
           });
@@ -954,22 +801,7 @@ export const WalkthroughJobsLive = Layer.effect(
               return { _tag: "none" } as const;
             }
 
-            const continuationCtx: ContinuationContext = {
-              walkthroughId: partialForContinuation.id,
-              existingBlocks: partialForContinuation.blocks,
-              existingIssueCount: partialForContinuation.issues.length,
-              existingRatedAxes: partialForContinuation.ratings.map((r) => r.axis),
-              // See note above: this column is the provider-agnostic agent
-              // session id; feed both continuation fields from it.
-              ...(partialForContinuation.opencodeSessionId
-                ? {
-                    opencodeSessionId: partialForContinuation.opencodeSessionId,
-                    codexThreadId: partialForContinuation.opencodeSessionId,
-                  }
-                : {}),
-            };
-
-            const nextGenerator = yield* ai.streamWalkthrough(buildStreamParams(continuationCtx));
+            const nextGenerator = yield* ai.streamWalkthrough(streamParams(true));
             return {
               _tag: "next",
               generator: nextGenerator,
@@ -1113,27 +945,13 @@ export const WalkthroughJobsLive = Layer.effect(
           accumulatedTokenUsage: ZERO_TOKEN_USAGE,
           autoContinuations: 0,
           currentGenerator: generator,
-          capturedOpencodeSessionId: undefined,
           startedAt: Date.now(),
           phaseAtLastContinuation: null,
           countsAtLastContinuation: null,
           terminalReason: "generator-ended",
         };
 
-        yield* Effect.gen(function* () {
-          yield* runWithAutoContinuation(initialState);
-        }).pipe(
-          Effect.ensuring(
-            capturedOpencodeSessionId !== undefined
-              ? provideDb(
-                  walkthroughService.setOpencodeSessionId(
-                    job.walkthroughId,
-                    capturedOpencodeSessionId,
-                  ),
-                ).pipe(Effect.catch(() => Effect.void))
-              : Effect.void,
-          ),
-        );
+        yield* runWithAutoContinuation(initialState);
 
         // KPI telemetry: stamp the generation span (see `launchJob`) with the
         // final token totals. Reached only on a completed run; a
@@ -1163,7 +981,7 @@ export const WalkthroughJobsLive = Layer.effect(
 
           // Broadcast `lifecycle:started` so the client can pre-create the
           // sidebar spinner entry before any content event arrives. Goes
-          // through emitEvent → bumpSeq → Broadcaster + legacy fanOut. Best-
+          // through emitEvent → bumpSeq → Broadcaster. Best-
           // effort: this is the first emit, so the seq will be 0 in the
           // common case (chat-edits on completed walkthroughs run a separate
           // seq lineage on the same row).
@@ -1302,7 +1120,6 @@ export const WalkthroughJobsLive = Layer.effect(
             Effect.catchCause(() => Effect.void),
             Effect.ensuring(removeJob(job.walkthroughId)),
             Effect.ensuring(
-              // Clear any session tokens issued for this job.
               sessionStore.clearWhere((payload) => payload.walkthroughId === job.walkthroughId),
             ),
             // The generation span. Unlike `WalkthroughJobs.job` (which forks and
@@ -1642,12 +1459,10 @@ export const WalkthroughJobsLive = Layer.effect(
           accountId: ownerAccountId,
           mode,
           abortController,
-          subscribers: new Set(),
-          nextSeq: 0,
+          activity: makeActivityBeacon(),
           fiber: null,
           cancelledByUser: false,
           cancelReason: null,
-          prerenderFailures: 0,
         };
 
         yield* launchJob(
@@ -1687,22 +1502,6 @@ export const WalkthroughJobsLive = Layer.effect(
         );
 
         return { walkthroughId, reused: false };
-      });
-
-    const subscribe = (
-      walkthroughId: string,
-      onEvent: Subscriber,
-    ): Effect.Effect<SubscribeResult> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(walkthroughId);
-        if (!job) {
-          debug("wt-trace", `subscribe-miss wt=${walkthroughId} (job not in registry)`);
-          return { found: false };
-        }
-
-        const { unsubscribe, flush } = subscribers.subscribe(walkthroughId, job, onEvent);
-        return { found: true, unsubscribe, flush };
       });
 
     const cancel = (
@@ -1802,19 +1601,6 @@ export const WalkthroughJobsLive = Layer.effect(
         }),
       );
 
-    const supersedeWalkthrough = (oldId: string, newId: string) =>
-      Effect.gen(function* () {
-        yield* provideDb(walkthroughService.supersede(oldId, newId));
-        // Notify any tab still observing `oldId` so it knows to clear the
-        // walkthrough view and re-fetch the replacement. emitEvent resolves
-        // the broadcast target from DB if the old job has already left the
-        // registry (typical: supersede runs after the fiber tore down).
-        yield* emitEvent(oldId, {
-          type: "lifecycle:superseded",
-          data: { walkthroughId: oldId, supersededBy: newId },
-        }).pipe(Effect.catch(() => Effect.void));
-      });
-
     const supersedeForPr = (prId: string, exceptHeadSha?: string, mode?: WalkthroughMode) =>
       Effect.gen(function* () {
         // Cancel any in-flight job first so the fiber's scope finalizer
@@ -1906,16 +1692,13 @@ export const WalkthroughJobsLive = Layer.effect(
           //    walkthroughs (no fiber) still get correct cursors.
           const seq = yield* provideDb(walkthroughService.bumpSeq(walkthroughId));
 
-          // 2. Look up the active job for the legacy SSE fanOut + targets.
-          const map = yield* Ref.get(registry);
-          const activeJob = map.get(walkthroughId);
-
-          // 3. Resolve broadcast targets (fast path = in-memory job, slow
+          // 2. Resolve broadcast targets (fast path = in-memory job, slow
           //    path = DB join for chat-edit-on-completed-walkthrough).
+          const activeJob = (yield* Ref.get(registry)).get(walkthroughId);
           const targets = yield* resolveEventTargets(walkthroughId, activeJob);
           if (targets !== null) {
-            // Broadcaster fan-out — the new SSE path. Account-scoped so a
-            // multi-account user only sees their own walkthrough events.
+            // Account-scoped so a multi-account user only sees their own
+            // walkthrough events.
             yield* broadcaster
               .broadcastToAccount(targets.accountId, {
                 type: "walkthrough:event",
@@ -1934,35 +1717,6 @@ export const WalkthroughJobsLive = Layer.effect(
             );
           }
 
-          // 4. Legacy fanOut for the per-PR SSE handler. During the dual-emit
-          //    window both paths are active; the legacy SSE handler is deleted
-          //    once the client cutover lands (step 7 of the plan).
-          if (activeJob) {
-            subscribers.fanOut(activeJob.walkthroughId, activeJob, event);
-          } else {
-            debug(
-              "wt-trace",
-              `emitEvent-no-job wt=${walkthroughId} type=${event.type} (chat-edit or post-completion path)`,
-            );
-          }
-
-          // 5. Refresh opencode stream-guard inactivity timer (unchanged).
-          //    Skip when the event being emitted is itself `thinking` — that's
-          //    already the heartbeat shape. Self-notifying would amplify into an
-          //    infinite loop via the consumer at processEvent (defense-in-depth
-          //    with the early-return on `thinking` there).
-          if (event.type !== "thinking") {
-            const notifiers = yield* Ref.get(activityNotifiers);
-            const notify = notifiers.get(walkthroughId);
-            if (notify) {
-              try {
-                notify({ type: "thinking", data: {} });
-              } catch {
-                /* notifier threw — ignore */
-              }
-            }
-          }
-
           return { kind: "delivered" as const, seq };
         }),
       );
@@ -1978,26 +1732,12 @@ export const WalkthroughJobsLive = Layer.effect(
         if (!payload) return null;
         const job = (yield* Ref.get(registry)).get(payload.walkthroughId);
         if (!job) return null;
+        job.activity.note();
         return {
           walkthroughId: payload.walkthroughId,
           prId: job.prId,
           accountId: job.accountId,
         };
-      });
-
-    const clearSessionToken = (token: string) => sessionStore.clear(token);
-
-    const incrementPrerenderFailures = (walkthroughId: string) =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(walkthroughId);
-        if (job) {
-          job.prerenderFailures += 1;
-          debug(
-            "walkthrough-jobs",
-            `prerender-failure-count wt=${walkthroughId} total=${job.prerenderFailures}`,
-          );
-        }
       });
 
     const tryHydrateFromRemoteCache = (
@@ -2075,20 +1815,14 @@ export const WalkthroughJobsLive = Layer.effect(
 
     return {
       startJob,
-      subscribe,
       findActiveByPr,
       cancel,
       reviveFromError,
       resumePending,
-      supersedeWalkthrough,
       supersedeForPr,
       emitEvent,
       issueSessionToken,
       resolveSessionToken,
-      clearSessionToken,
-      incrementPrerenderFailures,
-      registerActivityNotifier,
-      unregisterActivityNotifier,
       tryHydrateFromRemoteCache,
     };
   }),

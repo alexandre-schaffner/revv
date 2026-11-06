@@ -2,93 +2,11 @@ import type { WalkthroughMode } from "@revv/shared";
 import { Effect } from "effect";
 import { NotFoundError } from "../../../domain/errors";
 import { AppRuntime } from "../../../runtime";
-import { GitHubGateway } from "../../../services/GitHub";
-import { PrContextService } from "../../../services/PrContext";
 import { WalkthroughService } from "../../../services/Walkthrough";
 import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
 
 export function coerceWalkthroughMode(value: unknown): WalkthroughMode {
   return value === "author" ? "author" : "reviewer";
-}
-
-/**
- * GET /api/reviews/:id/walkthrough/cached — check whether a walkthrough
- * row exists for the PR's current HEAD commit, complete OR in-progress.
- *
- * Three response shapes:
- *   • `cached: true`,  `status: 'complete'`   → final cached row; client
- *     renders inline with no SSE round-trip.
- *   • `cached: true`,  `status: 'generating'` → resumed/in-flight job has
- *     partial content. Client hydrates what's available AND opens the SSE
- *     stream so subsequent writes (and the final `done`) flow through.
- *     This is the resume-on-restart path: without it, a `generating` row
- *     would look like `cached: false` to the client and fall through to
- *     the "Generate walkthrough" button while the server is already
- *     producing the walkthrough in the background.
- *   • `cached: false` → no walkthrough at this head SHA. Client shows
- *     the Generate button.
- *
- * The internal `opencodeSessionId` field on the partial result is
- * intentionally stripped before send — it's an orchestrator credential,
- * not something the UI consumes.
- */
-export function getCachedWalkthroughHandler(
-  prId: string,
-  userId: string,
-  mode: WalkthroughMode = "reviewer",
-) {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const prContext = yield* PrContextService;
-      const github = yield* GitHubGateway;
-      const walkthroughService = yield* WalkthroughService;
-      const jobs = yield* WalkthroughJobs;
-
-      const { pr, repo, token } = yield* prContext.resolveBasic(prId, userId);
-      const meta = yield* github.prs.meta(repo.fullName, pr.externalId, token);
-
-      const cached = yield* walkthroughService.getCached(pr.id, meta.headSha, mode);
-      if (cached) {
-        return {
-          cached: true as const,
-          status: "complete" as const,
-          walkthrough: cached,
-        };
-      }
-
-      const partial = yield* walkthroughService.getPartial(pr.id, meta.headSha, mode);
-      if (partial && partial.status === "generating") {
-        const { opencodeSessionId: _ignored, status: _status, ...walkthrough } = partial;
-        return {
-          cached: true as const,
-          status: "generating" as const,
-          walkthrough,
-        };
-      }
-
-      // No local row — probe the team cache. On a hit, import + complete
-      // the row in one shot so the client renders immediately without
-      // needing a Generate click or an SSE round-trip.
-      const hydrated = yield* jobs.tryHydrateFromRemoteCache(
-        pr.id,
-        meta.headSha,
-        repo.fullName,
-        mode,
-      );
-      if (hydrated) {
-        const fromCache = yield* walkthroughService.getCached(pr.id, meta.headSha, mode);
-        if (fromCache) {
-          return {
-            cached: true as const,
-            status: "complete" as const,
-            walkthrough: fromCache,
-          };
-        }
-      }
-
-      return { cached: false as const };
-    }),
-  );
 }
 
 /**

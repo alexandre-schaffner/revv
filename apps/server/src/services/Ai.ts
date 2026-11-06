@@ -11,6 +11,7 @@ import {
   isAcpAgentAvailable,
   resolveGenerationModel,
 } from "../ai/acp/presets";
+import type { ActivityBeacon } from "../ai/agent-stream";
 import type { GenerationLaunchOverride } from "../ai/jev/routing";
 import {
   buildChatSystemPrompt,
@@ -22,12 +23,11 @@ import {
   type ChatWalkthroughContext,
   type ResolveConflictsTask,
 } from "../ai/prompts/chat";
-import type { WalkthroughPromptHints } from "../ai/prompts/walkthrough";
+import type { WalkthroughPromptHints, WalkthroughReviewMode } from "../ai/prompts/walkthrough";
 import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
-// ── Prompt & provider imports (split out of this file) ──────────────────────
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
-import { type ContinuationContext, streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
+import { streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
 import {
   type AiError,
   AiGenerationError,
@@ -39,11 +39,8 @@ import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
 import type { PrFileMeta } from "./GitHub";
 import { SettingsService } from "./Settings";
-import type { PromptDiffSource } from "./walkthrough-prompt-files";
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-export type { ContinuationContext };
 
 export interface ChatParams {
   readonly pr: ChatPrContext;
@@ -95,20 +92,8 @@ export class AiService extends Context.Service<
   {
     readonly streamWalkthrough: (
       params: {
-        /**
-         * The deterministic walkthrough id the MCP tool handlers will scope
-         * all writes to. Issued by {@link WalkthroughJobs.startJob} via
-         * `walkthroughService.createPartial` BEFORE the provider is spawned.
-         * The providers inject this into the shared tool-handler context
-         * (doctrine invariant #11 — identity is orchestrator-provided).
-         */
+        /** Issued by WalkthroughJobs (`createPartial`) before the agent spawns; every MCP write is scoped to it. */
         walkthroughId: string;
-        /**
-         * Account that owns the PR. Passed through to the Claude MCP provider
-         * so it can scope SSE broadcasts without re-deriving accountId via a
-         * DB join on every tool call.
-         */
-        accountId: string;
         pr: {
           title: string;
           body: string | null;
@@ -119,39 +104,11 @@ export class AiService extends Context.Service<
         mode: WalkthroughMode;
         files: PrFileMeta[];
         worktreePath: string;
-        reviewMode?: {
-          readonly mode: "full" | "incremental";
-          readonly parentWalkthroughId: string | null;
-          readonly baseHeadSha: string | null;
-          readonly headSha: string;
-          readonly diffSource?: PromptDiffSource;
-        };
-        continuation?: ContinuationContext;
-        onSessionId?: (sessionId: string) => void;
-        /**
-         * Optional caller-owned abort controller. When provided, it is
-         * forwarded to the underlying provider so external cancellation
-         * (regenerate, scope close, shutdown) propagates straight into the
-         * Claude Agent SDK turn or the opencode HTTP session.
-         */
-        abortController?: AbortController;
-        /**
-         * Optional caller-provided callbacks for minting + clearing the
-         * HTTP-MCP session token. Only consulted when the resolved agent uses
-         * the HTTP MCP transport; the Claude SDK path ignores them.
-         * WalkthroughJobs supplies these because it owns the session-token
-         * map (in-process, ephemeral per invariant #1). Kept as plain
-         * callbacks so AiService doesn't need a layer dependency on
-         * WalkthroughJobs (that would cycle — WalkthroughJobs depends on
-         * AiService already).
-         */
-        issueHttpMcpSessionToken?: (walkthroughId: string) => Promise<string>;
-        clearHttpMcpSessionToken?: (token: string) => Promise<void>;
-        registerHttpMcpActivityNotifier?: (
-          walkthroughId: string,
-          callback: (event: WalkthroughStreamEvent) => void,
-        ) => Promise<void>;
-        unregisterHttpMcpActivityNotifier?: (walkthroughId: string) => Promise<void>;
+        reviewMode: WalkthroughReviewMode;
+        resumed: boolean;
+        mcpToken: string;
+        activity: ActivityBeacon;
+        abortController: AbortController;
         /**
          * Per-job model/effort override, resolved once at job start. Absent
          * uses configured settings. Goes through `resolveGenerationModel` so
@@ -253,51 +210,15 @@ export const AiServiceLive = Layer.effect(
             yield* Effect.annotateCurrentSpan("provider", agent);
             if (settings.aiModel) yield* Effect.annotateCurrentSpan("model", settings.aiModel);
 
-            // Walkthrough generation runs exclusively on the ACP transport now.
-            // The shared MCP tool handlers behind `/mcp/walkthrough` are the same
-            // code every agent reaches (doctrine invariant #13 — agent-path parity).
-            const acpAgentId = agent;
-            if (!isAcpAgentAvailable(acpAgentId)) {
+            if (!isAcpAgentAvailable(agent)) {
               return yield* Effect.fail(new AiNotConfiguredError());
             }
 
-            // HTTP-MCP callbacks are MANDATORY for every walkthrough now (there
-            // is no in-process path). WalkthroughJobs always supplies them.
-            if (
-              !params.issueHttpMcpSessionToken ||
-              !params.clearHttpMcpSessionToken ||
-              !params.registerHttpMcpActivityNotifier ||
-              !params.unregisterHttpMcpActivityNotifier
-            ) {
-              return yield* Effect.fail(
-                new AiGenerationError({
-                  cause: new Error("missing HTTP-MCP callbacks"),
-                  message:
-                    "walkthrough generation requires caller-supplied HTTP-MCP session-token + activity-notifier callbacks",
-                }),
-              );
-            }
-
-            const issueToken = params.issueHttpMcpSessionToken;
-            const clearToken = params.clearHttpMcpSessionToken;
-            const registerNotifier = params.registerHttpMcpActivityNotifier;
-            const unregisterNotifier = params.unregisterHttpMcpActivityNotifier;
             // Guard against a chat-only agent id left over from the bottom bar (e.g. cursor).
             const override = params.launchOverride;
             const model = resolveGenerationModel(agent, override?.model ?? settings.aiModel);
             const raw = streamWalkthroughViaAcp(
-              {
-                ...params,
-                db,
-                acpAgentId,
-                deps: {
-                  issueSessionToken: (walkthroughId) => issueToken(walkthroughId),
-                  clearSessionToken: (token) => clearToken(token),
-                  registerActivityNotifier: (walkthroughId, callback) =>
-                    registerNotifier(walkthroughId, callback),
-                  unregisterActivityNotifier: (walkthroughId) => unregisterNotifier(walkthroughId),
-                },
-              },
+              { ...params, db, acpAgentId: agent },
               {
                 model,
                 // Sized effort for Auto, the user's pin otherwise.
@@ -307,10 +228,7 @@ export const AiServiceLive = Layer.effect(
                 ),
               },
             );
-            return guardWalkthroughStream(raw, {
-              label: "walkthrough-acp",
-              synthesizePhases: false,
-            });
+            return guardWalkthroughStream(raw, { label: "walkthrough-acp" });
           }),
         ),
 

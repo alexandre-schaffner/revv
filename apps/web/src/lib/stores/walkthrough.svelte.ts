@@ -1200,7 +1200,6 @@ async function doHydrateFromCache(
       | {
           status: "complete" | "generating" | "error" | "superseded";
           walkthrough: WalkthroughPayload;
-          snapshotAt: string;
           seqAt?: number;
           stale?: boolean;
           historical?: boolean;

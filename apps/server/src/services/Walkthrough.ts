@@ -6,8 +6,7 @@
 //   • ORCHESTRATOR LIFECYCLE writes (per doctrine invariant #2 + #11):
 //     - createPartial    (inserts the row when a job begins)
 //     - setStatus        (generating → complete | error | superseded)
-//     - supersede        (old row → superseded, links to new row)
-//     - setOpencodeSessionId (opencode continuation id)
+//     - supersedeAllForPr (rows of a PR → superseded)
 //     - incrementResumeAttempts (resume counter)
 //     - markIssuesSubmitted (GitHub push bookkeeping)
 //
@@ -31,7 +30,6 @@ import type {
   Walkthrough,
   WalkthroughBlock,
   WalkthroughGenerationMode,
-  WalkthroughIssue,
   WalkthroughLead,
   WalkthroughMode,
   WalkthroughPipelinePhase,
@@ -43,7 +41,7 @@ import type {
   WalkthroughStatus,
   WalkthroughTokenUsage,
 } from "@revv/shared";
-import { and, asc, desc, eq, gt, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { Db } from "../db";
 import { commentThreads } from "../db/schema/comment-threads";
@@ -428,15 +426,6 @@ export class WalkthroughService extends Context.Service<
     ) => Effect.Effect<void, never, DbService>;
 
     /**
-     * Atomically mark `oldId` as `'superseded'` with `supersededBy = newId`.
-     * Called by {@link WalkthroughJobs.supersedeWalkthrough} when the PR
-     * gets a new head SHA. Per doctrine invariant #7, walkthroughs are
-     * immutable per head SHA — a new commit produces a new row, never
-     * mutates the old.
-     */
-    readonly supersede: (oldId: string, newId: string) => Effect.Effect<void, never, DbService>;
-
-    /**
      * Mark all non-superseded walkthroughs for a PR as 'superseded'.
      * `supersededBy` is left NULL — it gets backfilled when a new
      * walkthrough row is subsequently created for the PR's new head SHA,
@@ -471,42 +460,7 @@ export class WalkthroughService extends Context.Service<
       headSha: string,
       mode?: WalkthroughMode,
       generationMode?: WalkthroughGenerationMode,
-    ) => Effect.Effect<
-      | (Walkthrough & {
-          status: "generating" | "error";
-          opencodeSessionId: string | null;
-        })
-      | null,
-      never,
-      DbService
-    >;
-
-    /**
-     * Return only the child rows (semanticSteps, blocks, issues, ratings) for
-     * a given walkthrough that were created AFTER `since` (ISO 8601). Used by
-     * the SSE cursor-filtered replay: the client already has everything up to
-     * `since` from a prior `/current` REST call; this query returns only rows
-     * that landed in the race window between that call and the SSE subscription.
-     */
-    readonly getChildRowsSince: (
-      walkthroughId: string,
-      since: string,
-    ) => Effect.Effect<
-      {
-        semanticSteps: WalkthroughSemanticStep[];
-        blocks: WalkthroughBlock[];
-        issues: WalkthroughIssue[];
-        ratings: WalkthroughRating[];
-      },
-      never,
-      DbService
-    >;
-
-    /** Persist the opencode session ID for resumption. */
-    readonly setOpencodeSessionId: (
-      walkthroughId: string,
-      sessionId: string,
-    ) => Effect.Effect<void, never, DbService>;
+    ) => Effect.Effect<(Walkthrough & { status: "generating" | "error" }) | null, never, DbService>;
 
     /**
      * List all walkthroughs still in `status='generating'`. Used on server boot
@@ -520,7 +474,6 @@ export class WalkthroughService extends Context.Service<
         readonly prHeadSha: string;
         readonly mode: WalkthroughMode;
         readonly generationMode: WalkthroughGenerationMode;
-        readonly opencodeSessionId: string | null;
         readonly resumeAttempts: number;
       }>,
       never,
@@ -861,36 +814,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       });
     }).pipe(Effect.catch(() => Effect.void)),
 
-  supersede: (oldId, newId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      db.transaction(() => {
-        // Drop AI-authored comment threads tied to the outgoing walkthrough's
-        // issues. Human threads (walkthroughIssueId IS NULL) are untouched.
-        // The walkthroughs row itself is kept for audit (superseded_by chain);
-        // we can't rely on the cascade-on-delete path here.
-        const issueIds = db
-          .select({ id: walkthroughIssues.id })
-          .from(walkthroughIssues)
-          .where(eq(walkthroughIssues.walkthroughId, oldId))
-          .all()
-          .map((r) => r.id);
-        if (issueIds.length > 0) {
-          db.delete(commentThreads)
-            .where(inArray(commentThreads.walkthroughIssueId, issueIds))
-            .run();
-        }
-        db.update(walkthroughs)
-          .set({ status: "superseded", supersededBy: newId })
-          .where(eq(walkthroughs.id, oldId))
-          .run();
-        db.update(reviewRounds)
-          .set({ status: "superseded" })
-          .where(eq(reviewRounds.walkthroughId, oldId))
-          .run();
-      });
-    }).pipe(Effect.catch(() => Effect.void)),
-
   supersedeAllForPr: (prId, exceptHeadSha, mode) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
@@ -1007,7 +930,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       return {
         ...hydrateWalkthrough(db, row, avatarContent),
         status: row.status as "generating" | "error",
-        opencodeSessionId: row.opencodeSessionId ?? null,
       };
     }),
 
@@ -1091,15 +1013,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
       });
     }),
 
-  setOpencodeSessionId: (walkthroughId, sessionId) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      db.update(walkthroughs)
-        .set({ opencodeSessionId: sessionId })
-        .where(eq(walkthroughs.id, walkthroughId))
-        .run();
-    }).pipe(Effect.catch(() => Effect.void)),
-
   listGenerating: () =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
@@ -1110,7 +1023,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           prHeadSha: walkthroughs.prHeadSha,
           mode: walkthroughs.mode,
           generationMode: walkthroughs.generationMode,
-          opencodeSessionId: walkthroughs.opencodeSessionId,
           resumeAttempts: walkthroughs.resumeAttempts,
         })
         .from(walkthroughs)
@@ -1122,7 +1034,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
         prHeadSha: r.prHeadSha,
         mode: r.mode as WalkthroughMode,
         generationMode: r.generationMode as WalkthroughGenerationMode,
-        opencodeSessionId: r.opencodeSessionId ?? null,
         resumeAttempts: r.resumeAttempts,
       }));
     }),
@@ -1504,79 +1415,6 @@ export const WalkthroughServiceLive = Layer.succeed(WalkthroughService, {
           nextBaseHeadSha: null,
           rounds: [],
         }),
-      ),
-    ),
-
-  getChildRowsSince: (walkthroughId, since) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-
-      const semanticStepRows = db
-        .select()
-        .from(walkthroughSemanticSteps)
-        .where(
-          and(
-            eq(walkthroughSemanticSteps.walkthroughId, walkthroughId),
-            gt(walkthroughSemanticSteps.createdAt, since),
-          ),
-        )
-        .orderBy(asc(walkthroughSemanticSteps.semanticStepIndex))
-        .all();
-
-      const blockRows = db
-        .select()
-        .from(walkthroughBlocks)
-        .where(
-          and(
-            eq(walkthroughBlocks.walkthroughId, walkthroughId),
-            gt(walkthroughBlocks.createdAt, since),
-          ),
-        )
-        .all();
-
-      const issueRows = db
-        .select()
-        .from(walkthroughIssues)
-        .where(
-          and(
-            eq(walkthroughIssues.walkthroughId, walkthroughId),
-            gt(walkthroughIssues.createdAt, since),
-          ),
-        )
-        .all();
-
-      const ratingRows = db
-        .select()
-        .from(walkthroughRatings)
-        .where(
-          and(
-            eq(walkthroughRatings.walkthroughId, walkthroughId),
-            gt(walkthroughRatings.createdAt, since),
-          ),
-        )
-        .all();
-
-      const semanticSteps: WalkthroughSemanticStep[] = semanticStepRows.map((s) => ({
-        semanticStepIndex: s.semanticStepIndex,
-        title: s.title,
-        summary: s.summary ?? null,
-      }));
-
-      const blocks = [...blockRows]
-        .sort((a, b) => a.semanticStepIndex - b.semanticStepIndex || a.stepIndex - b.stepIndex)
-        .map((b) => JSON.parse(b.data) as WalkthroughBlock);
-
-      const issues = [...issueRows].sort((a, b) => a.order - b.order).map(decodeWalkthroughIssue);
-
-      const ratings = ratingRows
-        .filter(hasRationale)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-        .map(rowToRating);
-
-      return { semanticSteps, blocks, issues, ratings };
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed({ semanticSteps: [], blocks: [], issues: [], ratings: [] }),
       ),
     ),
 });

@@ -15,8 +15,7 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  *                              it is the latest historical walkthrough rather
  *                              than a walkthrough for the current PR HEAD.
  *   • `status: 'generating'` → in-flight job; client hydrates partial content
- *                              and opens SSE from `snapshotAt` cursor so only
- *                              race-window events arrive over the wire.
+ *                              and applies later SSE events past `seqAt`.
  *   • `status: 'error'`      → terminal failure; client shows error UI with
  *                              whatever partial content was persisted.
  *   • `status: 'not_found'`  → no local row; client probes the Generate button.
@@ -29,14 +28,6 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  * included, so a stale walkthrough keeps its perspective), else the
  * identity-derived default. Only one perspective is active per PR at a time
  * (see `WalkthroughJobs.startJobBody`), so this is the walkthrough on screen.
- *
- * The `snapshotAt` field is a cursor anchor: when the client opens the SSE
- * stream with `?snapshotAt=<value>`, the server replays only rows created
- * after that timestamp, avoiding a full retransmission of already-hydrated
- * content.
- *
- * `opencodeSessionId` is stripped before returning — it's an orchestrator
- * credential, not something the UI consumes.
  *
  * The head SHA is read from the locally-synced PR row (`pr.headSha`), NOT a
  * live GitHub call. This endpoint serves locally-cached content and must not
@@ -77,7 +68,6 @@ export function getCurrentWalkthroughHandler(
         return {
           status: "complete" as const,
           walkthrough: complete,
-          snapshotAt: new Date().toISOString(),
           seqAt,
         };
       }
@@ -85,12 +75,10 @@ export function getCurrentWalkthroughHandler(
       // 2. In-progress or errored walkthrough — hydrate partial state.
       const partial = yield* walkthroughService.getPartial(pr.id, headSha, mode);
       if (partial) {
-        const { opencodeSessionId: _ignored, ...walkthrough } = partial;
-        const seqAt = yield* walkthroughService.getSeqAt(walkthrough.id);
+        const seqAt = yield* walkthroughService.getSeqAt(partial.id);
         return {
-          status: partial.status as "generating" | "error",
-          walkthrough,
-          snapshotAt: new Date().toISOString(),
+          status: partial.status,
+          walkthrough: partial,
           seqAt,
         };
       }
@@ -105,7 +93,6 @@ export function getCurrentWalkthroughHandler(
           return {
             status: "complete" as const,
             walkthrough: fromCache,
-            snapshotAt: new Date().toISOString(),
             seqAt,
           };
         }
@@ -121,7 +108,6 @@ export function getCurrentWalkthroughHandler(
         return {
           status: "complete" as const,
           walkthrough: latest,
-          snapshotAt: new Date().toISOString(),
           seqAt,
           stale: true as const,
         };
