@@ -4,7 +4,7 @@ import ArrowLeft from "phosphor-svelte/lib/ArrowLeft";
 import Spinner from "phosphor-svelte/lib/Spinner";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import type { Snippet } from "svelte";
-import { ThoughtsReveal } from "$lib/components/ai/thoughts";
+import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
 import { Button } from "$lib/components/ui/button";
 import { heroMorph } from "$lib/motion";
 import type { RecapStreamEntry } from "$lib/stores/recap-stream.svelte";

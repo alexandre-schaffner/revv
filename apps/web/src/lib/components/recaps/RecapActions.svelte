@@ -2,9 +2,9 @@
 import type { RecapPeriod } from "@revv/shared";
 import PenNib from "phosphor-svelte/lib/PenNib";
 import Spinner from "phosphor-svelte/lib/Spinner";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import GenActionBar from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import type { RecapController } from "./recap-controller.svelte";
 
 /**

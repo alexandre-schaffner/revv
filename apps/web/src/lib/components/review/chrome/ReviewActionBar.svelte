@@ -11,12 +11,12 @@ import ShieldWarning from "phosphor-svelte/lib/ShieldWarning";
 import Stack from "phosphor-svelte/lib/Stack";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { untrack } from "svelte";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { isChatStreaming } from "$lib/chat/timeline.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, tokens } from "$lib/motion";
 import { getCurrentUserLogin } from "$lib/stores/auth.svelte";
-import { isChatStreaming } from "$lib/stores/chat.svelte";
 import { getConversation } from "$lib/stores/conversation.svelte";
 import {
   askMergeEligibility,

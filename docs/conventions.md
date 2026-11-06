@@ -391,6 +391,11 @@ no consumer recomputes. Showed up as a Floating Action Button stuck on "Stop" un
 switch invalidated derivations — the exact bug the comment in `walkthrough.svelte.ts:154–159`
 warns about.
 
+A `SvelteMap` (`svelte/reactivity`) tracks its own `.set/.delete`, so it needs no
+reassignment; its entries are replaced, never mutated in place (a same-reference `.set` is not a
+change). The chat modules (`apps/web/src/lib/chat/*.svelte.ts`) and `createResource` hold their
+per-PR entries this way.
+
 **Backlog.** Existing reactive-Map sites in `review.svelte.ts` already follow the idiom — no
 remediation needed today. The rule is a guardrail for future writes.
 
@@ -523,8 +528,9 @@ switch, sign-out and account removal. Stores never import the auth store to tear
 stores were on none of them, so an account switch left the previous account's chat, walkthrough
 and recap streams writing into the new session.
 
-**Canonical example.** `apps/web/src/lib/stores/chat.svelte.ts` `reset()` aborts in-flight turns
-before clearing its maps; `stacks.svelte.ts` `reset()` resets its resource and debounce timers.
+**Canonical example.** `apps/web/src/lib/chat/turn.svelte.ts` `reset()` aborts in-flight turns,
+then resets every chat module (timeline, proposed commits, session context, queue, suggestions);
+`stacks.svelte.ts` `reset()` resets its resource and debounce timers.
 
 ---
 

@@ -7,6 +7,7 @@
 // `autoFetchInterval` changes); the client never polls GitHub on a timer.
 
 import { goto } from "$app/navigation";
+import { reset as resetChat } from "$lib/chat/turn.svelte";
 import {
   clearIdentity,
   deleteAccount,
@@ -20,7 +21,6 @@ import {
   runAccountSwitch,
 } from "$lib/stores/auth.svelte";
 import { reset as resetBaseConflicts } from "$lib/stores/base-conflicts.svelte";
-import { reset as resetChat } from "$lib/stores/chat.svelte";
 import { reset as resetConversation } from "$lib/stores/conversation.svelte";
 import { connect, disconnect } from "$lib/stores/events.svelte";
 import { reset as resetHunkScan } from "$lib/stores/hunk-scan.svelte";
@@ -35,7 +35,6 @@ import { reset as resetStackHeadlines } from "$lib/stores/stack-headlines.svelte
 import { reset as resetStackMerge } from "$lib/stores/stack-merge.svelte";
 import { reset as resetStackRebase } from "$lib/stores/stack-rebase.svelte";
 import { reset as resetStacks } from "$lib/stores/stacks.svelte";
-import { reset as resetSuggestions } from "$lib/stores/suggestions.svelte";
 import { reset as resetSync } from "$lib/stores/sync.svelte";
 import { reset as resetWalkthrough } from "$lib/stores/walkthrough.svelte";
 import { reset as resetWalkthroughSizings } from "$lib/stores/walkthrough-sizing.svelte";
@@ -69,7 +68,6 @@ function resetAccountStores(): void {
   resetStackHeadlines();
   resetStackMerge();
   resetStackRebase();
-  resetSuggestions();
   resetMergeEligibility();
   resetRepoActivity();
   resetBaseConflicts();

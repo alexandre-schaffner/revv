@@ -6,8 +6,8 @@
 // inject glyphs into already-rendered markdown via the DOM rather than a Svelte
 // template — so they can't use the component form and built this by hand before.
 
-import { basename } from "$lib/utils/activity-groups";
 import { fileIcon } from "$lib/utils/file-icon";
+import { basename } from "$lib/utils/path";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 

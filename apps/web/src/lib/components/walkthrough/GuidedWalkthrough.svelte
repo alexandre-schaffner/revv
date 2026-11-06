@@ -12,9 +12,13 @@ import { toast } from "svelte-sonner";
 import { prlensDiagrams } from "$lib/actions/prlens.svelte";
 import { stackCitations } from "$lib/actions/stack-citations.svelte";
 import { API_BASE_URL } from "$lib/api/base-url";
-import { Shimmer } from "$lib/components/ai/shimmer";
-import { ThoughtsReveal } from "$lib/components/ai/thoughts";
-import { ToolActivityGroup } from "$lib/components/ai/tool";
+import {
+  type GroupableActivity,
+  isExplorationActivity,
+} from "$lib/components/agent-activity/activity-groups";
+import { provideActivityPr } from "$lib/components/agent-activity/repo-file";
+import ThoughtsReveal from "$lib/components/agent-activity/ThoughtsReveal.svelte";
+import ToolActivityGroup from "$lib/components/agent-activity/ToolActivityGroup.svelte";
 import ChangedAboveNote from "$lib/components/stack/margin/ChangedAboveNote.svelte";
 import ReliedOnNote from "$lib/components/stack/margin/ReliedOnNote.svelte";
 import { spreadRailNotes } from "$lib/components/stack/margin/spread-notes";
@@ -26,6 +30,7 @@ import { Button } from "$lib/components/ui/button";
 import FileBadge from "$lib/components/ui/FileBadge.svelte";
 import { Progress } from "$lib/components/ui/progress";
 import { Separator } from "$lib/components/ui/separator";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { authHeaders } from "$lib/session/token.svelte";
 import { openStackLayer } from "$lib/stacks/open-layer";
 import { getHunkScan } from "$lib/stores/hunk-scan.svelte";
@@ -85,7 +90,6 @@ import {
   startWalkthrough,
   stopClonePoll,
 } from "$lib/stores/walkthrough.svelte";
-import { type GroupableActivity, isExplorationActivity } from "$lib/utils/activity-groups";
 import {
   agentAuthRecoveryDescription,
   isAgentAuthRecoveryError,
@@ -113,6 +117,7 @@ interface Props {
 }
 
 let { prId, scrollRoot, isActive = true }: Props = $props();
+provideActivityPr(() => prId);
 
 const blocks = $derived(getBlocks());
 const semanticSteps = $derived(getSemanticSteps());
@@ -1389,7 +1394,6 @@ function handleResume(): void {
 												items={entry.items}
 												active={entryIdx === interleavedEntries.length - 1}
 												defaultOpen={false}
-												prId={prId}
 											/>
 										</div>
 									{/if}

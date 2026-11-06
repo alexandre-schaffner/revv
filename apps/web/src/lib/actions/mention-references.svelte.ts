@@ -16,8 +16,8 @@ import type { Action } from "svelte/action";
 
 import { openFileInDiff } from "$lib/stores/review.svelte";
 import type { ReviewFile } from "$lib/types/review";
-import { basename } from "$lib/utils/activity-groups";
 import { appendPillContents } from "$lib/utils/file-glyph";
+import { basename } from "$lib/utils/path";
 
 const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";

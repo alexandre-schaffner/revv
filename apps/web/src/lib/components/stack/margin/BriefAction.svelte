@@ -2,7 +2,7 @@
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import PencilSimpleLine from "phosphor-svelte/lib/PencilSimpleLine";
 import { toast } from "svelte-sonner";
-import { Shimmer } from "$lib/components/ai/shimmer";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { requestStackBrief } from "$lib/stores/stacks.svelte";
 import type { StackPlace } from "./stack-margin";
 

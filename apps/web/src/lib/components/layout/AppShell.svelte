@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { Snippet } from "svelte";
 import { page } from "$app/state";
 import SettingsModal from "$lib/components/settings/SettingsModal.svelte";
 import UserMenu from "$lib/components/sidebar/UserMenu.svelte";
@@ -30,12 +31,17 @@ import {
 import BottomBar from "./BottomBar.svelte";
 import CommandPalette from "./CommandPalette.svelte";
 import ProjectRail from "./ProjectRail.svelte";
-import RightPanel from "./RightPanel.svelte";
 import Sidebar from "./Sidebar.svelte";
 import { provideShellChrome } from "./shell-chrome.svelte";
 import TopBar from "./TopBar.svelte";
 
-let { children } = $props();
+interface Props {
+  children: Snippet;
+  /** The right-hand panel's content (the chat). */
+  rightPanel: Snippet;
+}
+
+let { children, rightPanel }: Props = $props();
 
 const sidebarCollapsed = $derived(getSidebarCollapsed());
 const rightPanelOpen = $derived(getRightPanelOpen());
@@ -270,11 +276,7 @@ function onRightHandleDblClick(): void {
 					ondblclick={onRightHandleDblClick}
 				></div>
 			{/if}
-			<RightPanel
-				onClose={toggleRightPanel}
-				stacked={chatStacked}
-				prId={page.params['prId'] ?? ''}
-			/>
+			{@render rightPanel()}
 		</aside>
 	</div>
 </div>

@@ -1,6 +1,5 @@
 // ── Random variant picker for streaming chat ───────────────────────────────
-// Given a stable id (typically the assistant message UUID created in
-// `chat.svelte.ts` per turn), pick one of the chat-eligible variants
+// Given a stable id (the chat's turn id), pick one of the chat-eligible variants
 // deterministically. Pure: same id → same variant; new id → fresh roll.
 // No store/DB writes needed.
 //

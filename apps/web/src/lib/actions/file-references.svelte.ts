@@ -21,8 +21,8 @@ import type { Action } from "svelte/action";
 
 import { openFileInDiff } from "$lib/stores/review.svelte";
 import type { ReviewFile } from "$lib/types/review";
-import { basename } from "$lib/utils/activity-groups";
 import { createFileGlyph } from "$lib/utils/file-glyph";
+import { basename } from "$lib/utils/path";
 
 const REF_PATH_ATTR = "data-file-ref-path";
 const REF_LINE_ATTR = "data-file-ref-line";

@@ -28,9 +28,6 @@ export interface ChatTask {
   readonly priority: "low" | "medium" | "high" | null;
 }
 
-/** Role of a message in the right-pane chat. */
-export type MessageRole = "user" | "assistant" | "system";
-
 export interface ChatAttachment {
   readonly kind: "image" | "text";
   readonly name: string;

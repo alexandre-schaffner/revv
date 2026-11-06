@@ -9,12 +9,12 @@ import GitMerge from "phosphor-svelte/lib/GitMerge";
 import Warning from "phosphor-svelte/lib/Warning";
 import { untrack } from "svelte";
 import { expectedHeads } from "$lib/api/wire";
-import { Shimmer } from "$lib/components/ai/shimmer";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
 import SegmentedControl, {
   type SegmentedOption,
 } from "$lib/components/ui/segmented-control/SegmentedControl.svelte";
+import { Shimmer } from "$lib/components/ui/shimmer";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
 import { RequestState } from "$lib/stores/_types";
 import {
