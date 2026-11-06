@@ -1,2 +1,2 @@
-export { default as Suggestion, type SuggestionProps } from "./Suggestion.svelte";
-export { default as SuggestionItem, type SuggestionItemProps } from "./SuggestionItem.svelte";
+export { default as Suggestion } from "./Suggestion.svelte";
+export { default as SuggestionItem } from "./SuggestionItem.svelte";

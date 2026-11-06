@@ -84,17 +84,4 @@ function labelFor(item: { count: number; one: string; other: string }): string {
       transform var(--duration-quick) var(--ease-out-expo);
     will-change: transform, opacity;
   }
-
-  @keyframes tool-count-item-in {
-    from {
-      opacity: 0;
-      filter: blur(2px);
-      transform: translateX(-0.25rem);
-    }
-    to {
-      opacity: 1;
-      filter: blur(0);
-      transform: translateX(0);
-    }
-  }
 </style>

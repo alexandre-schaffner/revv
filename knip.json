@@ -54,8 +54,7 @@
     "apps/server/src/cache/backends/**",
     "apps/server/src/cache/policies/**",
     "apps/server/src/cache/index.ts",
-    "apps/web/src/lib/components/ui/**/index.ts",
-    "apps/web/src/lib/components/ai/**/index.ts"
+    "apps/web/src/lib/components/ui/**/index.ts"
   ],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["biome", "turbo", "knip"]
