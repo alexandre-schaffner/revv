@@ -1,22 +1,18 @@
 // ── ProjectRecapJobs ────────────────────────────────────────────────────────
-// Durable orchestrator for daily / weekly project recap generation. Mirrors
-// the structure of {@link WalkthroughJobs} but radically simpler:
+// Daily / weekly project recaps on the durable agent-job kernel
+// (`jobs/agent-jobs.ts`), which owns the run lifecycle, the resume budget and
+// the MCP token. What is recap-specific lives here:
 //
-//   • Single-phase MCP-routed pipeline (one atomic write per recap).
-//   • No worktrees, no continuations, no SSE streaming. Status-only SSE
-//     broadcasts; the recap UI re-fetches the row when needed.
 //   • `requestRecap` owns the create / reuse / rerun decision for a window
 //     (one active recap per (repoId, period, periodStart)), serialized per
-//     window; `startJob` is serialized per recap so attach paths can't fork
-//     duplicate fibers.
-//   • Bounded retries via `resume_attempts`. Boot resume re-runs the agent
-//     from scratch — recap is single-phase so partial state is just the
-//     row at `status='generating'` with empty content, which is
-//     recoverable by re-running.
+//     window.
+//   • A run assembles the window's source bundle once and records it on the
+//     row, so a resumed run reads the same pull requests its earlier attempt
+//     was writing entries for.
+//   • Live events fan out to the per-generation SSE stream's subscribers.
 //
-// Per CLAUDE.md invariants #2 and #11: agents never write `status`. This
-// service is the sole writer. Content writes go through the recap MCP tool
-// handlers in `ai/providers/recap-tools/`.
+// Per CLAUDE.md invariants #2 and #11: agents never write `status`. Content
+// writes go through the recap MCP tool handlers in `ai/providers/recap-tools/`.
 
 import type {
   ProjectRecap,
@@ -28,19 +24,18 @@ import type {
 import { rollingWindow, windowIsCurrent } from "@revv/shared";
 import { SPAN } from "@revv/shared/telemetry";
 import { sql } from "drizzle-orm";
-import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
+import { Cause, Context, Effect, Layer } from "effect";
 import { resolveAgentLaunch } from "../ai/acp/agent-launch";
 import { isAgentLaunchable } from "../ai/acp/launch";
-import { JOB_TURN } from "../ai/acp/run-turn";
 import { runRecapAgentViaAcp } from "../ai/providers/recap-acp";
 import {
   type RecapSourcePrDiff,
   type RecapSourcePrDiffFile,
-  type RecapSourcePrDigest,
   type RecapToolContext,
   recapCompletionBlocker,
 } from "../ai/providers/recap-tools";
 import { recapPrDigests } from "../db/schema/index";
+import type { RecapSourceBundle, RecapSourcePrDigest } from "../db/schema/project-recaps";
 import type { DbError, RecapNotFoundError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { dbTry } from "../effects/db-try";
@@ -51,9 +46,16 @@ import { withTraceAnchor } from "../observability/span-graft";
 import { DbService } from "./Db";
 import { DiffCacheService } from "./DiffCache";
 import { GitHubEtagCache } from "./GitHubEtagCache";
-import { analyzeJobFailure } from "./job-failure";
 import { makeStartJobMutex } from "./job-mutex";
-import { makeSubscriberRegistry, type SubscriberHandle } from "./job-subscribers";
+import { makeSubscriberRegistry, type SubscriberChannel } from "./job-subscribers";
+import {
+  type AgentJobs,
+  type AgentRun,
+  MAX_RESUME_ATTEMPTS,
+  makeAgentJobs,
+  type RunEnd,
+  type RunOutcome,
+} from "./jobs/agent-jobs";
 import { PrContextService } from "./PrContext";
 import { ProjectRecapService } from "./ProjectRecap";
 import { type ArchivedPrWithWalkthrough, PullRequestService } from "./PullRequest";
@@ -68,50 +70,17 @@ import {
   truncatePatch,
 } from "./recap-source-bundle";
 import { SettingsService } from "./Settings";
-import { makeSessionTokenStore } from "./session-token-store";
-
-// ── Constants ────────────────────────────────────────────────────────────────
 
 /** Cap on concurrent recap jobs. Lower than walkthroughs — recap calls are heavier per turn. */
 export const MAX_CONCURRENT_RECAP_JOBS = 2;
 
-/** Resume-on-boot retry budget. After this many attempts the row goes to 'error'. */
-export const RECAP_MAX_RESUME_ATTEMPTS = 3;
-
-/**
- * TTL for HTTP-MCP session tokens: the turn ceiling, so a token never expires
- * mid-run, plus slack for setup and teardown.
- */
-const RECAP_SESSION_TOKEN_TTL_MS = JOB_TURN.ceilingMs + 5 * 60_000;
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-type Subscriber = (event: RecapStreamEvent) => void;
-
-interface ActiveRecapJob {
-  readonly recapId: string;
-  readonly repoId: string;
-  readonly period: RecapPeriod;
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly abortController: AbortController;
-  fiber: Fiber.Fiber<unknown, unknown> | null;
-  cancelledByUser: boolean;
-  /** Set to true the moment the agent calls `complete_recap` and validation passes. */
-  validatedComplete: boolean;
-  /** SSE subscribers keyed by opaque handle id. */
-  readonly subscribers: Set<SubscriberHandle<RecapStreamEvent>>;
-  /** Monotonic seq for tracing (in-memory diagnostic only). */
-  nextSeq: number;
-}
-
-/** An existing row to run (or attach to, when its job is already running). */
-export interface StartRecapJobParams {
-  readonly recapId: string;
-  readonly repoId: string;
-  readonly period: RecapPeriod;
-  readonly periodStart: string;
-  readonly periodEnd: string;
+/** A run's live state: its SSE subscribers and what the MCP route hands the tools. */
+interface RecapRun extends SubscriberChannel<RecapStreamEvent> {
+  /** Set once the source bundle is assembled; the token resolves to nothing before. */
+  tools: RecapToolContext | null;
+  calledAnyTool: boolean;
+  validated: boolean;
+  modelUsed: string | null;
 }
 
 export interface RecapRequest {
@@ -124,10 +93,6 @@ export interface RecapRequest {
 
 export type StartRecapJobError = DbError | RecapNotFoundError;
 
-export type EmitResult =
-  | { readonly kind: "delivered"; readonly seq: number }
-  | { readonly kind: "skipped-no-job"; readonly recapId: string };
-
 export type SubscribeResult =
   | {
       readonly found: true;
@@ -136,16 +101,9 @@ export type SubscribeResult =
     }
   | { readonly found: false };
 
-// ── Service tag ──────────────────────────────────────────────────────────────
-
 export class ProjectRecapJobs extends Context.Service<
   ProjectRecapJobs,
   {
-    /** Run an existing row's job, or attach to it when it is already running. */
-    readonly startJob: (
-      params: StartRecapJobParams,
-    ) => Effect.Effect<{ readonly recapId: string }, StartRecapJobError>;
-
     /**
      * Ask for the recap of a window: create it, reuse the one there, or rerun
      * that one in place (see `planRecapRequest`). Null when a scheduled
@@ -155,31 +113,31 @@ export class ProjectRecapJobs extends Context.Service<
       request: RecapRequest,
     ) => Effect.Effect<{ readonly recapId: string } | null, StartRecapJobError>;
 
+    /**
+     * Make sure a `generating` recap has a live run: a no-op while one is live,
+     * else the budgeted resume a restart would do.
+     */
+    readonly attach: (recapId: string) => Effect.Effect<void>;
+
+    /** The user's Stop. Settles a row whose run already died, too. */
     readonly cancel: (recapId: string) => Effect.Effect<void>;
 
     /** Re-launch any rows left in `status='generating'` by a prior process. */
-    readonly resumePending: () => Effect.Effect<void, DbError>;
+    readonly resumePending: () => Effect.Effect<void>;
 
     /**
      * Subscribe to live events for a generating recap. Buffered mode so
      * events arriving before flush are replayed in order.
      */
-    readonly subscribe: (recapId: string, onEvent: Subscriber) => Effect.Effect<SubscribeResult>;
+    readonly subscribe: (
+      recapId: string,
+      onEvent: (event: RecapStreamEvent) => void,
+    ) => Effect.Effect<SubscribeResult>;
 
-    /**
-     * Fan an event out to a running job's subscribers. No-op if no active job.
-     */
-    readonly emitEvent: (recapId: string, event: RecapStreamEvent) => Effect.Effect<EmitResult>;
-
-    /**
-     * Resolve a `/mcp/recap` bearer token to the per-job tool context it was
-     * issued for. Null when the token is unknown or its TTL has elapsed.
-     */
+    /** Resolve a `/mcp/recap` bearer token to its run's tool context. */
     readonly resolveSessionToken: (token: string) => Effect.Effect<RecapToolContext | null>;
   }
 >()("ProjectRecapJobs") {}
-
-// ── Live implementation ──────────────────────────────────────────────────────
 
 export const ProjectRecapJobsLive = Layer.effect(
   ProjectRecapJobs,
@@ -193,12 +151,7 @@ export const ProjectRecapJobsLive = Layer.effect(
     const diffCache = yield* DiffCacheService;
     const etagCache = yield* GitHubEtagCache;
 
-    const registry = yield* Ref.make(new Map<string, ActiveRecapJob>());
-    const semaphore = yield* Semaphore.make(MAX_CONCURRENT_RECAP_JOBS);
-    const startJobMutex = yield* makeStartJobMutex();
-
-    // Per-job SSE subscriber subscribe/unsubscribe handling. Fan-out stays
-    // concrete below while this wave is still mid-refactor.
+    const windowMutex = yield* makeStartJobMutex();
     const subscribers = makeSubscriberRegistry<RecapStreamEvent>({
       traceScope: "recap-jobs",
       errorScope: "recap-jobs",
@@ -206,25 +159,9 @@ export const ProjectRecapJobsLive = Layer.effect(
       handleIdPrefix: "",
     });
 
-    // Ephemeral opencode HTTP-MCP session tokens. Recap passes no liveness
-    // predicate — a token resolves to its stored RecapToolContext for as long
-    // as it hasn't expired, regardless of fiber liveness (invariant #1).
-    const sessionStore = yield* makeSessionTokenStore<RecapToolContext>(RECAP_SESSION_TOKEN_TTL_MS);
-    const issueSessionToken = sessionStore.issue;
-    const resolveSessionToken = sessionStore.resolve;
-    const clearSessionToken = sessionStore.clear;
-    const clearTokensForRecap = (recapId: string): Effect.Effect<void> =>
-      sessionStore.clearWhere((ctx) => ctx.recapId === recapId);
-
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
 
-    /**
-     * Provide the trio of services {@link PrContextService}'s GitHub-read
-     * passthroughs need at execution time (etag cache, db handle, settings
-     * for API base). Use this when calling things like `prCtx.prFiles` from
-     * inside `Effect.gen` blocks that promise empty requirements.
-     */
     const provideGithubDeps = <A, E>(
       eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
     ): Effect.Effect<A, E> =>
@@ -234,75 +171,71 @@ export const ProjectRecapJobsLive = Layer.effect(
         Effect.provideService(SettingsService, settingsService),
       );
 
-    // ── Status chokepoint (CLAUDE.md invariant #11) ─────────────────────
-    const setStatus = (
-      recap: { id: string; repositoryId: string; period: RecapPeriod },
-      status: ProjectRecapStatus,
-      options?: { tokenUsage?: Record<string, number>; modelUsed?: string; errorMessage?: string },
-    ): Effect.Effect<void> =>
+    const terminalEvent = (recapId: string, outcome: RunOutcome<string>): RecapStreamEvent =>
+      outcome.kind === "complete"
+        ? { type: "done", data: { recapId } }
+        : outcome.kind === "stopped"
+          ? { type: "stopped", data: { recapId } }
+          : { type: "error", data: { code: "RecapGenerationError", message: outcome.failure } };
+
+    const settle = (
+      recapId: string,
+      outcome: RunOutcome<string>,
+      run: AgentRun<RecapRun> | null,
+    ): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
-        // A status write that didn't commit must not be broadcast (invariant
-        // #8); the row keeps its old status and resume-on-boot picks it up.
-        const committed = yield* provideDb(recapService.setStatus(recap.id, status, options)).pipe(
-          Effect.as(true),
-          Effect.catchTag("DbError", (err) =>
-            Effect.sync(() => {
-              logError("recap-jobs", `status write ${status} failed for ${recap.id}:`, err.message);
-              return false;
-            }),
-          ),
+        const status: ProjectRecapStatus =
+          outcome.kind === "failed" ? "error" : outcome.kind === "stopped" ? "stopped" : "complete";
+        const moved = yield* provideDb(
+          recapService.finish(recapId, status, {
+            ...(run?.context.modelUsed ? { modelUsed: run.context.modelUsed } : {}),
+            ...(outcome.kind === "failed" ? { errorMessage: outcome.failure } : {}),
+          }),
         );
-        if (!committed) return;
-        const fresh = yield* provideDb(recapService.getById(recap.id)).pipe(
+        if (run) subscribers.fanOut(recapId, run.context, terminalEvent(recapId, outcome));
+        if (!moved) return;
+        const fresh = yield* provideDb(recapService.getById(recapId)).pipe(
           Effect.catch(() => Effect.succeed(null)),
         );
-        const data: {
-          recapId: string;
-          repoId: string;
-          period: RecapPeriod;
-          status: typeof status;
-          completedAt?: string | null;
-          errorMessage?: string | null;
-        } = {
-          recapId: recap.id,
-          repoId: recap.repositoryId,
-          period: recap.period,
-          status,
-        };
-        // Always send completedAt + errorMessage (including null) so a
-        // status transition away from `complete` or `error` clears the
-        // stale value on the client cache.
-        if (fresh) {
-          data.completedAt = fresh.completedAt;
-          data.errorMessage = fresh.errorMessage;
-        }
-        yield* realtime.toRepo(recap.repositoryId, {
+        if (!fresh) return;
+        // completedAt and errorMessage go out even when null, so a client
+        // cache drops the values of an earlier status.
+        yield* realtime.toRepo(fresh.repositoryId, {
           type: "recap:status-changed",
-          data,
+          data: {
+            recapId,
+            repoId: fresh.repositoryId,
+            period: fresh.period,
+            status,
+            completedAt: fresh.completedAt,
+            errorMessage: fresh.errorMessage,
+          },
         });
-        // For 'complete', also broadcast the fresh row so the UI can render
-        // immediately without re-fetching.
-        if (status === "complete" && fresh) {
-          yield* realtime.toRepo(recap.repositoryId, {
+        if (status === "complete") {
+          yield* realtime.toRepo(fresh.repositoryId, {
             type: "recap:added",
             data: { recap: fresh },
           });
         }
       });
 
-    const removeJob = (job: ActiveRecapJob) =>
-      Ref.update(registry, (map) => {
-        if (map.get(job.recapId) !== job) return map;
-        const next = new Map(map);
-        next.delete(job.recapId);
-        return next;
-      });
-
-    // ── Subscriber fan-out ──────────────────────────────────────────────
-    // Thin wrapper over the shared `subscribers` registry so the many local
-    // `fanOut(job, event)` call sites stay unchanged.
-    const fanOut = (job: ActiveRecapJob, event: RecapStreamEvent): number =>
-      subscribers.fanOut(job.recapId, job, event);
+    const jobs: AgentJobs<RecapRun, string> = yield* makeAgentJobs<RecapRun, string>({
+      name: "recap-jobs",
+      concurrency: MAX_CONCURRENT_RECAP_JOBS,
+      turnsPerRun: 1,
+      journal: {
+        generating: Effect.map(provideDb(recapService.listGenerating()), (rows) =>
+          rows.map((row) => row.id),
+        ),
+        bumpResumeAttempts: (recapId) => provideDb(recapService.incrementResumeAttempts(recapId)),
+        completionBlocker: (recapId) =>
+          dbTry("recap completion check", () => recapCompletionBlocker(db, recapId)),
+      },
+      settle,
+      crashed: (cause) => `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`,
+      resumeExhausted: `Exceeded max resume attempts (${MAX_RESUME_ATTEMPTS}) after repeated crashes`,
+      relaunch: (recapId) => launch(recapId),
+    });
 
     // ── Diff loader (walkthrough-fallback path) ─────────────────────────
     //
@@ -566,166 +499,64 @@ export const ProjectRecapJobsLive = Layer.effect(
         return { addedCount: upsertable.length };
       });
 
-    // ── Job body ─────────────────────────────────────────────────────────
+    // ── Source bundle ────────────────────────────────────────────────────
 
-    const buildJobBody = (job: ActiveRecapJob): Effect.Effect<void, DbError> =>
+    /**
+     * The window's pull requests, open work and digests. A window with nothing
+     * in it is final once closed (`empty`), and "nothing yet" while open.
+     */
+    const assembleSourceBundle = (
+      recap: ProjectRecap,
+      repoFullName: string,
+    ): Effect.Effect<RecapSourceBundle | "empty" | "nothing-yet", DbError> =>
       Effect.gen(function* () {
-        debug("recap-jobs", "running agent for", job.recapId);
-
-        // Synchronous emitter wired into the job's subscriber set.
-        // Same pattern as WalkthroughJobs: MCP tool handlers call this
-        // synchronously so content events don't lag behind lifecycle events.
-        // Time to the first nonempty streamed reasoning token. Synthetic phase
-        // and activity events do not establish that the model has responded.
-        // `agentStartMs` is set just before runRecapAgent, so the earlier
-        // orchestrator "analyzing" phase emit doesn't count against it.
-        let agentStartMs: number | null = null;
-        let ttftMs: number | null = null;
-        const emit = (event: RecapStreamEvent): void => {
-          if (
-            agentStartMs !== null &&
-            ttftMs === null &&
-            event.type === "thought" &&
-            event.data.text.length > 0
-          ) {
-            ttftMs = Date.now() - agentStartMs;
-          }
-          fanOut(job, event);
-        };
-
-        // Repo metadata for the prompt.
-        const repo = yield* provideDb(prCtx.getRepo(job.repoId)).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
-        if (!repo) {
-          const msg = "Repository not found — cannot build source bundle";
-          logError("recap-jobs", `repo ${job.repoId} not found — marking recap error`);
-          emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
-          yield* setStatus(
-            {
-              id: job.recapId,
-              repositoryId: job.repoId,
-              period: job.period,
-            },
-            "error",
-            { errorMessage: msg },
-          );
-          return;
-        }
-
-        // Source PRs + walkthroughs for the window. Read the local mirror
-        // first — if backfill discovers nothing new, this is the only DB
-        // query we make.
+        // Read the local mirror first: if backfill finds nothing new, this is
+        // the only query.
         let windowed = yield* provideDb(
-          prService.listArchivedPrsForWindow(job.repoId, job.periodStart, job.periodEnd),
+          prService.listArchivedPrsForWindow(
+            recap.repositoryId,
+            recap.periodStart,
+            recap.periodEnd,
+          ),
         ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
 
-        // Backfill any PRs that closed in this window but haven't yet
-        // landed in the local mirror (poll cycle hadn't run, repo was
-        // added mid-period, etc.). Hits GitHub's search API + getPr per
-        // missing number. Failures degrade silently so the recap still
-        // ships with whatever the mirror has.
         const backfill = yield* backfillMissingPrs(
-          job.repoId,
-          repo.fullName,
-          job.periodStart,
-          job.periodEnd,
+          recap.repositoryId,
+          repoFullName,
+          recap.periodStart,
+          recap.periodEnd,
           windowed,
         );
         if (backfill.addedCount > 0) {
-          debug(
-            "recap-jobs",
-            `requerying window after backfill of ${backfill.addedCount} PR(s) for recap ${job.recapId}`,
-          );
           windowed = yield* provideDb(
-            prService.listArchivedPrsForWindow(job.repoId, job.periodStart, job.periodEnd),
+            prService.listArchivedPrsForWindow(
+              recap.repositoryId,
+              recap.periodStart,
+              recap.periodEnd,
+            ),
           ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
         }
 
-        // PRs in flight for "who is working on what" context, reconstructed
-        // as of the window's close so a historical recap doesn't describe
-        // today's open PRs. Fetched before the empty-window guard so a window
-        // with only open PRs can still produce an "active work" recap.
+        // As of the window's close, so a historical recap doesn't describe
+        // today's open PRs. Read before the empty-window check so a window
+        // with only open PRs still gets an "active work" recap.
         const openPrs = yield* provideDb(
-          prService.listOpenPrsAsOfWindow(job.repoId, job.periodEnd),
+          prService.listOpenPrsAsOfWindow(recap.repositoryId, recap.periodEnd),
         ).pipe(Effect.catch(() => Effect.succeed([] as never[])));
 
         if (windowed.length === 0 && openPrs.length === 0) {
-          // A window with nothing in it means two different things depending
-          // on whether it's still open.
-          if (windowIsCurrent(job.period, job.periodStart)) {
-            // Live window: "nothing has happened yet, come back later" is the
-            // right answer, and the page's Generate copy assumes it.
-            const msg = "No archived or open PRs found for this window";
-            logError(
-              "recap-jobs",
-              `no archived or open PRs for recap ${job.recapId} — marking error`,
-            );
-            emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
-            yield* setStatus(
-              {
-                id: job.recapId,
-                repositoryId: job.repoId,
-                period: job.period,
-              },
-              "error",
-              { errorMessage: msg },
-            );
-            return;
-          }
-
-          // Closed window: the answer is final and it's "nothing shipped".
-          // That's a complete recap, not a failure — otherwise every quiet
-          // weekend in the calendar would paint red. Short-circuit before the
-          // agent runs so a quiet day costs zero tokens.
-          debug(
-            "recap-jobs",
-            `empty historical window for recap ${job.recapId} — completing without the agent`,
-          );
-          yield* provideDb(recapService.markEmptyWindow(job.recapId)).pipe(
-            Effect.catch(() => Effect.void),
-          );
-          yield* setStatus(
-            {
-              id: job.recapId,
-              repositoryId: job.repoId,
-              period: job.period,
-            },
-            "complete",
-          );
-          emit({ type: "done", data: { recapId: job.recapId } });
-          return;
+          return windowIsCurrent(recap.period, recap.periodStart) ? "nothing-yet" : "empty";
         }
 
-        // Diff ingestion runs before the final recap agent. Raw patches are
-        // compacted into durable per-PR digests so the final agent session can
-        // scale with many PRs without retaining every raw diff in context.
-        // `getPrDiff` remains as a fallback tool for parity/old prompts, but
-        // the normal path reads `diffDigest` from get_recap_state.
-        const repoToken = yield* Effect.cached(resolveRepoToken(job.repoId));
-        const jobContext = yield* Effect.context<never>();
-        const sourceRows = [...windowed, ...openPrs];
-        const getPrDiff = (prId: string): Effect.Effect<RecapSourcePrDiff | null> => {
-          const row = sourceRows.find((r) => r.pr.id === prId);
-          if (!row) return Effect.succeed(null);
-          return repoToken.pipe(
-            Effect.flatMap((token) => loadDiffForPr(row.pr, repo.fullName, token)),
-            Effect.provide(jobContext),
-          );
-        };
-
-        // Compact diffs into per-PR digests for every PR (archived OR open)
-        // that lacks a completed walkthrough. Open PRs follow the same
-        // protocol as archived no-walkthrough PRs: the agent reads
-        // `diffDigest` from the source bundle when writing each
-        // `add_pr_entry` description. Without this open PRs would only carry
-        // a body excerpt, and active-work entries would read very differently
-        // from shipped entries.
+        // Every PR without a completed walkthrough gets its diff compacted
+        // into a durable digest, so the agent session scales with many PRs
+        // without holding every raw diff.
+        const repoToken = yield* Effect.cached(resolveRepoToken(recap.repositoryId));
         const digestEntries = yield* Effect.forEach(
-          sourceRows.filter((row) => row.walkthrough === null),
+          [...windowed, ...openPrs].filter((row) => row.walkthrough === null),
           (row) =>
             Effect.gen(function* () {
-              const diff = yield* loadDiffForPr(row.pr, repo.fullName, yield* repoToken).pipe(
+              const diff = yield* loadDiffForPr(row.pr, repoFullName, yield* repoToken).pipe(
                 Effect.catch(() => Effect.succeed(null)),
               );
               const digest = buildDigestForRecapPr(row.pr, diff);
@@ -733,8 +564,8 @@ export const ProjectRecapJobsLive = Layer.effect(
                 db
                   .insert(recapPrDigests)
                   .values({
-                    id: `${job.recapId}:${row.pr.id}`,
-                    recapId: job.recapId,
+                    id: `${recap.id}:${row.pr.id}`,
+                    recapId: recap.id,
                     prId: row.pr.id,
                     source: digest.source,
                     digest: digest.digest,
@@ -763,303 +594,165 @@ export const ProjectRecapJobsLive = Layer.effect(
           { concurrency: 3 },
         );
 
-        const digestByPrId = new Map<string, RecapSourcePrDigest>(digestEntries);
         const bundle = attachRecapDigests(
-          buildSourceBundle(repo.fullName, job, windowed, openPrs),
-          digestByPrId,
+          buildSourceBundle(
+            repoFullName,
+            {
+              repoId: recap.repositoryId,
+              period: recap.period,
+              periodStart: recap.periodStart,
+              periodEnd: recap.periodEnd,
+            },
+            windowed,
+            openPrs,
+          ),
+          new Map<string, RecapSourcePrDigest>(digestEntries),
         );
+        yield* provideDb(recapService.saveSourceBundle(recap.id, bundle));
+        return bundle;
+      });
 
-        // Prior recaps for rolling context. Cheap query — at most a handful.
-        const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
-          recapService.getLatestForRepo(job.repoId, { limit: 5 }),
-        ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
+    // ── Run ──────────────────────────────────────────────────────────────
 
-        const launch = yield* resolveAgentLaunch("recap").pipe(
-          Effect.provideService(SettingsService, settingsService),
+    const runRecap = (run: AgentRun<RecapRun>): Effect.Effect<RunEnd<string>, DbError> =>
+      Effect.gen(function* () {
+        // Time to the first nonempty reasoning token; synthetic phase and
+        // activity events don't show the model has responded.
+        let agentStartMs: number | null = null;
+        let ttftMs: number | null = null;
+        const emit = (event: RecapStreamEvent): void => {
+          if (
+            agentStartMs !== null &&
+            ttftMs === null &&
+            event.type === "thought" &&
+            event.data.text.length > 0
+          ) {
+            ttftMs = Date.now() - agentStartMs;
+          }
+          subscribers.fanOut(run.id, run.context, event);
+        };
+        const recap = yield* provideDb(recapService.getById(run.id)).pipe(
+          Effect.catch(() => Effect.succeed(null)),
         );
-        if (!isAgentLaunchable(launch.agent)) {
-          const msg = `The configured recap agent ('${launch.agent}') is not available on this machine.`;
-          logError("recap-jobs", `recap ${job.recapId}: ${msg}`);
-          emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
-          yield* setStatus(
-            { id: job.recapId, repositoryId: job.repoId, period: job.period },
-            "error",
-            { errorMessage: msg },
-          );
-          return;
+        if (!recap) return { kind: "failed", failure: "Recap row not found" };
+        const repo = yield* provideDb(prCtx.getRepo(recap.repositoryId)).pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        if (!repo) {
+          return { kind: "failed", failure: "Repository not found — cannot build source bundle" };
         }
 
-        const modelUsed = launch.model;
-        let calledAnyTool = false;
-        const ctx: RecapToolContext = {
+        const stored = yield* provideDb(recapService.getSourceBundle(run.id));
+        const assembled = stored ?? (yield* assembleSourceBundle(recap, repo.fullName));
+        if (assembled === "nothing-yet") {
+          // A live window: "come back later" is the answer, and the page's
+          // Generate copy assumes it.
+          return { kind: "failed", failure: "No archived or open PRs found for this window" };
+        }
+        if (assembled === "empty") {
+          // A closed window: "nothing shipped" is final, not a failure, and
+          // costs no tokens.
+          debug("recap-jobs", `empty historical window for recap ${run.id} — no agent run`);
+          yield* provideDb(recapService.markEmptyWindow(run.id));
+          return { kind: "complete" };
+        }
+
+        const priorRecaps: ReadonlyArray<ProjectRecap> = yield* provideDb(
+          recapService.getLatestForRepo(recap.repositoryId, { limit: 5 }),
+        ).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProjectRecap>)));
+
+        const agentLaunch = yield* resolveAgentLaunch("recap").pipe(
+          Effect.provideService(SettingsService, settingsService),
+        );
+        if (!isAgentLaunchable(agentLaunch.agent)) {
+          return {
+            kind: "failed",
+            failure: `The configured recap agent ('${agentLaunch.agent}') is not available on this machine.`,
+          };
+        }
+        run.context.modelUsed = agentLaunch.model;
+
+        const repoToken = yield* Effect.cached(resolveRepoToken(recap.repositoryId));
+        const runContext = yield* Effect.context<never>();
+        const tools: RecapToolContext = {
           db,
-          recapId: job.recapId,
-          sourceBundle: bundle,
+          recapId: run.id,
+          sourceBundle: assembled,
           priorRecaps,
-          getPrDiff,
+          getPrDiff: (prId) =>
+            provideDb(prService.getPr(prId)).pipe(
+              Effect.flatMap((pr) =>
+                Effect.flatMap(repoToken, (token) => loadDiffForPr(pr, repo.fullName, token)),
+              ),
+              Effect.catch(() => Effect.succeed(null)),
+              Effect.provide(runContext),
+            ),
           emit,
           onToolCall: () => {
-            calledAnyTool = true;
+            run.context.calledAnyTool = true;
           },
           onCompleted: () => {
-            job.validatedComplete = true;
-            if (!job.abortController.signal.aborted) {
-              job.abortController.abort(new Error("Recap completed"));
-            }
+            run.context.validated = true;
+            if (!run.abort.signal.aborted) run.abort.abort(new Error("Recap completed"));
           },
         };
+        run.context.tools = tools;
 
-        // Emit initial phase so the UI knows the job is active.
         emit({ type: "phase", data: { phase: "analyzing", message: "Analyzing pull requests…" } });
 
         agentStartMs = Date.now();
-        const outcome = yield* Effect.acquireUseRelease(
-          issueSessionToken(ctx),
-          (sessionToken) =>
-            Effect.promise(() =>
-              runRecapAgentViaAcp({
-                ctx,
-                sessionToken,
-                launch,
-                workingDir: repo.clonePath ?? process.cwd(),
-                abortController: job.abortController,
-                calledAnyTool: () => calledAnyTool,
-                isValidated: () => job.validatedComplete,
-              }),
-            ),
-          (sessionToken) => clearSessionToken(sessionToken),
-        );
-
-        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
-
-        if (job.cancelledByUser) {
-          emit({ type: "stopped", data: { recapId: job.recapId } });
-          yield* setStatus(
-            {
-              id: job.recapId,
-              repositoryId: job.repoId,
-              period: job.period,
-            },
-            "stopped",
-          );
-          return;
-        }
-
-        const blocker = outcome.validated
-          ? null
-          : yield* dbTry("recap completion check", () => recapCompletionBlocker(db, job.recapId));
-        if (blocker === null) {
-          yield* setStatus(
-            {
-              id: job.recapId,
-              repositoryId: job.repoId,
-              period: job.period,
-            },
-            "complete",
-            { modelUsed },
-          );
-          emit({ type: "done", data: { recapId: job.recapId } });
-          return;
-        }
-
-        const msg =
-          outcome.error ??
-          "Agent finished without calling complete_recap — the overview may be empty or invalid";
-        emit({ type: "error", data: { code: "RecapGenerationError", message: msg } });
-        yield* setStatus(
-          {
-            id: job.recapId,
-            repositoryId: job.repoId,
-            period: job.period,
-          },
-          "error",
-          { errorMessage: msg },
-        );
-      });
-
-    const launchJob = (job: ActiveRecapJob) =>
-      Effect.withSpan("ProjectRecapJobs.job")(
-        Effect.gen(function* () {
-          yield* Effect.annotateCurrentSpan("recapId", job.recapId);
-          yield* Effect.annotateCurrentSpan("period", job.period);
-          yield* Ref.update(registry, (map) => {
-            const next = new Map(map);
-            next.set(job.recapId, job);
-            return next;
-          });
-
-          const scopedBody = buildJobBody(job).pipe(
-            // See WalkthroughJobs.launchJob — same reason, same ordering rule.
-            withTraceAnchor(job.recapId),
-            Effect.annotateLogs({ recapId: job.recapId, repoId: job.repoId }),
-            semaphore.withPermits(1),
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                if (
-                  analyzeJobFailure(cause, { cancelledByUser: job.cancelledByUser }) ===
-                  "leave-for-resume"
-                ) {
-                  // Process-shutdown interrupt with no user intent — leave the
-                  // row 'generating' so resume-on-boot can pick it up.
-                  return;
-                }
-                // A user-driven Stop, or a real failure. Either way the row
-                // leaves 'generating' so the UI doesn't get stuck on it. (A
-                // Stop may interrupt during DB read / bundle prep, before the
-                // agent's AbortController could catch it.)
-                const recap = { id: job.recapId, repositoryId: job.repoId, period: job.period };
-                if (Cause.hasInterruptsOnly(cause)) {
-                  fanOut(job, { type: "stopped", data: { recapId: job.recapId } });
-                  yield* setStatus(recap, "stopped");
-                  return;
-                }
-                logError("recap-jobs", `job ${job.recapId} failed:`, Cause.pretty(cause));
-                const msg = `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`;
-                fanOut(job, {
-                  type: "error",
-                  data: { code: "RecapGenerationError", message: msg },
-                });
-                yield* setStatus(recap, "error", { errorMessage: msg });
-              }),
-            ),
-            Effect.ensuring(removeJob(job)),
-            // The generation span. Like WalkthroughJobs.generate, this wraps the
-            // forked body so its duration is the real recap-generation time and
-            // it can carry the ttft_ms annotation ('ProjectRecapJobs.job' forks
-            // and returns in ~0ms).
-            Effect.withSpan(SPAN.recapGenerate, {
-              attributes: { recapId: job.recapId, period: job.period },
-            }),
-          );
-
-          const fiber = yield* scopedBody.pipe(withGitHubOrigin("recap:job"), Effect.forkDetach);
-          job.fiber = fiber as Fiber.Fiber<unknown, unknown>;
-        }),
-      );
-
-    // ── Public API ──────────────────────────────────────────────────────
-
-    const cancel = (recapId: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(recapId);
-
-        if (job) {
-          job.cancelledByUser = true;
-          try {
-            if (!job.abortController.signal.aborted) {
-              job.abortController.abort(new Error("Recap cancelled"));
-            }
-          } catch {
-            /* already aborted */
-          }
-          // Don't wait for the fiber to finish interrupting — during
-          // opencode "thinking" the remote session.abort() / prompt
-          // shutdown can hang, and Fiber.interrupt would block the HTTP
-          // stop request indefinitely. Fire-and-forget; the safety net
-          // below transitions the row immediately.
-          const fiber = job.fiber;
-          if (fiber) {
-            yield* Effect.sync(() => fiber.interruptUnsafe());
-          }
-          yield* clearTokensForRecap(recapId);
-        }
-
-        // Immediate safety net. Two cases land here:
-        //
-        //   (a) No live job in the registry — phantom row left in
-        //       'generating' by a prior server crash / restart, before
-        //       resumePending re-attached. cancel above was a no-op.
-        //   (b) Live job whose abort signal didn't propagate cleanly
-        //       through the agent SDK in time, so neither the body's
-        //       cancelledByUser branch nor the launchJob catchAllCause
-        //       managed to setStatus before Fiber.interrupt resolved.
-        //
-        // Either way, read the row's current status and force the
-        // 'generating' → 'stopped' transition via the chokepoint here
-        // (idempotent — UPDATE with the same status is harmless). This
-        // is what guarantees the UI's SSE reducer flips the floating bar
-        // out of the Stop state after the user clicks Stop.
-        const row = yield* provideDb(recapService.getById(recapId)).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
-        if (row && row.status === "generating") {
-          yield* setStatus(
-            {
-              id: row.id,
-              repositoryId: row.repositoryId,
-              period: row.period,
-            },
-            "stopped",
-          );
-        }
-      });
-
-    const startJob = (
-      params: StartRecapJobParams,
-    ): Effect.Effect<{ readonly recapId: string }, StartRecapJobError> =>
-      Effect.gen(function* () {
-        const { recapId } = params;
-        const mutex = yield* startJobMutex.acquire(`recap:${recapId}`);
-        return yield* mutex.withPermits(1)(
-          Effect.gen(function* () {
-            // Already running? Reuse, unless the old job was cancelled
-            // or aborted and hasn't cleaned up from the registry yet.
-            const existing = (yield* Ref.get(registry)).get(recapId);
-            if (existing) {
-              if (existing.cancelledByUser || existing.abortController.signal.aborted) {
-                yield* removeJob(existing);
-              } else {
-                return { recapId };
-              }
-            }
-
-            const job: ActiveRecapJob = {
-              recapId,
-              repoId: params.repoId,
-              period: params.period,
-              periodStart: params.periodStart,
-              periodEnd: params.periodEnd,
-              abortController: new AbortController(),
-              fiber: null,
-              cancelledByUser: false,
-              validatedComplete: false,
-              subscribers: new Set<SubscriberHandle<RecapStreamEvent>>(),
-              nextSeq: 0,
-            };
-            yield* launchJob(job);
-            return { recapId };
+        const outcome = yield* Effect.promise(() =>
+          runRecapAgentViaAcp({
+            ctx: tools,
+            sessionToken: run.token,
+            launch: agentLaunch,
+            workingDir: repo.clonePath ?? process.cwd(),
+            abortController: run.abort,
+            activity: run.activity,
+            calledAnyTool: () => run.context.calledAnyTool,
+            isValidated: () => run.context.validated,
           }),
         );
+        if (ttftMs !== null) yield* Effect.annotateCurrentSpan("ttft_ms", ttftMs);
+
+        return {
+          kind: "journal",
+          failure:
+            outcome.error ??
+            "Agent finished without calling complete_recap — the overview may be empty or invalid",
+        };
       });
 
-    const subscribe = (recapId: string, onEvent: Subscriber): Effect.Effect<SubscribeResult> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(recapId);
-        if (!job) {
-          return { found: false } as SubscribeResult;
-        }
-        const { unsubscribe, flush } = subscribers.subscribe(recapId, job, onEvent);
-        return { found: true, unsubscribe, flush };
-      });
+    const launch = (recapId: string): Effect.Effect<void> =>
+      jobs
+        .launch({
+          id: recapId,
+          context: (): RecapRun => ({
+            subscribers: new Set(),
+            nextSeq: 0,
+            tools: null,
+            calledAnyTool: false,
+            validated: false,
+            modelUsed: null,
+          }),
+          body: runRecap,
+          instrument: (_run, effect) =>
+            effect.pipe(
+              // Before the span, so the anchor resolves to it.
+              withTraceAnchor(recapId),
+              Effect.annotateLogs({ recapId }),
+              Effect.withSpan(SPAN.recapGenerate, { attributes: { recapId } }),
+              withGitHubOrigin("recap:job"),
+            ),
+        })
+        .pipe(Effect.asVoid);
 
-    const emitEvent = (recapId: string, event: RecapStreamEvent): Effect.Effect<EmitResult> =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(registry);
-        const job = map.get(recapId);
-        if (!job) {
-          debug("recap-jobs", `emitEvent-no-job recap=${recapId} type=${event.type}`);
-          return { kind: "skipped-no-job", recapId };
-        }
-        const seq = fanOut(job, event);
-        return { kind: "delivered", seq };
-      });
+    // ── Requests ─────────────────────────────────────────────────────────
 
     /**
      * The window has no pull request that closed in it or was open as it
-     * closed, as far as the local mirror knows. Same window boundary as
-     * `buildJobBody`'s empty-window guard, so the two agree.
+     * closed, as far as the local mirror knows. Same boundary as the run's
+     * empty-window check, so the two agree.
      */
     const windowIsSilent = (repoId: string, window: RecapWindowBounds): Effect.Effect<boolean> =>
       Effect.gen(function* () {
@@ -1080,9 +773,7 @@ export const ProjectRecapJobsLive = Layer.effect(
         const now = new Date();
         const window = request.window ?? rollingWindow(request.period, now);
         const { repoId, period } = request;
-        const mutex = yield* startJobMutex.acquire(
-          `window:${repoId}:${period}:${window.periodStart}`,
-        );
+        const mutex = yield* windowMutex.acquire(`${repoId}:${period}:${window.periodStart}`);
         return yield* mutex.withPermits(1)(
           Effect.gen(function* () {
             const existing = yield* provideDb(
@@ -1097,11 +788,14 @@ export const ProjectRecapJobsLive = Layer.effect(
               now,
             });
 
-            if (existing && plan === "reuse") return { recapId: existing.id };
+            if (existing && plan === "reuse") {
+              if (existing.status === "generating") yield* jobs.resume(existing.id);
+              return { recapId: existing.id };
+            }
 
             if (existing && plan === "rerun") {
-              // Stop any fiber still writing into the row before resetting it.
-              yield* cancel(existing.id);
+              // Stop any run still writing into the row before resetting it.
+              yield* jobs.stop(existing.id, "user");
               yield* provideDb(recapService.resetForRerun(existing.id, window));
               const refreshed = yield* provideDb(recapService.getById(existing.id)).pipe(
                 Effect.catch(() => Effect.succeed(null)),
@@ -1112,7 +806,8 @@ export const ProjectRecapJobsLive = Layer.effect(
                   data: { recap: refreshed },
                 });
               }
-              return yield* startJob({ recapId: existing.id, repoId, period, ...window });
+              yield* launch(existing.id);
+              return { recapId: existing.id };
             }
 
             // A quiet window the user didn't ask for leaves a gap in the
@@ -1127,72 +822,30 @@ export const ProjectRecapJobsLive = Layer.effect(
               type: "recap:added",
               data: { recap: created },
             });
-            return yield* startJob({ recapId: created.id, repoId, period, ...window });
+            yield* launch(created.id);
+            return { recapId: created.id };
           }),
         );
       });
 
-    const resumePending = (): Effect.Effect<void, DbError> =>
-      Effect.withSpan("ProjectRecapJobs.resumePending")(
-        Effect.gen(function* () {
-          const rows = yield* provideDb(recapService.listGenerating());
-          debug("recap-jobs", `resumePending: ${rows.length} row(s)`);
-          for (const row of rows) {
-            // An attempt that can't be counted isn't run: resuming it would
-            // escape the resume budget (invariant #9).
-            const attempts = yield* provideDb(recapService.incrementResumeAttempts(row.id)).pipe(
-              Effect.catchTag("DbError", (err) =>
-                Effect.sync(() => {
-                  logError("recap-jobs", `resume of ${row.id} skipped:`, err.message);
-                  return null;
-                }),
-              ),
-            );
-            if (attempts === null) continue;
-            if (attempts > RECAP_MAX_RESUME_ATTEMPTS) {
-              debug("recap-jobs", `recap ${row.id} exceeded resume attempts — marking error`);
-              yield* setStatus(
-                {
-                  id: row.id,
-                  repositoryId: row.repositoryId,
-                  period: row.period,
-                },
-                "error",
-                {
-                  errorMessage: `Exceeded max resume attempts (${RECAP_MAX_RESUME_ATTEMPTS}) after repeated crashes`,
-                },
-              );
-              continue;
-            }
-            yield* startJob({
-              recapId: row.id,
-              repoId: row.repositoryId,
-              period: row.period,
-              periodStart: row.periodStart,
-              periodEnd: row.periodEnd,
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() => {
-                  logError(
-                    "recap-jobs",
-                    `resume startJob failed for ${row.id}:`,
-                    Cause.pretty(cause),
-                  );
-                }),
-              ),
-            );
-          }
-        }),
-      );
+    const subscribe = (
+      recapId: string,
+      onEvent: (event: RecapStreamEvent) => void,
+    ): Effect.Effect<SubscribeResult> =>
+      Effect.map(jobs.running(recapId), (run): SubscribeResult => {
+        if (!run) return { found: false };
+        const { unsubscribe, flush } = subscribers.subscribe(recapId, run.context, onEvent);
+        return { found: true, unsubscribe, flush };
+      });
 
     return {
-      startJob,
       requestRecap,
-      cancel,
-      resumePending,
+      attach: jobs.resume,
+      cancel: (recapId) => jobs.stop(recapId, "user"),
+      resumePending: () => jobs.resumePending,
       subscribe,
-      emitEvent,
-      resolveSessionToken,
+      resolveSessionToken: (token) =>
+        Effect.map(jobs.resolveToken(token), (run) => run?.context.tools ?? null),
     };
   }),
 );

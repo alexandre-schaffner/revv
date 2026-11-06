@@ -1,5 +1,6 @@
 import type { StackBriefSnapshot } from "../../db/schema/stack-briefs";
 import type { AgentLaunch } from "../acp/agent-launch";
+import type { ActivityBeacon } from "../acp/run-turn";
 import { buildStackBriefUserMessage, STACK_BRIEF_SYSTEM_PROMPT } from "../prompts/stack-brief";
 import { type McpAgentAcpResult, runMcpAgentViaAcp } from "./mcp-agent-acp";
 import type { StackBriefToolContext } from "./stack-brief-tools";
@@ -12,6 +13,7 @@ export interface RunStackBriefAcpParams {
   readonly launch: AgentLaunch;
   readonly workingDir: string;
   readonly abortController: AbortController;
+  readonly activity: ActivityBeacon;
   readonly calledAnyTool: () => boolean;
   readonly isValidated: () => boolean;
 }
@@ -23,6 +25,8 @@ export function runStackBriefAgentViaAcp(
     launch: params.launch,
     workingDir: params.workingDir,
     abortController: params.abortController,
+    activity: params.activity,
+    traceKey: params.ctx.briefId,
     route: "/mcp/stack-brief",
     mcpServerName: `${STACK_BRIEF_MCP_SERVER}-${params.ctx.briefId}`,
     sessionToken: params.sessionToken,

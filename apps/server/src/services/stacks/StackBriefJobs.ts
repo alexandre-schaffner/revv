@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isOpenLayer, type StackBriefStatus } from "@revv/shared";
-import { and, eq, inArray, ne } from "drizzle-orm";
-import { Cause, Context, Effect, type Fiber, Layer, Ref, Semaphore } from "effect";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { Cause, Context, Effect, Layer } from "effect";
 import { resolveAgentLaunch } from "../../ai/acp/agent-launch";
 import { isAgentLaunchable } from "../../ai/acp/launch";
-import { JOB_TURN } from "../../ai/acp/run-turn";
 import { runStackBriefAgentViaAcp } from "../../ai/providers/stack-brief-acp";
 import {
   type StackBriefToolContext,
@@ -15,33 +14,27 @@ import { type StackBriefSnapshot, stackBriefs } from "../../db/schema/stack-brie
 import type { DbError } from "../../domain/errors";
 import { dbTry } from "../../effects/db-try";
 import { withDb } from "../../effects/with-db";
-import { debug, logError } from "../../logger";
+import { withTraceAnchor } from "../../observability/span-graft";
 import { DbService } from "../Db";
-import { analyzeJobFailure } from "../job-failure";
 import { makeStartJobMutex } from "../job-mutex";
+import {
+  type AgentJobs,
+  type AgentRun,
+  MAX_RESUME_ATTEMPTS,
+  makeAgentJobs,
+  type RunEnd,
+  type RunOutcome,
+} from "../jobs/agent-jobs";
 import { PrContextService } from "../PrContext";
 import { Realtime } from "../Realtime";
 import { SettingsService } from "../Settings";
-import { makeSessionTokenStore } from "../session-token-store";
 import { stackSignature } from "./fingerprint";
 import type { GitHubStack } from "./map";
 import { type StackError, StackService } from "./StackService";
 
 const MAX_CONCURRENT_BRIEF_JOBS = 1;
 
-export const STACK_BRIEF_MAX_RESUME_ATTEMPTS = 3;
-
-const SESSION_TOKEN_TTL_MS = JOB_TURN.ceilingMs + 5 * 60_000;
-
 const BODY_EXCERPT_CHARS = 1200;
-
-interface ActiveBriefJob {
-  readonly briefId: string;
-  readonly abortController: AbortController;
-  fiber: Fiber.Fiber<void, never> | null;
-  superseded: boolean;
-  validated: boolean;
-}
 
 export class StackBriefJobs extends Context.Service<
   StackBriefJobs,
@@ -97,6 +90,13 @@ export function buildStackBriefSnapshot(
   };
 }
 
+interface BriefRun {
+  readonly tools: StackBriefToolContext;
+  calledAnyTool: boolean;
+  validated: boolean;
+  modelUsed: string | null;
+}
+
 export const StackBriefJobsLive = Layer.effect(
   StackBriefJobs,
   Effect.gen(function* () {
@@ -106,10 +106,7 @@ export const StackBriefJobsLive = Layer.effect(
     const settingsService = yield* SettingsService;
     const stacks = yield* StackService;
 
-    const registry = yield* Ref.make(new Map<string, ActiveBriefJob>());
-    const semaphore = yield* Semaphore.make(MAX_CONCURRENT_BRIEF_JOBS);
     const stackMutex = yield* makeStartJobMutex();
-    const sessions = yield* makeSessionTokenStore<StackBriefToolContext>(SESSION_TOKEN_TTL_MS);
 
     const announce = (
       repositoryId: string,
@@ -122,20 +119,27 @@ export const StackBriefJobsLive = Layer.effect(
         data: { repositoryId, stackNumber, briefId, status },
       });
 
-    const finish = (
+    const settle = (
       briefId: string,
-      status: "complete" | "error",
-      options: { readonly modelUsed?: string; readonly errorMessage?: string } = {},
-    ): Effect.Effect<void> =>
+      outcome: RunOutcome<string>,
+      run: AgentRun<BriefRun> | null,
+    ): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
+        const status = outcome.kind === "complete" ? "complete" : "error";
+        const modelUsed = run?.context.modelUsed ?? null;
         const [moved] = yield* dbTry("stack brief status update", () =>
           db
             .update(stackBriefs)
             .set({
               status,
               ...(status === "complete" ? { completedAt: new Date().toISOString() } : {}),
-              ...(options.modelUsed ? { modelUsed: options.modelUsed } : {}),
-              errorMessage: options.errorMessage ?? null,
+              ...(modelUsed ? { modelUsed } : {}),
+              errorMessage:
+                outcome.kind === "failed"
+                  ? outcome.failure
+                  : outcome.kind === "stopped"
+                    ? "Stopped"
+                    : null,
             })
             .where(and(eq(stackBriefs.id, briefId), eq(stackBriefs.status, "generating")))
             .returning({
@@ -145,147 +149,120 @@ export const StackBriefJobsLive = Layer.effect(
             .all(),
         );
         if (moved) yield* announce(moved.repositoryId, moved.stackNumber, briefId, status);
-      }).pipe(
-        Effect.catch((e) =>
-          Effect.sync(() => logError("stack-brief", `status → ${status} failed for ${briefId}`, e)),
-        ),
-      );
-
-    const removeJob = (job: ActiveBriefJob) =>
-      Ref.update(registry, (map) => {
-        if (map.get(job.briefId) !== job) return map;
-        const next = new Map(map);
-        next.delete(job.briefId);
-        return next;
       });
 
-    // ── Job body ─────────────────────────────────────────────────────────
+    const jobs: AgentJobs<BriefRun, string> = yield* makeAgentJobs<BriefRun, string>({
+      name: "stack-brief",
+      concurrency: MAX_CONCURRENT_BRIEF_JOBS,
+      turnsPerRun: 1,
+      journal: {
+        generating: dbTry("stack brief resume scan", () =>
+          db
+            .select({ id: stackBriefs.id })
+            .from(stackBriefs)
+            .where(eq(stackBriefs.status, "generating"))
+            .all()
+            .map((row) => row.id),
+        ),
+        bumpResumeAttempts: (briefId) =>
+          dbTry("stack brief resume count", () => {
+            const [row] = db
+              .update(stackBriefs)
+              .set({ resumeAttempts: sql`${stackBriefs.resumeAttempts} + 1` })
+              .where(eq(stackBriefs.id, briefId))
+              .returning({ attempts: stackBriefs.resumeAttempts })
+              .all();
+            if (!row) throw new Error(`stack brief ${briefId} not found`);
+            return row.attempts;
+          }),
+        completionBlocker: (briefId) =>
+          dbTry("stack brief completion check", () => stackBriefCompletionBlocker(db, briefId)),
+      },
+      settle,
+      crashed: (cause) => `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`,
+      resumeExhausted: `Exceeded max resume attempts (${MAX_RESUME_ATTEMPTS}) after repeated crashes`,
+      relaunch: (briefId) => launch(briefId),
+    });
 
-    const runJob = (job: ActiveBriefJob): Effect.Effect<void, DbError> =>
+    const runBrief = (run: AgentRun<BriefRun>): Effect.Effect<RunEnd<string>, DbError> =>
       Effect.gen(function* () {
         const row = yield* dbTry("stack brief read", () =>
-          db.select().from(stackBriefs).where(eq(stackBriefs.id, job.briefId)).get(),
+          db.select().from(stackBriefs).where(eq(stackBriefs.id, run.id)).get(),
         );
-        if (row?.status !== "generating") return;
+        if (!row) return { kind: "failed", failure: "The stack brief row is gone" };
         const snapshot = row.stackSnapshot;
         if (snapshot.layers.length === 0) {
-          yield* finish(job.briefId, "error", { errorMessage: "The stack snapshot has no layers" });
-          return;
+          return { kind: "failed", failure: "The stack snapshot has no layers" };
         }
 
-        const launch = yield* resolveAgentLaunch("brief").pipe(
+        const agentLaunch = yield* resolveAgentLaunch("brief").pipe(
           Effect.provideService(SettingsService, settingsService),
         );
-        if (!isAgentLaunchable(launch.agent)) {
-          yield* finish(job.briefId, "error", {
-            errorMessage: `The configured agent ('${launch.agent}') is not available on this machine.`,
-          });
-          return;
+        if (!isAgentLaunchable(agentLaunch.agent)) {
+          return {
+            kind: "failed",
+            failure: `The configured agent ('${agentLaunch.agent}') is not available on this machine.`,
+          };
         }
-        const modelUsed = launch.model;
+        run.context.modelUsed = agentLaunch.model;
         const repo = yield* withDb(db, prCtx.getRepo(row.repositoryId)).pipe(
           Effect.orElseSucceed(() => null),
         );
 
-        let calledAnyTool = false;
-        const ctx: StackBriefToolContext = {
-          db,
-          briefId: job.briefId,
-          onToolCall: () => {
-            calledAnyTool = true;
-          },
-          onCompleted: () => {
-            job.validated = true;
-            if (!job.abortController.signal.aborted) {
-              job.abortController.abort(new Error("Stack brief completed"));
-            }
-          },
-        };
-
-        const outcome = yield* Effect.acquireUseRelease(
-          sessions.issue(ctx),
-          (sessionToken) =>
-            Effect.promise(() =>
-              runStackBriefAgentViaAcp({
-                ctx,
-                snapshot,
-                sessionToken,
-                launch,
-                workingDir: repo?.clonePath ?? process.cwd(),
-                abortController: job.abortController,
-                calledAnyTool: () => calledAnyTool,
-                isValidated: () => job.validated,
-              }),
-            ),
-          (sessionToken) => sessions.clear(sessionToken),
+        const outcome = yield* Effect.promise(() =>
+          runStackBriefAgentViaAcp({
+            ctx: run.context.tools,
+            snapshot,
+            sessionToken: run.token,
+            launch: agentLaunch,
+            workingDir: repo?.clonePath ?? process.cwd(),
+            abortController: run.abort,
+            activity: run.activity,
+            calledAnyTool: () => run.context.calledAnyTool,
+            isValidated: () => run.context.validated,
+          }),
         );
-
-        if (job.superseded) return;
-        const blocker = outcome.validated
-          ? null
-          : yield* dbTry("stack brief completion check", () =>
-              stackBriefCompletionBlocker(db, job.briefId),
-            );
-        if (blocker === null) {
-          yield* finish(job.briefId, "complete", { modelUsed });
-          return;
-        }
-        yield* finish(job.briefId, "error", {
-          modelUsed,
-          errorMessage:
+        return {
+          kind: "journal",
+          failure:
             outcome.error ??
             "The agent stopped before complete_stack_brief; the brief is unfinished",
-        });
+        };
       });
 
     const launch = (briefId: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const existing = (yield* Ref.get(registry)).get(briefId);
-        if (existing && !existing.abortController.signal.aborted) return;
-
-        const job: ActiveBriefJob = {
-          briefId,
-          abortController: new AbortController(),
-          fiber: null,
-          superseded: false,
-          validated: false,
-        };
-        yield* Ref.update(registry, (map) => new Map(map).set(briefId, job));
-
-        const body = runJob(job).pipe(
-          semaphore.withPermits(1),
-          Effect.catchCause((cause) => {
-            if (
-              analyzeJobFailure(cause, { cancelledByUser: job.superseded }) === "leave-for-resume"
-            ) {
-              return Effect.void;
-            }
-            if (job.superseded) return Effect.void;
-            logError("stack-brief", `job ${briefId} failed:`, Cause.pretty(cause));
-            return finish(briefId, "error", {
-              errorMessage: `Generation failed unexpectedly: ${Cause.pretty(cause).slice(0, 200)}`,
-            });
-          }),
-          Effect.ensuring(removeJob(job)),
-          Effect.withSpan("StackBriefJobs.job", { attributes: { briefId } }),
-        );
-        job.fiber = yield* Effect.forkDetach(body);
-      });
-
-    const stopRun = (briefId: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const job = (yield* Ref.get(registry)).get(briefId);
-        if (!job) return;
-        job.superseded = true;
-        if (!job.abortController.signal.aborted) {
-          job.abortController.abort(new Error("Stack brief superseded"));
-        }
-        if (job.fiber) {
-          const fiber = job.fiber;
-          yield* Effect.sync(() => fiber.interruptUnsafe());
-        }
-        yield* sessions.clearWhere((c) => c.briefId === briefId);
-      });
+      jobs
+        .launch({
+          id: briefId,
+          context: (handles): BriefRun => {
+            const context: BriefRun = {
+              calledAnyTool: false,
+              validated: false,
+              modelUsed: null,
+              tools: {
+                db,
+                briefId,
+                onToolCall: () => {
+                  context.calledAnyTool = true;
+                },
+                onCompleted: () => {
+                  context.validated = true;
+                  if (!handles.abort.signal.aborted) {
+                    handles.abort.abort(new Error("Stack brief completed"));
+                  }
+                },
+              },
+            };
+            return context;
+          },
+          body: runBrief,
+          instrument: (_run, effect) =>
+            effect.pipe(
+              withTraceAnchor(briefId),
+              Effect.withSpan("StackBriefJobs.job", { attributes: { briefId } }),
+            ),
+        })
+        .pipe(Effect.asVoid);
 
     const ensure = (prId: string, userId: string, accountId?: string) =>
       Effect.gen(function* () {
@@ -319,7 +296,7 @@ export const StackBriefJobsLive = Layer.effect(
             );
             const current = active.find((b) => b.signature === signature && b.status !== "error");
             if (current) {
-              if (current.status === "generating") yield* launch(current.id);
+              if (current.status === "generating") yield* jobs.resume(current.id);
               return current.id;
             }
 
@@ -373,7 +350,7 @@ export const StackBriefJobsLive = Layer.effect(
             );
 
             for (const id of retired) {
-              yield* stopRun(id);
+              yield* jobs.stop(id, "superseded");
               yield* announce(repositoryId, stack.number, id, "superseded");
             }
             yield* announce(repositoryId, stack.number, briefId, "generating");
@@ -383,45 +360,11 @@ export const StackBriefJobsLive = Layer.effect(
         );
       });
 
-    const resumePending = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const rows = yield* dbTry("stack brief resume scan", () =>
-          db
-            .select({ id: stackBriefs.id, attempts: stackBriefs.resumeAttempts })
-            .from(stackBriefs)
-            .where(eq(stackBriefs.status, "generating"))
-            .all(),
-        );
-        debug("stack-brief", `resumePending: ${rows.length} row(s)`);
-        for (const row of rows) {
-          const blocker = yield* dbTry("stack brief completion check", () =>
-            stackBriefCompletionBlocker(db, row.id),
-          );
-          if (blocker === null) {
-            yield* finish(row.id, "complete");
-            continue;
-          }
-          const attempts = row.attempts + 1;
-          yield* dbTry("stack brief resume count", () =>
-            db
-              .update(stackBriefs)
-              .set({ resumeAttempts: attempts })
-              .where(eq(stackBriefs.id, row.id))
-              .run(),
-          );
-          if (attempts > STACK_BRIEF_MAX_RESUME_ATTEMPTS) {
-            yield* finish(row.id, "error", {
-              errorMessage: `Exceeded max resume attempts (${STACK_BRIEF_MAX_RESUME_ATTEMPTS}) after repeated crashes`,
-            });
-            continue;
-          }
-          yield* launch(row.id);
-        }
-      }).pipe(
-        Effect.catch((e) => Effect.sync(() => logError("stack-brief", "resumePending failed", e))),
-        Effect.withSpan("StackBriefJobs.resumePending"),
-      );
-
-    return { ensure, resumePending, resolveSessionToken: sessions.resolve };
+    return {
+      ensure,
+      resumePending: () => jobs.resumePending,
+      resolveSessionToken: (token) =>
+        Effect.map(jobs.resolveToken(token), (run) => run?.context.tools ?? null),
+    };
   }),
 );
