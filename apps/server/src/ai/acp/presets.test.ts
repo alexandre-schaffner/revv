@@ -32,7 +32,7 @@ describe("ACP agent registry", () => {
       label: "Cursor",
       icon: "cursor",
       command: "npx",
-      args: ["-y", "cursor-agent-acp"],
+      args: ["-y", "cursor-agent-acp@0.1.1"],
     });
     // Every registry entry has the minimal launch shape + a capability surface.
     for (const def of ACP_AGENTS) {
@@ -57,7 +57,7 @@ describe("ACP launch presets", () => {
     if (serverEnv.acpCommand) return;
     expect(resolveAcpLaunchById("claude-code")).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      args: ["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
     });
     expect(resolveAcpLaunchById("opencode")).toEqual({
       command: "opencode",
@@ -65,7 +65,7 @@ describe("ACP launch presets", () => {
     });
     expect(resolveAcpLaunchById("codex")).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp"],
+      args: ["-y", "@agentclientprotocol/codex-acp@2.5.0"],
     });
   });
 
@@ -73,7 +73,7 @@ describe("ACP launch presets", () => {
     if (serverEnv.acpCommand) return;
     expect(resolveAcpLaunchById("codex", { model: "gpt-6-sol" })).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp"],
+      args: ["-y", "@agentclientprotocol/codex-acp@2.5.0"],
       env: { CODEX_CONFIG: JSON.stringify({ model: "gpt-6-sol" }) },
     });
   });
@@ -84,7 +84,7 @@ describe("ACP launch presets", () => {
       resolveAcpLaunchById("codex", { model: "gpt-6-sol", thinkingEffort: "extra-high" }),
     ).toEqual({
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp"],
+      args: ["-y", "@agentclientprotocol/codex-acp@2.5.0"],
       env: {
         CODEX_CONFIG: JSON.stringify({ model: "gpt-6-sol", model_reasoning_effort: "xhigh" }),
       },
@@ -174,7 +174,7 @@ describe("ACP launch presets", () => {
       });
 
       expect(launch.command).toBe("npx");
-      expect(launch.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp"]);
+      expect(launch.args).toEqual(["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"]);
       expect(launch.viaPackageRunner).toBe(true);
     });
   });
@@ -186,7 +186,7 @@ describe("ACP launch presets", () => {
       });
 
       expect(launch.command).toBe("bunx");
-      expect(launch.args).toEqual(["@agentclientprotocol/claude-agent-acp"]);
+      expect(launch.args).toEqual(["@agentclientprotocol/claude-agent-acp@0.100.0"]);
       expect(launch.viaPackageRunner).toBe(true);
     });
   });
@@ -196,7 +196,7 @@ describe("ACP launch presets", () => {
       const launch = resolveAcpProcessLaunchById("codex", { model: "gpt-6-sol" }, {}, path);
 
       expect(launch.command).toBe("bun");
-      expect(launch.args).toEqual(["x", "@agentclientprotocol/codex-acp"]);
+      expect(launch.args).toEqual(["x", "@agentclientprotocol/codex-acp@2.5.0"]);
       expect(launch.viaPackageRunner).toBe(true);
       expect(launch.env.CODEX_CONFIG).toBe(JSON.stringify({ model: "gpt-6-sol" }));
     });

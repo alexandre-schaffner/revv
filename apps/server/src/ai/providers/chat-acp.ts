@@ -25,7 +25,7 @@ import { CHAT_IDLE_TIMEOUT_MS, CLI_CHAT_TURN_TIMEOUT_MS } from "../../constants"
 import { AiGenerationError } from "../../domain/errors";
 import { debug, logError } from "../../logger";
 import { type AcpSessionState, getAcpConnection } from "../acp/acp-connection";
-import { withAgentKeychainHint } from "../acp/agent-keychain";
+import { describeAgentError, describeAgentFailure } from "../acp/agent-errors";
 import { findPlanModeId, modeToExitPlan } from "../acp/session-config";
 import {
   buildActivity,
@@ -275,7 +275,7 @@ export function streamChatViaAcp(
             logError("chat-acp", "session.error:", ev.message);
             controller.enqueue({
               kind: "text",
-              data: `\n\n_Error: ${withAgentKeychainHint(opts.acpAgentId, ev.message)}_`,
+              data: `\n\n_Error: ${describeAgentFailure(opts.acpAgentId, ev.message).message}_`,
             });
             hasEmittedText = true;
             lastWasNonText = false;
@@ -344,14 +344,9 @@ export function streamChatViaAcp(
 
         controller.close();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logError("chat-acp", "queryTask error:", msg);
-        controller.error(
-          new AiGenerationError({
-            cause: err,
-            message: withAgentKeychainHint(opts.acpAgentId, msg),
-          }),
-        );
+        const { message } = describeAgentError(opts.acpAgentId, err);
+        logError("chat-acp", "queryTask error:", message);
+        controller.error(new AiGenerationError({ cause: err, message }));
       } finally {
         if (handle && sessionId) {
           handle.setListener(sessionId, null);

@@ -99,6 +99,14 @@ export const THINKING_EFFORT_ORDER = [
   "low",
 ] as const satisfies readonly ThinkingEffort[];
 
+// Adapters fetched by a package runner are pinned to an exact version. An
+// unpinned `npx -y <pkg>` resolves the latest publish on every spawn, so a
+// release that changes behavior (claude-agent-acp 0.101.0 switched the default
+// session mode to `auto`) reaches every install the night it ships, and so
+// would a compromised publish. Bump a pin deliberately, only to a release at
+// least 3 days old, after checking its changelog against the ACP transport.
+// Dependabot doesn't see these strings.
+
 // ⇩ Add a new ACP agent here — one entry is all it takes. ⇩
 export const ACP_AGENTS = [
   {
@@ -107,7 +115,7 @@ export const ACP_AGENTS = [
     description: "Anthropic's reasoning model.",
     icon: "anthropic",
     command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
     capabilities: {
       defaultModel: "claude-sonnet-5-5",
       // Verified against https://code.claude.com/docs/en/model-config (2026-10-13).
@@ -162,7 +170,7 @@ export const ACP_AGENTS = [
     description: "OpenAI's coding agent.",
     icon: "openai",
     command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp"],
+    args: ["-y", "@agentclientprotocol/codex-acp@2.5.0"],
     capabilities: {
       defaultModel: "gpt-6.1-sol",
       // This maintained adapter embeds a current Codex App Server, so the
@@ -195,7 +203,7 @@ export const ACP_AGENTS = [
     description: "Cursor's coding agent.",
     icon: "cursor",
     command: "npx",
-    args: ["-y", "cursor-agent-acp"],
+    args: ["-y", "cursor-agent-acp@0.1.1"],
     capabilities: {
       defaultModel: "auto",
       // https://cursor.com/docs/models-and-pricing (2026-10-13). The
