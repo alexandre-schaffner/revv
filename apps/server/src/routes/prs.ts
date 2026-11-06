@@ -14,11 +14,11 @@ import {
   generateSuggestions,
   type SuggestionsWalkthroughContext,
 } from "../ai/providers/suggestions";
-import { db } from "../auth";
 import { pinnedPullRequests, user } from "../db/schema";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { Broadcaster } from "../services/Broadcaster";
+import { appDatabase } from "../services/Db";
 import {
   type CachedDiffFile,
   DiffCacheService,
@@ -45,6 +45,8 @@ import { SyncService } from "../services/Sync";
 import { WalkthroughService } from "../services/Walkthrough";
 import { handleAppError, withAccount } from "./middleware";
 import { coerceReviewMode } from "./reviews/handlers/active-session";
+
+const db = appDatabase();
 
 // ── PR diff SSR options ─────────────────────────────────────────────────────
 //

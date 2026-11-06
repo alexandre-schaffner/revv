@@ -3,17 +3,19 @@ import { isMaintainerLogin } from "@revv/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db } from "../auth";
 import { account, repositories, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
 import { AppRuntime } from "../runtime";
 import { CacheService } from "../services/Cache";
+import { appDatabase } from "../services/Db";
 import { GitHubGateway } from "../services/GitHub";
 import { Identity } from "../services/Identity";
 import { PullRequestService } from "../services/PullRequest";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { handleAppError, withAuth } from "./middleware";
+
+const db = appDatabase();
 
 /**
  * Return the current user's GitHub identity and (optionally) their role for a PR.

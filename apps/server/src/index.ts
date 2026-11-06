@@ -2,7 +2,7 @@ import { cors } from "@elysiajs/cors";
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 import { stopAllAcpConnections } from "./ai/acp/acp-connection";
-import { auth, db } from "./auth";
+import { auth } from "./auth";
 import { SOURCE_COMMIT } from "./build-info";
 import { serverEnv } from "./config";
 import { resolveDbPath } from "./db/index";
@@ -43,6 +43,7 @@ import { userRoutes } from "./routes/user";
 import { walkthroughsRoute } from "./routes/walkthroughs";
 import { AppRuntime } from "./runtime";
 import { ChatSessionService } from "./services/ChatSession";
+import { appDatabase } from "./services/Db";
 import { DbMaintenance } from "./services/DbMaintenance";
 import { Identity } from "./services/Identity";
 import { PollScheduler } from "./services/PollScheduler";
@@ -66,7 +67,10 @@ logError("server", `starting on port ${port}`);
 
 const ledgerPath = githubLedgerPath();
 if (ledgerPath !== null) {
-  installGitHubLedger({ path: ledgerPath, enterpriseHosts: () => configuredGitHubHosts(db) });
+  installGitHubLedger({
+    path: ledgerPath,
+    enterpriseHosts: () => configuredGitHubHosts(appDatabase()),
+  });
 }
 
 const roughRoute = (pathname: string) => pathname.replace(/\/[^/]*(?:\d|:)[^/]*/g, "/:id");

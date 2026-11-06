@@ -8,7 +8,8 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { getTableConfig, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
-import { __dbRecoveryTest, createDb } from "./index";
+import { createDb } from "./index";
+import { readMigrations, reconcileJournal } from "./journal";
 import * as schema from "./schema";
 
 // Every user upgrades from whatever migration their install last ran. These
@@ -115,6 +116,31 @@ function seedEveryTable(sqlite: Database): string[] {
   return tables;
 }
 
+function columnNames(sqlite: Database, table: string): string[] {
+  return columnsOf(sqlite, table).map((column) => column.name);
+}
+
+function indexColumns(sqlite: Database, index: string): string[] {
+  const rows = sqlite.query(`PRAGMA index_info(\`${index}\`)`).all() as Array<{ name: string }>;
+  return rows.map((row) => row.name);
+}
+
+function whenOf(tag: string): number {
+  const entry = journal.entries.find((e) => e.tag === tag);
+  if (!entry) throw new Error(`no journal entry ${tag}`);
+  return entry.when;
+}
+
+/** A file DB migrated through `tag` (inclusive), the way an older build left it. */
+function migratedThrough(name: string, tag: string): Database {
+  const count = journal.entries.findIndex((e) => e.tag === tag) + 1;
+  const sqlite = new Database(join(scratch, `${name}.db`), { create: true });
+  migrate(drizzle(sqlite), { migrationsFolder: migrationPrefix(count) });
+  return sqlite;
+}
+
+const migrations = readMigrations(migrationsDirectory);
+
 function rowCount(sqlite: Database, table: string): number {
   const row = sqlite.query(`SELECT COUNT(*) AS n FROM \`${table}\``).get() as { n: number };
   return row.n;
@@ -197,11 +223,9 @@ describe("database upgrades", () => {
     sqlite.run("ALTER TABLE `pull_requests` DROP COLUMN `diff_stats_head_sha`");
     sqlite.prepare("DELETE FROM __drizzle_migrations WHERE created_at = ?").run(middle?.when ?? 0);
 
-    __dbRecoveryTest.applySkippedMigrations(sqlite);
+    reconcileJournal(sqlite, migrations);
 
-    expect(__dbRecoveryTest.columnExists(sqlite, "pull_requests", "diff_stats_head_sha")).toBe(
-      true,
-    );
+    expect(columnNames(sqlite, "pull_requests")).toContain("diff_stats_head_sha");
     expect(ledgerWhens(sqlite)).toEqual(journal.entries.map((entry) => entry.when));
     sqlite.close();
   });
@@ -213,8 +237,89 @@ describe("database upgrades", () => {
       "UPDATE __drizzle_migrations SET hash = 'stale' WHERE created_at = (SELECT MIN(created_at) FROM __drizzle_migrations)",
     );
 
-    expect(() => __dbRecoveryTest.applySkippedMigrations(sqlite)).not.toThrow();
+    expect(() => reconcileJournal(sqlite, migrations)).not.toThrow();
     expect(ledgerWhens(sqlite)).toEqual(journal.entries.map((entry) => entry.when));
+    sqlite.close();
+  });
+});
+
+describe("schema applied outside the journal", () => {
+  const allWhens = journal.entries.map((entry) => entry.when);
+
+  it("records a migration whose column an older build already added", () => {
+    const before = migratedThrough("ahead-column", "0200_linked_clones");
+    before.run("ALTER TABLE `user_settings` ADD `github_client_id` text DEFAULT '' NOT NULL");
+    before.close();
+
+    const after = createDb(join(scratch, "ahead-column.db")).$client;
+    expect(ledgerWhens(after)).toEqual(allWhens);
+    after.close();
+  });
+
+  it("finishes a partly applied migration and the unrecorded ones behind it", () => {
+    const before = migratedThrough("partial", "0210_github_client_id");
+    // Review rounds started landing outside the journal, without the modes.
+    before.run("ALTER TABLE `walkthroughs` ADD `mode` text DEFAULT 'reviewer' NOT NULL");
+    before.run(
+      "ALTER TABLE `walkthroughs` ADD `parent_walkthrough_id` text REFERENCES `walkthroughs`(`id`) ON DELETE set null",
+    );
+    before.close();
+
+    const after = createDb(join(scratch, "partial.db")).$client;
+    expect(ledgerWhens(after)).toEqual(allWhens);
+    expect(columnNames(after, "walkthroughs")).toEqual(
+      expect.arrayContaining(["mode", "base_head_sha", "generation_mode"]),
+    );
+    expect(columnNames(after, "review_sessions")).toContain("mode");
+    expect(userTables(after)).toContain("review_rounds");
+    after.close();
+  });
+
+  it("does not resurrect an index a later applied migration dropped", () => {
+    const path = join(scratch, "superseded-index.db");
+    const sqlite = createDb(path).$client;
+    sqlite
+      .prepare("DELETE FROM __drizzle_migrations WHERE created_at = ?")
+      .run(whenOf("0220_walkthrough_modes"));
+
+    reconcileJournal(sqlite, migrations);
+
+    expect(ledgerWhens(sqlite)).toEqual(allWhens);
+    expect(indexColumns(sqlite, "walkthroughs_pr_head_sha_mode_unique")).toEqual([]);
+    sqlite.close();
+  });
+
+  it("restores what a recorded migration created but the schema lost", () => {
+    const path = join(scratch, "drift.db");
+    const sqlite = createDb(path).$client;
+    sqlite.run("ALTER TABLE `user_settings` DROP COLUMN `github_client_id`");
+    sqlite.run("ALTER TABLE `remote_users` DROP COLUMN `avatar_content`");
+    sqlite.run("DROP INDEX `chat_sessions_pr_agent_model_sha_unique`");
+    sqlite.run(
+      "CREATE UNIQUE INDEX `chat_sessions_pr_agent_model_sha_unique` ON `chat_sessions` (`pull_request_id`, `agent`, `pr_head_sha`)",
+    );
+    sqlite.close();
+
+    const after = createDb(path).$client;
+    expect(columnNames(after, "user_settings")).toContain("github_client_id");
+    expect(columnNames(after, "remote_users")).toContain("avatar_content");
+    expect(indexColumns(after, "chat_sessions_pr_agent_model_sha_unique")).toEqual([
+      "pull_request_id",
+      "agent",
+      "model",
+      "pr_head_sha",
+    ]);
+    after.close();
+  });
+
+  it("is a no-op once the journal and schema agree", () => {
+    const path = join(scratch, "settled.db");
+    createDb(path).$client.close();
+    const sqlite = new Database(path);
+    const schemaBefore = sqlite.query("SELECT sql FROM sqlite_master ORDER BY name").all();
+    reconcileJournal(sqlite, migrations);
+    expect(sqlite.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore);
+    expect(ledgerWhens(sqlite)).toEqual(allWhens);
     sqlite.close();
   });
 });

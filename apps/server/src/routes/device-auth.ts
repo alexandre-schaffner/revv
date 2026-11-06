@@ -1,7 +1,6 @@
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
-import { db, GITHUB_CLIENT_ID } from "../auth";
 import { serverEnv } from "../config";
 import { account, session, user } from "../db/schema";
 import { remoteUsers } from "../db/schema/remote-users";
@@ -20,10 +19,13 @@ import {
 } from "../github-oauth";
 import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
+import { appDatabase } from "../services/Db";
 import { Identity } from "../services/Identity";
 import { RemoteUserService } from "../services/RemoteUser";
 import { SettingsService } from "../services/Settings";
 import { withAuth } from "./middleware";
+
+const db = appDatabase();
 
 // The device-code flow needs `client_id` only — no client_secret. An empty
 // `GITHUB_CLIENT_ID` is now normal: GHE hosts supply their client ID during
@@ -31,7 +33,10 @@ import { withAuth } from "./middleware";
 // fixed self-hosted deployment. We warn only if it's been set to an obvious
 // placeholder, and otherwise diagnose missing-client-id at request time (see
 // `clientIdForHost`).
-if (GITHUB_CLIENT_ID.startsWith("BUNDLED_") || GITHUB_CLIENT_ID.startsWith("REPLACE_")) {
+if (
+  serverEnv.githubClientId.startsWith("BUNDLED_") ||
+  serverEnv.githubClientId.startsWith("REPLACE_")
+) {
   logError(
     "device-auth",
     "WARNING: GITHUB_CLIENT_ID looks like a placeholder — sign-in will fail. " +

@@ -5,19 +5,9 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer } from "better-auth/plugins";
 import { serverEnv } from "./config";
-import { createDb } from "./db/index";
 import { AUTH_TRUSTED_ORIGINS } from "./http-origins";
 import { appDataDir } from "./paths";
-
-// Re-exported for the handful of routes that still reach in directly.
-// All values are sourced from the centralized `serverEnv` snapshot in
-// `config.ts`, which resolves Effect's `ServerConfig` once at startup.
-//
-// `GITHUB_CLIENT_SECRET` is intentionally absent — the device-code flow
-// (the only OAuth flow the app uses) does not require it, and sign-out no
-// longer revokes on GitHub's side. Users can revoke from the GitHub app
-// connections page if they want (linked from the settings UI).
-export const GITHUB_CLIENT_ID = serverEnv.githubClientId;
+import { appDatabase } from "./services/Db";
 
 /**
  * Locate (or create) the better-auth signing secret.
@@ -53,14 +43,10 @@ function authKeyPath(): string {
   return join(appDataDir(), "auth.key");
 }
 
-const db = createDb();
-
-export { db };
-
 export const auth = betterAuth({
   baseURL: `http://localhost:${serverEnv.port}`,
   secret: loadOrCreateAuthSecret(),
-  database: drizzleAdapter(db, {
+  database: drizzleAdapter(appDatabase(), {
     provider: "sqlite",
   }),
   // No `socialProviders` — Revv authenticates exclusively via GitHub's
