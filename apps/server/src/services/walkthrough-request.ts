@@ -192,9 +192,6 @@ export function describeWalkthroughRequestError(error: WalkthroughRequestError):
       return "Revv has not cloned this repository yet. Ask the user to check Revv's Settings.";
     case "AiNotConfiguredError":
       return "No AI agent is configured in Revv. Ask the user to pick one in Revv's Settings.";
-    case "OpencodeNotSelectedError":
-    case "OpencodeUnhealthyError":
-      return "Revv's opencode daemon is not available. Retry in a minute, or ask the user to check Revv's Settings.";
     case "GitHubRateLimitError":
       return `GitHub rate-limited Revv until ${error.resetAt.toISOString()}. Retry after that.`;
     case "GitHubAuthError":

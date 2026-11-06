@@ -120,13 +120,6 @@ export class AiGenerationError extends Data.TaggedError("AiGenerationError")<{
 // biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
 export class AiNotConfiguredError extends Data.TaggedError("AiNotConfiguredError")<{}> {}
 
-export class OpencodeNotSelectedError extends Data.TaggedError("OpencodeNotSelectedError")<{
-  readonly selectedAgent: string;
-}> {}
-
-// biome-ignore lint/complexity/noBannedTypes: Effect TaggedError pattern requires {}
-export class OpencodeUnhealthyError extends Data.TaggedError("OpencodeUnhealthyError")<{}> {}
-
 /**
  * Why a TypeSafe System One (Jev) call produced no answer.
  *
@@ -156,11 +149,7 @@ export class JevUnavailable extends Data.TaggedError("JevUnavailable")<{
   readonly cause?: unknown;
 }> {}
 
-export type AiError =
-  | AiGenerationError
-  | AiNotConfiguredError
-  | OpencodeNotSelectedError
-  | OpencodeUnhealthyError;
+export type AiError = AiGenerationError | AiNotConfiguredError;
 
 export class ReviewError extends Data.TaggedError("ReviewError")<{
   readonly message: string;
@@ -276,28 +265,6 @@ export class RecapNotFoundError extends Data.TaggedError("RecapNotFoundError")<{
   readonly recapId: string;
 }> {}
 
-/**
- * Raised by the recap MCP tool surface when an out-of-order or
- * structurally-invalid call lands (e.g. `complete_recap` before `set_lede`,
- * or `add_pr_entry` with a pr_id not in the source bundle). The agent
- * receives this as a structured error result and can recover by issuing
- * the right call.
- */
-export class RecapPreconditionError extends Data.TaggedError("RecapPreconditionError")<{
-  readonly recapId: string;
-  readonly reason: string;
-}> {}
-
-/**
- * Raised when a recap row exceeds `RECAP_MAX_RESUME_ATTEMPTS` across
- * server restarts. The orchestrator flips the row to `'error'` and stops
- * relaunching it; this error type is the audit-log marker.
- */
-export class RecapBudgetExceededError extends Data.TaggedError("RecapBudgetExceededError")<{
-  readonly recapId: string;
-  readonly attempts: number;
-}> {}
-
 // Database errors
 export class DbError extends Data.TaggedError("DbError")<{
   readonly message: string;
@@ -362,8 +329,6 @@ export class ImportError extends Data.TaggedError("ImportError")<{
   readonly reason: string;
   readonly cause?: unknown;
 }> {}
-
-export type RecapError = RecapNotFoundError | RecapPreconditionError | RecapBudgetExceededError;
 
 // ── SSH cache-signing errors ────────────────────────────────────────────────
 

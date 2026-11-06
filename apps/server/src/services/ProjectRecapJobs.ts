@@ -31,7 +31,7 @@ import {
 } from "../ai/providers/recap-tools";
 import { CLI_WALKTHROUGH_TIMEOUT_MS } from "../constants";
 import { recapPrDigests } from "../db/schema/index";
-import { DbError, type RecapError, ValidationError } from "../domain/errors";
+import { DbError, type RecapNotFoundError, ValidationError } from "../domain/errors";
 import type { ObservedPr } from "../domain/observed-pr";
 import { withDb } from "../effects/with-db";
 import { debug, logError } from "../logger";
@@ -107,7 +107,7 @@ export interface StartRecapJobParams {
   readonly recapId?: string;
 }
 
-export type StartRecapJobError = ValidationError | RecapError;
+export type StartRecapJobError = ValidationError | RecapNotFoundError;
 
 export type EmitResult =
   | { readonly kind: "delivered"; readonly seq: number }
