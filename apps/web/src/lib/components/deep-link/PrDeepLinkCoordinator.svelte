@@ -8,7 +8,6 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import User from "phosphor-svelte/lib/User";
 import WarningCircle from "phosphor-svelte/lib/WarningCircle";
 import { tick } from "svelte";
-import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import Avatar from "$lib/components/shared/Avatar.svelte";
 import { Button } from "$lib/components/ui/button";
 import * as Dialog from "$lib/components/ui/dialog";
@@ -36,6 +35,7 @@ import {
   retryPrDeepLink,
   settlePrDeepLinkAuthorization,
 } from "$lib/stores/pr-deep-link.svelte";
+import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 
 const workflow = $derived(getPrDeepLinkState());
 const loadingVisible = $derived(getPrDeepLinkLoadingVisible());
