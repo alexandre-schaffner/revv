@@ -198,27 +198,32 @@ export function dayKey(iso: string): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
+/** Apply `strip` until the text stops changing: one pass can leave a tag behind
+ *  when markup is nested inside itself (`<scr<script>ipt>`). */
+function stripUntilStable(text: string, strip: (t: string) => string): string {
+  let current = text;
+  for (let previous = ""; previous !== current; ) {
+    previous = current;
+    current = strip(current);
+  }
+  return current;
+}
+
 /**
  * A bot comment's one-line gist: its first heading, else its first line of
  * text, with the markdown and HTML taken out. Bots post reports, and the
  * report's title is what tells one from the next.
  */
 export function commentGist(body: string, max = 90): string {
-  let withoutComments = body;
-  let previous: string;
-  do {
-    previous = withoutComments;
-    withoutComments = withoutComments.replace(/<!--[\s\S]*?-->/g, "");
-  } while (withoutComments !== previous);
-
-  const lines = withoutComments
+  const lines = stripUntilStable(body, (t) => t.replace(/<!--[\s\S]*?-->/g, ""))
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
   const heading = lines.find((l) => /^#{1,6}\s/.test(l));
   const raw = heading ?? lines[0] ?? "";
-  const text = raw
-    .replace(/^#{1,6}\s+/, "")
+  // Display text only (rendered escaped), so any angle bracket a bot left
+  // after the tags are gone has no business in a one-line gist either.
+  const text = stripUntilStable(raw.replace(/^#{1,6}\s+/, ""), (t) => t.replace(/<[^>]*>/g, ""))
     .replace(/[<>]/g, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

@@ -204,4 +204,10 @@ describe("timeline helpers", () => {
     expect(commentGist("<!-- marker -->\n## 🚓 Slop Cop\n\nInformative only")).toBe("Slop Cop");
     expect(commentGist("**Deploy** ready at [preview](https://x)")).toBe("Deploy ready at preview");
   });
+
+  it("leaves no tag or comment behind when markup nests inside itself", () => {
+    expect(commentGist("<scr<script>ipt>alert(1)</script> Report")).not.toMatch(/[<>]/);
+    expect(commentGist("<!<!--- -->- x -->Status")).not.toContain("<!--");
+    expect(commentGist("<b>Deploy</b> ready")).toBe("Deploy ready");
+  });
 });
