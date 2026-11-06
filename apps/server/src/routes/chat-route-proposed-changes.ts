@@ -22,19 +22,14 @@ export const chatProposedChangesRoutes = new Elysia()
   .onBeforeHandle(ownedBy({ prId: "pull request" }))
   .get(
     "/api/chat/:prId/proposed-changes",
-    (ctx) =>
-      runRoute(
-        Effect.flatMap(PrWorkspace, (w) => w.proposed(ctx.params.prId)),
-      ),
+    (ctx) => runRoute(Effect.flatMap(PrWorkspace, (w) => w.proposed(ctx.params.prId))),
     { params: prParams },
   )
   .get(
     "/api/chat/:prId/proposed-changes/:sha/diff",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.commitPatch(ctx.params.prId, ctx.params.sha),
-        ).pipe(
+        Effect.flatMap(PrWorkspace, (w) => w.commitPatch(ctx.params.prId, ctx.params.sha)).pipe(
           Effect.map(
             (diff) =>
               new Response(diff, { headers: { "Content-Type": "text/plain; charset=utf-8" } }),
@@ -47,9 +42,9 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes/:sha/files",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.commitFiles(ctx.params.prId, ctx.params.sha),
-        ).pipe(Effect.map((files) => ({ files }))),
+        Effect.flatMap(PrWorkspace, (w) => w.commitFiles(ctx.params.prId, ctx.params.sha)).pipe(
+          Effect.map((files) => ({ files })),
+        ),
       ),
     { params: commitParams },
   )
@@ -81,9 +76,9 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes/resolve-and-push",
     (ctx) =>
       runStream(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.resolveAndPush(ctx.params.prId),
-        ).pipe(Effect.map(pipeToSse)),
+        Effect.flatMap(PrWorkspace, (w) => w.resolveAndPush(ctx.params.prId)).pipe(
+          Effect.map(pipeToSse),
+        ),
       ),
     { params: prParams },
   )
@@ -117,9 +112,9 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes/:sha",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.discard(ctx.params.prId, [ctx.params.sha]),
-        ).pipe(Effect.as({ status: "discarded" as const })),
+        Effect.flatMap(PrWorkspace, (w) => w.discard(ctx.params.prId, [ctx.params.sha])).pipe(
+          Effect.as({ status: "discarded" as const }),
+        ),
       ),
     { params: commitParams },
   )
@@ -127,9 +122,7 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes/batch-discard",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.discard(ctx.params.prId, ctx.body.shas),
-        ).pipe(
+        Effect.flatMap(PrWorkspace, (w) => w.discard(ctx.params.prId, ctx.body.shas)).pipe(
           Effect.map(({ discardedCount }) => ({ status: "discarded" as const, discardedCount })),
         ),
       ),
@@ -151,9 +144,9 @@ export const chatProposedChangesRoutes = new Elysia()
     "/api/chat/:prId/proposed-changes/advance",
     (ctx) =>
       runRoute(
-        Effect.flatMap(PrWorkspace, (w) =>
-          w.advance(ctx.params.prId, ctx.body.newHeadSha),
-        ).pipe(Effect.as({ status: "advanced" as const })),
+        Effect.flatMap(PrWorkspace, (w) => w.advance(ctx.params.prId, ctx.body.newHeadSha)).pipe(
+          Effect.as({ status: "advanced" as const }),
+        ),
       ),
     { params: prParams, body: t.Object({ newHeadSha: t.String() }) },
   );
