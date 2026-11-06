@@ -70,12 +70,9 @@ const MAX_FILE_CONTENT_BYTES = 5 * 1024 * 1024;
 /** A NUL in this many leading bytes marks a file binary, as `git diff` decides it. */
 const BINARY_SNIFF_SAMPLE_BYTES = 8 * 1024;
 
-// ── Service definition ────────────────────────────────────────────────────────
-
 /**
- * Result of a single-PR worktree reap. `pruned:false` means the teardown was
- * intentionally skipped to avoid destroying live or unsaved work — the caller
- * can surface `reason` (e.g. "you have N reviews with unpushed changes").
+ * `pruned: false` means teardown was skipped: the agent branch carries
+ * unpushed commits, or the repo has no ready clone.
  */
 export type PruneWorktreeOutcome =
   | { readonly pruned: true }
@@ -87,7 +84,10 @@ export type PruneWorktreeOutcome =
 export class RepoCloneService extends Context.Service<
   RepoCloneService,
   {
-    /** Start a shallow clone for a repo. Updates DB status. Fire-and-forget via Effect.fork. */
+    /**
+     * Clone, adopt, or link the destination for `repo`. The outcome is reported
+     * through DB status and `repos:clone-status`; callers fork it and drop the error.
+     */
     readonly cloneRepo: (
       repo: Repository,
       githubToken: string,
@@ -111,25 +111,9 @@ export class RepoCloneService extends Context.Service<
       CloneError
     >;
     /**
-     * Read a file's content at a given commit SHA from the local clone.
-     * Used by the sidebar's "view unchanged file" path — the user clicked
-     * a file in the repo tree that isn't part of the PR's diff and we
-     * want to surface its contents in the main pane anyway.
-     *
-     * Behavior:
-     *   - Refuses files larger than {@link MAX_FILE_CONTENT_BYTES}
-     *     ('too-large' return) so we never blow up the UI on a giant
-     *     binary or source-bundle blob.
-     *   - Detects binary content by sampling the first 8 KB for null
-     *     bytes; binaries return with empty `content` and
-     *     `isBinary: true` so the frontend can render a placeholder
-     *     instead of garbage.
-     *   - Otherwise returns the full UTF-8 content as a string.
-     *
-     * The clone is assumed ready — if the user reached this code path,
-     * the tree was already listed, which gates on `cloneStatus`. We
-     * still report `cloning` for symmetry in case the repo flipped
-     * back to pending/cloning between calls.
+     * A file at `headSha` from the local clone, for a file outside the PR's
+     * diff. Binaries come back with empty `content` so the UI renders a
+     * placeholder.
      */
     readonly getFileContentAtSha: (
       repoId: string,
@@ -148,15 +132,18 @@ export class RepoCloneService extends Context.Service<
       | { readonly status: "error"; readonly message: string },
       CloneError
     >;
-    /** Get the clone status for a repo. */
     readonly getCloneStatus: (repoId: string) => Effect.Effect<{
       status: CloneStatus;
       path: string | null;
       error: string | null;
     }>;
-    /** Delete clone directory and reset DB fields. */
+    /**
+     * Remove Revv's worktrees and reset the clone fields. The clone directory
+     * is deleted only when Revv manages it; a linked checkout loses only
+     * Revv's branches and refs.
+     */
     readonly deleteClone: (repoId: string) => Effect.Effect<void, CloneError>;
-    /** Resume any repos with cloneStatus 'pending' or 'error' by re-triggering cloneRepo. */
+    /** Re-clone managed repos left `pending` or `error`; linked checkouts are never re-cloned. */
     readonly resumePendingClones: () => Effect.Effect<void>;
     /**
      * The PR's agent worktree, `<holder>/pr-N` on the agent branch `revv/pr-N`,
@@ -252,10 +239,6 @@ async function clearStalePrWorktreeLocks(worktreePath: string, branchName: strin
  * its repair path writes under `.git`, which fires a file-watcher event in any
  * editor that has the user's repository open. Only an unhealthy worktree should
  * pay that.
- *
- * Healthy: the directory exists, no lock files, no merge or rebase in
- * progress, no legacy `refs/revv/pr-N` shadowing the branch, HEAD on the agent
- * branch at `prHeadSha` or a descendant of it.
  */
 export async function isWorktreeHealthy(params: {
   clonePath: string;
@@ -327,8 +310,6 @@ const toCloneError = (err: unknown) =>
     ? err
     : new CloneError({ message: err instanceof Error ? err.message : String(err), cause: err });
 
-// ── Live implementation ───────────────────────────────────────────────────────
-
 export const RepoCloneServiceLive = Layer.effect(
   RepoCloneService,
   Effect.gen(function* () {
@@ -338,7 +319,6 @@ export const RepoCloneServiceLive = Layer.effect(
 
     yield* Effect.promise(() => reapOrphanedGitProcesses());
 
-    // Startup recovery: reset any repos that were mid-clone when server restarted
     db.update(repositories)
       .set({
         cloneStatus: "pending",
@@ -347,10 +327,9 @@ export const RepoCloneServiceLive = Layer.effect(
       .where(eq(repositories.cloneStatus, "cloning"))
       .run();
 
-    // In-flight de-duplication. Keys are repo ids. Prevents the
-    // startup-resume + manual POST + retry-clone routes from spawning
-    // concurrent clones for the same repo. SQLite remains authoritative
-    // for status; this set is a process-local short-circuit.
+    // Keeps startup-resume, the add route and the retry route from running
+    // concurrent clones of one repo. SQLite stays authoritative for status;
+    // this set is a process-local short-circuit.
     const inFlightClones = new Set<string>();
 
     const readyRepo = (repoId: string) => {
@@ -366,9 +345,7 @@ export const RepoCloneServiceLive = Layer.effect(
       opts?: { readonly basePath?: string },
     ): Effect.Effect<void, CloneError> =>
       Effect.suspend((): Effect.Effect<void, CloneError> => {
-        // Short-circuit if a clone is already running for this repo in
-        // this process. Returning success-void is correct: the in-flight
-        // fiber will perform the DB update + WS broadcast for the caller.
+        // The in-flight fiber does the DB update and broadcast for this caller too.
         if (inFlightClones.has(repo.id)) {
           debug(
             "repo-clone",
@@ -420,8 +397,6 @@ export const RepoCloneServiceLive = Layer.effect(
                 }
 
                 if (decision.action === "adopt") {
-                  // A valid clone of this repo already exists inside the
-                  // managed base — adopt it as managed without re-cloning.
                   db.update(repositories)
                     .set({
                       managed: true,
@@ -491,9 +466,8 @@ export const RepoCloneServiceLive = Layer.effect(
                   }),
                 onFailure: (err) =>
                   Effect.gen(function* () {
-                    // Clean up any partial clone directory only when Revv owns
-                    // the default-base path. Custom-location failures may point
-                    // at user content and must not be guessed away.
+                    // Only under Revv's base: a custom location may hold user
+                    // content and must not be guessed away.
                     if (pathIsUnder(cloneDir, CLONE_BASE_DIR) && existsSync(cloneDir)) {
                       yield* Effect.tryPromise({
                         try: () => rm(cloneDir, { recursive: true, force: true }),
@@ -501,19 +475,14 @@ export const RepoCloneServiceLive = Layer.effect(
                       }).pipe(Effect.catch(() => Effect.void));
                     }
 
-                    // Record the failure in DB then broadcast error
                     const errorMessage = err.message;
                     db.update(repositories)
                       .set({ cloneStatus: "error", cloneError: errorMessage })
                       .where(eq(repositories.id, repo.id))
                       .run();
 
-                    // Always log clone failures. The route handlers attach
-                    // `Effect.catchAll(() => Effect.void)` so without this
-                    // line a clone failure is invisible in server logs —
-                    // operators only see the silent DB row update and the
-                    // best-effort WS broadcast (which is lost if the client
-                    // happens to be disconnected at the moment of failure).
+                    // Callers fork this and swallow the error, so this log is
+                    // the only server-side trace of the failure.
                     logError("repo-clone", `clone failed for ${repo.fullName}: ${errorMessage}`);
 
                     yield* realtime.toAccount(accountId, {
@@ -533,10 +502,6 @@ export const RepoCloneServiceLive = Layer.effect(
             return cloneResult;
           }),
         ).pipe(
-          // Always release the in-flight slot, regardless of success,
-          // failure, or fiber interruption. Without this, a single
-          // crash mid-clone would block any future clone attempt for
-          // the same repo until the server restarts.
           Effect.ensuring(
             Effect.sync(() => {
               inFlightClones.delete(repo.id);
@@ -552,8 +517,7 @@ export const RepoCloneServiceLive = Layer.effect(
     ): Effect.Effect<void, CloneError> =>
       Effect.tryPromise({
         try: async () => {
-          // Record a link failure (DB + broadcast) and surface it. Linked
-          // repos always stay `managed: false` so the deletion path never
+          // Linked repos always stay `managed: false` so `deleteClone` never
           // `rm -rf`s a user-owned checkout.
           const failLink = async (error: string): Promise<never> => {
             db.update(repositories)
@@ -577,14 +541,10 @@ export const RepoCloneServiceLive = Layer.effect(
             await failLink("Linked clone not found — re-link");
           }
 
-          // Verify the local checkout's origin actually points at the
-          // GitHub repo identity we saved. The HTTP route validates
-          // `fullName` against GitHub but never proves the *path* belongs
-          // to it — and the link form lets the user edit the full name
-          // after inspection. Without this guard, `owner/A` could be linked
-          // to a clone of `owner/B`; later PR worktree creation would fetch
-          // `owner/A` refs into the wrong clone and write `revv/pr-*`
-          // branches there.
+          // The route validates `fullName` against GitHub but not that the
+          // path is a clone of it, and the user can edit the name after
+          // inspection. Without this, `owner/A` could be linked to a clone of
+          // `owner/B` and get `revv/pr-*` branches written into it.
           const matches = await remoteMatches(localPath, repo.githubHost, repo.fullName);
           if (!matches) {
             await failLink(
@@ -954,7 +914,6 @@ export const RepoCloneServiceLive = Layer.effect(
         }),
 
       getCloneStatus: (repoId: string) =>
-        // DB queries are synchronous (better-sqlite3 driver) so this is infallible
         Effect.sync(() => {
           const row = db.select().from(repositories).where(eq(repositories.id, repoId)).get();
 
@@ -995,7 +954,6 @@ export const RepoCloneServiceLive = Layer.effect(
               }
             }
 
-            // Reset clone state in DB regardless of whether a dir existed
             db.update(repositories)
               .set({
                 cloneStatus: "pending",

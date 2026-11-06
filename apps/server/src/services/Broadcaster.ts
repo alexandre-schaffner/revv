@@ -1,5 +1,3 @@
-// ── Broadcaster ─────────────────────────────────────────────────────────────
-//
 // The transport under `Realtime`: each client connected to `/api/events` is
 // registered under the account its session resolved to, and a send fans out
 // to that account's clients. Who receives a push is `Realtime`'s business.
@@ -12,7 +10,6 @@ import type { ServerEventMessage } from "@revv/shared";
 import { Context, Effect, Layer, Ref } from "effect";
 import { logError } from "../logger";
 
-/** A connected client, as the events route hands it over. */
 interface EventWriter {
   /** False once the client is gone. */
   readonly send: (event: ServerEventMessage) => boolean;
@@ -28,19 +25,14 @@ interface Registration {
 export class Broadcaster extends Context.Service<
   Broadcaster,
   {
-    /**
-     * Register a writer for the given account. Returns an unsubscribe fn
-     * the route MUST call from its disconnect / close hook.
-     */
+    /** Returns an unsubscribe fn the route MUST call from its close hook. */
     readonly register: (accountId: string, writer: EventWriter) => Effect.Effect<() => void>;
 
-    /** Best-effort broadcast to every writer registered for `accountId`. */
     readonly broadcastToAccount: (
       accountId: string,
       msg: ServerEventMessage,
     ) => Effect.Effect<void>;
 
-    /** Best-effort broadcast to every registered writer regardless of account. */
     readonly broadcastAll: (msg: ServerEventMessage) => Effect.Effect<void>;
   }
 >()("Broadcaster") {}

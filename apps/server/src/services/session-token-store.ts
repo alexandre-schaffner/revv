@@ -1,5 +1,3 @@
-// ── Session-token store ────────────────────────────────────────────────────
-//
 // The bearer tokens every HTTP MCP route authenticates an agent run with:
 // chat turns, walkthrough, recap and stack-brief jobs. A run issues an opaque
 // token bound to a payload; the route resolves token → payload per JSON-RPC
@@ -9,7 +7,7 @@
 // Per CLAUDE.md invariant #1 this is coordination-cache only: a server
 // restart wipes the map; the orchestrator's resume path re-issues tokens.
 //
-// Walkthrough injects a `liveCheck`, so a token stops resolving the moment its
+// Agent jobs inject a `liveCheck`, so a token stops resolving the moment its
 // job leaves the in-memory registry (the job died), even before TTL.
 
 import { Effect, Ref } from "effect";
@@ -20,7 +18,6 @@ interface Entry<T> {
 }
 
 export interface SessionTokenStore<T> {
-  /** Mint a fresh token bound to `payload`. Returns the opaque bearer token. */
   readonly issue: (payload: T) => Effect.Effect<string>;
   /**
    * Resolve a token to its payload, or `null` if unknown, expired, or — when a
@@ -30,7 +27,6 @@ export interface SessionTokenStore<T> {
   readonly resolve: (token: string) => Effect.Effect<T | null>;
   /** Invalidate a single token early (e.g. on job cancel). Silent if absent. */
   readonly clear: (token: string) => Effect.Effect<void>;
-  /** Evict every token whose payload matches `predicate` (e.g. job teardown). */
   readonly clearWhere: (predicate: (payload: T) => boolean) => Effect.Effect<void>;
 }
 

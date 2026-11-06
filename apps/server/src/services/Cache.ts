@@ -17,12 +17,9 @@ export const kvCacheRetention: RetentionPolicy = {
 };
 
 /**
- * Options governing a single `set` (or `getOrFetch`) write.
- *
- * Exactly one of `ttlMs` or `immutable` should be meaningful in practice —
- * passing `immutable: true` clears any `ttlMs`, and keys that legitimately
- * never go stale (anything containing `headSha` / `baseSha` / `ref`) should
- * set `immutable: true` so the row isn't swept by the expiry check.
+ * Keys that never go stale (anything containing `headSha` / `baseSha` / `ref`)
+ * should set `immutable: true` so the expiry sweep leaves them alone.
+ * `immutable: true` overrides `ttlMs`; passing neither is treated as immutable.
  */
 export interface CacheSetOptions {
   readonly ttlMs?: number;
@@ -37,29 +34,11 @@ export interface CacheStatsSnapshot {
 }
 
 /**
- * Generic multi-tier cache: in-memory hot layer + `kv_cache` durable layer.
+ * For **small metadata blobs** (the GitHub repos list, the authenticated-user
+ * payload, TTL-scoped lookups). Large bodies (diffs, file contents, AI
+ * explanations) belong in their purpose-built tables.
  *
- * Designed for **small metadata blobs** — things like the GitHub repos list,
- * the authenticated-user payload, TTL-scoped lookups. For immutable large
- * bodies (diffs, file contents, AI explanations), use their purpose-built
- * tables — they already carry referential integrity and richer queries.
- *
- * ### Semantics
- *
- * - `get` returns `null` on miss OR on expired TTL (TTL entries are only
- *   expired *lazily* on read; no background sweeper).
- * - `set` with `immutable: true` writes `expires_at = NULL`; callers can
- *   store indefinitely and invalidate explicitly.
- * - `set` with `ttlMs` writes `expires_at = now + ttlMs`. No TTL + no
- *   immutable ⇒ rejected at runtime (treated as immutable) so a caller
- *   doesn't silently leak unbounded rows.
- * - `getOrFetch` deduplicates concurrent calls for the same `(ns, key)` via
- *   an in-memory Promise map. The fetcher runs once; all concurrent callers
- *   await the same result.
- * - `invalidate(ns)` drops the whole namespace; `invalidate(ns, key)` drops
- *   one row. Both clear any matching in-memory entries too.
- *
- * Stats are best-effort, in-memory only, and reset on process restart.
+ * Stats are in-memory only and reset on process restart.
  */
 export class CacheService extends Context.Service<
   CacheService,
@@ -83,13 +62,10 @@ export class CacheService extends Context.Service<
 >()("CacheService") {}
 
 export const CacheServiceLive = Layer.sync(CacheService, () => {
-  // Hot-path mirror so repeated reads don't hit SQLite. Values expire on read
-  // (lazy) just like the durable layer.
   type MemEntry = { value: unknown; expiresAt: number | null };
   const memory = new Map<string, MemEntry>();
   const cacheKey = (ns: string, key: string) => `${ns}\0${key}`;
 
-  // In-flight dedup — one Promise of the fetcher's Exit per (ns,key), shared across concurrent callers.
   const inflight = new Map<string, Promise<unknown>>();
 
   let hits = 0;
@@ -147,7 +123,6 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
 
       const expiresAt = parseIso(row.expiresAt);
       if (isExpired(expiresAt)) {
-        // Lazy eviction: row is stale, drop it + register a miss.
         yield* dbTry(`cache.get expired delete(${ns}, ${key})`, () =>
           db
             .delete(kvCache)
@@ -162,7 +137,6 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
       try {
         parsed = JSON.parse(row.valueJson) as T;
       } catch {
-        // Corrupt JSON — treat as a miss so the next call overwrites.
         misses++;
         return null;
       }
@@ -180,7 +154,7 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
         ? null
         : typeof opts.ttlMs === "number"
           ? new Date(now + opts.ttlMs).toISOString()
-          : null; // default to immutable — forces callers to opt-in to TTL
+          : null;
       const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
       const valueJson = JSON.stringify(value);
       const fetchedAt = new Date(now).toISOString();
@@ -212,7 +186,6 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
         yield* dbTry(`cache.invalidate(${ns})`, () =>
           db.delete(kvCache).where(eq(kvCache.ns, ns)).run(),
         );
-        // Drop every matching in-memory entry too.
         const prefix = `${ns}\0`;
         for (const k of memory.keys()) {
           if (k.startsWith(prefix)) memory.delete(k);
@@ -246,13 +219,10 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
         return yield* exit;
       }
 
-      // Materialize the fetcher as a Promise so concurrent callers can share
-      // it. The Promise carries the fetcher's Exit and never rejects, so every
-      // caller — owner and deduplicated alike — sees a typed failure in the
-      // error channel. A rejecting Promise would reach joiners as a defect,
-      // slipping past their `catchAll`.
-      // The fetcher chain also writes through `set`, which requires
-      // DbService. Grab a runtime that carries both.
+      // The Promise carries the fetcher's Exit and never rejects, so every
+      // caller, owner and joiner alike, sees a typed failure in the error
+      // channel. A rejecting Promise would reach joiners as a defect, slipping
+      // past their `catchAll`.
       const runtime = yield* Effect.context<R | DbService>();
       const promise = Effect.runPromiseWith(runtime)(
         fetcher().pipe(
@@ -279,8 +249,6 @@ export const CacheServiceLive = Layer.sync(CacheService, () => {
     Effect.gen(function* () {
       const { db } = yield* DbService;
 
-      // Sweep expired rows opportunistically — keeps `entries` count honest
-      // and prevents the table from accumulating dead TTL rows forever.
       const nowIso = new Date().toISOString();
       yield* dbTry("cache.stats sweep", () =>
         db.delete(kvCache).where(lt(kvCache.expiresAt, nowIso)).run(),

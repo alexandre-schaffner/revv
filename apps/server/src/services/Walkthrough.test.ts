@@ -6,10 +6,7 @@ import { reviewRounds, walkthroughs } from "../db/schema";
 import { DbService } from "./Db";
 import { WalkthroughService, WalkthroughServiceLive } from "./Walkthrough";
 
-/**
- * Insert walkthrough rows for PR `pr-1` without seeding the PR / session rows
- * they reference (foreign keys off). Each row overrides the defaults.
- */
+/** Rows for PR `pr-1`, with foreign keys off so the PR / session rows needn't exist. */
 function insertWalkthroughs(
   db: Db,
   ...rows: readonly (Partial<typeof walkthroughs.$inferInsert> & { id: string })[]
@@ -78,9 +75,8 @@ describe("finish", () => {
     expect(round?.completedAt).toBe(walkthrough?.completedAt);
   });
 
-  // The status writer used to end in `Effect.catch(() => Effect.void)`, which
-  // can't see a throw from raw Drizzle: a failed write died as a defect
-  // instead of reaching the orchestrator as a failure it could handle.
+  // A throw from raw Drizzle must reach the orchestrator as a failure it can
+  // handle, not die as a defect.
   it("fails with DbError when the write doesn't commit", async () => {
     const db = createDb(":memory:");
     seedWalkthroughRound(db);
@@ -128,11 +124,9 @@ describe("walkthrough risk hydration", () => {
   });
 });
 
-// Regression: resuming an incremental walkthrough used to crash with
-// `UNIQUE constraint failed: walkthroughs.id`. `resumePending` didn't pass the
-// row's generationMode, so the resume defaulted to "full", `createPartial`'s
-// dedup keyed on the wrong (prId, headSha, mode, generationMode) tuple, missed
-// the existing incremental row, and tried to INSERT a duplicate id.
+// A resume must carry the row's generationMode: `createPartial` dedups on
+// (prId, headSha, mode, generationMode), so a resume defaulting to "full"
+// misses the incremental row and inserts a duplicate id.
 describe("resume incremental walkthrough", () => {
   function seedIncrementalGenerating(db: Db): void {
     insertWalkthroughs(db, {
@@ -245,12 +239,8 @@ describe("resume incremental walkthrough", () => {
   });
 });
 
-// Regression: Stop followed by Regenerate resumed the abandoned draft instead
-// of starting a fresh one. Stop leaves the row at `status='generating'` (the
-// abort route deliberately does not supersede, so Resume stays available), and
-// the regenerate handler used to sweep with `exceptHeadSha = pr.headSha`, which
-// spared exactly that row. `createPartial`'s dedup then handed it back to the
-// new job, content and all. The handler now sweeps unconditionally.
+// Regenerate sweeps without sparing the current head: a `generating` row left
+// there would be handed back to the new job by `createPartial`, content and all.
 describe("regenerate after a stopped generation", () => {
   function seedStoppedDraft(db: Db): void {
     insertWalkthroughs(db, {
@@ -279,7 +269,7 @@ describe("regenerate after a stopped generation", () => {
     const newId = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* WalkthroughService;
-        // What regenerateWalkthroughHandler now does: sweep everything.
+        // As the regenerate route does: sweep everything.
         yield* service.supersedeAllForPr("pr-1", undefined, "author");
         return yield* service.createPartial(freshRowParams);
       }).pipe(
@@ -304,7 +294,7 @@ describe("regenerate after a stopped generation", () => {
     const reusedId = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* WalkthroughService;
-        // The old behaviour, kept as an executable record of the bug.
+        // A sweep that spares the current head.
         yield* service.supersedeAllForPr("pr-1", "head-1", "author");
         return yield* service.createPartial(freshRowParams);
       }).pipe(

@@ -1,5 +1,3 @@
-// ─── CacheEligibility ─────────────────────────────────────────────────────────
-//
 // Repo-level permission gate for the team walkthrough cache.
 //
 // A cache entry is only trusted from (and only pushed by) GitHub identities
@@ -29,14 +27,12 @@ interface CacheEntry {
   fetchedAt: number;
 }
 
-const WRITE_TTL_MS = 15 * 60 * 1000; // 15 min for write/maintain/admin
-const READ_TTL_MS = 5 * 60 * 1000; // 5 min for read/none (faster refresh on access grants)
+const WRITE_TTL_MS = 15 * 60 * 1000; // write/maintain/admin
+const READ_TTL_MS = 5 * 60 * 1000; // read/none: shorter, so a new grant is seen sooner
 
 function isEligible(perm: PermLevel): boolean {
   return perm === "write" || perm === "maintain" || perm === "admin";
 }
-
-// ── Context tag ───────────────────────────────────────────────────────────────
 
 export class CacheEligibility extends Context.Service<
   CacheEligibility,
@@ -66,8 +62,6 @@ export class CacheEligibility extends Context.Service<
     ) => Effect.Effect<boolean>;
   }
 >()("CacheEligibility") {}
-
-// ── Layer ─────────────────────────────────────────────────────────────────────
 
 export const CacheEligibilityLive = Layer.effect(
   CacheEligibility,

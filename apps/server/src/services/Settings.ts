@@ -15,8 +15,8 @@ import { userSettings } from "../db/schema/user-settings";
 import { DbError } from "../domain/errors";
 import { DbService } from "./Db";
 
-// One row, id = 'default'. Every field is normalized on the way in and out, so
-// a stale or hand-edited row still yields valid settings.
+// Every field is normalized on the way in and out, so a stale or hand-edited
+// row still yields valid settings.
 const ROW_ID = "default";
 
 function parseJsonList(json: string): unknown {
@@ -105,9 +105,8 @@ async function writeRow(db: Db, s: UserSettings): Promise<void> {
 }
 
 /**
- * Load the row, or seed it on first boot. Installs from before the DB kept
- * settings in `~/.revv/settings.json` (legacy-upgrade: settingsJson); that file
- * is imported once, then removed.
+ * Installs from before the DB kept settings in `~/.revv/settings.json`
+ * (legacy-upgrade: settingsJson); that file is imported once, then removed.
  */
 async function loadOrSeed(db: Db, settingsPath: string): Promise<UserSettings> {
   const [row] = await db.select().from(userSettings).where(eq(userSettings.id, ROW_ID)).limit(1);

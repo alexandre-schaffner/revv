@@ -162,7 +162,6 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       if (!existing || existing.accountId !== accountId) {
         return yield* Effect.fail(new NotFoundError({ resource: "repository", id }));
       }
-      // Use orDie so DB errors become defects, keeping the error channel as NotFoundError
       yield* Effect.try({
         try: () => db.delete(repositories).where(eq(repositories.id, id)).run(),
         catch: (e) => new Error(String(e)),
@@ -182,9 +181,8 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
   getRepoByFullName: (fullName, accountId) =>
     Effect.gen(function* () {
       const { db } = yield* DbService;
-      // Scope on both columns: `(full_name, account_id)` is the unique index,
-      // so the same repo can legitimately be tracked by several accounts.
-      // Filtering on `full_name` alone returns an arbitrary account's row.
+      // `(full_name, account_id)` is the unique index: several accounts can
+      // track the same repo, so `full_name` alone matches an arbitrary row.
       const row = db
         .select(repoColumns)
         .from(repositories)

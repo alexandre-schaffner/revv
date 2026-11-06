@@ -137,8 +137,7 @@ describe("hasCompleteCachedFiles", () => {
   // GitHub counts file *entries* in `changed_files`, and reports a path whose
   // file type changed twice (removed + added). `pr_diff_files` is keyed on
   // (prId, path), so the row count is permanently short of `changed_files` for
-  // such a PR — without the recorded fetch size, every page view re-fetched
-  // all 30 pages.
+  // such a PR.
   it("accepts a cache holding every row the last fetch produced", () => {
     const files = Array.from({ length: 2998 }, (_, i) => cachedFile(`src/${i}.ts`));
     expect(hasCompleteCachedFiles(files, 3000)).toBe(false);

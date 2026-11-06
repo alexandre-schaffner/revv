@@ -1,5 +1,3 @@
-// ─── WalkthroughSnapshotImporter ─────────────────────────────────────────────
-//
 // Hydrates a walkthrough's content from a snapshot — a team-cache hit or a
 // restack carry — in one transaction, as if a compliant agent run had written
 // it. Not an agent write (invariant 2): the content was produced and gated by
@@ -32,18 +30,10 @@ export class WalkthroughSnapshotImporter extends Context.Service<
   WalkthroughSnapshotImporter,
   {
     /**
-     * Hydrate a pre-created walkthrough row from a snapshot.
-     *
-     * The caller (`WalkthroughJobs.startJob`) is expected to:
-     *   1. Call `WalkthroughService.createPartial` to obtain a partial
-     *      row at `(prId, prHeadSha)`. Its `id` is what gets passed here.
-     *   2. Call this importer to populate content + attribution.
-     *   3. Call `WalkthroughJobs.setStatus(id, 'complete')` to fire the
-     *      lifecycle transition and ws broadcast.
-     *
-     * If validation fails or the row is in an unimportable state, the
-     * caller falls back to running the agent normally — no half-imported
-     * rows ever exist (the whole population happens in one transaction).
+     * Fill a `generating` row the caller created with `createPartial`; the
+     * caller completes it afterwards. On a failure (validation, or a row in
+     * any other state) the caller falls back to running the agent, and no
+     * half-imported row exists: the fill is one transaction.
      */
     readonly import: (params: {
       readonly walkthroughId: string;
@@ -106,7 +96,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
               .where(eq(walkthroughLeads.walkthroughId, walkthroughId))
               .run();
 
-            // ── Phase A + C: content lives on the row ────────────────────
             const nowIso = new Date().toISOString();
             db.update(walkthroughs)
               .set({
@@ -128,9 +117,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
               .where(eq(walkthroughs.id, walkthroughId))
               .run();
 
-            // ── Phase B: semantic steps + blocks ─────────────────────────
-            // Insert semantic steps first so child blocks have parents
-            // matching the application-level FK convention.
             for (const step of snapshot.semanticSteps) {
               db.insert(walkthroughSemanticSteps)
                 .values({
@@ -166,7 +152,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
               return id;
             });
 
-            // ── Issues ──────────────────────────────────────────────────
             // A chat edit can retitle an issue onto another's identity, so
             // a snapshot may hold two issues that derive one id; the later
             // one is told apart by its position.
@@ -196,7 +181,6 @@ export const WalkthroughSnapshotImporterLive = Layer.succeed(WalkthroughSnapshot
                 .run();
             }
 
-            // ── Phase D: ratings ────────────────────────────────────────
             for (const rating of snapshot.ratings) {
               const blockIds = rating.blockIndexes
                 .map((idx) => newBlockIds[idx])

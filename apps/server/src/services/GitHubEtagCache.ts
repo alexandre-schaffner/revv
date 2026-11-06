@@ -9,12 +9,13 @@ import { DbService } from "./Db";
 
 /**
  * Rows here carry no expiry (an ETag stays valid indefinitely), and two things
- * grow the table fast: `listReviewComments` folds its advancing `since`
- * watermark into the key, leaving an unreachable row per move, and `listPrs`
- * stores the whole multi-page body. A week outlasts any live key's reuse (the
- * poll touches active keys every few minutes); reaping a live key costs one
- * unconditional refetch. `fetched_at` is stamped on 200 and left on 304, so a
- * key only replayed via 304s can be reaped too, which is the safe direction.
+ * grow the table fast: `reviews.listComments` folds its advancing `since`
+ * watermark into the key, leaving an unreachable row per move, and
+ * `prs.listOpenRest` stores the whole multi-page body. A week outlasts any live
+ * key's reuse (the poll touches active keys every few minutes); reaping a live
+ * key costs one unconditional refetch. `fetched_at` is stamped on 200 and left
+ * on 304, so a key only replayed via 304s can be reaped too, which is the safe
+ * direction.
  */
 export const etagCacheRetention: RetentionPolicy = {
   table: "github_etag_cache",
@@ -26,7 +27,6 @@ export const etagCacheRetention: RetentionPolicy = {
       .all().length,
 };
 
-/** Serialized-body shape stored in `github_etag_cache.body_json`. */
 export interface CachedBody {
   readonly etag: string;
   readonly lastModified: string | null;
@@ -39,11 +39,7 @@ export interface EtagStats {
   readonly bytesSaved: number;
 }
 
-/**
- * Build the cache key for a GitHub REST request. The query string is
- * canonicalized (alphabetical, dropped from the path) so `foo?a=1&b=2`
- * and `foo?b=2&a=1` collapse to the same key.
- */
+/** Query params are sorted, so `foo?a=1&b=2` and `foo?b=2&a=1` share a key. */
 export function buildCacheKey(method: string, pathWithQuery: string): string {
   const [rawPath, rawQuery = ""] = pathWithQuery.split("?", 2) as [string, string?];
   const params = new URLSearchParams(rawQuery);
@@ -54,16 +50,11 @@ export function buildCacheKey(method: string, pathWithQuery: string): string {
 }
 
 /**
- * Conditional-request cache for GitHub REST bodies.
- *
- * Callers look up by cache key; on hit, they add `If-None-Match: <etag>`
- * to the outbound request. On a 304, the stored body is replayed — zero
- * bytes of real response data, zero rate-limit budget consumed.
- *
- * Backed by the `github_etag_cache` SQLite table + in-memory counters for
- * observability. Counters reset on process restart. A read or write that
- * fails costs one unconditional request, so failures are logged and
- * treated as a miss.
+ * Conditional-request cache for GitHub REST bodies. Callers send
+ * `If-None-Match: <etag>` on a hit; GitHub's 304 costs no REST primary
+ * rate-limit budget, and the stored body is replayed. A failed read or write
+ * costs one unconditional request, so failures are logged and treated as a
+ * miss. The counters are in-memory and reset on restart.
  */
 export interface EtagCache {
   readonly get: (cacheKey: string) => Effect.Effect<CachedBody | null>;

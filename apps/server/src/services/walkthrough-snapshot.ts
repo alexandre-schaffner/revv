@@ -1,5 +1,3 @@
-// ─── Walkthrough snapshot exporter ──────────────────────────────────────────
-//
 // Translates a walkthrough row family into a `WalkthroughSnapshotV2`, for the
 // team-cache push and the restack carry. Local-only state stays behind (see
 // `walkthrough-cache-format.ts`); block links travel as ordinal indexes into
@@ -41,8 +39,6 @@ interface ExportParams {
 }
 
 /**
- * Build a `WalkthroughSnapshotV2` from a completed walkthrough row.
- *
  * Pre-conditions checked by the caller:
  *   • `status='complete'` (`RemoteWalkthroughCache.push`), or `'superseded'`
  *     with `completedAt` set (a restack carry, `findRestackSource`): never a
@@ -51,8 +47,7 @@ interface ExportParams {
  *   • summary non-empty, sentiment non-empty
  *   • ≥1 diff block, all 9 axes rated
  *
- * Synchronous Drizzle reads — wrap in `Effect.try` at the call site if
- * you need an Effect-returning wrapper.
+ * Synchronous, and throws `ExportError`: wrap it in `Effect.try`.
  */
 export function exportWalkthroughSnapshot(db: Db, params: ExportParams): WalkthroughSnapshotV2 {
   const row = db.select().from(walkthroughs).where(eq(walkthroughs.id, params.walkthroughId)).get();
@@ -142,9 +137,8 @@ export function exportWalkthroughSnapshot(db: Db, params: ExportParams): Walkthr
 }
 
 /**
- * Validate that a candidate snapshot satisfies every phase-output
- * contract. Used by the importer as a pre-commit gate (mirrors
- * `complete_walkthrough` from the MCP tool surface — same checks).
+ * The phase-output contract a snapshot must meet, mirroring the
+ * `complete_walkthrough` gate. The importer checks it before committing.
  */
 export function validateSnapshot(
   s: WalkthroughSnapshotV2,

@@ -12,21 +12,10 @@ import { addInstalledBinDirs, isCommandOnPath } from "../ai/acp/host";
 import { debug, logError } from "../logger";
 import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
 
-// ── Onboarding service ──────────────────────────────────────────────────────
-//
-// One-shot installer plumbing the agent step of onboarding uses to:
-//   1. Detect which registry agents are set up — see `detectAgentStatus` in
-//      `ai/acp/agents`, the single detection surface (installed + authed).
-//   2. Run the official install script for whichever registry agent the user
-//      selects when it isn't already present.
-//
-// Each agent's official one-line installer is on its registry entry. We
-// spawn it once per agent per server lifetime via the shared
-// `EventJobRegistry` — a second `startInstall(agent)` call for an in-flight
-// agent rides the running job instead of double-spawning. Installs for
-// different agents run independently. The registry's ephemeral replay buffer
-// lets a late SSE subscriber replay the full transcript and still react to
-// `done`; a kill -9 mid-install just re-shows the prompt on next boot.
+// Installs run through the shared `EventJobRegistry`: its ephemeral replay
+// buffer lets a late SSE subscriber replay the full transcript and still react
+// to `done`. Nothing is persisted; a kill -9 mid-install just re-shows the
+// prompt on next boot.
 
 export class OnboardingService extends Context.Service<
   OnboardingService,
@@ -38,10 +27,8 @@ export class OnboardingService extends Context.Service<
      */
     detectAgentStatus: () => Effect.Effect<AgentStatusReport>;
     /**
-     * Start the given agent's official install script if no job for that agent
-     * is running, or return the id of the in-flight job. Idempotent per agent —
-     * callers can race and the second one rides the first. Installs for
-     * different agents run independently.
+     * Idempotent per agent: a racing second call returns the in-flight job's
+     * id. Installs for different agents run independently.
      */
     startInstall: (agent: AcpAgentId) => Effect.Effect<{ jobId: string }>;
     /**
@@ -65,9 +52,8 @@ export const OnboardingServiceLive = Layer.effect(
 
     const drainStream = async (
       broadcast: (event: InstallEvent) => void,
-      // Bun.spawn's `.stdout` is typed as `number | ReadableStream<Uint8Array>
-      // | undefined` because callers can request a file-descriptor instead.
-      // We always pipe, so a narrowing guard is enough to satisfy the type.
+      // Bun types `.stdout` this wide because a caller may request an fd; we
+      // always pipe.
       stream: number | ReadableStream<Uint8Array> | undefined,
     ): Promise<void> => {
       if (!stream || typeof stream === "number") return;

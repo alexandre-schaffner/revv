@@ -25,7 +25,6 @@ export class DbMaintenance extends Context.Service<DbMaintenance, DbMaintenanceS
   "DbMaintenance",
 ) {}
 
-/** Runs every feature's retention policy, then checkpoints the WAL, on start and every 6 hours. */
 export const DbMaintenanceLive = Layer.effect(
   DbMaintenance,
   Effect.gen(function* () {

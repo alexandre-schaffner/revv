@@ -14,10 +14,7 @@ function run<A, E>(effect: Effect.Effect<A, E, CacheService | DbService>) {
 }
 
 describe("CacheService.getOrFetch", () => {
-  // A caller that joins an in-flight fetch must see the fetcher's failure as a
-  // typed failure, same as the caller that started it. Surfacing it as a
-  // defect slipped past every `catchAll` that degrades an optional lookup —
-  // a walkthrough start racing the sizing poll 500'd on a TypeSafe 402.
+  // A defect would slip past every `catchAll` that degrades an optional lookup.
   it("fails a deduplicated caller through the error channel", async () => {
     const [first, second] = await run(
       Effect.gen(function* () {
@@ -48,7 +45,6 @@ describe("CacheService.getOrFetch", () => {
     }
   });
 
-  // Failures aren't cached, in memory either: the next caller fetches again.
   it("lets the next caller retry after a failed fetch", async () => {
     let calls = 0;
     const fetcher = () =>
@@ -69,8 +65,6 @@ describe("CacheService.getOrFetch", () => {
     expect(calls).toBe(2);
   });
 
-  // The fetch runs detached, so interrupting the caller that started it
-  // doesn't stop it; a later caller must join it, not send a second one.
   it("keeps an interrupted owner's fetch joinable", async () => {
     let calls = 0;
     const value = await run(

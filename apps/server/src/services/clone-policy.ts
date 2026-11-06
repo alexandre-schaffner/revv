@@ -1,22 +1,3 @@
-/**
- * Clone-path policy, remote-identity parsing, and read-only git inspection
- * for {@link RepoCloneService}.
- *
- * Everything here is dependency-free of the Effect service closure — pure
- * functions plus best-effort git probes — so it can be unit-tested in
- * isolation and reasoned about without the clone/worktree orchestration that
- * lives in `RepoClone.ts`. Three concerns live here:
- *
- *   - **Remote parsing** — turning a git remote URL into an `owner/name`
- *     identity and comparing it against a saved repo (`parseRemoteFullName`,
- *     `remoteUrlMatches`).
- *   - **Path safety / ownership** — deciding which paths Revv may delete,
- *     expand, or treat as its own (`pathIsUnder`, `assertSafeManagedClonePath`,
- *     `worktreeHolderPath`, …).
- *   - **Destination policy** — classifying a target directory and deciding
- *     whether to clone, link, or refuse (`readCloneDestinationState`,
- *     `decideCloneDestination`).
- */
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -24,11 +5,7 @@ import { serverEnv } from "../config";
 import { CloneError } from "../domain/errors";
 import { isGitRepo, listWorktrees, originUrl } from "./git/ops";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 export const CLONE_BASE_DIR = serverEnv.cloneDir;
-
-// ── Path safety / ownership ─────────────────────────────────────────────────
 
 export function pathIsUnder(child: string, parent: string): boolean {
   const resolvedChild = resolve(child);
@@ -71,8 +48,6 @@ export function expandUserPath(path: string): string {
   return path;
 }
 
-// ── Remote-identity parsing ─────────────────────────────────────────────────
-
 function normalizeGitPath(pathname: string): string | null {
   const trimmed = pathname.replace(/^\/+/, "").replace(/\.git$/, "");
   const parts = trimmed.split("/").filter(Boolean);
@@ -102,8 +77,6 @@ export function remoteUrlMatches(remoteUrl: string, gitHost: string, fullName: s
   return parseRemoteFullName(remoteUrl, gitHost)?.toLowerCase() === fullName.toLowerCase();
 }
 
-// ── Destination policy ────────────────────────────────────────────────────────
-
 export type CloneDestinationState =
   | "missing"
   | "empty"
@@ -126,12 +99,10 @@ export function decideCloneDestination(
     case "empty":
       return { action: "clone", removeExisting: false };
     case "matching-git-repo":
-      // A valid clone of the right remote already sits here. Inside Revv's
-      // managed base, adopt it as a managed clone — Revv created it (e.g. a
-      // re-add over a directory a prior delete left behind) and may reclaim
-      // it on delete. Outside the base it's the user's own checkout, so link
-      // it read-only (`managed: false`) and never delete it. Flipping a
-      // base-internal clone to linked would orphan it permanently in `~/.revv`.
+      // Inside Revv's base the clone is Revv's own (e.g. left by an earlier
+      // delete), so adopt it as managed; linking it would orphan it in the base
+      // forever. Outside the base it's the user's checkout: link it
+      // (`managed: false`) so it is never deleted.
       return underDefaultBase ? { action: "adopt" } : { action: "link" };
     case "different-git-repo":
       return {
@@ -147,8 +118,6 @@ export function decideCloneDestination(
           };
   }
 }
-
-// ── Read-only git inspection ────────────────────────────────────────────────
 
 export async function remoteMatches(
   path: string,
@@ -173,10 +142,6 @@ export async function readCloneDestinationState(
   return readdirSync(dest).length === 0 ? "empty" : "non-empty-non-git";
 }
 
-/**
- * Every worktree checked out on `refs/heads/<branch>`. Used to reclaim the
- * agent branch from an orphaned Revv worktree squatting on it.
- */
 export async function findWorktreesOnBranch(
   clonePath: string,
   branchName: string,

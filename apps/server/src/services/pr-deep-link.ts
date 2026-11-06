@@ -17,7 +17,7 @@ interface ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite
   readonly upsertPullRequest: (pullRequest: ObservedPr) => Effect.Effect<void, DbError, RWrite>;
 }
 
-/** Targeted, account-scoped resolution. Account/host matching happens before this workflow. */
+/** The caller has matched the account to the link's host and scoped each operation to it. */
 export function resolvePullRequestLink<RRepository, RCached, RRemote, RWrite>(
   operations: ResolvePullRequestLinkOperations<RRepository, RCached, RRemote, RWrite>,
   locator: PullRequestLocator,

@@ -9,25 +9,11 @@ import {
 import { debug, logError } from "../logger";
 import { EventJobRegistry, type Job, type JobSubscription } from "./jobs/EventJobRegistry";
 
-// ── Agent login service ───────────────────────────────────────────────────────
-//
-// Drives an agent's interactive CLI login *inside Revv* rather than sending the
-// user out to a separate terminal. Each login runs the agent's official login
-// command (the registry entry's `cli.loginArgs`) in a spawned
-// pseudo-terminal (PTY); the raw terminal bytes stream to the onboarding UI's
-// xterm instance over SSE, and the user's keystrokes flow back via `writeInput`.
-//
-// The pub/sub plumbing (per-agent idempotent job map, replay buffer,
-// late-subscriber replay, commit-then-broadcast) lives in the shared
-// `EventJobRegistry`. The only login-specific state is the PTY: a login is
-// interactive, so the subprocess handle rides on the job's `meta` so keystrokes
-// can be written to its terminal and the output scanned for the first auth URL.
-// `cancelLogin` tears that PTY down so an abandoned login never orphans a
-// long-lived interactive CLI on the server.
-//
-// State is intentionally ephemeral — a `kill -9` mid-login just means the user
-// re-runs the login from the picker, and the auth re-check on next boot reflects
-// whatever the CLI actually persisted to disk.
+// Runs the agent's official login command in a PTY so the user signs in inside
+// Revv: terminal bytes stream to the onboarding xterm over SSE and keystrokes
+// come back via `writeInput`. Nothing is persisted: a `kill -9` mid-login just
+// means re-running it from the picker, and the next boot's auth re-check
+// reflects whatever the CLI wrote to disk.
 
 /** Default PTY geometry. The web's xterm fits to its container and the size is
  * cosmetic for these short login flows, so a sane fixed default is enough. */
@@ -37,13 +23,9 @@ const PTY_ROWS = 24;
 /** Matches the first URL the login CLI prints, so the UI can open it. */
 const URL_RE = /https?:\/\/[^\s"'<>]+/;
 
-/** Login-specific job state carried on the registry job's `meta` slot. */
 interface LoginMeta {
-  /** Live subprocess so `writeInput` can forward keystrokes to its PTY. */
   proc: ReturnType<typeof Bun.spawn> | null;
-  /** Accumulated stdout, scanned once for the first auth URL. */
   urlScan: string;
-  /** True once an `auth-url` event has been emitted (emit at most once). */
   authUrlSent: boolean;
 }
 
@@ -53,10 +35,9 @@ export class AgentLoginService extends Context.Service<
   AgentLoginService,
   {
     /**
-     * Start the agent's interactive login in a PTY if no login for that agent is
-     * running, or return the id of the in-flight job. Idempotent per agent.
-     * Agents with no login command (opencode) get a job that immediately emits a
-     * successful `done`.
+     * Idempotent per agent: a second call returns the in-flight job's id.
+     * Agents with no login command (opencode) get a job that immediately emits
+     * a successful `done`.
      */
     startLogin: (agent: AcpAgentId) => Effect.Effect<{ jobId: string }>;
     /** Forward a chunk of user input to the login job's PTY. No-op if unknown/terminal. */
@@ -96,10 +77,8 @@ export const AgentLoginServiceLive = Layer.effect(
       if (match) {
         job.meta.authUrlSent = true;
         broadcast({ type: "auth-url", url: match[0] });
-        // The scan buffer has served its purpose — drop it to bound memory.
         job.meta.urlScan = "";
       } else if (job.meta.urlScan.length > 64_000) {
-        // Bound the scan buffer if the CLI never prints a URL.
         job.meta.urlScan = job.meta.urlScan.slice(-8_000);
       }
     };
@@ -189,10 +168,9 @@ export const AgentLoginServiceLive = Layer.effect(
         Effect.sync(() => {
           const job = jobs.findById(jobId);
           if (!job) return { ok: false };
-          // Kill the interactive CLI (best-effort) and retire the job so a
-          // re-opened sign-in for this agent spawns a fresh PTY rather than
+          // Retired so a re-opened sign-in spawns a fresh PTY rather than
           // rejoining a wedged one. The lingering `proc.exited` handler then
-          // fires on a subscriber-less job — harmless.
+          // fires on a subscriber-less job, harmlessly.
           try {
             job.meta.proc?.kill();
           } catch (err) {

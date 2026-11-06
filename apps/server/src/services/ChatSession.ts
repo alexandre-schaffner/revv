@@ -1,21 +1,6 @@
-// ── ChatSession ────────────────────────────────────────────────────────────
-//
-// Drizzle wrapper around chat persistence: `chat_sessions` (the durable
-// thread handle) plus `chat_messages` and `chat_activities` (the transcript
-// + structured tool-use rows added in migration 0110).
-//
-// Two responsibilities:
-//
-//   1. Session bookkeeping — find/create per (prId, agent, model, prHeadSha),
-//      patch in the ACP session id once the agent reports it.
-//   2. Transcript persistence — append user messages, stream assistant
-//      content into a single row, append typed activity rows. All inserts
-//      atomically allocate `chat_sessions.next_sequence` so messages and
-//      activities share one monotonic ordering space.
-//
-// Session sequence allocation runs inside a SQLite transaction so concurrent
-// turns (which shouldn't happen for the same PR but could during retries)
-// can't double-issue the same sequence number.
+// Every transcript row of a session (messages, activities, tasks, plans) takes
+// its sequence from `chat_sessions.next_sequence`, so the timeline is one
+// monotonic ordering.
 
 import type { ChatAttachmentMetadata, ChatTask, InteractionMode } from "@revv/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
@@ -147,20 +132,14 @@ export class ChatSessionService extends Context.Service<
      */
     readonly baselinesForPr: (prId: string) => Effect.Effect<readonly string[], DbError>;
     /**
-     * Look up the existing row for (prId, agent, model, prHeadSha) or insert a
-     * fresh one with `session_id = NULL`. Used by the chat route at the
-     * START of a turn so subsequent message/activity inserts can FK to
-     * the row before the agent emits its session id (which arrives
-     * mid-stream).
+     * A new row starts with `session_id = NULL`: the route calls this at the
+     * start of a turn so message/activity rows can FK to it before the agent
+     * reports its session id mid-stream.
      */
     readonly findOrCreate: (
       params: FindOrCreateChatSessionParams,
     ) => Effect.Effect<ChatSessionRow, DbError>;
-    /**
-     * Patch the agent-side session id (and refresh worktree/branch which
-     * stay informational) onto an existing row. Called from the route's
-     * `onSessionId` callback.
-     */
+    /** Worktree/branch are refreshed too; they stay informational. */
     readonly setAgentSessionId: (params: {
       readonly chatSessionId: string;
       readonly sessionId: string;
@@ -168,10 +147,9 @@ export class ChatSessionService extends Context.Service<
       readonly branchName: string;
     }) => Effect.Effect<void, DbError>;
     /**
-     * Update the prHeadSha of an existing session row. Called by the
-     * merge-and-push flow after a successful push so the session lookup
-     * (keyed on `(prId, agent, model, prHeadSha)`) keeps finding this conversation
-     * even after `pull_requests.headSha` advances to the freshly pushed tip.
+     * Called after a successful push so the session lookup (keyed on
+     * `(prId, agent, model, prHeadSha)`) keeps finding this conversation once
+     * `pull_requests.headSha` advances to the pushed tip.
      */
     readonly updatePrHeadSha: (params: {
       readonly chatSessionId: string;
@@ -180,11 +158,6 @@ export class ChatSessionService extends Context.Service<
     /** Delete every session of the PR, with its transcript. */
     readonly clearForPr: (prId: string) => Effect.Effect<void, DbError>;
 
-    /**
-     * Insert a finalized user message. Returns the row's id + the
-     * allocated sequence (which the caller may include in outgoing SSE
-     * frames once B3 lands).
-     */
     readonly appendUserMessage: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
@@ -193,8 +166,7 @@ export class ChatSessionService extends Context.Service<
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
     /**
-     * Insert a streaming assistant placeholder. `is_streaming = 1`,
-     * empty content. The route appends content via
+     * Starts streaming with empty content; the route appends via
      * `appendAssistantContent` and finalizes via `finalizeAssistantMessage`.
      */
     readonly beginAssistantMessage: (params: {
@@ -202,16 +174,12 @@ export class ChatSessionService extends Context.Service<
       readonly turnId: string;
     }) => Effect.Effect<{ readonly id: string; readonly sequence: number }, DbError>;
 
-    /** Append `chunk` to the assistant message body in-place. */
     readonly appendAssistantContent: (params: {
       readonly messageId: string;
       readonly chunk: string;
     }) => Effect.Effect<void, DbError>;
 
-    /**
-     * Mark the assistant message as no-longer-streaming. If `error` is
-     * set, the inline-error chip text persists for renders that follow.
-     */
+    /** A set `error` persists as the inline-error chip for later renders. */
     readonly finalizeAssistantMessage: (params: {
       readonly messageId: string;
       readonly error?: string | null;
@@ -257,34 +225,24 @@ export class ChatSessionService extends Context.Service<
       readonly payload: unknown;
     }) => Effect.Effect<void, DbError>;
 
-    /** Read the full timeline for a session, ordered by sequence. */
     readonly listTimeline: (
       chatSessionId: string,
     ) => Effect.Effect<readonly ChatTimelineEntry[], DbError>;
-
-    // ── interaction mode ────────────────────────────────────────────────
 
     readonly setInteractionMode: (params: {
       readonly chatSessionId: string;
       readonly mode: InteractionMode;
     }) => Effect.Effect<void, DbError>;
 
-    // ── tasks ───────────────────────────────────────────────────────────
-
     /**
-     * Reconcile a full task-list snapshot. Existing rows matched by
-     * `(chat_session_id, task_id)` are updated in place (preserving their
-     * sequence); previously-unseen tasks are inserted at fresh
-     * sequences. Rows missing from the snapshot are left alone (v1
-     * decision; reconsider if drift becomes an issue).
+     * Known tasks keep their sequence; unseen ones get a fresh one. Rows
+     * missing from the snapshot are left alone.
      */
     readonly applyTaskListSnapshot: (params: {
       readonly chatSessionId: string;
       readonly turnId: string;
       readonly tasks: ReadonlyArray<ChatTask>;
     }) => Effect.Effect<readonly ChatTaskRow[], DbError>;
-
-    // ── plans ───────────────────────────────────────────────────────────
 
     /**
      * Insert a new plan in `pending` status. Throws if a plan already
@@ -317,10 +275,8 @@ export const ChatSessionServiceLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* DbService;
 
-    // Atomically allocate the next sequence number for a session. Wrapped
-    // in a transaction so two concurrent turns (which shouldn't happen for
-    // the same PR, but might during retries) can't double-issue the same
-    // number — the unique index would catch it but a transaction is cheaper.
+    // Two turns on one session can overlap during retries; the transaction
+    // keeps them from double-issuing a sequence.
     const allocateSequence = (chatSessionId: string): number =>
       db.transaction((tx) => {
         const row = tx
@@ -473,8 +429,7 @@ export const ChatSessionServiceLive = Layer.effect(
             )
             .get();
           if (existing) {
-            // Refresh worktree/branch in case the PR's worktree was
-            // reseated to a new path. Cheap.
+            // The PR's worktree may have been reseated to a new path.
             if (existing.worktreePath !== worktreePath || existing.branchName !== branchName) {
               db.update(chatSessions)
                 .set({ worktreePath, branchName, lastActivityAt: nowIso() })
@@ -596,8 +551,8 @@ export const ChatSessionServiceLive = Layer.effect(
       appendAssistantContent: ({ messageId, chunk }) =>
         dbTry("chat appendAssistantContent", () => {
           if (chunk.length === 0) return;
-          // SQL `||` concat — atomic and cheap. Avoids a read-modify-
-          // write race if two stream callbacks ever interleaved.
+          // SQL `||` concat avoids a read-modify-write race between
+          // interleaved stream callbacks.
           db.run(
             sql`UPDATE chat_messages SET content = content || ${chunk} WHERE id = ${messageId}`,
           );
@@ -739,9 +694,6 @@ export const ChatSessionServiceLive = Layer.effect(
             });
           }
 
-          // k-way merge by sequence. Build a flat list of entries
-          // with their sequence, sort, and emit. This is simpler
-          // than 5-pointer streaming and the data volume is tiny.
           const entries: Array<{
             sequence: number;
             entry: ChatTimelineEntry;
@@ -798,8 +750,6 @@ export const ChatSessionServiceLive = Layer.effect(
           return entries.map((e) => e.entry);
         }),
 
-      // ── interaction mode ───────────────────────────────────────
-
       setInteractionMode: ({ chatSessionId, mode }) =>
         dbTry("chat setInteractionMode", () => {
           db.update(chatSessions)
@@ -807,8 +757,6 @@ export const ChatSessionServiceLive = Layer.effect(
             .where(eq(chatSessions.id, chatSessionId))
             .run();
         }),
-
-      // ── tasks ──────────────────────────────────────────────────
 
       applyTaskListSnapshot: ({ chatSessionId, turnId, tasks }) =>
         dbTry("chat applyTaskListSnapshot", () => {
@@ -826,7 +774,6 @@ export const ChatSessionServiceLive = Layer.effect(
             for (const task of tasks) {
               const prior = byTaskId.get(task.id);
               if (prior) {
-                // Update in place; preserve sequence.
                 tx.update(chatTasks)
                   .set({
                     content: task.content,
@@ -834,7 +781,6 @@ export const ChatSessionServiceLive = Layer.effect(
                     status: task.status,
                     priority: task.priority,
                     updatedAt: now,
-                    // Track which turn most recently touched it.
                     turnId,
                   })
                   .where(eq(chatTasks.id, prior.id))
@@ -849,7 +795,6 @@ export const ChatSessionServiceLive = Layer.effect(
                   turnId,
                 });
               } else {
-                // New task — allocate sequence atomically.
                 const seqRow = tx
                   .select({ next: chatSessions.nextSequence })
                   .from(chatSessions)
@@ -903,8 +848,6 @@ export const ChatSessionServiceLive = Layer.effect(
           });
           return result;
         }),
-
-      // ── plans ──────────────────────────────────────────────────
 
       createPlan: ({ chatSessionId, turnId, markdown }) =>
         dbTry("chat createPlan", () => {

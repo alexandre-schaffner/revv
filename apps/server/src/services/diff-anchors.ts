@@ -15,7 +15,6 @@
 
 import { parseHunkHeader } from "@revv/shared";
 
-/** The line numbers one hunk exposes on each side of the diff. */
 interface HunkLines {
   readonly left: readonly number[];
   readonly right: readonly number[];
@@ -35,8 +34,6 @@ export function commentableLines(patch: string): HunkLines[] {
   let rightLine = 0;
 
   const lines = patch.split("\n");
-  // `split` leaves a trailing empty element for a patch ending in a newline.
-  // Counting it as a context line would make one extra line look commentable.
   if (lines.at(-1) === "") lines.pop();
 
   for (const line of lines) {
@@ -48,7 +45,7 @@ export function commentableLines(patch: string): HunkLines[] {
       current = { left: [], right: [] };
       continue;
     }
-    if (!current) continue; // preamble before the first hunk
+    if (!current) continue;
     if (line.startsWith("\\")) continue; // "\ No newline at end of file"
 
     if (line.startsWith("+")) current.right.push(rightLine++);

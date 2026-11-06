@@ -1,5 +1,3 @@
-// ── External coding-agent integrations ──────────────────────────────────────
-//
 // Credential lifecycle and checkout→PR resolution for coding agents that run
 // outside Revv's own agent lifecycle. Each provider gets one account-scoped
 // credential (stored only as a SHA-256 digest) plus a per-account/provider
@@ -120,7 +118,6 @@ function isProvider(value: string): value is ExternalAgentProvider {
   return (EXTERNAL_AGENT_PROVIDERS as readonly string[]).includes(value);
 }
 
-/** A full 40-hex commit SHA, either case. */
 export const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 
 function isSha(value: string): boolean {
@@ -134,7 +131,6 @@ export function isIntegrationCredentialActive(
   return credential.revokedAt === null && Date.parse(credential.expiresAt) > now;
 }
 
-/** Map an install-mechanics throw onto a tagged error without losing detail. */
 function asIntegrationError(
   code: ExternalIntegrationError["code"],
   message: string,

@@ -60,7 +60,6 @@ export class SyncService extends Context.Service<
   }
 >()("SyncService") {}
 
-/** Wrap any non-SyncError into a SyncError. Used as a uniform error funnel. */
 function toSyncError(threadId?: string): (e: unknown) => SyncError {
   return (e: unknown) => {
     if (e instanceof SyncError) return e;
@@ -220,8 +219,6 @@ export const SyncServiceLive = Layer.effect(
           );
         }
 
-        // Incremental poll: ask GitHub only for comments newer than our
-        // last successful sync. Null on cold-start pulls everything.
         const since = yield* prService.getCommentsSyncedAt(pr.id);
         const comments = yield* github.reviews.listComments(
           client,
@@ -238,14 +235,11 @@ export const SyncServiceLive = Layer.effect(
         const byExternalId = new Map<number, GhReviewComment>();
         for (const c of comments) byExternalId.set(c.id, c);
 
-        // GitHub's own thread grouping is the authoritative answer to "which
-        // thread does this reply belong to", and we need it twice — once to
-        // attach incoming replies, once to reconcile resolved/unresolved. Fetch
-        // it once, and only when one of those jobs is actually live: a PR with
-        // no local threads and no incoming replies has nothing to match, and
-        // skipping the GraphQL call there is what keeps quiet PRs free on the
-        // background sweep (GraphQL has no conditional-request equivalent, so
-        // unlike the REST calls above it is never a free 304).
+        // GitHub's thread grouping is the authority on which thread a reply
+        // belongs to and on resolution. Skip it for a PR with no local threads
+        // and no incoming replies: GraphQL has no conditional requests, so
+        // unlike the REST call above it is never a free 304, and skipping it
+        // keeps quiet PRs free on the background sweep.
         const localThreadsBefore = yield* reviewService.threadsForPr(pr.id);
         const hasIncomingReplies = comments.some((c) => c.inReplyToId !== null);
         const needsGhThreads = localThreadsBefore.length > 0 || hasIncomingReplies;
@@ -253,12 +247,9 @@ export const SyncServiceLive = Layer.effect(
           ? yield* github.reviews.listThreads(client, repo.fullName, pr.externalId)
           : [];
 
-        // Every comment id GitHub lists in a thread maps to that thread's root
-        // (its first comment). This is what `findRootInBatch` can only guess at:
-        // that fallback walks `in_reply_to_id` through the current batch, which
-        // misses whenever the root falls outside the `since` window — and a miss
-        // used to drop the comment permanently, since the watermark then
-        // advances past it.
+        // Comment id -> its thread's root (first comment). `findRootInBatch`
+        // misses a root outside the `since` window, and the watermark then
+        // advances past the reply for good.
         const rootByCommentId = new Map<number, number>();
         for (const t of ghThreads) {
           const root = t.commentDatabaseIds[0];
@@ -266,10 +257,6 @@ export const SyncServiceLive = Layer.effect(
           for (const id of t.commentDatabaseIds) rootByCommentId.set(id, root);
         }
 
-        // Comment authors, deduped by login. One person usually writes several
-        // comments in a batch and each upsert costs a SELECT + UPSERT (plus an
-        // avatar refetch once the 24h TTL lapses), so collapse them and flush
-        // after the ingest loop.
         const pendingAuthors = new Map<string, string | null>();
 
         for (const c of comments) {
@@ -316,11 +303,9 @@ export const SyncServiceLive = Layer.effect(
               newMessages++;
               continue;
             }
-            // No local thread owns this reply — its root predates our first
-            // sync of this PR, or was pruned by retention. Fall through and
-            // ingest it as its own root thread: showing it detached is strictly
-            // better than the old behaviour of dropping it and never looking
-            // again.
+            // No local thread owns this reply (its root predates our first sync
+            // of this PR, or was pruned by retention). Ingest it as its own
+            // thread: shown detached beats dropped for good.
           }
 
           yield* reviewService.startThread(
@@ -351,8 +336,6 @@ export const SyncServiceLive = Layer.effect(
           yield* avatars.ensure(repo.githubHost, login, avatarUrl);
         }
 
-        // Extract @-mentions from newly-synced review comments and append
-        // them to the PR's `mentionedUsers` array.
         const commentMentions = comments.flatMap((c) => extractGitHubMentions(c.body));
         if (commentMentions.length > 0) {
           yield* prService
@@ -388,9 +371,6 @@ export const SyncServiceLive = Layer.effect(
           }
         }
 
-        // Advance the high-water-mark only when the GitHub call
-        // succeeded AND produced comments — otherwise keep the old
-        // watermark so the next tick refetches from the same point.
         if (comments.length > 0) {
           const watermark = latestUpdatedAt(comments);
           if (watermark) {
@@ -398,11 +378,8 @@ export const SyncServiceLive = Layer.effect(
           }
         }
 
-        // Did GitHub's side actually move? Row writes are the obvious signal;
-        // the thread fingerprint catches the rest (a resolve, an unresolve, a
-        // thread appearing or vanishing) without re-deriving it from the DB.
-        // When the GraphQL call was skipped there was nothing to fingerprint,
-        // so the row writes are the whole answer.
+        // The thread fingerprint catches GitHub-side changes that write no
+        // local row: a resolve or unresolve, a thread appearing or vanishing.
         let changed = newThreads + newMessages + edits + statusChanges > 0;
         if (needsGhThreads) {
           const fingerprint = fingerprintThreads(ghThreads);
@@ -426,9 +403,6 @@ export const SyncServiceLive = Layer.effect(
     ): Effect.Effect<PullResult, SyncError, DbService> =>
       Effect.gen(function* () {
         const pulled = yield* pullComments(prId);
-        // The background sweep visits every open PR on every tick; announcing
-        // a no-op for each would be an SSE message per PR for nothing. A
-        // user-initiated sync always announces: it clears their spinner.
         if (pulled.changed || opts?.force === true) {
           yield* realtime.toPr(prId, {
             type: "threads:synced",
@@ -449,12 +423,7 @@ export const SyncServiceLive = Layer.effect(
   }),
 );
 
-/**
- * Fingerprint the externally-observable review-thread state: every thread's
- * node id, resolution flag, and comment ids, order-independent. Two pulls that
- * produce the same fingerprint saw the same GitHub state, so the second has
- * nothing to write and nothing to announce.
- */
+/** Order-independent: two pulls with the same fingerprint saw the same GitHub thread state. */
 function fingerprintThreads(threads: ReadonlyArray<GhReviewThread>): string {
   const canonical = threads
     .map((t) => {

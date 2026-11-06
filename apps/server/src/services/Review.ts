@@ -83,8 +83,6 @@ export class ReviewService extends Context.Service<
       externalId: string,
     ) => Effect.Effect<ThreadMessage | null, DbError, DbService>;
 
-    // ── Changes, announced after they commit ────────────────────────────────
-
     /** A thread with its first message. Announces `thread:created`. */
     readonly startThread: (
       prId: string,
@@ -157,7 +155,7 @@ export class ReviewService extends Context.Service<
     /** Drop a thread unconditionally. Announces `thread:deleted`. */
     readonly dropThread: (threadId: string) => Effect.Effect<void, DbError, DbService>;
 
-    // ── GitHub bookkeeping: no envelope, readers reconcile on their next read ─
+    // GitHub bookkeeping: announces nothing; readers reconcile on their next read.
 
     readonly linkThread: (
       threadId: string,
@@ -229,7 +227,6 @@ export function toMessage(row: MessageRow, avatarContent: string | null): Thread
   };
 }
 
-/** Messages with their author's cached avatar, oldest first. */
 function readMessages(db: Db | Tx, where: SQL | undefined): ThreadMessage[] {
   return db
     .select({

@@ -1,5 +1,3 @@
-// ── First-pass run ───────────────────────────────────────────────────────────
-//
 // Runs the per-hunk smell scan (`ai/jev/hunk-scan.ts`) for one PR head. Elysia
 // owns this end to end — Jev's answers are orchestrator-computed judgments
 // (invariant 2's carve-out), so they're written here, never through MCP.
@@ -59,7 +57,6 @@ export interface HunkScanInput extends HunkScanKey {
   }> | null;
 }
 
-/** The hunks `input` covers: what to seed, and what to ask in which order. */
 export function planHunkScan(input: HunkScanInput): HunkSelection {
   const priorities =
     input.filePriorities === null
@@ -75,14 +72,12 @@ export function selectionFingerprint(selection: HunkSelection): string {
   return hash.digest("hex");
 }
 
-/** Whether the persisted rows are exactly the seeds: same hunks, same content. */
 function matchesSeeds(rows: readonly HunkScanRowRecord[], seeds: readonly HunkScanSeed[]) {
   if (rows.length !== seeds.length) return false;
   const hashes = new Map(seeds.map((seed) => [hunkKey(seed), seed.contentHash]));
   return rows.every((row) => hashes.get(hunkKey(row)) === row.contentHash);
 }
 
-/** Whether a scan in `status` is reused as it is (given its rows match the diff). */
 function isSettled(status: HunkScanStatus, retry: boolean): boolean {
   return status === "complete" || (!retry && status !== "running");
 }
@@ -110,13 +105,12 @@ export function runHunkScan(
     const rows = existing === null ? [] : yield* listHunkScanRows(existing.id);
     const fresh = matchesSeeds(rows, input.selection.seeds);
     if (existing !== null) {
-      // A failed scan has no rows to compare; only a retry runs it again.
       if (existing.status === "failed" && !input.retry) return [];
       if (fresh && isSettled(existing.status, input.retry)) return rows.map(toHunkScanRow);
     }
 
-    // Switch off or no key. A scan cut off mid-run is ended exactly as if Jev
-    // had stopped answering; anything else is left as it is.
+    // A scan cut off mid-run is ended exactly as if Jev had stopped answering;
+    // anything else is left as it is.
     const jev = yield* JevService;
     if (!(yield* jev.isAvailable())) {
       if (existing?.status === "running") {
@@ -138,7 +132,6 @@ export function runHunkScan(
     ),
   );
 
-  /** Ask about every row still waiting, then close the scan. */
   function scan(id: string) {
     return Effect.gen(function* () {
       const seeded = yield* listHunkScanRows(id);
@@ -166,7 +159,6 @@ export function runHunkScan(
     });
   }
 
-  /** Close the scan on its committed rows: `complete`, `partial`, or — nothing answered — `failed`. */
   function finish(id: string, nothingAnswered: string) {
     return Effect.gen(function* () {
       const rows = (yield* listHunkScanRows(id)).map(toHunkScanRow);

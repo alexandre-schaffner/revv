@@ -53,8 +53,6 @@ describe("terminal handler placement under interruption", () => {
   });
 });
 
-// ── makeStartJobMutex ────────────────────────────────────────────────────────
-
 describe("makeStartJobMutex", () => {
   it("returns one shared semaphore per key and distinct ones across keys", () =>
     Effect.runPromise(
@@ -85,13 +83,10 @@ describe("makeStartJobMutex", () => {
           }),
         );
         yield* Effect.all([task, task, task], { concurrency: "unbounded" });
-        // Never two at once under the same key.
         expect(maxActive).toBe(1);
       }),
     ));
 });
-
-// ── makeSessionTokenStore ────────────────────────────────────────────────────
 
 describe("makeSessionTokenStore", () => {
   it("issues, resolves, and clears tokens (recap semantics, no liveCheck)", () =>
@@ -110,7 +105,6 @@ describe("makeSessionTokenStore", () => {
       Effect.gen(function* () {
         const store = yield* makeSessionTokenStore<{ recapId: string }>(0);
         const token = yield* store.issue({ recapId: "r1" });
-        // TTL 0 → already expired on resolve.
         expect(yield* store.resolve(token)).toBeNull();
       }),
     ));
@@ -144,8 +138,6 @@ describe("makeSessionTokenStore", () => {
       }),
     ));
 });
-
-// ── makeSubscriberRegistry ───────────────────────────────────────────────────
 
 type TestEvent = { readonly type: string; readonly n?: number };
 
