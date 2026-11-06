@@ -5,7 +5,8 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { Shimmer } from "$lib/components/ai/shimmer";
-import GenActionBar, { type GenActionState } from "$lib/components/layout/GenActionBar.svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
+import GenActionBar, { type GenActionState } from "$lib/components/shared/GenActionBar.svelte";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import {
   abortRecapStream,
@@ -25,7 +26,6 @@ import {
   regenerateRecap,
   stopRecap,
 } from "$lib/stores/recaps.svelte";
-import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 import DotMatrixLoader from "./DotMatrixLoader.svelte";
 import { pickLatestByWindow, recapWindowIsStale } from "./period-window";
 import RecapArchivePopover from "./RecapArchivePopover.svelte";
@@ -222,7 +222,9 @@ async function onStop(): Promise<void> {
   await stopRecap(id);
 }
 
-const actionsFloatStyle = $derived(getActionsFloatStyle());
+useShellChrome(() => ({
+  actions: showGenerateFab || genActionState ? recapActions : undefined,
+}));
 </script>
 
 <div class="period-view">
@@ -288,8 +290,8 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 	/>
 {/snippet}
 
-{#if showGenerateFab || genActionState}
-	<div class="actions-float" style={actionsFloatStyle}>
+{#snippet recapActions()}
+	<div class="actions-float">
 		<div class="actions-row" role="toolbar" aria-label="Recap actions">
 			{#if showGenerateFab}
 				<GlassPill
@@ -322,7 +324,7 @@ const actionsFloatStyle = $derived(getActionsFloatStyle());
 			{/if}
 		</div>
 	</div>
-{/if}
+{/snippet}
 
 <style>
 	.period-view {

@@ -252,13 +252,6 @@ function formatCompletedAt(iso: string): string {
    is `viewport − rail − sidebar − island`, and the sidebar is a user-dragged
    180→480px slider. A @media query cannot see any of that.
 
-   `container-type` must stay HERE and not move up to `.page` / `.content` /
-   `.period-view`. It implies `contain: layout`, which makes the element a
-   containing block for `position: fixed` descendants — and RecapPeriodView's
-   `.actions-float` is a fixed element positioned in viewport coordinates by
-   `getActionsFloatStyle()`. It is a sibling of `.recap-page`, so it escapes;
-   one level up and the Generate bar would jump by the pane's left offset.
-
    `width: 100%` is load-bearing too: a size container reports zero intrinsic
    inline size, so without it the grid collapses. */
 .recap-page {

@@ -1,6 +1,7 @@
 <script lang="ts">
 import { isImagePath } from "@revv/shared";
 import { onDestroy, untrack } from "svelte";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import {
   enterLineMode,
   enterScrollMode,
@@ -26,7 +27,6 @@ import {
   setDiffMode,
   setPrScrollPosition,
 } from "$lib/stores/review.svelte";
-import { setTopbarSubtitle } from "$lib/stores/topbar.svelte";
 import type { ReviewFile } from "$lib/types/review";
 import { isTextEditingKeyTarget } from "$lib/utils";
 import DiffViewer from "./DiffViewer.svelte";
@@ -80,12 +80,6 @@ const showFileViewer = $derived(
     (repoFilePath === activeFilePath || repoFile.status === "loading"),
 );
 
-// ── Token hover state ────────────────────────────────────────────────────
-//
-// The legacy explanation feature wired sparkle-tooltip explanations to
-// token hover. With the right pane now hosting the chat agent, that
-// affordance was removed — see CLAUDE.md "AI chat" doctrine. Keeping the
-// `fileTitleSectionEl` ref because other parts of this component bind to it.
 let fileTitleSectionEl = $state<HTMLElement | null>(null);
 
 // ── Comment trigger ──────────────────────────────────────────────────────
@@ -106,42 +100,23 @@ function openComment(startLine: number, endLine: number, side: "additions" | "de
 }
 
 // ── Topbar subtitle (show full path when file title scrolls out) ─────────
-let fileTitleObserver: IntersectionObserver | null = null;
+let fileTitleVisible = $state(true);
 
-function setupFileTitleObserver() {
-  if (fileTitleObserver) {
-    fileTitleObserver.disconnect();
-    fileTitleObserver = null;
-  }
-  if (!fileTitleSectionEl) {
-    setTopbarSubtitle(null);
-    return;
-  }
-  fileTitleObserver = new IntersectionObserver(
+$effect(() => {
+  const el = fileTitleSectionEl;
+  fileTitleVisible = true;
+  if (!el) return;
+  const observer = new IntersectionObserver(
     ([entry]) => {
-      setTopbarSubtitle(entry?.isIntersecting ? null : activeFilePath || null);
+      fileTitleVisible = entry?.isIntersecting ?? true;
     },
     { threshold: 0 },
   );
-  fileTitleObserver.observe(fileTitleSectionEl);
-}
-
-$effect(() => {
-  setupFileTitleObserver();
-  return () => {
-    if (fileTitleObserver) {
-      fileTitleObserver.disconnect();
-      fileTitleObserver = null;
-    }
-    setTopbarSubtitle(null);
-  };
+  observer.observe(el);
+  return () => observer.disconnect();
 });
 
-// Keep subtitle in sync when file changes while title is scrolled out of view
-$effect(() => {
-  activeFilePath; // track
-  if (fileTitleObserver) setupFileTitleObserver();
-});
+useShellChrome(() => ({ subtitle: fileTitleVisible ? null : activeFilePath || null }));
 
 // ── Keyboard navigation ──────────────────────────────────────────────────
 
@@ -180,8 +155,6 @@ const pendingG = new PendingGState();
 
 onDestroy(() => {
   pendingG.destroy();
-  if (fileTitleObserver) fileTitleObserver.disconnect();
-  setTopbarSubtitle(null);
 });
 
 // ── Diff-pane scroll persistence ─────────────────────────────────────────

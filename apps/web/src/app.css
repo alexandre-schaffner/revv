@@ -1015,8 +1015,8 @@ diffs-container {
 }
 
 /* ──────────────────────────────────────────────────────────
-   Floating action bar — bottom-anchored row of GlassPill buttons.
-   Shared by walkthrough and recap lifecycle controls.
+   Floating action bar — bottom-anchored row of GlassPill buttons, rendered
+   by AppShell inside `.main-area` from a page's `actions` chrome.
    The wrapper is pointer-events:none so clicks pass through the
    transparent padding around the pill row; all descendants regain
    interactivity automatically.
@@ -1031,10 +1031,6 @@ diffs-container {
   padding: 8px 0 10px;
   z-index: 10;
   pointer-events: none;
-  /* No left/right transition: the floating bar is pinned to the main-pane
-     bounds (getActionsFloatStyle), so tweening its inset slides it across the
-     main pane while the sidebar/right-panel toggles snap instantly. Snap it
-     too — match the instant pane toggles (see AppShell). */
 }
 .actions-float * {
   pointer-events: auto;

@@ -6,10 +6,10 @@ import Spinner from "phosphor-svelte/lib/Spinner";
 import { untrack } from "svelte";
 import { goto } from "$app/navigation";
 import { Shimmer } from "$lib/components/ai/shimmer";
+import { useShellChrome } from "$lib/components/layout/shell-chrome.svelte";
 import { Button } from "$lib/components/ui/button";
 import GlassPill from "$lib/components/ui/glass-pill/GlassPill.svelte";
 import { fetchRecapsForRepo, generateRecap, getRecapsForRepo } from "$lib/stores/recaps.svelte";
-import { getActionsFloatStyle } from "$lib/stores/sidebar.svelte";
 import {
   addUtcDays,
   dayKeyToUtcDate,
@@ -94,7 +94,7 @@ const unit = $derived(period === "daily" ? "day" : "week");
  * dangling word (on a real recap the same line reads "UTC · synced 10h ago").
  */
 const windowStillOpen = $derived(isCurrentPeriod(period, dayKey, new Date()));
-const actionsFloatStyle = $derived(getActionsFloatStyle());
+useShellChrome(() => ({ actions: recapActions }));
 
 async function onGenerate(): Promise<void> {
   if (generating) return;
@@ -112,6 +112,28 @@ async function onGenerate(): Promise<void> {
   }
 }
 </script>
+
+{#snippet recapActions()}
+<div class="actions-float">
+	<div class="actions-row" role="toolbar" aria-label="Recap actions">
+		<GlassPill
+			variant="accent"
+			onclick={onGenerate}
+			disabled={generating}
+			title="Write the {period} recap for {title}"
+		>
+			{#if generating}
+				<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
+			{:else}
+				<PenNib size={16} aria-hidden="true" />
+			{/if}
+			<Shimmer active={!generating}>
+				{generating ? "Generating recap…" : "Generate recap"}
+			</Shimmer>
+		</GlassPill>
+	</div>
+</div>
+{/snippet}
 
 <div class="window-route">
 	<div class="page">
@@ -146,31 +168,9 @@ async function onGenerate(): Promise<void> {
 			</div>
 		</div>
 	</div>
-
-	<div class="actions-float" style={actionsFloatStyle}>
-		<div class="actions-row" role="toolbar" aria-label="Recap actions">
-			<GlassPill
-				variant="accent"
-				onclick={onGenerate}
-				disabled={generating}
-				title="Write the {period} recap for {title}"
-			>
-				{#if generating}
-					<Spinner size={14} class="motion-essential-spin" aria-hidden="true" />
-				{:else}
-					<PenNib size={16} aria-hidden="true" />
-				{/if}
-				<Shimmer active={!generating}>
-					{generating ? "Generating recap…" : "Generate recap"}
-				</Shimmer>
-			</GlassPill>
-		</div>
-	</div>
 </div>
 
 <style>
-	/* Mirrors the recap route's wrapper: the fixed action bar must not be a
-	   descendant of the scroll container. */
 	.window-route {
 		position: relative;
 		height: 100%;

@@ -1,36 +1,49 @@
 <script lang="ts">
 import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import Spinner from "phosphor-svelte/lib/Spinner";
+import PillTabs from "$lib/components/layout/PillTabs.svelte";
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
-import { REVIEW_TABS, type ReviewTab } from "$lib/stores/review.svelte";
+import { getSelectedPr } from "$lib/stores/prs.svelte";
+import {
+  getActiveTab,
+  getIsPullingCommit,
+  getLoadedHeadSha,
+  pullLatestCommit,
+  REVIEW_TABS,
+  type ReviewTab,
+  setActiveTab,
+} from "$lib/stores/review.svelte";
 import { getCmdHeld } from "$lib/stores/shortcuts.svelte";
-import PillTabs from "./PillTabs.svelte";
+import { getPrWalkthroughStatus } from "$lib/stores/walkthrough.svelte";
 
-type Tab = ReviewTab;
-type WalkthroughStatus = "idle" | "generating" | "complete" | "error";
+const pr = $derived(getSelectedPr());
+const activeTab = $derived(getActiveTab());
+const walkthroughStatus = $derived(pr ? getPrWalkthroughStatus(pr.id) : "idle");
 
-interface Props {
-  activeTab: Tab;
-  onTabChange: (tab: Tab) => void;
-  walkthroughStatus?: WalkthroughStatus;
-  /**
-   * True when the PR the user is viewing has a newer headSha than the
-   * diff currently rendered — signals "pull this commit to refresh".
-   */
-  hasNewCommit?: boolean;
-  /** True while the pull is in-flight (refetching + regenerating). */
-  isPulling?: boolean;
-  onPullCommit?: () => void;
+// New-commit-available signal: the PR's current headSha differs from the
+// SHA the diff was loaded against. `getLoadedHeadSha` returns null until the
+// first successful fetch, suppressing the signal on fresh visits.
+//
+// Scoped to the diff and the Pull button only — says nothing about whether
+// the walkthrough is outdated. Conflating the two marked freshly-generated
+// walkthroughs stale once new commits landed but the diff hadn't refetched.
+// Walkthrough staleness comes from the server (`/current`'s `stale`,
+// `lifecycle:superseded`, review-rounds `hasNewCommits`).
+//
+// Closed and merged PRs are excluded: their head is final, so there is
+// nothing to pull. Without this a merged PR whose archived row carries a
+// newer SHA than the loaded diff shows a Pull button that can never be
+// satisfied — the walkthrough stamps "Merged" instead.
+const hasNewCommit = $derived.by(() => {
+  if (!pr?.headSha || pr.status !== "open") return false;
+  const loaded = getLoadedHeadSha(pr.id);
+  return loaded !== null && loaded !== pr.headSha;
+});
+const isPulling = $derived(pr ? getIsPullingCommit(pr.id) : false);
+
+function onPullCommit(): void {
+  if (pr) void pullLatestCommit(pr.id);
 }
-
-let {
-  activeTab,
-  onTabChange,
-  walkthroughStatus = "idle",
-  hasNewCommit = false,
-  isPulling = false,
-  onPullCommit,
-}: Props = $props();
 
 // The dot and the pull button live in the same slot to the right of the
 // pill tabs. Only one is visible at a time — the pull affordance takes
@@ -43,12 +56,12 @@ const buttonVisible = $derived(hasNewCommit);
 const buttonInteractive = $derived(hasNewCommit && !isPulling);
 
 function handlePullClick(): void {
-  if (buttonInteractive) onPullCommit?.();
+  if (buttonInteractive) onPullCommit();
 }
 
 const cmdHeld = $derived(getCmdHeld());
 
-const TAB_LABEL: Record<Tab, string> = {
+const TAB_LABEL: Record<ReviewTab, string> = {
   conversation: "Conversation",
   walkthrough: "Walkthrough",
   diff: "Diff",
@@ -62,7 +75,7 @@ const tabs = REVIEW_TABS.map((id, index) => ({
 
 function handleTabChange(tabId: string) {
   const tab = REVIEW_TABS.find((known) => known === tabId);
-  if (tab) onTabChange(tab);
+  if (tab) setActiveTab(tab);
 }
 
 let dotEl: HTMLSpanElement | null = $state(null);

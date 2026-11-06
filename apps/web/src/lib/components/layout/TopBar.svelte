@@ -1,11 +1,10 @@
 <script lang="ts">
 import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
 import Check from "phosphor-svelte/lib/Check";
-import Desktop from "phosphor-svelte/lib/Desktop";
 import LinkSimple from "phosphor-svelte/lib/LinkSimple";
-import Moon from "phosphor-svelte/lib/Moon";
 import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
-import Sun from "phosphor-svelte/lib/Sun";
+import ThemeIcon from "$lib/components/shared/ThemeIcon.svelte";
+import { cycleThemePreference, themePreferenceLabel } from "$lib/components/shared/theme-cycle";
 import * as Tooltip from "$lib/components/ui/tooltip";
 import { gsapPop, gsapPress, tokens } from "$lib/motion";
 import { fetchOrgs } from "$lib/stores/orgs.svelte";
@@ -17,29 +16,24 @@ import {
   getSelectedPrId,
 } from "$lib/stores/prs.svelte";
 import { getPrListSyncing, requestFullSync, requestSync } from "$lib/stores/sync.svelte";
-import {
-  getThemePreference,
-  setThemePreference,
-  type ThemePreference,
-} from "$lib/stores/theme.svelte";
-import { getTopbarSubtitle } from "$lib/stores/topbar.svelte";
 
 interface Props {
+  /** Appended to the PR title, e.g. the file the diff has scrolled to. */
+  subtitle: string | null;
   rightPanelOpen: boolean;
   onTogglePanel: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
 }
 
-let { rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props = $props();
+let { subtitle, rightPanelOpen, onTogglePanel, sidebarCollapsed, onToggleSidebar }: Props =
+  $props();
 
 const pr = $derived(getSelectedPr());
 const repository = $derived(
   pr ? (getRepositories().find((candidate) => candidate.id === pr.repositoryId) ?? null) : null,
 );
 const selectedPrId = $derived(getSelectedPrId());
-const theme = $derived(getThemePreference());
-const topbarSubtitle = $derived(getTopbarSubtitle());
 const linkCopied = $derived(getPrLinkCopied());
 
 // Combines direct-HTTP sync (`getIsLoading`) with SSE-driven
@@ -56,21 +50,6 @@ function handleSyncPrs(): void {
   // Re-pull the org list — picks up newly-joined orgs and rotates
   // any signed avatar URLs without requiring re-auth.
   void fetchOrgs();
-}
-const cycle: Record<ThemePreference, ThemePreference> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-
-const labels: Record<ThemePreference, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
-
-function cycleTheme() {
-  setThemePreference(cycle[theme]);
 }
 </script>
 
@@ -98,7 +77,7 @@ function cycleTheme() {
 		{#if pr}
 			<div class="title-row">
 				<span class="inline-title">
-					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if topbarSubtitle}<span class="title-separator"> / </span><span class="title-subtitle">{topbarSubtitle}</span>{/if}
+					<span class="pr-number">#{pr.externalId}</span>{pr.title}{#if subtitle}<span class="title-separator"> / </span><span class="title-subtitle">{subtitle}</span>{/if}
 				</span>
 				{#if repository}
 					<Tooltip.Root>
@@ -151,17 +130,11 @@ function cycleTheme() {
 		</button>
 		<button
 			class="theme-btn"
-			onclick={cycleTheme}
-			aria-label={labels[theme]}
-			title={labels[theme]}
+			onclick={cycleThemePreference}
+			aria-label={themePreferenceLabel()}
+			title={themePreferenceLabel()}
 		>
-			{#if theme === 'light'}
-				<Sun size={14} />
-			{:else if theme === 'dark'}
-				<Moon size={14} />
-			{:else}
-				<Desktop size={14} />
-			{/if}
+			<ThemeIcon size={14} />
 		</button>
 
 		<button
