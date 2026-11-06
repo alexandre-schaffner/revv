@@ -1,8 +1,14 @@
+import { MediaQuery } from "svelte/reactivity";
+
+let query: MediaQuery | null = null;
+
 /**
- * Synchronous reduced-motion check. The single arbiter across the app —
- * every action, preset call site, and motion `$effect` reads through here.
+ * The single reduced-motion arbiter across the app: every action, preset call
+ * site, and motion `$effect` reads through here. Synchronous everywhere, and
+ * reactive inside an effect or derived (it re-runs when the OS setting flips).
  */
 export function prefersReducedMotion(): boolean {
   if (typeof window === "undefined") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  query ??= new MediaQuery("(prefers-reduced-motion: reduce)");
+  return query.current;
 }
