@@ -12,12 +12,7 @@ export interface IssueGroup {
   issues: WalkthroughIssue[];
 }
 
-/**
- * One entry per issue, but tagged with its global render index across every
- * group. Both the GuidedWalkthrough and YourReview panels use this to
- * keep the entrance animation staggered as one continuous cascade rather
- * than restarting per-group.
- */
+/** `globalIndex` counts across every group, so a staggered entrance runs as one cascade. */
 export interface GroupedIssue {
   issue: WalkthroughIssue;
   globalIndex: number;
@@ -27,10 +22,6 @@ export interface IssueGroupView extends Omit<IssueGroup, "issues"> {
   issues: GroupedIssue[];
 }
 
-/**
- * Bucket issues by severity (Critical → Warning → Info). Empty buckets are
- * dropped. Within each bucket original arrival order is preserved.
- */
 function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[] {
   const groups: IssueGroup[] = [];
   for (const severity of ISSUE_SEVERITIES) {
@@ -41,11 +32,6 @@ function groupIssuesBySeverity(issues: readonly WalkthroughIssue[]): IssueGroup[
   return groups;
 }
 
-/**
- * Same grouping as `groupIssuesBySeverity`, but each issue carries its
- * `globalIndex` so callers can compute cascade-style animation delays
- * without manually threading a counter through nested `{#each}` blocks.
- */
 export function groupIssuesBySeverityWithIndex(
   issues: readonly WalkthroughIssue[],
 ): IssueGroupView[] {
@@ -64,7 +50,6 @@ export function sortBySeverity(issues: readonly WalkthroughIssue[]): Walkthrough
 }
 
 export interface SignalPartition {
-  /** Issues to render. Everything unscored lands here. */
   shown: WalkthroughIssue[];
   /** Issues collapsed behind the "show N filtered" disclosure. */
   filtered: WalkthroughIssue[];

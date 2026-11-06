@@ -1,7 +1,3 @@
-// The walkthrough store's pure core: the per-PR entry, how streamed events and
-// REST snapshots fold into it, and the UI state it projects to. No runes, so
-// it is unit-tested directly (walkthrough-reducer.test.ts).
-
 import {
   type Activity,
   type ActivityResult,
@@ -75,7 +71,6 @@ export interface WalkthroughEntry {
   providerConfig: NonNullable<Walkthrough["providerConfig"]> | null;
 }
 
-/** An entry for a run that is starting: streaming, nothing written yet. */
 export function startingEntry(
   mode: WalkthroughMode,
   phaseMessage: string,
@@ -115,12 +110,11 @@ export function startingEntry(
   };
 }
 
-/** An entry waiting on its first snapshot: not streaming, nothing known. */
+/** An entry waiting on its first snapshot. */
 export function idleEntry(mode: WalkthroughMode): WalkthroughEntry {
   return { ...startingEntry(mode, ""), isStreaming: false, streamStartedAt: null };
 }
 
-/** Summary, at least one block and every rating axis: nothing left to write. */
 export function hasAllContent(entry: WalkthroughEntry): boolean {
   return (
     entry.summary !== null && entry.blocks.length > 0 && entry.ratings.length >= RATING_AXES.length
@@ -132,7 +126,6 @@ export function isSettledComplete(entry: WalkthroughEntry): boolean {
   return entry.doneReceived && entry.streamError === null && hasAllContent(entry);
 }
 
-/** The entry with everything a walkthrough authored dropped; lifecycle fields kept. */
 function withoutContent(entry: WalkthroughEntry): WalkthroughEntry {
   const {
     mode,
@@ -345,8 +338,6 @@ export function applyEvents(
   return next;
 }
 
-// ── REST snapshots ──────────────────────────────────────────────────────────
-
 /** A found walkthrough from `/current` or `/report/:id`. */
 export interface WalkthroughSnapshot {
   status: WalkthroughStatus;
@@ -439,8 +430,6 @@ export function mergeSnapshot(
   if (isGenerating) entry.streamStartedAt = now;
   return entry;
 }
-
-// ── UI state ────────────────────────────────────────────────────────────────
 
 export type WalkthroughUiState =
   | { kind: "absent" }

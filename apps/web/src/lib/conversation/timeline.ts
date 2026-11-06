@@ -33,7 +33,6 @@ export type EventLine =
     }
   | { readonly kind: "single"; readonly key: string; readonly event: SingleEvent };
 
-/** The event kinds that fold into `labels` and `review_requests` lines. */
 type FoldedKind = "labeled" | "unlabeled" | "review_requested" | "review_request_removed";
 type SingleEvent = Exclude<TimelineEvent, { readonly kind: FoldedKind }>;
 
@@ -86,7 +85,6 @@ function union<T>(a: readonly T[], b: readonly T[], key: (item: T) => string): T
 const labelName = (label: PrLabel) => label.name;
 const same = (name: string) => name;
 
-/** Fold `next` into `prev` when both are the same kind of burst. */
 function merge(prev: EventLine, next: EventLine): EventLine | null {
   if (prev.kind === "single" || next.kind !== prev.kind) return null;
   if (prev.actor.login !== next.actor.login || !within(prev.createdAt, next.createdAt)) {
@@ -190,7 +188,6 @@ function list(names: readonly string[]): string {
     : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
 }
 
-/** How a timeline event line reads: its rail glyph and its sentence. */
 export function describeEvent(line: EventLine, actorLogin: string): EventDescription {
   switch (line.kind) {
     case "labels": {

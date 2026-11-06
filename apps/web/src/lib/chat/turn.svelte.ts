@@ -1,7 +1,3 @@
-// Chat turns: sending a message and writing the agent's answer into the
-// timeline as it streams, stopping it, plan decisions, the send queue, and the
-// PR-level actions that span the chat modules (open, reload, clear, reset).
-
 import {
   attachmentByteSize,
   type ChatAttachment,
@@ -224,8 +220,6 @@ export function abortChatTurn(prId: string): void {
   void refreshProposedChanges(prId);
 }
 
-// ── Plan mode ──────────────────────────────────────────────────────────────
-
 export async function setInteractionMode(prId: string, mode: InteractionMode): Promise<void> {
   const prior = getInteractionMode(prId);
   setInteractionModeLocally(prId, mode);
@@ -285,8 +279,6 @@ export function sendProposedFeedback(params: {
   clearProposedComments(prId, sha);
   return true;
 }
-
-// ── PR-level ───────────────────────────────────────────────────────────────
 
 /**
  * After a pull: the server keys the chat session on the PR head, so re-read

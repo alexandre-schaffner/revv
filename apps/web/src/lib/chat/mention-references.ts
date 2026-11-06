@@ -1,12 +1,3 @@
-// ── @-mention file pills in user messages ───────────────────────────────────
-//
-// User chat messages embed file mentions as plain text (`@apps/web/src/foo.ts`).
-// This action walks the rendered markdown and replaces each `@path` token with a
-// file pill — the per-extension glyph + basename — matching the tool-call detail
-// pill and the assistant-message file references. When the path resolves to a
-// changed file the pill is clickable (opens it in the diff tab); otherwise it's
-// a static label.
-
 import { MENTION_PATH_PATTERN } from "@revv/shared";
 import { decorationAction } from "$lib/markdown/decorate";
 import type { ReviewFile } from "$lib/stores/diff-files.svelte";
@@ -18,12 +9,9 @@ const PILL_CLASS = "mention-ref";
 const PATH_ATTR = "data-mention-path";
 const LINE_ATTR = "data-mention-line";
 
-// `@` followed by a path with an extension, optional `:line`. Conservative on
-// purpose so prose `@handle` mentions don't get captured. Grammar is shared
-// with the composer via `@revv/shared` so the two never drift.
+// Shared with the composer. Requires an extension so a prose `@handle` isn't captured.
 const MENTION_RE = new RegExp(MENTION_PATH_PATTERN, "g");
 
-/** A mention resolves to a changed file by exact path or unique basename. */
 function resolvePath(candidate: string, files: ReadonlyArray<ReviewFile>): string | null {
   for (const f of files) {
     if (f.path === candidate || f.oldPath === candidate) return f.path;
@@ -38,12 +26,9 @@ function resolvePath(candidate: string, files: ReadonlyArray<ReviewFile>): strin
 }
 
 /**
- * Apply (or strip) the clickable affordance on a pill from the current file
- * set. Idempotent and called both at creation and on every re-decoration, so a
- * pill minted before `reviewFiles` loaded gets upgraded once the file it names
- * becomes resolvable (and downgraded if the set later drops it). The pill's full
- * path lives in `title` and its line in `data-mention-line`, so resolution
- * survives without re-parsing the original `@token`.
+ * Idempotent; reruns on every re-decoration so a pill minted before the file set
+ * loaded becomes clickable later. The pill's `title` (full path) and
+ * `data-mention-line` are its only record of the original `@token`.
  */
 function syncPill(pill: HTMLElement, files: ReadonlyArray<ReviewFile>): void {
   const resolved = resolvePath(pill.title, files);
@@ -66,8 +51,6 @@ function makePill(
   const span = document.createElement("span");
   span.className = PILL_CLASS;
   span.title = fullPath;
-  // Stamp the line up front (independent of resolution) so a later upgrade can
-  // restore the jump target without the original token.
   if (line !== null) span.setAttribute(LINE_ATTR, String(line));
 
   appendPillContents(span, fullPath, "mention-ref-icon", "mention-ref-text");
@@ -76,7 +59,6 @@ function makePill(
   return span;
 }
 
-/** Replace `@path` tokens inside one text node with pill spans. */
 function decorateTextNode(textNode: Text, files: ReadonlyArray<ReviewFile>): void {
   const value = textNode.nodeValue ?? "";
   MENTION_RE.lastIndex = 0;
@@ -104,10 +86,6 @@ function decorate(node: HTMLElement, files: ReadonlyArray<ReviewFile> | null): v
     }
     return;
   }
-  // Re-resolve pills minted on a prior pass: the file set may have loaded (or
-  // changed) since, and the converted pill is no longer an `@text` node for the
-  // walk below to catch. This is what lets a pill become clickable once its
-  // file appears in the review — mirroring the `fileReferences` self-heal.
   for (const pill of node.querySelectorAll<HTMLElement>(`.${PILL_CLASS}`)) {
     syncPill(pill, files);
   }

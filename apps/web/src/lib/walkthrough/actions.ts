@@ -22,7 +22,6 @@ import { wtTrace } from "./trace";
 
 type GenerationMode = "full" | "incremental";
 
-/** Runs `action` holding the PR's pending slot; a second click while it's held is dropped. */
 async function withPending(
   prId: string,
   action: PendingAction,
@@ -107,7 +106,6 @@ export function abort(prId: string): void {
     .catch(() => undefined);
 }
 
-/** Supersede the PR's walkthrough server-side and start a new run. */
 async function runRegenerate(
   prId: string,
   mode: WalkthroughMode,

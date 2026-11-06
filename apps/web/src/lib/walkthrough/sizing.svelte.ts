@@ -1,5 +1,3 @@
-// ── Pre-generation sizing ───────────────────────────────────────────────────
-//
 // How much attention a PR needs, and which model "Auto" would pick for it,
 // resolved before any walkthrough exists so the review page can show a risk
 // tier on open. The server sizes from the cached diff and caches the answer
@@ -52,7 +50,6 @@ export function getWalkthroughSizing(
   return sizings.data(cacheKey(prId, headSha));
 }
 
-/** Fetch the preview for a PR at a specific head SHA, de-duped and cached. */
 export function fetchWalkthroughSizing(prId: string, headSha: string): Promise<void> {
   return sizings.load(cacheKey(prId, headSha), { prId }).then(() => undefined);
 }

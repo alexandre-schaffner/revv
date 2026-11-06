@@ -12,8 +12,6 @@ import {
   rollupBucket,
 } from "@revv/shared";
 
-// The @revv/shared rules the conversation tab, the merge box and stack merges all read.
-
 function rollup(state: CiRollup["state"], buckets: CiCheck["bucket"][] = []): CiRollup {
   return {
     headSha: "h",

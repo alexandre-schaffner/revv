@@ -16,7 +16,6 @@ export const VERDICT_VERB: Record<ReviewVerdict, string> = {
   dismissed: "reviewed (dismissed)",
 };
 
-/** The viewer's own verdict. */
 export const VIEWER_VERDICT_LABEL: Record<ReviewVerdict, string> = {
   approved: "You approved",
   changes_requested: "You requested changes",

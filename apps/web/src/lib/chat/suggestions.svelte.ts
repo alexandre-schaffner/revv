@@ -1,17 +1,10 @@
-// ── Chat empty-state suggestions ──────────────────────────────────────────
-//
-// Per-PR cache of the right-panel empty-state suggestions. The server
-// generates them from PR metadata + the AI walkthrough (when complete) and
-// returns three short prompts via `GET /api/prs/:id/suggestions`.
-//
 // Cached for the session per `(prId, agent, suggestions model)`, so picking
-// another model or agent asks again on the next right-panel open; the server
-// has its own `(prId, headSha, model)` cache behind it.
+// another model or agent asks again; the server has its own
+// `(prId, headSha, model)` cache behind it.
 //
 // On any failure the server itself returns the static fallback prompts, so
-// `getSuggestions()` returning `null` strictly means "haven't fetched yet"
-// rather than "fetch failed". Consumers render `CHAT_SUGGESTION_FALLBACKS`
-// meanwhile.
+// `getSuggestions()` returning `null` means "not fetched yet", not "failed".
+// Consumers render `CHAT_SUGGESTION_FALLBACKS` meanwhile.
 
 import { untrack } from "svelte";
 import { api } from "$lib/api/client";

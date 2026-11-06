@@ -1,7 +1,3 @@
-// The commits the chat agent made on its working branch, per PR, and what the
-// user does with them: select, comment, discard, cherry-pick, push, resolve a
-// conflicting push, and recover when the PR head moved under them.
-
 import type { ActivityKind, ProposedCommit } from "@revv/shared";
 import { SvelteMap } from "svelte/reactivity";
 import { toast } from "svelte-sonner";
@@ -111,8 +107,6 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-// ── Reads ──────────────────────────────────────────────────────────────────
-
 export function getProposedChanges(prId: string): ProposedChanges | null {
   return changes.data(prId);
 }
@@ -157,9 +151,6 @@ export function isCherryPickingCommit(prId: string, sha: string): boolean {
   return entry(prId).commitOps.get(sha) === "cherry-pick";
 }
 
-// ── Local state ────────────────────────────────────────────────────────────
-
-/** Ask for the proposed commits again; a failed read keeps the last list. */
 export async function refreshProposedChanges(prId: string): Promise<void> {
   await changes.refresh(prId, prId);
 }
@@ -219,8 +210,6 @@ export function clearProposed(prId: string): void {
   changes.invalidate(prId);
   updateEntry(prId, (e) => ({ ...EMPTY, busy: e.busy, commitOps: e.commitOps }));
 }
-
-// ── Push ───────────────────────────────────────────────────────────────────
 
 /**
  * Merge the agent's commits into the PR branch and push, or with
@@ -328,8 +317,6 @@ export function resolveAndPushProposed(prId: string): Promise<void> {
   });
 }
 
-// ── Per-commit actions ─────────────────────────────────────────────────────
-
 /**
  * Discard one agent commit. While the worktree is blocked, discarding the last
  * blocked commit advances the worktree to the new PR head.
@@ -361,7 +348,6 @@ export async function discardProposedCommitAction(prId: string, sha: string): Pr
   }
 }
 
-/** Cherry-pick one proposed commit onto the PR branch and push it. */
 export async function cherryPickProposedCommitAction(prId: string, sha: string): Promise<void> {
   if (entry(prId).commitOps.has(sha)) return;
   setCommitOp(prId, sha, "cherry-pick");
@@ -376,7 +362,6 @@ export async function cherryPickProposedCommitAction(prId: string, sha: string):
   }
 }
 
-/** Rebase every blocked commit onto the new PR head, then advance the worktree. */
 export async function rebaseAllProposedAction(prId: string): Promise<void> {
   const blocked = getWorktreeBlocked(prId);
   if (!blocked || isRebasingProposed(prId)) return;
@@ -393,8 +378,6 @@ export async function rebaseAllProposedAction(prId: string): Promise<void> {
     setBusy(prId, "rebase", false);
   }
 }
-
-// ── Batch actions on the selection ─────────────────────────────────────────
 
 async function runOnSelection(
   prId: string,
@@ -418,7 +401,6 @@ async function runOnSelection(
   }
 }
 
-/** Cherry-pick the selected commits onto the PR branch as one push. */
 export function batchCherryPickSelectedAction(prId: string): Promise<void> {
   return runOnSelection(
     prId,
@@ -444,7 +426,6 @@ export function batchDiscardSelectedAction(prId: string): Promise<void> {
   );
 }
 
-/** Forget every PR's proposed commits and stop listening to resolve streams. */
 export function reset(): void {
   for (const controller of resolveControllers.values()) controller.abort();
   resolveControllers.clear();

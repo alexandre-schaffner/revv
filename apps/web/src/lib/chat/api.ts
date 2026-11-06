@@ -1,13 +1,3 @@
-// ── Chat API ────────────────────────────────────────────────────────────────
-//
-// Right-pane AI chat HTTP/SSE client. Surfaces typed frames
-// (`{kind: 'text' | 'activity', ...}`) so the chat panel can render rich
-// activity entries inline between messages.
-//
-// History reload (gap A1) — `fetchChatMessages(prId)` pulls the persisted
-// timeline (messages + activities, ordered by sequence) so the panel hydrates
-// from SQLite on mount instead of starting empty after a desktop reload.
-
 import type {
   Activity,
   ApiErrorCode,
@@ -24,7 +14,6 @@ import { apiErrorCode, apiErrorMessage } from "$lib/api/errors";
 import { SseFrameError, SseHttpError, SseIdleError, streamSse } from "$lib/api/sse-stream";
 import type { EdenData } from "$lib/api/wire";
 
-// Re-export activity types used by stores and components.
 export type { Activity, ChatTask, InteractionMode };
 
 export interface ChatRequestParams {
@@ -46,11 +35,6 @@ export interface ChatCallbacks {
   onError: (error: StreamErrorBody) => void;
 }
 
-/**
- * Open a streaming chat turn. Returns an AbortController so the caller can
- * cancel mid-stream (e.g. when the user sends a new message before the
- * previous one finishes).
- */
 export function streamChatMessage(
   params: ChatRequestParams,
   callbacks: ChatCallbacks,
@@ -81,8 +65,7 @@ function dispatchChatFrame(frame: ChatStreamFrame, callbacks: ChatCallbacks): vo
   if (frame.kind === "text") {
     callbacks.onText(frame.data);
   } else if (frame.kind === "reasoning") {
-    // Reasoning frames are intentionally dropped — the
-    // chat panel never surfaces model reasoning.
+    // The chat panel never surfaces model reasoning.
   } else if (frame.kind === "activity") {
     callbacks.onActivity({
       activityKind: frame.activityKind,
@@ -167,8 +150,6 @@ export async function clearChat(prId: string): Promise<void> {
   if (error) throw new Error(apiErrorMessage(error, "Failed to clear chat"));
 }
 
-// ── Plan / interaction-mode endpoints ─────────────────────────────────────
-
 export async function setInteractionMode(prId: string, mode: InteractionMode): Promise<void> {
   const { error } = await chat(prId)["interaction-mode"].patch({ mode });
   if (error) throw new Error(apiErrorMessage(error, "Failed to set interaction mode"));
@@ -206,8 +187,6 @@ export async function fetchSessionContext(
   return data;
 }
 
-// ── History reload ────────────────────────────────────────────────────────
-
 export type ChatTimeline = EdenData<ReturnType<typeof chat>["messages"]["get"]>;
 export type PersistedChatEntry = ChatTimeline["entries"][number];
 
@@ -217,8 +196,6 @@ export async function fetchChatMessages(prId: string): Promise<ChatTimeline> {
   if (error) throw new Error(apiErrorMessage(error, "Failed to fetch chat messages"));
   return data;
 }
-
-// ── Proposed changes ──────────────────────────────────────────────────────
 
 export type ProposedChanges = EdenData<ReturnType<typeof chat>["proposed-changes"]["get"]>;
 
@@ -243,13 +220,10 @@ export async function fetchProposedDiffFiles(prId: string, sha: string) {
 
 export type ProposedDiffFile = Awaited<ReturnType<typeof fetchProposedDiffFiles>>[number];
 
-// ── Merge & push ──────────────────────────────────────────────────────────
-
 export type MergePushResult = EdenData<
   ReturnType<typeof chat>["proposed-changes"]["merge-and-push"]["post"]
 >;
 
-/** A refused push: the error table's code, or `GENERIC_ERROR` when the body carries none. */
 export interface MergePushError {
   code: ApiErrorCode | "GENERIC_ERROR";
   message: string;
@@ -289,7 +263,6 @@ export async function pushProposedChanges(
   throw refusal;
 }
 
-/** A cherry-pick push that didn't land, as the error its caller toasts. */
 function notPushed(result: Exclude<MergePushResult, { status: "pushed" }>): Error {
   return new Error(
     result.status === "remote-changed"
@@ -297,8 +270,6 @@ function notPushed(result: Exclude<MergePushResult, { status: "pushed" }>): Erro
       : `Nothing was pushed to ${result.branch}.`,
   );
 }
-
-// ── Resolve & push (SSE) ──────────────────────────────────────────────────
 
 export interface ResolvePushCallbacks {
   onStatus?: (message: string) => void;
@@ -314,8 +285,6 @@ export interface ResolvePushCallbacks {
   onError: (error: StreamErrorBody) => void;
   onDone: () => void;
 }
-
-// ── Blocked-commit management ─────────────────────────────────────────────
 
 /** Discard a single proposed commit via interactive rebase. */
 export async function discardProposedCommit(prId: string, sha: string): Promise<void> {

@@ -8,8 +8,6 @@ interface PerspectiveCopy {
   readonly generateLabel: string;
 }
 
-/** UI copy per walkthrough perspective. Keyed on the mode, so adding one
- *  without its copy fails to compile. */
 export const WALKTHROUGH_PERSPECTIVES: Record<WalkthroughMode, PerspectiveCopy> = {
   [REVIEW_MODE.reviewer]: {
     label: "Reviewer",
@@ -23,7 +21,6 @@ export const WALKTHROUGH_PERSPECTIVES: Record<WalkthroughMode, PerspectiveCopy> 
   },
 };
 
-/** The perspective menu, in `REVIEW_MODES` order. */
 export const WALKTHROUGH_PERSPECTIVE_OPTIONS = REVIEW_MODES.map((value) => ({
   value,
   ...WALKTHROUGH_PERSPECTIVES[value],
