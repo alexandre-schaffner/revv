@@ -12,6 +12,12 @@ export function stackKey(repositoryId: string, stackNumber: number): string {
   return `${repositoryId}:${stackNumber}`;
 }
 
+/** How a review cites another layer of its stack; the web renders each citation as a layer chip. */
+export const STACK_CITATION_FORMAT = "#N (layer k)";
+
+/** Matches a citation written in {@link STACK_CITATION_FORMAT}, `of m` allowed; group 1 is the PR number. */
+export const STACK_CITATION_PATTERN = /#(\d+)\s*\(layer\s+\d+(?:\s+of\s+\d+)?\)/gi;
+
 export function isOpenLayer(layer: { readonly status: string }): boolean {
   return layer.status !== "merged" && layer.status !== "closed";
 }

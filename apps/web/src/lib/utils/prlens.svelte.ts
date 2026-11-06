@@ -1,9 +1,9 @@
 import type { Lens } from "@coldtea/pr-lens-schema";
 import { toGraphDocInput } from "@revv/shared";
+import type { ResolvedTheme } from "$lib/stores/theme.svelte";
 
 import { buildColourMap, type ColourMap, themeStyleBlock } from "./prlens-theme";
 
-type AppTheme = "light" | "dark";
 type Rendered = { svg: string; width: number; colours: ColourMap };
 type RenderResult = Rendered | { error: string };
 
@@ -104,7 +104,7 @@ function truncate(message: string, limit = 400): string {
  */
 export async function renderPrLens(
   source: string,
-  theme: AppTheme,
+  theme: ResolvedTheme,
   animate: boolean,
 ): Promise<RenderResult> {
   const cacheKey = `${theme}\u0000${animate ? "motion" : "still"}\u0000${source}`;

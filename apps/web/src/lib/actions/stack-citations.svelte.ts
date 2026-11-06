@@ -1,4 +1,4 @@
-import type { StackLayer } from "@revv/shared";
+import { STACK_CITATION_PATTERN, type StackLayer } from "@revv/shared";
 import { mount, unmount } from "svelte";
 import type { Action } from "svelte/action";
 import LayerChip from "$lib/components/stack/margin/LayerChip.svelte";
@@ -7,8 +7,6 @@ import type { StackPlace } from "$lib/components/stack/margin/stack-margin";
 const CITE_CLASS = "stack-cite";
 const NUMBER_ATTR = "data-stack-number";
 const SOURCE_ATTR = "data-stack-source";
-
-const CITATION_RE = /#(\d+)\s*\(layer\s+\d+(?:\s+of\s+\d+)?\)/gi;
 
 interface Chip {
   readonly instance: ReturnType<typeof mount>;
@@ -68,7 +66,7 @@ export const stackCitations: Action<HTMLElement, StackPlace | null | undefined> 
     const frag = document.createDocumentFragment();
     const minted: [HTMLElement, StackLayer][] = [];
     let last = 0;
-    for (const match of value.matchAll(CITATION_RE)) {
+    for (const match of value.matchAll(STACK_CITATION_PATTERN)) {
       const layer = byNumber.get(Number(match[1]));
       if (!layer) continue;
       if (match.index > last) frag.append(value.slice(last, match.index));

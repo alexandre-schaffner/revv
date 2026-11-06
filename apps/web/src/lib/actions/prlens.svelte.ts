@@ -1,11 +1,9 @@
 import type { Action } from "svelte/action";
 
 import { gsap, prefersReducedMotion, tokens } from "$lib/motion";
-import { getResolvedTheme } from "$lib/stores/theme.svelte";
+import { getResolvedTheme, type ResolvedTheme } from "$lib/stores/theme.svelte";
 import { renderPrLens } from "$lib/utils/prlens.svelte";
 import { applyColourAttributes } from "$lib/utils/prlens-theme";
-
-type ResolvedTheme = "light" | "dark";
 
 const SELECTOR = ".prlens-diagram[data-prlens-src]";
 

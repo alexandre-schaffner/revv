@@ -93,6 +93,12 @@ export interface ActivityResult {
  * the server decoder encodes it, the web ToolCallCard decodes it to render a
  * real diff + LOC counts.
  */
+/**
+ * Tool-input keys that hold a file path, in precedence order: Claude uses
+ * `file_path`, opencode-style tools `path`, notebook tools `notebook_path`.
+ */
+export const TOOL_PATH_INPUT_KEYS = ["file_path", "path", "notebook_path"] as const;
+
 export const DIFF_OUTPUT_SENTINEL = "__revvDiff" as const;
 
 /** Old/new pair for a file edit, recovered from a tool's diff/output. */

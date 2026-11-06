@@ -18,6 +18,7 @@ import type {
   ChatTask,
   InteractionMode,
   NormalizedQuestion,
+  StreamErrorBody,
 } from "@revv/shared";
 import { API_BASE_URL } from "$lib/api/base-url";
 import { authHeaders } from "$lib/utils/session-token";
@@ -60,7 +61,7 @@ export interface ChatCallbacks {
     answers?: Readonly<Record<string, ReadonlyArray<string>>>;
   }) => void;
   onDone: () => void;
-  onError: (error: { code: string; message: string; [k: string]: unknown }) => void;
+  onError: (error: StreamErrorBody) => void;
 }
 
 /**
@@ -131,7 +132,7 @@ export function streamChatMessage(
       if (!res.ok) {
         disarmInactivity();
         const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
-        callbacks.onError(body as { code: string; message: string });
+        callbacks.onError(body as StreamErrorBody);
         return;
       }
 
@@ -719,7 +720,7 @@ export interface ResolvePushCallbacks {
     payload?: unknown;
   }) => void;
   onResult: (result: Extract<ResolvePushFrame, { kind: "result" }>) => void;
-  onError: (error: { code: string; message: string }) => void;
+  onError: (error: StreamErrorBody) => void;
   onDone: () => void;
 }
 
@@ -880,7 +881,7 @@ export function resolveConflictsAndPush(
     .then(async (res) => {
       if (!res.ok) {
         const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
-        callbacks.onError(body as { code: string; message: string });
+        callbacks.onError(body as StreamErrorBody);
         return;
       }
 

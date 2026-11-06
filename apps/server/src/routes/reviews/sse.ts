@@ -18,6 +18,7 @@
  *    SSE connections during git clone (10–30s) and AI streaming (minutes).
  */
 
+import { SSE_DONE_FRAME } from "@revv/shared";
 import { debug, logError } from "../../logger";
 
 const encoder = new TextEncoder();
@@ -113,7 +114,7 @@ export function createSseStream(heartbeatIntervalMs = 15_000): SseStream {
         encoder.encode(`data: ${JSON.stringify({ type: "phase", data: { phase, message } })}\n\n`),
       ),
     sendDone: () => {
-      tryEnqueue(encoder.encode("data: [DONE]\n\n"));
+      tryEnqueue(encoder.encode(SSE_DONE_FRAME));
       writer.close();
     },
     close: () => {

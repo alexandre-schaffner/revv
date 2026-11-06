@@ -207,7 +207,7 @@ export function normalizeTaskPriority(v: unknown): "low" | "medium" | "high" | n
 // ── Activity builder ────────────────────────────────────────────────────────
 
 import type { ActivityKind } from "@revv/shared";
-import { classifyTool, normalizeToolName } from "@revv/shared";
+import { classifyTool, normalizeToolName, TOOL_PATH_INPUT_KEYS } from "@revv/shared";
 import { buildExplorationDescription, toRepoRelative } from "../prompts/walkthrough";
 
 export interface BuiltActivity {
@@ -219,19 +219,16 @@ export interface BuiltActivity {
 }
 
 /**
- * Tool-input keys that hold a filesystem path. When `cwd` is known we rewrite
- * these to repo-relative form so the persisted payload matches the (already
- * relativized) summary — and so the web file-peek can pass the path straight to
- * `GET /api/prs/:id/repo-file` (which resolves against the clone root, not an
- * absolute worktree path).
+ * Rewrite a tool input's path keys to repo-relative form when `cwd` is known,
+ * so the persisted payload matches the (already relativized) summary, and so
+ * the web file-peek can pass the path straight to `GET /api/prs/:id/repo-file`
+ * (which resolves against the clone root, not an absolute worktree path).
  */
-const PATH_INPUT_KEYS = ["file_path", "path", "notebook_path"] as const;
-
 export function relativizeToolInput(input: unknown, cwd?: string): unknown {
   if (!cwd || input === null || typeof input !== "object" || Array.isArray(input)) return input;
   const obj = input as Record<string, unknown>;
   let next: Record<string, unknown> | null = null;
-  for (const key of PATH_INPUT_KEYS) {
+  for (const key of TOOL_PATH_INPUT_KEYS) {
     const v = obj[key];
     if (typeof v !== "string") continue;
     const rel = toRepoRelative(v, cwd);

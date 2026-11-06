@@ -27,6 +27,7 @@ import {
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENTS_COUNT,
   MAX_CHAT_ATTACHMENTS_TOTAL_BYTES,
+  type StreamErrorCode,
 } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
@@ -398,7 +399,7 @@ export const chatRoute = new Elysia()
         if (prepared.kind === "plan-pending") {
           ctx.set.status = 409;
           return {
-            code: "PLAN_PENDING",
+            code: "PLAN_PENDING" satisfies StreamErrorCode,
             planId: prepared.planId,
             message:
               "A plan is awaiting your decision. Approve or reject it before sending a new message.",
@@ -407,7 +408,7 @@ export const chatRoute = new Elysia()
         if (prepared.kind === "plan-not-found") {
           ctx.set.status = 404;
           return {
-            code: "PLAN_NOT_FOUND",
+            code: "PLAN_NOT_FOUND" satisfies StreamErrorCode,
             planId: prepared.planId,
             message: "Plan not found",
           };
@@ -415,7 +416,7 @@ export const chatRoute = new Elysia()
         if (prepared.kind === "question-pending") {
           ctx.set.status = 409;
           return {
-            code: "QUESTION_PENDING",
+            code: "QUESTION_PENDING" satisfies StreamErrorCode,
             questionId: prepared.questionId,
             message:
               "The agent is waiting for your answer to an open question. Answer it before sending a new message.",
@@ -497,7 +498,7 @@ export const chatRoute = new Elysia()
         if (blockedErr instanceof WorktreeBlockedByUnpushedCommits) {
           ctx.set.status = 409;
           return {
-            code: "WORKTREE_BLOCKED",
+            code: "WORKTREE_BLOCKED" satisfies StreamErrorCode,
             message: "PR head advanced but worktree has unpushed agent commits",
             worktreePath: blockedErr.worktreePath,
             branchName: blockedErr.branchName,
@@ -510,7 +511,7 @@ export const chatRoute = new Elysia()
         if (blockedErr instanceof AgentUnavailableError) {
           ctx.set.status = 422;
           return {
-            code: "AGENT_UNAVAILABLE",
+            code: "AGENT_UNAVAILABLE" satisfies StreamErrorCode,
             agentName: blockedErr.agentName,
             message: blockedErr.message,
           };

@@ -8,7 +8,12 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { AcpAgentId, ChatSessionContext } from "@revv/shared";
-import { getAcpAgentDefaultModel, resolveThinkingEffort } from "@revv/shared";
+import {
+  getAcpAgentDefaultModel,
+  resolveThinkingEffort,
+  SSE_DONE_FRAME,
+  sseErrorFrame,
+} from "@revv/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { getAcpConnection, peekAcpConnection } from "../ai/acp/acp-connection";
@@ -995,14 +1000,17 @@ export function resolvePushStreamToSSE(
           if (done) break;
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
         }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.enqueue(encoder.encode(SSE_DONE_FRAME));
         controller.close();
       } catch (err) {
-        const errMsg = JSON.stringify({
-          code: "GENERATION_ERROR",
-          message: err instanceof Error ? err.message : "Unknown error",
-        });
-        controller.enqueue(encoder.encode(`event: error\ndata: ${errMsg}\n\n`));
+        controller.enqueue(
+          encoder.encode(
+            sseErrorFrame({
+              code: "GENERATION_ERROR",
+              message: err instanceof Error ? err.message : "Unknown error",
+            }),
+          ),
+        );
         controller.close();
       }
     },

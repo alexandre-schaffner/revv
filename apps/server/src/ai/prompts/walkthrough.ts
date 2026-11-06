@@ -6,6 +6,7 @@ import {
   type RatingAxis,
   REVIEW_MODE,
   type RiskLevel,
+  STACK_CITATION_FORMAT,
   type WalkthroughBlock,
   type WalkthroughLead,
   type WalkthroughMode,
@@ -251,7 +252,7 @@ function renderStackBlock(stack: WalkthroughStackSnapshot): string[] {
     "- The diff below is this layer's own changes only: GitHub scopes it to the layer below.",
     "- Before you flag something as missing, call `get_stack_context`. A higher layer may add it, and an absence a higher layer fills is not an issue.",
     "- Code in lower layers is out of scope unless this layer depends on it. When it does, say so in a comment on this layer's code, not in an issue against the lower layer.",
-    "- Cite another layer as `#N (layer k)`.",
+    `- Cite another layer as \`${STACK_CITATION_FORMAT}\`.`,
     "- Place this layer in the stack in one sentence of the overview's Context part.",
     "- A split recommendation, if there is one, concerns this layer alone.",
   ];

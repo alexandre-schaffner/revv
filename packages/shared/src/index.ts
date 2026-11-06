@@ -29,5 +29,6 @@ export * from "./repo-activity";
 export * from "./review";
 export * from "./settings-update";
 export * from "./stacks";
+export * from "./stream-frames";
 export * from "./types";
 export * from "./walkthrough";

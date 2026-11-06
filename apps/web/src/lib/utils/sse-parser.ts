@@ -1,3 +1,5 @@
+import type { StreamErrorBody } from "@revv/shared";
+import { SSE_DONE_DATA, SSE_ERROR_EVENT } from "@revv/shared";
 /**
  * Result of parsing SSE frames from a buffer.
  */
@@ -9,7 +11,7 @@ export interface SSEParseResult<T> {
   /** Whether a `data: [DONE]` frame was encountered. */
   done: boolean;
   /** If an `event: error` frame was found, the parsed error payload. */
-  error?: { code: string; message: string } | undefined;
+  error?: StreamErrorBody | undefined;
 }
 
 /**
@@ -33,7 +35,7 @@ export function parseSSEBuffer<T>(
   const remaining = parts.pop() ?? "";
   const events: T[] = [];
   let done = false;
-  let error: { code: string; message: string } | undefined;
+  let error: StreamErrorBody | undefined;
 
   for (const part of parts) {
     // Skip SSE comments (lines starting with ':')
@@ -43,11 +45,11 @@ export function parseSSEBuffer<T>(
 
     // Check for error event
     const eventLine = lines.find((l) => l.startsWith("event: "));
-    if (eventLine?.slice(7) === "error") {
+    if (eventLine?.slice(7) === SSE_ERROR_EVENT) {
       const dataLine = lines.find((l) => l.startsWith("data: "));
       if (dataLine) {
         try {
-          error = JSON.parse(dataLine.slice(6)) as { code: string; message: string };
+          error = JSON.parse(dataLine.slice(6)) as StreamErrorBody;
         } catch {
           error = { code: "PARSE_ERROR", message: "Failed to parse error" };
         }
@@ -59,7 +61,7 @@ export function parseSSEBuffer<T>(
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const payload = line.slice(6);
-      if (payload === "[DONE]") {
+      if (payload === SSE_DONE_DATA) {
         done = true;
         continue;
       }

@@ -4,6 +4,9 @@ import { crossfadeDocument } from "$lib/motion";
 
 export type { ThemePreference };
 
+/** The theme actually painted: a `system` preference resolves to one of these. */
+export type ResolvedTheme = Exclude<ThemePreference, "system">;
+
 export type DiffThemePreference = "sync" | "light" | "dark";
 
 const THEME_KEY = "revv-theme";
@@ -13,7 +16,7 @@ const DIFF_THEME_KEY = "revv-diff-theme";
 
 let preference = $state<ThemePreference>(readStored(THEME_KEY, "system"));
 let diffPreference = $state<DiffThemePreference>(readStored(DIFF_THEME_KEY, "sync"));
-let _resolved = $derived<"light" | "dark">(resolve(preference));
+let _resolved = $derived<ResolvedTheme>(resolve(preference));
 
 function readStored<T extends string>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -21,7 +24,7 @@ function readStored<T extends string>(key: string, fallback: T): T {
   return v === "light" || v === "dark" ? (v as T) : fallback;
 }
 
-function resolve(pref: ThemePreference): "light" | "dark" {
+function resolve(pref: ThemePreference): ResolvedTheme {
   if (pref === "dark") return "dark";
   if (pref === "light") return "light";
   if (typeof window === "undefined") return "light";
@@ -136,7 +139,7 @@ export function getThemePreference(): ThemePreference {
   return preference;
 }
 
-export function getResolvedTheme(): "light" | "dark" {
+export function getResolvedTheme(): ResolvedTheme {
   return _resolved;
 }
 

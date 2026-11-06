@@ -1,4 +1,5 @@
 import type { ActivityKind } from "@revv/shared";
+import { TOOL_PATH_INPUT_KEYS } from "@revv/shared";
 
 export interface GroupableActivity {
   readonly id: string;
@@ -138,16 +139,8 @@ function payloadNumber(payload: unknown, key: string): number | null {
   return null;
 }
 
-/**
- * Path keys a file tool's input may carry, in precedence order. Mirrors the
- * server's `PATH_INPUT_KEYS` (normalized-events.ts) — Claude uses `file_path`,
- * opencode-style tools may use `path`, notebooks `notebook_path` — so the peek
- * resolves regardless of which the provider populated.
- */
-const PATH_INPUT_KEYS = ["file_path", "path", "notebook_path"] as const;
-
 function payloadPath(payload: unknown): string {
-  for (const key of PATH_INPUT_KEYS) {
+  for (const key of TOOL_PATH_INPUT_KEYS) {
     const value = payloadString(payload, key);
     if (value) return value;
   }
