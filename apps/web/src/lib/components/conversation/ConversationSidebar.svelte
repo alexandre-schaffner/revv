@@ -226,6 +226,7 @@ async function labelOptions(): Promise<PickerOption<PrLabel>[]> {
 
 	{#if conversation.codeowners}
 		<CodeOwnersSection
+			{prId}
 			codeowners={conversation.codeowners}
 			reviewers={conversation.reviewers}
 			avatars={conversation.avatars}

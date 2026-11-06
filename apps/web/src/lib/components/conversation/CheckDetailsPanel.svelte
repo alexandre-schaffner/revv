@@ -8,17 +8,18 @@ import Warning from "phosphor-svelte/lib/Warning";
 import XCircle from "phosphor-svelte/lib/XCircle";
 import { Button } from "$lib/components/ui/button/index.js";
 import type { RequestState } from "$lib/stores/_types";
-import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getChangedPaths } from "$lib/stores/diff-files.svelte";
 import { jumpToDiffLine } from "$lib/stores/review-nav.svelte";
 import { copyFeedback } from "$lib/utils/copy-feedback.svelte";
 import MarkdownBody from "./MarkdownBody.svelte";
 
 interface Props {
+  prId: string;
   request: RequestState<CheckDetails>;
   onretry: () => void;
 }
 
-let { request, onretry }: Props = $props();
+let { prId, request, onretry }: Props = $props();
 
 const logCopy = copyFeedback(1400);
 
@@ -36,7 +37,7 @@ const LEVEL_LABEL: Record<CheckAnnotation["level"], string> = {
 };
 
 /** Paths the PR touches; an annotation elsewhere has no diff line to jump to. */
-const prPaths = $derived(new Set(getReviewFiles().map((f) => f.path)));
+const prPaths = $derived(new Set(getChangedPaths(prId)));
 
 function copyLog(details: CheckDetails): void {
   if (details.log) void logCopy.copy(details.log.lines.map((l) => l.text).join("\n"));

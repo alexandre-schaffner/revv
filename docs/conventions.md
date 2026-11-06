@@ -539,6 +539,22 @@ and recap streams writing into the new session.
 then resets every chat module (timeline, proposed commits, session context, queue, suggestions);
 `stacks.svelte.ts` `reset()` resets its resource and debounce timers.
 
+<a id="stores-transport"></a>
+### 4.9 JSON calls go through Eden; refusals through `apiErrorMessage`
+
+**Rule.** Every JSON request goes through the Eden client in `apps/web/src/lib/api/client.ts`,
+and its types come from Eden inference (`EdenData<…>` in `api/wire.ts`) or `@revv/shared`,
+never a hand-written copy of the server's response. A refusal's text comes from
+`apiErrorMessage(error, fallback)` (`api/errors.ts`), its code from `apiErrorCode`. Raw `fetch`
+is for bytes (`ImageDiffViewer`'s blobs) and SSE streams (`api/sse-stream.ts`) only.
+
+**Why.** The client sets `parseDate: false`, so a date is the ISO string the shared types and the
+SSE stream both carry; a hand-typed shape or an `as` cast silently drifts from the route, and
+seven copies of "read `error`, else `message`, else the status" had drifted already.
+
+**Anti-pattern.** `(await res.json()) as Foo`, `error.value as { error?: string }`, or a store
+declaring the interface of a route's response.
+
 ---
 
 <a id="ui-motion"></a>

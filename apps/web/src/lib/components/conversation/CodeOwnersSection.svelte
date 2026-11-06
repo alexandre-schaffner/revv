@@ -14,7 +14,7 @@ import Avatar from "$lib/components/shared/Avatar.svelte";
 import DisclosureCaret from "$lib/components/shared/DisclosureCaret.svelte";
 import { VERDICT_LABEL } from "$lib/conversation/verdict";
 import { gsapSlide } from "$lib/motion";
-import { getReviewFiles } from "$lib/stores/diff-files.svelte";
+import { getChangedPaths } from "$lib/stores/diff-files.svelte";
 import { openFileInDiff } from "$lib/stores/review-nav.svelte";
 import SidebarSection from "./SidebarSection.svelte";
 import VerdictGlyph from "./VerdictGlyph.svelte";
@@ -24,13 +24,14 @@ import VerdictGlyph from "./VerdictGlyph.svelte";
 // carries their review state when they're among the reviewers.
 
 interface Props {
+  prId: string;
   codeowners: CodeownersFile;
   reviewers: readonly ReviewerEntry[];
   /** The conversation's avatars by login, for owners who aren't reviewers. */
   avatars: Readonly<Record<string, string>>;
 }
 
-let { codeowners, reviewers, avatars }: Props = $props();
+let { prId, codeowners, reviewers, avatars }: Props = $props();
 
 /** CODEOWNERS handles needn't match a login's case. */
 const avatarsByHandle = $derived(
@@ -47,7 +48,7 @@ interface OwnerRow {
   readonly avatarContent: string | null;
 }
 
-const paths = $derived(getReviewFiles().map((f) => f.path));
+const paths = $derived(getChangedPaths(prId));
 const ownersByPath = $derived(codeownersFor(codeowners.rules, paths));
 
 const rows = $derived.by((): OwnerRow[] => {
