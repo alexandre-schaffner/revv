@@ -67,7 +67,7 @@ clients"; GraphQL costs vary per query, so its deltas can't be.
   woken by another fiber resumes in the waker's ALS context. `AppRuntime`
   copies the caller's ALS origin into the Context once, at entry. A loop names
   its own runs with `withGitHubOrigin("poll:...")`. `githubTryPromise` (used
-  for every GitHub call in `github-rest.ts` and `GitHub.ts`) hands the fiber's
+  for every GitHub call in `services/github/transport.ts`) hands the fiber's
   origin to the promise; with none, the call is `unattributed`.
 - `analyze.ts` is pure: records in, report out.
 

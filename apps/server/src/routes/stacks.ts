@@ -2,9 +2,8 @@ import { isOpenLayer } from "@revv/shared";
 import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { logError } from "../logger";
-import { getOrFetchDiffFiles } from "../services/DiffCache";
-import { PullRequestService } from "../services/PullRequest";
-import { RepositoryService } from "../services/Repository";
+import { DiffCacheService } from "../services/DiffCache";
+import { PrContextService } from "../services/PrContext";
 import { StackHeadlineService } from "../services/stacks/StackHeadlines";
 import { StackMergeService } from "../services/stacks/StackMerge";
 import { StackRebaseService } from "../services/stacks/StackRebase";
@@ -19,9 +18,9 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
   .onBeforeHandle(ownedBy({ id: "pull request" }))
   .get("/:id/stack", (ctx) =>
     runRoute(
-      Effect.flatMap(StackService, (s) =>
-        s.detail(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-      ).pipe(Effect.map((stack) => ({ stack }))),
+      Effect.flatMap(StackService, (s) => s.detail(ctx.params.id, ctx.account.accountId)).pipe(
+        Effect.map((stack) => ({ stack })),
+      ),
     ),
   )
 
@@ -29,11 +28,11 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
     runRoute(
       Effect.gen(function* () {
         const stacks = yield* StackService;
-        const prService = yield* PullRequestService;
-        const repoService = yield* RepositoryService;
-        const { accountId, accessToken } = ctx.account;
+        const prContext = yield* PrContextService;
+        const diffCache = yield* DiffCacheService;
+        const { accountId } = ctx.account;
 
-        const stack = yield* stacks.detail(ctx.params.id, ctx.session.user.id, accountId);
+        const stack = yield* stacks.detail(ctx.params.id, accountId);
         const here = stack?.layers.find((l) => l.prId === ctx.params.id);
         if (!stack || !here) return { warmed: 0 };
         const neighbours = stack.layers.flatMap((l) =>
@@ -44,15 +43,8 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
 
         const warmOne = (prId: string) =>
           Effect.gen(function* () {
-            const pr = yield* prService.getPr(prId, accountId);
-            const repo = yield* repoService.getRepoById(pr.repositoryId, accountId);
-            yield* getOrFetchDiffFiles(
-              pr.id,
-              repo.fullName,
-              pr.externalId,
-              accessToken,
-              pr.changedFiles,
-            );
+            const { pr, repo, client } = yield* prContext.forPr(prId, accountId);
+            yield* diffCache.getOrFetch(pr, repo.fullName, client);
           }).pipe(
             Effect.catch((err) =>
               Effect.sync(() => logError("stacks", `warming the diff of ${prId} failed`, err)),
@@ -69,9 +61,7 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
 
   .get("/:id/stack/merge-plan", (ctx) =>
     runRoute(
-      Effect.flatMap(StackMergeService, (s) =>
-        s.plan(ctx.params.id, ctx.session.user.id, ctx.account.accountId),
-      ),
+      Effect.flatMap(StackMergeService, (s) => s.plan(ctx.params.id, ctx.account.accountId)),
     ),
   )
   .post(
@@ -95,12 +85,7 @@ export const stackRoutes = new Elysia({ prefix: "/api/prs" })
     (ctx) =>
       runRoute(
         Effect.flatMap(StackRebaseService, (s) =>
-          s.rebase(
-            ctx.params.id,
-            ctx.session.user.id,
-            ctx.account.accountId,
-            ctx.body.expectedHeads,
-          ),
+          s.rebase(ctx.params.id, ctx.account.accountId, ctx.body.expectedHeads),
         ),
       ),
     { body: t.Object({ expectedHeads: t.Record(t.String(), t.String()) }) },

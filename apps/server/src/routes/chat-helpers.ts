@@ -22,6 +22,7 @@ import { logError } from "../logger";
 import { AppRuntime } from "../runtime";
 import { type ChatSessionRow, ChatSessionService } from "../services/ChatSession";
 import { PROPOSED_COMMIT_RANGE_FLAGS } from "../services/GitOps";
+import { GitHubGateway } from "../services/github/gateway";
 import { PrContextService } from "../services/PrContext";
 import { RepoCloneService } from "../services/RepoClone";
 import { SettingsService } from "../services/Settings";
@@ -55,7 +56,6 @@ export function chatSessionModel(agent: AcpAgentId, aiModel: string): string {
  */
 export const resolveChatReadContext = (
   prId: string,
-  userId: string,
   opts: { fetchHeadShaFromGithub?: boolean } = {},
 ) =>
   Effect.gen(function* () {
@@ -64,7 +64,7 @@ export const resolveChatReadContext = (
     const settingsService = yield* SettingsService;
     const chatSessions = yield* ChatSessionService;
 
-    const { pr, repo, token } = yield* prCtx.resolveBasic(prId, userId);
+    const { pr, repo, client } = yield* prCtx.forPr(prId);
 
     // Resolve current head SHA. When the cached PR row has none, the only way
     // to learn it is a live GitHub meta fetch — expensive and rate-limited, and
@@ -74,8 +74,8 @@ export const resolveChatReadContext = (
     // menus) rather than pay a GitHub call and risk a 500 on mere PR browsing.
     let headSha: string | null = pr.headSha;
     if (!headSha && fetchHeadShaFromGithub) {
-      const meta = yield* prCtx.prMeta(repo.fullName, pr.externalId, token);
-      headSha = meta.headSha;
+      const github = yield* GitHubGateway;
+      headSha = (yield* github.prs.get(client, repo.fullName, repo.id, pr.externalId)).headSha;
     }
 
     const settings = yield* settingsService.getSettings();
@@ -89,7 +89,7 @@ export const resolveChatReadContext = (
       ? yield* chatSessions.find(pr.id, agent, model, headSha)
       : null;
 
-    return { pr, repo, token, headSha, settings, agent, model, existingSessionRow };
+    return { pr, repo, token: client.token, headSha, settings, agent, model, existingSessionRow };
   });
 
 /**
@@ -98,9 +98,9 @@ export const resolveChatReadContext = (
  * session for this PR). Only the POST turn mutates the worktree; the
  * session-context menu fetch uses {@link resolveChatReadContext} instead.
  */
-export const resolveChatTurnContext = (prId: string, userId: string) =>
+export const resolveChatTurnContext = (prId: string) =>
   Effect.gen(function* () {
-    const read = yield* resolveChatReadContext(prId, userId);
+    const read = yield* resolveChatReadContext(prId);
     const { headSha } = read;
     if (headSha === null) {
       // Unreachable: the turn path leaves `fetchHeadShaFromGithub` at its
@@ -163,9 +163,9 @@ const slashCommandCache = new Map<string, ReadonlyArray<ChatSessionContext["comm
  * given tier are absent — no head SHA, no worktree yet, no warm agent — so the
  * menus degrade to empty rather than failing the request.
  */
-export const resolveChatSessionContext = (prId: string, userId: string, warm: boolean) =>
+export const resolveChatSessionContext = (prId: string, warm: boolean) =>
   Effect.gen(function* () {
-    const read = yield* resolveChatReadContext(prId, userId, { fetchHeadShaFromGithub: warm });
+    const read = yield* resolveChatReadContext(prId, { fetchHeadShaFromGithub: warm });
     const { settings, agent, existingSessionRow } = read;
 
     // Slash commands are PR-independent (agent + repo project commands), so a

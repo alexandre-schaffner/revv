@@ -135,7 +135,6 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
     runRoute(
       getCurrentWalkthroughHandler(
         ctx.params.id,
-        ctx.session.user.id,
         ctx.query.mode === undefined ? undefined : coerceWalkthroughMode(ctx.query.mode),
       ),
     ),
@@ -143,15 +142,11 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
 
   // Sizes the PR ahead of generation (risk tier, "Auto" model pick). Shares
   // its cached answer with the generation path — same TypeSafe call, moved earlier.
-  .get("/:id/walkthrough/sizing", (ctx) =>
-    runRoute(getWalkthroughSizingHandler(ctx.params.id, ctx.session.user.id)),
-  )
+  .get("/:id/walkthrough/sizing", (ctx) => runRoute(getWalkthroughSizingHandler(ctx.params.id)))
 
   // The first pass for the PR's current head, started on first ask. Owned by
   // the PR head, not a walkthrough, so the Diff tab has it before Generate.
-  .post("/:id/hunk-scan", (ctx) =>
-    runRoute(ensureHunkScanHandler(ctx.params.id, ctx.session.user.id)),
-  )
+  .post("/:id/hunk-scan", (ctx) => runRoute(ensureHunkScanHandler(ctx.params.id)))
 
   .get("/:id/walkthrough/rounds", (ctx) =>
     runRoute(
@@ -189,7 +184,7 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
       Effect.gen(function* () {
         const prContext = yield* PrContextService;
         const walkthroughService = yield* WalkthroughService;
-        const { pr } = yield* prContext.resolveBasic(ctx.params.id, ctx.session.user.id);
+        const { pr } = yield* prContext.forPr(ctx.params.id);
         const report = yield* walkthroughService.getReport(pr.id, ctx.params.walkthroughId);
         if (!report) return { status: "not_found" as const };
         const seqAt = yield* walkthroughService.getSeqAt(report.walkthrough.id);
@@ -249,7 +244,7 @@ const prReviewRoutes = new Elysia({ prefix: "/api/reviews" })
   // ── GitHub submission ──────────────────────────────────────────────────
   .post(
     "/:id/github-submit",
-    (ctx) => runRoute(submitGithubReviewHandler(ctx.params.id, ctx.session.user.id, ctx.body)),
+    (ctx) => runRoute(submitGithubReviewHandler(ctx.params.id, ctx.body)),
     {
       body: t.Object({
         action: t.Union([t.Literal("approve"), t.Literal("request_changes"), t.Literal("comment")]),

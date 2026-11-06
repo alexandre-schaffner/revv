@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { WalkthroughLead, WalkthroughStackSnapshot } from "@revv/shared";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
 import { buildWalkthroughPrompt } from "./walkthrough";
 
 const BASE = {

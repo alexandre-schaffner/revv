@@ -3,11 +3,10 @@ import { Effect } from "effect";
 import { GitHubApiError, GitHubNetworkError, ValidationError } from "../../../domain/errors";
 import { DiffCacheService } from "../../../services/DiffCache";
 import { fitAnchorToPatch } from "../../../services/diff-anchors";
-import { GitHubGateway } from "../../../services/GitHub";
+import { GitHubGateway } from "../../../services/github/gateway";
 import { PrContextService } from "../../../services/PrContext";
 import { PrConversationService } from "../../../services/PrConversation";
 import { Realtime } from "../../../services/Realtime";
-import { RepositoryService } from "../../../services/Repository";
 import { ReviewService } from "../../../services/Review";
 import { WalkthroughService } from "../../../services/Walkthrough";
 
@@ -32,24 +31,10 @@ export interface SubmitReviewInput {
   issueIds?: string[];
 }
 
+/** GitHub's 422 for a second pending review by the same user on one PR. */
 export function isExistingPendingReviewError(error: unknown): boolean {
-  // GitHub answers the duplicate-review case with a 422, which the REST helpers
-  // surface as `GitHubApiError`. `GitHubNetworkError` stays accepted for the
-  // synthetic failure this module raises itself when the pending review can't
-  // be located.
-  const isSniffable = error instanceof GitHubApiError || error instanceof GitHubNetworkError;
-  if (!isSniffable || typeof error.cause !== "string") {
-    return false;
-  }
-
-  const cause = error.cause;
-  if (cause.includes("User can only have one pending review per pull request")) {
-    return true;
-  }
-
-  return (
-    cause.includes("422 Unprocessable Entity") && cause.toLowerCase().includes("pending review")
-  );
+  if (!(error instanceof GitHubApiError) || error.status !== 422) return false;
+  return String(error.cause).toLowerCase().includes("pending review");
 }
 
 /**
@@ -62,20 +47,18 @@ export function isExistingPendingReviewError(error: unknown): boolean {
  * This prevents pullComments (called by sync-threads immediately after) from
  * treating our own comments as new and creating duplicate threads.
  */
-export function submitGithubReviewHandler(prId: string, userId: string, body: SubmitReviewInput) {
+export function submitGithubReviewHandler(prId: string, body: SubmitReviewInput) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const github = yield* GitHubGateway;
     const reviewService = yield* ReviewService;
     const walkthroughService = yield* WalkthroughService;
-    const repoService = yield* RepositoryService;
     const realtime = yield* Realtime;
     const diffCache = yield* DiffCacheService;
     const conversations = yield* PrConversationService;
 
-    const ctx = yield* prContext.resolveBasic(prId, userId);
-    const { pr, repo, token: ghToken } = ctx;
-    const accountId = yield* repoService.getAccountIdForRepo(repo.id);
+    const ctx = yield* prContext.forPr(prId);
+    const { pr, repo, client, accountId } = ctx;
 
     const eventMap = {
       approve: "APPROVE",
@@ -172,16 +155,16 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     }
 
     const review = yield* github.reviews
-      .submit(repo.fullName, pr.externalId, reviewInput, ghToken)
+      .submit(client, repo.fullName, pr.externalId, reviewInput)
       .pipe(
         Effect.catchIf(isExistingPendingReviewError, () =>
           Effect.gen(function* () {
-            const reviewer = yield* github.users.authenticatedFresh(ghToken);
+            const reviewer = yield* github.users.viewer(client);
             const pending = yield* github.reviews.findPending(
+              client,
               repo.fullName,
               pr.externalId,
               reviewer.login,
-              ghToken,
             );
             if (!pending) {
               return yield* Effect.fail(
@@ -192,8 +175,8 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
               );
             }
 
-            yield* github.reviews.deletePending(repo.fullName, pr.externalId, pending.id, ghToken);
-            return yield* github.reviews.submit(repo.fullName, pr.externalId, reviewInput, ghToken);
+            yield* github.reviews.deletePending(client, repo.fullName, pr.externalId, pending.id);
+            return yield* github.reviews.submit(client, repo.fullName, pr.externalId, reviewInput);
           }),
         ),
       );
@@ -202,7 +185,7 @@ export function submitGithubReviewHandler(prId: string, userId: string, body: Su
     // sync-threads call doesn't create duplicate entries.
     if (submittable.length > 0) {
       const ghComments = yield* github.reviews
-        .commentsForReview(repo.fullName, pr.externalId, review.id, ghToken)
+        .commentsForReview(client, repo.fullName, pr.externalId, review.id)
         .pipe(Effect.orElseSucceed(() => []));
 
       for (const { input, comment } of submittable) {

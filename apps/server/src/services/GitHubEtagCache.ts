@@ -3,6 +3,8 @@ import { eq, lt } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { daysBefore, type RetentionPolicy } from "../db/retention";
 import { githubEtagCache } from "../db/schema/index";
+import { dbTry } from "../effects/db-try";
+import { logError } from "../logger";
 import { DbService } from "./Db";
 
 /**
@@ -59,87 +61,92 @@ export function buildCacheKey(method: string, pathWithQuery: string): string {
  * bytes of real response data, zero rate-limit budget consumed.
  *
  * Backed by the `github_etag_cache` SQLite table + in-memory counters for
- * observability. Counters reset on process restart.
+ * observability. Counters reset on process restart. A read or write that
+ * fails costs one unconditional request, so failures are logged and
+ * treated as a miss.
  */
-export class GitHubEtagCache extends Context.Service<
+export interface EtagCache {
+  readonly get: (cacheKey: string) => Effect.Effect<CachedBody | null>;
+  readonly put: (
+    cacheKey: string,
+    etag: string,
+    lastModified: string | null,
+    body: unknown,
+  ) => Effect.Effect<void>;
+  /** Call on a successful 304 so the hit counter + bytesSaved tally advance. */
+  readonly recordHit: (bodyByteSize: number) => void;
+  /** Call on a 200 so the miss counter advances. */
+  readonly recordMiss: () => void;
+  readonly stats: () => EtagStats;
+}
+
+export class GitHubEtagCache extends Context.Service<GitHubEtagCache, EtagCache>()(
+  "GitHubEtagCache",
+) {}
+
+export const GitHubEtagCacheLive = Layer.effect(
   GitHubEtagCache,
-  {
-    readonly get: (cacheKey: string) => Effect.Effect<CachedBody | null, never, DbService>;
-    readonly put: (
-      cacheKey: string,
-      etag: string,
-      lastModified: string | null,
-      body: unknown,
-    ) => Effect.Effect<void, never, DbService>;
-    /** Call on a successful 304 so the hit counter + bytesSaved tally advance. */
-    readonly recordHit: (bodyByteSize: number) => void;
-    /** Call on a 200 so the miss counter advances. */
-    readonly recordMiss: () => void;
-    readonly stats: () => EtagStats;
-  }
->()("GitHubEtagCache") {}
+  Effect.gen(function* () {
+    const { db } = yield* DbService;
+    let hits304 = 0;
+    let misses200 = 0;
+    let bytesSaved = 0;
 
-export const GitHubEtagCacheLive = Layer.sync(GitHubEtagCache, () => {
-  let hits304 = 0;
-  let misses200 = 0;
-  let bytesSaved = 0;
+    const get = (cacheKey: string): Effect.Effect<CachedBody | null> =>
+      dbTry("read GitHub ETag cache", () =>
+        db
+          .select({
+            etag: githubEtagCache.etag,
+            lastModified: githubEtagCache.lastModified,
+            bodyJson: githubEtagCache.bodyJson,
+          })
+          .from(githubEtagCache)
+          .where(eq(githubEtagCache.cacheKey, cacheKey))
+          .get(),
+      ).pipe(
+        Effect.flatMap((row) =>
+          row
+            ? Effect.try(
+                (): CachedBody => ({
+                  etag: row.etag,
+                  lastModified: row.lastModified ?? null,
+                  body: JSON.parse(row.bodyJson) as unknown,
+                }),
+              )
+            : Effect.succeed(null),
+        ),
+        Effect.catch((e) =>
+          Effect.sync(() => {
+            logError("GitHubEtagCache", "cache read failed:", e);
+            return null;
+          }),
+        ),
+      );
 
-  const get = (cacheKey: string) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const row = db
-        .select({
-          etag: githubEtagCache.etag,
-          lastModified: githubEtagCache.lastModified,
-          bodyJson: githubEtagCache.bodyJson,
-        })
-        .from(githubEtagCache)
-        .where(eq(githubEtagCache.cacheKey, cacheKey))
-        .get();
-      if (!row) return null;
-      try {
-        const body = JSON.parse(row.bodyJson) as unknown;
-        return {
-          etag: row.etag,
-          lastModified: row.lastModified ?? null,
-          body,
-        } satisfies CachedBody;
-      } catch {
-        // Corrupt JSON — treat as a miss so the next call overwrites.
-        return null;
-      }
-    });
+    const put = (cacheKey: string, etag: string, lastModified: string | null, body: unknown) =>
+      dbTry("write GitHub ETag cache", () => {
+        const now = new Date().toISOString();
+        const bodyJson = JSON.stringify(body);
+        db.insert(githubEtagCache)
+          .values({ cacheKey, etag, lastModified, bodyJson, fetchedAt: now })
+          .onConflictDoUpdate({
+            target: githubEtagCache.cacheKey,
+            set: { etag, lastModified, bodyJson, fetchedAt: now },
+          })
+          .run();
+      }).pipe(Effect.catch((e) => Effect.sync(() => logError("GitHubEtagCache", e.message))));
 
-  const put = (cacheKey: string, etag: string, lastModified: string | null, body: unknown) =>
-    Effect.gen(function* () {
-      const { db } = yield* DbService;
-      const now = new Date().toISOString();
-      const bodyJson = JSON.stringify(body);
-      db.insert(githubEtagCache)
-        .values({
-          cacheKey,
-          etag,
-          lastModified,
-          bodyJson,
-          fetchedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: githubEtagCache.cacheKey,
-          set: { etag, lastModified, bodyJson, fetchedAt: now },
-        })
-        .run();
-    });
-
-  return {
-    get,
-    put,
-    recordHit: (bodyByteSize: number) => {
-      hits304++;
-      bytesSaved += bodyByteSize;
-    },
-    recordMiss: () => {
-      misses200++;
-    },
-    stats: () => ({ hits304, misses200, bytesSaved }),
-  };
-});
+    return {
+      get,
+      put,
+      recordHit: (bodyByteSize: number) => {
+        hits304++;
+        bytesSaved += bodyByteSize;
+      },
+      recordMiss: () => {
+        misses200++;
+      },
+      stats: () => ({ hits304, misses200, bytesSaved }),
+    };
+  }),
+);

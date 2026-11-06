@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Result } from "effect";
-import { fetchCheckDetails, fetchCiRollup, fetchConversation } from "./github";
+import { fetchCheckDetails, fetchCiRollup, fetchConversation } from "./conversation";
+import { makeHttp } from "./transport";
+
+const http = makeHttp(null, null);
+const client = {
+  host: "ghe.test",
+  apiBase: "https://ghe.test/api",
+  token: "token",
+  accountId: null,
+};
 
 const realFetch = globalThis.fetch;
 
@@ -45,9 +54,7 @@ describe("legacy GitHub Enterprise fallback", () => {
     );
 
     const result = await Effect.runPromise(
-      fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api").pipe(
-        Effect.result,
-      ),
+      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1).pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(2);
@@ -61,9 +68,7 @@ describe("legacy GitHub Enterprise fallback", () => {
     }));
 
     const result = await Effect.runPromise(
-      fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api").pipe(
-        Effect.result,
-      ),
+      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1).pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(1);
@@ -153,7 +158,7 @@ describe("complete CI context lists", () => {
   it("includes failing and pending checks after the first 100 when polling", async () => {
     const queries = stubGraphql(respond);
     const { rollup } = await Effect.runPromise(
-      fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api"),
+      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1),
     );
     expect(queries).toHaveLength(2);
     expect(rollup?.checks).toHaveLength(102);
@@ -164,7 +169,7 @@ describe("complete CI context lists", () => {
   it("includes the same follow-up checks in a full conversation", async () => {
     const queries = stubGraphql(respond);
     const { conversation } = await Effect.runPromise(
-      fetchConversation({ owner: "o", repo: "r" }, 1, "pr-id", "token", "https://ghe.test/api"),
+      fetchConversation(http, client, { owner: "o", repo: "r" }, 1, "pr-id"),
     );
     expect(queries).toHaveLength(2);
     expect(conversation.ci?.checks).toHaveLength(102);
@@ -178,7 +183,7 @@ describe("complete CI context lists", () => {
         : respond(query, variables),
     );
     const { rollup } = await Effect.runPromise(
-      fetchCiRollup({ owner: "o", repo: "r" }, 1, "token", "https://ghe.test/api"),
+      fetchCiRollup(http, client, { owner: "o", repo: "r" }, 1),
     );
     expect(queries).toHaveLength(3);
     expect(queries[2]).not.toContain("isRequired");
@@ -217,9 +222,7 @@ describe("third-party check completion", () => {
       { preconnect: realFetch.preconnect },
     );
     const run = () =>
-      Effect.runPromise(
-        fetchCheckDetails({ owner: "o", repo: "r" }, 123, "token", "https://ghe.test/api"),
-      );
+      Effect.runPromise(fetchCheckDetails(http, client, { owner: "o", repo: "r" }, 123));
     const running = await run();
     expect(running.completed).toBe(false);
     expect(running.logUnavailable).toBe("not_actions");
@@ -274,13 +277,7 @@ describe("GitHub's own GraphQL failures", () => {
     const queries = stubGraphql(() => (queries.length === 1 ? FAILURE : CONVERSATION));
 
     const result = await Effect.runPromise(
-      fetchConversation(
-        { owner: "o", repo: "r" },
-        1,
-        "pr-id",
-        "token",
-        "https://ghe.test/api",
-      ).pipe(Effect.result),
+      fetchConversation(http, client, { owner: "o", repo: "r" }, 1, "pr-id").pipe(Effect.result),
     );
 
     expect(queries).toHaveLength(2);

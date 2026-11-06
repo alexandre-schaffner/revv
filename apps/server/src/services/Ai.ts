@@ -24,10 +24,10 @@ import { streamChatViaAcp } from "../ai/providers/chat-acp";
 import type { RawChatStreamFrame } from "../ai/providers/chat-types";
 import { guardWalkthroughStream } from "../ai/providers/stream-guard";
 import { streamWalkthroughViaAcp } from "../ai/providers/walkthrough-acp";
-import { type AiError, AiGenerationError, AiNotConfiguredError } from "../domain/errors";
+import { type AiError, AiNotConfiguredError } from "../domain/errors";
 import { ChatMcpTokens } from "./ChatMcpTokens";
 import { DbService } from "./Db";
-import type { PrFileMeta } from "./GitHub";
+import type { PrFileMeta } from "./github/pulls";
 import { SettingsService } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────

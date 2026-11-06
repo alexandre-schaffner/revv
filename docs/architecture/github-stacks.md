@@ -6,7 +6,7 @@ How Revv reviews a PR that sits in one of GitHub's native stacks, and what it ow
 
 | What | Owner | Where |
 |---|---|---|
-| Membership (stack number, position) | GitHub, mirrored by the poll | `pull_requests.stack_number/stack_position`, `services/github-graphql-prs.ts` |
+| Membership (stack number, position) | GitHub, mirrored by the poll | `pull_requests.stack_number/stack_position`, `services/github/pulls.ts` |
 | Stack detail (every layer's state, merge settings) | GitHub | `services/stacks/queries.ts` `PR_STACK_QUERY`, cached 30s in kv `pr-stack` |
 | Per-layer review state, restack verdict | Revv's DB, recomputed per read | `services/stacks/overlay.ts` |
 | What a walkthrough's agent saw | the walkthrough row | `walkthroughs.stack_context`, `diff_fingerprint` |

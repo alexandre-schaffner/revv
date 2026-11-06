@@ -23,7 +23,7 @@ import type { Db } from "../../db";
 import { walkthroughs as walkthroughsTable } from "../../db/schema/walkthroughs";
 import { debug, logError } from "../../logger";
 import { graftedSpan, publishTraceAnchor } from "../../observability/span-graft";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
 import { type AcpConnectionHandle, getAcpConnection } from "../acp/acp-connection";
 import { withAgentKeychainHint } from "../acp/agent-keychain";
 import type { AcpLaunchConfig } from "../acp/presets";

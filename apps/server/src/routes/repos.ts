@@ -4,9 +4,8 @@ import { Effect } from "effect";
 import { Elysia, t } from "elysia";
 import { NotFoundError, ValidationError } from "../domain/errors";
 import { CLONE_BASE_DIR, expandUserPath, pathIsUnder } from "../services/clone-policy";
-import { GitHubGateway } from "../services/GitHub";
-import { apiBaseForHost } from "../services/github-rest";
-import { Identity } from "../services/Identity";
+import { GitHubAccounts } from "../services/github/accounts";
+import { GitHubGateway } from "../services/github/gateway";
 import { PollScheduler } from "../services/PollScheduler";
 import { getRepoActivityResponse } from "../services/RepoActivity";
 import { RepoCloneService } from "../services/RepoClone";
@@ -57,21 +56,27 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
           const scheduler = yield* PollScheduler;
           const cloneSvc = yield* RepoCloneService;
 
-          const { accountId, accessToken: token } = ctx.account;
-          const githubHost = ctx.account.host;
-          // Query the account's own host: the settings-derived fallback base
-          // can point at a different host than the token was minted for.
+          const { accountId, client } = ctx.account;
+          const token = client.token;
           const repoData = yield* github.repos
-            .get(body.fullName, token, apiBaseForHost(githubHost))
+            .get(client, body.fullName)
             .pipe(
               Effect.catchTag("GitHubNotFoundError", () =>
-                Effect.flatMap(diagnoseRepoNotFound(body.fullName, githubHost, token), Effect.fail),
+                Effect.flatMap(
+                  diagnoseRepoNotFound(body.fullName, ctx.account.client),
+                  Effect.fail,
+                ),
               ),
             );
           const saved = yield* repoSvc.addRepo(
             {
-              ...repoData,
-              githubHost,
+              provider: "github",
+              owner: repoData.owner,
+              name: repoData.name,
+              fullName: repoData.fullName,
+              defaultBranch: repoData.defaultBranch,
+              avatarUrl: repoData.ownerAvatarUrl,
+              githubHost: client.host,
               managed: !isLink,
               ...(isLink ? { clonePath: body.clonePath } : {}),
             },
@@ -146,14 +151,14 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
     runRoute(
       Effect.gen(function* () {
         const repoSvc = yield* RepositoryService;
-        const identity = yield* Identity;
+        const accounts = yield* GitHubAccounts;
         const repo = yield* repoSvc.getRepoById(ctx.params.id);
         const owner = yield* repoSvc.getAccountIdForRepo(repo.id);
-        const account = yield* identity.resolveAccount(ctx.session.user.id, repo.githubHost);
+        const account = yield* accounts.accountForUser(ctx.session.user.id, repo.githubHost);
         if (account.accountId !== owner) {
           return yield* Effect.fail(new NotFoundError({ resource: "repository", id: repo.id }));
         }
-        return yield* getRepoActivityResponse(repo, account.accessToken);
+        return yield* getRepoActivityResponse(repo, account.client);
       }),
     ),
   )
@@ -163,12 +168,12 @@ export const repoRoutes = new Elysia({ prefix: "/api/repos" })
         const repoSvc = yield* RepositoryService;
         const cloneSvc = yield* RepoCloneService;
 
-        const { accountId, accessToken: token } = ctx.account;
+        const { accountId, client } = ctx.account;
         const repo = yield* repoSvc.getRepoById(ctx.params.id, accountId);
 
         if (repo.managed) {
           yield* Effect.forkDetach(
-            cloneSvc.cloneRepo(repo, token, accountId).pipe(Effect.catch(() => Effect.void)),
+            cloneSvc.cloneRepo(repo, client.token, accountId).pipe(Effect.catch(() => Effect.void)),
           );
         } else if (repo.clonePath) {
           // Linked repo: never route through `cloneRepo`. A missing path

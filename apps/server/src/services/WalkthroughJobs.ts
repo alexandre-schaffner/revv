@@ -93,7 +93,6 @@ import { withTraceAnchor } from "../observability/span-graft";
 import { AiService } from "./Ai";
 import { CacheService } from "./Cache";
 import { DbService } from "./Db";
-import { GitHubEtagCache } from "./GitHubEtagCache";
 import { HunkScanService } from "./HunkScan";
 import { JevService } from "./Jev";
 import { analyzeJobFailure } from "./job-failure";
@@ -357,7 +356,6 @@ export const WalkthroughJobsLive = Layer.effect(
   WalkthroughJobs,
   Effect.gen(function* () {
     const { db } = yield* DbService;
-    const etagCache = yield* GitHubEtagCache;
     const ai = yield* AiService;
     const prContextService = yield* PrContextService;
     const repoCloneService = yield* RepoCloneService;
@@ -399,15 +397,6 @@ export const WalkthroughJobsLive = Layer.effect(
       SESSION_TOKEN_TTL_MS,
       (payload) => Effect.map(Ref.get(registry), (map) => map.has(payload.walkthroughId)),
     );
-
-    const provideInfra = <A, E>(
-      eff: Effect.Effect<A, E, DbService | GitHubEtagCache | SettingsService>,
-    ): Effect.Effect<A, E> =>
-      eff.pipe(
-        Effect.provideService(DbService, { db }),
-        Effect.provideService(GitHubEtagCache, etagCache),
-        Effect.provideService(SettingsService, settingsService),
-      );
 
     const provideDb = <A, E>(eff: Effect.Effect<A, E, DbService>): Effect.Effect<A, E> =>
       withDb(db, eff);
@@ -1221,10 +1210,9 @@ export const WalkthroughJobsLive = Layer.effect(
           return { walkthroughId: existing.walkthroughId, reused: true };
         }
 
-        const resolved = yield* provideInfra(
-          prContextService.resolveWithDiff(params.prId, params.userId),
-        );
-        const { pr, repo, token, meta, files, commits } = resolved;
+        const resolved = yield* prContextService.withDiff(params.prId);
+        const { pr, repo, client, meta, files, commits } = resolved;
+        const token = client.token;
         const pinnedHead = params.expectedHeadSha?.toLowerCase();
         if (pinnedHead !== undefined && meta.headSha.toLowerCase() !== pinnedHead) {
           return yield* Effect.fail(

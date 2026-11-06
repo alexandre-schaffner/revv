@@ -153,7 +153,7 @@ export const StackReviewServiceLive = Layer.effect(
 
     const start = (prId: string, userId: string, accountId: string, scope: StackReviewScope) =>
       Effect.gen(function* () {
-        const detail = yield* stacks.detail(prId, userId, accountId);
+        const detail = yield* stacks.detail(prId, accountId);
         if (!detail) return yield* Effect.fail(new NotFoundError({ resource: "stack", id: prId }));
 
         const plan = planStackReview(detail.layers, scope);

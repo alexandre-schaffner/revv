@@ -5,8 +5,8 @@
 import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
-import { githubDelete, githubPatch, githubPost } from "../github-rest";
-import type { RepoRef } from "./github";
+import type { RepoRef } from "./conversation";
+import type { GitHubClient, GitHubHttp } from "./transport";
 
 interface GitHubWriteRequest {
   readonly method: "POST" | "PATCH" | "DELETE";
@@ -76,37 +76,33 @@ function requestsFor(ref: RepoRef, number: number, w: ConversationWrite): GitHub
   }
 }
 
-function send(
-  request: GitHubWriteRequest,
-  token: string,
-  apiBase: string,
-): Effect.Effect<unknown, GitHubError> {
-  const body = request.body ?? {};
-  const sent =
-    request.method === "POST"
-      ? githubPost(request.path, token, body, apiBase)
-      : request.method === "PATCH"
-        ? githubPatch(request.path, token, body, apiBase)
-        : githubDelete(request.path, token, apiBase, request.body);
-  return request.okIfMissing
-    ? sent.pipe(
-        Effect.catchIf(
-          (e) => e instanceof GitHubNotFoundError,
-          () => Effect.void,
-        ),
-      )
-    : sent;
-}
-
 /** Apply a write on GitHub, one request at a time; the first failure stops it. */
 export function runWrite(
+  http: GitHubHttp,
+  client: GitHubClient,
   ref: RepoRef,
   number: number,
   w: ConversationWrite,
-  token: string,
-  apiBase: string,
 ): Effect.Effect<void, GitHubError> {
-  return Effect.forEach(requestsFor(ref, number, w), (request) => send(request, token, apiBase), {
-    discard: true,
-  });
+  return Effect.forEach(
+    requestsFor(ref, number, w),
+    (request) => {
+      const sent = http.json(client, {
+        method: request.method,
+        path: request.path,
+        ...(request.body !== undefined || request.method !== "DELETE"
+          ? { body: request.body ?? {} }
+          : {}),
+      });
+      return request.okIfMissing
+        ? sent.pipe(
+            Effect.catchIf(
+              (e) => e instanceof GitHubNotFoundError,
+              () => Effect.void,
+            ),
+          )
+        : sent;
+    },
+    { discard: true },
+  );
 }

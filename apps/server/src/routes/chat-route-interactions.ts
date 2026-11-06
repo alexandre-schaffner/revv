@@ -39,7 +39,7 @@ export const chatInteractionRoutes = new Elysia()
           const prCtx = yield* PrContextService;
           const chatSessions = yield* ChatSessionService;
           const settingsService = yield* SettingsService;
-          const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+          const { pr } = yield* prCtx.forPr(ctx.params.prId);
           const settings = yield* settingsService.getSettings();
           const agent = yield* settingsService.resolveAgent();
           const row = pr.headSha
@@ -94,7 +94,7 @@ export const chatInteractionRoutes = new Elysia()
       // eagerly acquire the worktree and harvest the agent's slash commands so
       // they're available on a brand-new chat, before the first message.
       const warm = ctx.query.warm === "1" || ctx.query.warm === "true";
-      return runRoute(resolveChatSessionContext(ctx.params.prId, ctx.session.user.id, warm));
+      return runRoute(resolveChatSessionContext(ctx.params.prId, warm));
     },
     {
       params: t.Object({ prId: t.String() }),

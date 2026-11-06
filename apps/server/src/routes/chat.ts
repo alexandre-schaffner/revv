@@ -187,7 +187,7 @@ export const chatRoute = new Elysia()
         // from a prior turn) and only resets when its base diverges from
         // `prHeadSha` (PR head moved on the remote).
         const { pr, headSha, agent, model, worktreePath, branchName, existingSessionRow } =
-          yield* resolveChatTurnContext(ctx.body.prId, ctx.session.user.id);
+          yield* resolveChatTurnContext(ctx.body.prId);
 
         // No row means this is a fresh start (e.g. the user just cleared
         // chat), so after acquiring the worktree we hard-reset it — stale
@@ -476,7 +476,7 @@ export const chatRoute = new Elysia()
           const prCtx = yield* PrContextService;
           const chatSessions = yield* ChatSessionService;
           const settingsService = yield* SettingsService;
-          const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+          const { pr } = yield* prCtx.forPr(ctx.params.prId);
           const settings = yield* settingsService.getSettings();
           const agent = yield* settingsService.resolveAgent();
 
@@ -511,7 +511,7 @@ export const chatRoute = new Elysia()
           const prCtx = yield* PrContextService;
           const chatSessions = yield* ChatSessionService;
           const settingsService = yield* SettingsService;
-          const { pr } = yield* prCtx.resolveBasic(ctx.params.prId, ctx.session.user.id);
+          const { pr } = yield* prCtx.forPr(ctx.params.prId);
           const agent = yield* settingsService.resolveAgent();
 
           // Clearing the conversation also discards the unpushed agent

@@ -13,7 +13,7 @@ import type {
   RawLayerCompareAnswer,
   RawPrStackAnswer,
   RawStackPullRequest,
-} from "./queries";
+} from "../github/stack-queries";
 
 export function stackStatus(pr: {
   readonly state: string;

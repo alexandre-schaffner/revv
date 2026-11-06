@@ -38,17 +38,13 @@ import { WalkthroughJobs } from "../../../services/WalkthroughJobs";
  * new-commit detection / superseding is the PollScheduler's job, not this
  * read path's. (Doctrine: SQLite is authoritative.)
  */
-export function getCurrentWalkthroughHandler(
-  prId: string,
-  userId: string,
-  requestedMode?: WalkthroughMode,
-) {
+export function getCurrentWalkthroughHandler(prId: string, requestedMode?: WalkthroughMode) {
   return Effect.gen(function* () {
     const prContext = yield* PrContextService;
     const walkthroughService = yield* WalkthroughService;
     const jobs = yield* WalkthroughJobs;
 
-    const { pr, repo } = yield* prContext.resolveBasic(prId, userId);
+    const { pr, repo } = yield* prContext.forPr(prId);
     const mode =
       requestedMode ??
       (yield* walkthroughService.getLatestMode(pr.id)) ??

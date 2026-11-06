@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect, Layer, Result } from "effect";
-import { createDb, type Db } from "../db/index";
-import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../domain/errors";
-import { STACK_UNSEEN, stackSeen } from "../domain/observed-pr";
-import { DbService } from "./Db";
-import { GitHubGateway, GitHubGatewayLive } from "./GitHub";
-import { GitHubEtagCacheLive } from "./GitHubEtagCache";
-import { SettingsServiceLive } from "./Settings";
+import { createDb, type Db } from "../../db/index";
+import { GitHubApiError, GitHubNotFoundError, GitHubRateLimitError } from "../../domain/errors";
+import { apiBaseForHost } from "../../domain/github-host";
+import { STACK_UNSEEN, stackSeen } from "../../domain/observed-pr";
+import { DbService } from "../Db";
+import { GitHubEtagCacheLive } from "../GitHubEtagCache";
+import { GitHubAccounts } from "./accounts";
+import { GitHubGateway, GitHubGatewayLive } from "./gateway";
+import { type GitHubClient, githubClient } from "./transport";
 
 const realFetch = globalThis.fetch;
 
@@ -19,13 +21,30 @@ interface FetchCall {
   readonly headers: Headers;
 }
 
+const unused = Effect.die("unused");
+
+const accountsStub = Layer.succeed(GitHubAccounts, {
+  clientFor: () => unused,
+  accountForUser: () => unused,
+  backgroundClient: () => unused,
+  observer: { unauthorized: () => Effect.void, rateLimited: () => Effect.void },
+} as unknown as GitHubAccounts["Service"]);
+
 function gatewayLayer(db: Db) {
   const dbLayer = Layer.succeed(DbService, { db });
-  const dependent = Layer.mergeAll(GitHubEtagCacheLive, SettingsServiceLive).pipe(
-    Layer.provide(dbLayer),
+  return GitHubGatewayLive.pipe(
+    Layer.provide(Layer.mergeAll(GitHubEtagCacheLive.pipe(Layer.provide(dbLayer)), accountsStub)),
   );
-  return Layer.mergeAll(GitHubGatewayLive, dbLayer, dependent);
 }
+
+const client = githubClient("github.com", "token", "acct-1");
+
+const testClient: GitHubClient = {
+  host: "github.test",
+  apiBase: "https://api.github.test",
+  token: "token",
+  accountId: "acct-1",
+};
 
 function responseJson(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), init);
@@ -139,9 +158,7 @@ describe("GitHubGateway rate-limit handling", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs
-          .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.result);
+        return yield* github.prs.listOpen(testClient, "octo/repo", "repo-1").pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -177,7 +194,7 @@ describe("GitHubGateway conditional pagination", () => {
     const files = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.files("octo/repo", 1, "token");
+        return yield* github.prs.files(client, "octo/repo", 1);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -203,8 +220,8 @@ describe("GitHubGateway conditional pagination", () => {
     const comments = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        yield* github.reviews.listComments("octo/repo", 1, "2026-01-01T00:00:00Z", "token");
-        return yield* github.reviews.listComments("octo/repo", 1, "2026-01-02T00:00:00Z", "token");
+        yield* github.reviews.listComments(client, "octo/repo", 1, "2026-01-01T00:00:00Z");
+        return yield* github.reviews.listComments(client, "octo/repo", 1, "2026-01-02T00:00:00Z");
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -236,8 +253,8 @@ describe("GitHubGateway conditional pagination", () => {
     const comments = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        yield* github.reviews.listComments("octo/repo", 1, "2026-01-01T00:00:00Z", "token");
-        return yield* github.reviews.listComments("octo/repo", 1, "2026-01-01T00:00:00Z", "token");
+        yield* github.reviews.listComments(client, "octo/repo", 1, "2026-01-01T00:00:00Z");
+        return yield* github.reviews.listComments(client, "octo/repo", 1, "2026-01-01T00:00:00Z");
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -251,26 +268,30 @@ describe("GitHubGateway conditional pagination", () => {
   });
 });
 
-// The API base URL is a per-repository property (`repositories.github_host`).
-// These pin that an explicitly-passed base wins over the settings-derived
-// fallback, which is what keeps a GitHub Enterprise repo's token from being
-// sent to api.github.com when both hosts are connected on one machine.
 describe("GitHubGateway per-host API base", () => {
-  it("honours an explicit apiBase on the PR detail fetch", async () => {
+  it("sends a client's requests to its host's API", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch(() => responseJson(rawPr(7), { headers: { ETag: '"pr-7"' } }));
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.get("octo/repo", 7, "token", "https://api.ghe.example.com");
+        yield* github.prs.get(
+          githubClient("ghe.example.com", "token", "acct-1"),
+          "octo/repo",
+          "repo-1",
+          7,
+        );
+        yield* github.prs.get(client, "octo/repo", "repo-1", 7);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
+    expect(calls[0]?.url).toBe(`${apiBaseForHost("ghe.example.com")}/repos/octo/repo/pulls/7`);
     expect(calls[0]?.url).toBe("https://api.ghe.example.com/repos/octo/repo/pulls/7");
+    expect(calls[1]?.url).toBe("https://api.github.com/repos/octo/repo/pulls/7");
   });
 
-  it("honours an explicit apiBase on the review-thread GraphQL call", async () => {
+  it("sends GraphQL to the client's host", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch(() =>
       responseJson({
@@ -288,10 +309,9 @@ describe("GitHubGateway per-host API base", () => {
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
         return yield* github.reviews.listThreads(
+          githubClient("ghe.example.com", "token", "acct-1"),
           "octo/repo",
           7,
-          "token",
-          "https://api.ghe.example.com",
         );
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
@@ -299,30 +319,21 @@ describe("GitHubGateway per-host API base", () => {
     expect(calls[0]?.url).toBe("https://api.ghe.example.com/graphql");
   });
 
-  it("falls back to the settings-derived base when none is passed", async () => {
-    const db = createDb(":memory:");
-    const calls = stubFetch(() => responseJson(rawPr(7), { headers: { ETag: '"pr-7"' } }));
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const github = yield* GitHubGateway;
-        return yield* github.prs.get("octo/repo", 7, "token");
-      }).pipe(Effect.provide(gatewayLayer(db))),
-    );
-
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/octo/repo/pulls/7");
-  });
-
-  it("separates ETag cache entries by API base and token", async () => {
+  it("separates ETag cache entries by API base and account", async () => {
     const db = createDb(":memory:");
     const calls = stubFetch(() => responseJson(rawPr(1), { headers: { ETag: '"pr-1"' } }));
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        yield* github.prs.get("octo/repo", 1, "token-a", "https://api.github.test");
-        yield* github.prs.get("octo/repo", 1, "token-a", "https://api.github.example");
-        yield* github.prs.get("octo/repo", 1, "token-b", "https://api.github.test");
+        yield* github.prs.get(testClient, "octo/repo", "repo-1", 1);
+        yield* github.prs.get(
+          { ...testClient, apiBase: "https://api.github.example" },
+          "octo/repo",
+          "repo-1",
+          1,
+        );
+        yield* github.prs.get({ ...testClient, accountId: "acct-2" }, "octo/repo", "repo-1", 1);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -330,6 +341,114 @@ describe("GitHubGateway per-host API base", () => {
     expect(calls[0]?.headers.get("If-None-Match")).toBeNull();
     expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
     expect(calls[2]?.headers.get("If-None-Match")).toBeNull();
+  });
+
+  it("keeps an account's cached ETag across a token refresh", async () => {
+    const db = createDb(":memory:");
+    const calls = stubFetch((_call, index) =>
+      index === 0
+        ? responseJson(rawPr(1), { headers: { ETag: '"pr-1"' } })
+        : new Response(null, { status: 304 }),
+    );
+
+    const pr = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        yield* github.prs.get(testClient, "octo/repo", "repo-1", 1);
+        return yield* github.prs.get(
+          { ...testClient, token: "refreshed-token" },
+          "octo/repo",
+          "repo-1",
+          1,
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.headers.get("If-None-Match")).toBe('"pr-1"');
+    expect(calls[1]?.headers.get("Authorization")).toBe("Bearer refreshed-token");
+    expect(pr.id).toBe("repo-1:1");
+  });
+});
+
+describe("prs.get", () => {
+  it("maps a PR whose author was deleted to GitHub's ghost user", async () => {
+    const db = createDb(":memory:");
+    stubFetch(() => responseJson({ ...rawPr(3), user: null, body: "" }));
+
+    const pr = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.get(client, "octo/repo", "repo-9", 3);
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(pr).toMatchObject({
+      id: "repo-9:3",
+      repositoryId: "repo-9",
+      externalId: 3,
+      authorLogin: "ghost",
+      authorAvatarUrl: null,
+      body: null,
+    });
+  });
+});
+
+describe("rejection bodies", () => {
+  it("keeps the body of a rejected PATCH in the error", async () => {
+    const db = createDb(":memory:");
+    const calls = stubFetch(
+      () => new Response('{"message":"Validation Failed: base"}', { status: 422 }),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.updateBase(client, "octo/repo", 4, "nope").pipe(Effect.result);
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(GitHubApiError);
+    if (Result.isFailure(result) && result.failure._tag === "GitHubApiError") {
+      expect(result.failure.status).toBe(422);
+      expect(String(result.failure.cause)).toContain("Validation Failed: base");
+    }
+  });
+});
+
+describe("searchClosedInWindow", () => {
+  it("pages with page=N until a short page", async () => {
+    const db = createDb(":memory:");
+    const item = (n: number) => ({
+      number: n,
+      closed_at: "2026-01-03T00:00:00Z",
+      pull_request: { merged_at: n % 2 === 0 ? "2026-01-03T00:00:00Z" : null },
+    });
+    const calls = stubFetch((_call, index) =>
+      responseJson({
+        items:
+          index === 0 ? Array.from({ length: 100 }, (_, i) => item(i + 1)) : [item(101), item(102)],
+      }),
+    );
+
+    const closed = await Effect.runPromise(
+      Effect.gen(function* () {
+        const github = yield* GitHubGateway;
+        return yield* github.prs.searchClosedInWindow(
+          client,
+          "octo/repo",
+          "2026-01-01T00:00:00Z",
+          "2026-01-04T00:00:00Z",
+        );
+      }).pipe(Effect.provide(gatewayLayer(db))),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(new URL(calls[0]?.url ?? "").searchParams.get("page")).toBe("1");
+    expect(new URL(calls[1]?.url ?? "").searchParams.get("page")).toBe("2");
+    expect(closed).toHaveLength(102);
+    expect(closed[1]).toEqual({ number: 2, closedAt: "2026-01-03T00:00:00Z", merged: true });
   });
 });
 
@@ -350,12 +469,7 @@ describe("GitHubGateway error classification", () => {
     const prs = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.listOpen(
-          "octo/repo",
-          "repo-1",
-          "token",
-          "https://api.github.test",
-        );
+        return yield* github.prs.listOpen(testClient, "octo/repo", "repo-1");
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -370,9 +484,7 @@ describe("GitHubGateway error classification", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs
-          .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.result);
+        return yield* github.prs.listOpen(testClient, "octo/repo", "repo-1").pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -392,7 +504,7 @@ describe("GitHubGateway error classification", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.reviews.listThreads("octo/repo", 1, "token").pipe(Effect.result);
+        return yield* github.reviews.listThreads(client, "octo/repo", 1).pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -410,9 +522,7 @@ describe("listPrs", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs
-          .listOpen("octo/repo", "repo-1", "token", "https://api.github.test")
-          .pipe(Effect.result);
+        return yield* github.prs.listOpen(testClient, "octo/repo", "repo-1").pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -512,10 +622,9 @@ describe("listPrs", () => {
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
         return yield* github.prs.listOpen(
+          testClient,
           "octo/repo",
           "repo-1",
-          "token",
-          "https://ghe.test",
           withStacks === undefined ? {} : { withStacks },
         );
       }).pipe(Effect.provide(gatewayLayer(db))),
@@ -647,13 +756,8 @@ describe("listPrsRest", () => {
     const prs = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        yield* github.prs.listOpenRest("octo/repo", "repo-1", "token", "https://api.github.test");
-        return yield* github.prs.listOpenRest(
-          "octo/repo",
-          "repo-1",
-          "token",
-          "https://api.github.test",
-        );
+        yield* github.prs.listOpenRest(testClient, "octo/repo", "repo-1");
+        return yield* github.prs.listOpenRest(testClient, "octo/repo", "repo-1");
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -670,9 +774,7 @@ describe("probeOpenPrLists", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs
-          .probeOpenLists(fullNames, "token", "https://api.github.test")
-          .pipe(Effect.result);
+        return yield* github.prs.probeOpenLists(testClient, fullNames).pipe(Effect.result);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -752,9 +854,7 @@ describe("listReviewThreads", () => {
       Effect.runPromise(
         Effect.gen(function* () {
           const github = yield* GitHubGateway;
-          return yield* github.reviews
-            .listThreads("octo/repo", 1, "token", "https://api.github.test")
-            .pipe(Effect.result);
+          return yield* github.reviews.listThreads(testClient, "octo/repo", 1).pipe(Effect.result);
         }).pipe(Effect.provide(gatewayLayer(db))),
       );
 
@@ -779,7 +879,7 @@ describe("getPrFiles", () => {
     const files = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.files("octo/repo", 1, "token", "https://api.github.test");
+        return yield* github.prs.files(testClient, "octo/repo", 1);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -818,12 +918,7 @@ describe("listPrDiffStats", () => {
     const stats = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.diffStats(
-          "octo/repo",
-          numbers,
-          "token",
-          "https://api.github.test",
-        );
+        return yield* github.prs.diffStats(testClient, "octo/repo", numbers);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -846,7 +941,7 @@ describe("listPrDiffStats", () => {
     const stats = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.diffStats("octo/repo", [1, 2], "token", "https://api.github.test");
+        return yield* github.prs.diffStats(testClient, "octo/repo", [1, 2]);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -862,7 +957,7 @@ describe("listPrDiffStats", () => {
     const stats = await Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.diffStats("octo/repo", [], "token", "https://api.github.test");
+        return yield* github.prs.diffStats(testClient, "octo/repo", []);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 
@@ -914,7 +1009,7 @@ describe("mergeEligibility", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const github = yield* GitHubGateway;
-        return yield* github.prs.mergeEligibility("octo/repo", 7, "token");
+        return yield* github.prs.mergeEligibility(client, "octo/repo", 7);
       }).pipe(Effect.provide(gatewayLayer(db))),
     );
 

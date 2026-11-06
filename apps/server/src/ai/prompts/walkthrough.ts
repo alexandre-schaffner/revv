@@ -10,7 +10,7 @@ import {
   type WalkthroughMode,
   type WalkthroughStackSnapshot,
 } from "@revv/shared";
-import type { PrFileMeta } from "../../services/GitHub";
+import type { PrFileMeta } from "../../services/github/pulls";
 import {
   type PromptDiffSource,
   REVERTED_FILE_STATUS,

@@ -1,12 +1,19 @@
 // What the add-repo pickers offer: the repositories the account can see on
 // GitHub, their open-PR counts, and where a managed clone lands.
 
-import type { Repository } from "@revv/shared";
 import { api } from "$lib/api/client";
 import { RequestState } from "$lib/stores/_types";
 import { preloadOwnerHues } from "$lib/utils/avatarPalette";
 
-let catalog = $state<RequestState<Repository[]>>(RequestState.idle());
+/** A repository the account can add. */
+export interface AvailableRepo {
+  readonly fullName: string;
+  readonly owner: string;
+  readonly name: string;
+  readonly avatarUrl: string | null;
+}
+
+let catalog = $state<RequestState<AvailableRepo[]>>(RequestState.idle());
 // Open-PR count per `owner/name`. Filled in after the list lands, so the
 // picker renders at once and the row hints appear as the counts arrive.
 let prCounts = $state<Record<string, number>>({});
@@ -18,7 +25,7 @@ let prCountsLoaded = $state(false);
 // the fetch failed; the add then omits `basePath` and the server picks.
 let defaultCloneBaseDir = $state<string | null>(null);
 
-export function getAvailableRepos(): Repository[] {
+export function getAvailableRepos(): AvailableRepo[] {
   return catalog.status === "ok" ? catalog.data : [];
 }
 
