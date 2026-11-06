@@ -1,4 +1,3 @@
-// ── What a walkthrough run is, decided once ──────────────────────────────────
 // Every input a run of a walkthrough row needs is resolved here, when the row
 // is created: the generation mode and its base, the stack and a restack carry,
 // the job-start judgment (risk tier, reading order, sizing), the agent launch
@@ -46,8 +45,6 @@ import type { PrContextWithDiff } from "../PrContext";
 import { changedFiles, fingerprintFiles, isComparable } from "../stacks/fingerprint";
 import { type RestackSource, WalkthroughService } from "../Walkthrough";
 import type { GeneratedBy, GenerationProviderConfig } from "../walkthrough-cache-format";
-
-// ── The job-start judgment, projected into launch inputs ───────────────────
 
 export interface JobStartPlan {
   readonly assignedRisk: RiskLevel | null;
@@ -97,7 +94,6 @@ export function buildJobStartPlan(input: {
   };
 }
 
-/** Resolve the optional cached judgment and project it into launch inputs. */
 function resolveJobStart(input: {
   readonly prId: string;
   readonly headSha: string;
@@ -226,7 +222,6 @@ export interface WalkthroughLaunchDecision {
   readonly owner: WalkthroughOwner;
 }
 
-/** The row this run continues, when there is one. */
 interface ExistingRow {
   readonly id: string;
   readonly parentWalkthroughId?: string | null | undefined;

@@ -1,8 +1,8 @@
 // Drives the real stdio bridge as a subprocess. The contract under test is
 // narrow but load-bearing: a JSON-RPC request carrying an `id` must ALWAYS get
 // exactly one response line back. Anything less hangs the calling agent
-// forever with no diagnostic — which is what a stale endpoint path did, since
-// an unmatched Elysia route 404s with an empty body.
+// forever with no diagnostic; an unmatched Elysia route, for one, 404s with an
+// empty body.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -25,7 +25,6 @@ afterEach(() => {
   }
 });
 
-/** A stand-in Revv endpoint that answers every request the same way. */
 function stubRevv(respond: (request: Request) => Response): string {
   const server = Bun.serve({ port: 0, fetch: respond });
   servers.push({ stop: () => server.stop(true) });

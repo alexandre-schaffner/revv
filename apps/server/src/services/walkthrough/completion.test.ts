@@ -117,7 +117,6 @@ describe("walkthrough completion check", () => {
     expect(orchestratorCompletionBlocker(db, ID)).toBeNull();
   });
 
-  // The orchestrator used to check only the phase pointer and inline comments.
   it("refuses a phase-D journal the gate would refuse", () => {
     const db = createDb(":memory:");
     seed(db, "D");

@@ -1,8 +1,3 @@
-/**
- * Pull requests on GitHub: lists, details, files, commits and the PR
- * mutations, over REST and GraphQL alike. Every read maps into one
- * {@link ObservedPr} shape through {@link toObservedPr}.
- */
 import type { MergeEligibility, MergeMethod, PrStackPlace, PullRequest } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
@@ -24,8 +19,6 @@ import {
   retryTransientBeforeFallback,
   withSchemaFallback,
 } from "./transport";
-
-// ── One PR shape ────────────────────────────────────────────────────────────
 
 /** What every PR read carries, whichever API it came from. */
 interface PrFields {
@@ -200,8 +193,6 @@ function stackPlaceOf(node: GqlPr): PrStackPlace | null {
     : null;
 }
 
-// ── Open list ───────────────────────────────────────────────────────────────
-
 /**
  * A few active repos exceed 1,000 open PRs. Bounded for rate-limit safety, but
  * well past the point where a team filter would need rows GitHub's first pages
@@ -294,8 +285,6 @@ interface SignatureNode {
     readonly nodes: ReadonlyArray<{ readonly updatedAt: string } | null>;
   };
 }
-
-// ── Details, files, commits ─────────────────────────────────────────────────
 
 const PR_DETAIL_FIELDS = `${PR_NODE_FIELDS}
   mergedAt state additions deletions changedFiles`;
@@ -804,7 +793,6 @@ export const pullsApi = (http: GitHubHttp) => {
     markReadyForReview: (client: GitHubClient, fullName: string, prNumber: number) =>
       mutatePr(client, fullName, prNumber, "markPullRequestReadyForReview"),
 
-    /** Close without merging. */
     close: (client: GitHubClient, fullName: string, prNumber: number) =>
       Effect.gen(function* () {
         const { owner, repo } = yield* splitFullName(fullName);

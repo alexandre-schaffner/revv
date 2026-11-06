@@ -1,5 +1,3 @@
-// ── BranchPushLock ─────────────────────────────────────────────────────────
-//
 // One push to a remote branch at a time. Every flow that pushes a PR's head
 // branch takes it before doing any work: the chat push, the base sync, and the
 // stack rebase (which a stack merge runs too). Each of them leases the tip it

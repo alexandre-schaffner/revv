@@ -1,11 +1,9 @@
-// Pushing to a GitHub remote, and reading what a refused push means.
-
 import { isValidSha } from "./ops";
 import { type GitAttempt, gitAttempt, runGit } from "./runner";
 
 const PUSH_TIMEOUT_MS = 3 * 60_000;
 
-/** The SHA of `refs/heads/<branch>` on the remote, or null when there is no such branch. Throws when the remote can't be read. */
+/** Null when the remote has no such branch; throws when the remote can't be read. */
 export async function lsRemoteHead(
   cwd: string,
   url: string,
@@ -49,7 +47,6 @@ export async function pushLeased(
   );
 }
 
-/** Create `refs/heads/<branch>` on the remote, overwriting it when `force`. */
 export async function pushNewBranch(
   cwd: string,
   url: string,

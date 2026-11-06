@@ -1,4 +1,3 @@
-/** File contents at a ref, from GitHub. */
 import { Effect } from "effect";
 import type { GitHubError } from "../../domain/errors";
 import { splitFullName } from "./graphql-batch";

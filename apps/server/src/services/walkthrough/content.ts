@@ -1,5 +1,3 @@
-// ─── Walkthrough content ─────────────────────────────────────────────────────
-//
 // What a walkthrough's content rows are, independent of who writes or reads
 // them: their deterministic identities, the row↔DTO codec, the rules a
 // finished review is judged by, and the writes more than one path performs.
@@ -48,8 +46,6 @@ type RatingRow = typeof walkthroughRatings.$inferSelect;
 type ThreadRow = typeof commentThreads.$inferSelect;
 type MessageRow = typeof threadMessages.$inferSelect;
 
-// ── Identities ───────────────────────────────────────────────────────────────
-//
 // Every content row's id derives from its position or its content, so a
 // replayed tool call lands on the row it wrote before (invariant 3), and an
 // imported or restack-carried review gets the ids a chat edit will compute.
@@ -103,8 +99,6 @@ export function anchorThreadId(
 export function issueCommentMessageId(threadId: string): string {
   return `${threadId}-msg-0`;
 }
-
-// ── Codec ────────────────────────────────────────────────────────────────────
 
 /** A JSON array column, keeping only the elements `guard` accepts. Corrupt JSON reads as empty. */
 export function parseJsonArray<T>(raw: string | null, guard: (value: unknown) => value is T): T[] {
@@ -229,7 +223,6 @@ function providerAgent(value: unknown): AcpAgentId {
   return isAcpAgentId(value) ? value : (LEGACY_PROVIDER_AGENT[value] ?? "claude-code");
 }
 
-/** The provider snapshot a row recorded, or null when it has none. */
 export function decodeProviderConfig(
   raw: string | null,
   modelUsed: string,
@@ -282,8 +275,6 @@ function isStoredPrCommit(v: unknown): v is StoredPrCommit {
 export function decodePrCommits(raw: string | null): StoredPrCommit[] {
   return parseJsonArray(raw, isStoredPrCommit);
 }
-
-// ── Reads ────────────────────────────────────────────────────────────────────
 
 /** A walkthrough's content rows, each in reading order. */
 export interface WalkthroughContentRows {
@@ -367,8 +358,6 @@ export function latestCompleteWalkthrough(db: Db, prId: string): WalkthroughRow 
       .get() ?? null
   );
 }
-
-// ── Rules ────────────────────────────────────────────────────────────────────
 
 /**
  * An axis counts as rated once it carries prose. Rows seeded by the retired
@@ -519,9 +508,7 @@ export function renderMissingInlineCommentError(
   return `Error: ${uncommented.length} line-anchored concern(s) have no inline comment. For each, you MUST also call add_issue_comment with the matching issue_id. Missing:\n${list}\n\nCall add_issue_comment for each, then retry complete_walkthrough.`;
 }
 
-// ── Shared writes ────────────────────────────────────────────────────────────
-//
-// Each runs inside the caller's transaction.
+// The writes below run inside the caller's transaction.
 
 /** A block named by its position, as the agent addresses it. */
 export interface BlockRef {

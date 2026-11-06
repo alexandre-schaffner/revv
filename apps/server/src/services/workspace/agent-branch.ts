@@ -103,7 +103,7 @@ export async function commitsStrandedBy(
   return commits.length > 0 ? { oldHeadSha, commits } : null;
 }
 
-/** The proposed commits in `range`, oldest first. */
+/** Oldest first. */
 export function proposedShas(branch: AgentBranch, baseSha: string): Promise<string[]> {
   return proposedCommitShas(branch.worktreePath, range(branch, baseSha));
 }
@@ -142,7 +142,6 @@ export async function commitFiles(worktreePath: string, sha: string): Promise<Co
   );
 }
 
-/** Put the worktree back on the agent branch, best-effort. */
 export async function restoreAgentBranch(branch: AgentBranch): Promise<void> {
   if (!(await checkout(branch.worktreePath, branch.branchName)).ok) {
     logError("pr-workspace", `failed to restore the worktree to ${branch.branchName}`);
@@ -177,7 +176,6 @@ export async function healAbandonedMerge(branch: AgentBranch): Promise<boolean> 
   return true;
 }
 
-/** Move the agent branch to `sha` and check it out. */
 export async function moveAgentBranch(branch: AgentBranch, sha: string): Promise<boolean> {
   const moved = await forceBranch(branch.worktreePath, branch.branchName, sha);
   return moved.ok && (await checkout(branch.worktreePath, branch.branchName)).ok;

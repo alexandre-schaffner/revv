@@ -1,5 +1,3 @@
-// Parsers for git's machine-readable output, so callers get entries, not text.
-
 export interface NameStatusEntry {
   readonly status: string;
   readonly filename: string;

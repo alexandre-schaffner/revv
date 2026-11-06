@@ -1,4 +1,3 @@
-/** Repositories, orgs, teams and repository statistics on GitHub. */
 import type { Team } from "@revv/shared";
 import { Effect, Result } from "effect";
 import type { GitHubError } from "../../domain/errors";

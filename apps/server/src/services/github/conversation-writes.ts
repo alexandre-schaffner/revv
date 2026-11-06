@@ -1,7 +1,3 @@
-// The REST writes the Conversation tab makes: reviewers, assignees, labels,
-// conversation comments, the PR description, and Actions re-runs. Each write
-// is plain data (`requestsFor`) run by one executor (`runWrite`).
-
 import type { ConversationWrite } from "@revv/shared";
 import { Effect } from "effect";
 import { type GitHubError, GitHubNotFoundError } from "../../domain/errors";
@@ -21,7 +17,6 @@ function bareTeamSlugs(teams: readonly string[]): string[] {
   return teams.map((t) => t.split("/").pop() ?? t);
 }
 
-/** The REST requests a write takes, in order. */
 function requestsFor(ref: RepoRef, number: number, w: ConversationWrite): GitHubWriteRequest[] {
   const repo = `/repos/${ref.owner}/${ref.repo}`;
   const pr = `${repo}/pulls/${number}`;

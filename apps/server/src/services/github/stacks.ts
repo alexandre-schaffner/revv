@@ -1,4 +1,3 @@
-/** GitHub's native PR stacks, read over GraphQL. */
 import { Effect } from "effect";
 import type { GitHubError } from "../../domain/errors";
 import { logError } from "../../logger";

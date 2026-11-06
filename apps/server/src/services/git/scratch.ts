@@ -41,7 +41,6 @@ export async function clearScratch(clonePath: string, scratchPath: string): Prom
   }
 }
 
-/** A fresh scratch worktree detached at `sha`, clearing whatever a dead run left. */
 export async function prepareScratch(
   clonePath: string,
   scratchPath: string,
@@ -59,7 +58,7 @@ export async function prepareScratch(
     : { kind: "failed", message: `Couldn't prepare a worktree: ${firstLine(added.stderr)}` };
 }
 
-/** Fetch `refspecs`, `deepen`ing the shallow history when asked. Null on success, else git's reason. */
+/** Null on success, else git's reason. */
 export async function fetchForScratch(
   clonePath: string,
   url: string,

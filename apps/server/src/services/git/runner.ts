@@ -1,5 +1,3 @@
-// ── git runner ─────────────────────────────────────────────────────────────
-//
 // The one place Revv spawns git. Every command gets the same policy:
 //
 //   - `GIT_ENV`: nothing may prompt. The production LaunchAgent has no TTY, so
@@ -221,10 +219,6 @@ export async function gitSucceeds(
   return (await gitAttempt(cwd, args, timeoutMs)).ok;
 }
 
-/**
- * Boot-time reaper for git processes a previous server lifetime orphaned
- * inside the clone directory. Best-effort: a missing `pkill` is ignored.
- */
 export async function killStaleCloneProcesses(): Promise<void> {
   try {
     const escaped = serverEnv.cloneDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

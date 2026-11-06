@@ -52,7 +52,6 @@ let revv: string;
 let scratch: string;
 let repo: SyncRepo;
 
-/** Move main on origin; `conflicting` rewrites the line `feat` also rewrote. */
 function moveMain(opts: { conflicting: boolean; workflow?: boolean }) {
   git(dev, ["checkout", "-q", "main"]);
   if (opts.conflicting) commit(dev, "shared.txt", "main\n", "main edits shared");
@@ -71,7 +70,6 @@ function opFor(strategy: BaseConflictStrategy, tips: Tips): OperationInput {
   return { strategy, scratchPath: scratch, tips, baseBranch: "main", sourceBranch: "feat" };
 }
 
-/** What the agent does: write the combined file, stage it, continue. */
 function resolveAsAgent(strategy: BaseConflictStrategy, body = "main\nfeat\n") {
   writeFileSync(join(scratch, "shared.txt"), body);
   git(scratch, ["add", "shared.txt"]);

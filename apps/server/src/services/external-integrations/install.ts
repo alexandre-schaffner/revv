@@ -1,5 +1,3 @@
-// ── External integration install mechanics ──────────────────────────────────
-//
 // Filesystem operations that place Revv's stdio MCP bridge and credential
 // where each coding agent can pick them up:
 //
@@ -12,8 +10,8 @@
 //
 // Every install is convergent (reconnect yields the same end state with a
 // rotated credential), isolated by a digest of the Revv account id, and
-// refuses to replace files it does not own. Paths are derived from an explicit
-// home directory so tests run inside temp dirs.
+// refuses to replace files it does not own. Paths derive from an explicit home
+// directory (Codex's also from `CODEX_HOME`) so tests run inside temp dirs.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -46,9 +44,6 @@ export function externalIntegrationError(
   return new ExternalIntegrationError({ message, code, ...(cause === undefined ? {} : { cause }) });
 }
 
-// ── Asset locations ─────────────────────────────────────────────────────────
-
-/** Locate the repository's `integrations/` directory (dev and packaged). */
 export function findIntegrationsDirectory(): string {
   const candidates = [
     serverEnv.integrationsDir,
@@ -77,8 +72,6 @@ function bridgeSourceFile(integrationsDirectory: string): string {
 function agentGuideSourceFile(integrationsDirectory: string): string {
   return join(integrationsDirectory, "external-agent-guides", "address-feedback.md");
 }
-
-// ── Shared install primitives ───────────────────────────────────────────────
 
 export interface BridgeInstallInput {
   readonly runtimeExecutable: string;
@@ -111,7 +104,6 @@ function assertRevvManaged(directory: string): void {
   }
 }
 
-/** Atomic, convergent directory replacement used by every provider install. */
 function writeManagedDirectory(targetDirectory: string, populate: (staged: string) => void): void {
   assertRevvManaged(targetDirectory);
   mkdirSync(dirname(targetDirectory), { recursive: true, mode: 0o700 });
@@ -144,7 +136,6 @@ function removeManagedDirectory(directory: string): void {
   rmSync(directory, { recursive: true });
 }
 
-/** Copy the canonical bridge into a staged install directory. */
 // The compiled desktop server embeds `integrations/` in its virtual
 // filesystem, which supports reads but not `copyFile`/`cp`. Copy by content.
 function copyAsset(source: string, target: string): void {
@@ -168,7 +159,6 @@ function stageBridge(staged: string, integrationsDirectory: string): void {
   chmodSync(target, 0o600);
 }
 
-/** Absolute path of the bridge a provider's client config should launch. */
 function bridgeFile(installDirectory: string): string {
   return join(installDirectory, "server", "revv-mcp.ts");
 }
@@ -205,7 +195,6 @@ function readManagedGuideBody(integrationsDirectory: string): string {
   return readFileSync(file, "utf8").trim();
 }
 
-/** Front-matter + body, in the shape the given agent's prompt loader expects. */
 function renderGuide(integrationsDirectory: string, frontMatter: readonly string[]): string {
   const body = readManagedGuideBody(integrationsDirectory);
   const header = frontMatter.length > 0 ? `---\n${frontMatter.join("\n")}\n---\n\n` : "";
@@ -234,8 +223,6 @@ function removeManagedGuide(file: string): void {
   }
   rmSync(file);
 }
-
-// ── Claude Code (user-scoped plugin directory) ──────────────────────────────
 
 interface ClaudeCodePaths {
   /** Claude Code loads `~/.claude/skills/<dir>` holding a plugin manifest as
@@ -293,8 +280,6 @@ function installClaudeCode(
     });
   });
 }
-
-// ── Codex (config.toml managed block + custom prompt) ───────────────────────
 
 export interface CodexPaths {
   readonly installDir: string;
@@ -416,8 +401,6 @@ function codexInstalled(paths: CodexPaths, serverName: string): boolean {
   return existing?.includes(codexBlockBegin(serverName)) ?? false;
 }
 
-// ── Shared JSON config merge (OpenCode, Cursor) ─────────────────────────────
-
 function isRevvManagedEntry(entry: unknown): boolean {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
   const record = entry as Record<string, unknown>;
@@ -467,7 +450,6 @@ function nestedRecord(parent: Record<string, unknown>, key: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-/** Upsert one account-scoped Revv server, refusing a foreign row at that key. */
 function upsertJsonMcpEntry(
   file: string,
   section: string,
@@ -517,8 +499,6 @@ function jsonMcpEntryInstalled(file: string, section: string, serverName: string
     return false;
   }
 }
-
-// ── OpenCode (opencode.json mcp entry + global command) ─────────────────────
 
 // Written in opencode 1's layout — the server directly under `mcp` with
 // `enabled`, the command in `command/` — which every opencode reads: opencode 2
@@ -574,8 +554,6 @@ function uninstallOpenCode(paths: OpenCodePaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
-// ── Cursor (~/.cursor/mcp.json) ─────────────────────────────────────────────
-
 export interface CursorPaths {
   readonly installDir: string;
   readonly configFile: string;
@@ -605,8 +583,6 @@ function uninstallCursor(paths: CursorPaths, serverName: string): void {
   removeManagedDirectory(paths.installDir);
 }
 
-// ── Provider registry ───────────────────────────────────────────────────────
-
 export interface ExternalIntegrationInstaller {
   /** Account-scoped name shown in the agent's MCP configuration. */
   readonly clientName: string;
@@ -617,10 +593,6 @@ export interface ExternalIntegrationInstaller {
   readonly installed: () => boolean;
 }
 
-/**
- * Bind a provider's install mechanics to a home directory. Tests pass a temp
- * directory; the service uses the real one.
- */
 export function externalIntegrationInstaller(
   provider: ExternalAgentProvider,
   accountId: string,

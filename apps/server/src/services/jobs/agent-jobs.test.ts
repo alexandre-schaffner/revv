@@ -91,7 +91,6 @@ const launch = (
   body: (run: AgentRun<{ note: string }>) => Effect.Effect<RunEnd<string>, unknown>,
 ) => harness.jobs.launch({ id, context: () => ({ note: id }), body });
 
-/** Waits until the run with `id` has left the registry. */
 const ended = (harness: Harness, id: string) =>
   Effect.gen(function* () {
     while ((yield* harness.jobs.running(id)) !== null) yield* Effect.sleep(1);

@@ -67,7 +67,7 @@ afterEach(async () => {
 // The agent branch's baseline: the tightest of the PR heads Revv has seen.
 // A session's `prHeadSha` is frozen when the session starts, but the worktree
 // is reset onto the PR's current head when the agent branch isn't built on it;
-// measuring from the stale head reported the PR's whole rebased history as
+// measuring from the stale head would report the PR's whole rebased history as
 // "proposed commits" in a brand-new chat.
 describe("resolveBaseSha", () => {
   it("prefers the PR's current head once the worktree was reset onto it", async () => {
@@ -149,8 +149,6 @@ describe("dropProposedCommits", () => {
     expect(git(worktree, ["symbolic-ref", "--short", "HEAD"])).toBe("revv/pr-1");
   });
 
-  // The single-commit discard used to rebase `… sha HEAD`: with HEAD detached
-  // by a killed push, it rewrote whatever HEAD was and left the branch alone.
   it("rewrites the branch even when HEAD is detached somewhere else", async () => {
     git(worktree, ["checkout", "-q", "--detach", oldHead]);
     const result = await dropProposedCommits(branch, prHead, new Set([one]));

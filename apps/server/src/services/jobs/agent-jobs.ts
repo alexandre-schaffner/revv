@@ -1,5 +1,3 @@
-// ── Durable agent jobs ───────────────────────────────────────────────────────
-//
 // The one kernel every durable agent pipeline (walkthrough, project recap,
 // stack brief) runs on. The journal row is the job (invariant 1); what lives
 // here is the reconstructible part: which runs are live, the concurrency
@@ -47,7 +45,6 @@ export interface AgentRun<C> {
   readonly context: C;
 }
 
-/** What a run's body reports when it returns. */
 export type RunEnd<F> =
   /** The agent's work is over: complete if the journal passes the completion check, else `failure`. */
   | { readonly kind: "journal"; readonly failure: F }
@@ -68,7 +65,7 @@ export interface AgentJobSpec<C, F> {
   readonly journal: {
     /** Ids of rows still `generating`. */
     readonly generating: Effect.Effect<ReadonlyArray<string>, DbError>;
-    /** Count one more resume attempt and return the new count. */
+    /** Returns the new count. */
     readonly bumpResumeAttempts: (id: string) => Effect.Effect<number, DbError>;
     /** Why the row isn't finished yet, or null when its journal holds a finished result. */
     readonly completionBlocker: (id: string) => Effect.Effect<string | null, DbError>;
@@ -112,7 +109,6 @@ export interface AgentJobs<C, F> {
   readonly stop: (id: string, reason: StopReason) => Effect.Effect<void>;
   /** Run `id` again if its run died, under the resume budget. A no-op while it is live. */
   readonly resume: (id: string) => Effect.Effect<void>;
-  /** {@link resume} every row still `generating`. */
   readonly resumePending: Effect.Effect<void>;
   readonly resolveToken: (token: string) => Effect.Effect<AgentRun<C> | null>;
 }

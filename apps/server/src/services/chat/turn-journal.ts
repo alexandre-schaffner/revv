@@ -24,7 +24,6 @@ interface JournalParams {
   readonly chatSessionId: string;
   readonly turnId: string;
   readonly prId: string;
-  /** Called for every frame: the turn is making progress. */
   readonly onProgress: () => void;
   /** Stop the agent: the client went away, or the journal failed. */
   readonly stopAgent: () => void;
@@ -183,7 +182,6 @@ export function journalTurn(params: JournalParams): ReadableStream<ChatStreamFra
       if (firstTokenAt !== null) span.setAttribute("ttft_ms", firstTokenAt - startedAt);
       const failure = Exit.isFailure(exit) ? exit.cause : null;
       if (failure !== null) {
-        // Stop the agent rather than stream what won't persist.
         params.stopAgent();
         await reader.cancel().catch(() => {});
       }
@@ -194,9 +192,7 @@ export function journalTurn(params: JournalParams): ReadableStream<ChatStreamFra
         if (failure !== null) controller.error(Cause.squash(failure));
         else if (agentError !== null) controller.error(agentError);
         else controller.close();
-      } catch {
-        /* the client left meanwhile */
-      }
+      } catch {}
     },
     cancel() {
       // Frames already on their way are still journaled.

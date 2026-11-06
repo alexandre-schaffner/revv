@@ -1,5 +1,3 @@
-// ── Workspace claims ───────────────────────────────────────────────────────
-//
 // One thing at a time works in a PR's agent worktree: a chat turn, a push, or
 // an edit of the agent's commits. A claim that isn't touched for `idleMs`
 // expires, so a holder that never releases (a stream whose cleanup never ran,

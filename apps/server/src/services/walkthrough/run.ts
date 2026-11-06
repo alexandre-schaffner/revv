@@ -1,4 +1,3 @@
-// ── One walkthrough run ──────────────────────────────────────────────────────
 // What a run does between launch and its verdict: check out the worktree at
 // the head (alongside the first pass), build the prompt's file list, record
 // the leads, then run agent turns until the journal says the review is

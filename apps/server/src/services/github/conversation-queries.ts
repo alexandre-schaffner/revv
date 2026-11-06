@@ -1,6 +1,6 @@
 // GraphQL documents for the Conversation tab. Two shapes of each: the modern
 // one, and a legacy one for GitHub Enterprise releases that predate a field
-// (see MODERN_TOKENS); `github.ts` picks between them.
+// (see MODERN_TOKENS); `conversation.ts` picks between them.
 
 /**
  * Fields a GitHub Enterprise release may predate. GraphQL rejects the whole

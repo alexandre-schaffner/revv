@@ -1,14 +1,6 @@
 // Shipping the agent's commits: turning the proposed commits on the agent
 // branch into commits on the PR's source branch, or on a new branch.
 //
-// The merge push detaches the worktree onto the fetched source-branch tip,
-// merges the agent branch into it (a fast-forward when it can), pushes
-// `HEAD:refs/heads/<source>` leased on the tip `ls-remote` read, then moves
-// the agent branch to the pushed tip. A conflict either aborts back to the
-// agent branch (`mergeAndPush`) or is handed to a one-shot agent run
-// (`resolveAndPush`). A cherry-pick push replays chosen commits onto the
-// source tip instead, then rebuilds the agent branch on the pushed tip.
-//
 // Every flow holds the PR's workspace claim and the source branch's push lock
 // for its whole run; both are taken before any git work, so an overlapping
 // flow is refused up front.
@@ -142,7 +134,6 @@ const requireOk = (attempt: { readonly ok: boolean; readonly stderr: string }, w
     : Effect.fail(new GitOperationError({ message: `${what}: ${attempt.stderr || "git failed"}` }));
 
 export function makeAgentPush(deps: PushDeps) {
-  /** Hold the workspace and the target branch, then check there's something clean to push. */
   const begin = (prId: string, target?: string) =>
     Effect.gen(function* () {
       const claim = yield* deps.claim(prId, "push");
@@ -199,7 +190,6 @@ export function makeAgentPush(deps: PushDeps) {
 
   type Begun = Effect.Success<ReturnType<typeof begin>>;
 
-  /** Read the source tip (the lease) and fetch it. */
   const fetchSource = (run: Begun) =>
     Effect.gen(function* () {
       const { branch, ctx, url } = run;
@@ -212,7 +202,6 @@ export function makeAgentPush(deps: PushDeps) {
       return leaseSha;
     });
 
-  /** Record why a push failed, put the worktree back on the agent branch, and say what it means. */
   const pushFailed = (run: Begun, stderr: string) =>
     Effect.gen(function* () {
       logError(
@@ -296,7 +285,6 @@ export function makeAgentPush(deps: PushDeps) {
       };
     });
 
-  /** Detach onto the fetched source tip and merge the agent branch into it. */
   const mergeOntoSource = (run: Begun, abortOnConflict: boolean) =>
     Effect.gen(function* () {
       const { branch, ctx } = run;

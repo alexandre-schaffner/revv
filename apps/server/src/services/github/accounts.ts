@@ -39,7 +39,6 @@ const users = usersApi(makeHttp(null, null));
  */
 export type GitHubBudget = "core" | "graphql" | "search";
 
-/** A budget, or `"all"` for a limit that counts every request. */
 type PauseScope = GitHubBudget | "all";
 
 function pauseScopeOf(err: GitHubRateLimitError): PauseScope {
@@ -49,7 +48,6 @@ function pauseScopeOf(err: GitHubRateLimitError): PauseScope {
   return "core";
 }
 
-/** A user's account on one GitHub host, with the client to call GitHub as it. */
 export interface AccountIdentity {
   readonly accountId: string;
   readonly userId: string;
@@ -58,7 +56,6 @@ export interface AccountIdentity {
   readonly client: GitHubClient;
 }
 
-/** Who an account is on GitHub, without a token. */
 export interface AccountProfile {
   readonly accountId: string;
   readonly userId: string;
@@ -212,7 +209,6 @@ export const GitHubAccountsLive = Layer.effect(
     const realtime = yield* Realtime;
     const settings = yield* SettingsService;
 
-    // ── Tokens ──────────────────────────────────────────────────────────────
     // A copy of the secure store, which costs a keychain read per call. This
     // service makes every write, so the copy is updated in the same step.
     const tokenCache = new Map<string, TokenPair | null>();
@@ -255,7 +251,6 @@ export const GitHubAccountsLive = Layer.effect(
 
     const authFailure = (message: string) => new GitHubAuthError({ message });
 
-    // ── Re-auth flag ────────────────────────────────────────────────────────
     const reauthCache = new Map<string, boolean>();
 
     const reauthRequired = (accountId: string): Effect.Effect<boolean> =>
@@ -294,7 +289,6 @@ export const GitHubAccountsLive = Layer.effect(
         });
       }).pipe(Effect.catch((e) => Effect.sync(() => logError("GitHubAccounts", e.message))));
 
-    /** Clear the flag (when set) and tell the account's clients. */
     const clearReauthRequired = (accountId: string): Effect.Effect<void, DbError> =>
       Effect.gen(function* () {
         const row = yield* readRow(accountId);
@@ -315,7 +309,6 @@ export const GitHubAccountsLive = Layer.effect(
         });
       });
 
-    // ── Refresh ─────────────────────────────────────────────────────────────
     // One grant per account at a time: concurrent grants would each invalidate
     // the previous one's rotated refresh token.
     const refreshOnce = keyedSingleFlight<string, string, GitHubAuthError>();
@@ -433,7 +426,6 @@ export const GitHubAccountsLive = Layer.effect(
         return yield* Effect.fail(authFailure("No access token found"));
       });
 
-    // ── Failures reported by the transport ─────────────────────────────────
     const pauses = new Map<string, Map<PauseScope, number>>();
 
     const isPausedFor = (accountId: string, scope: PauseScope): boolean => {
@@ -474,7 +466,6 @@ export const GitHubAccountsLive = Layer.effect(
         );
       });
 
-    /** Whether the stored token answers `GET /user`. */
     const tokenWorks = (accountId: string): Effect.Effect<boolean> =>
       Effect.gen(function* () {
         const row = yield* readRow(accountId);
@@ -536,7 +527,6 @@ export const GitHubAccountsLive = Layer.effect(
         return yield* clientFor(accountId).pipe(Effect.orElseSucceed(() => null));
       });
 
-    // ── Identity ────────────────────────────────────────────────────────────
     const viewerLogin = (accountId: string): Effect.Effect<string | null, DbError> =>
       dbTry("read viewer login", () =>
         db
@@ -613,7 +603,6 @@ export const GitHubAccountsLive = Layer.effect(
         });
       });
 
-    // ── Sign-in and sessions ────────────────────────────────────────────────
     const mintSession = (userId: string): Effect.Effect<string, DbError> =>
       dbTry("create session", () => {
         const token = newSessionToken();
