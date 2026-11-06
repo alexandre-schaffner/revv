@@ -4,6 +4,7 @@ import CloudArrowDown from "phosphor-svelte/lib/CloudArrowDown";
 import FolderOpen from "phosphor-svelte/lib/FolderOpen";
 import * as Dialog from "$lib/components/ui/dialog/index.js";
 import { gsapFade, gsapFadeY, gsapPress, tokens } from "$lib/motion";
+import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 import { fetchDefaultCloneBaseDir } from "$lib/stores/prs.svelte";
 import AddRepoForm from "./AddRepoForm.svelte";
 import LinkRepoForm from "./LinkRepoForm.svelte";
@@ -17,7 +18,6 @@ let {
   onOpenChange: (open: boolean) => void;
 } = $props();
 
-const LAST_CLONE_BASE_KEY = "revv:lastCloneBaseDir";
 type View = "choose" | "clone" | "link";
 
 let view = $state<View>("choose");
@@ -34,17 +34,14 @@ $effect.pre(() => {
   if (!open) return;
   view = "choose";
   void fetchDefaultCloneBaseDir();
-  const saved =
-    typeof localStorage === "undefined" ? null : localStorage.getItem(LAST_CLONE_BASE_KEY);
-  cloneBasePath = saved?.trim() ? saved : "";
+  cloneBasePath = readStored(STORAGE_KEYS.lastCloneBase, textCodec, null) ?? "";
 });
 
 function rememberCloneBase(path: string): void {
   cloneBasePath = path;
   // Persist only an explicit custom base; an empty value means "default", which
   // we never want to pin (it would survive a later server-default change).
-  if (path.trim()) localStorage.setItem(LAST_CLONE_BASE_KEY, path);
-  else localStorage.removeItem(LAST_CLONE_BASE_KEY);
+  writeStored(STORAGE_KEYS.lastCloneBase, textCodec, path);
 }
 </script>
 

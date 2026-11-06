@@ -30,6 +30,7 @@ import { UPDATE_STABLE_COOLDOWN_MS } from "@revv/shared";
 import Download from "phosphor-svelte/lib/Download";
 import { toast } from "svelte-sonner";
 import { getIsMaintainer } from "$lib/stores/auth.svelte";
+import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 import { getSettings } from "$lib/stores/settings.svelte";
 import { checkForUpdate, type UpdateInfo } from "./client";
 
@@ -38,13 +39,10 @@ const HOURLY_MS = 60 * 60 * 1000;
 /** Shared Sonner slot for every updater toast — see the module header. */
 const TOAST_ID = "revv-updater";
 
-/** localStorage key holding the last version the user dismissed. */
-const DISMISSED_KEY = "revv:updater:dismissed-version";
-
 let started = false;
 let intervalId: ReturnType<typeof setInterval> | null = null;
 /**
- * In-memory mirror of {@link DISMISSED_KEY}, so a dismissal still holds for
+ * In-memory mirror of the stored dismissal, so a dismissal still holds for
  * the rest of the session even if the write didn't land.
  */
 let dismissedVersion: string | null = null;
@@ -168,17 +166,14 @@ function shouldNotify(update: UpdateInfo, manual: boolean): boolean {
 /** True when the user has dismissed this exact version, now or in a past run. */
 function isDismissed(version: string): boolean {
   if (version === dismissedVersion) return true;
-  if (typeof localStorage === "undefined") return false;
-  return localStorage.getItem(DISMISSED_KEY) === version;
+  return readStored(STORAGE_KEYS.dismissedUpdate, textCodec, null) === version;
 }
 
 /** Records a dismissal and takes the card off the screen's books. */
 function rememberDismissal(version: string): void {
   dismissedVersion = version;
   notifiedVersion = null;
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(DISMISSED_KEY, version);
-  }
+  writeStored(STORAGE_KEYS.dismissedUpdate, textCodec, version);
 }
 
 function showUpdateToast(update: UpdateInfo): void {

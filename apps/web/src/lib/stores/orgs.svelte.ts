@@ -1,22 +1,19 @@
 import type { Org } from "@revv/shared";
 import { api } from "$lib/api/client";
+import { readStored, STORAGE_KEYS, textCodec, writeStored } from "$lib/stores/persisted.svelte";
 
 let currentUserId = $state<string | null>(null);
 
-function storageKey(): string {
-  return currentUserId ? `rev_active_org_${currentUserId}` : "rev_active_org";
-}
+const readActiveOrg = (): string | null =>
+  readStored(STORAGE_KEYS.activeOrg(currentUserId), textCodec, null);
 
 let availableOrgs = $state<Org[]>([]);
-let activeOrg = $state<string | null>(
-  typeof localStorage !== "undefined" ? localStorage.getItem(storageKey()) : null,
-);
+let activeOrg = $state<string | null>(readActiveOrg());
 
 export function initForUser(userId: string): void {
   if (userId !== currentUserId) orgsLoadedAt = 0;
   currentUserId = userId;
-  const stored = typeof localStorage !== "undefined" ? localStorage.getItem(storageKey()) : null;
-  activeOrg = stored;
+  activeOrg = readActiveOrg();
 }
 
 const ORGS_FRESH_FOR_MS = 5 * 60 * 1000;
@@ -50,10 +47,7 @@ async function readOrgs(): Promise<void> {
 
 function setActiveOrg(login: string | null): void {
   activeOrg = login;
-  if (typeof localStorage !== "undefined") {
-    if (login) localStorage.setItem(storageKey(), login);
-    else localStorage.removeItem(storageKey());
-  }
+  writeStored(STORAGE_KEYS.activeOrg(currentUserId), textCodec, login);
 }
 
 export function reset(): void {
@@ -61,5 +55,5 @@ export function reset(): void {
   availableOrgs = [];
   activeOrg = null;
   currentUserId = null;
-  // Intentionally NOT removing localStorage key — per-user org selection persists across account switches
+  // The stored selection stays: it's per user and survives account switches.
 }

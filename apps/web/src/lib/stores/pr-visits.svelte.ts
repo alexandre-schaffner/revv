@@ -1,38 +1,17 @@
-const STORAGE_KEY = "rev_pr_visits";
+import { jsonCodec, persisted, STORAGE_KEYS } from "$lib/stores/persisted.svelte";
 
 type Visits = Record<string, string>;
 
-function loadVisits(): Visits {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Visits;
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-let visits = $state<Visits>(loadVisits());
-
-function persist(): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(visits));
-  } catch {
-    // Quota or serialization failure — visits become session-only.
-  }
-}
+const visits = persisted<Visits>(
+  STORAGE_KEYS.prVisits,
+  jsonCodec((v) => (v && typeof v === "object" && !Array.isArray(v) ? (v as Visits) : undefined)),
+  {},
+);
 
 export function markVisited(prId: string, headSha: string | null): void {
   const next = headSha ?? "";
-  if (visits[prId] === next) return;
-  visits = { ...visits, [prId]: next };
-  persist();
+  if (visits.current[prId] === next) return;
+  visits.current = { ...visits.current, [prId]: next };
 }
 
 /**
@@ -45,7 +24,7 @@ export function markVisited(prId: string, headSha: string | null): void {
 export type VisitState = "unvisited" | "visited" | "moved";
 
 export function getVisitState(prId: string, headSha: string | null): VisitState {
-  const seen = visits[prId];
+  const seen = visits.current[prId];
   if (seen === undefined) return "unvisited";
   // An empty recorded SHA is a visit from before the head was known; there's
   // nothing to compare, so don't claim it moved.

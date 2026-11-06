@@ -3,6 +3,7 @@ import Archive from "phosphor-svelte/lib/Archive";
 import CaretDown from "phosphor-svelte/lib/CaretDown";
 import CaretRight from "phosphor-svelte/lib/CaretRight";
 import { gsapFadeY, gsapSlide, tokens } from "$lib/motion";
+import { flagCodec, readStored, STORAGE_KEYS, writeStored } from "$lib/stores/persisted.svelte";
 import {
   fetchMoreArchived,
   getArchivedByRepo,
@@ -19,7 +20,6 @@ interface Props {
 let { repoId }: Props = $props();
 
 const STAGGER_CAP = 20;
-const STORAGE_PREFIX = "revv:archive-open:";
 
 let expanded = $state(false);
 
@@ -27,17 +27,12 @@ let expanded = $state(false);
 // and "I left it open last time" is the user's intent. Localstorage
 // rather than the store because it's chrome state, not data state.
 $effect(() => {
-  if (typeof localStorage === "undefined") return;
-  const stored = localStorage.getItem(`${STORAGE_PREFIX}${repoId}`);
-  expanded = stored === "1";
+  expanded = readStored(STORAGE_KEYS.archiveOpen(repoId), flagCodec, false);
 });
 
 function toggle(): void {
   expanded = !expanded;
-  if (typeof localStorage !== "undefined") {
-    if (expanded) localStorage.setItem(`${STORAGE_PREFIX}${repoId}`, "1");
-    else localStorage.removeItem(`${STORAGE_PREFIX}${repoId}`);
-  }
+  writeStored(STORAGE_KEYS.archiveOpen(repoId), flagCodec, expanded);
 }
 
 const archivedPrs = $derived(getArchivedByRepo().get(repoId) ?? []);
