@@ -6,6 +6,7 @@ export * from "./codeowners";
 export * from "./comment-permissions";
 export * from "./constants";
 export * from "./conversation";
+export * from "./diff-hunks";
 export * from "./events";
 export * from "./external-integrations";
 export * from "./github-client-id";

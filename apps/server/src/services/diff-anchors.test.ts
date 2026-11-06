@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { parsePatchFiles } from "@pierre/diffs";
-import { buildGitPatchHeader } from "@revv/shared";
-import { commentableLines, fitAnchorToPatch, splitHunks } from "./diff-anchors";
+import { buildGitPatchHeader, splitHunks } from "@revv/shared";
+import { commentableLines, fitAnchorToPatch } from "./diff-anchors";
 
 // Two hunks: new lines 10-13 and 30-32, old lines 10-12 and 30-33.
 const PATCH = [
@@ -141,5 +141,15 @@ describe("splitHunks", () => {
       pierre.map((h) => [h.additionStart, h.additionCount, h.deletionStart, h.deletionCount]),
     );
     expect(ours).toHaveLength(3);
+  });
+
+  // A bare `@@` is no hunk to Pierre either, so it must not shift the index of later hunks.
+  it("skips a header without ranges the way @pierre/diffs does", () => {
+    const patch = "@@ -0,0 +1,2 @@\n+a\n+b\n@@ section @@\n x\n@@ -5,1 +7,1 @@ fn x()\n-c\n+d\n";
+    const header = buildGitPatchHeader({ path: "src/a.ts" });
+    const pierre = parsePatchFiles(`${header}\n${patch}`)[0]?.files[0]?.hunks ?? [];
+    expect(splitHunks(patch).map((h) => [h.index, h.newStart, h.newLines])).toEqual(
+      pierre.map((h, i) => [i, h.additionStart, h.additionCount]),
+    );
   });
 });

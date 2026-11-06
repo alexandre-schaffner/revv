@@ -20,6 +20,7 @@ import type {
   MarkdownBlock,
   WalkthroughBlock,
 } from "@revv/shared";
+import { parseHunkHeader } from "@revv/shared";
 import { prLensDiagramError } from "./prlens-doc";
 
 /**
@@ -305,14 +306,6 @@ export function withArtifactWarnings(okText: string, input: BlockVariantInput): 
   return warnings.length > 0 ? `${okText}\n\n${warnings.join("\n\n")}` : okText;
 }
 
-/**
- * A unified-diff hunk header carrying explicit ranges: `@@ -a[,b] +c[,d] @@`.
- * A bare `@@`, a `@@ section label @@`, or a header with missing ranges is
- * malformed — Pierre's parser yields zero hunks for it and the diff renders as
- * a blank panel.
- */
-const VALID_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/;
-
 const isHunkHeader = (line: string): boolean => line.startsWith("@@");
 
 /**
@@ -365,7 +358,7 @@ export function normalizeDiffPatch(patch: string): string {
     let j = i + 1;
     while (j < lines.length && !isHunkHeader(lines[j] ?? "")) j++;
     const body = lines.slice(i + 1, j);
-    out.push(VALID_HUNK_HEADER.test(header) ? header : synthesizeHunkHeader(body));
+    out.push(parseHunkHeader(header) ? header : synthesizeHunkHeader(body));
     out.push(...body);
     i = j;
   }

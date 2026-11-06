@@ -17,6 +17,8 @@ import {
   type HunkScanRow,
   type HunkSkipReason,
   type HunkSmell,
+  type PatchHunk,
+  splitHunks,
   type WalkthroughLead,
 } from "@revv/shared";
 import { noul } from "@typesafe-ai/sdk";
@@ -24,7 +26,6 @@ import { Deferred, Effect } from "effect";
 import { type DbError, JevUnavailable } from "../../domain/errors";
 import { CacheService } from "../../services/Cache";
 import type { DbService } from "../../services/Db";
-import { type PatchHunk, splitHunks } from "../../services/diff-anchors";
 import type { HunkScanSeed } from "../../services/hunk-scan-store";
 import { JEV_MODEL, JevService } from "../../services/Jev";
 import { optionalJev } from "./optional";
